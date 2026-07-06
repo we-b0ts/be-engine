@@ -1,0 +1,358 @@
+use std::net::{Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct AppConfig {
+    pub dns_mock: DnsMockConfig,
+    pub tcp_gateway: TcpGatewayConfig,
+    pub http: HttpConfig,
+    pub http_gateway: HttpGatewayConfig,
+    pub mysql: MysqlConfig,
+    pub recording: RecordingConfig,
+    pub tls: TlsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct DnsMockConfig {
+    pub enabled: bool,
+    pub listen: SocketAddr,
+    pub upstream_dns: SocketAddr,
+    pub fake_cidr: String,
+    pub ttl_seconds: u32,
+    pub bypass_domains: Vec<String>,
+    pub hosts: BTreeMap<String, Vec<Ipv4Addr>>,
+    pub registry_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TcpGatewayConfig {
+    pub enabled: bool,
+    pub listen: SocketAddr,
+    pub record_http: bool,
+    pub mitm_https: bool,
+    pub https_ports: Vec<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HttpConfig {
+    pub enabled: bool,
+    pub listen: SocketAddr,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HttpGatewayConfig {
+    pub enabled: bool,
+    pub listen: SocketAddr,
+    pub matched_upstream: String,
+    pub fallback_upstream: String,
+    pub preserve_host: bool,
+    pub rules: Vec<HttpGatewayRuleConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HttpGatewayRuleConfig {
+    pub name: Option<String>,
+    pub hosts: Vec<String>,
+    pub methods: Vec<String>,
+    pub path_prefixes: Vec<String>,
+    pub headers: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MysqlConfig {
+    pub enabled: bool,
+    pub record_raw_packets: bool,
+    pub routes: Vec<MysqlRouteConfig>,
+    pub listen: SocketAddr,
+    pub upstream: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct MysqlRouteConfig {
+    pub name: Option<String>,
+    pub listen: SocketAddr,
+    pub upstream: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RecordingConfig {
+    pub output_dir: PathBuf,
+    pub max_body_bytes: usize,
+    pub redact_headers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TlsConfig {
+    pub ca_cert_path: PathBuf,
+    pub ca_key_path: PathBuf,
+}
+
+impl AppConfig {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read config {}", path.display()))?;
+        toml::from_str(&raw).with_context(|| format!("failed to parse config {}", path.display()))
+    }
+}
+
+impl Default for HttpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:8080"
+                .parse()
+                .expect("valid default http listen address"),
+        }
+    }
+}
+
+impl Default for DnsMockConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.153:15353"
+                .parse()
+                .expect("valid default DNS mock listen address"),
+            upstream_dns: "10.10.10.10:53"
+                .parse()
+                .expect("valid default upstream DNS address"),
+            fake_cidr: "198.18.0.0/15".to_string(),
+            ttl_seconds: 60,
+            bypass_domains: Vec::new(),
+            hosts: BTreeMap::new(),
+            registry_path: PathBuf::from("./recordings/fake_dns_registry.json"),
+        }
+    }
+}
+
+impl Default for TcpGatewayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:15001"
+                .parse()
+                .expect("valid default TCP gateway listen address"),
+            record_http: true,
+            mitm_https: true,
+            https_ports: Vec::new(),
+        }
+    }
+}
+
+impl Default for HttpGatewayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:18080"
+                .parse()
+                .expect("valid default HTTP gateway listen address"),
+            matched_upstream: "http://127.0.0.1:8081".to_string(),
+            fallback_upstream: "http://127.0.0.1:8082".to_string(),
+            preserve_host: true,
+            rules: Vec::new(),
+        }
+    }
+}
+
+impl Default for MysqlConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            record_raw_packets: false,
+            routes: Vec::new(),
+            listen: "127.0.0.1:3307"
+                .parse()
+                .expect("valid default mysql listen address"),
+            upstream: "127.0.0.1:3306".to_string(),
+        }
+    }
+}
+
+impl MysqlConfig {
+    pub fn effective_routes(&self) -> Vec<MysqlRouteConfig> {
+        if self.routes.is_empty() {
+            vec![MysqlRouteConfig {
+                name: Some("default".to_string()),
+                listen: self.listen,
+                upstream: self.upstream.clone(),
+            }]
+        } else {
+            self.routes.clone()
+        }
+    }
+}
+
+impl Default for MysqlRouteConfig {
+    fn default() -> Self {
+        Self {
+            name: None,
+            listen: "127.0.0.1:3307"
+                .parse()
+                .expect("valid default mysql route listen address"),
+            upstream: "127.0.0.1:3306".to_string(),
+        }
+    }
+}
+
+impl Default for RecordingConfig {
+    fn default() -> Self {
+        Self {
+            output_dir: PathBuf::from("./recordings"),
+            max_body_bytes: 1024 * 1024,
+            redact_headers: vec![
+                "authorization".to_string(),
+                "cookie".to_string(),
+                "set-cookie".to_string(),
+                "proxy-authorization".to_string(),
+                "proxy-authenticate".to_string(),
+            ],
+        }
+    }
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            ca_cert_path: PathBuf::from("./data/traffic-recorder-ca.pem"),
+            ca_key_path: PathBuf::from("./data/traffic-recorder-ca-key.pem"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_minimal_config_with_defaults() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [http]
+            listen = "127.0.0.1:18080"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.http.listen.to_string(), "127.0.0.1:18080");
+        assert!(!config.http.enabled);
+        assert!(!config.mysql.enabled);
+        assert!(!config.mysql.record_raw_packets);
+        assert_eq!(config.recording.max_body_bytes, 1024 * 1024);
+    }
+
+    #[test]
+    fn parses_mysql_dns_routes() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [mysql]
+            enabled = true
+            record_raw_packets = true
+
+            [[mysql.routes]]
+            name = "app-db"
+            listen = "0.0.0.0:3306"
+            upstream = "10.0.0.12:3306"
+            "#,
+        )
+        .unwrap();
+
+        let routes = config.mysql.effective_routes();
+        assert!(config.mysql.record_raw_packets);
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].name.as_deref(), Some("app-db"));
+        assert_eq!(routes[0].listen.to_string(), "0.0.0.0:3306");
+        assert_eq!(routes[0].upstream, "10.0.0.12:3306");
+    }
+
+    #[test]
+    fn parses_http_gateway_rules() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [http_gateway]
+            enabled = true
+            listen = "127.0.0.1:18080"
+            matched_upstream = "http://127.0.0.1:9001"
+            fallback_upstream = "http://127.0.0.1:9002"
+
+            [[http_gateway.rules]]
+            name = "record-api"
+            hosts = ["api.example.com"]
+            methods = ["GET", "POST"]
+            path_prefixes = ["/api/"]
+            headers = { "x-record" = "yes" }
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.http_gateway.enabled);
+        assert_eq!(config.http_gateway.rules.len(), 1);
+        assert_eq!(
+            config.http_gateway.rules[0].headers["x-record"],
+            "yes".to_string()
+        );
+    }
+
+    #[test]
+    fn parses_dns_mock_and_tcp_gateway() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [dns_mock]
+            enabled = true
+            listen = "127.0.0.1:53"
+            upstream_dns = "8.8.8.8:53"
+            fake_cidr = "198.18.0.0/15"
+            bypass_domains = ["preview-wss-wegent.intra.demo.test", ".internal.example.com"]
+            registry_path = "./recordings/test_fake_dns_registry.json"
+
+            [dns_mock.hosts]
+            "db-10-185-28-119.test" = ["10.185.28.119"]
+            "multi-db.test" = ["10.0.0.1", "10.0.0.2"]
+
+            [tcp_gateway]
+            enabled = true
+            listen = "127.0.0.1:15001"
+            record_http = true
+            mitm_https = true
+            https_ports = [443, 8443]
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.dns_mock.enabled);
+        assert!(config.tcp_gateway.enabled);
+        assert!(config.tcp_gateway.mitm_https);
+        assert_eq!(config.tcp_gateway.https_ports, vec![443, 8443]);
+        assert_eq!(config.dns_mock.fake_cidr, "198.18.0.0/15");
+        assert_eq!(
+            config.dns_mock.bypass_domains,
+            vec![
+                "preview-wss-wegent.intra.demo.test".to_string(),
+                ".internal.example.com".to_string()
+            ]
+        );
+        assert_eq!(
+            config.dns_mock.registry_path,
+            PathBuf::from("./recordings/test_fake_dns_registry.json")
+        );
+        assert_eq!(
+            config.dns_mock.hosts["db-10-185-28-119.test"],
+            vec!["10.185.28.119".parse::<Ipv4Addr>().unwrap()]
+        );
+        assert_eq!(config.dns_mock.hosts["multi-db.test"].len(), 2);
+    }
+}
