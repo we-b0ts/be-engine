@@ -57,9 +57,16 @@ service client, queue adapter, or scheduler input source. Recorded mocks should
 implement the same boundary only for E2E replay.
 
 Default copied case location in the target repo is `tests/fixtures/recordings`.
-Preserve original case files. If the selected scope has no recorded case, stop
-before rewriting and recommend what to record, including the route/job, expected
-dependencies, and completeness checks.
+Preserve original case files. A user-provided recording path may be a single
+case directory or a collection such as `recordings/<rule>/<uri-group>` whose
+child directories are case ids. When given a collection, select by reading each
+child `request.json.uri` and matching the selected API path; do not rely on the
+`uri-group` directory name alone. If zero or multiple cases match, ask the user
+to choose before rewriting.
+
+If the selected scope has no recorded case, stop before rewriting and recommend
+what to record, including the route/job, expected dependencies, and completeness
+checks.
 
 ## Target Artifacts
 

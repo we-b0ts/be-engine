@@ -18,6 +18,13 @@ recordings/<rule>/<uri-group>/<case-id>/dependencies-debug.jsonl
 hyphens, for example `/api/users/list` becomes `api-users`. Older recordings may
 omit this directory and use `recordings/<rule>/<case-id>`.
 
+A path ending at `recordings/<rule>/<uri-group>` is a case collection, not a
+single case. Its direct child directories are case ids, commonly UUIDs. The
+collection can contain cases for related but different URLs. To select a case,
+open each child `request.json` and match the recorded `uri` path against the
+requested API/function scope. Do not infer the selected API from `uri-group`
+alone.
+
 Treat `expected_response.json` as a tolerated user spelling only. Prefer
 `expected-response.json` in new references and test names. Do not rename or
 rewrite recorded files during replay work.

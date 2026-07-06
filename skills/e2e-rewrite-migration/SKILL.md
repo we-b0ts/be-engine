@@ -34,7 +34,9 @@ recording/E2E evidence.
    scope, case paths, command facade, schema status, runtime startup status,
    blockers, and recording feedback.
 6. Place copied recorded cases under `tests/fixtures/recordings` by default and
-   preserve original case files.
+   preserve original case files. If the user provides a case collection
+   directory, select the case by each child `request.json.uri` matching the
+   migration scope.
 7. Use `recorded-e2e-cases` for recorded replay, dependency mocks, byte-level
    response compatibility, configured ignores, and recording feedback rules.
 8. Ensure a repo-local development command facade exists. Prefer an existing

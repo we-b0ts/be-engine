@@ -18,6 +18,8 @@ The target `AGENTS.md` must include:
 - project overview for the target rewrite
 - source repo path and selected migration scope
 - recorded case location, defaulting to `tests/fixtures/recordings`
+- recorded case selection rule: collection directories must be filtered by
+  `request.json.uri`
 - E2E rule: recorded cases are the behavior contract
 - compatibility rule: responses are byte-level compatible unless explicit E2E
   config ignores fields or headers
@@ -64,6 +66,11 @@ compatible.
 Recorded cases under `tests/fixtures/recordings` are the compatibility contract.
 Preserve original recorded case files. A migration is complete only when the
 selected recorded E2E passes and the target repo quality checks pass.
+
+If a path points at a collection such as `recordings/<rule>/<uri-group>`, treat
+its child directories as candidate cases. Select the case by matching each
+child `request.json.uri` to the migrated API path; do not rely on the
+`uri-group` directory name alone.
 
 Responses must be byte-level compatible by default. Ignore fields or headers
 only when explicitly configured in the recorded E2E assertion config.

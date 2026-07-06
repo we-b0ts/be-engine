@@ -1,6 +1,6 @@
 ---
 name: recorded-e2e-cases
-description: Replay and fix E2E tests from recorded traffic cases in recordings/rule/uri-group/case-id directories. Use when working with request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, dependency replay, MySQL mysql_exchange records, generated dependency mocks, case-driven E2E tests, or failures where the HTTP request/response pair is insufficient without recorded dependencies.
+description: Replay and fix E2E tests from recorded traffic case directories or case collections under recordings/rule/uri-group. Use when working with request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, dependency replay, MySQL mysql_exchange records, generated dependency mocks, case-driven E2E tests, or failures where the HTTP request/response pair is insufficient without recorded dependencies.
 ---
 
 # Recorded E2E Cases
@@ -11,7 +11,10 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
 
 1. Resolve the case under `recordings/<rule>/<uri-group>/<case-id>` unless the
    user explicitly gives a different case path. Older recordings may use
-   `recordings/<rule>/<case-id>`. Preserve recorded files exactly.
+   `recordings/<rule>/<case-id>`. A user path may also point at a case
+   collection such as `recordings/<rule>/<uri-group>`; scan child case
+   directories and select by `request.json.uri`, not by directory name alone.
+   Preserve recorded files exactly.
 2. Load `request.json`, canonical `expected-response.json`, and
    `dependencies.jsonl` first. Accept `expected_response.json` as a user spelling
    but do not rename or rewrite it. Read

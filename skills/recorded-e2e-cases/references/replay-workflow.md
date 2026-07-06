@@ -24,7 +24,11 @@ Implement in this order:
 
 1. Create or extend a test helper that can load one case from
    `recordings/<rule>/<uri-group>/<case-id>`. Older recordings may use
-   `recordings/<rule>/<case-id>`.
+   `recordings/<rule>/<case-id>`. If the user supplied a collection directory
+   such as `recordings/<rule>/<uri-group>`, inspect each child case's
+   `request.json.uri` and select the case that matches the requested API path.
+   If zero or multiple cases match, report the candidates and ask the user to
+   choose.
 2. Decode the recorded request body and prepare headers. Remove or override only
    headers that the target test harness cannot or should not set, such as
    hop-by-hop transport headers.
@@ -101,6 +105,8 @@ paths. Keep it small; do not use it for broad test orchestration or mock data.
 Minimum supported concepts:
 
 - case key: `recordings/<rule>/<uri-group>/<case-id>`
+- optional case collection key: `recordings/<rule>/<uri-group>` plus a selected
+  case id after matching `request.json.uri`
 - body assertion mode: semantic fields, exact body, or status-only
 - ignored response JSONPaths
 - ignored or asserted headers
