@@ -75,10 +75,9 @@ async fn http_gateway_records_only_matched_traffic() {
     config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
         name: Some("record-path".to_string()),
-        hosts: Vec::new(),
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/record/".to_string()],
-        headers: Default::default(),
+        ..Default::default()
     }];
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
@@ -122,10 +121,9 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
         name: Some("api".to_string()),
-        hosts: Vec::new(),
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/api/".to_string()],
-        headers: Default::default(),
+        ..Default::default()
     }];
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
@@ -136,13 +134,13 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
-    let response = raw_http_get(gateway_addr, "/api").await;
+    let response = raw_http_get(gateway_addr, "/api/users/list").await;
     assert!(response.contains("Content-Encoding: gzip"));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
 
-    let rule_dir = temp.path().join("recordings/api");
+    let rule_dir = temp.path().join("recordings/api/api-users");
     let case_dirs = std::fs::read_dir(&rule_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -151,7 +149,7 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     let case_dir = &case_dirs[0];
 
     let request_json = std::fs::read_to_string(case_dir.join("request.json")).unwrap();
-    assert!(request_json.contains(r#""uri": "/api""#));
+    assert!(request_json.contains(r#""uri": "/api/users/list""#));
 
     let response_json = std::fs::read_to_string(case_dir.join("expected-response.json")).unwrap();
     let response: Value = serde_json::from_str(&response_json).unwrap();

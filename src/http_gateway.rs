@@ -17,7 +17,9 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::config::{HttpGatewayConfig, HttpGatewayRuleConfig};
+use crate::config::{
+    DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS, HttpGatewayConfig, HttpGatewayRuleConfig,
+};
 use crate::process_lookup::{lookup_listening_process, process_label};
 use crate::recorder::{
     CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent,
@@ -87,10 +89,12 @@ async fn handle_gateway_request(
         redact_headers(&request_headers, &state.config().recording.redact_headers);
     let authority = request_authority(&original_uri, &request_headers);
     let matched_rule = match_rule(&config.rules, &method, &original_uri, &request_headers);
+    let matched_rule_name = matched_rule.as_ref().map(|rule| rule.name.clone());
     let should_record = matched_rule.is_some();
-    let case = matched_rule.as_ref().map(|rule_name| CaseContext {
+    let case = matched_rule.as_ref().map(|rule| CaseContext {
         id,
-        rule_name: rule_name.clone(),
+        rule_name: rule.name.clone(),
+        uri_group: case_uri_group(&original_uri, rule.case_uri_segments),
     });
     let upstream_base = if should_record {
         &config.matched_upstream
@@ -111,7 +115,7 @@ async fn handle_gateway_request(
                 request_headers: request_headers_for_record,
                 request_body: Bytes::new(),
                 started,
-                matched_rule,
+                matched_rule: matched_rule_name.clone(),
                 case,
                 should_record,
                 target: Some(upstream_base.clone()),
@@ -131,7 +135,7 @@ async fn handle_gateway_request(
                 method: method.to_string(),
                 uri: original_uri.to_string(),
                 authority: authority.clone(),
-                matched_rule: matched_rule.clone(),
+                matched_rule: matched_rule_name.clone(),
                 upstream: upstream_base.clone(),
                 headers: request_headers_for_record.clone(),
                 body: capture_case_body(
@@ -163,7 +167,7 @@ async fn handle_gateway_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
-                matched_rule,
+                matched_rule: matched_rule_name.clone(),
                 case,
                 should_record,
                 target: Some(upstream_base.clone()),
@@ -192,7 +196,7 @@ async fn handle_gateway_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
-                matched_rule,
+                matched_rule: matched_rule_name.clone(),
                 case,
                 should_record,
                 target: Some(upstream_base.clone()),
@@ -221,7 +225,7 @@ async fn handle_gateway_request(
                         request_headers: request_headers_for_record,
                         request_body,
                         started,
-                        matched_rule,
+                        matched_rule: matched_rule_name.clone(),
                         case,
                         should_record,
                         target: Some(upstream_base.clone()),
@@ -243,7 +247,7 @@ async fn handle_gateway_request(
                     authority: authority.clone(),
                     request_headers: with_gateway_headers(
                         request_headers_for_record,
-                        matched_rule.as_deref(),
+                        matched_rule_name.as_deref(),
                         upstream_base,
                     ),
                     request_body: capture_body(
@@ -274,7 +278,7 @@ async fn handle_gateway_request(
                     case,
                     CaseResponseRecord {
                         timestamp: Utc::now(),
-                        matched_rule: matched_rule.clone(),
+                        matched_rule: matched_rule_name.clone(),
                         upstream: upstream_base.clone(),
                         status: Some(status.as_u16()),
                         headers: Some(response_headers_for_record.clone()),
@@ -305,7 +309,7 @@ async fn handle_gateway_request(
                 request_headers: request_headers_for_record,
                 request_body,
                 started,
-                matched_rule,
+                matched_rule: matched_rule_name.clone(),
                 case,
                 should_record,
                 target: Some(upstream_base.clone()),
@@ -489,20 +493,32 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
     simple_response(StatusCode::BAD_GATEWAY, &error)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatchedHttpGatewayRule {
+    name: String,
+    case_uri_segments: usize,
+}
+
 fn match_rule(
     rules: &[HttpGatewayRuleConfig],
     method: &Method,
     uri: &Uri,
     headers: &HeaderMap,
-) -> Option<String> {
+) -> Option<MatchedHttpGatewayRule> {
     if rules.is_empty() {
-        return Some("default".to_string());
+        return Some(MatchedHttpGatewayRule {
+            name: "default".to_string(),
+            case_uri_segments: DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS,
+        });
     }
 
     rules
         .iter()
         .find(|rule| rule_matches(rule, method, uri, headers))
-        .map(|rule| rule.name.clone().unwrap_or_else(|| "unnamed".to_string()))
+        .map(|rule| MatchedHttpGatewayRule {
+            name: rule.name.clone().unwrap_or_else(|| "unnamed".to_string()),
+            case_uri_segments: rule.case_uri_segments,
+        })
 }
 
 fn rule_matches(
@@ -554,6 +570,26 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
     }
     let normalized = prefix.trim_end_matches('/');
     path == normalized || path.starts_with(&format!("{normalized}/"))
+}
+
+fn case_uri_group(uri: &Uri, segment_count: usize) -> Option<String> {
+    if segment_count == 0 {
+        return None;
+    }
+
+    let group = uri
+        .path()
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .take(segment_count)
+        .collect::<Vec<_>>()
+        .join("-");
+
+    Some(if group.is_empty() {
+        "root".to_string()
+    } else {
+        group
+    })
 }
 
 fn upstream_socket_addr(base: &str) -> Option<SocketAddr> {
@@ -704,6 +740,7 @@ mod tests {
             methods: vec!["POST".to_string()],
             path_prefixes: vec!["/v1/".to_string()],
             headers: [("x-record".to_string(), "yes".to_string())].into(),
+            ..Default::default()
         };
         let request = Request::builder()
             .method("POST")
@@ -726,5 +763,22 @@ mod tests {
         let uri =
             build_upstream_uri("http://127.0.0.1:9000", &"/hello?a=1".parse().unwrap()).unwrap();
         assert_eq!(uri.to_string(), "http://127.0.0.1:9000/hello?a=1");
+    }
+
+    #[test]
+    fn builds_case_uri_group_from_path_segments() {
+        assert_eq!(
+            case_uri_group(&"/api/users/list?x=1".parse().unwrap(), 2).as_deref(),
+            Some("api-users")
+        );
+        assert_eq!(
+            case_uri_group(&"/api/users/list".parse().unwrap(), 1).as_deref(),
+            Some("api")
+        );
+        assert_eq!(case_uri_group(&"/api/users/list".parse().unwrap(), 0), None);
+        assert_eq!(
+            case_uri_group(&"/".parse().unwrap(), 2).as_deref(),
+            Some("root")
+        );
     }
 }

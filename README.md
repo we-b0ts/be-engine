@@ -105,6 +105,7 @@ name = "record-api"
 hosts = ["api.example.com"]
 methods = ["GET", "POST"]
 path_prefixes = ["/api/"]
+case_uri_segments = 2
 headers = { "x-record" = "yes" }
 ```
 
@@ -117,11 +118,16 @@ Matched gateway requests also create a case directory under
 `recording.output_dir`:
 
 ```text
-<rule-name>/<case-id>/request.json
-<rule-name>/<case-id>/expected-response.json
-<rule-name>/<case-id>/dependencies.jsonl
-<rule-name>/<case-id>/dependencies-debug.jsonl
+<rule-name>/<uri-group>/<case-id>/request.json
+<rule-name>/<uri-group>/<case-id>/expected-response.json
+<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
+<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
 ```
+
+`uri-group` is built from the first `case_uri_segments` path segments joined by
+hyphens. The default is `2`, so `/api/users/list` is recorded under
+`api-users`. Set `case_uri_segments = 0` on a rule to omit the URI grouping
+directory.
 
 `request.json` stores the matched gateway request. `expected-response.json`
 stores the matched upstream response; if the response body has

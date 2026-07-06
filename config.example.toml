@@ -11,10 +11,11 @@ bypass_domains = [
   "demand-service.intra.weibo.cn",
   "dns.alidns.com",
   "doh.pub",
+  "git.intra.demo.test",
   "*.monitor.sample.test",
   "*.dingtalk.com",
   "copilot.demo.test",
-  "wss-wegent.intra.demo.test",
+  "*wegent.intra.demo.test",
   "*.googleapis.com",
   "*.google.com",
 ]
@@ -41,8 +42,11 @@ preserve_host = true
 # traffic is treated as matched and recorded.
 [[http_gateway.rules]]
 name = "record-api"
-methods = ["GET", "POST"]
+methods = ["GET"]
 path_prefixes = ["/api/"]
+# Number of URI path segments used in the case directory name.
+# /api/users/list with the default 2 becomes api-users.
+case_uri_segments = 2
 headers = {}
 
 [mysql]
