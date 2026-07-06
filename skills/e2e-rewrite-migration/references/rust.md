@@ -6,8 +6,9 @@ Use this reference only when Rust is the target language.
 
 For an empty target repo, initialize with `cargo init`, then add the smallest
 Axum + Tokio service skeleton needed to run the first recorded E2E and a normal
-service entrypoint exposed through `scripts/<project>-cli start`. Do not build a
-full production platform before the first recorded scope is proven.
+service entrypoint exposed through `scripts/<project>-cli start|stop|restart|status`.
+Do not build a full production platform before the first recorded scope is
+proven.
 
 Default stack:
 
@@ -100,8 +101,8 @@ useful Rust shape is:
 - `app_from_env` or equivalent for normal runtime wiring
 - `src/main.rs` that runs the server for API/service migrations
 - `config/default.yaml` or equivalent committed development config
-- `scripts/<project>-cli` wrapping `start`, `e2e`, `check`, and `doctor` when
-  no stronger repo convention exists
+- `scripts/<project>-cli` wrapping `start`, `stop`, `restart`, `status`, `e2e`,
+  `check`, and `doctor` when no stronger repo convention exists
 
 The migration is incomplete if only the recorded repository exists for an API
 that normally depends on a database or external service, or if the crate has no
@@ -117,9 +118,15 @@ secrets or machine-specific settings.
 
 Prefer `scripts/<project>-cli` as the Rust migration command facade when the
 repo has no existing Makefile, justfile, or script convention. The facade should
-wrap `cargo run`, focused recorded E2E, Cargo quality gates, and basic config
-diagnostics so future agents can use stable commands instead of rediscovering
-Cargo invocations.
+wrap local service lifecycle, focused recorded E2E, Cargo quality gates, and
+basic config diagnostics so future agents can use stable commands instead of
+rediscovering Cargo invocations.
+
+For local service lifecycle, prefer a pid file under a repo-local ignored
+runtime directory such as `.migration/run/` or the repo's existing temp/runtime
+directory. `stop` should tolerate an already-stopped service, `restart` should
+delegate to `stop` then `start`, and `status` should report running state plus
+pid, port, or health response when available.
 
 ## Quality Gate
 
@@ -136,7 +143,7 @@ If the target repo already defines focused E2E commands, run the focused command
 first, then the broader relevant checks.
 
 For API/service migrations, also verify a normal startup path through the
-command facade. When real dependencies are unavailable, prefer lazy connection
-pools or configuration validation so the service can reach startup without
-reading recorded fixtures. Record the exact command and result in
-`.migration/e2e.yaml`.
+command facade. Run `start`, confirm `status`, and clean up with `stop`. When
+real dependencies are unavailable, prefer lazy connection pools or configuration
+validation so the service can reach startup without reading recorded fixtures.
+Record the exact commands and results in `.migration/e2e.yaml`.

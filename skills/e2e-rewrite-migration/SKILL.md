@@ -41,7 +41,9 @@ recording/E2E evidence.
    structural response compatibility, configured ignores, exact-byte modes, and
    recording feedback rules.
 8. Ensure a repo-local development command facade exists. Prefer an existing
-   project convention; otherwise create `scripts/<project>-cli`.
+   project convention; otherwise create `scripts/<project>-cli`. Runnable
+   services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,
+   and `doctor`.
 9. Manage runtime config under `config/`. Development startup should read a
    committed default config directly; production may specify another config file
    or use environment overrides.

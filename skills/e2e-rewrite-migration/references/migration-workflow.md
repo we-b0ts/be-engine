@@ -95,6 +95,8 @@ Before implementing behavior:
 - `e2e_command`
 - `quality_commands`
 - `runtime_start_command`
+- `runtime_stop_command`
+- `runtime_status_command`
 - `runtime_start_status`
 - `config_files`
 - `blockers`
@@ -116,17 +118,22 @@ already uses `bin/` for source-controlled scripts.
 Expose the commands that are relevant to the migrated scope:
 
 - `start`: start the service from normal runtime config
-- `restart`: stop and start, when the project has a managed local process
+- `stop`: stop the local service idempotently without killing unrelated
+  processes
+- `restart`: run the same `stop` then `start` path
+- `status`: report whether the service is running and include pid, port, or
+  health details when available
 - `e2e`: run the focused recorded E2E, or the configured recorded E2E suite
 - `check`: run formatting, tests, linting, and relevant quality gates
 - `build`: build the target artifact
 - `release`: run the project's release/package flow when it exists
 - `doctor`: print missing config, dependency, port, and toolchain problems
 
-For the first migration slice, implement at least `start`, `e2e`, `check`, and
-`doctor` when the target is a runnable service. Commands may wrap language-native
-tools such as `cargo`, `go`, `npm`, Docker Compose, `make`, or `just`; the
-stable interface for agents and users is the facade command.
+For the first migration slice, implement at least `start`, `stop`, `restart`,
+`status`, `e2e`, `check`, and `doctor` when the target is a runnable service.
+Commands may wrap language-native tools such as `cargo`, `go`, `npm`, Docker
+Compose, `make`, or `just`; the stable interface for agents and users is the
+facade command.
 
 Place application config under `config/`. Development startup should read a
 committed default config directly, such as `config/default.yaml` or the target
@@ -221,7 +228,8 @@ stricter standard.
 
 For API/service scopes, verify the default runtime can start from normal
 configuration without loading `tests/fixtures/recordings`. Prefer the command
-facade, such as `scripts/<project>-cli start`, for the startup smoke. The smoke
+facade, such as `scripts/<project>-cli start`, for the startup smoke. Use
+`status` to confirm the local process and `stop` to clean it up. The smoke
 should prove the service entrypoint exists and reaches bind or configuration
 parsing. It may fail to connect to unavailable real dependencies only after
 startup or when the migrated endpoint is exercised; it must not be hard-wired
@@ -237,8 +245,8 @@ Keep output concise:
 
 - migrated scope
 - source repo path and recorded case path
-- command facade, E2E command, and quality commands run
+- command facade lifecycle commands, E2E command, and quality commands run
 - schema validation status for DB-backed scopes
-- runtime/startup command or verified startup status for service scopes
+- runtime lifecycle commands and verified process status for service scopes
 - pass/fail result
 - blockers or recording improvement feedback only when present

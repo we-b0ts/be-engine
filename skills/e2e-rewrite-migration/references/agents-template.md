@@ -25,10 +25,12 @@ The target `AGENTS.md` must include:
   exact bytes apply only to non-JSON or explicit exact-byte modes
 - runtime dependency rule: recorded dependency data is test/mock evidence, not
   normal runtime storage
-- normal startup rule: API/service migrations require a runnable service
-  entrypoint and startup command before completion
+- normal lifecycle rule: API/service migrations require runnable service
+  lifecycle commands before completion
 - command facade rule: expose development operations through the repo's command
   facade, or `scripts/<project>-cli` when no convention exists
+- service lifecycle rule: runnable services expose `start`, `stop`, `restart`,
+  and `status`
 - config rule: keep committed development runtime config under `config/`
 - module design rule: choose explicit module ownership before coding; do not
   require fixed module names
@@ -86,17 +88,22 @@ Recorded dependency data is not runtime storage. The default service startup
 must use normal configuration and real dependency boundaries. Tests may swap in
 recorded mocks that implement the same boundary.
 
-For API/service scopes, keep a normal startup command documented and runnable.
-Do not mark a migration complete if the only working path is a recorded E2E
-test harness or a fixture-backed app.
+For API/service scopes, keep normal lifecycle commands documented and runnable:
+`start`, `stop`, `restart`, and `status`. Do not mark a migration complete if
+the only working path is a recorded E2E test harness or a fixture-backed app.
 
 ## Commands And Config
 
 Use the repository command facade for development operations. If the repository
 does not already have one, create `scripts/<project>-cli`; this is a committed
 development script, not a built binary artifact. Prefer these command names
-when relevant: `start`, `restart`, `e2e`, `check`, `build`, `release`, and
-`doctor`.
+when relevant: `start`, `stop`, `restart`, `status`, `e2e`, `check`, `build`,
+`release`, and `doctor`.
+
+For runnable services, `stop` must be idempotent and avoid killing unrelated
+processes. `restart` should run the same stop/start path. `status` should report
+whether the local service is running and include pid, port, or health details
+when available.
 
 Keep application runtime config under `config/`. Development startup should read
 a committed default config directly. Production may pass a different config file
@@ -137,8 +144,8 @@ complete until the schema gap is resolved.
 Keep `.migration/e2e.yaml` updated with the source repo, target language,
 current scope, recorded cases, status, commands, blockers, and recording
 feedback. Track `command_facade`, `runtime_start_command`,
-`runtime_start_status`, `config_files`, `module_plan`, `schema_sources`,
-`schema_validation_status`,
+`runtime_stop_command`, `runtime_status_command`, `runtime_start_status`,
+`config_files`, `module_plan`, `schema_sources`, `schema_validation_status`,
 `runtime_dependency_status`, and `recorded_mock_status` separately.
 
 ## Failure Handling
