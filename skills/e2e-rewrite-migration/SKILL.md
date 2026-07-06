@@ -1,6 +1,6 @@
 ---
 name: e2e-rewrite-migration
-description: Use when rewriting or migrating one API, scheduled job, worker, or service capability from a local source repository into another language using recorded E2E cases as the behavior contract. Requires a user-provided source repo path, recorded cases, target repo or current workspace, AGENTS.md migration rules, and E2E proof before completion.
+description: Use when rewriting or migrating one API, scheduled job, worker, or service capability from a local source repository into another language using recorded E2E cases as the behavior contract. Requires a user-provided source repo path, recorded cases, target repo or current workspace, a concise AGENTS.md map with linked migration docs, and E2E proof before completion.
 ---
 
 # E2E Rewrite Migration
@@ -28,8 +28,9 @@ recording/E2E evidence.
    route and case evidence, then ask for confirmation before implementing.
 3. Migrate one API/function at a time. Prefer GET first, scheduled jobs after
    GET, then write operations and complex side effects.
-4. Ensure target repo `AGENTS.md` exists and includes migration rules. Read
-   [agents-template.md](references/agents-template.md).
+4. Ensure target repo `AGENTS.md` exists as a concise navigation map and links
+   to detailed migration docs under `docs/`; follow the Documentation Map
+   Contract in [migration-workflow.md](references/migration-workflow.md).
 5. Create or update `.migration/e2e.yaml` with source repo, target language,
    scope, case paths, command facade, schema status, runtime startup status,
    blockers, and recording feedback.

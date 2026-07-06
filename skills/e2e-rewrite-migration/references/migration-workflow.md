@@ -11,6 +11,8 @@ Inspect before implementation:
   relevant tests
 - target repo structure, build system, `AGENTS.md`, existing test commands, and
   language conventions
+- existing `docs/` structure, documentation conventions, and link-checking
+  tools
 - normal service startup entrypoints, runtime config, and dependency wiring
 - existing command facade conventions such as Makefile, justfile, package
   scripts, or `scripts/*`
@@ -74,7 +76,9 @@ checks.
 
 Before implementing behavior:
 
-- ensure `AGENTS.md` exists or is merged with migration rules
+- ensure `AGENTS.md` exists or is merged as a concise documentation map
+- ensure migration details live in structured docs under `docs/`, with
+  `AGENTS.md` acting as a concise map
 - create or update `.migration/e2e.yaml`
 - create or reuse a repo-local development command facade
 - create or reuse committed development config under `config/`
@@ -104,6 +108,8 @@ Before implementing behavior:
 - `config_files`
 - `logging_config`
 - `log_paths`
+- `docs`
+- `agents_md_status`
 - `blockers`
 - `recording_feedback`
 - `runtime_dependency_status`
@@ -176,6 +182,35 @@ Do not log secrets, full DSNs, authorization headers, cookies, app keys, tokens,
 or full request/response bodies by default. Prefer structured logs and
 redaction. The command facade should make `status` show the log directory and
 make E2E failures point to the relevant log path(s).
+
+## Documentation Map Contract
+
+Treat `AGENTS.md` as a navigation map, not the storage place for detailed
+migration rules. Keep this contract short enough that agents can apply it
+without a separate template file.
+
+When creating or substantially updating target repo docs:
+
+- keep `AGENTS.md` at 100 lines or fewer
+- include only repo overview, essential entry points, and links to detailed
+  docs
+- place design decisions, execution plans, product/API specs, operations notes,
+  recorded E2E contracts, failure handling, and references under `docs/`
+- prefer the target repo's existing docs organization; if none exists, design a
+  small structure under `docs/` that fits the project
+- do not create empty boilerplate docs just to satisfy a template
+- avoid duplicating the same rule in `AGENTS.md` and detailed docs
+- update `.migration/e2e.yaml` with the docs paths and `agents_md_status`
+
+If an existing `AGENTS.md` is already longer than 100 lines, do not make it
+longer. Add the shortest possible migration map entry and move new migration
+details into `docs/`. If safe, shrink the existing file into a map; otherwise
+record a docs hygiene blocker.
+
+Cross-links must be verifiable. Use the target repo's markdown/link checker or
+CI convention when one exists. If none exists, make the command facade's
+`doctor` or `check` verify that the files linked from `AGENTS.md` exist, and
+record the command in `.migration/e2e.yaml`.
 
 ## Module Design Contract
 
