@@ -1,0 +1,67 @@
+[dns_mock]
+enabled = true
+listen = "127.0.0.153:15353"
+upstream_dns = "10.10.10.10:53"
+fake_cidr = "198.18.0.0/15"
+ttl_seconds = 60
+registry_path = "./recordings/fake_dns_registry.json"
+# Exact names, suffixes starting with ".", and glob wildcards using "*" or "?"
+# are returned from upstream DNS unchanged.
+bypass_domains = [
+  "demand-service.intra.weibo.cn",
+  "dns.alidns.com",
+  "doh.pub",
+  "*.monitor.sample.test",
+  "*.dingtalk.com",
+  "copilot.demo.test",
+  "wss-wegent.intra.demo.test",
+  "*.googleapis.com",
+  "*.google.com",
+]
+
+[dns_mock.hosts]
+"db-10-185-28-119.test" = ["10.185.28.119"]
+
+[tcp_gateway]
+enabled = true
+listen = "127.0.0.1:15001"
+record_http = true
+mitm_https = true
+# Empty means attempt HTTPS MITM for all TLS-looking TCP streams.
+https_ports = []
+
+[http_gateway]
+enabled = true
+listen = "0.0.0.0:18084"
+matched_upstream = "http://127.0.0.1:7171"
+fallback_upstream = "http://10.37.254.56:7171"
+preserve_host = true
+
+# tcpcopy HTTP traffic matching rules. If no rules are configured, all gateway
+# traffic is treated as matched and recorded.
+[[http_gateway.rules]]
+name = "record-api"
+methods = ["GET", "POST"]
+path_prefixes = ["/api/"]
+headers = {}
+
+[mysql]
+# Applies to MySQL captured through dns_mock + tcp_gateway as well as the
+# optional dedicated MySQL proxy. Default false keeps dependencies compact:
+# mysql_response records one concatenated payload instead of raw packet details.
+record_raw_packets = false
+
+[recording]
+output_dir = "./recordings"
+max_body_bytes = 1048576
+redact_headers = [
+  "authorization",
+  "cookie",
+  "set-cookie",
+  "proxy-authorization",
+  "proxy-authenticate",
+]
+
+[tls]
+ca_cert_path = "./data/traffic-recorder-ca.pem"
+ca_key_path = "./data/traffic-recorder-ca-key.pem"

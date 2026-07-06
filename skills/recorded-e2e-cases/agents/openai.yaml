@@ -1,0 +1,4 @@
+interface:
+  display_name: "Recorded E2E Cases"
+  short_description: "Replay E2E from recorded case data"
+  default_prompt: "Use $recorded-e2e-cases to turn this recorded traffic case into a replayable E2E test."
