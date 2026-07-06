@@ -18,6 +18,8 @@ Default stack:
 - `thiserror` for domain/library errors
 - `anyhow` for app startup, wiring, and test utilities
 - `sqlx` for async SQL access when database behavior is needed
+- `tracing` and `tracing-subscriber` for structured async-aware logs
+- `tracing-appender` or an equivalent file appender when file logs are needed
 - a small config loader using the target repo's preferred format; YAML is a
   reasonable default when the repo has no convention
 
@@ -43,6 +45,8 @@ Keep the implementation small and behavior-focused:
 - tests should drive recorded requests and dependency mocks, not private
   implementation details
 - config should be explicit enough to isolate real external services during E2E
+- logs should be initialized through a small observability/logging module, not
+  scattered across handlers
 - avoid putting a migrated API entirely in `src/lib.rs` and `src/main.rs`
 
 Preserve API, database query semantics, and external protocol behavior unless
@@ -69,6 +73,39 @@ export modules or expose an app factory. Do not let either file become the
 catch-all implementation file. Recorded repositories or mock clients should
 live under `tests/support/` or an equally isolated test-support module unless
 the target repo has a different established pattern.
+
+## Logging
+
+Use `tracing` and `tracing-subscriber` by default for Rust API/service
+migrations. They fit Axum, Tower, Tokio, and async spans. Use `EnvFilter` with a
+fallback such as `info` so local startup does not depend on the user setting
+`RUST_LOG`.
+
+Prefer a small logging or observability module that:
+
+- reads logging config from `config/default.yaml` or the target repo equivalent
+- supports JSON output for CI/production-like runs and pretty/text output for
+  local debugging when useful
+- writes development files under `.migration/run/logs/` when the repo has no
+  existing convention
+- keeps app lifecycle, access, error, and dependency categories queryable
+- redacts secrets, app keys, authorization headers, cookies, tokens, passwords,
+  and full DSNs
+
+For Axum services, use Tower or middleware-level access logging so every request
+emits method, URI, route pattern when known, status, latency, request id, and
+recorded case id when present. Handler and service code should add context with
+spans rather than losing the request id across async boundaries.
+
+For SQLx and other dependency adapters, log failures at the boundary with the
+operation name, dependency kind, redacted target, latency, and root cause. SQLx
+decode/type errors must remain visible in logs even when the HTTP response keeps
+the source system's legacy business error.
+
+When using background local startup through `scripts/<project>-cli start`,
+redirect stdout/stderr to the configured log directory or use a file appender.
+`status` should report the log path. `e2e` failures should print or point to the
+relevant access, error, and dependency logs without dumping secrets.
 
 ## E2E And Compatibility
 

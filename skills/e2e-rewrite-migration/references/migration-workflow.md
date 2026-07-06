@@ -15,6 +15,7 @@ Inspect before implementation:
 - existing command facade conventions such as Makefile, justfile, package
   scripts, or `scripts/*`
 - existing config format and config directory conventions
+- existing logging, tracing, access-log, and runtime artifact conventions
 - existing module boundaries, package layout, and test-support conventions
 - recorded cases under the user-provided location or target
   `tests/fixtures/recordings`
@@ -77,6 +78,8 @@ Before implementing behavior:
 - create or update `.migration/e2e.yaml`
 - create or reuse a repo-local development command facade
 - create or reuse committed development config under `config/`
+- create or reuse diagnostic logging for service startup, access, dependency
+  failures, and replay diagnostics
 - choose the target module layout for the selected scope
 - identify the focused recorded E2E command
 - identify target quality check commands
@@ -99,6 +102,8 @@ Before implementing behavior:
 - `runtime_status_command`
 - `runtime_start_status`
 - `config_files`
+- `logging_config`
+- `log_paths`
 - `blockers`
 - `recording_feedback`
 - `runtime_dependency_status`
@@ -148,6 +153,29 @@ overrides are needed, use ignored files such as `config/local.yaml` or
 `.migration/e2e.yaml` or `.recorded-e2e.yaml` as application runtime config:
 `.migration/e2e.yaml` tracks migration state, while `.recorded-e2e.yaml`
 controls recorded assertion behavior and dependency isolation.
+
+## Logging Contract
+
+For runnable services, add or preserve diagnostic logs before declaring the
+migration complete. Use [logging.md](logging.md) for the default contract.
+
+When the target repo has no convention, default development logs to
+`.migration/run/logs/` and include queryable categories for application
+lifecycle, HTTP access or job triggers, actionable errors, and external
+dependency calls. Keep logging configuration in `config/` with the rest of the
+application runtime config.
+
+Access logs are route/job-level summaries. They should show that the migrated
+request entered the process, which route or job handled it, status or business
+code, latency, request id, and recorded case id when present. Dependency logs
+should preserve root causes from DB, HTTP, Redis, MQ, cache, and filesystem
+boundaries. Error logs should make compatibility-hidden failures visible, such
+as a source-compatible auth error whose real cause is a DB decode failure.
+
+Do not log secrets, full DSNs, authorization headers, cookies, app keys, tokens,
+or full request/response bodies by default. Prefer structured logs and
+redaction. The command facade should make `status` show the log directory and
+make E2E failures point to the relevant log path(s).
 
 ## Module Design Contract
 
@@ -207,19 +235,21 @@ Use at most 3 iterations:
 1. Implement the smallest target behavior needed for the selected scope.
 2. Add or reuse the command facade and config files needed for normal
    development startup.
-3. Choose or create the module layout before adding the handler/service code.
-4. Confirm DB/MySQL schema evidence before finalizing runtime adapter field
+3. Add or reuse logging setup for startup, access, dependency, and replay
+   diagnosis.
+4. Choose or create the module layout before adding the handler/service code.
+5. Confirm DB/MySQL schema evidence before finalizing runtime adapter field
    types. If schema is missing, record the unconfirmed status.
-5. Implement or wire the real runtime dependency path separately from recorded
+6. Implement or wire the real runtime dependency path separately from recorded
    mocks. The default app/server startup must not require a recorded case path.
-6. For API/service scopes, ensure a normal runnable entrypoint exists before
+7. For API/service scopes, ensure a normal runnable entrypoint exists before
    declaring success. A library-only test harness is not enough for a migrated
    service API.
-7. Run the focused recorded E2E through recorded mocks.
-8. Classify failures as target implementation bug, mock/replay issue,
+8. Run the focused recorded E2E through recorded mocks.
+9. Classify failures as target implementation bug, mock/replay issue,
    incomplete recording, recording workflow improvement, or target setup issue.
-9. Fix target implementation only when recorded replay evidence is complete.
-10. Stop with a recording/E2E improvement list when evidence is missing or
+10. Fix target implementation only when recorded replay evidence is complete.
+11. Stop with a recording/E2E improvement list when evidence is missing or
    replay would require guessing.
 
 After focused E2E passes, run the target repo's relevant quality checks. For
@@ -248,5 +278,6 @@ Keep output concise:
 - command facade lifecycle commands, E2E command, and quality commands run
 - schema validation status for DB-backed scopes
 - runtime lifecycle commands and verified process status for service scopes
+- logging config and essential log path(s) for service scopes
 - pass/fail result
 - blockers or recording improvement feedback only when present

@@ -32,6 +32,8 @@ The target `AGENTS.md` must include:
 - service lifecycle rule: runnable services expose `start`, `stop`, `restart`,
   and `status`
 - config rule: keep committed development runtime config under `config/`
+- logging rule: runnable services provide diagnostic startup, access,
+  dependency, and error logs with redaction
 - module design rule: choose explicit module ownership before coding; do not
   require fixed module names
 - schema mapping rule: DB/MySQL runtime types require explicit schema evidence
@@ -113,6 +115,26 @@ values in ignored files such as `config/local.yaml` or `.env.local`.
 Do not use `.migration/e2e.yaml` or `.recorded-e2e.yaml` as application runtime
 config. They are for migration state and recorded E2E behavior only.
 
+## Logging And Diagnostics
+
+Runnable services must provide logs that let an agent distinguish request
+routing, target implementation bugs, dependency failures, mock/replay gaps, and
+recording evidence gaps. If this repo has no existing logging convention, use
+`.migration/run/logs/` for development logs with these categories: application
+lifecycle, HTTP access or job trigger summaries, actionable errors, and external
+dependency calls.
+
+Access logs should include method, URI, route pattern when known, status code,
+business code when present, latency, request id, and recorded case id when
+present. Dependency logs should preserve DB/HTTP/cache/MQ root causes, including
+decode/type errors, while redacting secrets. Do not log authorization headers,
+cookies, tokens, app keys, passwords, full DSNs, or full request/response bodies
+by default.
+
+Keep logging config in `config/` with the runtime config. The command facade
+should make `status` show the log directory and should point to relevant logs
+when `e2e` fails.
+
 ## Architecture And Modules
 
 Before writing a migration slice, choose the module layout that fits this repo.
@@ -145,8 +167,9 @@ Keep `.migration/e2e.yaml` updated with the source repo, target language,
 current scope, recorded cases, status, commands, blockers, and recording
 feedback. Track `command_facade`, `runtime_start_command`,
 `runtime_stop_command`, `runtime_status_command`, `runtime_start_status`,
-`config_files`, `module_plan`, `schema_sources`, `schema_validation_status`,
-`runtime_dependency_status`, and `recorded_mock_status` separately.
+`config_files`, `logging_config`, `log_paths`, `module_plan`, `schema_sources`,
+`schema_validation_status`, `runtime_dependency_status`, and
+`recorded_mock_status` separately.
 
 ## Failure Handling
 

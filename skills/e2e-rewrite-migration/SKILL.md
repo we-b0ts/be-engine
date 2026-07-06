@@ -47,21 +47,24 @@ recording/E2E evidence.
 9. Manage runtime config under `config/`. Development startup should read a
    committed default config directly; production may specify another config file
    or use environment overrides.
-10. Choose the target module layout before writing behavior code. Let the agent
+10. Add or preserve a diagnostic logging setup for runnable services. Default
+   to predictable development logs under `.migration/run/logs/`; read
+   [logging.md](references/logging.md).
+11. Choose the target module layout before writing behavior code. Let the agent
     pick names that fit the repo, such as `api`, `store`, `service`, or `util`;
     require a clear design, not fixed module names.
-11. For DB/MySQL-backed behavior, map runtime adapter types from explicit schema
+12. For DB/MySQL-backed behavior, map runtime adapter types from explicit schema
    evidence: semantic column schema in `dependencies.jsonl`, or schema supplied
    by the user. If schema is missing, continue only with
    `schema_validation_status: unconfirmed` and do not call the migration
    complete.
-12. Implement the real runtime dependency path and normal startup entrypoint for
+13. Implement the real runtime dependency path and normal startup entrypoint for
    the migrated scope. Recorded dependencies may power tests and mocks, but the
    default service startup must not require recorded case data.
-13. Implement the target behavior idiomatically. Do not assume mechanical
+14. Implement the target behavior idiomatically. Do not assume mechanical
    translation is required; API/interface output compatibility is the contract.
-14. Iterate implementation -> recorded E2E -> fix at most 3 times.
-15. Run the recorded E2E, normal runtime/startup smoke for service targets, and
+15. Iterate implementation -> recorded E2E -> fix at most 3 times.
+16. Run the recorded E2E, normal runtime/startup smoke for service targets, and
     relevant target quality checks before completion.
 
 Read [migration-workflow.md](references/migration-workflow.md) for the complete
@@ -74,6 +77,8 @@ migration loop, missing-recording behavior, and failure classification.
   recommend a concrete API/function to record, preferably a low-risk GET.
 - If an API/service migration has no runnable normal startup path, or the
   startup path loads recorded fixtures, do not mark the migration complete.
+- If a runnable service lacks diagnostic logs for startup, access, dependency
+  failures, and E2E replay failures, add them or keep the migration incomplete.
 - If DB/MySQL runtime type mapping lacks explicit schema evidence, keep the work
   as incomplete and report the schema gap even if recorded E2E passes.
 - If replay cannot pass because recorded evidence is incomplete, output the
