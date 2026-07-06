@@ -43,6 +43,8 @@ const MYSQL_TYPE_GEOMETRY: u8 = 255;
 const MYSQL_FLAG_NOT_NULL: u16 = 0x0001;
 const MYSQL_FLAG_UNSIGNED: u16 = 0x0020;
 
+const MYSQL_CHARSET_BINARY: u16 = 63;
+
 #[derive(Debug, Clone)]
 pub(crate) struct MysqlSemanticTracker {
     statements: HashMap<u32, PreparedStatement>,
@@ -442,6 +444,7 @@ fn parse_stmt_execute_params(
             offset,
             param_type.type_code,
             param_type.unsigned,
+            false,
             max_value_bytes,
         ) {
             Some((value, next)) => {
@@ -561,6 +564,7 @@ fn parse_binary_row(
             offset,
             column.column_type_code,
             unsigned,
+            is_binary_column(column),
             max_value_bytes,
         )?;
         row.push(value);
@@ -592,7 +596,7 @@ fn parse_text_value(bytes: &[u8], column: &MysqlColumn, max_value_bytes: usize) 
             mysql_string(text.into_owned())
         }
         MYSQL_TYPE_NULL => mysql_null(),
-        _ => mysql_utf8_or_raw(bytes, max_value_bytes),
+        _ => mysql_bytes_or_utf8(bytes, is_binary_column(column), max_value_bytes),
     }
 }
 
@@ -601,6 +605,7 @@ fn parse_binary_value(
     offset: usize,
     type_code: u8,
     unsigned: bool,
+    force_bytes: bool,
     max_value_bytes: usize,
 ) -> Option<(MysqlValue, usize)> {
     match type_code {
@@ -688,11 +693,17 @@ fn parse_binary_value(
         | MYSQL_TYPE_STRING
         | MYSQL_TYPE_GEOMETRY => {
             let (bytes, next) = read_lenenc_bytes(payload, offset)?;
-            Some((mysql_utf8_or_raw(bytes, max_value_bytes), next))
+            Some((
+                mysql_bytes_or_utf8(bytes, force_bytes, max_value_bytes),
+                next,
+            ))
         }
         _ => {
             let (bytes, next) = read_lenenc_bytes(payload, offset)?;
-            Some((mysql_utf8_or_raw(bytes, max_value_bytes), next))
+            Some((
+                mysql_bytes_or_utf8(bytes, force_bytes, max_value_bytes),
+                next,
+            ))
         }
     }
 }
@@ -869,6 +880,18 @@ fn mysql_utf8_or_raw(bytes: &[u8], max_value_bytes: usize) -> MysqlValue {
     }
 }
 
+fn mysql_bytes_or_utf8(bytes: &[u8], force_bytes: bool, max_value_bytes: usize) -> MysqlValue {
+    if force_bytes {
+        mysql_raw(bytes, max_value_bytes)
+    } else {
+        mysql_utf8_or_raw(bytes, max_value_bytes)
+    }
+}
+
+fn is_binary_column(column: &MysqlColumn) -> bool {
+    column.family == "binary"
+}
+
 fn empty_to_none(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
@@ -889,7 +912,20 @@ fn mysql_sql_type_name(type_code: u8, charset: u16) -> &'static str {
         MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE => "DATE",
         MYSQL_TYPE_TIME => "TIME",
         MYSQL_TYPE_DATETIME => "DATETIME",
-        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_STRING => "VARCHAR",
+        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING => {
+            if is_binary_charset(charset) {
+                "VARBINARY"
+            } else {
+                "VARCHAR"
+            }
+        }
+        MYSQL_TYPE_STRING => {
+            if is_binary_charset(charset) {
+                "BINARY"
+            } else {
+                "VARCHAR"
+            }
+        }
         MYSQL_TYPE_BIT => "BIT",
         MYSQL_TYPE_JSON => "JSON",
         MYSQL_TYPE_ENUM => "ENUM",
@@ -947,11 +983,14 @@ fn mysql_column_family(type_code: u8, charset: u16) -> &'static str {
                 "string"
             }
         }
-        MYSQL_TYPE_VARCHAR
-        | MYSQL_TYPE_VAR_STRING
-        | MYSQL_TYPE_STRING
-        | MYSQL_TYPE_ENUM
-        | MYSQL_TYPE_SET => "string",
+        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_STRING => {
+            if is_binary_charset(charset) {
+                "binary"
+            } else {
+                "string"
+            }
+        }
+        MYSQL_TYPE_ENUM | MYSQL_TYPE_SET => "string",
         _ => "unknown",
     }
 }
@@ -989,7 +1028,7 @@ fn mysql_column_scale(type_code: u8, decimals: u8) -> Option<u8> {
 }
 
 fn is_binary_charset(charset: u16) -> bool {
-    charset == 63
+    charset == MYSQL_CHARSET_BINARY
 }
 
 fn read_lenenc_string(bytes: &[u8], offset: usize) -> Option<(String, usize)> {
@@ -1138,6 +1177,49 @@ mod tests {
     }
 
     #[test]
+    fn decodes_binary_charset_var_string_as_varbinary_schema() {
+        let column = parse_column_definition(&column_def_with_charset_and_flags(
+            "user_name",
+            MYSQL_TYPE_VAR_STRING,
+            MYSQL_CHARSET_BINARY,
+            MYSQL_FLAG_NOT_NULL,
+        ))
+        .expect("column definition");
+        let value = serde_json::to_value(&column).expect("column serializes");
+
+        assert_eq!(value["name"], "user_name");
+        assert_eq!(value["family"], "binary");
+        assert_eq!(value["sql_type"], "VARBINARY");
+        assert_eq!(value["nullable"], false);
+    }
+
+    #[test]
+    fn records_binary_charset_string_values_as_bytes() {
+        let column = parse_column_definition(&column_def_with_charset_and_flags(
+            "user_name",
+            MYSQL_TYPE_VAR_STRING,
+            MYSQL_CHARSET_BINARY,
+            MYSQL_FLAG_NOT_NULL,
+        ))
+        .expect("column definition");
+
+        let value = parse_text_value(b"alice", &column, 64);
+
+        assert_eq!(value.kind, "bytes");
+        assert!(value.value.is_none());
+        assert_eq!(
+            value.raw,
+            Some(BodyCapture {
+                encoding: "base64",
+                original_len: 5,
+                stored_len: 5,
+                truncated: false,
+                data: STANDARD.encode(b"alice")
+            })
+        );
+    }
+
+    #[test]
     fn parses_prepare_and_execute_binary_resultset() {
         let mut tracker = MysqlSemanticTracker::new(1024);
         let prepare = MysqlPacket {
@@ -1243,6 +1325,15 @@ mod tests {
     }
 
     fn column_def_with_flags(name: &str, type_code: u8, flags: u16) -> Vec<u8> {
+        column_def_with_charset_and_flags(name, type_code, 33, flags)
+    }
+
+    fn column_def_with_charset_and_flags(
+        name: &str,
+        type_code: u8,
+        charset: u16,
+        flags: u16,
+    ) -> Vec<u8> {
         let mut payload = Vec::new();
         payload.extend_from_slice(&lenenc_bytes(b"def"));
         payload.extend_from_slice(&lenenc_bytes(b"test"));
@@ -1251,7 +1342,7 @@ mod tests {
         payload.extend_from_slice(&lenenc_bytes(name.as_bytes()));
         payload.extend_from_slice(&lenenc_bytes(name.as_bytes()));
         payload.push(0x0c);
-        payload.extend_from_slice(&33_u16.to_le_bytes());
+        payload.extend_from_slice(&charset.to_le_bytes());
         payload.extend_from_slice(&255_u32.to_le_bytes());
         payload.push(type_code);
         payload.extend_from_slice(&flags.to_le_bytes());
