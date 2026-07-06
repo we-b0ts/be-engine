@@ -40,6 +40,9 @@ const MYSQL_TYPE_VAR_STRING: u8 = 253;
 const MYSQL_TYPE_STRING: u8 = 254;
 const MYSQL_TYPE_GEOMETRY: u8 = 255;
 
+const MYSQL_FLAG_NOT_NULL: u16 = 0x0001;
+const MYSQL_FLAG_UNSIGNED: u16 = 0x0020;
+
 #[derive(Debug, Clone)]
 pub(crate) struct MysqlSemanticTracker {
     statements: HashMap<u32, PreparedStatement>,
@@ -552,7 +555,7 @@ fn parse_binary_row(
             row.push(mysql_null());
             continue;
         }
-        let unsigned = column.flags.unwrap_or_default() & 0x20 != 0;
+        let unsigned = column.flags.unwrap_or_default() & MYSQL_FLAG_UNSIGNED != 0;
         let (value, next) = parse_binary_value(
             payload,
             offset,
@@ -784,31 +787,30 @@ fn parse_stmt_prepare_ok(payload: &[u8]) -> Option<PrepareOkPacket> {
 }
 
 fn parse_column_definition(payload: &[u8]) -> Option<MysqlColumn> {
-    let (catalog, offset) = read_lenenc_string(payload, 0)?;
-    let (schema, offset) = read_lenenc_string(payload, offset)?;
+    let (_catalog, offset) = read_lenenc_string(payload, 0)?;
+    let (_schema, offset) = read_lenenc_string(payload, offset)?;
     let (table, offset) = read_lenenc_string(payload, offset)?;
     let (org_table, offset) = read_lenenc_string(payload, offset)?;
     let (name, offset) = read_lenenc_string(payload, offset)?;
     let (org_name, offset) = read_lenenc_string(payload, offset)?;
     let (_, offset) = read_lenenc_int(payload, offset)?;
     let charset = read_u16_le(payload, offset)?;
-    let column_length = read_u32_le(payload, offset + 2)?;
+    let _column_length = read_u32_le(payload, offset + 2)?;
     let column_type_code = *payload.get(offset + 6)?;
     let flags = read_u16_le(payload, offset + 7)?;
     let decimals = *payload.get(offset + 9)?;
     Some(MysqlColumn {
-        catalog: empty_to_none(catalog),
-        schema: empty_to_none(schema),
-        table: empty_to_none(table),
-        org_table: empty_to_none(org_table),
         name,
-        org_name: empty_to_none(org_name),
-        column_type: mysql_type_name(column_type_code).to_string(),
+        table: empty_to_none(org_table).or_else(|| empty_to_none(table)),
+        column: empty_to_none(org_name),
+        family: mysql_column_family(column_type_code, charset).to_string(),
+        sql_type: mysql_sql_type_name(column_type_code, charset).to_string(),
+        unsigned: mysql_column_unsigned(column_type_code, flags),
+        bits: mysql_column_bits(column_type_code),
+        nullable: Some(flags & MYSQL_FLAG_NOT_NULL == 0),
+        scale: mysql_column_scale(column_type_code, decimals),
         column_type_code,
-        charset: Some(charset),
-        column_length: Some(column_length),
         flags: Some(flags),
-        decimals: Some(decimals),
     })
 }
 
@@ -871,38 +873,123 @@ fn empty_to_none(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn mysql_type_name(type_code: u8) -> &'static str {
+fn mysql_sql_type_name(type_code: u8, charset: u16) -> &'static str {
     match type_code {
-        MYSQL_TYPE_DECIMAL => "DECIMAL",
-        MYSQL_TYPE_TINY => "TINY",
-        MYSQL_TYPE_SHORT => "SHORT",
-        MYSQL_TYPE_LONG => "LONG",
+        MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => "DECIMAL",
+        MYSQL_TYPE_TINY => "TINYINT",
+        MYSQL_TYPE_SHORT => "SMALLINT",
+        MYSQL_TYPE_LONG => "INT",
+        MYSQL_TYPE_LONGLONG => "BIGINT",
+        MYSQL_TYPE_INT24 => "MEDIUMINT",
+        MYSQL_TYPE_YEAR => "YEAR",
         MYSQL_TYPE_FLOAT => "FLOAT",
         MYSQL_TYPE_DOUBLE => "DOUBLE",
         MYSQL_TYPE_NULL => "NULL",
         MYSQL_TYPE_TIMESTAMP => "TIMESTAMP",
-        MYSQL_TYPE_LONGLONG => "LONGLONG",
-        MYSQL_TYPE_INT24 => "INT24",
-        MYSQL_TYPE_DATE => "DATE",
+        MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE => "DATE",
         MYSQL_TYPE_TIME => "TIME",
         MYSQL_TYPE_DATETIME => "DATETIME",
-        MYSQL_TYPE_YEAR => "YEAR",
-        MYSQL_TYPE_NEWDATE => "NEWDATE",
-        MYSQL_TYPE_VARCHAR => "VARCHAR",
+        MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_STRING => "VARCHAR",
         MYSQL_TYPE_BIT => "BIT",
         MYSQL_TYPE_JSON => "JSON",
-        MYSQL_TYPE_NEWDECIMAL => "NEWDECIMAL",
         MYSQL_TYPE_ENUM => "ENUM",
         MYSQL_TYPE_SET => "SET",
-        MYSQL_TYPE_TINY_BLOB => "TINY_BLOB",
-        MYSQL_TYPE_MEDIUM_BLOB => "MEDIUM_BLOB",
-        MYSQL_TYPE_LONG_BLOB => "LONG_BLOB",
-        MYSQL_TYPE_BLOB => "BLOB",
-        MYSQL_TYPE_VAR_STRING => "VAR_STRING",
-        MYSQL_TYPE_STRING => "STRING",
+        MYSQL_TYPE_TINY_BLOB => {
+            if is_binary_charset(charset) {
+                "TINYBLOB"
+            } else {
+                "TINYTEXT"
+            }
+        }
+        MYSQL_TYPE_MEDIUM_BLOB => {
+            if is_binary_charset(charset) {
+                "MEDIUMBLOB"
+            } else {
+                "MEDIUMTEXT"
+            }
+        }
+        MYSQL_TYPE_LONG_BLOB => {
+            if is_binary_charset(charset) {
+                "LONGBLOB"
+            } else {
+                "LONGTEXT"
+            }
+        }
+        MYSQL_TYPE_BLOB => {
+            if is_binary_charset(charset) {
+                "BLOB"
+            } else {
+                "TEXT"
+            }
+        }
         MYSQL_TYPE_GEOMETRY => "GEOMETRY",
         _ => "UNKNOWN",
     }
+}
+
+fn mysql_column_family(type_code: u8, charset: u16) -> &'static str {
+    match type_code {
+        MYSQL_TYPE_TINY | MYSQL_TYPE_SHORT | MYSQL_TYPE_LONG | MYSQL_TYPE_LONGLONG
+        | MYSQL_TYPE_INT24 | MYSQL_TYPE_YEAR => "integer",
+        MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => "decimal",
+        MYSQL_TYPE_FLOAT | MYSQL_TYPE_DOUBLE => "float",
+        MYSQL_TYPE_TIMESTAMP | MYSQL_TYPE_DATETIME => "datetime",
+        MYSQL_TYPE_DATE | MYSQL_TYPE_NEWDATE => "date",
+        MYSQL_TYPE_TIME => "time",
+        MYSQL_TYPE_JSON => "json",
+        MYSQL_TYPE_BIT => "bit",
+        MYSQL_TYPE_GEOMETRY => "geometry",
+        MYSQL_TYPE_NULL => "null",
+        MYSQL_TYPE_TINY_BLOB | MYSQL_TYPE_MEDIUM_BLOB | MYSQL_TYPE_LONG_BLOB | MYSQL_TYPE_BLOB => {
+            if is_binary_charset(charset) {
+                "binary"
+            } else {
+                "string"
+            }
+        }
+        MYSQL_TYPE_VARCHAR
+        | MYSQL_TYPE_VAR_STRING
+        | MYSQL_TYPE_STRING
+        | MYSQL_TYPE_ENUM
+        | MYSQL_TYPE_SET => "string",
+        _ => "unknown",
+    }
+}
+
+fn mysql_column_unsigned(type_code: u8, flags: u16) -> Option<bool> {
+    match type_code {
+        MYSQL_TYPE_TINY
+        | MYSQL_TYPE_SHORT
+        | MYSQL_TYPE_LONG
+        | MYSQL_TYPE_LONGLONG
+        | MYSQL_TYPE_INT24
+        | MYSQL_TYPE_DECIMAL
+        | MYSQL_TYPE_NEWDECIMAL
+        | MYSQL_TYPE_FLOAT
+        | MYSQL_TYPE_DOUBLE => Some(flags & MYSQL_FLAG_UNSIGNED != 0),
+        _ => None,
+    }
+}
+
+fn mysql_column_bits(type_code: u8) -> Option<u16> {
+    match type_code {
+        MYSQL_TYPE_TINY => Some(8),
+        MYSQL_TYPE_SHORT | MYSQL_TYPE_YEAR => Some(16),
+        MYSQL_TYPE_INT24 => Some(24),
+        MYSQL_TYPE_LONG => Some(32),
+        MYSQL_TYPE_LONGLONG => Some(64),
+        MYSQL_TYPE_FLOAT => Some(32),
+        MYSQL_TYPE_DOUBLE => Some(64),
+        _ => None,
+    }
+}
+
+fn mysql_column_scale(type_code: u8, decimals: u8) -> Option<u8> {
+    matches!(type_code, MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL).then_some(decimals)
+}
+
+fn is_binary_charset(charset: u16) -> bool {
+    charset == 63
 }
 
 fn read_lenenc_string(bytes: &[u8], offset: usize) -> Option<(String, usize)> {
@@ -1028,6 +1115,29 @@ mod tests {
     }
 
     #[test]
+    fn serializes_column_as_semantic_schema() {
+        let column = parse_column_definition(&column_def_with_flags(
+            "id",
+            MYSQL_TYPE_LONG,
+            MYSQL_FLAG_NOT_NULL | MYSQL_FLAG_UNSIGNED,
+        ))
+        .expect("column definition");
+        let value = serde_json::to_value(&column).expect("column serializes");
+
+        assert_eq!(value["name"], "id");
+        assert_eq!(value["table"], "t");
+        assert_eq!(value["column"], "id");
+        assert_eq!(value["family"], "integer");
+        assert_eq!(value["sql_type"], "INT");
+        assert_eq!(value["unsigned"], true);
+        assert_eq!(value["bits"], 32);
+        assert_eq!(value["nullable"], false);
+        assert!(value.get("flags").is_none());
+        assert!(value.get("column_type_code").is_none());
+        assert!(value.get("column_type").is_none());
+    }
+
+    #[test]
     fn parses_prepare_and_execute_binary_resultset() {
         let mut tracker = MysqlSemanticTracker::new(1024);
         let prepare = MysqlPacket {
@@ -1129,6 +1239,10 @@ mod tests {
     }
 
     fn column_def(name: &str, type_code: u8) -> Vec<u8> {
+        column_def_with_flags(name, type_code, 0)
+    }
+
+    fn column_def_with_flags(name: &str, type_code: u8, flags: u16) -> Vec<u8> {
         let mut payload = Vec::new();
         payload.extend_from_slice(&lenenc_bytes(b"def"));
         payload.extend_from_slice(&lenenc_bytes(b"test"));
@@ -1140,7 +1254,7 @@ mod tests {
         payload.extend_from_slice(&33_u16.to_le_bytes());
         payload.extend_from_slice(&255_u32.to_le_bytes());
         payload.push(type_code);
-        payload.extend_from_slice(&0_u16.to_le_bytes());
+        payload.extend_from_slice(&flags.to_le_bytes());
         payload.push(0);
         payload.extend_from_slice(&[0, 0]);
         payload

@@ -50,6 +50,7 @@ pub type HeaderMapSnapshot = BTreeMap<String, Vec<String>>;
 pub struct CaseContext {
     pub id: Uuid,
     pub rule_name: String,
+    pub uri_group: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -215,18 +216,25 @@ pub struct MysqlExchangeResponse {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct MysqlColumn {
-    pub catalog: Option<String>,
-    pub schema: Option<String>,
-    pub table: Option<String>,
-    pub org_table: Option<String>,
     pub name: String,
-    pub org_name: Option<String>,
-    pub column_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    pub family: String,
+    pub sql_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsigned: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bits: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nullable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u8>,
+    #[serde(skip_serializing)]
     pub column_type_code: u8,
-    pub charset: Option<u16>,
-    pub column_length: Option<u32>,
+    #[serde(skip_serializing)]
     pub flags: Option<u16>,
-    pub decimals: Option<u8>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -356,9 +364,13 @@ impl Recorder {
     }
 
     fn case_dir(&self, case: &CaseContext) -> std::path::PathBuf {
-        self.output_dir
-            .join(sanitize_path_component(&case.rule_name))
-            .join(case.id.to_string())
+        let mut path = self
+            .output_dir
+            .join(sanitize_path_component(&case.rule_name));
+        if let Some(uri_group) = &case.uri_group {
+            path = path.join(sanitize_path_component(uri_group));
+        }
+        path.join(case.id.to_string())
     }
 }
 
@@ -524,7 +536,7 @@ fn sanitize_path_component(value: &str) -> String {
             if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
                 ch
             } else {
-                '_'
+                '-'
             }
         })
         .collect::<String>();
@@ -592,6 +604,7 @@ mod tests {
         let case = CaseContext {
             id: Uuid::new_v4(),
             rule_name: "api".to_string(),
+            uri_group: None,
         };
         let event = RecorderEvent::ProxyError(ProxyErrorEvent {
             id: Uuid::new_v4(),
@@ -622,12 +635,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn case_files_include_uri_group_when_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record api".to_string(),
+            uri_group: Some("api-users".to_string()),
+        };
+
+        recorder
+            .write_case_json(&case, "request.json", &serde_json::json!({ "ok": true }))
+            .await
+            .unwrap();
+
+        assert!(
+            temp.path()
+                .join("record-api")
+                .join("api-users")
+                .join(case.id.to_string())
+                .join("request.json")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
     async fn case_dependency_compacts_client_process_to_pid() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();
         let case = CaseContext {
             id: Uuid::new_v4(),
             rule_name: "api".to_string(),
+            uri_group: None,
         };
         let event = RecorderEvent::ProxyError(ProxyErrorEvent {
             id: Uuid::new_v4(),
@@ -669,6 +708,7 @@ mod tests {
         let case = CaseContext {
             id: Uuid::new_v4(),
             rule_name: "api".to_string(),
+            uri_group: None,
         };
         let event = RecorderEvent::MysqlQuery(MysqlQueryEvent {
             id: Uuid::new_v4(),
