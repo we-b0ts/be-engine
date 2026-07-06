@@ -45,7 +45,8 @@ Use `recorded-e2e-cases` for:
 
 - case loading and dependency replay
 - dependency mocks from `dependencies.jsonl`
-- byte-level response compatibility
+- JSON structural response compatibility, with exact-byte comparison only for
+  non-JSON bodies or explicit exact-byte modes
 - configured response ignores
 - missing dependency diagnosis
 - recording improvement feedback

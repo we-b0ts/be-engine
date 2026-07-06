@@ -63,8 +63,17 @@ Load order:
 - `error`: recorder/upstream error, or null
 
 Use `method`, `uri`, headers, and body to drive the request. Use `status` and
-meaningful body fields for assertions. Assert headers only when they are
+the response body for assertions. Assert headers only when they are
 business-relevant or the target project's existing E2E style already does so.
+
+For JSON response bodies, parse recorded and actual bodies and compare JSON
+values structurally. Object member order is not meaningful. Field presence and
+value kind are meaningful: a missing field, `null`, and `""` are three different
+results. Arrays remain ordered unless the product contract or explicit
+assertion config says otherwise.
+
+Use byte-level comparison only for non-JSON bodies, binary payloads, or an
+explicit exact-bytes assertion mode.
 
 ## Body Capture
 
@@ -80,9 +89,9 @@ HTTP case body fields:
 - `decode_error`: decode error text, or null
 
 If `encoding` is `utf8`, use `data` directly. If `encoding` is `base64`, decode
-`data` before sending the request or comparing bytes. If `truncated` is true,
-avoid exact full-body assertions; assert only stable fields available in the
-stored data.
+`data` before sending the request or comparing exact bytes. If `truncated` is
+true, avoid exact full-body assertions; assert only stable fields available in
+the stored data.
 
 ## Dependency Files
 

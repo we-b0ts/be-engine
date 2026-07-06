@@ -71,8 +71,20 @@ the target repo has a different established pattern.
 
 ## E2E And Compatibility
 
-The recorded E2E is the primary contract. Use byte-level response compatibility
-by default. Only configured ignores may relax headers or body fields.
+The recorded E2E is the primary contract. For JSON responses, compare parsed
+JSON values, not serialized bytes. Object key order, whitespace, and pretty
+formatting do not matter. Field presence and value kind do matter: missing,
+`null`, and `""` are three different outputs. Only configured ignores may relax
+headers or body fields. Use byte-level response compatibility only for non-JSON
+bodies or explicit exact-byte modes.
+
+For Rust JSON APIs, define wire DTOs that preserve the source API contract. Do
+not add `skip_serializing_if` or default omission unless the recorded/source
+response actually omits the field. Represent recorded `null` as `Option<T>`
+without skipping serialization, recorded empty strings as `String`, and absent
+fields as omitted fields. `HashMap` or other map-backed JSON objects are
+acceptable for JSON structural E2E only when field presence and values are
+correct; they are not suitable for exact-byte assertions.
 
 Use recorded dependency mocks for tests. Do not connect to real DBs, queues,
 caches, or third-party services during recorded E2E unless the target repo

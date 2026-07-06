@@ -37,8 +37,9 @@ recording/E2E evidence.
    preserve original case files. If the user provides a case collection
    directory, select the case by each child `request.json.uri` matching the
    migration scope.
-7. Use `recorded-e2e-cases` for recorded replay, dependency mocks, byte-level
-   response compatibility, configured ignores, and recording feedback rules.
+7. Use `recorded-e2e-cases` for recorded replay, dependency mocks, JSON
+   structural response compatibility, configured ignores, exact-byte modes, and
+   recording feedback rules.
 8. Ensure a repo-local development command facade exists. Prefer an existing
    project convention; otherwise create `scripts/<project>-cli`.
 9. Manage runtime config under `config/`. Development startup should read a

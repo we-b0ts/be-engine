@@ -35,11 +35,18 @@ Implement in this order:
 3. Build dependency mocks from `dependencies.jsonl`.
 4. Start the app under test with real external dependencies isolated.
 5. Send the recorded request or invoke the equivalent route.
-6. Assert status and meaningful response body fields. Assert headers only when
+6. Assert status and response body compatibility. Assert headers only when
    stable and relevant.
 
 The replay is complete only when the request returns the expected response while
 using dependency behavior reconstructed from the recorded dependency file.
+
+For JSON responses, compare parsed JSON values, not serialized bytes. Object
+key order and pretty formatting do not matter. Field presence and value type do
+matter: missing, `null`, and `""` are all different. Arrays are ordered unless
+the product contract or explicit assertion config marks them unordered. Use
+byte-level body comparison only for non-JSON bodies or explicit exact-byte
+assertion mode.
 
 Recorded dependencies are test evidence. Do not turn them into the app's normal
 runtime data source unless the user explicitly asks for a replay-only tool. For
@@ -107,7 +114,7 @@ Minimum supported concepts:
 - case key: `recordings/<rule>/<uri-group>/<case-id>`
 - optional case collection key: `recordings/<rule>/<uri-group>` plus a selected
   case id after matching `request.json.uri`
-- body assertion mode: semantic fields, exact body, or status-only
+- body assertion mode: strict JSON, exact bytes, semantic fields, or status-only
 - ignored response JSONPaths
 - ignored or asserted headers
 - external dependency isolation flag

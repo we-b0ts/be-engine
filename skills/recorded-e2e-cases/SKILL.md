@@ -29,7 +29,9 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    Memcache, MQ, and other external dependencies unless the project already has
    an explicit local/test isolation strategy.
 5. Drive the recorded request, or the closest equivalent route invocation, and
-   compare it with `expected-response.json`.
+   compare it with `expected-response.json`. For JSON responses, compare parsed
+   JSON structurally: object key order is irrelevant, but field presence, value
+   type, `null`, empty string, and missing field must match exactly.
 6. Run a focused single-case or related E2E command first. After it passes, run
    the broader relevant suite or project-standard checks.
 7. Iterate at most 3 times. Fix or add mocks first. Modify product code only
@@ -54,6 +56,8 @@ configuration interface.
   re-recording or data-supply steps.
 - If the HTTP assertion differs only in unstable fields, suggest JSONPath ignore
   entries but do not add them unless the user explicitly authorizes it.
+- Use byte-level body comparison only for non-JSON bodies or when the user or
+  project config explicitly requests exact bytes.
 
 Read [failure-diagnosis.md](references/failure-diagnosis.md) for protocol-neutral
 triage, MySQL-specific risk signals, and recorder feedback signals.

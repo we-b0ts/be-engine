@@ -21,8 +21,8 @@ The target `AGENTS.md` must include:
 - recorded case selection rule: collection directories must be filtered by
   `request.json.uri`
 - E2E rule: recorded cases are the behavior contract
-- compatibility rule: responses are byte-level compatible unless explicit E2E
-  config ignores fields or headers
+- compatibility rule: JSON responses use strict structural JSON comparison;
+  exact bytes apply only to non-JSON or explicit exact-byte modes
 - runtime dependency rule: recorded dependency data is test/mock evidence, not
   normal runtime storage
 - normal startup rule: API/service migrations require a runnable service
@@ -72,8 +72,12 @@ its child directories as candidate cases. Select the case by matching each
 child `request.json.uri` to the migrated API path; do not rely on the
 `uri-group` directory name alone.
 
-Responses must be byte-level compatible by default. Ignore fields or headers
-only when explicitly configured in the recorded E2E assertion config.
+JSON responses must be structurally compatible by default. Compare parsed JSON,
+not serialized bytes: object key order and whitespace do not matter, but field
+presence, value type, `null`, empty string, and missing field must match exactly.
+Use exact-byte comparison only for non-JSON bodies or explicit exact-byte modes.
+Ignore fields or headers only when explicitly configured in the recorded E2E
+assertion config.
 
 Use the recorded dependency data to build mocks. Do not invent missing
 dependency rows, messages, cache values, or downstream responses.

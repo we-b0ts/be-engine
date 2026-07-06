@@ -72,6 +72,11 @@ records.
 Only classify a mismatch as assertion drift when dependency mocks were used and
 the business behavior matches.
 
+For JSON responses, diagnose against parsed JSON values. Formatting, whitespace,
+and object key order are not assertion failures. Missing fields, extra fields,
+`null` versus `""`, wrong scalar types, and unexpected array order are assertion
+failures unless explicitly configured otherwise.
+
 Common unstable fields:
 
 - timestamps and durations
