@@ -29,6 +29,9 @@ const CLIENT_MULTI_RESULTS: u32 = 0x0002_0000;
 const CLIENT_PLUGIN_AUTH: u32 = 0x0008_0000;
 
 const SERVER_STATUS_AUTOCOMMIT: u16 = 0x0002;
+const MYSQL_REPLAY_AUTH_PLUGIN: &[u8] = b"mysql_native_password";
+const MYSQL_REPLAY_AUTH_PLUGIN_DATA_1: &[u8; 8] = b"replay01";
+const MYSQL_REPLAY_AUTH_PLUGIN_DATA_2: &[u8; 12] = b"replay-seed2";
 
 const MYSQL_TYPE_TINY: u8 = 1;
 const MYSQL_TYPE_SHORT: u8 = 2;
@@ -52,6 +55,7 @@ const MYSQL_TYPE_GEOMETRY: u8 = 255;
 
 const MYSQL_FLAG_NOT_NULL: u16 = 0x0001;
 const MYSQL_FLAG_UNSIGNED: u16 = 0x0020;
+const MYSQL_FLAG_BINARY: u16 = 0x0080;
 const MYSQL_CHARSET_UTF8_GENERAL_CI: u16 = 33;
 const MYSQL_CHARSET_BINARY: u16 = 63;
 const SO_ORIGINAL_DST: libc::c_int = 80;
@@ -1629,21 +1633,27 @@ fn handshake_packet(connection_id: u32) -> MysqlPacket {
     payload.push(0x0a);
     payload.extend_from_slice(b"8.0.0-traffic-recorder-replay\0");
     payload.extend_from_slice(&connection_id.to_le_bytes());
-    payload.extend_from_slice(b"replay01");
+    payload.extend_from_slice(MYSQL_REPLAY_AUTH_PLUGIN_DATA_1);
     payload.push(0);
     payload.extend_from_slice(&(capabilities as u16).to_le_bytes());
     payload.push(45);
     payload.extend_from_slice(&SERVER_STATUS_AUTOCOMMIT.to_le_bytes());
     payload.extend_from_slice(&((capabilities >> 16) as u16).to_le_bytes());
-    payload.push(21);
+    payload.push(mysql_replay_auth_plugin_data_len());
     payload.extend_from_slice(&[0; 10]);
-    payload.extend_from_slice(b"replay-auth-seed");
+    payload.extend_from_slice(MYSQL_REPLAY_AUTH_PLUGIN_DATA_2);
     payload.push(0);
-    payload.extend_from_slice(b"mysql_native_password\0");
+    payload.extend_from_slice(MYSQL_REPLAY_AUTH_PLUGIN);
+    payload.push(0);
     MysqlPacket {
         sequence_id: 0,
         payload,
     }
+}
+
+fn mysql_replay_auth_plugin_data_len() -> u8 {
+    u8::try_from(MYSQL_REPLAY_AUTH_PLUGIN_DATA_1.len() + MYSQL_REPLAY_AUTH_PLUGIN_DATA_2.len() + 1)
+        .expect("MySQL replay auth plugin data length fits u8")
 }
 
 fn ok_payload(affected_rows: u64, last_insert_id: u64) -> Vec<u8> {
@@ -1693,6 +1703,9 @@ fn column_definition_payload(column: &RecordedMysqlColumn) -> Vec<u8> {
     }
     if column.unsigned == Some(true) {
         flags |= MYSQL_FLAG_UNSIGNED;
+    }
+    if column.family == "binary" {
+        flags |= MYSQL_FLAG_BINARY;
     }
 
     let mut payload = Vec::new();
@@ -2422,6 +2435,81 @@ mod tests {
     use super::*;
     use tokio::io::AsyncWriteExt;
 
+    #[test]
+    fn handshake_packet_auth_plugin_is_sqlx_compatible() {
+        let packet = handshake_packet(7);
+        assert_eq!(packet.sequence_id, 0);
+
+        let mut offset = 0;
+        assert_eq!(packet.payload[offset], 0x0a);
+        offset += 1;
+        offset += nul_terminated_len(&packet.payload[offset..]) + 1;
+        offset += 4;
+        assert_eq!(
+            &packet.payload[offset..offset + MYSQL_REPLAY_AUTH_PLUGIN_DATA_1.len()],
+            MYSQL_REPLAY_AUTH_PLUGIN_DATA_1
+        );
+        offset += MYSQL_REPLAY_AUTH_PLUGIN_DATA_1.len();
+        assert_eq!(packet.payload[offset], 0);
+        offset += 1;
+
+        let capabilities_1 =
+            u16::from_le_bytes([packet.payload[offset], packet.payload[offset + 1]]);
+        offset += 2;
+        offset += 1;
+        offset += 2;
+        let capabilities_2 =
+            u16::from_le_bytes([packet.payload[offset], packet.payload[offset + 1]]);
+        offset += 2;
+        let capabilities = capabilities_1 as u32 | ((capabilities_2 as u32) << 16);
+        assert_ne!(capabilities & CLIENT_SECURE_CONNECTION, 0);
+        assert_ne!(capabilities & CLIENT_PLUGIN_AUTH, 0);
+
+        let auth_plugin_data_len = packet.payload[offset];
+        offset += 1;
+        offset += 10;
+
+        let sqlx_auth_plugin_data_2_len =
+            std::cmp::max(auth_plugin_data_len.saturating_sub(9), 12) as usize;
+        assert_eq!(
+            sqlx_auth_plugin_data_2_len,
+            MYSQL_REPLAY_AUTH_PLUGIN_DATA_2.len()
+        );
+        assert_eq!(
+            &packet.payload[offset..offset + sqlx_auth_plugin_data_2_len],
+            MYSQL_REPLAY_AUTH_PLUGIN_DATA_2
+        );
+        offset += sqlx_auth_plugin_data_2_len;
+        assert_eq!(packet.payload[offset], 0);
+        offset += 1;
+
+        let plugin_len = nul_terminated_len(&packet.payload[offset..]);
+        assert_eq!(
+            &packet.payload[offset..offset + plugin_len],
+            MYSQL_REPLAY_AUTH_PLUGIN
+        );
+        assert_eq!(offset + plugin_len + 1, packet.payload.len());
+    }
+
+    #[test]
+    fn binary_replay_column_sets_binary_flag() {
+        let payload = column_definition_payload(&RecordedMysqlColumn {
+            name: "department_id".to_string(),
+            table: Some("user".to_string()),
+            column: Some("department_id".to_string()),
+            family: "binary".to_string(),
+            sql_type: "VARBINARY".to_string(),
+            unsigned: None,
+            bits: None,
+            nullable: Some(true),
+            scale: None,
+        });
+        let (type_code, flags) = replay_column_type_and_flags(&payload);
+
+        assert_eq!(type_code, MYSQL_TYPE_VAR_STRING);
+        assert_ne!(flags & MYSQL_FLAG_BINARY, 0);
+    }
+
     #[tokio::test]
     async fn replays_text_query_from_dependencies() {
         let temp = tempfile::tempdir().unwrap();
@@ -2718,6 +2806,28 @@ mod tests {
 
     async fn write_packet_bytes(stream: &mut TcpStream, packet: MysqlPacket) {
         stream.write_all(&packet.to_wire_bytes()).await.unwrap();
+    }
+
+    fn nul_terminated_len(bytes: &[u8]) -> usize {
+        bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .expect("missing NUL terminator")
+    }
+
+    fn replay_column_type_and_flags(payload: &[u8]) -> (u8, u16) {
+        let mut offset = 0;
+        for _ in 0..6 {
+            let (_, next) = read_lenenc_bytes(payload, offset).expect("lenenc column field");
+            offset = next;
+        }
+        let (_, offset) = read_lenenc_int(payload, offset).expect("column fixed length marker");
+        let type_code = *payload.get(offset + 6).expect("column type code");
+        let flags = u16::from_le_bytes([
+            *payload.get(offset + 7).expect("column flags low byte"),
+            *payload.get(offset + 8).expect("column flags high byte"),
+        ]);
+        (type_code, flags)
     }
 
     fn login_payload(database: &str) -> Vec<u8> {

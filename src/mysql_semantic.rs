@@ -42,6 +42,7 @@ const MYSQL_TYPE_GEOMETRY: u8 = 255;
 
 const MYSQL_FLAG_NOT_NULL: u16 = 0x0001;
 const MYSQL_FLAG_UNSIGNED: u16 = 0x0020;
+const MYSQL_FLAG_BINARY: u16 = 0x0080;
 
 const MYSQL_CHARSET_BINARY: u16 = 63;
 
@@ -814,8 +815,8 @@ fn parse_column_definition(payload: &[u8]) -> Option<MysqlColumn> {
         name,
         table: empty_to_none(org_table).or_else(|| empty_to_none(table)),
         column: empty_to_none(org_name),
-        family: mysql_column_family(column_type_code, charset).to_string(),
-        sql_type: mysql_sql_type_name(column_type_code, charset).to_string(),
+        family: mysql_column_family(column_type_code, charset, flags).to_string(),
+        sql_type: mysql_sql_type_name(column_type_code, charset, flags).to_string(),
         unsigned: mysql_column_unsigned(column_type_code, flags),
         bits: mysql_column_bits(column_type_code),
         nullable: Some(flags & MYSQL_FLAG_NOT_NULL == 0),
@@ -896,7 +897,7 @@ fn empty_to_none(value: String) -> Option<String> {
     (!value.is_empty()).then_some(value)
 }
 
-fn mysql_sql_type_name(type_code: u8, charset: u16) -> &'static str {
+fn mysql_sql_type_name(type_code: u8, charset: u16, flags: u16) -> &'static str {
     match type_code {
         MYSQL_TYPE_DECIMAL | MYSQL_TYPE_NEWDECIMAL => "DECIMAL",
         MYSQL_TYPE_TINY => "TINYINT",
@@ -913,14 +914,14 @@ fn mysql_sql_type_name(type_code: u8, charset: u16) -> &'static str {
         MYSQL_TYPE_TIME => "TIME",
         MYSQL_TYPE_DATETIME => "DATETIME",
         MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING => {
-            if is_binary_charset(charset) {
+            if is_binary_type(charset, flags) {
                 "VARBINARY"
             } else {
                 "VARCHAR"
             }
         }
         MYSQL_TYPE_STRING => {
-            if is_binary_charset(charset) {
+            if is_binary_type(charset, flags) {
                 "BINARY"
             } else {
                 "VARCHAR"
@@ -931,28 +932,28 @@ fn mysql_sql_type_name(type_code: u8, charset: u16) -> &'static str {
         MYSQL_TYPE_ENUM => "ENUM",
         MYSQL_TYPE_SET => "SET",
         MYSQL_TYPE_TINY_BLOB => {
-            if is_binary_charset(charset) {
+            if is_binary_type(charset, flags) {
                 "TINYBLOB"
             } else {
                 "TINYTEXT"
             }
         }
         MYSQL_TYPE_MEDIUM_BLOB => {
-            if is_binary_charset(charset) {
+            if is_binary_type(charset, flags) {
                 "MEDIUMBLOB"
             } else {
                 "MEDIUMTEXT"
             }
         }
         MYSQL_TYPE_LONG_BLOB => {
-            if is_binary_charset(charset) {
+            if is_binary_type(charset, flags) {
                 "LONGBLOB"
             } else {
                 "LONGTEXT"
             }
         }
         MYSQL_TYPE_BLOB => {
-            if is_binary_charset(charset) {
+            if is_binary_type(charset, flags) {
                 "BLOB"
             } else {
                 "TEXT"
@@ -963,7 +964,7 @@ fn mysql_sql_type_name(type_code: u8, charset: u16) -> &'static str {
     }
 }
 
-fn mysql_column_family(type_code: u8, charset: u16) -> &'static str {
+fn mysql_column_family(type_code: u8, charset: u16, flags: u16) -> &'static str {
     match type_code {
         MYSQL_TYPE_TINY | MYSQL_TYPE_SHORT | MYSQL_TYPE_LONG | MYSQL_TYPE_LONGLONG
         | MYSQL_TYPE_INT24 | MYSQL_TYPE_YEAR => "integer",
@@ -977,14 +978,14 @@ fn mysql_column_family(type_code: u8, charset: u16) -> &'static str {
         MYSQL_TYPE_GEOMETRY => "geometry",
         MYSQL_TYPE_NULL => "null",
         MYSQL_TYPE_TINY_BLOB | MYSQL_TYPE_MEDIUM_BLOB | MYSQL_TYPE_LONG_BLOB | MYSQL_TYPE_BLOB => {
-            if is_binary_charset(charset) {
+            if is_binary_type(charset, flags) {
                 "binary"
             } else {
                 "string"
             }
         }
         MYSQL_TYPE_VARCHAR | MYSQL_TYPE_VAR_STRING | MYSQL_TYPE_STRING => {
-            if is_binary_charset(charset) {
+            if is_binary_type(charset, flags) {
                 "binary"
             } else {
                 "string"
@@ -1029,6 +1030,10 @@ fn mysql_column_scale(type_code: u8, decimals: u8) -> Option<u8> {
 
 fn is_binary_charset(charset: u16) -> bool {
     charset == MYSQL_CHARSET_BINARY
+}
+
+fn is_binary_type(charset: u16, flags: u16) -> bool {
+    is_binary_charset(charset) || flags & MYSQL_FLAG_BINARY != 0
 }
 
 fn read_lenenc_string(bytes: &[u8], offset: usize) -> Option<(String, usize)> {
@@ -1194,6 +1199,23 @@ mod tests {
     }
 
     #[test]
+    fn decodes_binary_flag_var_string_as_varbinary_schema() {
+        let column = parse_column_definition(&column_def_with_charset_and_flags(
+            "department_id",
+            MYSQL_TYPE_VAR_STRING,
+            33,
+            MYSQL_FLAG_BINARY,
+        ))
+        .expect("column definition");
+        let value = serde_json::to_value(&column).expect("column serializes");
+
+        assert_eq!(value["name"], "department_id");
+        assert_eq!(value["family"], "binary");
+        assert_eq!(value["sql_type"], "VARBINARY");
+        assert_eq!(value["nullable"], true);
+    }
+
+    #[test]
     fn records_binary_charset_string_values_as_bytes() {
         let column = parse_column_definition(&column_def_with_charset_and_flags(
             "user_name",
@@ -1215,6 +1237,32 @@ mod tests {
                 stored_len: 5,
                 truncated: false,
                 data: STANDARD.encode(b"alice")
+            })
+        );
+    }
+
+    #[test]
+    fn records_binary_flag_string_values_as_bytes() {
+        let column = parse_column_definition(&column_def_with_charset_and_flags(
+            "department_id",
+            MYSQL_TYPE_VAR_STRING,
+            33,
+            MYSQL_FLAG_BINARY,
+        ))
+        .expect("column definition");
+
+        let value = parse_text_value(b"0", &column, 64);
+
+        assert_eq!(value.kind, "bytes");
+        assert!(value.value.is_none());
+        assert_eq!(
+            value.raw,
+            Some(BodyCapture {
+                encoding: "base64",
+                original_len: 1,
+                stored_len: 1,
+                truncated: false,
+                data: STANDARD.encode(b"0")
             })
         );
     }

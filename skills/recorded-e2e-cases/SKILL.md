@@ -25,18 +25,21 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    conventions.
 4. Start managed dependency replay from `dependencies.jsonl` before asserting
    the HTTP response. Use `scripts/replay.sh` and
-   `assets/replay.example.toml`; set `TRAFFIC_RECORDER_PROXY_BIN` to the
-   traffic-recorder-proxy binary. Do not hand-write substitute dependency mocks
-   when replay data or relay behavior is missing; report recorder/replay
-   improvements instead.
+   `assets/replay.example.toml`; ensure `traffic-recorder-proxy` is executable
+   on `PATH` before starting. Do not hand-write substitute dependency mocks when
+   replay data or relay behavior is missing; report recorder/replay improvements
+   instead.
 5. Drive the recorded request, or the closest equivalent route invocation, and
    compare it with `expected-response.json`. For JSON responses, compare parsed
    JSON structurally: object key order is irrelevant, but field presence, value
    type, `null`, empty string, and missing field must match exactly.
-6. Use `dependencies-summary.json` as the dependency coverage checklist when it
-   exists. Response-driving, auth/session, and required side-effect dependency
-   counts must be matched or explicitly explained; unrelated/background traffic
-   may be ignored with evidence.
+6. Treat `dependencies.jsonl` as the case-level dependency touch contract. Use
+   `dependencies-summary.json` as the coverage checklist when it exists.
+   Response compatibility alone is not success. All case-owned dependency
+   touches, including auth/session calls and required side effects, must be
+   replay-matched. Unmatched or unused case dependencies block success unless
+   the user explicitly approves a behavior change or the evidence proves a
+   recording-correlation issue that should be reported upstream.
 7. Run a focused single-case or related E2E command first. After it passes, run
    the broader relevant suite or project-standard checks.
 8. Iterate at most 3 times. Fix replay config, target dependency routing, or
@@ -59,6 +62,10 @@ discovery, managed dependency replay, replay loops, and the fallback
 - If the case cannot be replayed because recording evidence is incomplete,
   stop and output a concise missing-dependency list with recommended
   re-recording or data-supply steps.
+- Do not mark a case as passed while replay output has unexplained unmatched
+  target calls or unused case dependency exchanges. Dynamic values such as
+  timestamps, request ids, UUIDs, durations, or generated ids may be normalized,
+  but the dependency touch itself must still be exercised.
 - If the HTTP assertion differs only in unstable fields, suggest JSONPath ignore
   entries but do not add them unless the user explicitly authorizes it.
 - Use byte-level body comparison only for non-JSON bodies or when the user or

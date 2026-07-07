@@ -26,18 +26,20 @@ This skill bundles a replay helper and config template:
 - `scripts/replay.sh`
 - `assets/replay.example.toml`
 
-Before running the target E2E, set `TRAFFIC_RECORDER_PROXY_BIN` to an executable
-`traffic-recorder-proxy` binary. The helper also checks common local candidates
-and `PATH`, but the environment variable is the explicit, portable interface.
+Before running the target E2E, ensure the `traffic-recorder-proxy` command is
+available on `PATH`. For local development, prefer installing, copying, or
+symlinking the binary into a user PATH directory such as `~/.local/bin`.
 
 ```bash
-TRAFFIC_RECORDER_PROXY_BIN=/path/to/traffic-recorder-proxy \
-  /path/to/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
+command -v traffic-recorder-proxy
+/path/to/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
 ```
 
 Use the template as the starting config. Relative `case` and `report` paths are
 resolved from the config file directory. Use `--no-intercept` only when the
 target project already routes dependencies to the replay listeners.
+`TRAFFIC_RECORDER_PROXY_BIN` is accepted only as an explicit fallback override
+when PATH cannot be changed.
 
 ## Replay Construction
 
@@ -67,7 +69,8 @@ Implement in this order:
 
 The replay is complete only when the request returns the expected response while
 using dependency behavior replayed from the recorded dependency file, and the
-dependency coverage summary is matched or explicitly explained.
+case-owned dependency touch contract is satisfied. HTTP response compatibility
+alone is not success.
 
 For JSON responses, compare parsed JSON values, not serialized bytes. Object
 key order and pretty formatting do not matter. Field presence and value type do
@@ -87,6 +90,14 @@ Use traffic-recorder-proxy replay as the dependency boundary. If a required
 dependency type cannot be replayed from recorded evidence, stop with recorder
 feedback instead of hand-writing substitute mock data.
 
+Treat every event in `dependencies.jsonl` as part of the initial touch audit.
+The target implementation may use different code structure, but it must touch
+equivalent external dependencies for the selected case. Equivalent means the
+same dependency role and compatible operation, input shape, state effect,
+recorded status, rows or affected rows, and error semantics where applicable.
+Do not require mechanical source-code translation or byte-identical SQL
+formatting, but do require dependency behavior evidence.
+
 Before relying on replay results, classify each recorded dependency:
 
 - `response-driving`: data directly needed to produce the expected response
@@ -97,10 +108,15 @@ Before relying on replay results, classify each recorded dependency:
   traffic captured near the request but not owned by the case
 
 Replay response-driving and auth/session dependencies first. Required side
-effects must be replayed or explicitly explained when the app path requires
-them. Do not fold unrelated/background dependencies into business logic or
-runtime data models; note the evidence for ignoring them. If ownership is
-ambiguous, treat it as recorder feedback rather than guessing.
+effects must be replayed. If the target intentionally changes a side effect,
+for example replacing a legacy DB request log with structured service logs, get
+explicit user approval and record it as a behavior-contract change; do not
+silently mark the replay as passed. Do not fold unrelated/background
+dependencies into business logic or runtime data models. Classify traffic as
+unrelated/background only with evidence such as bootstrap ownership, scheduler
+ownership, startup timing, source-code ownership, or a replay report showing it
+is not exercised by the selected request. If ownership is ambiguous, treat the
+replay as incomplete and report a recorder-correlation improvement.
 
 For MySQL:
 
@@ -117,6 +133,10 @@ For MySQL:
 - Reproduce error code and message for `response.status == "error"`.
 - Preserve dependency order when transactions, locks, repeated SQL, or session
   state matter.
+- Normalize dynamic params only when the dependency touch remains equivalent.
+  Examples include current timestamps, request ids, UUIDs, elapsed durations,
+  and generated ids that are linked across recorded calls. Do not skip a whole
+  query or side effect because one parameter is dynamic.
 - Treat missing SQL, missing params for prepared execution, missing semantic
   column schema, row truncation, and parse warnings as risk signals.
 
@@ -133,10 +153,13 @@ evidence for:
 - protocol, CRUD operation, table/host/topic/key-pattern, response status, row
   count, affected rows, and error code/message where applicable
 
-Do not fail the E2E solely because unrelated/background traffic from the
-recorded summary was not replayed. Instead, document why it is not case-owned.
-If the summary shows a dependency category that the target test never exercises
-and it is not safe to classify it as unrelated, treat the replay as incomplete.
+Do not mark the E2E as passed when replay output contains unexplained
+`unmatched` target dependency calls, `unused_case_exchanges`, or equivalent
+unused recorded case dependencies. An unused case exchange may mean the target
+omitted logic. It can be ignored only after evidence proves it is unrelated
+background traffic, or after the user approves a behavior change. If the summary
+shows a dependency category that the target test never exercises and it is not
+safe to classify it as unrelated, treat the replay as incomplete.
 
 For non-MySQL dependencies:
 
@@ -197,6 +220,10 @@ process-wide traffic, include a short working-note summary of which dependency
 classes were replayed, explained, or ignored. Surface recorder feedback if
 better dependency attribution, role tagging, or noise filtering would have
 reduced manual triage.
+
+If replay passes the HTTP assertion but leaves case dependencies unused, report
+the result as partial: response passed, dependency touch incomplete. Include the
+unmatched/unused dependency list and do not finish as success.
 
 ## Final Response
 

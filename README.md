@@ -79,8 +79,9 @@ For dependency replay, use the helper bundled with the recorded E2E skill. Copy
 or adapt `skills/recorded-e2e-cases/assets/replay.example.toml`, then run:
 
 ```bash
-TRAFFIC_RECORDER_PROXY_BIN="$PWD/target/debug/traffic-recorder-proxy" \
-  ./skills/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
+ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
+command -v traffic-recorder-proxy
+./skills/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
 ```
 
 The replay script starts the replay DNS and fake-IP TCP gateway, then applies

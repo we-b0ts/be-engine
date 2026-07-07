@@ -49,6 +49,8 @@ Use `recorded-e2e-cases` for:
 - case loading and dependency replay
 - managed dependency replay from `dependencies.jsonl`
 - dependency coverage from `dependencies-summary.json`, when present
+- dependency touch contract enforcement: every case-owned recorded dependency
+  must be matched by equivalent target behavior
 - JSON structural response compatibility, with exact-byte comparison only for
   non-JSON bodies or explicit exact-byte modes
 - configured response ignores
@@ -61,6 +63,15 @@ boundary for production-like startup, such as a database repository, external
 service client, queue adapter, or scheduler input source. Recorded replay must
 not replace that real runtime boundary; it belongs only inside the E2E harness
 and replay tooling supplied by `recorded-e2e-cases`.
+
+A migration is complete only when both the HTTP response and the case-owned
+dependency touches pass. If replay reports unused recorded case exchanges,
+unmatched target dependency calls, or missing required side effects, the result
+is incomplete even when `expected-response.json` matches. The agent may not
+silently drop legacy side effects such as DB request-log writes. It must either
+implement equivalent behavior, get explicit user approval for a behavior
+contract change, or report the dependency as a recording-correlation
+improvement when evidence proves it is unrelated/background traffic.
 
 Default copied case location in the target repo is `tests/fixtures/recordings`.
 Preserve original case files. A user-provided recording path may be a single
@@ -282,7 +293,8 @@ Use at most 3 iterations:
 7. For API/service scopes, ensure a normal runnable entrypoint exists before
    declaring success. A library-only test harness is not enough for a migrated
    service API.
-8. Run the focused recorded E2E through managed dependency replay.
+8. Run the focused recorded E2E through managed dependency replay and verify
+   that all case-owned dependency touches are matched.
 9. Classify failures as target implementation bug, replay issue,
    incomplete recording, recording workflow improvement, or target setup issue.
 10. Fix target implementation only when recorded replay evidence is complete.
@@ -317,4 +329,6 @@ Keep output concise:
 - runtime lifecycle commands and verified process status for service scopes
 - logging config and essential log path(s) for service scopes
 - pass/fail result
+- dependency touch status, especially any unmatched target calls or unused case
+  exchanges
 - blockers or recording improvement feedback only when present

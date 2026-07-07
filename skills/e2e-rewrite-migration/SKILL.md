@@ -40,7 +40,9 @@ recording/E2E evidence.
    migration scope.
 7. Use `recorded-e2e-cases` for recorded request replay, managed dependency
    replay, dependency summary coverage, JSON structural response compatibility,
-   configured ignores, exact-byte modes, and recording feedback rules.
+   configured ignores, exact-byte modes, recording feedback rules, and the
+   dependency touch contract. A matching HTTP response is only partial success
+   until all case-owned dependencies are matched.
 8. Ensure a repo-local development command facade exists. Prefer an existing
    project convention; otherwise create `scripts/<project>-cli`. Runnable
    services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,

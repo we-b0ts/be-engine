@@ -14,7 +14,8 @@ Options:
   --no-intercept  Start replay listeners without changing local DNS/iptables.
 
 The config file defaults to replay.example.toml in the current directory.
-Set TRAFFIC_RECORDER_PROXY_BIN to the traffic-recorder-proxy binary path.
+Ensure the traffic-recorder-proxy command is available on PATH before starting.
+TRAFFIC_RECORDER_PROXY_BIN is accepted as an explicit fallback override.
 DNS/fake-IP rules are removed when this script exits.
 EOF
 }
@@ -83,6 +84,11 @@ find_proxy_binary() {
   local repo_candidate="$SCRIPT_DIR/../../../target/debug/traffic-recorder-proxy"
   local cwd_candidate="$CALLER_CWD/target/debug/traffic-recorder-proxy"
 
+  if command -v traffic-recorder-proxy >/dev/null 2>&1; then
+    command -v traffic-recorder-proxy
+    return
+  fi
+
   if [ -n "${TRAFFIC_RECORDER_PROXY_BIN:-}" ]; then
     if [ ! -x "$TRAFFIC_RECORDER_PROXY_BIN" ]; then
       echo "TRAFFIC_RECORDER_PROXY_BIN is not executable: $TRAFFIC_RECORDER_PROXY_BIN" >&2
@@ -102,12 +108,7 @@ find_proxy_binary() {
     return
   fi
 
-  if command -v traffic-recorder-proxy >/dev/null 2>&1; then
-    command -v traffic-recorder-proxy
-    return
-  fi
-
-  echo "traffic-recorder-proxy binary not found. Set TRAFFIC_RECORDER_PROXY_BIN=/path/to/traffic-recorder-proxy." >&2
+  echo "traffic-recorder-proxy command not found on PATH. Add it to PATH, for example ~/.local/bin/traffic-recorder-proxy, or set TRAFFIC_RECORDER_PROXY_BIN=/path/to/traffic-recorder-proxy." >&2
   exit 1
 }
 

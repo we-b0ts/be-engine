@@ -27,6 +27,8 @@ evidence:
 - a dependency error was recorded instead of a semantic response
 - `dependencies-summary.json` lists response-driving, auth/session, or required
   side-effect dependencies that the replay does not cover
+- replay output contains unused recorded case exchanges or unmatched target
+  dependency calls that cannot be proven unrelated/background
 - downstream data is needed but no semantic record or trusted project fixture
   supplies it
 - the recorded HTTP response depends on data that cannot be explained by the
@@ -42,6 +44,7 @@ Fix replay setup before product code when:
 - the app calls a dependency but replay does not handle it
 - the replay dependency coverage summary misses a recorded response-driving,
   auth/session, or required side-effect dependency
+- the HTTP response passes but recorded case dependencies remain unused
 - SQL differs only by formatting, placeholder style, or harmless whitespace
 - prepared statement params are parsed but replay ignores them
 - dependency ordering matters and replay lacks connection/session state
@@ -99,6 +102,8 @@ Modify product code only when:
 
 - dependency evidence is complete
 - replay is hit and returns the recorded behavior
+- replay coverage has no unexplained unused case exchanges or unmatched target
+  dependency calls
 - the request is driven equivalently to the recording
 - the remaining mismatch is a real behavior difference, not an unstable field
   or missing environment setup
@@ -126,6 +131,8 @@ Report recorder feedback when replay required:
 - filtering substantial unrelated process-wide traffic, such as request-log
   writes, scheduler queries, locks, heartbeats, or background jobs, before the
   case-owned dependencies were clear
+- discovering that a case dependency was intentionally replaced or dropped in a
+  migration and therefore needs user-approved contract-change tracking
 - adding large amounts of target-project fixture data that should have been
   captured as semantic dependency output
 - identifying unstable response fields that the recorder could tag or summarize
