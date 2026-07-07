@@ -63,12 +63,14 @@ recording/E2E evidence.
    complete.
 13. Implement the real runtime dependency path and normal startup entrypoint for
    the migrated scope. Recorded dependencies may power E2E replay, but the
-   default service startup must not require recorded case data.
+   default service startup must not require recorded case data or recorded
+   dependency params.
 14. Implement the target behavior idiomatically. Do not assume mechanical
    translation is required; API/interface output compatibility is the contract.
 15. Iterate implementation -> recorded E2E -> fix at most 3 times.
-16. Run the recorded E2E, normal runtime/startup smoke for service targets, and
-    relevant target quality checks before completion.
+16. Perform a migration semantics review, then run the recorded E2E, normal
+    runtime/startup smoke for service targets, and relevant target quality
+    checks before completion.
 
 Read [migration-workflow.md](references/migration-workflow.md) for the complete
 migration loop, missing-recording behavior, and failure classification.
@@ -82,6 +84,8 @@ migration loop, missing-recording behavior, and failure classification.
   startup path loads recorded fixtures, do not mark the migration complete.
 - If a runnable service lacks diagnostic logs for startup, access, dependency
   failures, and E2E replay failures, add them or keep the migration incomplete.
+- If normal runtime config or product logic contains recorded params whose
+  provenance cannot be traced to source behavior, keep the migration incomplete.
 - If DB/MySQL runtime type mapping lacks explicit schema evidence, keep the work
   as incomplete and report the schema gap even if recorded E2E passes.
 - If replay cannot pass because recorded evidence is incomplete, output the

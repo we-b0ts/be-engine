@@ -24,11 +24,15 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    runtime config, and dependency wiring before adding anything. Prefer existing
    conventions.
 4. Start managed dependency replay from `dependencies.jsonl` before asserting
-   the HTTP response. Use `scripts/replay.sh` and
-   `assets/replay.example.toml`; ensure `traffic-recorder-proxy` is executable
-   on `PATH` before starting. Do not hand-write substitute dependency mocks when
-   replay data or relay behavior is missing; report recorder/replay improvements
-   instead.
+   the HTTP response. Use `traffic-replay <case-dir>` from the
+   traffic-recorder-proxy repo; ensure both `traffic-replay` and
+   `traffic-recorder-proxy` are executable on `PATH` before starting. Replay
+   defaults to owner filtering for the `trp-record` Unix user. Run the target
+   service as that user, or pass `--user`, `--owner-uid`, or `--all-users` only
+   when the test environment is intentionally scoped. Do not reference this
+   skill's filesystem path from target-project tests. Do not hand-write
+   substitute dependency mocks when replay data or relay behavior is missing;
+   report recorder/replay improvements instead.
 5. Drive the recorded request, or the closest equivalent route invocation, and
    compare it with `expected-response.json`. For JSON responses, compare parsed
    JSON structurally: object key order is irrelevant, but field presence, value
@@ -39,12 +43,15 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    touches, including auth/session calls and required side effects, must be
    replay-matched. Unmatched or unused case dependencies block success unless
    the user explicitly approves a behavior change or the evidence proves a
-   recording-correlation issue that should be reported upstream.
+   recording-correlation issue that should be reported upstream. Do not copy
+   recorded dependency params into normal runtime config or product logic just
+   to satisfy coverage.
 7. Run a focused single-case or related E2E command first. After it passes, run
    the broader relevant suite or project-standard checks.
-8. Iterate at most 3 times. Fix replay config, target dependency routing, or
-   recorder/replay evidence first. Modify product code only when dependency
-   replay is complete and the failure clearly points to a real code bug.
+8. Iterate at most 3 times. Fix replay command options, target dependency
+   routing, or recorder/replay evidence first. Modify product code only when
+   dependency replay is complete and the failure clearly points to a real code
+   bug.
 9. After success, failure, or partial progress, review whether the replay pain
    indicates recorder improvement opportunities. Do not change the recorder from
    the target project; report evidence-backed feedback.
@@ -66,6 +73,9 @@ discovery, managed dependency replay, replay loops, and the fallback
   target calls or unused case dependency exchanges. Dynamic values such as
   timestamps, request ids, UUIDs, durations, or generated ids may be normalized,
   but the dependency touch itself must still be exercised.
+- Recorded params are evidence, not defaults. Keep fixed recorded values in
+  E2E replay config only; normal runtime must derive values from request input,
+  system time, generated ids, database state, or explicit product config.
 - If the HTTP assertion differs only in unstable fields, suggest JSONPath ignore
   entries but do not add them unless the user explicitly authorizes it.
 - Use byte-level body comparison only for non-JSON bodies or when the user or

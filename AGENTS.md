@@ -6,10 +6,10 @@ This is a Rust single-binary traffic recorder proxy. It records HTTP, HTTPS,
 HTTP gateway, fake-DNS/TCP gateway, and MySQL traffic to JSONL files.
 
 The primary crate is in `src/` and builds the `traffic-recorder-proxy` binary.
-Recorder runtime configuration lives in `recorder.example.toml`. Replay helpers
-and the replay config template live under
-`skills/recorded-e2e-cases/{scripts,assets}`. Local recorder helper scripts live
-in `scripts/`.
+Recorder runtime configuration lives in `recorder.example.toml`. Replay defaults
+are built into `scripts/traffic-replay`, which takes a recorded case directory
+directly. Local recorder/replay helper scripts live in `scripts/`, including
+`scripts/traffic-record` and `scripts/traffic-replay`.
 
 ## Rust Tooling
 
@@ -44,32 +44,41 @@ cargo run -- --config recorder.example.toml
 For watch-mode recording:
 
 ```bash
-./scripts/record.sh
+mkdir -p "$HOME/.local/bin"
+ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
+traffic-record recorder.example.toml
 ```
 
-`scripts/record.sh` enables local DNS capture and fake-IP TCP redirect by default,
-which modifies local DNS/iptables state through the setup scripts. Use this when
-you intentionally want the recorder to intercept local traffic. To skip those
-rules:
+`traffic-record` enables local DNS capture and fake-IP TCP redirect by default,
+which modifies local DNS/iptables state through the setup scripts. Use this
+when you intentionally want the recorder to intercept local traffic. To skip
+those rules:
 
 ```bash
-./scripts/record.sh --no-dns
+traffic-record --no-dns recorder.example.toml
 ```
 
 `recorder.example.toml` enables `[local_record]` owner filtering for the
 dedicated Unix user `trp-record`. Prefer running the source service as that user
 so bootstrap and case dependencies are not polluted by unrelated local
-processes. `OWNER_UID` in the environment overrides the config.
+processes. `traffic-record --user`, `traffic-record --owner-uid`,
+`traffic-record --all-users`, or `OWNER_UID` override the config.
 
 For replay-mode development:
 
 ```bash
 cargo build
-TRAFFIC_RECORDER_PROXY_BIN="$PWD/target/debug/traffic-recorder-proxy" \
-  ./skills/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
-TRAFFIC_RECORDER_PROXY_BIN="$PWD/target/debug/traffic-recorder-proxy" \
-  ./skills/recorded-e2e-cases/scripts/replay.sh --no-intercept path/to/replay.toml
+mkdir -p "$HOME/.local/bin"
+ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
+ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
+ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
+traffic-replay path/to/case-dir
+traffic-replay --no-intercept path/to/case-dir
 ```
+
+`traffic-replay` also defaults to owner filtering for `trp-record`. Run the
+target service as that user, or pass `--user`, `--owner-uid`, or `--all-users`
+when the replay environment requires a different scope.
 
 When using the setup scripts directly, always pair `up` with `down`:
 

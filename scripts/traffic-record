@@ -7,21 +7,36 @@ cd "$ROOT_DIR"
 usage() {
   cat >&2 <<EOF
 Usage:
-  $0 [--dns|--no-dns] [recorder-config.toml] [-- extra traffic-recorder-proxy args...]
+  traffic-record [options] [recorder-config.toml] [-- extra traffic-recorder-proxy args...]
 
 Options:
-  --dns       Enable local DNS capture and fake-IP TCP redirect. This is default.
-  --no-dns    Skip local DNS capture and fake-IP TCP redirect.
+  --dns            Enable local DNS capture and fake-IP TCP redirect. This is default.
+  --no-dns         Skip local DNS capture and fake-IP TCP redirect.
+  --user USER      Limit capture to this Unix user. Defaults to [local_record].record_user.
+  --owner-uid UID  Limit capture to this numeric Unix uid.
+  --all-users      Capture all local users. Use only on isolated machines.
 
 DNS/fake-IP rules are automatically removed when this script exits.
-OWNER_UID overrides [local_record] owner filtering from the config file.
+CLI owner options override OWNER_UID, which overrides [local_record].
 EOF
 }
 
 ENABLE_DNS=1
 CONFIG="recorder.example.toml"
 CONFIG_SET=0
+OWNER_MODE="config"
+OWNER_USER_OVERRIDE=""
+OWNER_UID_OVERRIDE=""
 APP_ARGS=()
+
+need_value() {
+  local option="$1"
+  local value="${2:-}"
+  if [ -z "$value" ]; then
+    echo "$option requires a value" >&2
+    exit 2
+  fi
+}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -31,6 +46,26 @@ while [ "$#" -gt 0 ]; do
       ;;
     --no-dns)
       ENABLE_DNS=0
+      shift
+      ;;
+    --user)
+      need_value "$1" "${2:-}"
+      OWNER_MODE="user"
+      OWNER_USER_OVERRIDE="$2"
+      OWNER_UID_OVERRIDE=""
+      shift 2
+      ;;
+    --owner-uid)
+      need_value "$1" "${2:-}"
+      OWNER_MODE="uid"
+      OWNER_UID_OVERRIDE="$2"
+      OWNER_USER_OVERRIDE=""
+      shift 2
+      ;;
+    --all-users)
+      OWNER_MODE="all"
+      OWNER_USER_OVERRIDE=""
+      OWNER_UID_OVERRIDE=""
       shift
       ;;
     -h|--help)
@@ -96,16 +131,48 @@ PY
   LOCAL_RECORD_OWNER_UID="${local_record_values[2]}"
 }
 
+uid_for_user() {
+  local user="$1"
+  if [ -z "$user" ]; then
+    echo "user name is required" >&2
+    exit 2
+  fi
+  if ! id -u "$user" 2>/dev/null; then
+    cat >&2 <<EOF
+record user not found: $user
+Create it with:
+  sudo useradd --system --create-home --shell /bin/bash $user
+EOF
+    exit 1
+  fi
+}
+
 resolve_owner_uid() {
-  LOCAL_RECORD_ENABLED=0
-  LOCAL_RECORD_USER=""
-  LOCAL_RECORD_OWNER_UID=""
-  load_local_record_config
+  if [ "$OWNER_MODE" = "all" ]; then
+    export OWNER_UID=""
+    return
+  fi
+
+  if [ "$OWNER_MODE" = "uid" ]; then
+    export OWNER_UID="$OWNER_UID_OVERRIDE"
+    return
+  fi
+
+  if [ "$OWNER_MODE" = "user" ]; then
+    OWNER_UID="$(uid_for_user "$OWNER_USER_OVERRIDE")"
+    export OWNER_UID
+    return
+  fi
 
   if [ -n "${OWNER_UID:-}" ]; then
     export OWNER_UID
     return
   fi
+
+  LOCAL_RECORD_ENABLED=1
+  LOCAL_RECORD_USER="trp-record"
+  LOCAL_RECORD_OWNER_UID=""
+  load_local_record_config
 
   if [ "$LOCAL_RECORD_ENABLED" != "1" ]; then
     export OWNER_UID=""
@@ -122,14 +189,7 @@ resolve_owner_uid() {
     exit 1
   fi
 
-  if ! OWNER_UID="$(id -u "$LOCAL_RECORD_USER" 2>/dev/null)"; then
-    cat >&2 <<EOF
-record user not found: $LOCAL_RECORD_USER
-Create it with:
-  sudo useradd --system --create-home --shell /bin/bash $LOCAL_RECORD_USER
-EOF
-    exit 1
-  fi
+  OWNER_UID="$(uid_for_user "$LOCAL_RECORD_USER")"
   export OWNER_UID
 }
 

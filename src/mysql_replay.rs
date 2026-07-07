@@ -227,12 +227,15 @@ impl ReplayState {
         sql: Option<&str>,
         reason: &str,
     ) {
+        let recorded_match = self.consume_builtin_exchange(target, command, sql);
         self.events.builtin_queries.push(QueryReport {
             target: target.cloned(),
             command: command.to_string(),
             sql: sql.map(ToOwned::to_owned),
             params: None,
             reason: reason.to_string(),
+            recorded_source: recorded_match.map(|(source, _)| source),
+            recorded_index: recorded_match.map(|(_, index)| index),
         });
     }
 
@@ -250,6 +253,8 @@ impl ReplayState {
             sql: sql.map(ToOwned::to_owned),
             params: params.map(ToOwned::to_owned),
             reason: reason.to_string(),
+            recorded_source: None,
+            recorded_index: None,
         });
     }
 
@@ -267,6 +272,8 @@ impl ReplayState {
             sql: sql.map(ToOwned::to_owned),
             params: params.map(ToOwned::to_owned),
             reason: reason.to_string(),
+            recorded_source: None,
+            recorded_index: None,
         });
     }
 
@@ -314,6 +321,30 @@ impl ReplayState {
                 index,
                 record: exchange.record.clone(),
             });
+        }
+        None
+    }
+
+    fn consume_builtin_exchange(
+        &mut self,
+        target: Option<&TargetKey>,
+        command: &str,
+        sql: Option<&str>,
+    ) -> Option<(ReplaySource, usize)> {
+        let normalized_sql = sql.map(normalize_sql);
+        for (index, exchange) in self.exchanges.iter_mut().enumerate() {
+            if exchange.consumed || exchange.record.command != command {
+                continue;
+            }
+            if !target_matches_exchange(target, exchange.target.as_ref()) {
+                continue;
+            }
+            let recorded_sql = exchange.record.sql.as_deref().map(normalize_sql);
+            if recorded_sql != normalized_sql {
+                continue;
+            }
+            exchange.consumed = true;
+            return Some((exchange.source, index));
         }
         None
     }
@@ -463,6 +494,10 @@ struct QueryReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     params: Option<Vec<RecordedMysqlValue>>,
     reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recorded_source: Option<ReplaySource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recorded_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2556,6 +2591,48 @@ mod tests {
         assert_eq!(report["matched_queries"][0]["source"], "case");
         assert_eq!(report["matched_queries"][0]["command"], "COM_QUERY");
         assert!(report["unmatched_queries"].as_array().unwrap().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn builtin_query_consumes_matching_recorded_exchange() {
+        let temp = tempfile::tempdir().unwrap();
+        let case_dir = temp.path().join("case");
+        tokio::fs::create_dir_all(&case_dir).await.unwrap();
+        tokio::fs::write(
+            case_dir.join("dependencies.jsonl"),
+            r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SET NAMES utf8","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}"#,
+        )
+        .await
+        .unwrap();
+        let report_path = temp.path().join("report.json");
+        let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+        let mut client = connect_login(addr).await;
+
+        write_packet_bytes(
+            &mut client,
+            MysqlPacket {
+                sequence_id: 0,
+                payload: [vec![0x03], b"SET NAMES utf8".to_vec()].concat(),
+            },
+        )
+        .await;
+        let ok = read_packet(&mut client).await.unwrap().unwrap();
+        assert_eq!(ok.payload[0], 0x00);
+
+        wait_for_report_contains(&report_path, r#""builtin_queries""#).await;
+        let report: Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
+        assert_eq!(report["builtin_queries"][0]["command"], "COM_QUERY");
+        assert_eq!(report["builtin_queries"][0]["sql"], "SET NAMES utf8");
+        assert_eq!(report["builtin_queries"][0]["recorded_source"], "case");
+        assert_eq!(report["builtin_queries"][0]["recorded_index"], 0);
+        assert!(
+            report["unused_case_exchanges"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
         task.abort();
     }
 

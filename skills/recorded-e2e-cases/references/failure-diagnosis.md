@@ -29,6 +29,8 @@ evidence:
   side-effect dependencies that the replay does not cover
 - replay output contains unused recorded case exchanges or unmatched target
   dependency calls that cannot be proven unrelated/background
+- satisfying replay coverage would require hardcoding recorded params into
+  normal runtime config or product logic
 - downstream data is needed but no semantic record or trusted project fixture
   supplies it
 - the recorded HTTP response depends on data that cannot be explained by the
@@ -51,6 +53,8 @@ Fix replay setup before product code when:
 - replay returns a generic empty value but the recorded dependency returned
   concrete rows, affected rows, ids, errors, or messages
 - the app attempts a real external connection during the replay
+- the app only matches replay because normal runtime config contains recorded
+  params such as fixed ids, timestamps, request ids, or table suffixes
 
 Record enough evidence in the working notes to know which dependency matched,
 missed, or leaked to the network.
@@ -133,6 +137,8 @@ Report recorder feedback when replay required:
   case-owned dependencies were clear
 - discovering that a case dependency was intentionally replaced or dropped in a
   migration and therefore needs user-approved contract-change tracking
+- discovering that a recorded dependency touch has no clear ownership in the
+  selected request path and would require hardcoded recorded params to replay
 - adding large amounts of target-project fixture data that should have been
   captured as semantic dependency output
 - identifying unstable response fields that the recorder could tag or summarize

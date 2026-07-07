@@ -19,27 +19,31 @@ Use the project's existing E2E framework and startup style. If no framework
 exists, add the smallest conventional E2E setup for that technology stack and
 explain why. Do not introduce a broad new architecture just for one case.
 
-## Managed Replay Helper
+## Managed Replay CLI
 
-This skill bundles a replay helper and config template:
+Use the repository-level replay command, not a skill-local script path:
 
-- `scripts/replay.sh`
-- `assets/replay.example.toml`
+- `traffic-replay`
 
-Before running the target E2E, ensure the `traffic-recorder-proxy` command is
-available on `PATH`. For local development, prefer installing, copying, or
-symlinking the binary into a user PATH directory such as `~/.local/bin`.
+Before running the target E2E, ensure both commands are available on `PATH`.
+For local development, prefer installing, copying, or symlinking them into a
+user PATH directory such as `~/.local/bin`.
 
 ```bash
 command -v traffic-recorder-proxy
-/path/to/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
+command -v traffic-replay
+traffic-replay path/to/case-dir
 ```
 
-Use the template as the starting config. Relative `case` and `report` paths are
-resolved from the config file directory. Use `--no-intercept` only when the
+Pass the selected case directory directly. The replay report defaults to
+`<case-dir>/.replay/replay-report.json`. Use `--no-intercept` only when the
 target project already routes dependencies to the replay listeners.
-`TRAFFIC_RECORDER_PROXY_BIN` is accepted only as an explicit fallback override
-when PATH cannot be changed.
+`traffic-replay` defaults to owner filtering for the `trp-record` Unix user.
+Run the target service as `trp-record`, or pass `--user`, `--owner-uid`, or
+`--all-users` only when the replay environment is intentionally scoped.
+Do not hardcode the traffic-recorder-proxy repository path or skill path inside
+target-project tests. A test harness may allow `TRAFFIC_REPLAY` or a similar
+local override, but the default command must be `traffic-replay`.
 
 ## Replay Construction
 
@@ -55,7 +59,7 @@ Implement in this order:
 2. Decode the recorded request body and prepare headers. Remove or override only
    headers that the target test harness cannot or should not set, such as
    hop-by-hop transport headers.
-3. Start managed dependency replay with `scripts/replay.sh`, using
+3. Start managed dependency replay with `traffic-replay <case-dir>`. It uses
    `dependencies.jsonl` from the selected case and bootstrap dependencies
    discovered above the case directory. The canonical bootstrap file is
    `recordings/bootstrap-dependencies.jsonl`.
@@ -98,6 +102,21 @@ recorded status, rows or affected rows, and error semantics where applicable.
 Do not require mechanical source-code translation or byte-identical SQL
 formatting, but do require dependency behavior evidence.
 
+Recorded dependency params are not runtime configuration. Use them to identify
+expected inputs, dynamic value patterns, schema, result shape, and replay
+coverage, but do not hardcode them into product code or default runtime config.
+Examples that must not become normal defaults include fixed business ids,
+tenant ids, user ids, request ids, UUIDs, timestamps, elapsed durations, and
+monthly table suffixes. If those values are needed only to make replay
+deterministic, keep them in E2E-only config with names such as `fixed`,
+`override`, `recorded`, or `replay`.
+
+For dynamic recorded values, define the runtime strategy before declaring
+success. Examples: current-month table suffix, request-start timestamp,
+generated request id, system clock, current authenticated user, or ids derived
+from database state. If the strategy is unknown, keep the case incomplete and
+report the missing source of truth instead of pinning the recorded value.
+
 Before relying on replay results, classify each recorded dependency:
 
 - `response-driving`: data directly needed to produce the expected response
@@ -117,6 +136,11 @@ unrelated/background only with evidence such as bootstrap ownership, scheduler
 ownership, startup timing, source-code ownership, or a replay report showing it
 is not exercised by the selected request. If ownership is ambiguous, treat the
 replay as incomplete and report a recorder-correlation improvement.
+
+When a dependency touch cannot be traced to the selected request's source-code
+path, do not invent a configuration knob that replays the recorded params. Mark
+the dependency as unproven case ownership and return a concise
+recorder-correlation or source-analysis blocker.
 
 For MySQL:
 
@@ -204,8 +228,8 @@ Use at most 3 iterations:
 2. If it fails, classify the failure as incomplete recording, replay routing
    miss, unsupported replay behavior, assertion drift, environment setup, or
    product code bug.
-3. Fix replay config, target dependency routing, or recorder/replay evidence
-   first.
+3. Fix replay command options, target dependency routing, or recorder/replay
+   evidence first.
 4. Fix product code only when dependency replay is complete and the failure is a
    real behavior defect.
 5. Re-run the focused command after each change.

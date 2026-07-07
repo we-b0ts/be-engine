@@ -41,9 +41,17 @@ cargo build --release
 cargo run -- --config recorder.example.toml
 ```
 
-For watch-mode recording, `./scripts/record.sh` runs `cargo watch` and enables
-local DNS capture plus fake-IP TCP redirect by default. Use
-`./scripts/record.sh --no-dns` when you want to skip those local rules.
+For watch-mode recording, install the repo-level command and run
+`traffic-record`. It runs `cargo watch` and enables local DNS capture plus
+fake-IP TCP redirect by default. Use `traffic-record --no-dns` when you want to
+skip those local rules.
+
+```bash
+mkdir -p "$HOME/.local/bin"
+ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
+command -v traffic-record
+traffic-record recorder.example.toml
+```
 
 `recorder.example.toml` enables local owner filtering with the `trp-record`
 Unix user by default:
@@ -61,11 +69,12 @@ recorder:
 ```bash
 sudo useradd --system --create-home --shell /bin/bash trp-record
 sudo -u trp-record /path/to/source-service start
-./scripts/record.sh recorder.example.toml
+traffic-record recorder.example.toml
 ```
 
-`OWNER_UID=... ./scripts/record.sh` overrides `[local_record]` when you need to
-record a different dedicated user.
+Use `traffic-record --user other-user`, `traffic-record --owner-uid 1002`, or
+`traffic-record --all-users` when you need to override the default owner scope.
+`OWNER_UID=... traffic-record` also overrides `[local_record]`.
 
 The default example listens on:
 
@@ -75,17 +84,25 @@ The default example listens on:
 - JSONL output: `./recordings/traffic.jsonl`
 - Generated CA: `./data/traffic-recorder-ca.pem`
 
-For dependency replay, use the helper bundled with the recorded E2E skill. Copy
-or adapt `skills/recorded-e2e-cases/assets/replay.example.toml`, then run:
+For dependency replay, install the repo-level replay command and pass the case
+directory directly:
 
 ```bash
+cargo build
+mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
+ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
+ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
 command -v traffic-recorder-proxy
-./skills/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
+command -v traffic-record
+command -v traffic-replay
+traffic-replay path/to/case-dir
 ```
 
-The replay script starts the replay DNS and fake-IP TCP gateway, then applies
-the same local interception rules used for recording. Use
+`traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
+the same local interception rules used for recording. By default it limits
+interception to the `trp-record` Unix user, so run the target service as that
+user or override the owner with `--user`, `--owner-uid`, or `--all-users`. Use
 `--no-intercept` to start only the replay listeners.
 
 ## Optional Explicit HTTP/HTTPS Proxy

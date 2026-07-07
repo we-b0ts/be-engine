@@ -43,6 +43,7 @@ Keep the implementation small and behavior-focused:
   implementation
 - make `main` or the default server path construct the real implementation from
   normal configuration, not from a case directory
+- keep recorded dependency params out of normal runtime config and product code
 - tests should drive recorded requests and replayed dependencies, not private
   implementation details
 - config should be explicit enough to isolate real external services during E2E
@@ -67,6 +68,14 @@ include names like `api`, `http`, `handler`, `service`, `store`, `repository`,
 `model`, `domain`, `client`, `adapter`, `util`, `config`, and `app`, but none of
 these names is required. Pick names that make the current slice readable and
 that can grow with the next API.
+
+Model dynamic values explicitly. For example, a request log table suffix should
+come from a clock-backed `YYYYMM` strategy or an approved product config, not
+from the month recorded in one dependency file. UUIDs, request ids, tenant ids,
+business ids, timestamps, and similar recorded params should come from request
+context, generated ids, dependency state, or source-proven rules. If Rust E2E
+needs a fixed recorded value, place it only in `config/e2e.yaml` or test support
+with a clear replay-only name.
 
 Create only modules needed by the current slice. `main.rs` should be
 bootstrap-only: parse args/config and start the server. `lib.rs` should mostly
@@ -154,11 +163,19 @@ committed config by default. Support an explicit config path, such as
 Keep `config/local.yaml` and `.env.local` ignored when they contain local
 secrets or machine-specific settings.
 
+Do not put recorded dependency params in `config/default.yaml` just to satisfy
+replay coverage. `config/default.yaml` is for normal development behavior;
+`config/e2e.yaml` may contain replay-only fixed values when the normal runtime
+strategy is also implemented and documented in `.migration/e2e.yaml`.
+
 Prefer `scripts/<project>-cli` as the Rust migration command facade when the
 repo has no existing Makefile, justfile, or script convention. The facade should
 wrap local service lifecycle, focused recorded E2E, Cargo quality gates, and
 basic config diagnostics so future agents can use stable commands instead of
 rediscovering Cargo invocations.
+Recorded E2E commands should invoke `traffic-replay` from `PATH`; do not embed
+the traffic-recorder-proxy repo path or any skill-local helper path in Rust
+tests.
 
 For local service lifecycle, prefer a pid file under a repo-local ignored
 runtime directory such as `.migration/run/` or the repo's existing temp/runtime

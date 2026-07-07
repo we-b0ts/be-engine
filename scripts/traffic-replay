@@ -1,0 +1,426 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CALLER_CWD="$(pwd)"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  traffic-replay [options] <case-dir> [-- extra traffic-recorder-proxy replay args...]
+  traffic-replay --config replay.toml [options] [-- extra traffic-recorder-proxy replay args...]
+
+Options:
+  --intercept              Enable local DNS capture and fake-IP TCP redirect. This is default.
+  --no-intercept           Start replay listeners without changing local DNS/iptables.
+  --config PATH            Read optional replay settings from a TOML file.
+  --report PATH            Replay report path. Defaults to <case-dir>/.replay/replay-report.json.
+  --dns-listen ADDR        DNS replay listener. Default: 127.0.0.153:15353.
+  --tcp-listen ADDR        Fake-IP TCP replay listener. Default: 127.0.0.1:15001.
+  --fake-cidr CIDR         Fake IP CIDR. Default: 198.18.0.0/15.
+  --upstream-dns ADDR      DNS upstream excluded from capture. Default: 10.10.10.10:53.
+  --user USER              Limit capture to this Unix user. Default: trp-record.
+  --owner-uid UID          Limit capture to this numeric Unix uid.
+  --all-users              Capture all local users. Use only on isolated machines.
+
+Ensure traffic-replay and traffic-recorder-proxy are available on PATH for
+target-project E2E runs. TRAFFIC_RECORDER_PROXY_BIN is accepted as an explicit
+fallback override for local development only.
+DNS/fake-IP rules are removed when this script exits.
+EOF
+}
+
+ENABLE_INTERCEPT=1
+INTERCEPT_SET=0
+CONFIG=""
+CASE_DIR=""
+CASE_BASE="$CALLER_CWD"
+CASE_SET=0
+REPORT_PATH=""
+REPORT_BASE="$CALLER_CWD"
+REPORT_SET=0
+DNS_LISTEN="127.0.0.153:15353"
+DNS_SET=0
+TCP_LISTEN="127.0.0.1:15001"
+TCP_SET=0
+FAKE_CIDR="198.18.0.0/15"
+FAKE_SET=0
+UPSTREAM_DNS_VALUE="10.10.10.10:53"
+UPSTREAM_SET=0
+OWNER_MODE="user"
+OWNER_USER_VALUE="trp-record"
+OWNER_UID_VALUE=""
+OWNER_SET=0
+APP_ARGS=()
+
+need_value() {
+  local option="$1"
+  local value="${2:-}"
+  if [ -z "$value" ]; then
+    echo "$option requires a value" >&2
+    exit 2
+  fi
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --intercept)
+      ENABLE_INTERCEPT=1
+      INTERCEPT_SET=1
+      shift
+      ;;
+    --no-intercept)
+      ENABLE_INTERCEPT=0
+      INTERCEPT_SET=1
+      shift
+      ;;
+    --config)
+      need_value "$1" "${2:-}"
+      CONFIG="$2"
+      shift 2
+      ;;
+    --report)
+      need_value "$1" "${2:-}"
+      REPORT_PATH="$2"
+      REPORT_BASE="$CALLER_CWD"
+      REPORT_SET=1
+      shift 2
+      ;;
+    --dns-listen)
+      need_value "$1" "${2:-}"
+      DNS_LISTEN="$2"
+      DNS_SET=1
+      shift 2
+      ;;
+    --tcp-listen)
+      need_value "$1" "${2:-}"
+      TCP_LISTEN="$2"
+      TCP_SET=1
+      shift 2
+      ;;
+    --fake-cidr)
+      need_value "$1" "${2:-}"
+      FAKE_CIDR="$2"
+      FAKE_SET=1
+      shift 2
+      ;;
+    --upstream-dns)
+      need_value "$1" "${2:-}"
+      UPSTREAM_DNS_VALUE="$2"
+      UPSTREAM_SET=1
+      shift 2
+      ;;
+    --user)
+      need_value "$1" "${2:-}"
+      OWNER_MODE="user"
+      OWNER_USER_VALUE="$2"
+      OWNER_UID_VALUE=""
+      OWNER_SET=1
+      shift 2
+      ;;
+    --owner-uid)
+      need_value "$1" "${2:-}"
+      OWNER_MODE="uid"
+      OWNER_UID_VALUE="$2"
+      OWNER_USER_VALUE=""
+      OWNER_SET=1
+      shift 2
+      ;;
+    --all-users)
+      OWNER_MODE="all"
+      OWNER_USER_VALUE=""
+      OWNER_UID_VALUE=""
+      OWNER_SET=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      APP_ARGS+=("$@")
+      break
+      ;;
+    *)
+      if [ "$CASE_SET" -eq 0 ] && [ -f "$1" ] && [[ "$1" == *.toml ]]; then
+        CONFIG="$1"
+      elif [ "$CASE_SET" -eq 0 ]; then
+        CASE_DIR="$1"
+        CASE_BASE="$CALLER_CWD"
+        CASE_SET=1
+      else
+        APP_ARGS+=("$1")
+      fi
+      shift
+      ;;
+  esac
+done
+
+resolve_path() {
+  local path="$1"
+  local base="${2:-$CALLER_CWD}"
+  if [ -z "$path" ]; then
+    printf '\n'
+  elif [[ "$path" = /* ]]; then
+    printf '%s\n' "$path"
+  else
+    printf '%s\n' "$base/$path"
+  fi
+}
+
+load_config() {
+  local config_path
+  config_path="$(resolve_path "$CONFIG")"
+  if [ ! -f "$config_path" ]; then
+    echo "replay config not found: $CONFIG" >&2
+    exit 1
+  fi
+  local config_dir
+  config_dir="$(cd "$(dirname "$config_path")" && pwd)"
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "python3 is required to read $config_path" >&2
+    exit 1
+  fi
+
+  local -a replay_values
+  mapfile -t replay_values < <(python3 - "$config_path" <<'PY'
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.stderr.write("tomllib is required; use Python 3.11+ to read replay TOML config.\n")
+    raise SystemExit(1)
+
+path = sys.argv[1]
+with open(path, "rb") as fh:
+    config = tomllib.load(fh)
+replay = config.get("replay", {})
+
+def value(name, default=""):
+    item = replay.get(name, default)
+    if isinstance(item, bool):
+        return "1" if item else "0"
+    return str(item)
+
+print(value("case"))
+print(value("dns_listen"))
+print(value("tcp_listen"))
+print(value("fake_cidr"))
+print(value("report"))
+print(value("enable_intercept"))
+print(value("upstream_dns"))
+print(value("owner_uid"))
+print(value("user", value("record_user")))
+print(value("all_users"))
+PY
+)
+
+  if [ "$CASE_SET" -eq 0 ] && [ -n "${replay_values[0]}" ]; then
+    CASE_DIR="${replay_values[0]}"
+    CASE_BASE="$config_dir"
+    CASE_SET=1
+  fi
+  if [ "$DNS_SET" -eq 0 ] && [ -n "${replay_values[1]}" ]; then
+    DNS_LISTEN="${replay_values[1]}"
+  fi
+  if [ "$TCP_SET" -eq 0 ] && [ -n "${replay_values[2]}" ]; then
+    TCP_LISTEN="${replay_values[2]}"
+  fi
+  if [ "$FAKE_SET" -eq 0 ] && [ -n "${replay_values[3]}" ]; then
+    FAKE_CIDR="${replay_values[3]}"
+  fi
+  if [ "$REPORT_SET" -eq 0 ] && [ -n "${replay_values[4]}" ]; then
+    REPORT_PATH="${replay_values[4]}"
+    REPORT_BASE="$config_dir"
+  fi
+  if [ "$INTERCEPT_SET" -eq 0 ] && [ -n "${replay_values[5]}" ]; then
+    ENABLE_INTERCEPT="${replay_values[5]}"
+  fi
+  if [ "$UPSTREAM_SET" -eq 0 ] && [ -n "${replay_values[6]}" ]; then
+    UPSTREAM_DNS_VALUE="${replay_values[6]}"
+  fi
+  if [ "$OWNER_SET" -eq 0 ]; then
+    if [ "${replay_values[9]}" = "1" ]; then
+      OWNER_MODE="all"
+      OWNER_USER_VALUE=""
+      OWNER_UID_VALUE=""
+    elif [ -n "${replay_values[7]}" ]; then
+      OWNER_MODE="uid"
+      OWNER_UID_VALUE="${replay_values[7]}"
+      OWNER_USER_VALUE=""
+    elif [ -n "${replay_values[8]}" ]; then
+      OWNER_MODE="user"
+      OWNER_USER_VALUE="${replay_values[8]}"
+      OWNER_UID_VALUE=""
+    fi
+  fi
+}
+
+if [ -n "$CONFIG" ]; then
+  load_config
+fi
+
+if [ "$CASE_SET" -eq 0 ] || [ -z "$CASE_DIR" ]; then
+  usage
+  echo "case directory is required" >&2
+  exit 2
+fi
+
+CASE_DIR="$(resolve_path "$CASE_DIR" "$CASE_BASE")"
+if [ ! -d "$CASE_DIR" ]; then
+  echo "case directory not found: $CASE_DIR" >&2
+  exit 1
+fi
+
+if [ -z "$REPORT_PATH" ]; then
+  REPORT_PATH="$CASE_DIR/.replay/replay-report.json"
+else
+  REPORT_PATH="$(resolve_path "$REPORT_PATH" "$REPORT_BASE")"
+fi
+
+find_proxy_binary() {
+  local repo_candidate="$SCRIPT_DIR/../target/debug/traffic-recorder-proxy"
+  local cwd_candidate="$CALLER_CWD/target/debug/traffic-recorder-proxy"
+
+  if command -v traffic-recorder-proxy >/dev/null 2>&1; then
+    command -v traffic-recorder-proxy
+    return
+  fi
+
+  if [ -n "${TRAFFIC_RECORDER_PROXY_BIN:-}" ]; then
+    if [ ! -x "$TRAFFIC_RECORDER_PROXY_BIN" ]; then
+      echo "TRAFFIC_RECORDER_PROXY_BIN is not executable: $TRAFFIC_RECORDER_PROXY_BIN" >&2
+      exit 1
+    fi
+    printf '%s\n' "$TRAFFIC_RECORDER_PROXY_BIN"
+    return
+  fi
+
+  if [ -x "$cwd_candidate" ]; then
+    printf '%s\n' "$cwd_candidate"
+    return
+  fi
+
+  if [ -x "$repo_candidate" ]; then
+    printf '%s\n' "$(cd "$(dirname "$repo_candidate")" && pwd)/$(basename "$repo_candidate")"
+    return
+  fi
+
+  echo "traffic-recorder-proxy command not found on PATH. Add it to PATH, for example ~/.local/bin/traffic-recorder-proxy, or set TRAFFIC_RECORDER_PROXY_BIN=/path/to/traffic-recorder-proxy for local development." >&2
+  exit 1
+}
+
+resolve_owner_uid() {
+  case "$OWNER_MODE" in
+    all)
+      printf '\n'
+      ;;
+    uid)
+      if [ -z "$OWNER_UID_VALUE" ]; then
+        echo "--owner-uid requires a non-empty uid" >&2
+        exit 2
+      fi
+      printf '%s\n' "$OWNER_UID_VALUE"
+      ;;
+    user)
+      if [ -z "$OWNER_USER_VALUE" ]; then
+        echo "--user requires a non-empty Unix user" >&2
+        exit 2
+      fi
+      if ! id -u "$OWNER_USER_VALUE" 2>/dev/null; then
+        cat >&2 <<EOF
+replay user not found: $OWNER_USER_VALUE
+Create it with:
+  sudo useradd --system --create-home --shell /bin/bash $OWNER_USER_VALUE
+EOF
+        exit 1
+      fi
+      ;;
+    *)
+      echo "unknown owner mode: $OWNER_MODE" >&2
+      exit 2
+      ;;
+  esac
+}
+
+PROXY_BIN="$(find_proxy_binary)"
+
+if [ "$ENABLE_INTERCEPT" = "1" ]; then
+  OWNER_UID_VALUE="$(resolve_owner_uid)"
+else
+  OWNER_UID_VALUE=""
+fi
+
+split_host_port() {
+  local value="$1"
+  local host="${value%:*}"
+  local port="${value##*:}"
+  host="${host#[}"
+  host="${host%]}"
+  printf '%s\n%s\n' "$host" "$port"
+}
+
+mapfile -t dns_parts < <(split_host_port "$DNS_LISTEN")
+DNS_IP_VALUE="${dns_parts[0]}"
+DNS_PORT_VALUE="${dns_parts[1]}"
+mapfile -t tcp_parts < <(split_host_port "$TCP_LISTEN")
+GATEWAY_PORT_VALUE="${tcp_parts[1]}"
+
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    if ! command -v sudo >/dev/null 2>&1; then
+      echo "sudo not found; intercept setup requires root privileges" >&2
+      exit 1
+    fi
+    sudo env \
+      "DNS_IP=$DNS_IP_VALUE" \
+      "DNS_PORT=$DNS_PORT_VALUE" \
+      "UPSTREAM_DNS=$UPSTREAM_DNS_VALUE" \
+      "FAKE_CIDR=$FAKE_CIDR" \
+      "GATEWAY_PORT=$GATEWAY_PORT_VALUE" \
+      "OWNER_UID=$OWNER_UID_VALUE" \
+      "$@"
+  fi
+}
+
+DNS_CAPTURE_UP=0
+FAKE_REDIRECT_UP=0
+
+cleanup_intercept() {
+  local exit_code=$?
+  trap - EXIT
+  if [ "$ENABLE_INTERCEPT" = "1" ]; then
+    set +e
+    if [ "$FAKE_REDIRECT_UP" -eq 1 ]; then
+      run_as_root "$SCRIPT_DIR/setup_fake_ip_redirect.sh" down
+    fi
+    if [ "$DNS_CAPTURE_UP" -eq 1 ]; then
+      run_as_root "$SCRIPT_DIR/setup_local_dns.sh" down
+    fi
+  fi
+  exit "$exit_code"
+}
+
+if [ "$ENABLE_INTERCEPT" = "1" ]; then
+  trap cleanup_intercept EXIT
+  if [ -n "$OWNER_UID_VALUE" ]; then
+    echo "local replay owner filter enabled: OWNER_UID=$OWNER_UID_VALUE" >&2
+  else
+    echo "local replay owner filter disabled: capturing all local users" >&2
+  fi
+  run_as_root "$SCRIPT_DIR/setup_local_dns.sh" up
+  DNS_CAPTURE_UP=1
+  run_as_root "$SCRIPT_DIR/setup_fake_ip_redirect.sh" up
+  FAKE_REDIRECT_UP=1
+fi
+
+args=(replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LISTEN" --fake-cidr "$FAKE_CIDR" --report "$REPORT_PATH")
+args+=("${APP_ARGS[@]}")
+
+export RUST_LOG="${RUST_LOG:-info}"
+"$PROXY_BIN" "${args[@]}"

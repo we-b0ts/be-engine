@@ -64,6 +64,13 @@ service client, queue adapter, or scheduler input source. Recorded replay must
 not replace that real runtime boundary; it belongs only inside the E2E harness
 and replay tooling supplied by `recorded-e2e-cases`.
 
+Recorded dependency parameters are also evidence, not product defaults. Do not
+copy fixed business ids, tenant ids, user ids, request ids, UUIDs, timestamps,
+durations, monthly table suffixes, or dependency params from recordings into
+normal runtime config or product logic. If a value must be fixed for replay
+determinism, keep it only in E2E/replay config and give it an explicit
+`recorded`, `fixed`, `override`, or `replay` name.
+
 A migration is complete only when both the HTTP response and the case-owned
 dependency touches pass. If replay reports unused recorded case exchanges,
 unmatched target dependency calls, or missing required side effects, the result
@@ -127,6 +134,8 @@ Before implementing behavior:
 - `recording_feedback`
 - `runtime_dependency_status`
 - `recorded_replay_status`
+- `dynamic_value_strategy_status`
+- `semantics_review_status`
 
 ## Command And Config Contract
 
@@ -152,12 +161,15 @@ Expose the commands that are relevant to the migrated scope:
 - `build`: build the target artifact
 - `release`: run the project's release/package flow when it exists
 - `doctor`: print missing config, dependency, port, and toolchain problems
+  including `traffic-replay` and `traffic-recorder-proxy` when recorded E2E is
+  part of the repo workflow
 
 For the first migration slice, implement at least `start`, `stop`, `restart`,
 `status`, `e2e`, `check`, and `doctor` when the target is a runnable service.
 Commands may wrap language-native tools such as `cargo`, `go`, `npm`, Docker
 Compose, `make`, or `just`; the stable interface for agents and users is the
-facade command.
+facade command. The focused recorded E2E should call `traffic-replay` from
+`PATH`, not a skill-local helper path.
 
 Place application config under `config/`. Development startup should read a
 committed default config directly, such as `config/default.yaml` or the target
@@ -165,6 +177,12 @@ repo's preferred format. Add `config/e2e.yaml` when recorded E2E needs a
 different but still source-controlled isolation config. Production may specify a
 different config path, such as with `--config` or a project-specific environment
 variable, and may override individual values through environment variables.
+
+Default runtime config must describe behavior, not a captured case. Examples:
+use a strategy such as current-month table suffix, system clock, generated
+request id, authenticated user, tenant from request/session, or ids read from
+database state. E2E config may pin recorded values only when the pin is visibly
+test-only and the normal startup path does not require it.
 
 Keep real secrets and machine-local values out of committed config. If local
 overrides are needed, use ignored files such as `config/local.yaml` or
@@ -225,6 +243,27 @@ CI convention when one exists. If none exists, make the command facade's
 `doctor` or `check` verify that the files linked from `AGENTS.md` exist, and
 record the command in `.migration/e2e.yaml`.
 
+## Runtime Value Strategy
+
+Before declaring success, identify dynamic values seen in `request.json`,
+`expected-response.json`, and `dependencies.jsonl`, then map each value to its
+runtime source:
+
+- request input or headers
+- authenticated/session context
+- database or external dependency result
+- system clock or request-start time
+- generated id or UUID
+- deterministic product rule, such as current `YYYYMM` table suffix
+- explicit product config supplied by the user or source repo
+- E2E-only replay override
+
+Values found only in recorded dependencies are not enough to create product
+defaults. If source code does not show why the selected request owns a value or
+dependency touch, keep `dynamic_value_strategy_status` incomplete and report a
+source-analysis or recorder-correlation blocker. Do not add a config knob just
+to make the replay coverage pass.
+
 ## Module Design Contract
 
 Before writing behavior code, choose a small module plan that fits the target
@@ -276,6 +315,26 @@ migration complete. The final response must call out the missing schema evidence
 and ask the user for a recording with semantic column schema or an explicit
 schema source.
 
+## Migration Semantics Review
+
+After implementation and before final success, review the target changes against
+the source repo and replay report:
+
+- every case-owned dependency touch is implemented or explicitly classified as
+  unrelated/background with source or recorder evidence
+- no normal runtime config or product logic contains fixed values copied from
+  recorded dependency params
+- dynamic values have runtime strategies recorded in `.migration/e2e.yaml`
+- DB/MySQL adapter types come from explicit schema evidence, not source-language
+  model guesses
+- E2E-only fixtures, replay listeners, and case loaders cannot be reached from
+  the default service startup path
+- intended behavior changes, including dropped legacy side effects, have
+  explicit user approval
+
+If any item is uncertain, do not mark the migration complete. Record
+`semantics_review_status: incomplete` and include the specific blocker.
+
 ## Implementation Loop
 
 Use at most 3 iterations:
@@ -288,17 +347,21 @@ Use at most 3 iterations:
 4. Choose or create the module layout before adding the handler/service code.
 5. Confirm DB/MySQL schema evidence before finalizing runtime adapter field
    types. If schema is missing, record the unconfirmed status.
-6. Implement or wire the real runtime dependency path separately from recorded
+6. Define runtime strategies for dynamic recorded values. Keep fixed recorded
+   values out of normal config unless the source repo proves they are true
+   product defaults.
+7. Implement or wire the real runtime dependency path separately from recorded
    replay. The default app/server startup must not require a recorded case path.
-7. For API/service scopes, ensure a normal runnable entrypoint exists before
+8. For API/service scopes, ensure a normal runnable entrypoint exists before
    declaring success. A library-only test harness is not enough for a migrated
    service API.
-8. Run the focused recorded E2E through managed dependency replay and verify
+9. Run the focused recorded E2E through managed dependency replay and verify
    that all case-owned dependency touches are matched.
-9. Classify failures as target implementation bug, replay issue,
+10. Perform the migration semantics review.
+11. Classify failures as target implementation bug, replay issue,
    incomplete recording, recording workflow improvement, or target setup issue.
-10. Fix target implementation only when recorded replay evidence is complete.
-11. Stop with a recording/E2E improvement list when evidence is missing or
+12. Fix target implementation only when recorded replay evidence is complete.
+13. Stop with a recording/E2E improvement list when evidence is missing or
    replay would require guessing.
 
 After focused E2E passes, run the target repo's relevant quality checks. For
@@ -331,4 +394,5 @@ Keep output concise:
 - pass/fail result
 - dependency touch status, especially any unmatched target calls or unused case
   exchanges
+- dynamic value strategy and semantics review status
 - blockers or recording improvement feedback only when present
