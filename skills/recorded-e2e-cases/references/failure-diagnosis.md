@@ -8,13 +8,13 @@ attempt.
 Classify failures in this order:
 
 1. Incomplete recording
-2. Missing or incorrect dependency mock
+2. Missing or incorrect dependency replay
 3. Environment or app startup mismatch
 4. Assertion drift in unstable response fields
 5. Product code bug
 
 Prefer dependency and environment explanations until the recorded dependency
-evidence is complete and the mocks are known to be hit.
+evidence is complete and replay is known to be hit.
 
 ## Incomplete Recording Signals
 
@@ -25,6 +25,8 @@ evidence:
   external services
 - dependency calls appear only in `dependencies-debug.jsonl`
 - a dependency error was recorded instead of a semantic response
+- `dependencies-summary.json` lists response-driving, auth/session, or required
+  side-effect dependencies that the replay does not cover
 - downstream data is needed but no semantic record or trusted project fixture
   supplies it
 - the recorded HTTP response depends on data that cannot be explained by the
@@ -33,15 +35,17 @@ evidence:
 Do not infer missing rows, messages, cache entries, or third-party responses
 from `expected-response.json` alone.
 
-## Mock Failure Signals
+## Replay Failure Signals
 
-Fix mocks before product code when:
+Fix replay setup before product code when:
 
-- the app calls a dependency but no mock handles it
+- the app calls a dependency but replay does not handle it
+- the replay dependency coverage summary misses a recorded response-driving,
+  auth/session, or required side-effect dependency
 - SQL differs only by formatting, placeholder style, or harmless whitespace
-- prepared statement params are parsed but the mock ignores them
-- dependency ordering matters and the mock is stateless
-- the mock returns a generic empty value but the recorded dependency returned
+- prepared statement params are parsed but replay ignores them
+- dependency ordering matters and replay lacks connection/session state
+- replay returns a generic empty value but the recorded dependency returned
   concrete rows, affected rows, ids, errors, or messages
 - the app attempts a real external connection during the replay
 
@@ -60,16 +64,16 @@ Treat these as replay risks:
 - `response.rows_truncated == true`
 - use of `statement_id` as a global key
 - transaction, lock, temp table, session variable, or repeated SQL behavior
-  mocked without ordering or connection state
+  replayed without ordering or connection state
 - `mysql_tls_rejected`, because MySQL TLS MITM is intentionally unsupported
 
-Use `dependencies-debug.jsonl` to explain parser gaps, not as the primary mock
+Use `dependencies-debug.jsonl` to explain parser gaps, not as the primary replay
 source. Raw/base64 payloads are less reliable than semantic `mysql_exchange`
 records.
 
 ## Assertion Drift
 
-Only classify a mismatch as assertion drift when dependency mocks were used and
+Only classify a mismatch as assertion drift when dependency replay was used and
 the business behavior matches.
 
 For JSON responses, diagnose against parsed JSON values. Formatting, whitespace,
@@ -94,7 +98,7 @@ stable semantic fields over broad ignores.
 Modify product code only when:
 
 - dependency evidence is complete
-- mocks are hit and return the recorded behavior
+- replay is hit and returns the recorded behavior
 - the request is driven equivalently to the recording
 - the remaining mismatch is a real behavior difference, not an unstable field
   or missing environment setup

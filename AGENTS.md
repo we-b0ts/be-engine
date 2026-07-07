@@ -6,8 +6,10 @@ This is a Rust single-binary traffic recorder proxy. It records HTTP, HTTPS,
 HTTP gateway, fake-DNS/TCP gateway, and MySQL traffic to JSONL files.
 
 The primary crate is in `src/` and builds the `traffic-recorder-proxy` binary.
-Example runtime configuration lives in `config.example.toml`. Local helper
-scripts live in `scripts/`.
+Recorder runtime configuration lives in `recorder.example.toml`. Replay helpers
+and the replay config template live under
+`skills/recorded-e2e-cases/{scripts,assets}`. Local recorder helper scripts live
+in `scripts/`.
 
 ## Rust Tooling
 
@@ -36,22 +38,37 @@ Do not replace that registry configuration unless explicitly asked.
 Run the service with:
 
 ```bash
-cargo run -- --config config.example.toml
+cargo run -- --config recorder.example.toml
 ```
 
-For watch-mode development:
+For watch-mode recording:
 
 ```bash
-./scripts/dev.sh
+./scripts/record.sh
 ```
 
-`scripts/dev.sh` enables local DNS capture and fake-IP TCP redirect by default,
+`scripts/record.sh` enables local DNS capture and fake-IP TCP redirect by default,
 which modifies local DNS/iptables state through the setup scripts. Use this when
 you intentionally want the recorder to intercept local traffic. To skip those
 rules:
 
 ```bash
-./scripts/dev.sh --no-dns
+./scripts/record.sh --no-dns
+```
+
+`recorder.example.toml` enables `[local_record]` owner filtering for the
+dedicated Unix user `trp-record`. Prefer running the source service as that user
+so bootstrap and case dependencies are not polluted by unrelated local
+processes. `OWNER_UID` in the environment overrides the config.
+
+For replay-mode development:
+
+```bash
+cargo build
+TRAFFIC_RECORDER_PROXY_BIN="$PWD/target/debug/traffic-recorder-proxy" \
+  ./skills/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
+TRAFFIC_RECORDER_PROXY_BIN="$PWD/target/debug/traffic-recorder-proxy" \
+  ./skills/recorded-e2e-cases/scripts/replay.sh --no-intercept path/to/replay.toml
 ```
 
 When using the setup scripts directly, always pair `up` with `down`:
@@ -78,14 +95,21 @@ swap files.
 Case output is organized as:
 
 ```text
-<rule-name>/<case-id>/request.json
-<rule-name>/<case-id>/expected-response.json
-<rule-name>/<case-id>/dependencies.jsonl
-<rule-name>/<case-id>/dependencies-debug.jsonl
+<rule-name>/<uri-group>/<case-id>/request.json
+<rule-name>/<uri-group>/<case-id>/expected-response.json
+<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
+<rule-name>/<uri-group>/<case-id>/dependencies-summary.json
+<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
+bootstrap-dependencies.jsonl
+bootstrap-dependencies-summary.json
+bootstrap-dependencies-debug.jsonl
 ```
 
-Use `dependencies.jsonl` for mock-oriented semantic data. Use
-`dependencies-debug.jsonl` only for protocol-level debugging.
+Use `dependencies.jsonl` for replay-oriented semantic data. Use
+`dependencies-debug.jsonl` only for protocol-level debugging. Root-level
+bootstrap dependency files capture replay-oriented dependencies observed before
+the first case starts; replay discovers them by walking upward from a case
+directory.
 
 ## Coding Guidelines
 
@@ -104,7 +128,7 @@ Use `dependencies.jsonl` for mock-oriented semantic data. Use
   secrets should be added to `recording.redact_headers` defaults or documented.
 - MySQL TLS MITM is intentionally out of scope for v1. If `CLIENT_SSL` is
   detected, keep rejecting and recording the reason.
-- For mock generation, prefer semantic `mysql_exchange` records over raw
+- For managed replay, prefer semantic `mysql_exchange` records over raw
   packet/base64 payloads.
 
 ## Testing Guidance

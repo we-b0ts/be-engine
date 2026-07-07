@@ -1,7 +1,7 @@
 # Recorded Case Format
 
 Use this reference when parsing recorded case artifacts or translating them into
-target-project test inputs and mocks.
+target-project E2E inputs and dependency replay config.
 
 ## Directory And Files
 
@@ -11,7 +11,11 @@ Canonical case layout:
 recordings/<rule>/<uri-group>/<case-id>/request.json
 recordings/<rule>/<uri-group>/<case-id>/expected-response.json
 recordings/<rule>/<uri-group>/<case-id>/dependencies.jsonl
+recordings/<rule>/<uri-group>/<case-id>/dependencies-summary.json
 recordings/<rule>/<uri-group>/<case-id>/dependencies-debug.jsonl
+recordings/bootstrap-dependencies.jsonl
+recordings/bootstrap-dependencies-summary.json
+recordings/bootstrap-dependencies-debug.jsonl
 ```
 
 `uri-group` is usually built from the first two URI path segments joined by
@@ -34,7 +38,10 @@ Load order:
 1. `request.json`
 2. `expected-response.json`
 3. `dependencies.jsonl`
-4. `dependencies-debug.jsonl` only for missing semantic data, parse warnings, or
+4. `dependencies-summary.json` when present
+5. root-level `bootstrap-dependencies.jsonl` when present
+6. root-level `bootstrap-dependencies-summary.json` when present
+7. `dependencies-debug.jsonl` only for missing semantic data, parse warnings, or
    protocol debugging
 
 ## HTTP Boundary Files
@@ -95,12 +102,12 @@ the stored data.
 
 ## Dependency Files
 
-`dependencies.jsonl` contains semantic dependency records for mocks and replay.
+`dependencies.jsonl` contains semantic dependency records for managed replay.
 Each line is a JSON object with `event_type`.
 
 Common semantic records:
 
-- `mysql_exchange`: structured SQL request and response; preferred for mocks
+- `mysql_exchange`: structured SQL request and response; preferred for replay
 - `mysql_connection`: connection metadata
 - `tcp_gateway_connection`: captured TCP/fake-IP dependency connection metadata
 - `mysql_tls_rejected`: MySQL TLS rejection event; MySQL TLS MITM is out of scope
@@ -119,6 +126,53 @@ on the case-local dependency files.
 `mysql_response`, and `mysql_packet`. Keep these out of normal E2E assertions
 unless the protocol detail itself is under test. Raw MySQL protocol type names,
 type codes, and flags belong in debug records, not normal semantic replay data.
+
+`dependencies-summary.json` is a derived coverage checklist generated from
+`dependencies.jsonl`. It is not the source of dependency data. Use it to see
+which protocols, CRUD operations, tables, hosts, side effects, and errors the
+case recorded, and to verify that replay covered the behavior that matters for
+the case. If it is absent, derive the same working summary from
+`dependencies.jsonl`.
+
+Summary rules:
+
+- Successful MySQL `COM_STMT_PREPARE` exchanges are omitted from
+  `dependencies.jsonl` and from the acceptance summary; the debug file keeps raw
+  protocol evidence.
+- MySQL `COM_STMT_EXECUTE`, text query execution, execute failures, and prepare
+  failures are semantic dependencies and should appear in `dependencies.jsonl`
+  and the summary.
+- Dependency coverage should compare response-driving, auth/session, and
+  required side-effect behavior. Unrelated/background traffic may be listed but
+  should not fail replay when it is safely ignored with evidence.
+
+First-version summary fields:
+
+- Top level: `version`, `source`, `total_events`, `event_types`, optional
+  `parse_errors`, and optional protocol sections such as `mysql`, `http`,
+  `tcp_gateway`, and `proxy_errors`.
+- `mysql`: connection counts, TLS rejection counts, route/database/user/upstream
+  counts, semantic exchange counts, executed and failed CRUD counts, resultset
+  and error counts, returned/affected row totals, per-table executed/failed CRUD
+  counts, and compact statement records.
+- `http`: call counts, methods, authorities, status codes, and errors.
+- `tcp_gateway`: connection counts, domains, upstreams, and errors.
+- `proxy_errors`: protocol and target error counts.
+
+The summary is an index for coverage and triage. Use `dependencies.jsonl` as the
+source of replay payloads and exact dependency behavior.
+
+`bootstrap-dependencies.jsonl` is a root-level replay dependency file for
+startup/bootstrap traffic captured before the first case starts. It is shared
+across cases from the same recording directory. Do not move it into a case
+directory unless packaging a standalone case bundle; replay should discover it
+by walking upward from the case directory. Its debug and summary companions use
+the same naming pattern: `bootstrap-dependencies-debug.jsonl` and
+`bootstrap-dependencies-summary.json`. Newer recordings may close the bootstrap
+window earlier when the recorder's `[http_gateway.ready]` probe observes the
+configured upstream path returning the configured success status. Traffic after
+that ready signal is normal idle/background traffic, not bootstrap evidence,
+unless it belongs to an active case.
 
 ## MySQL Exchange Records
 
@@ -141,10 +195,15 @@ Prefer `mysql_exchange` over raw MySQL records. Important fields:
 - `response.rows_truncated`: true when result rows were truncated
 - `parse_warnings`: parser warnings that may make replay unsafe
 
+Successful prepared-statement setup is not a replay dependency by itself.
+Record successful `COM_STMT_PREPARE` in debug/protocol data, not as a normal
+semantic dependency. If a prepare fails, keep it as a `mysql_exchange` because
+the failure is an observed dependency result or side effect.
+
 Match MySQL calls by normalized SQL plus parsed `params`. Normalize SQL by
 collapsing whitespace while preserving placeholders. Preserve ordering for
 transactions, locks, repeated SQL, stateful sessions, and connection-specific
-behavior. Do not use `statement_id` as a stable mock key across connections.
+behavior. Do not use `statement_id` as a stable replay key across connections.
 
 MySQL resultset columns in `dependencies.jsonl` are semantic, not wire-protocol
 columns. Expected fields:

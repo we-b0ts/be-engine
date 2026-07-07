@@ -23,9 +23,9 @@ The target implementation must make these questions answerable from logs:
 - did the service start, which config did it read, and where are logs written?
 - did the migrated request/job enter the target process?
 - which route, handler, or job scope handled it?
-- did recorded E2E use mocks, and which case/dependency records matched?
+- did recorded E2E use dependency replay, and which case/dependency records matched?
 - did a real runtime dependency fail, and what was the root cause?
-- is a failure due to target code, mock/replay data, recording evidence,
+- is a failure due to target code, replay data, recording evidence,
   runtime config, or an external dependency?
 
 Do not hide dependency or decode failures behind compatibility responses
@@ -61,7 +61,7 @@ artifacts.
   errors, dependency failures that affect behavior, and type/decode errors.
 - `dependency.log`: DB, HTTP, Redis, Memcache, MQ, cache, filesystem, and other
   external boundary calls. Use it to distinguish real dependency failures from
-  mock/replay failures.
+  replay failures.
 
 The implementation may write the same structured event to multiple sinks when
 the logging library supports filtering. Do not require four physical files if
@@ -79,7 +79,7 @@ the four categories must remain queryable.
   migration scope, request/job completion summaries, case loading summaries,
   and command facade lifecycle events.
 - `debug`: SQL templates, downstream HTTP method/host/path, retry details,
-  cache hit/miss, mock dependency match/miss/unused details, and E2E assertion
+  cache hit/miss, replay dependency match/miss/unused details, and E2E assertion
   diffs. Do not enable by default in production.
 - `trace`: protocol frames, field-level decode details, or full internal spans.
   Keep disabled by default and never log secrets.

@@ -38,20 +38,54 @@ cargo build --release
 ## Run
 
 ```bash
-cargo run -- --config config.example.toml
+cargo run -- --config recorder.example.toml
 ```
 
-For watch-mode development, `./scripts/dev.sh` runs `cargo watch` and enables
+For watch-mode recording, `./scripts/record.sh` runs `cargo watch` and enables
 local DNS capture plus fake-IP TCP redirect by default. Use
-`./scripts/dev.sh --no-dns` when you want to skip those local rules.
+`./scripts/record.sh --no-dns` when you want to skip those local rules.
+
+`recorder.example.toml` enables local owner filtering with the `trp-record`
+Unix user by default:
+
+```toml
+[local_record]
+enabled = true
+record_user = "trp-record"
+owner_uid = ""
+```
+
+Create the user once, run the source service as that user, then start the
+recorder:
+
+```bash
+sudo useradd --system --create-home --shell /bin/bash trp-record
+sudo -u trp-record /path/to/source-service start
+./scripts/record.sh recorder.example.toml
+```
+
+`OWNER_UID=... ./scripts/record.sh` overrides `[local_record]` when you need to
+record a different dedicated user.
 
 The default example listens on:
 
 - DNS mock: `127.0.0.153:15353`
 - TCP fake-IP gateway: `127.0.0.1:15001`
-- HTTP gateway for tcpcopy traffic: disabled by default, sample `127.0.0.1:18080`
+- HTTP gateway for tcpcopy traffic: `0.0.0.0:18084`
 - JSONL output: `./recordings/traffic.jsonl`
 - Generated CA: `./data/traffic-recorder-ca.pem`
+
+For dependency replay, use the helper bundled with the recorded E2E skill. Copy
+or adapt `skills/recorded-e2e-cases/assets/replay.example.toml`, then run:
+
+```bash
+TRAFFIC_RECORDER_PROXY_BIN="$PWD/target/debug/traffic-recorder-proxy" \
+  ./skills/recorded-e2e-cases/scripts/replay.sh path/to/replay.toml
+```
+
+The replay script starts the replay DNS and fake-IP TCP gateway, then applies
+the same local interception rules used for recording. Use
+`--no-intercept` to start only the replay listeners.
 
 ## Optional Explicit HTTP/HTTPS Proxy
 
@@ -100,6 +134,12 @@ matched_upstream = "http://127.0.0.1:8081"
 fallback_upstream = "http://10.10.20.30:8080"
 preserve_host = true
 
+[http_gateway.ready]
+enabled = true
+path = "/"
+success_status = 200
+interval_ms = 1000
+
 [[http_gateway.rules]]
 name = "record-api"
 hosts = ["api.example.com"]
@@ -114,6 +154,13 @@ treated as matched and recorded. Matching supports host, method, path prefix,
 and exact header value checks. `preserve_host = true` keeps the original `Host`
 header when forwarding.
 
+`[http_gateway.ready]` is an optional active readiness probe against
+`matched_upstream`. When enabled, the recorder sends `GET path` every
+`interval_ms` milliseconds, defaulting to once per second. When the response
+status equals `success_status`, the shared bootstrap dependency window closes.
+The probe itself is not recorded as a case. If this section is disabled, the
+bootstrap window still closes when the first matched gateway case starts.
+
 Matched gateway requests also create a case directory under
 `recording.output_dir`:
 
@@ -121,7 +168,11 @@ Matched gateway requests also create a case directory under
 <rule-name>/<uri-group>/<case-id>/request.json
 <rule-name>/<uri-group>/<case-id>/expected-response.json
 <rule-name>/<uri-group>/<case-id>/dependencies.jsonl
+<rule-name>/<uri-group>/<case-id>/dependencies-summary.json
 <rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
+bootstrap-dependencies.jsonl
+bootstrap-dependencies-summary.json
+bootstrap-dependencies-debug.jsonl
 ```
 
 `uri-group` is built from the first `case_uri_segments` path segments joined by
@@ -135,17 +186,23 @@ stores the matched upstream response; if the response body has
 While that gateway request is active, dependency traffic captured by the
 fake-IP gateway is appended to `dependencies.jsonl` or
 `dependencies-debug.jsonl`. The main `dependencies.jsonl` file is intended for
-mock generation and keeps semantic events such as `mysql_exchange`,
+managed replay and keeps semantic events such as `mysql_exchange`,
 `mysql_connection`, and dependency errors. MySQL protocol details such as
 `mysql_query`, `mysql_response`, and `mysql_packet` are written to
-`dependencies-debug.jsonl` so raw/base64 payloads do not distract the mock path.
+`dependencies-debug.jsonl` so raw/base64 payloads do not distract the replay path.
 Each dependency line keeps the original event fields and adds
 `case_dependency_matched_by`: `process` when the dependency process matches the
 upstream process, or `active_window` when it was recorded because it happened
 during the request/response window. Dependency case files compact
 `client_process` to just the process id to keep them small; the global
-`traffic.jsonl` keeps the full process details. Dependency traffic without an
-active matched gateway request is only written to the global `traffic.jsonl`.
+`traffic.jsonl` keeps the full process details.
+
+Before the first matched gateway case is registered, replay-oriented dependency
+traffic is also written to root-level `bootstrap-dependencies.jsonl`; protocol
+debug records go to `bootstrap-dependencies-debug.jsonl`. The bootstrap window
+closes permanently when `[http_gateway.ready]` succeeds or, if no ready probe is
+configured, when the first case starts. Later idle traffic remains only in
+`traffic.jsonl` unless it belongs to an active case.
 
 ## Configure Local Fake-IP DNS Gateway
 
@@ -295,8 +352,8 @@ MySQL TLS, and records parseable query metadata plus grouped server response
 payloads as `mysql_connection`, `mysql_query`, `mysql_response`, or
 `mysql_exchange` records. By default, `mysql_response` records one concatenated
 response payload and omits the raw packet list. `mysql_exchange` is the
-semantic form intended for mock generation: it includes SQL, prepared statement
-ids, parsed execute parameters when available, response columns, rows, OK
+semantic form intended for replay: it includes SQL, prepared statement ids,
+parsed execute parameters when available, response columns, rows, OK
 metadata, and MySQL errors. Set
 `[mysql].record_raw_packets = true` only when you need per-packet protocol
 debugging details.
@@ -378,7 +435,7 @@ Records are appended to `traffic.jsonl`. Event types include:
 HTTP and HTTPS bodies are base64 encoded and truncated according to
 `recording.max_body_bytes`. Original and stored byte lengths are included.
 MySQL response payloads are also base64 encoded and truncated with the same
-limit. MySQL password/auth response bytes are not recorded. For AI/mock use
+limit. MySQL password/auth response bytes are not recorded. For AI replay use
 cases, prefer `mysql_exchange` over raw `mysql_response.payload`: it contains
 structured query input and parsed output rows where the recorder has enough
 protocol context.

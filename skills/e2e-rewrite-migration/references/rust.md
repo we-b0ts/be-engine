@@ -39,10 +39,11 @@ Keep the implementation small and behavior-focused:
   access
 - provide a real implementation for normal runtime, such as a `sqlx` repository
   when the source behavior reads or writes SQL
-- provide a recorded/mock implementation only for E2E replay
+- route E2E dependencies through managed replay, not through the normal runtime
+  implementation
 - make `main` or the default server path construct the real implementation from
   normal configuration, not from a case directory
-- tests should drive recorded requests and dependency mocks, not private
+- tests should drive recorded requests and replayed dependencies, not private
   implementation details
 - config should be explicit enough to isolate real external services during E2E
 - logs should be initialized through a small observability/logging module, not
@@ -70,7 +71,7 @@ that can grow with the next API.
 Create only modules needed by the current slice. `main.rs` should be
 bootstrap-only: parse args/config and start the server. `lib.rs` should mostly
 export modules or expose an app factory. Do not let either file become the
-catch-all implementation file. Recorded repositories or mock clients should
+catch-all implementation file. Recorded replay setup and case loaders should
 live under `tests/support/` or an equally isolated test-support module unless
 the target repo has a different established pattern.
 
@@ -124,9 +125,9 @@ fields as omitted fields. `HashMap` or other map-backed JSON objects are
 acceptable for JSON structural E2E only when field presence and values are
 correct; they are not suitable for exact-byte assertions.
 
-Use recorded dependency mocks for tests. Do not connect to real DBs, queues,
-caches, or third-party services during recorded E2E unless the target repo
-already has an explicit local/test isolation strategy.
+Use managed dependency replay for recorded E2E. Do not connect to real DBs,
+queues, caches, or third-party services during recorded E2E unless the target
+repo already has an explicit local/test isolation strategy.
 
 Do not make `main` or the default server startup load recorded case data. A
 useful Rust shape is:

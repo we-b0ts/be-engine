@@ -57,7 +57,17 @@ pub struct HttpGatewayConfig {
     pub matched_upstream: String,
     pub fallback_upstream: String,
     pub preserve_host: bool,
+    pub ready: HttpGatewayReadyConfig,
     pub rules: Vec<HttpGatewayRuleConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HttpGatewayReadyConfig {
+    pub enabled: bool,
+    pub path: String,
+    pub success_status: u16,
+    pub interval_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -167,7 +177,19 @@ impl Default for HttpGatewayConfig {
             matched_upstream: "http://127.0.0.1:8081".to_string(),
             fallback_upstream: "http://127.0.0.1:8082".to_string(),
             preserve_host: true,
+            ready: HttpGatewayReadyConfig::default(),
             rules: Vec::new(),
+        }
+    }
+}
+
+impl Default for HttpGatewayReadyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: "/".to_string(),
+            success_status: 200,
+            interval_ms: 1000,
         }
     }
 }
@@ -272,6 +294,24 @@ mod tests {
     }
 
     #[test]
+    fn ignores_local_record_script_config() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [local_record]
+            enabled = true
+            record_user = "trp-record"
+            owner_uid = ""
+
+            [recording]
+            output_dir = "./recordings"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.recording.output_dir, PathBuf::from("./recordings"));
+    }
+
+    #[test]
     fn parses_mysql_dns_routes() {
         let config: AppConfig = toml::from_str(
             r#"
@@ -305,6 +345,12 @@ mod tests {
             matched_upstream = "http://127.0.0.1:9001"
             fallback_upstream = "http://127.0.0.1:9002"
 
+            [http_gateway.ready]
+            enabled = true
+            path = "/"
+            success_status = 200
+            interval_ms = 1000
+
             [[http_gateway.rules]]
             name = "record-api"
             hosts = ["api.example.com"]
@@ -321,6 +367,10 @@ mod tests {
         .unwrap();
 
         assert!(config.http_gateway.enabled);
+        assert!(config.http_gateway.ready.enabled);
+        assert_eq!(config.http_gateway.ready.path, "/");
+        assert_eq!(config.http_gateway.ready.success_status, 200);
+        assert_eq!(config.http_gateway.ready.interval_ms, 1000);
         assert_eq!(config.http_gateway.rules.len(), 2);
         assert_eq!(config.http_gateway.rules[0].case_uri_segments, 3);
         assert_eq!(

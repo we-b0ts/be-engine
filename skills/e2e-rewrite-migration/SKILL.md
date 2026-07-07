@@ -38,9 +38,9 @@ recording/E2E evidence.
    preserve original case files. If the user provides a case collection
    directory, select the case by each child `request.json.uri` matching the
    migration scope.
-7. Use `recorded-e2e-cases` for recorded replay, dependency mocks, JSON
-   structural response compatibility, configured ignores, exact-byte modes, and
-   recording feedback rules.
+7. Use `recorded-e2e-cases` for recorded request replay, managed dependency
+   replay, dependency summary coverage, JSON structural response compatibility,
+   configured ignores, exact-byte modes, and recording feedback rules.
 8. Ensure a repo-local development command facade exists. Prefer an existing
    project convention; otherwise create `scripts/<project>-cli`. Runnable
    services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,
@@ -60,7 +60,7 @@ recording/E2E evidence.
    `schema_validation_status: unconfirmed` and do not call the migration
    complete.
 13. Implement the real runtime dependency path and normal startup entrypoint for
-   the migrated scope. Recorded dependencies may power tests and mocks, but the
+   the migrated scope. Recorded dependencies may power E2E replay, but the
    default service startup must not require recorded case data.
 14. Implement the target behavior idiomatically. Do not assume mechanical
    translation is required; API/interface output compatibility is the contract.
@@ -89,4 +89,4 @@ migration loop, missing-recording behavior, and failure classification.
 
 Keep the final response short: migrated scope, source and case paths, pass/fail
 status, E2E/quality/startup commands run, and recording improvement feedback
-only when real replay or mock pain exposed a recording gap.
+only when real replay pain exposed a recording gap.

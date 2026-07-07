@@ -3,6 +3,10 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::dependency_summary::{
+    should_append_case_dependency, write_bootstrap_dependency_summary,
+    write_case_dependency_summary,
+};
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -20,7 +24,7 @@ use uuid::Uuid;
 pub struct Recorder {
     file: Arc<Mutex<File>>,
     output_dir: Arc<std::path::PathBuf>,
-    case_write_lock: Arc<Mutex<()>>,
+    dependency_write_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -102,6 +106,12 @@ pub struct MysqlConnectionEvent {
     pub listen_addr: String,
     pub client_addr: Option<String>,
     pub client_process: Option<ProcessInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_addr: Option<String>,
     pub upstream_addr: String,
     pub username: Option<String>,
     pub database: Option<String>,
@@ -255,6 +265,12 @@ pub struct MysqlTlsRejectedEvent {
     pub listen_addr: String,
     pub client_addr: Option<String>,
     pub client_process: Option<ProcessInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_addr: Option<String>,
     pub upstream_addr: String,
     pub capability_flags: u32,
     pub reason: String,
@@ -287,7 +303,7 @@ impl Recorder {
         Ok(Self {
             file: Arc::new(Mutex::new(file)),
             output_dir: Arc::new(output_dir.to_path_buf()),
-            case_write_lock: Arc::new(Mutex::new(())),
+            dependency_write_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -331,12 +347,16 @@ impl Recorder {
         event: &RecorderEvent,
         matched_by: &str,
     ) -> Result<()> {
-        let _guard = self.case_write_lock.lock().await;
+        if !should_append_case_dependency(event) {
+            return Ok(());
+        }
+        let _guard = self.dependency_write_lock.lock().await;
         let dir = self.case_dir(case);
         tokio::fs::create_dir_all(&dir)
             .await
             .with_context(|| format!("failed to create case recording dir {}", dir.display()))?;
-        let path = dir.join(case_dependency_filename(event));
+        let filename = case_dependency_filename(event);
+        let path = dir.join(filename);
         let mut value =
             serde_json::to_value(event).context("failed to serialize case dependency event")?;
         compact_case_dependency_process_info(&mut value);
@@ -360,7 +380,65 @@ impl Recorder {
             .context("failed to append case dependency event")?;
         file.flush()
             .await
-            .context("failed to flush case dependency event")
+            .context("failed to flush case dependency event")?;
+        if filename == "dependencies.jsonl" {
+            write_case_dependency_summary(&dir).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn append_bootstrap_dependency(
+        &self,
+        event: &RecorderEvent,
+        matched_by: &str,
+    ) -> Result<()> {
+        if !should_append_case_dependency(event) {
+            return Ok(());
+        }
+        let _guard = self.dependency_write_lock.lock().await;
+        tokio::fs::create_dir_all(&*self.output_dir)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create recording dir {}",
+                    self.output_dir.display()
+                )
+            })?;
+        let filename = bootstrap_dependency_filename(event);
+        let path = self.output_dir.join(filename);
+        let mut value = serde_json::to_value(event)
+            .context("failed to serialize bootstrap dependency event")?;
+        compact_case_dependency_process_info(&mut value);
+        if let serde_json::Value::Object(object) = &mut value {
+            object.insert(
+                "bootstrap_dependency_matched_by".to_string(),
+                serde_json::Value::String(matched_by.to_string()),
+            );
+        }
+        let mut line =
+            serde_json::to_vec(&value).context("failed to serialize bootstrap dependency event")?;
+        line.push(b'\n');
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to open bootstrap dependencies file {}",
+                    path.display()
+                )
+            })?;
+        file.write_all(&line)
+            .await
+            .context("failed to append bootstrap dependency event")?;
+        file.flush()
+            .await
+            .context("failed to flush bootstrap dependency event")?;
+        if filename == "bootstrap-dependencies.jsonl" {
+            write_bootstrap_dependency_summary(&self.output_dir).await?;
+        }
+        Ok(())
     }
 
     fn case_dir(&self, case: &CaseContext) -> std::path::PathBuf {
@@ -379,6 +457,14 @@ fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
         "dependencies-debug.jsonl"
     } else {
         "dependencies.jsonl"
+    }
+}
+
+fn bootstrap_dependency_filename(event: &RecorderEvent) -> &'static str {
+    if is_case_dependency_debug_event(event) {
+        "bootstrap-dependencies-debug.jsonl"
+    } else {
+        "bootstrap-dependencies.jsonl"
     }
 }
 
@@ -702,6 +788,151 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bootstrap_dependency_writes_root_file_and_summary() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let event = RecorderEvent::ProxyError(ProxyErrorEvent {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            protocol: "test".to_string(),
+            client_addr: None,
+            client_process: Some(ProcessInfo {
+                pid: 42,
+                comm: Some("app".to_string()),
+                cmdline: Some("app --serve".to_string()),
+                exe: Some("/tmp/app".to_string()),
+            }),
+            target: Some("upstream".to_string()),
+            error: "boom".to_string(),
+        });
+
+        recorder
+            .append_bootstrap_dependency(&event, "bootstrap_window")
+            .await
+            .unwrap();
+
+        let raw = tokio::fs::read_to_string(temp.path().join("bootstrap-dependencies.jsonl"))
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(value["event_type"], "proxy_error");
+        assert_eq!(value["client_process"], 42);
+        assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
+
+        let summary_raw =
+            tokio::fs::read_to_string(temp.path().join("bootstrap-dependencies-summary.json"))
+                .await
+                .unwrap();
+        let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
+        assert_eq!(summary["total_events"], 1);
+        assert_eq!(summary["event_types"]["proxy_error"], 1);
+    }
+
+    #[tokio::test]
+    async fn case_dependency_summary_skips_successful_prepare() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: None,
+        };
+
+        recorder
+            .append_case_dependency(
+                &case,
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    "COM_STMT_PREPARE",
+                    Some("SELECT `id`, `name` FROM `user` WHERE `id` = ?"),
+                    "stmt_prepare",
+                    vec![mysql_column("id", "user", "id", "integer", "INT")],
+                    Vec::new(),
+                    None,
+                    None,
+                )),
+                "process",
+            )
+            .await
+            .unwrap();
+
+        let case_dir = temp.path().join("api").join(case.id.to_string());
+        assert!(!case_dir.join("dependencies.jsonl").exists());
+        assert!(!case_dir.join("dependencies-summary.json").exists());
+
+        recorder
+            .append_case_dependency(
+                &case,
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    "COM_STMT_EXECUTE",
+                    Some("SELECT `id`, `name` FROM `user` WHERE `id` = ?"),
+                    "resultset",
+                    vec![
+                        mysql_column("id", "user", "id", "integer", "INT"),
+                        mysql_column("name", "user", "name", "string", "VARCHAR"),
+                    ],
+                    vec![vec![
+                        MysqlValue {
+                            kind: "integer".to_string(),
+                            value: Some(serde_json::json!(1)),
+                            raw: None,
+                        },
+                        MysqlValue {
+                            kind: "string".to_string(),
+                            value: Some(serde_json::json!("alice")),
+                            raw: None,
+                        },
+                    ]],
+                    None,
+                    None,
+                )),
+                "process",
+            )
+            .await
+            .unwrap();
+
+        recorder
+            .append_case_dependency(
+                &case,
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    "COM_STMT_PREPARE",
+                    Some("INSERT INTO request_log_202607 (uuid) VALUES (?)"),
+                    "error",
+                    Vec::new(),
+                    Vec::new(),
+                    Some(1146),
+                    Some("Table 'pluto_log.request_log_202607' doesn't exist"),
+                )),
+                "process",
+            )
+            .await
+            .unwrap();
+
+        let raw = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+            .await
+            .unwrap();
+        assert_eq!(raw.lines().count(), 2);
+        assert!(!raw.contains("\"status\":\"stmt_prepare\""));
+
+        let summary_raw = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
+            .await
+            .unwrap();
+        let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
+        assert_eq!(summary["total_events"], 2);
+        assert_eq!(summary["event_types"]["mysql_exchange"], 2);
+        assert_eq!(summary["mysql"]["semantic_exchanges"], 2);
+        assert_eq!(summary["mysql"]["executed"]["total"], 1);
+        assert_eq!(summary["mysql"]["executed"]["crud"]["select"], 1);
+        assert_eq!(summary["mysql"]["failed"]["total"], 1);
+        assert_eq!(summary["mysql"]["failed"]["by_phase"]["prepare"], 1);
+        assert_eq!(summary["mysql"]["failed"]["crud"]["insert"], 1);
+        assert_eq!(summary["mysql"]["tables"]["user"]["executed"]["select"], 1);
+        assert_eq!(
+            summary["mysql"]["tables"]["request_log_202607"]["failed"]["insert"],
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn case_dependency_routes_mysql_protocol_details_to_debug_file() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();
@@ -741,5 +972,99 @@ mod tests {
         assert_eq!(value["event_type"], "mysql_query");
         assert_eq!(value["client_process"], 42);
         assert_eq!(value["case_dependency_matched_by"], "process");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_dependency_routes_mysql_protocol_details_to_debug_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let event = RecorderEvent::MysqlQuery(MysqlQueryEvent {
+            id: Uuid::new_v4(),
+            connection_id: Uuid::new_v4(),
+            sequence: 1,
+            timestamp: Utc::now(),
+            client_addr: Some("127.0.0.1:12345".to_string()),
+            client_process: Some(ProcessInfo {
+                pid: 42,
+                comm: Some("app".to_string()),
+                cmdline: Some("app --serve".to_string()),
+                exe: Some("/tmp/app".to_string()),
+            }),
+            command: "COM_QUERY".to_string(),
+            query: Some("select 1".to_string()),
+            payload_len: 9,
+        });
+
+        recorder
+            .append_bootstrap_dependency(&event, "bootstrap_window")
+            .await
+            .unwrap();
+
+        assert!(!temp.path().join("bootstrap-dependencies.jsonl").exists());
+        let raw = tokio::fs::read_to_string(temp.path().join("bootstrap-dependencies-debug.jsonl"))
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+        assert_eq!(value["event_type"], "mysql_query");
+        assert_eq!(value["client_process"], 42);
+        assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
+    }
+
+    fn mysql_exchange(
+        command: &str,
+        sql: Option<&str>,
+        status: &str,
+        columns: Vec<MysqlColumn>,
+        rows: Vec<Vec<MysqlValue>>,
+        error_code: Option<u16>,
+        error_message: Option<&str>,
+    ) -> MysqlExchangeEvent {
+        MysqlExchangeEvent {
+            id: Uuid::new_v4(),
+            connection_id: Uuid::new_v4(),
+            query_sequence: 1,
+            timestamp: Utc::now(),
+            client_addr: None,
+            client_process: None,
+            command: command.to_string(),
+            sql: sql.map(ToOwned::to_owned),
+            statement_id: Some(1),
+            params: None,
+            response: MysqlExchangeResponse {
+                status: status.to_string(),
+                error_code,
+                error_message: error_message.map(ToOwned::to_owned),
+                affected_rows: None,
+                last_insert_id: None,
+                row_count: rows.len(),
+                rows,
+                columns,
+                rows_truncated: false,
+            },
+            duration_ms: 1,
+            parse_warnings: Vec::new(),
+        }
+    }
+
+    fn mysql_column(
+        name: &str,
+        table: &str,
+        column: &str,
+        family: &str,
+        sql_type: &str,
+    ) -> MysqlColumn {
+        MysqlColumn {
+            name: name.to_string(),
+            table: Some(table.to_string()),
+            column: Some(column.to_string()),
+            family: family.to_string(),
+            sql_type: sql_type.to_string(),
+            unsigned: None,
+            bits: None,
+            nullable: Some(false),
+            scale: None,
+            column_type_code: 0,
+            flags: None,
+        }
     }
 }

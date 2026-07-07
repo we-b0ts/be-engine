@@ -1,6 +1,6 @@
 ---
 name: recorded-e2e-cases
-description: Replay and fix E2E tests from recorded traffic case directories or case collections under recordings/rule/uri-group. Use when working with request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, dependency replay, MySQL mysql_exchange records, generated dependency mocks, case-driven E2E tests, or failures where the HTTP request/response pair is insufficient without recorded dependencies.
+description: Replay and fix E2E tests from recorded traffic case directories or case collections under recordings/rule/uri-group. Use when working with request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, traffic-recorder-proxy dependency replay, MySQL mysql_exchange records, case-driven E2E tests, or failures where the HTTP request/response pair is insufficient without recorded dependencies.
 ---
 
 # Recorded E2E Cases
@@ -15,35 +15,40 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    collection such as `recordings/<rule>/<uri-group>`; scan child case
    directories and select by `request.json.uri`, not by directory name alone.
    Preserve recorded files exactly.
-2. Load `request.json`, canonical `expected-response.json`, and
-   `dependencies.jsonl` first. Accept `expected_response.json` as a user spelling
-   but do not rename or rewrite it. Read
+2. Load `request.json`, canonical `expected-response.json`,
+   `dependencies.jsonl`, and `dependencies-summary.json` when present. Accept
+   `expected_response.json` as a user spelling but do not rename or rewrite it.
+   Read
    [case-format.md](references/case-format.md) when parsing fields.
-3. Inspect the target project's existing E2E runner, server startup path, test
-   fixtures, and mock style before adding anything. Prefer existing conventions.
-4. Recreate dependency behavior from `dependencies.jsonl` before asserting the
-   HTTP response. Classify dependencies as response-driving, auth/session,
-   required side effect, or unrelated/background noise before turning them into
-   mocks. Recorded dependency data is for test mocks/replay, not normal
-   application runtime storage. Default to isolating all real DB, HTTP, Redis,
-   Memcache, MQ, and other external dependencies unless the project already has
-   an explicit local/test isolation strategy.
+3. Inspect the target project's existing E2E runner, server startup path,
+   runtime config, and dependency wiring before adding anything. Prefer existing
+   conventions.
+4. Start managed dependency replay from `dependencies.jsonl` before asserting
+   the HTTP response. Use `scripts/replay.sh` and
+   `assets/replay.example.toml`; set `TRAFFIC_RECORDER_PROXY_BIN` to the
+   traffic-recorder-proxy binary. Do not hand-write substitute dependency mocks
+   when replay data or relay behavior is missing; report recorder/replay
+   improvements instead.
 5. Drive the recorded request, or the closest equivalent route invocation, and
    compare it with `expected-response.json`. For JSON responses, compare parsed
    JSON structurally: object key order is irrelevant, but field presence, value
    type, `null`, empty string, and missing field must match exactly.
-6. Run a focused single-case or related E2E command first. After it passes, run
+6. Use `dependencies-summary.json` as the dependency coverage checklist when it
+   exists. Response-driving, auth/session, and required side-effect dependency
+   counts must be matched or explicitly explained; unrelated/background traffic
+   may be ignored with evidence.
+7. Run a focused single-case or related E2E command first. After it passes, run
    the broader relevant suite or project-standard checks.
-7. Iterate at most 3 times. Fix or add mocks first. Modify product code only
-   when dependency evidence is complete and the failure clearly points to a real
-   code bug.
-8. After success, failure, or partial progress, review whether the replay pain
+8. Iterate at most 3 times. Fix replay config, target dependency routing, or
+   recorder/replay evidence first. Modify product code only when dependency
+   replay is complete and the failure clearly points to a real code bug.
+9. After success, failure, or partial progress, review whether the replay pain
    indicates recorder improvement opportunities. Do not change the recorder from
    the target project; report evidence-backed feedback.
 
 Read [replay-workflow.md](references/replay-workflow.md) for target-project
-discovery, mock construction, replay loops, and the fallback `.recorded-e2e.yaml`
-configuration interface.
+discovery, managed dependency replay, replay loops, and the fallback
+`.recorded-e2e.yaml` configuration interface.
 
 ## Failure Rules
 

@@ -47,7 +47,8 @@ not replace recorded cases.
 Use `recorded-e2e-cases` for:
 
 - case loading and dependency replay
-- dependency mocks from `dependencies.jsonl`
+- managed dependency replay from `dependencies.jsonl`
+- dependency coverage from `dependencies-summary.json`, when present
 - JSON structural response compatibility, with exact-byte comparison only for
   non-JSON bodies or explicit exact-byte modes
 - configured response ignores
@@ -57,8 +58,9 @@ Use `recorded-e2e-cases` for:
 Recorded dependency data is test evidence, not the target service's normal
 runtime storage. The migrated implementation must have a real dependency
 boundary for production-like startup, such as a database repository, external
-service client, queue adapter, or scheduler input source. Recorded mocks should
-implement the same boundary only for E2E replay.
+service client, queue adapter, or scheduler input source. Recorded replay must
+not replace that real runtime boundary; it belongs only inside the E2E harness
+and replay tooling supplied by `recorded-e2e-cases`.
 
 Default copied case location in the target repo is `tests/fixtures/recordings`.
 Preserve original case files. A user-provided recording path may be a single
@@ -113,7 +115,7 @@ Before implementing behavior:
 - `blockers`
 - `recording_feedback`
 - `runtime_dependency_status`
-- `recorded_mock_status`
+- `recorded_replay_status`
 
 ## Command And Config Contract
 
@@ -232,13 +234,13 @@ For service/API migrations, account for these responsibilities in the design:
 - domain/request/response models
 - persistence or external client boundaries
 - real runtime adapters for DB, HTTP, cache, MQ, or scheduler dependencies
-- recorded replay mocks and case loaders used only by tests
+- recorded replay setup and case loaders used only by tests
 
 Do not put the full migrated API into `main` plus one large library file merely
 because the first recorded case is small. `main` should be bootstrap-only, and
-the library root should mostly wire or export modules. Test-only recorded mocks
-should live in test support or clearly isolated mock modules, not in the normal
-runtime path. Combine responsibilities only when the scope is genuinely tiny
+the library root should mostly wire or export modules. Recorded replay wiring
+should live in test support, E2E harnesses, or config used only by tests, not in
+the normal runtime path. Combine responsibilities only when the scope is genuinely tiny
 and the module plan explains why.
 
 ## Schema Mapping Contract
@@ -276,12 +278,12 @@ Use at most 3 iterations:
 5. Confirm DB/MySQL schema evidence before finalizing runtime adapter field
    types. If schema is missing, record the unconfirmed status.
 6. Implement or wire the real runtime dependency path separately from recorded
-   mocks. The default app/server startup must not require a recorded case path.
+   replay. The default app/server startup must not require a recorded case path.
 7. For API/service scopes, ensure a normal runnable entrypoint exists before
    declaring success. A library-only test harness is not enough for a migrated
    service API.
-8. Run the focused recorded E2E through recorded mocks.
-9. Classify failures as target implementation bug, mock/replay issue,
+8. Run the focused recorded E2E through managed dependency replay.
+9. Classify failures as target implementation bug, replay issue,
    incomplete recording, recording workflow improvement, or target setup issue.
 10. Fix target implementation only when recorded replay evidence is complete.
 11. Stop with a recording/E2E improvement list when evidence is missing or

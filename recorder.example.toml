@@ -23,6 +23,15 @@ bypass_domains = [
 [dns_mock.hosts]
 "db-10-185-28-119.test" = ["10.185.28.119"]
 
+[local_record]
+# Development recording should usually isolate traffic to one Unix user. Run the
+# source service as this user, then scripts/record.sh resolves it to OWNER_UID
+# for DNS and fake-IP iptables owner matching. OWNER_UID in the environment
+# overrides this config.
+enabled = true
+record_user = "trp-record"
+owner_uid = ""
+
 [tcp_gateway]
 enabled = true
 listen = "127.0.0.1:15001"
@@ -37,6 +46,16 @@ listen = "0.0.0.0:18084"
 matched_upstream = "http://127.0.0.1:7171"
 fallback_upstream = "http://10.37.254.56:7171"
 preserve_host = true
+
+[http_gateway.ready]
+# The recorder actively probes matched_upstream until this path returns the
+# expected status, then closes the shared bootstrap dependency window. This
+# prevents post-start scheduled jobs from making bootstrap-dependencies.jsonl
+# grow indefinitely.
+enabled = true
+path = "/"
+success_status = 200
+interval_ms = 1000
 
 # tcpcopy HTTP traffic matching rules. If no rules are configured, all gateway
 # traffic is treated as matched and recorded.

@@ -1,0 +1,22 @@
+[replay]
+# Case directory that contains request.json, expected-response.json, and
+# dependencies.jsonl. A bootstrap-dependencies.jsonl file is discovered by
+# walking upward from this directory. Relative paths are resolved from this
+# config file's directory.
+case = "./recordings/record-api/api-user/<case-id>"
+
+# Replay intercept listeners. Use scripts/replay.sh from this skill to route
+# local DNS and fake-IP traffic here. Set TRAFFIC_RECORDER_PROXY_BIN to the
+# traffic-recorder-proxy binary path when invoking the script.
+dns_listen = "127.0.0.153:15353"
+tcp_listen = "127.0.0.1:15001"
+fake_cidr = "198.18.0.0/15"
+
+# Replay report is updated while the replay server handles queries.
+report = "./.replay/replay-report.json"
+
+# scripts/replay.sh uses these settings for local interception. Set
+# enable_intercept = false if you only want to start the replay listeners.
+enable_intercept = true
+upstream_dns = "10.10.10.10:53"
+owner_uid = ""

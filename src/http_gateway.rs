@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
@@ -14,11 +14,12 @@ use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use serde::Serialize;
 use tokio::net::TcpListener;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::config::{
-    DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS, HttpGatewayConfig, HttpGatewayRuleConfig,
+    DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS, HttpGatewayConfig, HttpGatewayReadyConfig,
+    HttpGatewayRuleConfig,
 };
 use crate::process_lookup::{lookup_listening_process, process_label};
 use crate::recorder::{
@@ -40,6 +41,14 @@ pub async fn run(state: AppState) -> Result<()> {
         fallback_upstream = %config.fallback_upstream,
         "HTTP gateway listening"
     );
+
+    if config.ready.enabled {
+        let ready_state = state.clone();
+        let ready_config = config.clone();
+        tokio::spawn(async move {
+            run_ready_probe(ready_state, ready_config).await;
+        });
+    }
 
     loop {
         let (stream, peer_addr) = listener
@@ -72,6 +81,90 @@ pub async fn run(state: AppState) -> Result<()> {
             }
         });
     }
+}
+
+async fn run_ready_probe(state: AppState, config: HttpGatewayConfig) {
+    let interval = Duration::from_millis(config.ready.interval_ms.max(1));
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    info!(
+        upstream = %config.matched_upstream,
+        path = %config.ready.path,
+        success_status = config.ready.success_status,
+        interval_ms = config.ready.interval_ms.max(1),
+        "HTTP gateway ready probe started"
+    );
+
+    while state.is_bootstrap_open() {
+        ticker.tick().await;
+        match probe_ready_once(&state, &config.matched_upstream, &config.ready).await {
+            Ok(status) if status == config.ready.success_status => {
+                state.close_bootstrap("http_gateway.ready");
+                info!(
+                    upstream = %config.matched_upstream,
+                    path = %config.ready.path,
+                    status,
+                    "HTTP gateway ready probe succeeded"
+                );
+                return;
+            }
+            Ok(status) => {
+                debug!(
+                    upstream = %config.matched_upstream,
+                    path = %config.ready.path,
+                    status,
+                    expected = config.ready.success_status,
+                    "HTTP gateway ready probe did not match"
+                );
+            }
+            Err(err) => {
+                debug!(
+                    upstream = %config.matched_upstream,
+                    path = %config.ready.path,
+                    error = %err,
+                    "HTTP gateway ready probe failed"
+                );
+            }
+        }
+    }
+
+    info!("HTTP gateway ready probe stopped because bootstrap is already closed");
+}
+
+async fn probe_ready_once(
+    state: &AppState,
+    upstream_base: &str,
+    ready: &HttpGatewayReadyConfig,
+) -> Result<u16> {
+    let ready_uri = ready_probe_path_uri(&ready.path)?;
+    let outbound_uri = build_upstream_uri(upstream_base, &ready_uri)?;
+    let outbound = build_upstream_request(
+        &Method::GET,
+        outbound_uri,
+        Bytes::new(),
+        &HeaderMap::new(),
+        false,
+    )?;
+    let response = send_upstream(state.client(), outbound)
+        .await
+        .context("HTTP gateway ready probe request failed")?;
+    let status = response.status().as_u16();
+    let _ = response.into_body().collect().await;
+    Ok(status)
+}
+
+fn ready_probe_path_uri(path: &str) -> Result<Uri> {
+    let trimmed = path.trim();
+    let normalized = if trimmed.is_empty() {
+        "/".to_string()
+    } else if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{}", trimmed.trim_start_matches('/'))
+    };
+    normalized
+        .parse::<Uri>()
+        .with_context(|| format!("invalid HTTP gateway ready path {path}"))
 }
 
 async fn handle_gateway_request(
@@ -731,6 +824,9 @@ fn is_hop_by_hop(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AppConfig, HttpGatewayReadyConfig};
+    use tempfile::tempdir;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     #[test]
     fn matches_rule_by_host_method_path_and_header() {
@@ -763,6 +859,64 @@ mod tests {
         let uri =
             build_upstream_uri("http://127.0.0.1:9000", &"/hello?a=1".parse().unwrap()).unwrap();
         assert_eq!(uri.to_string(), "http://127.0.0.1:9000/hello?a=1");
+    }
+
+    #[test]
+    fn builds_ready_probe_path_uri() {
+        assert_eq!(ready_probe_path_uri("").unwrap().to_string(), "/");
+        assert_eq!(
+            ready_probe_path_uri("healthz").unwrap().to_string(),
+            "/healthz"
+        );
+        assert_eq!(
+            ready_probe_path_uri(" /ready?probe=1 ")
+                .unwrap()
+                .to_string(),
+            "/ready?probe=1"
+        );
+    }
+
+    #[tokio::test]
+    async fn ready_probe_closes_bootstrap_on_success_status() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let _ = stream.read(&mut buf).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let temp = tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.http_gateway.matched_upstream = format!("http://{upstream_addr}");
+        config.http_gateway.ready = HttpGatewayReadyConfig {
+            enabled: true,
+            path: "/ready".to_string(),
+            success_status: 200,
+            interval_ms: 1,
+        };
+        config.recording.output_dir = temp.path().join("recordings");
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+        let state = AppState::new(config).await.unwrap();
+        assert!(state.is_bootstrap_open());
+
+        let ready_config = state.config().http_gateway.clone();
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            run_ready_probe(state.clone(), ready_config),
+        )
+        .await
+        .unwrap();
+
+        assert!(!state.is_bootstrap_open());
     }
 
     #[test]
