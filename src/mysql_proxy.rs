@@ -17,7 +17,7 @@ use crate::mysql_protocol::{
     MysqlPacket, ServerPacketInfo, parse_client_command, parse_handshake_response,
     parse_server_packet, read_packet,
 };
-use crate::mysql_semantic::MysqlSemanticTracker;
+use crate::mysql_semantic::{MysqlExchangeContext, MysqlSemanticTracker};
 use crate::recorder::{
     MysqlConnectionEvent, MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket,
     MysqlTlsRejectedEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent, capture_body,
@@ -459,6 +459,15 @@ pub(crate) async fn handle_connected_mysql(
     )));
     let semantic_tracker = Arc::new(Mutex::new(MysqlSemanticTracker::new(
         state.config().recording.max_body_bytes,
+        MysqlExchangeContext {
+            route_name: route_name.clone(),
+            target_host: target_host.clone(),
+            target_port,
+            target_addr: target_addr.clone(),
+            upstream_addr: Some(upstream_addr.clone()),
+            username: login.username.clone(),
+            database: login.database.clone(),
+        },
     )));
     let (mut client_read, mut client_write) = client.into_split();
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
@@ -495,6 +504,9 @@ pub(crate) async fn handle_connected_mysql(
                 };
                 let flushed_exchange = {
                     let mut tracker = c2s_semantic_tracker.lock().await;
+                    if command.command_name == "COM_INIT_DB" {
+                        tracker.set_database(command.query.clone());
+                    }
                     tracker.start_query(
                         c2s_connection_id,
                         sequence,

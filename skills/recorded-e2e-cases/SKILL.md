@@ -41,11 +41,13 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    `dependencies-summary.json` as the coverage checklist when it exists.
    Response compatibility alone is not success. All case-owned dependency
    touches, including auth/session calls and required side effects, must be
-   replay-matched. Unmatched or unused case dependencies block success unless
-   the user explicitly approves a behavior change or the evidence proves a
-   recording-correlation issue that should be reported upstream. Do not copy
-   recorded dependency params into normal runtime config or product logic just
-   to satisfy coverage.
+   replay-matched with the same dependency identity. For MySQL, identity
+   includes the business target host, target port, database/schema, and
+   username/role before SQL and params are compared. Unmatched or unused case
+   dependencies block success unless the user explicitly approves a behavior
+   change or the evidence proves a recording-correlation issue that should be
+   reported upstream. Do not copy recorded dependency params into normal
+   runtime config or product logic just to satisfy coverage.
 7. Run a focused single-case or related E2E command first. After it passes, run
    the broader relevant suite or project-standard checks.
 8. Iterate at most 3 times. Fix replay command options, target dependency

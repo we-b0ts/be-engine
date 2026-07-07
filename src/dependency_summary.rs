@@ -127,6 +127,7 @@ struct MysqlDependencySummary {
     rows_returned: usize,
     affected_rows: u64,
     tables: BTreeMap<String, MysqlTableSummary>,
+    dependencies: BTreeMap<String, MysqlDependencyIdentitySummary>,
     statements: Vec<MysqlStatementSummary>,
 }
 
@@ -155,9 +156,32 @@ struct MysqlTableSummary {
     failed: BTreeMap<String, usize>,
 }
 
+#[derive(Debug, Default, Serialize)]
+struct MysqlDependencyIdentitySummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_port: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
+    executed: BTreeMap<String, usize>,
+    failed: BTreeMap<String, usize>,
+    tables: BTreeMap<String, MysqlTableSummary>,
+}
+
 #[derive(Debug, Serialize)]
 struct MysqlStatementSummary {
     query_sequence: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_port: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
     command: Option<String>,
     phase: String,
     operation: String,
@@ -316,6 +340,10 @@ fn record_mysql_summary(summary: &mut MysqlDependencySummary, value: &Value) {
     let affected_rows = json_u64(response, "affected_rows");
     let error_code = json_u64(response, "error_code");
     let error_message = json_str(response, "error_message").map(ToOwned::to_owned);
+    let target_host = json_str(value, "target_host").map(ToOwned::to_owned);
+    let target_port = json_u64(value, "target_port");
+    let database = json_str(value, "database").map(ToOwned::to_owned);
+    let username = json_str(value, "username").map(ToOwned::to_owned);
     let failed = status
         .as_deref()
         .is_some_and(|status| status == "error" || status == "incomplete")
@@ -350,8 +378,43 @@ fn record_mysql_summary(summary: &mut MysqlDependencySummary, value: &Value) {
         *target.entry(operation.clone()).or_default() += 1;
     }
 
+    let identity_key = mysql_dependency_identity_key(
+        target_host.as_deref(),
+        target_port,
+        database.as_deref(),
+        username.as_deref(),
+    );
+    let identity_summary = summary.dependencies.entry(identity_key).or_insert_with(|| {
+        MysqlDependencyIdentitySummary {
+            target_host: target_host.clone(),
+            target_port,
+            database: database.clone(),
+            username: username.clone(),
+            ..MysqlDependencyIdentitySummary::default()
+        }
+    });
+    let identity_counts = if failed {
+        &mut identity_summary.failed
+    } else {
+        &mut identity_summary.executed
+    };
+    *identity_counts.entry(operation.clone()).or_default() += 1;
+    for table in &tables {
+        let table_summary = identity_summary.tables.entry(table.clone()).or_default();
+        let target = if failed {
+            &mut table_summary.failed
+        } else {
+            &mut table_summary.executed
+        };
+        *target.entry(operation.clone()).or_default() += 1;
+    }
+
     summary.statements.push(MysqlStatementSummary {
         query_sequence: json_u64(value, "query_sequence"),
+        target_host,
+        target_port,
+        database,
+        username,
         command,
         phase,
         operation,
@@ -362,6 +425,23 @@ fn record_mysql_summary(summary: &mut MysqlDependencySummary, value: &Value) {
         error_code,
         error_message,
     });
+}
+
+fn mysql_dependency_identity_key(
+    target_host: Option<&str>,
+    target_port: Option<u64>,
+    database: Option<&str>,
+    username: Option<&str>,
+) -> String {
+    format!(
+        "{}:{}|db={}|user={}",
+        target_host.unwrap_or("<unknown-host>"),
+        target_port
+            .map(|port| port.to_string())
+            .unwrap_or_else(|| "<unknown-port>".to_string()),
+        database.unwrap_or("<unknown-db>"),
+        username.unwrap_or("<unknown-user>")
+    )
 }
 
 fn record_http_summary(summary: &mut HttpDependencySummary, value: &Value) {

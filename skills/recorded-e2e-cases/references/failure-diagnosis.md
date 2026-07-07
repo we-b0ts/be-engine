@@ -64,6 +64,10 @@ missed, or leaked to the network.
 Treat these as replay risks:
 
 - missing `sql`
+- missing MySQL dependency identity fields: business `target_host`,
+  `target_port`, default `database`/schema, or `username`
+- use of fake IPs or upstream IPs instead of the business/original target host
+  for replay matching
 - `COM_STMT_EXECUTE` without parsed `params`
 - resultsets without semantic `response.columns` schema fields such as
   `family`, `sql_type`, `nullable`, or numeric signedness

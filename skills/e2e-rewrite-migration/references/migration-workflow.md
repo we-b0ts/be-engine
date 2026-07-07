@@ -104,7 +104,8 @@ Before implementing behavior:
 - create or reuse committed development config under `config/`
 - create or reuse diagnostic logging for service startup, access, dependency
   failures, and replay diagnostics
-- choose the target module layout for the selected scope
+- choose the target package/module layout for the selected scope and apply code
+  organization gates
 - identify the focused recorded E2E command
 - identify target quality check commands
 
@@ -116,7 +117,10 @@ Before implementing behavior:
 - `recorded_cases`
 - `status`
 - `command_facade`
+- `package_layout`
+- `workspace_decision`
 - `module_plan`
+- `architecture_review_status`
 - `schema_sources`
 - `schema_validation_status`
 - `e2e_command`
@@ -271,6 +275,14 @@ repo and selected scope. Prefer the target repo's existing boundaries. If the
 repo is new or empty, create enough structure for the first migrated slice to
 grow safely without adding empty placeholder modules.
 
+Decide package layout before implementation. Default to one package/crate for
+one API/function when the target repo has no stronger convention. Use a
+workspace or multi-package layout only when the user asks for it, the target
+repo already uses one, the selected scope spans multiple runnable artifacts, or
+there is a real shared library boundary needed by multiple APIs, jobs, or
+services. If the need is uncertain, record `workspace_decision:
+needs_confirmation` and ask the user before creating the workspace.
+
 Do not prescribe exact module or directory names. The agent should choose names
 that fit the project and source domain, such as `api`, `handler`, `store`,
 `repository`, `service`, `model`, `util`, `client`, or `adapter`. The important
@@ -286,12 +298,32 @@ For service/API migrations, account for these responsibilities in the design:
 - real runtime adapters for DB, HTTP, cache, MQ, or scheduler dependencies
 - recorded replay setup and case loaders used only by tests
 
+Keep responsibilities separated by dependency direction. Transport/handler code
+parses requests and renders responses; it should not own SQL, cache, MQ, or
+third-party protocol details. Service/use-case code owns business orchestration
+and should not depend on framework request/response types. Domain and wire DTOs
+should not depend on DB drivers, replay fixtures, or test harnesses. Adapters
+own external protocol details behind narrow interfaces. Test support must not
+be imported by the normal runtime path.
+
+Treat broad `util` modules as temporary. A utility module should have a clear
+topic such as time, ids, redaction, serialization, or config helpers. If a
+utility file accumulates unrelated responsibilities, split it before completing
+the migration.
+
+Apply code-size gates to product source files. Warn and self-review when a new
+or heavily modified file exceeds 600 lines; split or document the reason before
+800 lines; do not mark the migration complete if a product source file exceeds
+1000 lines without a user-approved exception. Exceptions are limited to
+generated code, checked-in protocol tables, or repo conventions that are already
+validated by the target project.
+
 Do not put the full migrated API into `main` plus one large library file merely
 because the first recorded case is small. `main` should be bootstrap-only, and
 the library root should mostly wire or export modules. Recorded replay wiring
 should live in test support, E2E harnesses, or config used only by tests, not in
-the normal runtime path. Combine responsibilities only when the scope is genuinely tiny
-and the module plan explains why.
+the normal runtime path. Combine responsibilities only when the scope is
+genuinely tiny and the module plan explains why.
 
 ## Schema Mapping Contract
 
@@ -322,18 +354,27 @@ the source repo and replay report:
 
 - every case-owned dependency touch is implemented or explicitly classified as
   unrelated/background with source or recorder evidence
+- MySQL touches use the recorded business target host, database/schema, and
+  username/role as dependency identity; log databases, read/write roles,
+  tenants, and shards must map to explicit runtime adapters instead of sharing
+  one pool by accident
 - no normal runtime config or product logic contains fixed values copied from
   recorded dependency params
 - dynamic values have runtime strategies recorded in `.migration/e2e.yaml`
 - DB/MySQL adapter types come from explicit schema evidence, not source-language
   model guesses
+- package/workspace decisions and module boundaries match the code that was
+  actually implemented
+- new or heavily modified product source files pass the code-size gates, or a
+  user-approved exception is recorded
 - E2E-only fixtures, replay listeners, and case loaders cannot be reached from
   the default service startup path
 - intended behavior changes, including dropped legacy side effects, have
   explicit user approval
 
 If any item is uncertain, do not mark the migration complete. Record
-`semantics_review_status: incomplete` and include the specific blocker.
+`semantics_review_status: incomplete` or `architecture_review_status:
+incomplete` and include the specific blocker.
 
 ## Implementation Loop
 
@@ -344,7 +385,8 @@ Use at most 3 iterations:
    development startup.
 3. Add or reuse logging setup for startup, access, dependency, and replay
    diagnosis.
-4. Choose or create the module layout before adding the handler/service code.
+4. Choose or create the package/module layout before adding the
+   handler/service code.
 5. Confirm DB/MySQL schema evidence before finalizing runtime adapter field
    types. If schema is missing, record the unconfirmed status.
 6. Define runtime strategies for dynamic recorded values. Keep fixed recorded
@@ -392,6 +434,7 @@ Keep output concise:
 - runtime lifecycle commands and verified process status for service scopes
 - logging config and essential log path(s) for service scopes
 - pass/fail result
+- package/workspace decision and architecture review status
 - dependency touch status, especially any unmatched target calls or unused case
   exchanges
 - dynamic value strategy and semantics review status

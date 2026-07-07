@@ -10,6 +10,13 @@ service entrypoint exposed through `scripts/<project>-cli start|stop|restart|sta
 Do not build a full production platform before the first recorded scope is
 proven.
 
+Map the language-agnostic package decision to Cargo. Default to a single crate
+for the first API/function rewrite. Create a Cargo workspace only when the user
+requests it, the target repo already uses one, the scope includes multiple
+binaries or deployable services, or shared crate boundaries are needed by
+multiple migrated units. If the reason is unclear, ask before creating a
+workspace and record the decision in `.migration/e2e.yaml`.
+
 Default stack:
 
 - Axum for HTTP routing
@@ -28,9 +35,10 @@ hard-code dependency versions in the migration skill output.
 
 ## Architecture
 
-Keep the implementation small and behavior-focused:
+Apply the module design contract from `migration-workflow.md`. For Rust, map it
+to crates, modules, traits, adapters, and files like this:
 
-- choose the Rust module layout before writing handler/service code
+- choose the Rust crate/module layout before writing handler/service code
 - use module names that fit the repo and source domain; do not treat this skill
   as prescribing exact names
 - route handlers should parse inputs, call service logic, and render responses
@@ -50,6 +58,13 @@ Keep the implementation small and behavior-focused:
 - logs should be initialized through a small observability/logging module, not
   scattered across handlers
 - avoid putting a migrated API entirely in `src/lib.rs` and `src/main.rs`
+
+Apply the generic code-size gates from `migration-workflow.md`. Rust-specific
+defaults: keep `main.rs` focused on argument/config parsing, logging init, app
+wiring, and server startup; target 150 lines or fewer. Keep `lib.rs` or
+`mod.rs` focused on exports and app factories; target 300 lines or fewer.
+Handler, service, repository, adapter, and config modules should usually stay
+under 500-700 lines unless the target repo already has a stronger convention.
 
 Preserve API, database query semantics, and external protocol behavior unless
 the user explicitly approves a contract change. If a recorded case appears to
@@ -83,6 +98,12 @@ export modules or expose an app factory. Do not let either file become the
 catch-all implementation file. Recorded replay setup and case loaders should
 live under `tests/support/` or an equally isolated test-support module unless
 the target repo has a different established pattern.
+
+As Rust-specific signals of poor separation, avoid catch-all files such as a
+large `utils.rs`, `helpers.rs`, or `common.rs`. Prefer scoped modules for time,
+ids, redaction, serialization, config, or other concrete concerns. If a module
+needs both Axum extractors and SQLx query details, split the transport and
+adapter responsibilities before declaring the migration complete.
 
 ## Logging
 

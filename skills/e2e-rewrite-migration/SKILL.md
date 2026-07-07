@@ -32,8 +32,9 @@ recording/E2E evidence.
    to detailed migration docs under `docs/`; follow the Documentation Map
    Contract in [migration-workflow.md](references/migration-workflow.md).
 5. Create or update `.migration/e2e.yaml` with source repo, target language,
-   scope, case paths, command facade, schema status, runtime startup status,
-   blockers, and recording feedback.
+   scope, case paths, command facade, package/workspace decision, module plan,
+   schema status, runtime startup status, architecture review status, blockers,
+   and recording feedback.
 6. Place copied recorded cases under `tests/fixtures/recordings` by default and
    preserve original case files. If the user provides a case collection
    directory, select the case by each child `request.json.uri` matching the
@@ -41,8 +42,10 @@ recording/E2E evidence.
 7. Use `recorded-e2e-cases` for recorded request replay, managed dependency
    replay, dependency summary coverage, JSON structural response compatibility,
    configured ignores, exact-byte modes, recording feedback rules, and the
-   dependency touch contract. A matching HTTP response is only partial success
-   until all case-owned dependencies are matched.
+   dependency touch contract. For MySQL, preserve business target host,
+   database/schema, and username/role identity before comparing SQL and params.
+   A matching HTTP response is only partial success until all case-owned
+   dependencies are matched.
 8. Ensure a repo-local development command facade exists. Prefer an existing
    project convention; otherwise create `scripts/<project>-cli`. Runnable
    services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,
@@ -53,9 +56,10 @@ recording/E2E evidence.
 10. Add or preserve a diagnostic logging setup for runnable services. Default
    to predictable development logs under `.migration/run/logs/`; read
    [logging.md](references/logging.md).
-11. Choose the target module layout before writing behavior code. Let the agent
-    pick names that fit the repo, such as `api`, `store`, `service`, or `util`;
-    require a clear design, not fixed module names.
+11. Choose the target package/module layout before writing behavior code. Let
+    the agent pick names that fit the repo, such as `api`, `store`, `service`,
+    or `util`; require a clear design, code-size gates, and ownership
+    boundaries, not fixed module names.
 12. For DB/MySQL-backed behavior, map runtime adapter types from explicit schema
    evidence: semantic column schema in `dependencies.jsonl`, or schema supplied
    by the user. If schema is missing, continue only with

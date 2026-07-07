@@ -51,6 +51,18 @@ pub(crate) struct MysqlSemanticTracker {
     statements: HashMap<u32, PreparedStatement>,
     active: Option<ActiveExchange>,
     max_value_bytes: usize,
+    context: MysqlExchangeContext,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MysqlExchangeContext {
+    pub route_name: Option<String>,
+    pub target_host: Option<String>,
+    pub target_port: Option<u16>,
+    pub target_addr: Option<String>,
+    pub upstream_addr: Option<String>,
+    pub username: Option<String>,
+    pub database: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -91,11 +103,12 @@ enum RowProtocol {
 }
 
 impl MysqlSemanticTracker {
-    pub(crate) fn new(max_value_bytes: usize) -> Self {
+    pub(crate) fn new(max_value_bytes: usize, context: MysqlExchangeContext) -> Self {
         Self {
             statements: HashMap::new(),
             active: None,
             max_value_bytes,
+            context,
         }
     }
 
@@ -136,6 +149,10 @@ impl MysqlSemanticTracker {
         }
     }
 
+    pub(crate) fn set_database(&mut self, database: Option<String>) {
+        self.context.database = database;
+    }
+
     pub(crate) fn finish_from_response(
         &mut self,
         response: &MysqlResponseEvent,
@@ -165,6 +182,13 @@ impl MysqlSemanticTracker {
             timestamp: Utc::now(),
             client_addr: active.client_addr,
             client_process: active.client_process,
+            route_name: self.context.route_name.clone(),
+            target_host: self.context.target_host.clone(),
+            target_port: self.context.target_port,
+            target_addr: self.context.target_addr.clone(),
+            upstream_addr: self.context.upstream_addr.clone(),
+            username: self.context.username.clone(),
+            database: self.context.database.clone(),
             command: active.command,
             sql: active.sql,
             statement_id: active.statement_id,
@@ -1104,7 +1128,7 @@ mod tests {
 
     #[test]
     fn parses_text_resultset_exchange() {
-        let mut tracker = MysqlSemanticTracker::new(1024);
+        let mut tracker = MysqlSemanticTracker::new(1024, test_context());
         let query = MysqlPacket {
             sequence_id: 0,
             payload: [vec![0x03], b"select id, name".to_vec()].concat(),
@@ -1269,7 +1293,7 @@ mod tests {
 
     #[test]
     fn parses_prepare_and_execute_binary_resultset() {
-        let mut tracker = MysqlSemanticTracker::new(1024);
+        let mut tracker = MysqlSemanticTracker::new(1024, test_context());
         let prepare = MysqlPacket {
             sequence_id: 0,
             payload: [vec![0x16], b"select name from user where id=?".to_vec()].concat(),
@@ -1397,6 +1421,18 @@ mod tests {
         payload.push(0);
         payload.extend_from_slice(&[0, 0]);
         payload
+    }
+
+    fn test_context() -> MysqlExchangeContext {
+        MysqlExchangeContext {
+            route_name: Some("mysql".to_string()),
+            target_host: Some("mysql.internal".to_string()),
+            target_port: Some(3306),
+            target_addr: Some("mysql.internal:3306".to_string()),
+            upstream_addr: Some("10.0.0.1:3306".to_string()),
+            username: Some("root".to_string()),
+            database: Some("appdb".to_string()),
+        }
     }
 
     #[test]

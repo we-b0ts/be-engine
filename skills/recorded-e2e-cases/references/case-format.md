@@ -154,7 +154,7 @@ First-version summary fields:
 - `mysql`: connection counts, TLS rejection counts, route/database/user/upstream
   counts, semantic exchange counts, executed and failed CRUD counts, resultset
   and error counts, returned/affected row totals, per-table executed/failed CRUD
-  counts, and compact statement records.
+  counts, per-dependency identity summaries, and compact statement records.
 - `http`: call counts, methods, authorities, status codes, and errors.
 - `tcp_gateway`: connection counts, domains, upstreams, and errors.
 - `proxy_errors`: protocol and target error counts.
@@ -180,6 +180,12 @@ Prefer `mysql_exchange` over raw MySQL records. Important fields:
 
 - `connection_id`: connection-scoped id
 - `query_sequence`: sequence of queries on the connection
+- `target_host`: business/original target host used by the application, not a
+  fake IP and not an upstream IP fallback
+- `target_port`: original target port
+- `target_addr`: original target host and port
+- `database`: default MySQL database/schema for this exchange
+- `username`: MySQL username observed for this exchange
 - `command`: MySQL command name
 - `sql`: SQL text, when parsed
 - `statement_id`: prepared statement id; connection-local only
@@ -200,10 +206,13 @@ Record successful `COM_STMT_PREPARE` in debug/protocol data, not as a normal
 semantic dependency. If a prepare fails, keep it as a `mysql_exchange` because
 the failure is an observed dependency result or side effect.
 
-Match MySQL calls by normalized SQL plus parsed `params`. Normalize SQL by
-collapsing whitespace while preserving placeholders. Preserve ordering for
-transactions, locks, repeated SQL, stateful sessions, and connection-specific
-behavior. Do not use `statement_id` as a stable replay key across connections.
+Match MySQL calls by dependency identity first, then normalized SQL plus parsed
+`params`. The identity is `target_host`, `target_port`, `database`, and
+`username`; `target_host` must be the business/original domain seen by the
+application. Normalize SQL by collapsing whitespace while preserving
+placeholders. Preserve ordering for transactions, locks, repeated SQL, stateful
+sessions, and connection-specific behavior. Do not use `statement_id` as a
+stable replay key across connections.
 
 MySQL resultset columns in `dependencies.jsonl` are semantic, not wire-protocol
 columns. Expected fields:

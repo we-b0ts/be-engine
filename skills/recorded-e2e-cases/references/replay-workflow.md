@@ -151,7 +151,12 @@ For MySQL:
 - Treat `response.columns` as query-level schema evidence. Use semantic fields
   such as `family`, `sql_type`, `unsigned`, `bits`, and `nullable`; do not
   infer language types from raw protocol flags or protocol type names.
-- Match by normalized SQL and parsed `params`.
+- Match by dependency identity first, then normalized SQL and parsed `params`.
+  The MySQL dependency identity is the business/original `target_host`,
+  `target_port`, default `database`/schema, and `username`. Do not use fake IPs
+  or upstream IPs as the semantic identity. Identical SQL against a different
+  business domain, shard, log database, tenant database, or user role is a
+  mismatch.
 - Return resultset columns and rows for `response.status == "resultset"`.
 - Return affected rows and last insert id for `response.status == "ok"`.
 - Reproduce error code and message for `response.status == "error"`.
@@ -176,6 +181,8 @@ evidence for:
   behavior tolerated
 - protocol, CRUD operation, table/host/topic/key-pattern, response status, row
   count, affected rows, and error code/message where applicable
+- MySQL business target host, database/schema, and username for every matched
+  exchange where those fields are recorded
 
 Do not mark the E2E as passed when replay output contains unexplained
 `unmatched` target dependency calls, `unused_case_exchanges`, or equivalent

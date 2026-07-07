@@ -111,7 +111,7 @@ impl MysqlReplayRuntime {
         let bootstrap_path = find_upward(&case_dir, "bootstrap-dependencies.jsonl");
         let mut exchanges = Vec::new();
         let mut targets = BTreeMap::new();
-        let mut connection_targets = HashMap::new();
+        let mut connection_identities = HashMap::new();
         let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
 
         if let Some(path) = &bootstrap_path {
@@ -120,7 +120,7 @@ impl MysqlReplayRuntime {
                 ReplaySource::Bootstrap,
                 &mut exchanges,
                 &mut targets,
-                &mut connection_targets,
+                &mut connection_identities,
             )
             .await?;
         }
@@ -129,7 +129,7 @@ impl MysqlReplayRuntime {
             ReplaySource::Case,
             &mut exchanges,
             &mut targets,
-            &mut connection_targets,
+            &mut connection_identities,
         )
         .await?;
 
@@ -211,25 +211,29 @@ impl ReplayState {
         peer_addr: SocketAddr,
         target: Option<&TargetKey>,
         database: Option<String>,
+        username: Option<String>,
     ) {
         self.events.connections += 1;
         self.events.connection_events.push(ConnectionReport {
             peer_addr: peer_addr.to_string(),
             target: target.cloned(),
             database,
+            username,
         });
     }
 
     fn record_builtin(
         &mut self,
-        target: Option<&TargetKey>,
+        identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
         reason: &str,
     ) {
-        let recorded_match = self.consume_builtin_exchange(target, command, sql);
+        let recorded_match = self.consume_builtin_exchange(identity, command, sql);
         self.events.builtin_queries.push(QueryReport {
-            target: target.cloned(),
+            target: identity.target.clone(),
+            database: identity.database.clone(),
+            username: identity.username.clone(),
             command: command.to_string(),
             sql: sql.map(ToOwned::to_owned),
             params: None,
@@ -241,14 +245,16 @@ impl ReplayState {
 
     fn record_unsupported(
         &mut self,
-        target: Option<&TargetKey>,
+        identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
         reason: &str,
     ) {
         self.events.unsupported_commands.push(QueryReport {
-            target: target.cloned(),
+            target: identity.target.clone(),
+            database: identity.database.clone(),
+            username: identity.username.clone(),
             command: command.to_string(),
             sql: sql.map(ToOwned::to_owned),
             params: params.map(ToOwned::to_owned),
@@ -260,14 +266,16 @@ impl ReplayState {
 
     fn record_unmatched(
         &mut self,
-        target: Option<&TargetKey>,
+        identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
         reason: &str,
     ) {
         self.events.unmatched_queries.push(QueryReport {
-            target: target.cloned(),
+            target: identity.target.clone(),
+            database: identity.database.clone(),
+            username: identity.username.clone(),
             command: command.to_string(),
             sql: sql.map(ToOwned::to_owned),
             params: params.map(ToOwned::to_owned),
@@ -283,7 +291,7 @@ impl ReplayState {
 
     fn match_exchange(
         &mut self,
-        target: Option<&TargetKey>,
+        identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
         params: Option<&[RecordedMysqlValue]>,
@@ -293,7 +301,7 @@ impl ReplayState {
             if exchange.consumed || exchange.record.command != command {
                 continue;
             }
-            if !target_matches_exchange(target, exchange.target.as_ref()) {
+            if !identity_matches_exchange(identity, &exchange.identity) {
                 continue;
             }
             let Some(recorded_sql) = exchange.record.sql.as_deref().map(normalize_sql) else {
@@ -307,7 +315,9 @@ impl ReplayState {
             }
             exchange.consumed = true;
             let matched = MatchedQueryReport {
-                target: exchange.target.clone(),
+                target: Some(exchange.identity.target.clone()),
+                database: exchange.identity.database.clone(),
+                username: exchange.identity.username.clone(),
                 source: exchange.source,
                 index,
                 command: command.to_string(),
@@ -327,7 +337,7 @@ impl ReplayState {
 
     fn consume_builtin_exchange(
         &mut self,
-        target: Option<&TargetKey>,
+        identity: &ReplaySessionIdentity,
         command: &str,
         sql: Option<&str>,
     ) -> Option<(ReplaySource, usize)> {
@@ -336,7 +346,7 @@ impl ReplayState {
             if exchange.consumed || exchange.record.command != command {
                 continue;
             }
-            if !target_matches_exchange(target, exchange.target.as_ref()) {
+            if !identity_matches_exchange(identity, &exchange.identity) {
                 continue;
             }
             let recorded_sql = exchange.record.sql.as_deref().map(normalize_sql);
@@ -349,13 +359,13 @@ impl ReplayState {
         None
     }
 
-    fn statement_metadata(&self, target: Option<&TargetKey>, sql: &str) -> StatementMetadata {
+    fn statement_metadata(&self, identity: &ReplaySessionIdentity, sql: &str) -> StatementMetadata {
         let normalized_sql = normalize_sql(sql);
         for exchange in &self.exchanges {
             if exchange.record.command != "COM_STMT_EXECUTE" {
                 continue;
             }
-            if !target_matches_exchange(target, exchange.target.as_ref()) {
+            if !identity_matches_exchange(identity, &exchange.identity) {
                 continue;
             }
             if exchange
@@ -411,7 +421,9 @@ impl ReplayState {
             .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
             .map(|(index, exchange)| RecordedExchangeSummary {
                 index,
-                target: exchange.target.clone(),
+                target: Some(exchange.identity.target.clone()),
+                database: exchange.identity.database.clone(),
+                username: exchange.identity.username.clone(),
                 command: exchange.record.command.clone(),
                 sql: exchange.record.sql.clone(),
                 status: exchange.record.response.status.clone(),
@@ -434,7 +446,7 @@ struct ReplayEvents {
 #[derive(Debug, Clone)]
 struct ReplayExchange {
     source: ReplaySource,
-    target: Option<TargetKey>,
+    identity: MysqlDependencyIdentity,
     record: RecordedMysqlExchange,
     consumed: bool,
 }
@@ -481,13 +493,20 @@ struct ConnectionReport {
     peer_addr: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<TargetKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct QueryReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<TargetKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
     command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     sql: Option<String>,
@@ -504,6 +523,10 @@ struct QueryReport {
 struct MatchedQueryReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<TargetKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
     source: ReplaySource,
     index: usize,
     command: String,
@@ -519,6 +542,10 @@ struct RecordedExchangeSummary {
     index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<TargetKey>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    database: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    username: Option<String>,
     command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     sql: Option<String>,
@@ -538,6 +565,20 @@ struct ReplayTarget {
     fake_ip: Ipv4Addr,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MysqlDependencyIdentity {
+    target: TargetKey,
+    database: Option<String>,
+    username: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ReplaySessionIdentity {
+    target: Option<TargetKey>,
+    database: Option<String>,
+    username: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
 enum DependencyRecord {
@@ -553,12 +594,18 @@ struct RecordedMysqlConnection {
     target_host: Option<String>,
     target_port: Option<u16>,
     target_addr: Option<String>,
-    upstream_addr: String,
+    database: Option<String>,
+    username: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct RecordedMysqlExchange {
     connection_id: Option<Uuid>,
+    target_host: Option<String>,
+    target_port: Option<u16>,
+    target_addr: Option<String>,
+    database: Option<String>,
+    username: Option<String>,
     command: String,
     sql: Option<String>,
     params: Option<Vec<RecordedMysqlValue>>,
@@ -636,7 +683,7 @@ async fn load_dependency_file(
     source: ReplaySource,
     exchanges: &mut Vec<ReplayExchange>,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
-    connection_targets: &mut HashMap<Uuid, TargetKey>,
+    connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
 ) -> Result<()> {
     let raw = tokio::fs::read_to_string(path)
         .await
@@ -661,7 +708,8 @@ async fn load_dependency_file(
         let DependencyRecord::MysqlConnection(connection) = record else {
             continue;
         };
-        if let Some(target) = target_from_connection(connection) {
+        if let Some(identity) = identity_from_connection(connection) {
+            let target = identity.target.clone();
             targets
                 .entry(target.clone())
                 .or_insert_with(|| ReplayTarget {
@@ -669,7 +717,7 @@ async fn load_dependency_file(
                     port: target.port,
                     fake_ip: Ipv4Addr::UNSPECIFIED,
                 });
-            connection_targets.insert(connection.id, target);
+            connection_identities.insert(connection.id, identity);
         }
     }
 
@@ -680,12 +728,29 @@ async fn load_dependency_file(
         if exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare" {
             continue;
         }
-        let target = exchange
-            .connection_id
-            .and_then(|connection_id| connection_targets.get(&connection_id).cloned());
+        let identity = identity_from_exchange(&exchange)
+            .or_else(|| {
+                exchange
+                    .connection_id
+                    .and_then(|connection_id| connection_identities.get(&connection_id).cloned())
+            })
+            .with_context(|| {
+                format!(
+                    "mysql_exchange in {} lacks business target/database identity for SQL {:?}",
+                    path.display(),
+                    exchange.sql
+                )
+            })?;
+        targets
+            .entry(identity.target.clone())
+            .or_insert_with(|| ReplayTarget {
+                host: identity.target.host.clone(),
+                port: identity.target.port,
+                fake_ip: Ipv4Addr::UNSPECIFIED,
+            });
         exchanges.push(ReplayExchange {
             source,
-            target,
+            identity,
             record: *exchange,
             consumed: false,
         });
@@ -705,6 +770,26 @@ fn find_upward(start: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
+fn identity_from_connection(
+    connection: &RecordedMysqlConnection,
+) -> Option<MysqlDependencyIdentity> {
+    let target = target_from_connection(connection)?;
+    Some(MysqlDependencyIdentity {
+        target,
+        database: normalize_optional(&connection.database),
+        username: normalize_optional(&connection.username),
+    })
+}
+
+fn identity_from_exchange(exchange: &RecordedMysqlExchange) -> Option<MysqlDependencyIdentity> {
+    let target = target_from_exchange(exchange)?;
+    Some(MysqlDependencyIdentity {
+        target,
+        database: normalize_optional(&exchange.database),
+        username: normalize_optional(&exchange.username),
+    })
+}
+
 fn target_from_connection(connection: &RecordedMysqlConnection) -> Option<TargetKey> {
     if let (Some(host), Some(port)) = (&connection.target_host, connection.target_port) {
         return Some(TargetKey {
@@ -717,7 +802,22 @@ fn target_from_connection(connection: &RecordedMysqlConnection) -> Option<Target
     {
         return Some(target);
     }
-    target_from_addr(&connection.upstream_addr)
+    None
+}
+
+fn target_from_exchange(exchange: &RecordedMysqlExchange) -> Option<TargetKey> {
+    if let (Some(host), Some(port)) = (&exchange.target_host, exchange.target_port) {
+        return Some(TargetKey {
+            host: normalize_host(host),
+            port,
+        });
+    }
+    if let Some(target_addr) = &exchange.target_addr
+        && let Some(target) = target_from_addr(target_addr)
+    {
+        return Some(target);
+    }
+    None
 }
 
 fn target_from_addr(value: &str) -> Option<TargetKey> {
@@ -753,19 +853,34 @@ fn assign_fake_ips(
     Ok(out)
 }
 
-fn target_matches_exchange(
-    session_target: Option<&TargetKey>,
-    exchange_target: Option<&TargetKey>,
+fn identity_matches_exchange(
+    session: &ReplaySessionIdentity,
+    exchange: &MysqlDependencyIdentity,
 ) -> bool {
-    match (session_target, exchange_target) {
-        (Some(session), Some(exchange)) => session == exchange,
-        (Some(_), None) => true,
-        (None, _) => true,
-    }
+    session.target.as_ref() == Some(&exchange.target)
+        && normalize_identity_value(session.database.as_deref())
+            == normalize_identity_value(exchange.database.as_deref())
+        && normalize_identity_value(session.username.as_deref())
+            == normalize_identity_value(exchange.username.as_deref())
 }
 
 fn normalize_host(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn normalize_identity_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+fn normalize_optional(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[derive(Debug)]
@@ -1007,8 +1122,13 @@ async fn handle_replay_connection(
         .await?;
         {
             let mut state = state.lock().await;
+            let identity = ReplaySessionIdentity {
+                target: target.clone(),
+                database: login.database.clone(),
+                username: login.username.clone(),
+            };
             state.record_unsupported(
-                target.as_ref(),
+                &identity,
                 "HANDSHAKE",
                 None,
                 None,
@@ -1020,7 +1140,12 @@ async fn handle_replay_connection(
     }
     {
         let mut state = state.lock().await;
-        state.record_connection(peer_addr, target.as_ref(), login.database.clone());
+        state.record_connection(
+            peer_addr,
+            target.as_ref(),
+            login.database.clone(),
+            login.username.clone(),
+        );
     }
     write_packet(
         &mut stream,
@@ -1035,6 +1160,7 @@ async fn handle_replay_connection(
     let mut session = ReplaySession {
         target,
         database: login.database,
+        username: login.username,
         next_statement_id: 1,
         statements: HashMap::new(),
     };
@@ -1061,8 +1187,9 @@ async fn handle_replay_connection(
                 .await?;
                 {
                     let mut state = state.lock().await;
+                    let identity = session.identity();
                     state.record_builtin(
-                        session.target.as_ref(),
+                        &identity,
                         &command.command_name,
                         command.query.as_deref(),
                         "driver/session command handled by replay server",
@@ -1083,8 +1210,9 @@ async fn handle_replay_connection(
             other => {
                 {
                     let mut state = state.lock().await;
+                    let identity = session.identity();
                     state.record_unsupported(
-                        session.target.as_ref(),
+                        &identity,
                         other,
                         command.query.as_deref(),
                         None,
@@ -1109,8 +1237,19 @@ async fn handle_replay_connection(
 struct ReplaySession {
     target: Option<TargetKey>,
     database: Option<String>,
+    username: Option<String>,
     next_statement_id: u32,
     statements: HashMap<u32, PreparedStatement>,
+}
+
+impl ReplaySession {
+    fn identity(&self) -> ReplaySessionIdentity {
+        ReplaySessionIdentity {
+            target: self.target.clone(),
+            database: self.database.clone(),
+            username: self.username.clone(),
+        }
+    }
 }
 
 async fn handle_query(
@@ -1122,8 +1261,9 @@ async fn handle_query(
     if let Some(response) = builtin_response(sql, session.database.as_deref()) {
         write_response(stream, &response, ResultRowEncoding::Text).await?;
         let mut state = state.lock().await;
+        let identity = session.identity();
         state.record_builtin(
-            session.target.as_ref(),
+            &identity,
             "COM_QUERY",
             Some(sql),
             "driver/session query handled by replay server",
@@ -1133,7 +1273,8 @@ async fn handle_query(
 
     let matched = {
         let mut state = state.lock().await;
-        state.match_exchange(session.target.as_ref(), "COM_QUERY", Some(sql), None)
+        let identity = session.identity();
+        state.match_exchange(&identity, "COM_QUERY", Some(sql), None)
     };
     match matched {
         Some(matched) => {
@@ -1142,8 +1283,9 @@ async fn handle_query(
         None => {
             {
                 let mut state = state.lock().await;
+                let identity = session.identity();
                 state.record_unmatched(
-                    session.target.as_ref(),
+                    &identity,
                     "COM_QUERY",
                     Some(sql),
                     None,
@@ -1170,7 +1312,8 @@ async fn handle_stmt_prepare(
 ) -> Result<()> {
     let failed_prepare = {
         let mut state = state.lock().await;
-        state.match_exchange(session.target.as_ref(), "COM_STMT_PREPARE", Some(sql), None)
+        let identity = session.identity();
+        state.match_exchange(&identity, "COM_STMT_PREPARE", Some(sql), None)
     };
     if let Some(matched) = failed_prepare
         && matched.record.response.status == "error"
@@ -1180,7 +1323,8 @@ async fn handle_stmt_prepare(
 
     let metadata = {
         let state = state.lock().await;
-        state.statement_metadata(session.target.as_ref(), sql)
+        let identity = session.identity();
+        state.statement_metadata(&identity, sql)
     };
     if metadata.columns.is_empty() && looks_like_select(sql) {
         let mut state = state.lock().await;
@@ -1212,8 +1356,9 @@ async fn handle_stmt_execute(
     let Some(statement) = session.statements.get(&parsed.statement_id).cloned() else {
         {
             let mut state = state.lock().await;
+            let identity = session.identity();
             state.record_unmatched(
-                session.target.as_ref(),
+                &identity,
                 "COM_STMT_EXECUTE",
                 None,
                 parsed.params.as_deref(),
@@ -1238,8 +1383,9 @@ async fn handle_stmt_execute(
     if let Some(response) = builtin_response(&statement.sql, session.database.as_deref()) {
         write_response(stream, &response, ResultRowEncoding::Binary).await?;
         let mut state = state.lock().await;
+        let identity = session.identity();
         state.record_builtin(
-            session.target.as_ref(),
+            &identity,
             "COM_STMT_EXECUTE",
             Some(&statement.sql),
             "prepared driver/session query handled by replay server",
@@ -1256,8 +1402,9 @@ async fn handle_stmt_execute(
 
     let matched = {
         let mut state = state.lock().await;
+        let identity = session.identity();
         state.match_exchange(
-            session.target.as_ref(),
+            &identity,
             "COM_STMT_EXECUTE",
             Some(&statement.sql),
             parsed.params.as_deref(),
@@ -1270,8 +1417,9 @@ async fn handle_stmt_execute(
         None => {
             {
                 let mut state = state.lock().await;
+                let identity = session.identity();
                 state.record_unmatched(
-                    session.target.as_ref(),
+                    &identity,
                     "COM_STMT_EXECUTE",
                     Some(&statement.sql),
                     parsed.params.as_deref(),
@@ -2552,7 +2700,7 @@ mod tests {
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         tokio::fs::write(
             case_dir.join("dependencies.jsonl"),
-            r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SELECT id, name FROM user WHERE id = 1","response":{"status":"resultset","columns":[{"name":"id","table":"user","column":"id","family":"integer","sql_type":"INT","unsigned":false,"bits":32,"nullable":false},{"name":"name","table":"user","column":"name","family":"string","sql_type":"VARCHAR","nullable":false}],"rows":[[{"kind":"integer","value":1},{"kind":"string","value":"alice"}]]}}"#,
+            r#"{"event_type":"mysql_exchange","target_host":"mysql.internal","target_port":3306,"target_addr":"mysql.internal:3306","database":"appdb","username":"root","command":"COM_QUERY","sql":"SELECT id, name FROM user WHERE id = 1","response":{"status":"resultset","columns":[{"name":"id","table":"user","column":"id","family":"integer","sql_type":"INT","unsigned":false,"bits":32,"nullable":false},{"name":"name","table":"user","column":"name","family":"string","sql_type":"VARCHAR","nullable":false}],"rows":[[{"kind":"integer","value":1},{"kind":"string","value":"alice"}]]}}"#,
         )
         .await
         .unwrap();
@@ -2601,7 +2749,7 @@ mod tests {
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         tokio::fs::write(
             case_dir.join("dependencies.jsonl"),
-            r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SET NAMES utf8","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}"#,
+            r#"{"event_type":"mysql_exchange","target_host":"mysql.internal","target_port":3306,"target_addr":"mysql.internal:3306","database":"appdb","username":"root","command":"COM_QUERY","sql":"SET NAMES utf8","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}"#,
         )
         .await
         .unwrap();
@@ -2620,7 +2768,7 @@ mod tests {
         let ok = read_packet(&mut client).await.unwrap().unwrap();
         assert_eq!(ok.payload[0], 0x00);
 
-        wait_for_report_contains(&report_path, r#""builtin_queries""#).await;
+        wait_for_report_contains(&report_path, r#""recorded_source": "case""#).await;
         let report: Value =
             serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
         assert_eq!(report["builtin_queries"][0]["command"], "COM_QUERY");
@@ -2643,7 +2791,7 @@ mod tests {
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         tokio::fs::write(
             case_dir.join("dependencies.jsonl"),
-            r#"{"event_type":"mysql_exchange","command":"COM_STMT_EXECUTE","sql":"SELECT name FROM user WHERE id=?","params":[{"kind":"integer","value":42}],"response":{"status":"resultset","columns":[{"name":"name","table":"user","column":"name","family":"string","sql_type":"VARCHAR","nullable":false}],"rows":[[{"kind":"string","value":"alice"}]]}}"#,
+            r#"{"event_type":"mysql_exchange","target_host":"mysql.internal","target_port":3306,"target_addr":"mysql.internal:3306","database":"appdb","username":"root","command":"COM_STMT_EXECUTE","sql":"SELECT name FROM user WHERE id=?","params":[{"kind":"integer","value":42}],"response":{"status":"resultset","columns":[{"name":"name","table":"user","column":"name","family":"string","sql_type":"VARCHAR","nullable":false}],"rows":[[{"kind":"string","value":"alice"}]]}}"#,
         )
         .await
         .unwrap();
@@ -2690,6 +2838,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn does_not_match_same_sql_on_different_database() {
+        let temp = tempfile::tempdir().unwrap();
+        let case_dir = temp.path().join("case");
+        tokio::fs::create_dir_all(&case_dir).await.unwrap();
+        tokio::fs::write(
+            case_dir.join("dependencies.jsonl"),
+            r#"{"event_type":"mysql_exchange","target_host":"mysql.internal","target_port":3306,"target_addr":"mysql.internal:3306","database":"otherdb","username":"root","command":"COM_QUERY","sql":"SELECT value FROM config","response":{"status":"resultset","columns":[{"name":"value","family":"string","sql_type":"VARCHAR","nullable":false}],"rows":[[{"kind":"string","value":"wrong-db"}]]}}"#,
+        )
+        .await
+        .unwrap();
+        let report_path = temp.path().join("report.json");
+        let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+        let mut client = connect_login(addr).await;
+
+        write_packet_bytes(
+            &mut client,
+            MysqlPacket {
+                sequence_id: 0,
+                payload: [vec![0x03], b"SELECT value FROM config".to_vec()].concat(),
+            },
+        )
+        .await;
+        let error = read_packet(&mut client).await.unwrap().unwrap();
+        assert_eq!(error.payload[0], 0xff);
+
+        wait_for_report_contains(
+            &report_path,
+            r#""reason": "no recorded semantic dependency matched this SQL""#,
+        )
+        .await;
+        let report: Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
+        assert_eq!(report["unmatched_queries"][0]["database"], "appdb");
+        assert_eq!(report["unused_case_exchanges"][0]["database"], "otherdb");
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn loads_bootstrap_dependencies_from_parent_directory() {
         let temp = tempfile::tempdir().unwrap();
         let group_dir = temp.path().join("record-api").join("api-user");
@@ -2697,7 +2883,7 @@ mod tests {
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         tokio::fs::write(
             group_dir.join("bootstrap-dependencies.jsonl"),
-            r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SELECT value FROM app_config","response":{"status":"resultset","columns":[{"name":"value","family":"string","sql_type":"VARCHAR","nullable":false}],"rows":[[{"kind":"string","value":"on"}]]}}"#,
+            r#"{"event_type":"mysql_exchange","target_host":"mysql.internal","target_port":3306,"target_addr":"mysql.internal:3306","database":"appdb","username":"root","command":"COM_QUERY","sql":"SELECT value FROM app_config","response":{"status":"resultset","columns":[{"name":"value","family":"string","sql_type":"VARCHAR","nullable":false}],"rows":[[{"kind":"string","value":"on"}]]}}"#,
         )
         .await
         .unwrap();
@@ -2749,7 +2935,7 @@ mod tests {
         tokio::fs::write(
             case_dir.join("dependencies.jsonl"),
             format!(
-                r#"{{"event_type":"mysql_connection","id":"{connection_id}","target_host":"mysql-user.internal","target_port":3306,"target_addr":"mysql-user.internal:3306","upstream_addr":"10.1.2.3:3306"}}
+                r#"{{"event_type":"mysql_connection","id":"{connection_id}","target_host":"mysql-user.internal","target_port":3306,"target_addr":"mysql-user.internal:3306","upstream_addr":"10.1.2.3:3306","database":"appdb","username":"root"}}
 {{"event_type":"mysql_exchange","connection_id":"{connection_id}","command":"COM_QUERY","sql":"SELECT id FROM user","response":{{"status":"resultset","columns":[{{"name":"id","family":"integer","sql_type":"INT","nullable":false}}],"rows":[[{{"kind":"integer","value":7}}]]}}}}"#
             ),
         )

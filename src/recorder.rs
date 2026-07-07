@@ -202,6 +202,20 @@ pub struct MysqlExchangeEvent {
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
     pub client_process: Option<ProcessInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
     pub command: String,
     pub sql: Option<String>,
     pub statement_id: Option<u32>,
@@ -1026,6 +1040,13 @@ mod tests {
             timestamp: Utc::now(),
             client_addr: None,
             client_process: None,
+            route_name: None,
+            target_host: Some("mysql.internal".to_string()),
+            target_port: Some(3306),
+            target_addr: Some("mysql.internal:3306".to_string()),
+            upstream_addr: Some("10.0.0.1:3306".to_string()),
+            username: Some("root".to_string()),
+            database: Some("appdb".to_string()),
             command: command.to_string(),
             sql: sql.map(ToOwned::to_owned),
             statement_id: Some(1),
