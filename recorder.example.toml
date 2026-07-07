@@ -51,14 +51,16 @@ preserve_host = true
 # The recorder actively probes matched_upstream until this path returns the
 # expected status, then closes the shared bootstrap dependency window. This
 # prevents post-start scheduled jobs from making bootstrap-dependencies.jsonl
-# grow indefinitely.
+# grow indefinitely. While the service is not ready, matched rule traffic is
+# sent to fallback_upstream and no case is created.
 enabled = true
 path = "/"
 success_status = 200
 interval_ms = 1000
 
 # tcpcopy HTTP traffic matching rules. If no rules are configured, all gateway
-# traffic is treated as matched and recorded.
+# traffic is eligible for matching. At most one matched case is recorded at a
+# time; overlapping eligible requests are sent to fallback_upstream.
 [[http_gateway.rules]]
 name = "record-api"
 methods = ["GET"]

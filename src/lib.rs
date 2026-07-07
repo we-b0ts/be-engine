@@ -66,6 +66,7 @@ struct ActiveCaseRegistry {
 struct ActiveCaseState {
     active: Vec<ActiveCaseRegistration>,
     bootstrap_open: bool,
+    case_matching_ready: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +80,12 @@ pub(crate) struct ActiveCaseGuard {
     case_id: Uuid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActiveCaseRejection {
+    NotReady,
+    Busy,
+}
+
 impl Drop for ActiveCaseGuard {
     fn drop(&mut self) {
         self.registry.unregister(self.case_id);
@@ -87,27 +94,42 @@ impl Drop for ActiveCaseGuard {
 
 impl Default for ActiveCaseRegistry {
     fn default() -> Self {
-        Self {
-            state: Arc::new(StdMutex::new(ActiveCaseState {
-                active: Vec::new(),
-                bootstrap_open: true,
-            })),
-        }
+        Self::new(true)
     }
 }
 
 impl ActiveCaseRegistry {
-    fn register(&self, case: CaseContext, upstream_pid: Option<u32>) -> ActiveCaseGuard {
+    fn new(case_matching_ready: bool) -> Self {
+        Self {
+            state: Arc::new(StdMutex::new(ActiveCaseState {
+                active: Vec::new(),
+                bootstrap_open: true,
+                case_matching_ready,
+            })),
+        }
+    }
+
+    fn try_register(
+        &self,
+        case: CaseContext,
+        upstream_pid: Option<u32>,
+    ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
         let mut state = self.state.lock().expect("active case registry poisoned");
+        if !state.case_matching_ready {
+            return Err(ActiveCaseRejection::NotReady);
+        }
+        if !state.active.is_empty() {
+            return Err(ActiveCaseRejection::Busy);
+        }
         state.bootstrap_open = false;
         state.active.push(ActiveCaseRegistration {
             case: case.clone(),
             upstream_pid,
         });
-        ActiveCaseGuard {
+        Ok(ActiveCaseGuard {
             registry: self.clone(),
             case_id: case.id,
-        }
+        })
     }
 
     fn unregister(&self, case_id: Uuid) {
@@ -121,6 +143,7 @@ impl ActiveCaseRegistry {
         let mut state = self.state.lock().expect("active case registry poisoned");
         let was_open = state.bootstrap_open;
         state.bootstrap_open = false;
+        state.case_matching_ready = true;
         was_open
     }
 
@@ -131,20 +154,22 @@ impl ActiveCaseRegistry {
 
     fn current_targets_for_event(&self, event_pid: Option<u32>) -> DependencyTargets {
         let state = self.state.lock().expect("active case registry poisoned");
-        let cases = state
-            .active
-            .iter()
-            .map(|registration| {
+        let active_count = state.active.len();
+        let (cases, ambiguous_active_cases) = match state.active.as_slice() {
+            [] => (Vec::new(), 0),
+            [registration] => {
                 let matched_by = match (registration.upstream_pid, event_pid) {
                     (Some(upstream_pid), Some(event_pid)) if upstream_pid == event_pid => "process",
                     _ => "active_window",
                 };
-                (registration.case.clone(), matched_by)
-            })
-            .collect::<Vec<_>>();
+                (vec![(registration.case.clone(), matched_by)], 0)
+            }
+            active => (Vec::new(), active.len()),
+        };
         DependencyTargets {
-            bootstrap_open: state.bootstrap_open && cases.is_empty(),
+            bootstrap_open: state.bootstrap_open && active_count == 0,
             cases,
+            ambiguous_active_cases,
         }
     }
 }
@@ -152,6 +177,7 @@ impl ActiveCaseRegistry {
 struct DependencyTargets {
     cases: Vec<(CaseContext, &'static str)>,
     bootstrap_open: bool,
+    ambiguous_active_cases: usize,
 }
 
 impl AppState {
@@ -175,6 +201,7 @@ impl AppState {
             .build();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
+        let case_matching_ready = !config.http_gateway.ready.enabled;
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -183,7 +210,7 @@ impl AppState {
                 ca,
                 client,
                 upstream_tls_config,
-                active_cases: ActiveCaseRegistry::default(),
+                active_cases: ActiveCaseRegistry::new(case_matching_ready),
             }),
         })
     }
@@ -212,12 +239,12 @@ impl AppState {
         self.inner.upstream_tls_config.clone()
     }
 
-    pub(crate) fn register_active_case(
+    pub(crate) fn try_register_active_case(
         &self,
         case: CaseContext,
         upstream_pid: Option<u32>,
-    ) -> ActiveCaseGuard {
-        self.inner.active_cases.register(case, upstream_pid)
+    ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
+        self.inner.active_cases.try_register(case, upstream_pid)
     }
 
     pub(crate) fn close_bootstrap(&self, reason: &'static str) -> bool {
@@ -244,6 +271,13 @@ impl AppState {
             warn!(
                 error = %err,
                 "failed to append bootstrap dependency"
+            );
+        }
+        if targets.ambiguous_active_cases > 0 {
+            warn!(
+                active_cases = targets.ambiguous_active_cases,
+                event_type = recorder_event_kind(event),
+                "skipping case dependency because active case ownership is ambiguous"
             );
         }
         for (case, matched_by) in targets.cases {
@@ -313,6 +347,20 @@ impl AppState {
     }
 }
 
+fn recorder_event_kind(event: &RecorderEvent) -> &'static str {
+    match event {
+        RecorderEvent::HttpExchange(_) => "http_exchange",
+        RecorderEvent::TcpGatewayConnection(_) => "tcp_gateway_connection",
+        RecorderEvent::MysqlConnection(_) => "mysql_connection",
+        RecorderEvent::MysqlQuery(_) => "mysql_query",
+        RecorderEvent::MysqlResponse(_) => "mysql_response",
+        RecorderEvent::MysqlExchange(_) => "mysql_exchange",
+        RecorderEvent::MysqlPacket(_) => "mysql_packet",
+        RecorderEvent::MysqlTlsRejected(_) => "mysql_tls_rejected",
+        RecorderEvent::ProxyError(_) => "proxy_error",
+    }
+}
+
 fn event_client_pid(event: &RecorderEvent) -> Option<u32> {
     match event {
         RecorderEvent::HttpExchange(event) => {
@@ -375,7 +423,7 @@ mod tests {
             rule_name: "record-api".to_string(),
             uri_group: Some("api-user".to_string()),
         };
-        let guard = registry.register(case.clone(), Some(42));
+        let guard = registry.try_register(case.clone(), Some(42)).unwrap();
 
         let active = registry.current_targets_for_event(Some(42));
         assert!(!active.bootstrap_open);
@@ -385,6 +433,87 @@ mod tests {
         let after_case = registry.current_targets_for_event(None);
         assert!(!after_case.bootstrap_open);
         assert!(after_case.cases.is_empty());
+    }
+
+    #[test]
+    fn active_case_registry_rejects_cases_before_ready() {
+        let registry = ActiveCaseRegistry::new(false);
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some("api-user".to_string()),
+        };
+
+        assert!(matches!(
+            registry.try_register(case.clone(), Some(42)),
+            Err(ActiveCaseRejection::NotReady)
+        ));
+        assert!(registry.current_targets_for_event(None).bootstrap_open);
+
+        assert!(registry.close_bootstrap());
+        let guard = registry.try_register(case.clone(), Some(42)).unwrap();
+        let active = registry.current_targets_for_event(Some(42));
+        assert_eq!(active.cases, vec![(case, "process")]);
+        drop(guard);
+    }
+
+    #[test]
+    fn active_case_registry_allows_only_one_active_case() {
+        let registry = ActiveCaseRegistry::default();
+        let first = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some("api-user".to_string()),
+        };
+        let second = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some("api-user".to_string()),
+        };
+
+        let guard = registry.try_register(first, Some(42)).unwrap();
+        assert!(matches!(
+            registry.try_register(second.clone(), Some(43)),
+            Err(ActiveCaseRejection::Busy)
+        ));
+
+        drop(guard);
+        assert!(registry.try_register(second, Some(43)).is_ok());
+    }
+
+    #[test]
+    fn active_case_registry_does_not_share_ambiguous_dependencies() {
+        let registry = ActiveCaseRegistry::default();
+        let first = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some("api-user".to_string()),
+        };
+        let second = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some("api-user".to_string()),
+        };
+        {
+            let mut state = registry
+                .state
+                .lock()
+                .expect("active case registry poisoned");
+            state.bootstrap_open = false;
+            state.active.push(ActiveCaseRegistration {
+                case: first,
+                upstream_pid: None,
+            });
+            state.active.push(ActiveCaseRegistration {
+                case: second,
+                upstream_pid: None,
+            });
+        }
+
+        let targets = registry.current_targets_for_event(None);
+        assert!(targets.cases.is_empty());
+        assert_eq!(targets.ambiguous_active_cases, 2);
+        assert!(!targets.bootstrap_open);
     }
 
     #[test]

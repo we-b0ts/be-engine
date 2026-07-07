@@ -64,6 +64,14 @@ service client, queue adapter, or scheduler input source. Recorded replay must
 not replace that real runtime boundary; it belongs only inside the E2E harness
 and replay tooling supplied by `recorded-e2e-cases`.
 
+Target E2E requests must be constructed from the current case's `request.json`.
+Use the recorded method, URI including query string, headers, and body for that
+case. Do not hardcode auth headers, tenant ids, query params, cookies, request
+bodies, or other case-specific request data in test code. A reusable helper
+such as `build_request_from_case(case_dir)` is preferred when a scope has more
+than one recorded case. Remove or override only transport headers that the
+target framework cannot safely set.
+
 Recorded dependency parameters are also evidence, not product defaults. Do not
 copy fixed business ids, tenant ids, user ids, request ids, UUIDs, timestamps,
 durations, monthly table suffixes, or dependency params from recordings into
@@ -85,8 +93,24 @@ Preserve original case files. A user-provided recording path may be a single
 case directory or a collection such as `recordings/<rule>/<uri-group>` whose
 child directories are case ids. When given a collection, select by reading each
 child `request.json.uri` and matching the selected API path; do not rely on the
-`uri-group` directory name alone. If zero or multiple cases match, ask the user
-to choose before rewriting.
+`uri-group` directory name alone.
+
+Before rewriting when multiple APIs or collection paths are involved, build a
+scope/case matrix:
+
+- group cases by normalized HTTP method and URI path from `request.json`
+- keep query strings as part of the case request, not as grouping-only data
+- include every matching case for the selected API; multiple cases for one API
+  are expected and all must pass
+- if the user requested several APIs, process them one API/function at a time
+  in the migration order
+- if no case matches a requested API, stop that scope and recommend what to
+  record
+- if a case could belong to multiple requested scopes, ask the user before
+  rewriting that scope
+
+Do not collapse a case set to a single "representative" case unless the user
+explicitly asks for a narrower migration.
 
 If the selected scope has no recorded case, stop before rewriting and recommend
 what to record, including the route/job, expected dependencies, and completeness
@@ -114,6 +138,7 @@ Before implementing behavior:
 - `source_repo`
 - `target_language`
 - `current_scope`
+- `scope_case_matrix` when several APIs or case sets are involved
 - `recorded_cases`
 - `status`
 - `command_facade`
@@ -354,6 +379,8 @@ the source repo and replay report:
 
 - every case-owned dependency touch is implemented or explicitly classified as
   unrelated/background with source or recorder evidence
+- target E2E requests are built from each case's `request.json`, without
+  hardcoded case-specific headers, query params, or bodies
 - MySQL touches use the recorded business target host, database/schema, and
   username/role as dependency identity; log databases, read/write roles,
   tenants, and shards must map to explicit runtime adapters instead of sharing

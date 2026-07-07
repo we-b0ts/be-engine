@@ -39,8 +39,12 @@ Pass the selected case directory directly. The replay report defaults to
 `<case-dir>/.replay/replay-report.json`. Use `--no-intercept` only when the
 target project already routes dependencies to the replay listeners.
 `traffic-replay` defaults to owner filtering for the `trp-record` Unix user.
-Run the target service as `trp-record`, or pass `--user`, `--owner-uid`, or
-`--all-users` only when the replay environment is intentionally scoped.
+Target-project E2E commands should pass no user-filter argument by default and
+should ensure the target process runs as `trp-record`. If the harness truly
+cannot run as that user, use an exact `--owner-uid` with a recorded rationale.
+Do not put `--all-users` in target-project tests, command facades, docs, or
+migration state. Use `--all-users` only as a manual troubleshooting command on
+an isolated machine, then remove it from committed artifacts.
 Do not hardcode the traffic-recorder-proxy repository path or skill path inside
 target-project tests. A test harness may allow `TRAFFIC_REPLAY` or a similar
 local override, but the default command must be `traffic-replay`.
@@ -53,12 +57,18 @@ Implement in this order:
    `recordings/<rule>/<uri-group>/<case-id>`. Older recordings may use
    `recordings/<rule>/<case-id>`. If the user supplied a collection directory
    such as `recordings/<rule>/<uri-group>`, inspect each child case's
-   `request.json.uri` and select the case that matches the requested API path.
-   If zero or multiple cases match, report the candidates and ask the user to
-   choose.
-2. Decode the recorded request body and prepare headers. Remove or override only
-   headers that the target test harness cannot or should not set, such as
-   hop-by-hop transport headers.
+   `request.json.uri` and select every case that matches the requested API
+   path. A matching set of cases for one API is a case set, not an ambiguity.
+   If zero cases match, or the requested scope itself is unclear, report the
+   candidates and ask the user to choose.
+2. Build the request from the current case's `request.json`. Use the recorded
+   method, URI including query string, headers, and body as the source of truth.
+   Do not hardcode auth headers, tenant ids, query params, body fields, cookies,
+   or other case-specific request data in the target test helper. Remove or
+   override only headers that the target test harness cannot or should not set,
+   such as hop-by-hop transport headers (`connection`, `content-length`,
+   `host`, `transfer-encoding`) or compression headers that the harness cannot
+   reproduce.
 3. Start managed dependency replay with `traffic-replay <case-dir>`. It uses
    `dependencies.jsonl` from the selected case and bootstrap dependencies
    discovered above the case directory. The canonical bootstrap file is
@@ -67,7 +77,7 @@ Implement in this order:
    dependencies isolated.
 5. Use `dependencies-summary.json`, when present, as the dependency coverage
    checklist for replay.
-6. Send the recorded request or invoke the equivalent route.
+6. Send the request built from the current case or invoke the equivalent route.
 7. Assert status and response body compatibility. Assert headers only when
    stable and relevant.
 

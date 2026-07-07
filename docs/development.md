@@ -49,6 +49,12 @@ so bootstrap and case dependencies are not polluted by unrelated local
 processes. `traffic-record --user`, `traffic-record --owner-uid`,
 `traffic-record --all-users`, or `OWNER_UID` override the config.
 
+HTTP gateway recording is intentionally conservative. Until the configured
+ready probe succeeds, matching traffic is sent to `fallback_upstream` and no
+case is created. After ready, only one matched case can be active at a time;
+overlapping matching requests are also sent to fallback so dependencies are not
+shared across cases.
+
 For replay-mode development:
 
 ```bash
@@ -102,8 +108,8 @@ bootstrap-dependencies-debug.jsonl
 Use `dependencies.jsonl` for replay-oriented semantic data. Use
 `dependencies-debug.jsonl` only for protocol-level debugging. Root-level
 bootstrap dependency files capture replay-oriented dependencies observed before
-the first case starts; replay discovers them by walking upward from a case
-directory.
+the service is ready, or before the first case starts when no ready probe is
+configured. Replay discovers them by walking upward from a case directory.
 
 ## Testing Guidance
 

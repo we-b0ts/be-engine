@@ -7,7 +7,9 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use traffic_recorder_proxy::{AppConfig, HttpGatewayRuleConfig, MysqlRouteConfig};
+use traffic_recorder_proxy::{
+    AppConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, MysqlRouteConfig,
+};
 
 #[tokio::test]
 async fn records_http_proxy_exchange() {
@@ -102,6 +104,110 @@ async fn http_gateway_records_only_matched_traffic() {
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
     assert!(jsonl.contains("/record"));
     assert!(!jsonl.contains("/recording/two"));
+}
+
+#[tokio::test]
+async fn http_gateway_falls_back_before_ready() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let matched_upstream = spawn_http_response_upstream("matched", 2).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
+    let gateway_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http.listen = free_addr();
+    config.http_gateway.enabled = true;
+    config.http_gateway.listen = gateway_addr;
+    config.http_gateway.matched_upstream = format!("http://{matched_upstream}");
+    config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
+    config.http_gateway.ready = HttpGatewayReadyConfig {
+        enabled: true,
+        path: "/ready".to_string(),
+        success_status: 204,
+        interval_ms: 1000,
+    };
+    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+        name: Some("record-path".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/".to_string()],
+        ..Default::default()
+    }];
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    let response = raw_http_get(gateway_addr, "/record/one").await;
+    assert!(response.contains("fallback"));
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    handle.abort();
+
+    assert!(!temp.path().join("recordings/record-path").exists());
+}
+
+#[tokio::test]
+async fn http_gateway_allows_only_one_active_matched_case() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let matched_upstream =
+        spawn_delayed_http_response_upstream("matched", 1, Duration::from_millis(200)).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
+    let gateway_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http.listen = free_addr();
+    config.http_gateway.enabled = true;
+    config.http_gateway.listen = gateway_addr;
+    config.http_gateway.matched_upstream = format!("http://{matched_upstream}");
+    config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
+    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+        name: Some("record-path".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/".to_string()],
+        ..Default::default()
+    }];
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    let first = tokio::spawn(raw_http_get(gateway_addr, "/record/one"));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let second_response = raw_http_get(gateway_addr, "/record/two").await;
+    assert!(second_response.contains("fallback"));
+    let first_response = first.await.unwrap();
+    assert!(first_response.contains("matched"));
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    handle.abort();
+
+    let rule_dir = temp.path().join("recordings/record-path");
+    let uri_group_dirs = std::fs::read_dir(&rule_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(uri_group_dirs.len(), 1);
+    assert_eq!(
+        uri_group_dirs[0].file_name().unwrap().to_str().unwrap(),
+        "record-one"
+    );
+    let case_dirs = std::fs::read_dir(&uri_group_dirs[0])
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(case_dirs.len(), 1);
+    assert!(case_dirs[0].join("request.json").exists());
 }
 
 #[tokio::test]
@@ -284,6 +390,30 @@ async fn spawn_http_response_upstream(body: &'static str, accept_count: usize) -
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut buf = [0_u8; 2048];
             let _ = stream.read(&mut buf).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    addr
+}
+
+async fn spawn_delayed_http_response_upstream(
+    body: &'static str,
+    accept_count: usize,
+    delay: Duration,
+) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        for _ in 0..accept_count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let _ = stream.read(&mut buf).await.unwrap();
+            tokio::time::sleep(delay).await;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

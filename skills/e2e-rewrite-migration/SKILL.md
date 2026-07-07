@@ -24,28 +24,34 @@ recording/E2E evidence.
 ## Workflow
 
 1. Inspect source repo routes/jobs, target repo structure, and recorded cases.
+   If the user provides multiple APIs or a recording collection, scan
+   `request.json` files first and build a scope/case matrix.
 2. If the user did not specify a scope, propose one low-risk HTTP GET with
    route and case evidence, then ask for confirmation before implementing.
-3. Migrate one API/function at a time. Prefer GET first, scheduled jobs after
-   GET, then write operations and complex side effects.
+3. Migrate one API/function at a time. If one API has multiple recorded cases,
+   all of that API's cases must pass before the API is complete. For multiple
+   APIs, prefer GET first, scheduled jobs after GET, then write operations and
+   complex side effects.
 4. Ensure target repo `AGENTS.md` exists as a concise navigation map and links
    to detailed migration docs under `docs/`; follow the Documentation Map
    Contract in [migration-workflow.md](references/migration-workflow.md).
 5. Create or update `.migration/e2e.yaml` with source repo, target language,
-   scope, case paths, command facade, package/workspace decision, module plan,
-   schema status, runtime startup status, architecture review status, blockers,
-   and recording feedback.
+   scope, scope/case matrix when applicable, case paths, command facade,
+   package/workspace decision, module plan, schema status, runtime startup
+   status, architecture review status, blockers, and recording feedback.
 6. Place copied recorded cases under `tests/fixtures/recordings` by default and
    preserve original case files. If the user provides a case collection
-   directory, select the case by each child `request.json.uri` matching the
-   migration scope.
+   directory, select cases by each child `request.json.uri` matching the
+   migration scope. Do not collapse multiple matching cases into one.
 7. Use `recorded-e2e-cases` for recorded request replay, managed dependency
    replay, dependency summary coverage, JSON structural response compatibility,
    configured ignores, exact-byte modes, recording feedback rules, and the
    dependency touch contract. For MySQL, preserve business target host,
    database/schema, and username/role identity before comparing SQL and params.
    A matching HTTP response is only partial success until all case-owned
-   dependencies are matched.
+   dependencies are matched. Recorded request construction must come from each
+   case's `request.json`; do not hardcode case-specific headers, query params,
+   or bodies in target tests.
 8. Ensure a repo-local development command facade exists. Prefer an existing
    project convention; otherwise create `scripts/<project>-cli`. Runnable
    services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,

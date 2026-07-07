@@ -13,8 +13,8 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    user explicitly gives a different case path. Older recordings may use
    `recordings/<rule>/<case-id>`. A user path may also point at a case
    collection such as `recordings/<rule>/<uri-group>`; scan child case
-   directories and select by `request.json.uri`, not by directory name alone.
-   Preserve recorded files exactly.
+   directories and select matching case sets by `request.json.uri`, not by
+   directory name alone. Preserve recorded files exactly.
 2. Load `request.json`, canonical `expected-response.json`,
    `dependencies.jsonl`, and `dependencies-summary.json` when present. Accept
    `expected_response.json` as a user spelling but do not rename or rewrite it.
@@ -27,17 +27,25 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    the HTTP response. Use `traffic-replay <case-dir>` from the
    traffic-recorder-proxy repo; ensure both `traffic-replay` and
    `traffic-recorder-proxy` are executable on `PATH` before starting. Replay
-   defaults to owner filtering for the `trp-record` Unix user. Run the target
-   service as that user, or pass `--user`, `--owner-uid`, or `--all-users` only
-   when the test environment is intentionally scoped. Do not reference this
+   defaults to owner filtering for the `trp-record` Unix user. Target-project
+   E2E commands should pass no user-filter argument by default and should run
+   the target process as `trp-record`. Use an exact `--owner-uid` only when the
+   harness cannot run as that user and record why. Do not put `--all-users` in
+   target-project tests, command facades, docs, or migration state; it is only
+   for manual troubleshooting on an isolated machine. Do not reference this
    skill's filesystem path from target-project tests. Do not hand-write
    substitute dependency mocks when replay data or relay behavior is missing;
    report recorder/replay improvements instead.
-5. Drive the recorded request, or the closest equivalent route invocation, and
+5. Build each test request from that case's `request.json`. Use recorded
+   `method`, `uri`, headers, and body as the source of truth. Do not hardcode
+   auth headers, query strings, bodies, or other case-specific request data in
+   the target test. Remove or override only transport headers the target harness
+   cannot set safely.
+6. Drive the recorded request, or the closest equivalent route invocation, and
    compare it with `expected-response.json`. For JSON responses, compare parsed
    JSON structurally: object key order is irrelevant, but field presence, value
    type, `null`, empty string, and missing field must match exactly.
-6. Treat `dependencies.jsonl` as the case-level dependency touch contract. Use
+7. Treat `dependencies.jsonl` as the case-level dependency touch contract. Use
    `dependencies-summary.json` as the coverage checklist when it exists.
    Response compatibility alone is not success. All case-owned dependency
    touches, including auth/session calls and required side effects, must be
@@ -48,13 +56,13 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    change or the evidence proves a recording-correlation issue that should be
    reported upstream. Do not copy recorded dependency params into normal
    runtime config or product logic just to satisfy coverage.
-7. Run a focused single-case or related E2E command first. After it passes, run
+8. Run a focused single-case or related E2E command first. After it passes, run
    the broader relevant suite or project-standard checks.
-8. Iterate at most 3 times. Fix replay command options, target dependency
+9. Iterate at most 3 times. Fix replay command options, target dependency
    routing, or recorder/replay evidence first. Modify product code only when
    dependency replay is complete and the failure clearly points to a real code
    bug.
-9. After success, failure, or partial progress, review whether the replay pain
+10. After success, failure, or partial progress, review whether the replay pain
    indicates recorder improvement opportunities. Do not change the recorder from
    the target project; report evidence-backed feedback.
 

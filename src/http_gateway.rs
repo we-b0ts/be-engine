@@ -26,7 +26,7 @@ use crate::recorder::{
     CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent,
     RecorderEvent, capture_body, capture_case_body, redact_headers,
 };
-use crate::{AppState, ProxyClient};
+use crate::{ActiveCaseGuard, ActiveCaseRejection, AppState, ProxyClient};
 
 type GatewayBody = BoxBody<Bytes, Infallible>;
 
@@ -183,17 +183,34 @@ async fn handle_gateway_request(
     let authority = request_authority(&original_uri, &request_headers);
     let matched_rule = match_rule(&config.rules, &method, &original_uri, &request_headers);
     let matched_rule_name = matched_rule.as_ref().map(|rule| rule.name.clone());
-    let should_record = matched_rule.is_some();
-    let case = matched_rule.as_ref().map(|rule| CaseContext {
+    let candidate_case = matched_rule.as_ref().map(|rule| CaseContext {
         id,
         rule_name: rule.name.clone(),
         uri_group: case_uri_group(&original_uri, rule.case_uri_segments),
     });
-    let upstream_base = if should_record {
-        &config.matched_upstream
-    } else {
-        &config.fallback_upstream
-    };
+    let mut should_record = false;
+    let mut case = None;
+    let mut upstream_base = config.fallback_upstream.clone();
+    let mut _case_guard = None;
+
+    if let Some(candidate_case) = candidate_case {
+        match try_register_case_for_upstream(&state, &candidate_case, &config.matched_upstream) {
+            Ok(guard) => {
+                should_record = true;
+                upstream_base = config.matched_upstream.clone();
+                case = Some(candidate_case);
+                _case_guard = Some(guard);
+            }
+            Err(reason) => {
+                info!(
+                    reason = %active_case_rejection_reason(reason),
+                    matched_rule = matched_rule_name.as_deref().unwrap_or("unknown"),
+                    uri = %original_uri,
+                    "HTTP gateway matched request sent to fallback"
+                );
+            }
+        }
+    }
 
     let request_body = match req.into_body().collect().await {
         Ok(collected) => collected.to_bytes(),
@@ -243,11 +260,7 @@ async fn handle_gateway_request(
         warn!(error = %err, case_id = %case.id, "failed to write HTTP gateway case request");
     }
 
-    let _case_guard = case
-        .as_ref()
-        .map(|case| register_case_for_upstream(&state, case, upstream_base));
-
-    let outbound_uri = match build_upstream_uri(upstream_base, &original_uri) {
+    let outbound_uri = match build_upstream_uri(&upstream_base, &original_uri) {
         Ok(uri) => uri,
         Err(err) => {
             return record_gateway_error(GatewayErrorContext {
@@ -341,7 +354,7 @@ async fn handle_gateway_request(
                     request_headers: with_gateway_headers(
                         request_headers_for_record,
                         matched_rule_name.as_deref(),
-                        upstream_base,
+                        &upstream_base,
                     ),
                     request_body: capture_body(
                         &request_body,
@@ -467,29 +480,41 @@ async fn write_case_response(
         .await
 }
 
-fn register_case_for_upstream(
+fn try_register_case_for_upstream(
     state: &AppState,
     case: &CaseContext,
     upstream_base: &str,
-) -> crate::ActiveCaseGuard {
+) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
     let process = upstream_socket_addr(upstream_base).and_then(lookup_listening_process);
-    if let Some(process) = &process {
-        info!(
-            case_id = %case.id,
-            rule = %case.rule_name,
-            upstream = %upstream_base,
-            process = %process_label(process),
-            "registered active HTTP gateway case"
-        );
-    } else {
-        info!(
-            case_id = %case.id,
-            rule = %case.rule_name,
-            upstream = %upstream_base,
-            "registered active HTTP gateway case without upstream process match"
-        );
+    let guard = state
+        .try_register_active_case(case.clone(), process.as_ref().map(|process| process.pid))?;
+    match &process {
+        Some(process) => {
+            info!(
+                case_id = %case.id,
+                rule = %case.rule_name,
+                upstream = %upstream_base,
+                process = %process_label(process),
+                "registered active HTTP gateway case"
+            );
+        }
+        None => {
+            info!(
+                case_id = %case.id,
+                rule = %case.rule_name,
+                upstream = %upstream_base,
+                "registered active HTTP gateway case without upstream process match"
+            );
+        }
     }
-    state.register_active_case(case.clone(), process.map(|process| process.pid))
+    Ok(guard)
+}
+
+fn active_case_rejection_reason(reason: ActiveCaseRejection) -> &'static str {
+    match reason {
+        ActiveCaseRejection::NotReady => "not_ready",
+        ActiveCaseRejection::Busy => "busy",
+    }
 }
 
 struct GatewayErrorContext {

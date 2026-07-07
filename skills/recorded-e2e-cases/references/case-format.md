@@ -24,9 +24,10 @@ omit this directory and use `recordings/<rule>/<case-id>`.
 
 A path ending at `recordings/<rule>/<uri-group>` is a case collection, not a
 single case. Its direct child directories are case ids, commonly UUIDs. The
-collection can contain cases for related but different URLs. To select a case,
+collection can contain cases for related but different URLs. To select cases,
 open each child `request.json` and match the recorded `uri` path against the
-requested API/function scope. Do not infer the selected API from `uri-group`
+requested API/function scope. Multiple matches for the same scope are a case
+set and must all be considered. Do not infer the selected API from `uri-group`
 alone.
 
 Treat `expected_response.json` as a tolerated user spelling only. Prefer
