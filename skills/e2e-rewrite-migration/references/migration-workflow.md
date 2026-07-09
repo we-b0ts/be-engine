@@ -48,6 +48,7 @@ Use `recorded-e2e-cases` for:
 
 - case loading and dependency replay
 - managed dependency replay from `dependencies.jsonl`
+- replay session lifecycle with `traffic-replay` and `traffic-replay-cli`
 - dependency coverage from `dependencies-summary.json`, when present
 - dependency touch contract enforcement: every case-owned recorded dependency
   must be matched by equivalent target behavior
@@ -72,6 +73,14 @@ such as `build_request_from_case(case_dir)` is preferred when a scope has more
 than one recorded case. Remove or override only transport headers that the
 target framework cannot safely set.
 
+For one selected case set, start one replay session with `traffic-replay`, wait
+for readiness with `traffic-replay-cli wait-ready`, then bracket each case with
+`traffic-replay-cli begin <case-id>` and `traffic-replay-cli end <case-id>
+--fail-on-dirty`. Finish with a clean aggregate report. Replay startup or
+readiness failure is a replay lifecycle/setup failure; do not send the target
+HTTP request or modify product code based on a result collected while replay was
+not ready.
+
 Recorded dependency parameters are also evidence, not product defaults. Do not
 copy fixed business ids, tenant ids, user ids, request ids, UUIDs, timestamps,
 durations, monthly table suffixes, or dependency params from recordings into
@@ -80,13 +89,14 @@ determinism, keep it only in E2E/replay config and give it an explicit
 `recorded`, `fixed`, `override`, or `replay` name.
 
 A migration is complete only when both the HTTP response and the case-owned
-dependency touches pass. If replay reports unused recorded case exchanges,
-unmatched target dependency calls, or missing required side effects, the result
-is incomplete even when `expected-response.json` matches. The agent may not
-silently drop legacy side effects such as DB request-log writes. It must either
-implement equivalent behavior, get explicit user approval for a behavior
-contract change, or report the dependency as a recording-correlation
-improvement when evidence proves it is unrelated/background traffic.
+dependency touches pass for the selected recorded case set. If replay reports
+unused recorded case exchanges, unmatched target dependency calls, or missing
+required side effects, the result is incomplete even when
+`expected-response.json` matches. The agent may not silently drop legacy side
+effects such as DB request-log writes. It must either implement equivalent
+behavior, get explicit user approval for a behavior contract change, or report
+the dependency as a recording-correlation improvement when evidence proves it
+is unrelated/background traffic.
 
 Default copied case location in the target repo is `tests/fixtures/recordings`.
 Preserve original case files. A user-provided recording path may be a single
@@ -147,6 +157,7 @@ Before implementing behavior:
 - `package_layout`
 - `workspace_decision`
 - `module_plan`
+- `module_topology_review`
 - `architecture_review_status`
 - `schema_sources`
 - `schema_validation_status`
@@ -192,15 +203,16 @@ Expose the commands that are relevant to the migrated scope:
 - `build`: build the target artifact
 - `release`: run the project's release/package flow when it exists
 - `doctor`: print missing config, dependency, port, and toolchain problems
-  including `traffic-replay` and `traffic-recorder-proxy` when recorded E2E is
-  part of the repo workflow
+  including `traffic-replay`, `traffic-replay-cli`, and
+  `traffic-recorder-proxy` when recorded E2E is part of the repo workflow
 
 For the first migration slice, implement at least `start`, `stop`, `restart`,
 `status`, `e2e`, `check`, and `doctor` when the target is a runnable service.
 Commands may wrap language-native tools such as `cargo`, `go`, `npm`, Docker
 Compose, `make`, or `just`; the stable interface for agents and users is the
 facade command. The focused recorded E2E should call `traffic-replay` from
-`PATH`, not a skill-local helper path.
+`PATH` and control active cases with `traffic-replay-cli` from `PATH`, not a
+skill-local helper path.
 
 Place application config under `config/`. Development startup should read a
 committed default config directly, such as `config/default.yaml` or the target
@@ -302,6 +314,13 @@ repo and selected scope. Prefer the target repo's existing boundaries. If the
 repo is new or empty, create enough structure for the first migrated slice to
 grow safely without adding empty placeholder modules.
 
+Review module topology before implementation and whenever expanding an existing
+domain. Look for domain clusters, prefix-sprawl files, oversized files,
+catch-all modules, and test/replay support leaking into normal runtime modules.
+Choose a structure that makes ownership obvious. Directory namespaces are often
+better when a domain has multiple cohesive sub-responsibilities, but do not
+reorganize purely for aesthetics or against the repo's conventions.
+
 Decide package layout before implementation. Default to one package/crate for
 one API/function when the target repo has no stronger convention. Use a
 workspace or multi-package layout only when the user asks for it, the target
@@ -314,6 +333,14 @@ Do not prescribe exact module or directory names. The agent should choose names
 that fit the project and source domain, such as `api`, `handler`, `store`,
 `repository`, `service`, `model`, `util`, `client`, or `adapter`. The important
 requirement is an explicit design with clear ownership boundaries.
+
+Avoid treating same-prefix files as the final architecture when they are really
+one domain split across loose files. A layout such as `domain_feature_a`,
+`domain_feature_b`, and `domain_feature_c` may be acceptable during a narrow
+mechanical extraction, but before completion the agent should decide whether a
+real module namespace would make the domain clearer. Record the decision in
+`module_topology_review`; a conscious "keep as-is" is acceptable when it fits
+the target repo.
 
 For service/API migrations, account for these responsibilities in the design:
 
@@ -383,6 +410,8 @@ the source repo and replay report:
   unrelated/background with source or recorder evidence
 - target E2E requests are built from each case's `request.json`, without
   hardcoded case-specific headers, query params, or bodies
+- replay session readiness is verified before requests, every selected case is
+  bracketed by begin/end, and aggregate replay reports are clean
 - MySQL touches use the recorded business target host, database/schema, and
   username/role as dependency identity; log databases, read/write roles,
   tenants, and shards must map to explicit runtime adapters instead of sharing
@@ -427,7 +456,7 @@ Use at most 3 iterations:
    declaring success. A library-only test harness is not enough for a migrated
    service API.
 9. Run the focused recorded E2E through managed dependency replay and verify
-   that all case-owned dependency touches are matched.
+   that all selected case-owned dependency touches are matched.
 10. Perform the migration semantics review.
 11. Classify failures as target implementation bug, replay issue,
    incomplete recording, recording workflow improvement, or target setup issue.
@@ -457,12 +486,12 @@ document the normal startup command, then update `.migration/e2e.yaml`.
 Keep output concise:
 
 - migrated scope
-- source repo path and recorded case path
+- source repo path and recorded case path or selected case set
 - command facade lifecycle commands, E2E command, and quality commands run
 - schema validation status for DB-backed scopes
 - runtime lifecycle commands and verified process status for service scopes
 - logging config and essential log path(s) for service scopes
-- pass/fail result
+- selected recorded case set pass/fail result
 - package/workspace decision and architecture review status
 - dependency touch status, especially any unmatched target calls or unused case
   exchanges

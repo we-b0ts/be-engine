@@ -34,6 +34,8 @@ Prefer the existing boundaries when adding or moving code:
 - `mysql_protocol.rs`: low-level MySQL packet parsing and encoding
 - `mysql_semantic.rs`: semantic MySQL exchange parsing
 - `mysql_replay.rs`: managed MySQL dependency replay
+- `mysql_replay_control.rs`: replay session control socket, session state, and
+  control client
 - `mysql_replay_records.rs`: replay dependency records, identity matching,
   target assignment, and report model
 - `mysql_replay_dns.rs`: replay DNS question parsing and fake A responses
@@ -66,6 +68,25 @@ Avoid catch-all helper files. If a helper grows, split it by topic such as
 paths, time, redaction, process lookup, packet codec, matching, or report
 formatting.
 
+## Module Topology Review
+
+Before adding behavior to an existing domain, review whether the current module
+topology still explains ownership clearly. Pay attention to domain clusters,
+same-prefix files, oversized files, catch-all helper modules, and test/replay
+support leaking into normal runtime paths.
+
+Prefer real Rust module namespaces when they make a domain clearer. For example,
+a growing group such as `mysql_replay_*` can become a `mysql::replay` module
+tree when the next MySQL replay change needs to touch or extend it. The goal is
+clarity of ownership, not cosmetic directory churn; keeping the current layout
+is fine when it is the least surprising shape for the change.
+
+Do not treat `include!`-based extraction or loose same-prefix files as a
+long-term architecture by default. They are acceptable as temporary or
+mechanical steps, but the next substantial change in that area should consider
+moving to ordinary Rust modules unless there is a generated-code or
+macro-driven reason to keep `include!`.
+
 ## Code-Size Gates
 
 Product source files must stay below 1000 lines after a change.
@@ -80,10 +101,8 @@ Use these thresholds:
 
 Existing files already over 1000 lines are refactor hotspots:
 
-- `src/mysql_replay.rs`
 - `src/mysql_semantic.rs`
 - `src/tcp_gateway.rs`
-- `src/recorder.rs`
 
 When a task touches one of these files, do a scoped extraction before adding new
 behavior. Keep the extraction tied to the current change, such as moving replay
@@ -94,14 +113,16 @@ writing into smaller modules. Do not perform broad unrelated rewrites.
 
 Use these as guidance when a touched file crosses a size gate:
 
-- split `mysql_replay` by runtime state, fake DNS/gateway, MySQL session,
-  exchange matching, response encoding, and replay report
+- move `mysql_replay` leaf files toward a real `mysql::replay` namespace when a
+  replay change needs to extend that area
 - split `mysql_semantic` by tracker, prepared statements, resultset parsing,
   column schema, value decoding, and tests
-- split `recorder` by event types, writers, case paths, body encoding, and
-  summaries
+- move recorder event/run/body responsibilities toward a `recorder` namespace
+  if the current loose files become harder to navigate
 - split `tcp_gateway` by fake-IP routing, listener lifecycle, connection copy,
   process matching, and dependency attachment
+- group HTTP proxy/gateway/case responsibilities under an `http` namespace if
+  future HTTP work makes the current top-level files noisy
 
 Prefer small, reversible extractions with focused tests. Preserve public event
 formats unless the user explicitly asks for a breaking format change.

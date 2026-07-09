@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::future::pending;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::fd::AsRawFd;
@@ -10,8 +11,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
-use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{TcpListener, TcpStream, UdpSocket, UnixListener, UnixStream};
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -67,6 +68,20 @@ pub struct MysqlReplayConfig {
     pub tcp_listen: SocketAddr,
     pub fake_cidr: String,
     pub report_path: Option<PathBuf>,
+    pub session_path: Option<PathBuf>,
+    pub control_socket_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MysqlReplayControlConfig {
+    pub session_path: PathBuf,
+    pub command: String,
+    pub case_id: Option<String>,
+    pub fail_on_dirty: bool,
+}
+
+pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
+    send_control_request(config).await
 }
 
 pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
@@ -92,12 +107,15 @@ pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
     tokio::select! {
         result = runtime.run_dns(dns_socket) => result,
         result = runtime.run_tcp(tcp_listener) => result,
+        result = runtime.run_control() => result,
     }
 }
 
 struct MysqlReplayRuntime {
     state: Arc<Mutex<ReplayState>>,
     report_path: Option<PathBuf>,
+    session_path: Option<PathBuf>,
+    control_socket_path: Option<PathBuf>,
 }
 
 impl MysqlReplayRuntime {
@@ -106,9 +124,9 @@ impl MysqlReplayRuntime {
         dns_listen: SocketAddr,
         tcp_listen: SocketAddr,
     ) -> Result<Self> {
-        let case_dir = config.case_dir;
-        let case_dependencies_path = case_dir.join("dependencies.jsonl");
-        let bootstrap_path = find_upward(&case_dir, "bootstrap-dependencies.jsonl");
+        let root_dir = config.case_dir;
+        let (mode, mut cases, active_case_id) = discover_replay_cases(&root_dir).await?;
+        let bootstrap_path = find_upward(&root_dir, "bootstrap-dependencies.jsonl");
         let mut exchanges = Vec::new();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
@@ -118,28 +136,40 @@ impl MysqlReplayRuntime {
             load_dependency_file(
                 path,
                 ReplaySource::Bootstrap,
+                None,
                 &mut exchanges,
                 &mut targets,
                 &mut connection_identities,
             )
             .await?;
         }
-        load_dependency_file(
-            &case_dependencies_path,
-            ReplaySource::Case,
-            &mut exchanges,
-            &mut targets,
-            &mut connection_identities,
-        )
-        .await?;
+        for case in cases.values() {
+            load_dependency_file(
+                &case.dependencies_path,
+                ReplaySource::Case,
+                Some(&case.id),
+                &mut exchanges,
+                &mut targets,
+                &mut connection_identities,
+            )
+            .await?;
+        }
 
         let targets = assign_fake_ips(targets, fake_cidr)?;
+        if let Some(case_id) = &active_case_id
+            && let Some(case) = cases.get_mut(case_id)
+        {
+            case.status = ReplayCaseStatus::Active;
+        }
 
         let state = ReplayState {
+            session_id: Uuid::new_v4(),
             dns_listen,
             tcp_listen,
-            case_dir,
-            case_dependencies_path,
+            mode,
+            root_dir,
+            cases,
+            active_case_id,
             bootstrap_path,
             targets,
             exchanges,
@@ -148,6 +178,8 @@ impl MysqlReplayRuntime {
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
             report_path: config.report_path,
+            session_path: config.session_path,
+            control_socket_path: config.control_socket_path,
         })
     }
 
@@ -191,14 +223,27 @@ impl MysqlReplayRuntime {
     async fn write_report(&self) -> Result<()> {
         write_report_snapshot(self.state.clone(), self.report_path.clone()).await
     }
+
+    async fn run_control(&self) -> Result<()> {
+        run_control_socket(
+            self.state.clone(),
+            self.report_path.clone(),
+            self.session_path.clone(),
+            self.control_socket_path.clone(),
+        )
+        .await
+    }
 }
 
 #[derive(Debug)]
 struct ReplayState {
+    session_id: Uuid,
     dns_listen: SocketAddr,
     tcp_listen: SocketAddr,
-    case_dir: PathBuf,
-    case_dependencies_path: PathBuf,
+    mode: ReplayMode,
+    root_dir: PathBuf,
+    cases: BTreeMap<String, ReplayCase>,
+    active_case_id: Option<String>,
     bootstrap_path: Option<PathBuf>,
     targets: Vec<ReplayTarget>,
     exchanges: Vec<ReplayExchange>,
@@ -231,6 +276,7 @@ impl ReplayState {
     ) {
         let recorded_match = self.consume_builtin_exchange(identity, command, sql);
         self.events.builtin_queries.push(QueryReport {
+            case_id: self.active_case_id.clone(),
             target: identity.target.clone(),
             database: identity.database.clone(),
             username: identity.username.clone(),
@@ -252,6 +298,7 @@ impl ReplayState {
         reason: &str,
     ) {
         self.events.unsupported_commands.push(QueryReport {
+            case_id: self.active_case_id.clone(),
             target: identity.target.clone(),
             database: identity.database.clone(),
             username: identity.username.clone(),
@@ -273,6 +320,7 @@ impl ReplayState {
         reason: &str,
     ) {
         self.events.unmatched_queries.push(QueryReport {
+            case_id: self.active_case_id.clone(),
             target: identity.target.clone(),
             database: identity.database.clone(),
             username: identity.username.clone(),
@@ -297,8 +345,12 @@ impl ReplayState {
         params: Option<&[RecordedMysqlValue]>,
     ) -> Option<MatchedExchange> {
         let normalized_sql = sql.map(normalize_sql);
+        let active_case_id = self.active_case_id.clone();
         for (index, exchange) in self.exchanges.iter_mut().enumerate() {
             if exchange.consumed || exchange.record.command != command {
+                continue;
+            }
+            if !active_case_matches(active_case_id.as_deref(), exchange) {
                 continue;
             }
             if !identity_matches_exchange(identity, &exchange.identity) {
@@ -315,6 +367,7 @@ impl ReplayState {
             }
             exchange.consumed = true;
             let matched = MatchedQueryReport {
+                case_id: exchange.case_id.clone(),
                 target: Some(exchange.identity.target.clone()),
                 database: exchange.identity.database.clone(),
                 username: exchange.identity.username.clone(),
@@ -342,8 +395,12 @@ impl ReplayState {
         sql: Option<&str>,
     ) -> Option<(ReplaySource, usize)> {
         let normalized_sql = sql.map(normalize_sql);
+        let active_case_id = self.active_case_id.clone();
         for (index, exchange) in self.exchanges.iter_mut().enumerate() {
             if exchange.consumed || exchange.record.command != command {
+                continue;
+            }
+            if !active_case_matches(active_case_id.as_deref(), exchange) {
                 continue;
             }
             if !identity_matches_exchange(identity, &exchange.identity) {
@@ -363,6 +420,9 @@ impl ReplayState {
         let normalized_sql = normalize_sql(sql);
         for exchange in &self.exchanges {
             if exchange.record.command != "COM_STMT_EXECUTE" {
+                continue;
+            }
+            if !self.active_case_matches(exchange) {
                 continue;
             }
             if !identity_matches_exchange(identity, &exchange.identity) {
@@ -393,10 +453,18 @@ impl ReplayState {
     fn snapshot_report(&self) -> ReplayReport {
         ReplayReport {
             version: 1,
+            mode: self.mode,
             dns_listen: self.dns_listen.to_string(),
             tcp_listen: self.tcp_listen.to_string(),
-            case_dir: self.case_dir.display().to_string(),
-            case_dependencies_path: self.case_dependencies_path.display().to_string(),
+            case_dir: self.root_dir.display().to_string(),
+            case_dependencies_path: self
+                .cases
+                .values()
+                .next()
+                .map(|case| case.dependencies_path.display().to_string())
+                .unwrap_or_default(),
+            active_case_id: self.active_case_id.clone(),
+            cases: self.case_reports(),
             bootstrap_dependencies_path: self
                 .bootstrap_path
                 .as_ref()
@@ -421,6 +489,7 @@ impl ReplayState {
             .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
             .map(|(index, exchange)| RecordedExchangeSummary {
                 index,
+                case_id: exchange.case_id.clone(),
                 target: Some(exchange.identity.target.clone()),
                 database: exchange.identity.database.clone(),
                 username: exchange.identity.username.clone(),
@@ -430,10 +499,27 @@ impl ReplayState {
             })
             .collect()
     }
+
+    fn active_case_matches(&self, exchange: &ReplayExchange) -> bool {
+        active_case_matches(self.active_case_id.as_deref(), exchange)
+    }
+
+    fn case_reports(&self) -> Vec<ReplayCaseReport> {
+        self.cases
+            .values()
+            .map(|case| ReplayCaseReport {
+                case_id: case.id.clone(),
+                case_dir: case.dir.display().to_string(),
+                dependencies_path: case.dependencies_path.display().to_string(),
+                status: case.status,
+            })
+            .collect()
+    }
 }
 
 include!("mysql_replay_records.rs");
 include!("mysql_replay_dns.rs");
+include!("mysql_replay_control.rs");
 async fn handle_gateway_connection(
     stream: TcpStream,
     peer_addr: SocketAddr,

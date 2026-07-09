@@ -63,6 +63,7 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
+ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
@@ -70,6 +71,28 @@ traffic-replay --no-intercept path/to/case-dir
 `traffic-replay` also defaults to owner filtering for `trp-record`. Run the
 target service as that user, or pass `--user`, `--owner-uid`, or `--all-users`
 when the replay environment requires a different scope.
+
+For a case collection, start one replay session and control active case
+ownership through the CLI:
+
+```bash
+traffic-replay path/to/recordings/<rule>/<uri-group>
+traffic-replay-cli wait-ready
+traffic-replay-cli cases
+traffic-replay-cli begin <case-id>
+traffic-replay-cli end <case-id> --fail-on-dirty
+traffic-replay-cli report --fail-on-dirty
+traffic-replay-cli stop
+```
+
+`traffic-replay-cli` is a thin facade over `traffic-recorder-proxy
+replay-control`; the Rust binary owns the control protocol and Unix socket
+client. The script should stay small and should not implement JSON/socket
+protocol logic.
+
+Do not send target E2E requests before replay is ready. Replay startup, port
+binding, DNS redirect, or stale-process failures are replay lifecycle/setup
+failures, not product behavior evidence.
 
 When using setup scripts directly, always pair `up` with `down`:
 

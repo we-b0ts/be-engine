@@ -27,17 +27,21 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
 3. Inspect the target project's existing E2E runner, server startup path,
    runtime config, and dependency wiring before adding anything. Prefer existing
    conventions.
-4. Start managed dependency replay from `dependencies.jsonl` before asserting
-   the HTTP response. Use `traffic-replay <case-dir>` from the
-   traffic-recorder-proxy repo; ensure both `traffic-replay` and
-   `traffic-recorder-proxy` are executable on `PATH` before starting. Replay
-   defaults to owner filtering for the `trp-record` Unix user. Target-project
-   E2E commands should pass no user-filter argument by default and should run
-   the target process as `trp-record`. Use an exact `--owner-uid` only when the
+4. Start managed dependency replay before asserting the HTTP response. Use
+   `traffic-replay <case-or-collection-dir>` to start one replay session and
+   `traffic-replay-cli` to control case lifecycle. Ensure
+   `traffic-replay-cli`, `traffic-replay`, and `traffic-recorder-proxy` are on
+   `PATH`; do not reference this skill's filesystem path from target-project
+   tests. Wait for replay readiness before sending requests. For a case set,
+   call `traffic-replay-cli begin <case-id>` before each recorded request and
+   `traffic-replay-cli end <case-id> --fail-on-dirty` after assertions; finish
+   with a clean aggregate report and stop the replay session. Replay defaults
+   to owner filtering for the `trp-record` Unix user. Target-project E2E
+   commands should pass no user-filter argument by default and should run the
+   target process as `trp-record`. Use an exact `--owner-uid` only when the
    harness cannot run as that user and record why. Do not put `--all-users` in
    target-project tests, command facades, docs, or migration state; it is only
-   for manual troubleshooting on an isolated machine. Do not reference this
-   skill's filesystem path from target-project tests. Do not hand-write
+   for manual troubleshooting on an isolated machine. Do not hand-write
    substitute dependency mocks when replay data or relay behavior is missing;
    report recorder/replay improvements instead.
 5. Build each test request from that case's `request.json`. Use recorded
@@ -60,8 +64,8 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    change or the evidence proves a recording-correlation issue that should be
    reported upstream. Do not copy recorded dependency params into normal
    runtime config or product logic just to satisfy coverage.
-8. Run a focused single-case or related E2E command first. After it passes, run
-   the broader relevant suite or project-standard checks.
+8. Run a focused single-case or selected case-set E2E command first. After it
+   passes, run the broader relevant suite or project-standard checks.
 9. Iterate at most 3 times. Fix replay command options, target dependency
    routing, or recorder/replay evidence first. Modify product code only when
    dependency replay is complete and the failure clearly points to a real code
@@ -100,8 +104,8 @@ triage, MySQL-specific risk signals, and recorder feedback signals.
 
 ## Output
 
-On success, keep the final response short: state whether the recorded E2E
-passes, what changed, and the essential verification command. On a blocked case,
-include the missing evidence list. If recorder improvements are indicated,
-include only the concise evidence-backed feedback. Avoid long reports unless the
-user asks.
+On success, keep the final response short: state whether the selected recorded
+case set passes, what changed, and the essential verification command. On a
+blocked case, include the missing evidence list. If recorder improvements are
+indicated, include only the concise evidence-backed feedback. Avoid long reports
+unless the user asks.

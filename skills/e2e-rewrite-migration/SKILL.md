@@ -8,8 +8,8 @@ description: Use when rewriting or migrating one API, scheduled job, worker, or 
 Rewrite behavior, not source text.
 
 Use recorded E2E cases as the compatibility contract. A migration is complete
-only when the target implementation passes recorded E2E replay plus the target
-repo's relevant quality checks, or when blocked output identifies missing
+only when the selected recorded case set passes replay plus the target repo's
+relevant quality checks, or when blocked output identifies missing
 recording/E2E evidence.
 
 ## Required Inputs
@@ -52,7 +52,9 @@ recording/E2E evidence.
    A matching HTTP response is only partial success until all case-owned
    dependencies are matched. Recorded request construction must come from each
    case's `request.json`; do not hardcode case-specific headers, query params,
-   or bodies in target tests.
+   or bodies in target tests. For case sets, use the replay session lifecycle:
+   start `traffic-replay`, wait ready with `traffic-replay-cli`, then
+   begin/end each case and require a clean aggregate report.
 8. Ensure a repo-local development command facade exists. Prefer an existing
    project convention; otherwise create `scripts/<project>-cli`. Runnable
    services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,
@@ -63,10 +65,10 @@ recording/E2E evidence.
 10. Add or preserve a diagnostic logging setup for runnable services. Default
    to predictable development logs under `.migration/run/logs/`; read
    [logging.md](references/logging.md).
-11. Choose the target package/module layout before writing behavior code. Let
-    the agent pick names that fit the repo, such as `api`, `store`, `service`,
-    or `util`; require a clear design, code-size gates, and ownership
-    boundaries, not fixed module names.
+11. Choose the target package/module layout before writing behavior code. Do a
+    module topology review, not only a file-name plan. Let the agent pick names
+    and directory namespaces that fit the repo; require clear ownership
+    boundaries and code-size gates, not fixed module names.
 12. For DB/MySQL-backed behavior, map runtime adapter types from explicit schema
    evidence: semantic column schema in `dependencies.jsonl`, or schema supplied
    by the user. If schema is missing, continue only with
@@ -104,6 +106,7 @@ migration loop, missing-recording behavior, and failure classification.
 
 ## Output
 
-Keep the final response short: migrated scope, source and case paths, pass/fail
-status, E2E/quality/startup commands run, and recording improvement feedback
-only when real replay pain exposed a recording gap.
+Keep the final response short: migrated scope, source and case paths, selected
+recorded case set pass/fail status, E2E/quality/startup commands run, and
+recording improvement feedback only when real replay pain exposed a recording
+gap.

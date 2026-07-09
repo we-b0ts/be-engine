@@ -25,7 +25,7 @@ unset BASH_ENV ENV TRAFFIC_RECORDER_PROXY_BIN
 usage() {
   cat >&2 <<EOF
 Usage:
-  traffic-replay [options] <case-dir> [-- extra traffic-recorder-proxy replay args...]
+  traffic-replay [options] <case-or-collection-dir> [-- extra traffic-recorder-proxy replay args...]
   traffic-replay --config replay.toml [options] [-- extra traffic-recorder-proxy replay args...]
 
 Options:
@@ -33,6 +33,8 @@ Options:
   --no-intercept           Start replay listeners without changing local DNS/iptables.
   --config PATH            Read optional replay settings from a TOML file.
   --report PATH            Replay report path. Defaults to <case-dir>/.replay/replay-report.json.
+  --session PATH           Session JSON path. Defaults to ./.replay/session.json in caller cwd.
+  --control-socket PATH    Control socket path. Defaults to session dir/control.sock.
   --dns-listen ADDR        DNS replay listener. Default: 127.0.0.153:15353.
   --tcp-listen ADDR        Fake-IP TCP replay listener. Default: 127.0.0.1:15001.
   --fake-cidr CIDR         Fake IP CIDR. Default: 198.18.0.0/15.
@@ -42,8 +44,9 @@ Options:
   --all-users              Capture all local users. Use only on isolated machines.
   --proxy-bin PATH         Explicit traffic-recorder-proxy binary override.
 
-Ensure traffic-replay and traffic-recorder-proxy are available on PATH for
-target-project E2E runs. Use --proxy-bin only for local proxy development.
+Ensure traffic-replay, traffic-replay-cli, and traffic-recorder-proxy are
+available on PATH for target-project E2E runs. Use --proxy-bin only for local
+proxy development.
 Replay child processes are run with shell startup hooks such as BASH_ENV cleared.
 DNS/fake-IP rules are removed when this script exits.
 EOF
@@ -58,6 +61,12 @@ CASE_SET=0
 REPORT_PATH=""
 REPORT_BASE="$CALLER_CWD"
 REPORT_SET=0
+SESSION_PATH=""
+SESSION_BASE="$CALLER_CWD"
+SESSION_SET=0
+CONTROL_SOCKET_PATH=""
+CONTROL_SOCKET_BASE="$CALLER_CWD"
+CONTROL_SOCKET_SET=0
 DNS_LISTEN="127.0.0.153:15353"
 DNS_SET=0
 TCP_LISTEN="127.0.0.1:15001"
@@ -104,6 +113,20 @@ while [ "$#" -gt 0 ]; do
       REPORT_PATH="$2"
       REPORT_BASE="$CALLER_CWD"
       REPORT_SET=1
+      shift 2
+      ;;
+    --session)
+      need_value "$1" "${2:-}"
+      SESSION_PATH="$2"
+      SESSION_BASE="$CALLER_CWD"
+      SESSION_SET=1
+      shift 2
+      ;;
+    --control-socket)
+      need_value "$1" "${2:-}"
+      CONTROL_SOCKET_PATH="$2"
+      CONTROL_SOCKET_BASE="$CALLER_CWD"
+      CONTROL_SOCKET_SET=1
       shift 2
       ;;
     --dns-listen)
@@ -235,6 +258,8 @@ print(value("dns_listen"))
 print(value("tcp_listen"))
 print(value("fake_cidr"))
 print(value("report"))
+print(value("session"))
+print(value("control_socket"))
 print(value("enable_intercept"))
 print(value("upstream_dns"))
 print(value("owner_uid"))
@@ -261,24 +286,32 @@ PY
     REPORT_PATH="${replay_values[4]}"
     REPORT_BASE="$config_dir"
   fi
-  if [ "$INTERCEPT_SET" -eq 0 ] && [ -n "${replay_values[5]}" ]; then
-    ENABLE_INTERCEPT="${replay_values[5]}"
+  if [ "$SESSION_SET" -eq 0 ] && [ -n "${replay_values[5]}" ]; then
+    SESSION_PATH="${replay_values[5]}"
+    SESSION_BASE="$config_dir"
   fi
-  if [ "$UPSTREAM_SET" -eq 0 ] && [ -n "${replay_values[6]}" ]; then
-    UPSTREAM_DNS_VALUE="${replay_values[6]}"
+  if [ "$CONTROL_SOCKET_SET" -eq 0 ] && [ -n "${replay_values[6]}" ]; then
+    CONTROL_SOCKET_PATH="${replay_values[6]}"
+    CONTROL_SOCKET_BASE="$config_dir"
+  fi
+  if [ "$INTERCEPT_SET" -eq 0 ] && [ -n "${replay_values[7]}" ]; then
+    ENABLE_INTERCEPT="${replay_values[7]}"
+  fi
+  if [ "$UPSTREAM_SET" -eq 0 ] && [ -n "${replay_values[8]}" ]; then
+    UPSTREAM_DNS_VALUE="${replay_values[8]}"
   fi
   if [ "$OWNER_SET" -eq 0 ]; then
-    if [ "${replay_values[9]}" = "1" ]; then
+    if [ "${replay_values[11]}" = "1" ]; then
       OWNER_MODE="all"
       OWNER_USER_VALUE=""
       OWNER_UID_VALUE=""
-    elif [ -n "${replay_values[7]}" ]; then
+    elif [ -n "${replay_values[9]}" ]; then
       OWNER_MODE="uid"
-      OWNER_UID_VALUE="${replay_values[7]}"
+      OWNER_UID_VALUE="${replay_values[9]}"
       OWNER_USER_VALUE=""
-    elif [ -n "${replay_values[8]}" ]; then
+    elif [ -n "${replay_values[10]}" ]; then
       OWNER_MODE="user"
-      OWNER_USER_VALUE="${replay_values[8]}"
+      OWNER_USER_VALUE="${replay_values[10]}"
       OWNER_UID_VALUE=""
     fi
   fi
@@ -304,6 +337,16 @@ if [ -z "$REPORT_PATH" ]; then
   REPORT_PATH="$CASE_DIR/.replay/replay-report.json"
 else
   REPORT_PATH="$(resolve_path "$REPORT_PATH" "$REPORT_BASE")"
+fi
+if [ -z "$SESSION_PATH" ]; then
+  SESSION_PATH="$CALLER_CWD/.replay/session.json"
+else
+  SESSION_PATH="$(resolve_path "$SESSION_PATH" "$SESSION_BASE")"
+fi
+if [ -z "$CONTROL_SOCKET_PATH" ]; then
+  CONTROL_SOCKET_PATH="$(dirname "$SESSION_PATH")/control.sock"
+else
+  CONTROL_SOCKET_PATH="$(resolve_path "$CONTROL_SOCKET_PATH" "$CONTROL_SOCKET_BASE")"
 fi
 
 find_proxy_binary() {
@@ -452,7 +495,7 @@ if [ "$ENABLE_INTERCEPT" = "1" ]; then
   FAKE_REDIRECT_UP=1
 fi
 
-args=(replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LISTEN" --fake-cidr "$FAKE_CIDR" --report "$REPORT_PATH")
+args=(replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LISTEN" --fake-cidr "$FAKE_CIDR" --report "$REPORT_PATH" --session "$SESSION_PATH" --control-socket "$CONTROL_SOCKET_PATH")
 args+=("${APP_ARGS[@]}")
 
 export RUST_LOG="${RUST_LOG:-info}"

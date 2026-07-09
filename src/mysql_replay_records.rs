@@ -12,6 +12,7 @@ struct ReplayEvents {
 #[derive(Debug, Clone)]
 struct ReplayExchange {
     source: ReplaySource,
+    case_id: Option<String>,
     identity: MysqlDependencyIdentity,
     record: RecordedMysqlExchange,
     consumed: bool,
@@ -36,10 +37,13 @@ enum ReplaySource {
 #[derive(Debug, Serialize)]
 struct ReplayReport {
     version: u8,
+    mode: ReplayMode,
     dns_listen: String,
     tcp_listen: String,
     case_dir: String,
     case_dependencies_path: String,
+    active_case_id: Option<String>,
+    cases: Vec<ReplayCaseReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     bootstrap_dependencies_path: Option<String>,
     targets: Vec<ReplayTarget>,
@@ -68,6 +72,8 @@ struct ConnectionReport {
 #[derive(Debug, Clone, Serialize)]
 struct QueryReport {
     #[serde(skip_serializing_if = "Option::is_none")]
+    case_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<TargetKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
     database: Option<String>,
@@ -88,6 +94,8 @@ struct QueryReport {
 #[derive(Debug, Clone, Serialize)]
 struct MatchedQueryReport {
     #[serde(skip_serializing_if = "Option::is_none")]
+    case_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<TargetKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
     database: Option<String>,
@@ -106,6 +114,8 @@ struct MatchedQueryReport {
 #[derive(Debug, Clone, Serialize)]
 struct RecordedExchangeSummary {
     index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    case_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<TargetKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -129,6 +139,37 @@ struct ReplayTarget {
     host: String,
     port: u16,
     fake_ip: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReplayMode {
+    Single,
+    Collection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReplayCaseStatus {
+    Pending,
+    Active,
+    Ended,
+}
+
+#[derive(Debug, Clone)]
+struct ReplayCase {
+    id: String,
+    dir: PathBuf,
+    dependencies_path: PathBuf,
+    status: ReplayCaseStatus,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ReplayCaseReport {
+    case_id: String,
+    case_dir: String,
+    dependencies_path: String,
+    status: ReplayCaseStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -247,6 +288,7 @@ enum ResultRowEncoding {
 async fn load_dependency_file(
     path: &Path,
     source: ReplaySource,
+    case_id: Option<&str>,
     exchanges: &mut Vec<ReplayExchange>,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
@@ -316,12 +358,87 @@ async fn load_dependency_file(
             });
         exchanges.push(ReplayExchange {
             source,
+            case_id: case_id.map(ToOwned::to_owned),
             identity,
             record: *exchange,
             consumed: false,
         });
     }
     Ok(())
+}
+
+async fn discover_replay_cases(
+    root_dir: &Path,
+) -> Result<(ReplayMode, BTreeMap<String, ReplayCase>, Option<String>)> {
+    let direct_dependencies = root_dir.join("dependencies.jsonl");
+    if direct_dependencies.is_file() {
+        let case_id = path_file_name(root_dir).unwrap_or_else(|| "case".to_string());
+        let mut cases = BTreeMap::new();
+        cases.insert(
+            case_id.clone(),
+            ReplayCase {
+                id: case_id.clone(),
+                dir: root_dir.to_path_buf(),
+                dependencies_path: direct_dependencies,
+                status: ReplayCaseStatus::Pending,
+            },
+        );
+        return Ok((ReplayMode::Single, cases, Some(case_id)));
+    }
+
+    let mut entries = tokio::fs::read_dir(root_dir)
+        .await
+        .with_context(|| format!("failed to read replay case collection {}", root_dir.display()))?;
+    let mut cases = BTreeMap::new();
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .with_context(|| format!("failed to scan replay case collection {}", root_dir.display()))?
+    {
+        let file_type = entry.file_type().await.with_context(|| {
+            format!("failed to inspect replay case entry {}", entry.path().display())
+        })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let case_dir = entry.path();
+        let dependencies_path = case_dir.join("dependencies.jsonl");
+        if !dependencies_path.is_file() {
+            continue;
+        }
+        let Some(case_id) = path_file_name(&case_dir) else {
+            continue;
+        };
+        cases.insert(
+            case_id.clone(),
+            ReplayCase {
+                id: case_id,
+                dir: case_dir,
+                dependencies_path,
+                status: ReplayCaseStatus::Pending,
+            },
+        );
+    }
+    if cases.is_empty() {
+        return Err(anyhow!(
+            "replay path {} is neither a case directory nor a collection with child dependencies.jsonl files",
+            root_dir.display()
+        ));
+    }
+    Ok((ReplayMode::Collection, cases, None))
+}
+
+fn path_file_name(path: &Path) -> Option<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(ToOwned::to_owned)
+}
+
+fn active_case_matches(active_case_id: Option<&str>, exchange: &ReplayExchange) -> bool {
+    match exchange.source {
+        ReplaySource::Bootstrap => true,
+        ReplaySource::Case => exchange.case_id.as_deref() == active_case_id,
+    }
 }
 
 fn find_upward(start: &Path, filename: &str) -> Option<PathBuf> {

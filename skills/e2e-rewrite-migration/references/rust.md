@@ -59,6 +59,13 @@ to crates, modules, traits, adapters, and files like this:
   scattered across handlers
 - avoid putting a migrated API entirely in `src/lib.rs` and `src/main.rs`
 
+For Rust module topology, prefer real module namespaces over prefix-sprawl when
+a domain grows. Use `mod.rs`, `foo.rs`, or `foo/` submodules according to the
+repo convention. `lib.rs` should expose domain modules and app factories, not
+every leaf implementation file. Avoid `include!` as production architecture
+unless there is a specific generated-code or macro-driven reason; if a
+mechanical extraction uses it temporarily, record the follow-up module cleanup.
+
 Apply the generic code-size gates from `migration-workflow.md`. Rust-specific
 defaults: keep `main.rs` focused on argument/config parsing, logging init, app
 wiring, and server startup; target 150 lines or fewer. Keep `lib.rs` or

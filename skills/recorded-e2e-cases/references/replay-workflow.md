@@ -21,23 +21,43 @@ explain why. Do not introduce a broad new architecture just for one case.
 
 ## Managed Replay CLI
 
-Use the repository-level replay command, not a skill-local script path:
+Use the repository-level replay commands, not skill-local script paths:
 
-- `traffic-replay`
+- `traffic-replay` starts one replay session for a case or case collection
+- `traffic-replay-cli` controls readiness, active case lifecycle, reports, and
+  shutdown
 
-Before running the target E2E, ensure both commands are available on `PATH`.
+`traffic-replay-cli` is a thin PATH facade over `traffic-recorder-proxy
+replay-control`; do not generate it inside the target project.
+
+Before running the target E2E, ensure all commands are available on `PATH`.
 For local development, prefer installing, copying, or symlinking them into a
 user PATH directory such as `~/.local/bin`.
 
 ```bash
 command -v traffic-recorder-proxy
 command -v traffic-replay
-traffic-replay path/to/case-dir
+command -v traffic-replay-cli
+traffic-replay path/to/case-or-collection-dir
+traffic-replay-cli wait-ready
 ```
 
-Pass the selected case directory directly. The replay report defaults to
-`<case-dir>/.replay/replay-report.json`. Use `--no-intercept` only when the
-target project already routes dependencies to the replay listeners.
+Pass the selected case directory or collection directory directly. A collection
+directory is usually `recordings/<rule>/<uri-group>` or the copied target path
+under `tests/fixtures/recordings`. The replay session loads bootstrap
+dependencies plus the selected case files, but case dependencies are not a
+global pool. The active case is selected with `traffic-replay-cli begin
+<case-id>` and closed with `traffic-replay-cli end <case-id> --fail-on-dirty`.
+
+Use `traffic-replay-cli wait-ready` before sending any target request. If the
+session cannot bind listeners, install DNS/fake-IP rules, or write its initial
+report, treat it as a replay lifecycle/setup failure and stop. Do not continue
+with the HTTP assertion, do not debug product behavior from that result, and do
+not make each target project hand-roll port allocation, process polling, or
+leftover replay cleanup.
+
+Use `--no-intercept` only when the target project already routes dependencies
+to the replay listeners.
 `traffic-replay` defaults to owner filtering for the `trp-record` Unix user.
 Target-project E2E commands should pass no user-filter argument by default and
 should ensure the target process runs as `trp-record`. If the harness truly
@@ -47,7 +67,8 @@ migration state. Use `--all-users` only as a manual troubleshooting command on
 an isolated machine, then remove it from committed artifacts.
 Do not hardcode the traffic-recorder-proxy repository path or skill path inside
 target-project tests. A test harness may allow `TRAFFIC_REPLAY` or a similar
-local override, but the default command must be `traffic-replay`.
+local override, but the default commands must be `traffic-replay` and
+`traffic-replay-cli`.
 
 ## Replay Construction
 
@@ -69,22 +90,32 @@ Implement in this order:
    such as hop-by-hop transport headers (`connection`, `content-length`,
    `host`, `transfer-encoding`) or compression headers that the harness cannot
    reproduce.
-3. Start managed dependency replay with `traffic-replay <case-dir>`. It uses
-   `dependencies.jsonl` from the selected case and bootstrap dependencies
-   discovered above the case directory. The canonical bootstrap file is
-   `recordings/bootstrap-dependencies.jsonl`.
-4. Point the app under test at the replay listeners and keep real external
-   dependencies isolated.
-5. Use `dependencies-summary.json`, when present, as the dependency coverage
-   checklist for replay.
-6. Send the request built from the current case or invoke the equivalent route.
-7. Assert status and response body compatibility. Assert headers only when
+3. Start managed dependency replay with `traffic-replay
+   <case-or-collection-dir>`. It uses `dependencies.jsonl` from each selected
+   case and bootstrap dependencies discovered above the case directory. The
+   canonical bootstrap file is `recordings/bootstrap-dependencies.jsonl`.
+4. Wait for readiness with `traffic-replay-cli wait-ready`, then point the app
+   under test at the replay listeners and keep real external dependencies
+   isolated.
+5. For each selected case, call `traffic-replay-cli begin <case-id>`, then send
+   the request built from that case or invoke the equivalent route.
+6. Assert status and response body compatibility. Assert headers only when
    stable and relevant.
+7. End the case with `traffic-replay-cli end <case-id> --fail-on-dirty` and use
+   `dependencies-summary.json`, when present, as the dependency coverage
+   checklist for replay.
+8. After the selected case set finishes, run `traffic-replay-cli report
+   --fail-on-dirty` and stop the session with `traffic-replay-cli stop`.
 
 The replay is complete only when the request returns the expected response while
 using dependency behavior replayed from the recorded dependency file, and the
 case-owned dependency touch contract is satisfied. HTTP response compatibility
 alone is not success.
+
+For collection replay, a passed result means the selected case set passed. Do
+not collapse a collection into one representative case. Traffic observed while
+no case is active, or while a different case is active, must not be silently
+matched to the current case.
 
 For JSON responses, compare parsed JSON values, not serialized bytes. Object
 key order and pretty formatting do not matter. Field presence and value type do
@@ -241,12 +272,12 @@ config.
 
 Use at most 3 iterations:
 
-1. Run the focused single-case or nearest E2E command.
+1. Run the focused single-case or selected case-set E2E command.
 2. If it fails, classify the failure as incomplete recording, replay routing
    miss, unsupported replay behavior, assertion drift, environment setup, or
    product code bug.
-3. Fix replay command options, target dependency routing, or recorder/replay
-   evidence first.
+3. Fix replay readiness, lifecycle, command options, target dependency routing,
+   or recorder/replay evidence first.
 4. Fix product code only when dependency replay is complete and the failure is a
    real behavior defect.
 5. Re-run the focused command after each change.
@@ -270,7 +301,7 @@ unmatched/unused dependency list and do not finish as success.
 
 On success, keep the final response short:
 
-- pass/fail conclusion
+- selected recorded case set pass/fail conclusion
 - essential changes
 - verification command
 - concise recorder feedback when replay required guessing, debug-only data, or
