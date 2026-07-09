@@ -32,19 +32,29 @@ recording/E2E evidence.
    all of that API's cases must pass before the API is complete. For multiple
    APIs, prefer GET first, scheduled jobs after GET, then write operations and
    complex side effects.
-4. Ensure target repo `AGENTS.md` exists as a concise navigation map and links
+4. Prepare the target repo branch from `dev-migration` before implementation
+   or handoff. If current work is on another branch, preserve it with stash,
+   switch to `dev-migration`, pull latest, create a scope branch, then reapply
+   intended migration work there. Completed migrations must be committed and
+   opened as a PR to `dev-migration`, not left staged or only local.
+5. Ensure target repo `AGENTS.md` exists as a concise navigation map and links
    to detailed migration docs under `docs/`; follow the Documentation Map
    Contract in [migration-workflow.md](references/migration-workflow.md).
-5. Create or update `.migration/e2e.yaml` with source repo, target language,
-   scope, scope/case matrix when applicable, case paths, command facade,
-   package/workspace decision, module plan, schema status, runtime startup
-   status, architecture review status, blockers, and recording feedback.
-6. Place copied recorded cases under `tests/fixtures/recordings` by default and
-   preserve original case files. If the user provides a case collection
-   directory, select cases by each child `request.json.uri` matching the
-   migration scope. Do not scan `recordings/_runs` or consume `.partial` /
-   `.truncated` failed cases. Do not collapse multiple matching cases into one.
-7. Use `recorded-e2e-cases` for recorded request replay, managed dependency
+6. Create or update `.migration/e2e.yaml` with source repo, target language,
+   scope, scope/case matrix when applicable, rewrite input case paths, PR E2E
+   case source, command facade, branch/PR status, package/workspace decision,
+   module plan, schema status, runtime startup status, architecture review
+   status, blockers, and recording feedback.
+7. Treat user-provided recorded cases as external rewrite inputs, not target
+   repo files. Do not copy or commit those cases unless the user explicitly
+   asks or the target repo already has that convention. The target E2E facade
+   should accept an external case path, normally `e2e --case-dir <path>`, so PR
+   actions/workflows can supply cases at runtime. If the user provides a case
+   collection directory or run directory, select cases by each published child
+   `request.json.uri` matching the migration scope. Do not scan `failed`,
+   `staging`, or `.replay` directories or consume `.partial` / `.truncated`
+   failed cases. Do not collapse multiple matching cases into one.
+8. Use `recorded-e2e-cases` for recorded request replay, managed dependency
    replay, dependency summary coverage, JSON structural response compatibility,
    configured ignores, exact-byte modes, recording feedback rules, and the
    dependency touch contract. For MySQL, preserve business target host,
@@ -55,33 +65,38 @@ recording/E2E evidence.
    or bodies in target tests. For case sets, use the replay session lifecycle:
    start `traffic-replay`, wait ready with `traffic-replay-cli`, then
    begin/end each case and require a clean aggregate report.
-8. Ensure a repo-local development command facade exists. Prefer an existing
+9. Ensure a repo-local development command facade exists. Prefer an existing
    project convention; otherwise create `scripts/<project>-cli`. Runnable
    services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,
-   and `doctor`.
-9. Manage runtime config under `config/`. Development startup should read a
-   committed default config directly; production may specify another config file
-   or use environment overrides.
-10. Add or preserve a diagnostic logging setup for runnable services. Default
+   and `doctor`. The `e2e` command must accept an external case directory
+   argument such as `--case-dir <path>` unless an existing equivalent already
+   exists.
+10. Manage runtime config under `config/`. Development startup should read a
+   committed default config directly, then let environment variables override
+   config values by full config path converted to uppercase snake case. Keep
+   password, secret, appkey/app_key, access key, token, and authorization-like
+   keys present in `config/default.yaml` with blank values; when such keys
+   exist, provide `config/.env.example` with the environment variable names.
+11. Add or preserve a diagnostic logging setup for runnable services. Default
    to predictable development logs under `.migration/run/logs/`; read
    [logging.md](references/logging.md).
-11. Choose the target package/module layout before writing behavior code. Do a
+12. Choose the target package/module layout before writing behavior code. Do a
     module topology review, not only a file-name plan. Let the agent pick names
     and directory namespaces that fit the repo; require clear ownership
     boundaries and code-size gates, not fixed module names.
-12. For DB/MySQL-backed behavior, map runtime adapter types from explicit schema
+13. For DB/MySQL-backed behavior, map runtime adapter types from explicit schema
    evidence: semantic column schema in `dependencies.jsonl`, or schema supplied
    by the user. If schema is missing, continue only with
    `schema_validation_status: unconfirmed` and do not call the migration
    complete.
-13. Implement the real runtime dependency path and normal startup entrypoint for
+14. Implement the real runtime dependency path and normal startup entrypoint for
    the migrated scope. Recorded dependencies may power E2E replay, but the
    default service startup must not require recorded case data or recorded
    dependency params.
-14. Implement the target behavior idiomatically. Do not assume mechanical
+15. Implement the target behavior idiomatically. Do not assume mechanical
    translation is required; API/interface output compatibility is the contract.
-15. Iterate implementation -> recorded E2E -> fix at most 3 times.
-16. Perform a migration semantics review, then run the recorded E2E, normal
+16. Iterate implementation -> recorded E2E -> fix at most 3 times.
+17. Perform a migration semantics review, then run the recorded E2E, normal
     runtime/startup smoke for service targets, and relevant target quality
     checks before completion.
 
@@ -106,7 +121,8 @@ migration loop, missing-recording behavior, and failure classification.
 
 ## Output
 
-Keep the final response short: migrated scope, source and case paths, selected
-recorded case set pass/fail status, E2E/quality/startup commands run, and
+Keep the final response short: migrated scope, source path, rewrite input case
+paths, PR E2E case source, selected recorded case set pass/fail status, PR
+target branch and URL when available, E2E/quality/startup commands run, and
 recording improvement feedback only when real replay pain exposed a recording
 gap.

@@ -22,7 +22,7 @@ mirror. Do not replace that registry configuration unless explicitly asked.
 Run the service with:
 
 ```bash
-cargo run -- --config recorder.example.toml
+cargo run -- --config config/recorder.example.toml
 ```
 
 For watch-mode recording, install the repo-level command and run
@@ -31,7 +31,7 @@ For watch-mode recording, install the repo-level command and run
 ```bash
 mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
-traffic-record recorder.example.toml
+traffic-record config/recorder.example.toml
 ```
 
 `traffic-record` enables local DNS capture and fake-IP TCP redirect by default,
@@ -40,10 +40,10 @@ when you intentionally want the recorder to intercept local traffic. To skip
 those rules:
 
 ```bash
-traffic-record --no-dns recorder.example.toml
+traffic-record --no-dns config/recorder.example.toml
 ```
 
-`recorder.example.toml` enables `[local_record]` owner filtering for the
+`config/recorder.example.toml` enables `[local_record]` owner filtering for the
 dedicated Unix user `trp-record`. Prefer running the source service as that user
 so bootstrap and case dependencies are not polluted by unrelated local
 processes. `traffic-record --user`, `traffic-record --owner-uid`,
@@ -76,7 +76,8 @@ For a case collection, start one replay session and control active case
 ownership through the CLI:
 
 ```bash
-traffic-replay path/to/recordings/<rule>/<uri-group>
+traffic-replay path/to/recordings/<run-id>/<rule>/<uri-group>
+traffic-replay path/to/recordings/<run-id>
 traffic-replay-cli wait-ready
 traffic-replay-cli cases
 traffic-replay-cli begin <case-id>
@@ -115,34 +116,31 @@ Generated runtime artifacts are ignored by git:
 Do not commit generated CA files, traffic recordings, test captures, or local
 swap files.
 
-Valid case output is published as:
+Each recorder process creates one run directory under `recording.output_dir`
+named `YYYYMMDDHHMMSS`. Valid case output is published inside that run:
 
 ```text
-<rule-name>/<uri-group>/<case-id>/request.json
-<rule-name>/<uri-group>/<case-id>/expected-response.json
-<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
-<rule-name>/<uri-group>/<case-id>/dependencies-summary.json
-<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
-bootstrap-dependencies.jsonl
-bootstrap-dependencies-summary.json
-bootstrap-dependencies-debug.jsonl
-```
-
-Every recording process also creates a run directory:
-
-```text
-_runs/<run-id>/recording-run.json
-_runs/<run-id>/errors.jsonl
-_runs/<run-id>/failed/<rule-name>/<uri-group>/<case-id>/
+<run-id>/traffic.jsonl
+<run-id>/recording-run.json
+<run-id>/errors.jsonl
+<run-id>/bootstrap-dependencies.jsonl
+<run-id>/bootstrap-dependencies-summary.json
+<run-id>/bootstrap-dependencies-debug.jsonl
+<run-id>/<rule-name>/<uri-group>/<case-id>/request.json
+<run-id>/<rule-name>/<uri-group>/<case-id>/expected-response.json
+<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
+<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-summary.json
+<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
+<run-id>/failed/<rule-name>/<uri-group>/<case-id>/
 ```
 
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
-truncated request or expected response body is kept under `_runs/.../failed`
+truncated request or expected response body is kept under `<run-id>/failed`
 with `recording-error.json` instead of being published. On clean shutdown,
 recording exits with an error if the run contains failed cases.
 
 Use `dependencies.jsonl` for replay-oriented semantic data. Use
-`dependencies-debug.jsonl` only for protocol-level debugging. Root-level
+`dependencies-debug.jsonl` only for protocol-level debugging. Run-level
 bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.

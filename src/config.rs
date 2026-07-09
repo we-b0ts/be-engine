@@ -5,8 +5,6 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS: usize = 2;
-
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -70,7 +68,7 @@ pub struct HttpGatewayReadyConfig {
     pub interval_ms: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HttpGatewayRuleConfig {
     pub name: Option<String>,
@@ -78,7 +76,7 @@ pub struct HttpGatewayRuleConfig {
     pub methods: Vec<String>,
     pub path_prefixes: Vec<String>,
     pub headers: BTreeMap<String, String>,
-    pub case_uri_segments: usize,
+    pub case_path_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -190,19 +188,6 @@ impl Default for HttpGatewayReadyConfig {
             path: "/".to_string(),
             success_status: 200,
             interval_ms: 1000,
-        }
-    }
-}
-
-impl Default for HttpGatewayRuleConfig {
-    fn default() -> Self {
-        Self {
-            name: None,
-            hosts: Vec::new(),
-            methods: Vec::new(),
-            path_prefixes: Vec::new(),
-            headers: BTreeMap::new(),
-            case_uri_segments: DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS,
         }
     }
 }
@@ -356,7 +341,7 @@ mod tests {
             hosts = ["api.example.com"]
             methods = ["GET", "POST"]
             path_prefixes = ["/api/"]
-            case_uri_segments = 3
+            case_path_patterns = ["/api/users/*/xxx"]
             headers = { "x-record" = "yes" }
 
             [[http_gateway.rules]]
@@ -372,15 +357,15 @@ mod tests {
         assert_eq!(config.http_gateway.ready.success_status, 200);
         assert_eq!(config.http_gateway.ready.interval_ms, 1000);
         assert_eq!(config.http_gateway.rules.len(), 2);
-        assert_eq!(config.http_gateway.rules[0].case_uri_segments, 3);
+        assert_eq!(
+            config.http_gateway.rules[0].case_path_patterns,
+            vec!["/api/users/*/xxx".to_string()]
+        );
         assert_eq!(
             config.http_gateway.rules[0].headers["x-record"],
             "yes".to_string()
         );
-        assert_eq!(
-            config.http_gateway.rules[1].case_uri_segments,
-            DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS
-        );
+        assert!(config.http_gateway.rules[1].case_path_patterns.is_empty());
     }
 
     #[test]

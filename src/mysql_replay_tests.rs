@@ -633,6 +633,73 @@ mod tests {
         abort_tasks(tasks);
     }
 
+    #[tokio::test]
+    async fn run_directory_replay_discovers_published_cases_recursively() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_dir = temp.path().join("20260709123456");
+        let case_a = run_dir
+            .join("record-api")
+            .join("api-users-list")
+            .join("case-a");
+        let case_b = run_dir
+            .join("record-api")
+            .join("api-users-list")
+            .join("case-b");
+        let failed_case = run_dir
+            .join("failed")
+            .join("record-api")
+            .join("api-users-list")
+            .join("case-failed");
+        let staging_case = run_dir
+            .join("staging")
+            .join("record-api")
+            .join("api-users-list")
+            .join("case-staging");
+        write_string_dependency(&case_a, "SELECT name FROM user WHERE id = 1", "alice").await;
+        write_string_dependency(&case_b, "SELECT name FROM user WHERE id = 2", "bob").await;
+        write_string_dependency(
+            &failed_case,
+            "SELECT name FROM user WHERE id = 3",
+            "failed",
+        )
+        .await;
+        write_string_dependency(
+            &staging_case,
+            "SELECT name FROM user WHERE id = 4",
+            "staging",
+        )
+        .await;
+
+        let session_path = temp.path().join(".replay").join("session.json");
+        let control_socket_path = temp.path().join(".replay").join("control.sock");
+        let (addr, tasks) =
+            spawn_replay_with_control(&run_dir, None, session_path.clone(), control_socket_path)
+                .await;
+
+        run_control(&session_path, "wait_ready", None, false)
+            .await
+            .unwrap();
+        let cases = run_control(&session_path, "cases", None, false)
+            .await
+            .unwrap();
+        let case_ids = cases["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|case| case["case_id"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(case_ids, vec!["case-a", "case-b"]);
+
+        run_control(&session_path, "begin", Some("case-a"), false)
+            .await
+            .unwrap();
+        query_one_string(addr, "SELECT name FROM user WHERE id = 1", "alice").await;
+        run_control(&session_path, "end", Some("case-a"), true)
+            .await
+            .unwrap();
+        abort_tasks(tasks);
+    }
+
     async fn spawn_replay(
         case_dir: &Path,
         report_path: Option<PathBuf>,
@@ -714,6 +781,7 @@ mod tests {
     }
 
     async fn write_string_dependency(case_dir: &Path, sql: &str, value: &str) {
+        tokio::fs::create_dir_all(case_dir).await.unwrap();
         let dependency = serde_json::json!({
             "event_type": "mysql_exchange",
             "target_host": "mysql.internal",

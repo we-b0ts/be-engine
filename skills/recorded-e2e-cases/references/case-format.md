@@ -8,37 +8,36 @@ target-project E2E inputs and dependency replay config.
 Canonical published case layout:
 
 ```text
-recordings/<rule>/<uri-group>/<case-id>/request.json
-recordings/<rule>/<uri-group>/<case-id>/expected-response.json
-recordings/<rule>/<uri-group>/<case-id>/dependencies.jsonl
-recordings/<rule>/<uri-group>/<case-id>/dependencies-summary.json
-recordings/<rule>/<uri-group>/<case-id>/dependencies-debug.jsonl
-recordings/bootstrap-dependencies.jsonl
-recordings/bootstrap-dependencies-summary.json
-recordings/bootstrap-dependencies-debug.jsonl
+recordings/<run-id>/traffic.jsonl
+recordings/<run-id>/recording-run.json
+recordings/<run-id>/errors.jsonl
+recordings/<run-id>/bootstrap-dependencies.jsonl
+recordings/<run-id>/bootstrap-dependencies-summary.json
+recordings/<run-id>/bootstrap-dependencies-debug.jsonl
+recordings/<run-id>/<rule>/<uri-group>/<case-id>/request.json
+recordings/<run-id>/<rule>/<uri-group>/<case-id>/expected-response.json
+recordings/<run-id>/<rule>/<uri-group>/<case-id>/dependencies.jsonl
+recordings/<run-id>/<rule>/<uri-group>/<case-id>/dependencies-summary.json
+recordings/<run-id>/<rule>/<uri-group>/<case-id>/dependencies-debug.jsonl
+recordings/<run-id>/failed/<rule>/<uri-group>/<case-id>/
 ```
 
-Recorder run diagnostics are separate from published cases:
-
-```text
-recordings/_runs/<run-id>/recording-run.json
-recordings/_runs/<run-id>/errors.jsonl
-recordings/_runs/<run-id>/failed/<rule>/<uri-group>/<case-id>/
-```
-
-Do not scan `recordings/_runs` as a case collection. Failed case directories
+Each recorder process creates one `YYYYMMDDHHMMSS` run directory. Do not scan
+`failed`, `staging`, or `.replay` as case collections. Failed case directories
 may contain `.partial`, `.truncated`, and `recording-error.json` files. They are
 evidence for recorder configuration or recorder implementation fixes, not E2E
 replay fixtures.
 
-`uri-group` is usually built from the first two URI path segments joined by
-hyphens, for example `/api/users/list` becomes `api-users`. Older recordings may
-omit this directory and use `recordings/<rule>/<case-id>`.
+`uri-group` is usually built from the full request URI path joined by hyphens,
+for example `/api/users/list` becomes `api-users-list`. When the recorder rule
+defines segment-wildcard `case_path_patterns`, the matching pattern defines the
+group instead: `/api/users/123/xxx` with `/api/users/*/xxx` becomes
+`api-users-wildcard-xxx`.
 
-A path ending at `recordings/<rule>/<uri-group>` is a case collection, not a
-single case. Its direct child directories are case ids, commonly UUIDs. The
-collection can contain cases for related but different URLs. To select cases,
-open each child `request.json` and match the recorded `uri` path against the
+A path ending at `recordings/<run-id>/<rule>/<uri-group>` is a case collection,
+not a single case. A path ending at `recordings/<run-id>` is a run collection
+and may contain multiple rules and URI groups. To select cases, open each
+published child `request.json` and match the recorded `uri` path against the
 requested API/function scope. Multiple matches for the same scope are a case
 set and must all be considered. Do not infer the selected API from `uri-group`
 alone.
@@ -53,8 +52,8 @@ Load order:
 2. `expected-response.json`
 3. `dependencies.jsonl`
 4. `dependencies-summary.json` when present
-5. root-level `bootstrap-dependencies.jsonl` when present
-6. root-level `bootstrap-dependencies-summary.json` when present
+5. run-level `bootstrap-dependencies.jsonl` when present
+6. run-level `bootstrap-dependencies-summary.json` when present
 7. `dependencies-debug.jsonl` only for missing semantic data, parse warnings, or
    protocol debugging
 
@@ -181,12 +180,12 @@ First-version summary fields:
 The summary is an index for coverage and triage. Use `dependencies.jsonl` as the
 source of replay payloads and exact dependency behavior.
 
-`bootstrap-dependencies.jsonl` is a root-level replay dependency file for
+`bootstrap-dependencies.jsonl` is a run-level replay dependency file for
 startup/bootstrap traffic captured before the first case starts. It is shared
-across cases from the same recording directory. Do not move it into a case
-directory unless packaging a standalone case bundle; replay should discover it
-by walking upward from the case directory. Its debug and summary companions use
-the same naming pattern: `bootstrap-dependencies-debug.jsonl` and
+across cases from the same recording run. Do not move it into a case directory
+unless packaging a standalone case bundle; replay should discover it by walking
+upward from the case directory. Its debug and summary companions use the same
+naming pattern: `bootstrap-dependencies-debug.jsonl` and
 `bootstrap-dependencies-summary.json`. Newer recordings may close the bootstrap
 window earlier when the recorder's `[http_gateway.ready]` probe observes the
 configured upstream path returning the configured success status. Traffic after

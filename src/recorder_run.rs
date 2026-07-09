@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
@@ -166,7 +166,7 @@ impl Recorder {
             uri_group: case.uri_group.clone(),
             case_id: case.id,
             reason,
-            detail_path: path_relative_to(&detail_path, &self.output_dir),
+            detail_path: path_relative_to(&detail_path, &self.run_dir),
         };
         {
             let mut state = self.run_state.lock().await;
@@ -193,9 +193,7 @@ impl Recorder {
     }
 
     pub(crate) fn case_dir(&self, case: &CaseContext) -> PathBuf {
-        let mut path = self
-            .output_dir
-            .join(sanitize_path_component(&case.rule_name));
+        let mut path = self.run_dir.join(sanitize_path_component(&case.rule_name));
         if let Some(uri_group) = &case.uri_group {
             path = path.join(sanitize_path_component(uri_group));
         }
@@ -257,7 +255,7 @@ impl Recorder {
         let report = RecorderRunReport {
             run_id: state.run_id.clone(),
             status,
-            output_dir: self.output_dir.display().to_string(),
+            output_dir: self.run_dir.display().to_string(),
             published_cases: state.published_cases,
             failed_cases: state.failed_cases,
             errors: state.errors.clone(),
@@ -293,12 +291,7 @@ async fn remove_dir_if_exists(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn new_run_id() -> String {
-    format!(
-        "{}-{}",
-        Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
-        Uuid::new_v4()
-    )
-    .replace([':', '-'], "")
+    Utc::now().format("%Y%m%d%H%M%S").to_string()
 }
 
 fn path_relative_to(path: &Path, base: &Path) -> String {

@@ -38,16 +38,17 @@ user PATH directory such as `~/.local/bin`.
 command -v traffic-recorder-proxy
 command -v traffic-replay
 command -v traffic-replay-cli
-traffic-replay path/to/case-or-collection-dir
+traffic-replay path/to/case-run-or-collection-dir
 traffic-replay-cli wait-ready
 ```
 
-Pass the selected case directory or collection directory directly. A collection
-directory is usually `recordings/<rule>/<uri-group>` or the copied target path
-under `tests/fixtures/recordings`. The replay session loads bootstrap
-dependencies plus the selected case files, but case dependencies are not a
-global pool. The active case is selected with `traffic-replay-cli begin
-<case-id>` and closed with `traffic-replay-cli end <case-id> --fail-on-dirty`.
+Pass the selected case directory, collection directory, or run directory
+directly. A collection directory is usually
+`recordings/<run-id>/<rule>/<uri-group>`; a run directory is
+`recordings/<run-id>`. The replay session loads bootstrap dependencies plus the
+selected case files, but case dependencies are not a global pool. The active
+case is selected with `traffic-replay-cli begin <case-id>` and closed with
+`traffic-replay-cli end <case-id> --fail-on-dirty`.
 
 Use `traffic-replay-cli wait-ready` before sending any target request. If the
 session cannot bind listeners, install DNS/fake-IP rules, or write its initial
@@ -75,13 +76,14 @@ local override, but the default commands must be `traffic-replay` and
 Implement in this order:
 
 1. Create or extend a test helper that can load one case from
-   `recordings/<rule>/<uri-group>/<case-id>`. Older recordings may use
-   `recordings/<rule>/<case-id>`. If the user supplied a collection directory
-   such as `recordings/<rule>/<uri-group>`, inspect each child case's
-   `request.json.uri` and select every case that matches the requested API
-   path. A matching set of cases for one API is a case set, not an ambiguity.
-   If zero cases match, or the requested scope itself is unclear, report the
-   candidates and ask the user to choose.
+   `recordings/<run-id>/<rule>/<uri-group>/<case-id>`. If the user supplied a
+   collection directory such as `recordings/<run-id>/<rule>/<uri-group>` or an
+   entire run directory such as `recordings/<run-id>`, inspect each published
+   case's `request.json.uri` and select every case that matches the requested
+   API path. Ignore `failed`, `staging`, and `.replay` directories. A matching
+   set of cases for one API is a case set, not an ambiguity. If zero cases
+   match, or the requested scope itself is unclear, report the candidates and
+   ask the user to choose.
 2. Build the request from the current case's `request.json`. Use the recorded
    method, URI including query string, headers, and body as the source of truth.
    Do not hardcode auth headers, tenant ids, query params, body fields, cookies,
@@ -91,9 +93,10 @@ Implement in this order:
    `host`, `transfer-encoding`) or compression headers that the harness cannot
    reproduce.
 3. Start managed dependency replay with `traffic-replay
-   <case-or-collection-dir>`. It uses `dependencies.jsonl` from each selected
-   case and bootstrap dependencies discovered above the case directory. The
-   canonical bootstrap file is `recordings/bootstrap-dependencies.jsonl`.
+   <case-run-or-collection-dir>`. It uses `dependencies.jsonl` from each
+   selected case and bootstrap dependencies discovered above the case
+   directory. The canonical bootstrap file is
+   `recordings/<run-id>/bootstrap-dependencies.jsonl`.
 4. Wait for readiness with `traffic-replay-cli wait-ready`, then point the app
    under test at the replay listeners and keep real external dependencies
    isolated.
@@ -253,9 +256,10 @@ payload data.
 
 Minimum supported concepts:
 
-- case key: `recordings/<rule>/<uri-group>/<case-id>`
-- optional case collection key: `recordings/<rule>/<uri-group>` plus a selected
-  case id after matching `request.json.uri`
+- case key: `recordings/<run-id>/<rule>/<uri-group>/<case-id>`
+- optional case collection key: `recordings/<run-id>/<rule>/<uri-group>` or
+  `recordings/<run-id>` plus a selected case id after matching
+  `request.json.uri`
 - body assertion mode: strict JSON, exact bytes, semantic fields, or status-only
 - ignored response JSONPaths
 - ignored or asserted headers

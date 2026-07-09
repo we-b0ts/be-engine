@@ -1220,7 +1220,12 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         gateway.abort();
 
-        let jsonl = tokio::fs::read_to_string(temp.path().join("recordings/traffic.jsonl"))
+        let run_dir = std::fs::read_dir(temp.path().join("recordings"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.is_dir())
+            .unwrap();
+        let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
             .await
             .unwrap();
         assert!(jsonl.contains(r#""event_type":"http_exchange""#));

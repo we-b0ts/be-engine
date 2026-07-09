@@ -54,11 +54,11 @@ interval_ms = 1000
 # time; overlapping eligible requests are sent to fallback_upstream.
 [[http_gateway.rules]]
 name = "record-api"
-methods = ["GET"]
-path_prefixes = ["/api/"]
-# Number of URI path segments used in the case directory name.
-# /api/users/list with the default 2 becomes api-users.
-case_uri_segments = 2
+methods = []
+path_prefixes = ["/api"]
+# Optional full-path grouping patterns for dynamic path segments.
+# /api/users/123/xxx with "/api/users/*/xxx" becomes api-users-wildcard-xxx.
+case_path_patterns = []
 headers = {}
 
 [mysql]

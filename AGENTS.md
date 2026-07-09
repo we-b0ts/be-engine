@@ -6,7 +6,7 @@ This is a Rust single-binary traffic recorder proxy. It records HTTP, HTTPS,
 HTTP gateway, fake-DNS/TCP gateway, and MySQL traffic to JSONL files.
 
 The primary crate is in `src/` and builds the `traffic-recorder-proxy` binary.
-Recorder configuration starts from `recorder.example.toml`. Local command
+Recorder configuration starts from `config/recorder.example.toml`. Local command
 facades live in `scripts/`, especially `traffic-record` and `traffic-replay`.
 
 ## Read First
@@ -41,8 +41,8 @@ cargo test proxy_integration
 For local recording and replay:
 
 ```bash
-cargo run -- --config recorder.example.toml
-traffic-record recorder.example.toml
+cargo run -- --config config/recorder.example.toml
+traffic-record config/recorder.example.toml
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
