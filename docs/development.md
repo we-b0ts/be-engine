@@ -11,6 +11,7 @@ Use the standard Cargo workflow:
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
+scripts/check-code-organization
 cargo build
 ```
 
@@ -34,7 +35,7 @@ ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 traffic-record config/recorder.example.toml
 ```
 
-`traffic-record` enables local DNS capture and fake-IP TCP redirect by default,
+`traffic-record` enables local DNS capture and fake-IP TCP/UDP redirect by default,
 which modifies local DNS/iptables state through the setup scripts. Use this
 when you intentionally want the recorder to intercept local traffic. To skip
 those rules:
@@ -140,7 +141,9 @@ with `recording-error.json` instead of being published. On clean shutdown,
 recording exits with an error if the run contains failed cases.
 
 Use `dependencies.jsonl` for replay-oriented semantic data. Use
-`dependencies-debug.jsonl` only for protocol-level debugging. Run-level
+`dependencies-debug.jsonl` only for protocol-level debugging. UDP datagrams,
+including push-metrics side effects, are recorded as semantic dependencies when
+captured by the UDP gateway. Run-level
 bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.

@@ -31,6 +31,15 @@ mitm_https = true
 # Empty means attempt HTTPS MITM for all TLS-looking TCP streams.
 https_ports = []
 
+[udp_gateway]
+# Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP
+# recording is side-effect capture; it does not wait for or synthesize replies.
+enabled = true
+listen = "127.0.0.1:15002"
+# Default false keeps recording from emitting development metrics to real
+# upstream collectors.
+forward = false
+
 [http_gateway]
 enabled = true
 listen = "0.0.0.0:17171"

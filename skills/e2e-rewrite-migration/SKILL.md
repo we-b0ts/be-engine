@@ -43,8 +43,8 @@ recording/E2E evidence.
 6. Create or update `.migration/e2e.yaml` with source repo, target language,
    scope, scope/case matrix when applicable, rewrite input case paths, PR E2E
    case source, command facade, branch/PR status, package/workspace decision,
-   module plan, schema status, runtime startup status, architecture review
-   status, blockers, and recording feedback.
+   module plan, schema status, metrics contract status, runtime startup status,
+   architecture review status, blockers, and recording feedback.
 7. Treat user-provided recorded cases as external rewrite inputs, not target
    repo files. Do not copy or commit those cases unless the user explicitly
    asks or the target repo already has that convention. The target E2E facade
@@ -64,7 +64,8 @@ recording/E2E evidence.
    case's `request.json`; do not hardcode case-specific headers, query params,
    or bodies in target tests. For case sets, use the replay session lifecycle:
    start `traffic-replay`, wait ready with `traffic-replay-cli`, then
-   begin/end each case and require a clean aggregate report.
+   begin/end each case and require a clean aggregate report. Treat recorded
+   metrics dependencies as behavior, not optional observability.
 9. Ensure a repo-local development command facade exists. Prefer an existing
    project convention; otherwise create `scripts/<project>-cli`. Runnable
    services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,
@@ -95,8 +96,11 @@ recording/E2E evidence.
    dependency params.
 15. Implement the target behavior idiomatically. Do not assume mechanical
    translation is required; API/interface output compatibility is the contract.
-16. Iterate implementation -> recorded E2E -> fix at most 3 times.
-17. Perform a migration semantics review, then run the recorded E2E, normal
+16. Add focused unit or component tests for non-trivial local logic. Recorded
+   E2E proves compatibility but does not replace tests for parsers, config,
+   signing, metrics, dynamic values, error mapping, and adapters.
+17. Iterate implementation -> recorded E2E -> fix at most 3 times.
+18. Perform a migration semantics review, then run the recorded E2E, normal
     runtime/startup smoke for service targets, and relevant target quality
     checks before completion.
 

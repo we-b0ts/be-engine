@@ -7,6 +7,9 @@ use serde_json::Value;
 
 use crate::recorder::RecorderEvent;
 
+mod udp;
+use udp::{UdpDependencySummary, record_udp_summary};
+
 pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
     !matches!(event, RecorderEvent::MysqlExchange(exchange) if is_debug_only_mysql_exchange(exchange))
 }
@@ -72,6 +75,8 @@ struct DependencySummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     tcp_gateway: Option<TcpGatewayDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    udp: Option<UdpDependencySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     proxy_errors: Option<ProxyErrorSummary>,
 }
 
@@ -83,6 +88,7 @@ struct DependencySummaryBuilder {
     mysql: MysqlDependencySummary,
     http: HttpDependencySummary,
     tcp_gateway: TcpGatewayDependencySummary,
+    udp: UdpDependencySummary,
     proxy_errors: ProxyErrorSummary,
 }
 
@@ -97,6 +103,7 @@ impl DependencySummaryBuilder {
             mysql: self.mysql.has_activity().then_some(self.mysql),
             http: (self.http.calls > 0).then_some(self.http),
             tcp_gateway: (self.tcp_gateway.connections > 0).then_some(self.tcp_gateway),
+            udp: (self.udp.datagrams > 0).then_some(self.udp),
             proxy_errors: (self.proxy_errors.total > 0).then_some(self.proxy_errors),
         }
     }
@@ -250,6 +257,7 @@ fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
             "tcp_gateway_connection" => {
                 record_tcp_gateway_summary(&mut builder.tcp_gateway, &value);
             }
+            "udp_datagram" => record_udp_summary(&mut builder.udp, &value),
             "proxy_error" => record_proxy_error_summary(&mut builder.proxy_errors, &value),
             _ => {}
         }

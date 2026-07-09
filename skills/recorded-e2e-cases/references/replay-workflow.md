@@ -243,6 +243,32 @@ For non-MySQL dependencies:
   cache entries. Treat missing semantic replay support as recorder/replay
   feedback.
 
+## Metrics Dependency Validation
+
+Metrics dependencies are validated by replay or focused exporter checks, not by
+target-project mocks. A passing HTTP response is not sufficient when a case
+records metrics dependencies or the selected source capability is known to emit
+metrics.
+
+Classify metrics by delivery model:
+
+- push metrics are outbound side effects. Replay should validate that the
+  target service emits equivalent metric events during the active case window.
+  Compare stable semantic fields such as metric name/path, value, tags or
+  labels, target identity, and delivery status. Do not byte-compare generated
+  timestamps by default; require presence and case-window membership unless the
+  timestamp is a business value.
+- pull metrics are exported service state. Verify that the target service
+  starts the configured exporter or scrape endpoint and that the selected
+  request/job updates the expected metric family. Use stable label dimensions
+  and avoid adding ignores unless the user approves them.
+
+If recorded metrics evidence is missing, incomplete, or unsupported by replay,
+do not invent metric payloads in the target project. Report the missing metrics
+evidence as recorder/replay feedback. If metrics are intentionally dropped or
+replaced with another telemetry contract, require explicit user approval and
+record the behavior-contract change.
+
 ## Assertion And Config Fallback
 
 Prefer the target project's existing assertion configuration. If none exists and

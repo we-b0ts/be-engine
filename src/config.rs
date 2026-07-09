@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 pub struct AppConfig {
     pub dns_mock: DnsMockConfig,
     pub tcp_gateway: TcpGatewayConfig,
+    pub udp_gateway: UdpGatewayConfig,
     pub http: HttpConfig,
     pub http_gateway: HttpGatewayConfig,
     pub mysql: MysqlConfig,
@@ -38,6 +39,14 @@ pub struct TcpGatewayConfig {
     pub record_http: bool,
     pub mitm_https: bool,
     pub https_ports: Vec<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct UdpGatewayConfig {
+    pub enabled: bool,
+    pub listen: SocketAddr,
+    pub forward: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -161,6 +170,18 @@ impl Default for TcpGatewayConfig {
             record_http: true,
             mitm_https: true,
             https_ports: Vec::new(),
+        }
+    }
+}
+
+impl Default for UdpGatewayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:15002"
+                .parse()
+                .expect("valid default UDP gateway listen address"),
+            forward: false,
         }
     }
 }
@@ -369,7 +390,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_dns_mock_and_tcp_gateway() {
+    fn parses_dns_mock_and_fake_ip_gateways() {
         let config: AppConfig = toml::from_str(
             r#"
             [dns_mock]
@@ -390,14 +411,22 @@ mod tests {
             record_http = true
             mitm_https = true
             https_ports = [443, 8443]
+
+            [udp_gateway]
+            enabled = true
+            listen = "127.0.0.1:15002"
+            forward = true
             "#,
         )
         .unwrap();
 
         assert!(config.dns_mock.enabled);
         assert!(config.tcp_gateway.enabled);
+        assert!(config.udp_gateway.enabled);
         assert!(config.tcp_gateway.mitm_https);
         assert_eq!(config.tcp_gateway.https_ports, vec![443, 8443]);
+        assert_eq!(config.udp_gateway.listen.to_string(), "127.0.0.1:15002");
+        assert!(config.udp_gateway.forward);
         assert_eq!(config.dns_mock.fake_cidr, "198.18.0.0/15");
         assert_eq!(
             config.dns_mock.bypass_domains,

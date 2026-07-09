@@ -28,8 +28,8 @@ Usage:
   traffic-record [options] [recorder-config.toml] [-- extra traffic-recorder-proxy args...]
 
 Options:
-  --dns            Enable local DNS capture and fake-IP TCP redirect. This is default.
-  --no-dns         Skip local DNS capture and fake-IP TCP redirect.
+  --dns            Enable local DNS capture and fake-IP TCP/UDP redirect. This is default.
+  --no-dns         Skip local DNS capture and fake-IP TCP/UDP redirect.
   --user USER      Limit capture to this Unix user. Defaults to [local_record].record_user.
   --owner-uid UID  Limit capture to this numeric Unix uid.
   --all-users      Capture all local users. Use only on isolated machines.
@@ -249,7 +249,10 @@ run_as_root() {
       "DNS_PORT=${DNS_PORT:-15353}" \
       "UPSTREAM_DNS=${UPSTREAM_DNS:-10.10.10.10:53}" \
       "FAKE_CIDR=${FAKE_CIDR:-198.18.0.0/15}" \
+      "ENABLE_TCP=1" \
+      "ENABLE_UDP=${ENABLE_UDP:-1}" \
       "GATEWAY_PORT=${GATEWAY_PORT:-15001}" \
+      "UDP_GATEWAY_PORT=${UDP_GATEWAY_PORT:-15002}" \
       "OWNER_UID=$OWNER_UID" \
       "$@"
   fi

@@ -14,6 +14,13 @@ struct TcpSocketEntry {
     inode: u64,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct UdpSocketEntry {
+    local: SocketAddr,
+    remote: SocketAddr,
+    inode: u64,
+}
+
 pub fn lookup_tcp_process(
     local_addr: SocketAddr,
     candidate_remote_addrs: &[SocketAddr],
@@ -25,6 +32,40 @@ pub fn lookup_tcp_process(
 
     for entry in entries {
         if entry.state != TCP_STATE_LISTEN && entry.local.port() == local_addr.port() {
+            unique_local_port_inodes.insert(entry.inode);
+        }
+        if !candidate_remote_addrs.contains(&entry.remote) {
+            continue;
+        }
+        if entry.local == local_addr {
+            exact_inodes.insert(entry.inode);
+        } else if entry.local.port() == local_addr.port() {
+            port_fallback_inodes.insert(entry.inode);
+        }
+    }
+
+    find_process_for_inodes(&exact_inodes)
+        .or_else(|| find_process_for_inodes(&port_fallback_inodes))
+        .or_else(|| {
+            if unique_local_port_inodes.len() == 1 {
+                find_process_for_inodes(&unique_local_port_inodes)
+            } else {
+                None
+            }
+        })
+}
+
+pub fn lookup_udp_process(
+    local_addr: SocketAddr,
+    candidate_remote_addrs: &[SocketAddr],
+) -> Option<ProcessInfo> {
+    let entries = read_udp_entries().ok()?;
+    let mut exact_inodes = HashSet::new();
+    let mut port_fallback_inodes = HashSet::new();
+    let mut unique_local_port_inodes = HashSet::new();
+
+    for entry in entries {
+        if entry.local.port() == local_addr.port() {
             unique_local_port_inodes.insert(entry.inode);
         }
         if !candidate_remote_addrs.contains(&entry.remote) {
@@ -72,6 +113,59 @@ pub fn process_label(process: &ProcessInfo) -> String {
         }
         _ => format!("pid={} name={}", process.pid, name),
     }
+}
+
+fn read_udp_entries() -> Result<Vec<UdpSocketEntry>> {
+    let mut entries = Vec::new();
+    read_udp4_entries("/proc/net/udp", &mut entries)?;
+    read_udp6_entries("/proc/net/udp6", &mut entries)?;
+    Ok(entries)
+}
+
+fn read_udp4_entries(path: &str, entries: &mut Vec<UdpSocketEntry>) -> Result<()> {
+    let raw = fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?;
+    for line in raw.lines().skip(1) {
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() <= 9 {
+            continue;
+        }
+        let local = parse_tcp4_addr(parts[1])?;
+        let remote = parse_tcp4_addr(parts[2])?;
+        let inode = parts[9]
+            .parse::<u64>()
+            .with_context(|| format!("invalid UDP inode {}", parts[9]))?;
+        if inode != 0 {
+            entries.push(UdpSocketEntry {
+                local,
+                remote,
+                inode,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn read_udp6_entries(path: &str, entries: &mut Vec<UdpSocketEntry>) -> Result<()> {
+    let raw = fs::read_to_string(path).with_context(|| format!("failed to read {path}"))?;
+    for line in raw.lines().skip(1) {
+        let parts = line.split_whitespace().collect::<Vec<_>>();
+        if parts.len() <= 9 {
+            continue;
+        }
+        let local = parse_tcp6_addr(parts[1])?;
+        let remote = parse_tcp6_addr(parts[2])?;
+        let inode = parts[9]
+            .parse::<u64>()
+            .with_context(|| format!("invalid UDP inode {}", parts[9]))?;
+        if inode != 0 {
+            entries.push(UdpSocketEntry {
+                local,
+                remote,
+                inode,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn read_tcp_entries() -> Result<Vec<TcpSocketEntry>> {
@@ -239,6 +333,7 @@ fn read_process_info(pid: u32) -> ProcessInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::UdpSocket;
     use tokio::net::{TcpListener, TcpStream};
 
     #[test]
@@ -296,5 +391,17 @@ mod tests {
             .expect("current process should own listening socket");
         assert_eq!(process.pid, std::process::id());
         drop(listener);
+    }
+
+    #[tokio::test]
+    async fn looks_up_current_process_for_udp_socket() {
+        let socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let local = socket.local_addr().unwrap();
+        let remote = "127.0.0.1:9".parse::<SocketAddr>().unwrap();
+        socket.connect(remote).await.unwrap();
+
+        let process = lookup_udp_process(local, &[remote])
+            .expect("current process should own connected UDP socket");
+        assert_eq!(process.pid, std::process::id());
     }
 }

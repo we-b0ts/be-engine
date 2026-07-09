@@ -142,6 +142,60 @@ If the selected scope has no recorded case, stop before rewriting and recommend
 what to record, including the route/job, expected dependencies, and completeness
 checks.
 
+## Metrics Contract
+
+Metrics are part of observable behavior when the source capability emits them.
+Do not silently drop metrics during a rewrite just because the HTTP response
+contract passes. Classify metrics by delivery model, not by source language,
+framework, or metrics library:
+
+- push metrics are outbound side effects. They may be sent over UDP, TCP, HTTP,
+  or a company-specific transport. Validate them from recorded or replayed
+  dependency evidence when that evidence exists.
+- pull metrics are exported service state. They may be exposed through
+  Prometheus, OpenMetrics, or a custom scrape endpoint. Validate them through
+  the configured exporter or scrape endpoint when the source behavior includes
+  one.
+
+For push metrics, implement the real runtime metrics client or adapter that the
+target service should use. Do not satisfy the migration by replacing metrics
+with project-local mocks or by writing recorded metric payloads from the E2E
+harness. Replay/report tooling owns side-effect comparison.
+
+For pull metrics, ensure the service starts the exporter with normal runtime
+startup and verify that a focused request or job updates the expected metric
+family. Keep labels and dimensions stable; avoid high-cardinality request data
+unless the source contract explicitly uses it.
+
+When metrics behavior exists in the source code but recorded cases, replay
+output, source docs, or existing tests are not enough to reproduce it, keep the
+migration incomplete with `metrics_contract_status: metrics_unconfirmed`.
+List the missing evidence and recommend the recording or verification step
+needed to confirm the metrics contract.
+
+## Unit And Component Test Contract
+
+Recorded E2E is the compatibility contract, not the only test layer. Add
+focused unit or component tests for local logic that would otherwise require a
+full recorded replay to diagnose.
+
+Prefer unit/component tests for:
+
+- request parsing, response shaping, serializers, and compatibility helpers
+- runtime config loading, environment overrides, redaction, and validation
+- dynamic value strategies such as clocks, request ids, table suffixes, and
+  generated ids
+- schema/type mapping and external adapter conversion logic
+- signing, canonicalization, metrics normalization, and protocol-specific
+  payload builders
+- error mapping, retry classification, and dependency boundary behavior
+
+Do not create broad brittle tests that duplicate recorded E2E assertions. The
+unit layer should make product logic easier to debug when recorded replay
+fails. If a migrated scope changes non-trivial logic but has no meaningful unit
+or component tests, record `unit_test_status: insufficient` and do not present
+the quality gate as complete without calling out that gap.
+
 ## Git Baseline And PR Delivery
 
 Use `dev-migration` as the target repo integration branch for migration work.
@@ -219,6 +273,7 @@ Before implementing behavior:
 - `schema_sources`
 - `schema_validation_status`
 - `e2e_command`
+- `unit_test_status`
 - `quality_commands`
 - `runtime_start_command`
 - `runtime_stop_command`
@@ -227,6 +282,7 @@ Before implementing behavior:
 - `config_files`
 - `logging_config`
 - `log_paths`
+- `metrics_contract_status`
 - `docs`
 - `agents_md_status`
 - `blockers`
@@ -499,6 +555,10 @@ the source repo and replay report:
 - no normal runtime config or product logic contains fixed values copied from
   recorded dependency params
 - dynamic values have runtime strategies recorded in `.migration/e2e.yaml`
+- metrics emitted by the source capability are implemented, verified, or
+  explicitly recorded as `metrics_unconfirmed`
+- non-trivial local logic has focused unit or component tests, or
+  `unit_test_status: insufficient` is recorded with a reason
 - DB/MySQL adapter types come from explicit schema evidence, not source-language
   model guesses
 - package/workspace decisions and module boundaries match the code that was
@@ -535,13 +595,15 @@ Use at most 3 iterations:
 8. For API/service scopes, ensure a normal runnable entrypoint exists before
    declaring success. A library-only test harness is not enough for a migrated
    service API.
-9. Run the focused recorded E2E through managed dependency replay and verify
+9. Add or update focused unit/component tests for the local logic introduced by
+   the scope.
+10. Run the focused recorded E2E through managed dependency replay and verify
    that all selected case-owned dependency touches are matched.
-10. Perform the migration semantics review.
-11. Classify failures as target implementation bug, replay issue,
+11. Perform the migration semantics review.
+12. Classify failures as target implementation bug, replay issue,
    incomplete recording, recording workflow improvement, or target setup issue.
-12. Fix target implementation only when recorded replay evidence is complete.
-13. Stop with a recording/E2E improvement list when evidence is missing or
+13. Fix target implementation only when recorded replay evidence is complete.
+14. Stop with a recording/E2E improvement list when evidence is missing or
    replay would require guessing.
 
 After focused E2E passes, run the target repo's relevant quality checks. For

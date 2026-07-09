@@ -129,6 +129,7 @@ Common semantic records:
 - `mysql_exchange`: structured SQL request and response; preferred for replay
 - `mysql_connection`: connection metadata
 - `tcp_gateway_connection`: captured TCP/fake-IP dependency connection metadata
+- `udp_datagram`: captured UDP/fake-IP dependency datagram or push side effect
 - `mysql_tls_rejected`: MySQL TLS rejection event; MySQL TLS MITM is out of scope
 - `proxy_error`: recorder or dependency proxy error
 
@@ -175,6 +176,8 @@ First-version summary fields:
   counts, per-dependency identity summaries, and compact statement records.
 - `http`: call counts, methods, authorities, status codes, and errors.
 - `tcp_gateway`: connection counts, domains, upstreams, and errors.
+- `udp`: datagram counts, protocols, target hosts/addrs, upstreams, payload
+  bytes, forwarding counts, and errors.
 - `proxy_errors`: protocol and target error counts.
 
 The summary is an index for coverage and triage. Use `dependencies.jsonl` as the

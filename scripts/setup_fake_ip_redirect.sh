@@ -4,16 +4,20 @@ set -euo pipefail
 ACTION="${1:-up}"
 FAKE_CIDR="${FAKE_CIDR:-198.18.0.0/15}"
 GATEWAY_PORT="${GATEWAY_PORT:-15001}"
+UDP_GATEWAY_PORT="${UDP_GATEWAY_PORT:-15002}"
 OWNER_UID="${OWNER_UID:-}"
+ENABLE_TCP="${ENABLE_TCP:-1}"
+ENABLE_UDP="${ENABLE_UDP:-1}"
 
 usage() {
   cat >&2 <<EOF
 Usage:
-  sudo FAKE_CIDR=$FAKE_CIDR GATEWAY_PORT=$GATEWAY_PORT OWNER_UID=$OWNER_UID $0 up
-  sudo FAKE_CIDR=$FAKE_CIDR GATEWAY_PORT=$GATEWAY_PORT OWNER_UID=$OWNER_UID $0 down
+  sudo FAKE_CIDR=$FAKE_CIDR GATEWAY_PORT=$GATEWAY_PORT UDP_GATEWAY_PORT=$UDP_GATEWAY_PORT OWNER_UID=$OWNER_UID $0 up
+  sudo FAKE_CIDR=$FAKE_CIDR GATEWAY_PORT=$GATEWAY_PORT UDP_GATEWAY_PORT=$UDP_GATEWAY_PORT OWNER_UID=$OWNER_UID $0 down
 
-This only redirects TCP traffic whose destination is inside FAKE_CIDR.
+This redirects TCP and UDP traffic whose destination is inside FAKE_CIDR.
 Set OWNER_UID to limit redirect to one Unix user.
+Set ENABLE_TCP=0 or ENABLE_UDP=0 to skip either protocol.
 EOF
 }
 
@@ -32,13 +36,44 @@ route_exists() {
 }
 
 rule_exists() {
+  local protocol="$1"
+  local port="$2"
   local owner_args=()
   mapfile -t owner_args < <(owner_match_args)
   iptables -t nat -C OUTPUT \
-    -p tcp \
+    -p "$protocol" \
     "${owner_args[@]}" \
     -d "$FAKE_CIDR" \
-    -j REDIRECT --to-ports "$GATEWAY_PORT" >/dev/null 2>&1
+    -j REDIRECT --to-ports "$port" >/dev/null 2>&1
+}
+
+add_rule() {
+  local protocol="$1"
+  local port="$2"
+  if rule_exists "$protocol" "$port"; then
+    return
+  fi
+  owner_args=()
+  mapfile -t owner_args < <(owner_match_args)
+  iptables -t nat -A OUTPUT \
+    -p "$protocol" \
+    "${owner_args[@]}" \
+    -d "$FAKE_CIDR" \
+    -j REDIRECT --to-ports "$port"
+}
+
+delete_rules() {
+  local protocol="$1"
+  local port="$2"
+  while rule_exists "$protocol" "$port"; do
+    owner_args=()
+    mapfile -t owner_args < <(owner_match_args)
+    iptables -t nat -D OUTPUT \
+      -p "$protocol" \
+      "${owner_args[@]}" \
+      -d "$FAKE_CIDR" \
+      -j REDIRECT --to-ports "$port"
+  done
 }
 
 owner_match_args() {
@@ -52,30 +87,24 @@ if [ "$ACTION" = "up" ]; then
     ip route add local "$FAKE_CIDR" dev lo
   fi
 
-  if ! rule_exists; then
-    owner_args=()
-    mapfile -t owner_args < <(owner_match_args)
-    iptables -t nat -A OUTPUT \
-      -p tcp \
-      "${owner_args[@]}" \
-      -d "$FAKE_CIDR" \
-      -j REDIRECT --to-ports "$GATEWAY_PORT"
+  if [ "$ENABLE_TCP" = "1" ]; then
+    add_rule tcp "$GATEWAY_PORT"
+  fi
+  if [ "$ENABLE_UDP" = "1" ]; then
+    add_rule udp "$UDP_GATEWAY_PORT"
   fi
 
-  echo "fake IP redirect enabled: $FAKE_CIDR -> local TCP port $GATEWAY_PORT"
+  echo "fake IP redirect enabled: $FAKE_CIDR tcp=$ENABLE_TCP:$GATEWAY_PORT udp=$ENABLE_UDP:$UDP_GATEWAY_PORT"
   if [ -n "$OWNER_UID" ]; then
     echo "owner UID scope: $OWNER_UID"
   fi
 else
-  while rule_exists; do
-    owner_args=()
-    mapfile -t owner_args < <(owner_match_args)
-    iptables -t nat -D OUTPUT \
-      -p tcp \
-      "${owner_args[@]}" \
-      -d "$FAKE_CIDR" \
-      -j REDIRECT --to-ports "$GATEWAY_PORT"
-  done
+  if [ "$ENABLE_TCP" = "1" ]; then
+    delete_rules tcp "$GATEWAY_PORT"
+  fi
+  if [ "$ENABLE_UDP" = "1" ]; then
+    delete_rules udp "$UDP_GATEWAY_PORT"
+  fi
 
   if route_exists; then
     ip route del local "$FAKE_CIDR" dev lo

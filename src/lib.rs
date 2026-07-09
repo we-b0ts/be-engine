@@ -14,6 +14,7 @@ mod recorder_event;
 mod recorder_run;
 mod tcp_gateway;
 mod tls;
+mod udp_gateway;
 
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
@@ -31,7 +32,7 @@ use uuid::Uuid;
 pub use config::{
     AppConfig, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
     HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingConfig, TcpGatewayConfig,
-    TlsConfig,
+    TlsConfig, UdpGatewayConfig,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
 pub use mysql_replay::{
@@ -41,8 +42,8 @@ pub use recorder::{
     BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent, MysqlColumn,
     MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
     MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
-    ProxyErrorEvent, Recorder, RecorderEvent, TcpGatewayConnectionEvent, capture_body,
-    capture_body_with_original_len, capture_case_body, redact_headers,
+    ProxyErrorEvent, Recorder, RecorderEvent, TcpGatewayConnectionEvent, UdpDatagramEvent,
+    capture_body, capture_body_with_original_len, capture_case_body, redact_headers,
 };
 pub use tls::MitmCa;
 
@@ -320,6 +321,11 @@ impl AppState {
             tasks.spawn(async move { tcp_gateway::run(tcp_gateway_state).await });
         }
 
+        if self.config().udp_gateway.enabled {
+            let udp_gateway_state = self.clone();
+            tasks.spawn(async move { udp_gateway::run(udp_gateway_state).await });
+        }
+
         if self.config().http_gateway.enabled {
             let gateway_state = self.clone();
             tasks.spawn(async move { http_gateway::run(gateway_state).await });
@@ -335,6 +341,7 @@ impl AppState {
             http_listen = %self.config().http.listen,
             dns_mock_enabled = self.config().dns_mock.enabled,
             tcp_gateway_enabled = self.config().tcp_gateway.enabled,
+            udp_gateway_enabled = self.config().udp_gateway.enabled,
             http_gateway_enabled = self.config().http_gateway.enabled,
             mysql_enabled = self.config().mysql.enabled,
             "traffic recorder proxy started"
@@ -367,6 +374,7 @@ fn recorder_event_kind(event: &RecorderEvent) -> &'static str {
     match event {
         RecorderEvent::HttpExchange(_) => "http_exchange",
         RecorderEvent::TcpGatewayConnection(_) => "tcp_gateway_connection",
+        RecorderEvent::UdpDatagram(_) => "udp_datagram",
         RecorderEvent::MysqlConnection(_) => "mysql_connection",
         RecorderEvent::MysqlQuery(_) => "mysql_query",
         RecorderEvent::MysqlResponse(_) => "mysql_response",
@@ -383,6 +391,9 @@ fn event_client_pid(event: &RecorderEvent) -> Option<u32> {
             event.client_process.as_ref().map(|process| process.pid)
         }
         RecorderEvent::TcpGatewayConnection(event) => {
+            event.client_process.as_ref().map(|process| process.pid)
+        }
+        RecorderEvent::UdpDatagram(event) => {
             event.client_process.as_ref().map(|process| process.pid)
         }
         RecorderEvent::MysqlConnection(event) => {
