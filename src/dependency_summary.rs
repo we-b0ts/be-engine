@@ -8,12 +8,7 @@ use serde_json::Value;
 use crate::recorder::RecorderEvent;
 
 pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
-    !matches!(
-        event,
-        RecorderEvent::MysqlExchange(exchange)
-            if exchange.command == "COM_STMT_PREPARE"
-                && exchange.response.status == "stmt_prepare"
-    )
+    !matches!(event, RecorderEvent::MysqlExchange(exchange) if is_debug_only_mysql_exchange(exchange))
 }
 
 pub(crate) async fn write_case_dependency_summary(dir: &Path) -> Result<()> {
@@ -242,7 +237,7 @@ fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_string();
-        if event_type == "mysql_exchange" && is_successful_stmt_prepare_value(&value) {
+        if event_type == "mysql_exchange" && is_debug_only_mysql_exchange_value(&value) {
             continue;
         }
         builder.total_events += 1;
@@ -322,7 +317,7 @@ fn record_mysql_tls_rejected_summary(summary: &mut MysqlDependencySummary, value
 }
 
 fn record_mysql_summary(summary: &mut MysqlDependencySummary, value: &Value) {
-    if is_successful_stmt_prepare_value(value) {
+    if is_debug_only_mysql_exchange_value(value) {
         return;
     }
     summary.semantic_exchanges += 1;
@@ -489,12 +484,71 @@ fn record_proxy_error_summary(summary: &mut ProxyErrorSummary, value: &Value) {
     }
 }
 
+fn is_debug_only_mysql_exchange(exchange: &crate::recorder_event::MysqlExchangeEvent) -> bool {
+    is_successful_stmt_prepare(exchange)
+        || is_successful_mysql_session_setup(
+            exchange.command.as_str(),
+            exchange.sql.as_deref(),
+            exchange.response.status.as_str(),
+        )
+}
+
+fn is_successful_stmt_prepare(exchange: &crate::recorder_event::MysqlExchangeEvent) -> bool {
+    exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare"
+}
+
+fn is_debug_only_mysql_exchange_value(value: &Value) -> bool {
+    is_successful_stmt_prepare_value(value)
+        || is_successful_mysql_session_setup(
+            json_str(value, "command").unwrap_or_default(),
+            json_str(value, "sql"),
+            value
+                .get("response")
+                .and_then(|response| json_str(response, "status"))
+                .unwrap_or_default(),
+        )
+}
+
 fn is_successful_stmt_prepare_value(value: &Value) -> bool {
     json_str(value, "command") == Some("COM_STMT_PREPARE")
         && value
             .get("response")
             .and_then(|response| json_str(response, "status"))
             == Some("stmt_prepare")
+}
+
+fn is_successful_mysql_session_setup(command: &str, sql: Option<&str>, status: &str) -> bool {
+    command == "COM_QUERY" && status == "ok" && sql.is_some_and(is_mysql_session_setup_sql)
+}
+
+fn is_mysql_session_setup_sql(sql: &str) -> bool {
+    let normalized = normalize_mysql_control_sql(sql);
+    normalized.starts_with("set names ")
+        || normalized.starts_with("set character set ")
+        || normalized.starts_with("set character_set_client ")
+        || normalized.starts_with("set character_set_connection ")
+        || normalized.starts_with("set character_set_results ")
+        || normalized.starts_with("set collation_connection ")
+        || normalized.starts_with("set time_zone ")
+        || normalized.starts_with("set sql_mode ")
+}
+
+fn normalize_mysql_control_sql(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut last_was_space = false;
+    for ch in sql.chars() {
+        let ch = if ch == '`' { continue } else { ch };
+        if ch.is_whitespace() {
+            if !last_was_space {
+                out.push(' ');
+            }
+            last_was_space = true;
+        } else {
+            out.push(ch.to_ascii_lowercase());
+            last_was_space = false;
+        }
+    }
+    out.trim().to_string()
 }
 
 fn mysql_phase(command: Option<&str>) -> &'static str {
@@ -639,6 +693,20 @@ mod tests {
         assert_eq!(summary["event_types"]["mysql_exchange"], 1);
         assert_eq!(summary["mysql"]["semantic_exchanges"], 1);
         assert_eq!(summary["mysql"]["executed"]["crud"]["select"], 1);
+    }
+
+    #[test]
+    fn dependency_summary_omits_successful_mysql_session_setup_lines() {
+        let raw = r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SET NAMES utf8","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}
+{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SET @tenant_id = 1","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}
+{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SELECT * FROM `user`","response":{"status":"resultset","row_count":0,"columns":[]}}"#;
+        let summary = serde_json::to_value(build_dependency_summary(raw)).unwrap();
+
+        assert_eq!(summary["total_events"], 2);
+        assert_eq!(summary["event_types"]["mysql_exchange"], 2);
+        assert_eq!(summary["mysql"]["semantic_exchanges"], 2);
+        assert_eq!(summary["mysql"]["executed"]["crud"]["select"], 1);
+        assert_eq!(summary["mysql"]["executed"]["crud"]["other"], 1);
     }
 
     #[test]

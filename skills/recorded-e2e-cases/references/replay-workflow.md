@@ -186,9 +186,6 @@ recorder-correlation or source-analysis blocker.
 For MySQL:
 
 - Use `mysql_exchange` records as the primary replay source.
-- Do not require successful `COM_STMT_PREPARE` exchanges for replay; they are
-  protocol setup and belong in debug data. Preserve prepare failures because
-  they are observed dependency failures or side effects.
 - Treat `response.columns` as query-level schema evidence. Use semantic fields
   such as `family`, `sql_type`, `unsigned`, `bits`, and `nullable`; do not
   infer language types from raw protocol flags or protocol type names.

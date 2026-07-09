@@ -233,6 +233,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn builtin_query_without_recorded_exchange_is_not_dirty() {
+        let temp = tempfile::tempdir().unwrap();
+        let case_dir = temp.path().join("case");
+        tokio::fs::create_dir_all(&case_dir).await.unwrap();
+        tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
+            .await
+            .unwrap();
+        let report_path = temp.path().join("report.json");
+        let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+        let mut client = connect_login(addr).await;
+
+        write_packet_bytes(
+            &mut client,
+            MysqlPacket {
+                sequence_id: 0,
+                payload: [vec![0x03], b"SET NAMES utf8".to_vec()].concat(),
+            },
+        )
+        .await;
+        let ok = read_packet(&mut client).await.unwrap().unwrap();
+        assert_eq!(ok.payload[0], 0x00);
+
+        wait_for_report_contains(&report_path, r#""sql": "SET NAMES utf8""#).await;
+        let report: Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
+        assert_eq!(report["builtin_queries"][0]["command"], "COM_QUERY");
+        assert_eq!(report["builtin_queries"][0]["sql"], "SET NAMES utf8");
+        assert!(report["builtin_queries"][0]["recorded_source"].is_null());
+        assert!(report["unmatched_queries"].as_array().unwrap().is_empty());
+        assert!(
+            report["unused_case_exchanges"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn non_builtin_set_without_recorded_exchange_is_unmatched() {
+        let temp = tempfile::tempdir().unwrap();
+        let case_dir = temp.path().join("case");
+        tokio::fs::create_dir_all(&case_dir).await.unwrap();
+        tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
+            .await
+            .unwrap();
+        let report_path = temp.path().join("report.json");
+        let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+        let mut client = connect_login(addr).await;
+
+        write_packet_bytes(
+            &mut client,
+            MysqlPacket {
+                sequence_id: 0,
+                payload: [vec![0x03], b"SET @tenant_id = 1".to_vec()].concat(),
+            },
+        )
+        .await;
+        let err = read_packet(&mut client).await.unwrap().unwrap();
+        assert_eq!(err.payload[0], 0xff);
+
+        wait_for_report_contains(&report_path, r#""unmatched_queries""#).await;
+        let report: Value =
+            serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
+        assert!(report["builtin_queries"].as_array().unwrap().is_empty());
+        assert_eq!(report["unmatched_queries"][0]["command"], "COM_QUERY");
+        assert_eq!(report["unmatched_queries"][0]["sql"], "SET @tenant_id = 1");
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn replays_prepared_execute_from_dependencies() {
         let temp = tempfile::tempdir().unwrap();
         let case_dir = temp.path().join("case");

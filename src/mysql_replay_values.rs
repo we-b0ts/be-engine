@@ -50,11 +50,22 @@ fn builtin_response(sql: &str, database: Option<&str>) -> Option<RecordedMysqlRe
 }
 
 fn is_builtin_ok(normalized_sql: &str) -> bool {
-    normalized_sql.starts_with("set ")
+    is_mysql_session_setup_sql(normalized_sql)
         || matches!(
             normalized_sql,
             "begin" | "start transaction" | "commit" | "rollback"
         )
+}
+
+fn is_mysql_session_setup_sql(normalized_sql: &str) -> bool {
+    normalized_sql.starts_with("set names ")
+        || normalized_sql.starts_with("set character set ")
+        || normalized_sql.starts_with("set character_set_client ")
+        || normalized_sql.starts_with("set character_set_connection ")
+        || normalized_sql.starts_with("set character_set_results ")
+        || normalized_sql.starts_with("set collation_connection ")
+        || normalized_sql.starts_with("set time_zone ")
+        || normalized_sql.starts_with("set sql_mode ")
 }
 
 fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {

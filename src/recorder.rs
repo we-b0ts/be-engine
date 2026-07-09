@@ -675,6 +675,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn case_dependency_skips_successful_mysql_session_setup() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: None,
+        };
+
+        recorder
+            .append_case_dependency(
+                &case,
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    "COM_QUERY",
+                    Some("SET NAMES utf8"),
+                    "ok",
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                )),
+                "process",
+            )
+            .await
+            .unwrap();
+
+        let case_dir = recorder.case_staging_dir(&case);
+        assert!(!case_dir.join("dependencies.jsonl").exists());
+        assert!(!case_dir.join("dependencies-summary.json").exists());
+
+        recorder
+            .append_case_dependency(
+                &case,
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    "COM_QUERY",
+                    Some("SET @tenant_id = 1"),
+                    "ok",
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                )),
+                "process",
+            )
+            .await
+            .unwrap();
+
+        let raw = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+            .await
+            .unwrap();
+        assert_eq!(raw.lines().count(), 1);
+        assert!(raw.contains("SET @tenant_id = 1"));
+        assert!(!raw.contains("SET NAMES utf8"));
+    }
+
+    #[tokio::test]
     async fn case_dependency_routes_mysql_protocol_details_to_debug_file() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();

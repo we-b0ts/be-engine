@@ -156,10 +156,9 @@ the case. If it is absent, derive the same working summary from
 
 Summary rules:
 
-- Successful MySQL `COM_STMT_PREPARE` exchanges are omitted from
-  `dependencies.jsonl` and from the acceptance summary; the debug file keeps raw
-  protocol evidence.
-- MySQL `COM_STMT_EXECUTE`, text query execution, execute failures, and prepare
+- Successful protocol setup is omitted from `dependencies.jsonl` and from the
+  acceptance summary; the debug file keeps raw protocol evidence.
+- Executed dependency calls, returned rows, write results, and dependency
   failures are semantic dependencies and should appear in `dependencies.jsonl`
   and the summary.
 - Dependency coverage should compare response-driving, auth/session, and
@@ -220,11 +219,6 @@ Prefer `mysql_exchange` over raw MySQL records. Important fields:
 - `response.error_code` and `response.error_message`: error response details
 - `response.rows_truncated`: true when result rows were truncated
 - `parse_warnings`: parser warnings that may make replay unsafe
-
-Successful prepared-statement setup is not a replay dependency by itself.
-Record successful `COM_STMT_PREPARE` in debug/protocol data, not as a normal
-semantic dependency. If a prepare fails, keep it as a `mysql_exchange` because
-the failure is an observed dependency result or side effect.
 
 Match MySQL calls by dependency identity first, then normalized SQL plus parsed
 `params`. The identity is `target_host`, `target_port`, `database`, and
