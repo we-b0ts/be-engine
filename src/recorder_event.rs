@@ -1,0 +1,279 @@
+use std::collections::BTreeMap;
+
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct BodyCapture {
+    pub encoding: &'static str,
+    pub original_len: usize,
+    pub stored_len: usize,
+    pub truncated: bool,
+    pub data: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CaseBodyCapture {
+    pub encoding: &'static str,
+    pub original_len: usize,
+    pub stored_len: usize,
+    pub truncated: bool,
+    pub decoded: bool,
+    pub content_encoding: Option<String>,
+    pub data: String,
+    pub decode_error: Option<String>,
+}
+
+pub type HeaderMapSnapshot = BTreeMap<String, Vec<String>>;
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CaseContext {
+    pub id: Uuid,
+    pub rule_name: String,
+    pub uri_group: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "event_type", rename_all = "snake_case")]
+pub enum RecorderEvent {
+    HttpExchange(HttpExchangeEvent),
+    TcpGatewayConnection(TcpGatewayConnectionEvent),
+    MysqlConnection(MysqlConnectionEvent),
+    MysqlQuery(MysqlQueryEvent),
+    MysqlResponse(MysqlResponseEvent),
+    MysqlExchange(MysqlExchangeEvent),
+    MysqlPacket(MysqlPacketEvent),
+    MysqlTlsRejected(MysqlTlsRejectedEvent),
+    ProxyError(ProxyErrorEvent),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub comm: Option<String>,
+    pub cmdline: Option<String>,
+    pub exe: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HttpExchangeEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub scheme: String,
+    pub method: String,
+    pub uri: String,
+    pub authority: Option<String>,
+    pub request_headers: HeaderMapSnapshot,
+    pub request_body: BodyCapture,
+    pub response_status: Option<u16>,
+    pub response_headers: Option<HeaderMapSnapshot>,
+    pub response_body: Option<BodyCapture>,
+    pub duration_ms: u128,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MysqlConnectionEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub route_name: Option<String>,
+    pub listen_addr: String,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_addr: Option<String>,
+    pub upstream_addr: String,
+    pub username: Option<String>,
+    pub database: Option<String>,
+    pub capability_flags: Option<u32>,
+    pub duration_ms: Option<u128>,
+    pub client_to_server_bytes: u64,
+    pub server_to_client_bytes: u64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TcpGatewayConnectionEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub domain: Option<String>,
+    pub fake_addr: String,
+    pub upstream_addr: Option<String>,
+    pub client_to_server_bytes: u64,
+    pub server_to_client_bytes: u64,
+    pub duration_ms: u128,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MysqlQueryEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub command: String,
+    pub query: Option<String>,
+    pub payload_len: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MysqlPacketEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub query_sequence: Option<u64>,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub direction: String,
+    pub sequence_id: u8,
+    pub payload_len: usize,
+    pub payload: Option<BodyCapture>,
+    pub packet_kind: Option<String>,
+    pub error_code: Option<u16>,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MysqlResponseEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub query_sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub status: String,
+    pub packet_count: usize,
+    pub payload_bytes: usize,
+    pub duration_ms: u128,
+    pub error_code: Option<u16>,
+    pub error_message: Option<String>,
+    pub payload: BodyCapture,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packets: Option<Vec<MysqlResponsePacket>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MysqlResponsePacket {
+    pub sequence_id: u8,
+    pub packet_kind: String,
+    pub payload_len: usize,
+    pub payload: BodyCapture,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MysqlExchangeEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub query_sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub route_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database: Option<String>,
+    pub command: String,
+    pub sql: Option<String>,
+    pub statement_id: Option<u32>,
+    pub params: Option<Vec<MysqlValue>>,
+    pub response: MysqlExchangeResponse,
+    pub duration_ms: u128,
+    pub parse_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct MysqlExchangeResponse {
+    pub status: String,
+    pub error_code: Option<u16>,
+    pub error_message: Option<String>,
+    pub affected_rows: Option<u64>,
+    pub last_insert_id: Option<u64>,
+    pub columns: Vec<MysqlColumn>,
+    pub rows: Vec<Vec<MysqlValue>>,
+    pub row_count: usize,
+    pub rows_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MysqlColumn {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    pub family: String,
+    pub sql_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unsigned: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bits: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nullable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale: Option<u8>,
+    #[serde(skip_serializing)]
+    pub column_type_code: u8,
+    #[serde(skip_serializing)]
+    pub flags: Option<u16>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct MysqlValue {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw: Option<BodyCapture>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MysqlTlsRejectedEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub route_name: Option<String>,
+    pub listen_addr: String,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_addr: Option<String>,
+    pub upstream_addr: String,
+    pub capability_flags: u32,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProxyErrorEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub protocol: String,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub target: Option<String>,
+    pub error: String,
+}

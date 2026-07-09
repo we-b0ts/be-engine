@@ -93,7 +93,9 @@ Preserve original case files. A user-provided recording path may be a single
 case directory or a collection such as `recordings/<rule>/<uri-group>` whose
 child directories are case ids. When given a collection, select by reading each
 child `request.json.uri` and matching the selected API path; do not rely on the
-`uri-group` directory name alone.
+`uri-group` directory name alone. Do not select from `recordings/_runs`; failed
+cases with `.partial`, `.truncated`, or `recording-error.json` are recorder
+diagnostics and must be re-recorded before migration work starts.
 
 Before rewriting when multiple APIs or collection paths are involved, build a
 scope/case matrix:

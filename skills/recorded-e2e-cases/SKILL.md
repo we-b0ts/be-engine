@@ -14,10 +14,14 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    `recordings/<rule>/<case-id>`. A user path may also point at a case
    collection such as `recordings/<rule>/<uri-group>`; scan child case
    directories and select matching case sets by `request.json.uri`, not by
-   directory name alone. Preserve recorded files exactly.
+   directory name alone. Ignore `recordings/_runs`; it contains recorder run
+   diagnostics and failed cases, not replay fixtures. Preserve recorded files
+   exactly.
 2. Load `request.json`, canonical `expected-response.json`,
    `dependencies.jsonl`, and `dependencies-summary.json` when present. Accept
    `expected_response.json` as a user spelling but do not rename or rewrite it.
+   If a supplied directory only has `.truncated` or `.partial` files, stop and
+   report that the case was not published as a valid recording.
    Read
    [case-format.md](references/case-format.md) when parsing fields.
 3. Inspect the target project's existing E2E runner, server startup path,

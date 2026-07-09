@@ -26,13 +26,26 @@ Prefer the existing boundaries when adding or moving code:
 - `config.rs`: runtime configuration structures and loading
 - `http_proxy.rs`: explicit HTTP/HTTPS proxy behavior
 - `http_gateway.rs`: tcpcopy-style HTTP gateway behavior
+- `http_gateway_case.rs`: HTTP gateway case finalization and invalid-case
+  classification
 - `dns_mock.rs`: fake-DNS behavior
 - `tcp_gateway.rs`: fake-IP TCP interception and routing
 - `mysql_proxy.rs`: MySQL proxy/session orchestration
 - `mysql_protocol.rs`: low-level MySQL packet parsing and encoding
 - `mysql_semantic.rs`: semantic MySQL exchange parsing
 - `mysql_replay.rs`: managed MySQL dependency replay
-- `recorder.rs`: JSONL event structures and file writes
+- `mysql_replay_records.rs`: replay dependency records, identity matching,
+  target assignment, and report model
+- `mysql_replay_dns.rs`: replay DNS question parsing and fake A responses
+- `mysql_replay_session.rs`: replay MySQL session command handling
+- `mysql_replay_response.rs`: replay MySQL response packet encoding
+- `mysql_replay_values.rs`: replay value conversion, built-in responses, and
+  low-level value helpers
+- `recorder.rs`: JSONL writes, case file writes, dependency attachment, and
+  body capture helpers
+- `recorder_event.rs`: recorder event and payload data structures
+- `recorder_run.rs`: recording run reports, staging, publishing, and failed
+  case handling
 - `dependency_summary.rs`: dependency summary construction
 - `process_lookup.rs`: local process ownership lookup
 - `tls.rs`: CA and TLS helpers

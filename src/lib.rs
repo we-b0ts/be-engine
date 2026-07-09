@@ -2,6 +2,7 @@ mod config;
 mod dependency_summary;
 mod dns_mock;
 mod http_gateway;
+mod http_gateway_case;
 mod http_proxy;
 mod mysql_protocol;
 mod mysql_proxy;
@@ -9,6 +10,8 @@ mod mysql_replay;
 mod mysql_semantic;
 mod process_lookup;
 mod recorder;
+mod recorder_event;
+mod recorder_run;
 mod tcp_gateway;
 mod tls;
 
@@ -335,7 +338,7 @@ impl AppState {
             "traffic recorder proxy started"
         );
 
-        tokio::select! {
+        let run_result = tokio::select! {
             _ = tokio::signal::ctrl_c() => {
                 info!("shutdown signal received");
                 Ok(())
@@ -343,7 +346,18 @@ impl AppState {
             Some(joined) = tasks.join_next() => {
                 joined.context("proxy task panicked")?
             }
+        };
+
+        let has_failed_cases = self
+            .recorder()
+            .finish_run()
+            .await
+            .context("failed to finalize recording run")?;
+        run_result?;
+        if has_failed_cases {
+            anyhow::bail!("recording run finished with failed cases");
         }
+        Ok(())
     }
 }
 

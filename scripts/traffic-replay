@@ -1,8 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+resolve_script_path() {
+  local source="${BASH_SOURCE[0]}"
+  while [ -L "$source" ]; do
+    local dir
+    dir="$(cd -P "$(dirname "$source")" && pwd)"
+    source="$(readlink "$source")"
+    if [[ "$source" != /* ]]; then
+      source="$dir/$source"
+    fi
+  done
+  local dir
+  dir="$(cd -P "$(dirname "$source")" && pwd)"
+  printf '%s/%s\n' "$dir" "$(basename "$source")"
+}
+
+SCRIPT_PATH="$(resolve_script_path)"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_CWD="$(pwd)"
+unset BASH_ENV ENV TRAFFIC_RECORDER_PROXY_BIN
 
 usage() {
   cat >&2 <<EOF
@@ -22,10 +40,11 @@ Options:
   --user USER              Limit capture to this Unix user. Default: trp-record.
   --owner-uid UID          Limit capture to this numeric Unix uid.
   --all-users              Capture all local users. Use only on isolated machines.
+  --proxy-bin PATH         Explicit traffic-recorder-proxy binary override.
 
 Ensure traffic-replay and traffic-recorder-proxy are available on PATH for
-target-project E2E runs. TRAFFIC_RECORDER_PROXY_BIN is accepted as an explicit
-fallback override for local development only.
+target-project E2E runs. Use --proxy-bin only for local proxy development.
+Replay child processes are run with shell startup hooks such as BASH_ENV cleared.
 DNS/fake-IP rules are removed when this script exits.
 EOF
 }
@@ -51,6 +70,7 @@ OWNER_MODE="user"
 OWNER_USER_VALUE="trp-record"
 OWNER_UID_VALUE=""
 OWNER_SET=0
+PROXY_BIN_OVERRIDE=""
 APP_ARGS=()
 
 need_value() {
@@ -132,6 +152,11 @@ while [ "$#" -gt 0 ]; do
       OWNER_UID_VALUE=""
       OWNER_SET=1
       shift
+      ;;
+    --proxy-bin)
+      need_value "$1" "${2:-}"
+      PROXY_BIN_OVERRIDE="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -282,20 +307,26 @@ else
 fi
 
 find_proxy_binary() {
-  local repo_candidate="$SCRIPT_DIR/../target/debug/traffic-recorder-proxy"
+  local sibling_candidate="$SCRIPT_DIR/traffic-recorder-proxy"
+  local repo_candidate="$REPO_ROOT/target/debug/traffic-recorder-proxy"
   local cwd_candidate="$CALLER_CWD/target/debug/traffic-recorder-proxy"
+
+  if [ -n "$PROXY_BIN_OVERRIDE" ]; then
+    if [ ! -x "$PROXY_BIN_OVERRIDE" ]; then
+      echo "--proxy-bin is not executable: $PROXY_BIN_OVERRIDE" >&2
+      exit 1
+    fi
+    printf '%s\n' "$PROXY_BIN_OVERRIDE"
+    return
+  fi
 
   if command -v traffic-recorder-proxy >/dev/null 2>&1; then
     command -v traffic-recorder-proxy
     return
   fi
 
-  if [ -n "${TRAFFIC_RECORDER_PROXY_BIN:-}" ]; then
-    if [ ! -x "$TRAFFIC_RECORDER_PROXY_BIN" ]; then
-      echo "TRAFFIC_RECORDER_PROXY_BIN is not executable: $TRAFFIC_RECORDER_PROXY_BIN" >&2
-      exit 1
-    fi
-    printf '%s\n' "$TRAFFIC_RECORDER_PROXY_BIN"
+  if [ -x "$sibling_candidate" ]; then
+    printf '%s\n' "$sibling_candidate"
     return
   fi
 
@@ -309,7 +340,7 @@ find_proxy_binary() {
     return
   fi
 
-  echo "traffic-recorder-proxy command not found on PATH. Add it to PATH, for example ~/.local/bin/traffic-recorder-proxy, or set TRAFFIC_RECORDER_PROXY_BIN=/path/to/traffic-recorder-proxy for local development." >&2
+  echo "traffic-recorder-proxy command not found on PATH. Add it to PATH, for example ~/.local/bin/traffic-recorder-proxy, or pass --proxy-bin /path/to/traffic-recorder-proxy for local proxy development." >&2
   exit 1
 }
 
@@ -371,13 +402,15 @@ GATEWAY_PORT_VALUE="${tcp_parts[1]}"
 
 run_as_root() {
   if [ "$(id -u)" -eq 0 ]; then
-    "$@"
+    env -u BASH_ENV -u ENV "$@"
   else
     if ! command -v sudo >/dev/null 2>&1; then
       echo "sudo not found; intercept setup requires root privileges" >&2
       exit 1
     fi
     sudo env \
+      -u BASH_ENV \
+      -u ENV \
       "DNS_IP=$DNS_IP_VALUE" \
       "DNS_PORT=$DNS_PORT_VALUE" \
       "UPSTREAM_DNS=$UPSTREAM_DNS_VALUE" \
@@ -423,4 +456,4 @@ args=(replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LI
 args+=("${APP_ARGS[@]}")
 
 export RUST_LOG="${RUST_LOG:-info}"
-"$PROXY_BIN" "${args[@]}"
+env -u BASH_ENV -u ENV "$PROXY_BIN" "${args[@]}"

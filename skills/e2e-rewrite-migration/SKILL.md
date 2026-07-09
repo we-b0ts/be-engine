@@ -42,7 +42,8 @@ recording/E2E evidence.
 6. Place copied recorded cases under `tests/fixtures/recordings` by default and
    preserve original case files. If the user provides a case collection
    directory, select cases by each child `request.json.uri` matching the
-   migration scope. Do not collapse multiple matching cases into one.
+   migration scope. Do not scan `recordings/_runs` or consume `.partial` /
+   `.truncated` failed cases. Do not collapse multiple matching cases into one.
 7. Use `recorded-e2e-cases` for recorded request replay, managed dependency
    replay, dependency summary coverage, JSON structural response compatibility,
    configured ignores, exact-byte modes, recording feedback rules, and the

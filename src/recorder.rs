@@ -1,17 +1,17 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::dependency_summary::{
     should_append_case_dependency, write_bootstrap_dependency_summary,
     write_case_dependency_summary,
 };
+use crate::recorder_run::{RecorderRunState, new_run_id};
 use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
-use chrono::{DateTime, Utc};
 use flate2::read::{GzDecoder, ZlibDecoder};
 use hyper::HeaderMap;
 use serde::Serialize;
@@ -20,285 +20,16 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+pub use crate::recorder_event::*;
+
 #[derive(Clone)]
 pub struct Recorder {
     file: Arc<Mutex<File>>,
-    output_dir: Arc<std::path::PathBuf>,
-    dependency_write_lock: Arc<Mutex<()>>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct BodyCapture {
-    pub encoding: &'static str,
-    pub original_len: usize,
-    pub stored_len: usize,
-    pub truncated: bool,
-    pub data: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct CaseBodyCapture {
-    pub encoding: &'static str,
-    pub original_len: usize,
-    pub stored_len: usize,
-    pub truncated: bool,
-    pub decoded: bool,
-    pub content_encoding: Option<String>,
-    pub data: String,
-    pub decode_error: Option<String>,
-}
-
-pub type HeaderMapSnapshot = BTreeMap<String, Vec<String>>;
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct CaseContext {
-    pub id: Uuid,
-    pub rule_name: String,
-    pub uri_group: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "event_type", rename_all = "snake_case")]
-pub enum RecorderEvent {
-    HttpExchange(HttpExchangeEvent),
-    TcpGatewayConnection(TcpGatewayConnectionEvent),
-    MysqlConnection(MysqlConnectionEvent),
-    MysqlQuery(MysqlQueryEvent),
-    MysqlResponse(MysqlResponseEvent),
-    MysqlExchange(MysqlExchangeEvent),
-    MysqlPacket(MysqlPacketEvent),
-    MysqlTlsRejected(MysqlTlsRejectedEvent),
-    ProxyError(ProxyErrorEvent),
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProcessInfo {
-    pub pid: u32,
-    pub comm: Option<String>,
-    pub cmdline: Option<String>,
-    pub exe: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct HttpExchangeEvent {
-    pub id: Uuid,
-    pub timestamp: DateTime<Utc>,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    pub scheme: String,
-    pub method: String,
-    pub uri: String,
-    pub authority: Option<String>,
-    pub request_headers: HeaderMapSnapshot,
-    pub request_body: BodyCapture,
-    pub response_status: Option<u16>,
-    pub response_headers: Option<HeaderMapSnapshot>,
-    pub response_body: Option<BodyCapture>,
-    pub duration_ms: u128,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MysqlConnectionEvent {
-    pub id: Uuid,
-    pub timestamp: DateTime<Utc>,
-    pub route_name: Option<String>,
-    pub listen_addr: String,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_host: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_port: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_addr: Option<String>,
-    pub upstream_addr: String,
-    pub username: Option<String>,
-    pub database: Option<String>,
-    pub capability_flags: Option<u32>,
-    pub duration_ms: Option<u128>,
-    pub client_to_server_bytes: u64,
-    pub server_to_client_bytes: u64,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TcpGatewayConnectionEvent {
-    pub id: Uuid,
-    pub timestamp: DateTime<Utc>,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    pub domain: Option<String>,
-    pub fake_addr: String,
-    pub upstream_addr: Option<String>,
-    pub client_to_server_bytes: u64,
-    pub server_to_client_bytes: u64,
-    pub duration_ms: u128,
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MysqlQueryEvent {
-    pub id: Uuid,
-    pub connection_id: Uuid,
-    pub sequence: u64,
-    pub timestamp: DateTime<Utc>,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    pub command: String,
-    pub query: Option<String>,
-    pub payload_len: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MysqlPacketEvent {
-    pub id: Uuid,
-    pub connection_id: Uuid,
-    pub query_sequence: Option<u64>,
-    pub timestamp: DateTime<Utc>,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    pub direction: String,
-    pub sequence_id: u8,
-    pub payload_len: usize,
-    pub payload: Option<BodyCapture>,
-    pub packet_kind: Option<String>,
-    pub error_code: Option<u16>,
-    pub error_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MysqlResponseEvent {
-    pub id: Uuid,
-    pub connection_id: Uuid,
-    pub query_sequence: u64,
-    pub timestamp: DateTime<Utc>,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    pub status: String,
-    pub packet_count: usize,
-    pub payload_bytes: usize,
-    pub duration_ms: u128,
-    pub error_code: Option<u16>,
-    pub error_message: Option<String>,
-    pub payload: BodyCapture,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub packets: Option<Vec<MysqlResponsePacket>>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MysqlResponsePacket {
-    pub sequence_id: u8,
-    pub packet_kind: String,
-    pub payload_len: usize,
-    pub payload: BodyCapture,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MysqlExchangeEvent {
-    pub id: Uuid,
-    pub connection_id: Uuid,
-    pub query_sequence: u64,
-    pub timestamp: DateTime<Utc>,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub route_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_host: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_port: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_addr: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub upstream_addr: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub username: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub database: Option<String>,
-    pub command: String,
-    pub sql: Option<String>,
-    pub statement_id: Option<u32>,
-    pub params: Option<Vec<MysqlValue>>,
-    pub response: MysqlExchangeResponse,
-    pub duration_ms: u128,
-    pub parse_warnings: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct MysqlExchangeResponse {
-    pub status: String,
-    pub error_code: Option<u16>,
-    pub error_message: Option<String>,
-    pub affected_rows: Option<u64>,
-    pub last_insert_id: Option<u64>,
-    pub columns: Vec<MysqlColumn>,
-    pub rows: Vec<Vec<MysqlValue>>,
-    pub row_count: usize,
-    pub rows_truncated: bool,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct MysqlColumn {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub table: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub column: Option<String>,
-    pub family: String,
-    pub sql_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unsigned: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bits: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nullable: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scale: Option<u8>,
-    #[serde(skip_serializing)]
-    pub column_type_code: u8,
-    #[serde(skip_serializing)]
-    pub flags: Option<u16>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct MysqlValue {
-    pub kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub raw: Option<BodyCapture>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct MysqlTlsRejectedEvent {
-    pub id: Uuid,
-    pub connection_id: Uuid,
-    pub timestamp: DateTime<Utc>,
-    pub route_name: Option<String>,
-    pub listen_addr: String,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_host: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_port: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_addr: Option<String>,
-    pub upstream_addr: String,
-    pub capability_flags: u32,
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProxyErrorEvent {
-    pub id: Uuid,
-    pub timestamp: DateTime<Utc>,
-    pub protocol: String,
-    pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
-    pub target: Option<String>,
-    pub error: String,
+    pub(crate) output_dir: Arc<PathBuf>,
+    pub(crate) run_dir: Arc<PathBuf>,
+    pub(crate) run_state: Arc<Mutex<RecorderRunState>>,
+    pub(crate) dependency_write_lock: Arc<Mutex<()>>,
+    pub(crate) finalized_cases: Arc<Mutex<HashSet<Uuid>>>,
 }
 
 impl Recorder {
@@ -314,11 +45,24 @@ impl Recorder {
             .open(&path)
             .await
             .with_context(|| format!("failed to open JSONL recording file {}", path.display()))?;
-        Ok(Self {
+        let run_id = new_run_id();
+        let run_dir = output_dir.join("_runs").join(&run_id);
+        tokio::fs::create_dir_all(&run_dir)
+            .await
+            .with_context(|| format!("failed to create recording run dir {}", run_dir.display()))?;
+        let recorder = Self {
             file: Arc::new(Mutex::new(file)),
             output_dir: Arc::new(output_dir.to_path_buf()),
+            run_dir: Arc::new(run_dir),
+            run_state: Arc::new(Mutex::new(RecorderRunState {
+                run_id,
+                ..Default::default()
+            })),
             dependency_write_lock: Arc::new(Mutex::new(())),
-        })
+            finalized_cases: Arc::new(Mutex::new(HashSet::new())),
+        };
+        recorder.write_run_report("running").await?;
+        Ok(recorder)
     }
 
     pub async fn record(&self, event: RecorderEvent) -> Result<()> {
@@ -341,7 +85,7 @@ impl Recorder {
         filename: &str,
         value: &T,
     ) -> Result<()> {
-        let path = self.case_dir(case).join(filename);
+        let path = self.case_staging_dir(case).join(filename);
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.with_context(|| {
                 format!("failed to create case recording dir {}", parent.display())
@@ -365,7 +109,10 @@ impl Recorder {
             return Ok(());
         }
         let _guard = self.dependency_write_lock.lock().await;
-        let dir = self.case_dir(case);
+        if self.finalized_cases.lock().await.contains(&case.id) {
+            return Ok(());
+        }
+        let dir = self.case_staging_dir(case);
         tokio::fs::create_dir_all(&dir)
             .await
             .with_context(|| format!("failed to create case recording dir {}", dir.display()))?;
@@ -453,16 +200,6 @@ impl Recorder {
             write_bootstrap_dependency_summary(&self.output_dir).await?;
         }
         Ok(())
-    }
-
-    fn case_dir(&self, case: &CaseContext) -> std::path::PathBuf {
-        let mut path = self
-            .output_dir
-            .join(sanitize_path_component(&case.rule_name));
-        if let Some(uri_group) = &case.uri_group {
-            path = path.join(sanitize_path_component(uri_group));
-        }
-        path.join(case.id.to_string())
     }
 }
 
@@ -629,7 +366,7 @@ fn decode_content_encoding(bytes: &[u8], encoding: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn sanitize_path_component(value: &str) -> String {
+pub(crate) fn sanitize_path_component(value: &str) -> String {
     let sanitized = value
         .chars()
         .map(|ch| {
@@ -655,6 +392,7 @@ impl From<Bytes> for BodyCapture {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use hyper::header::{AUTHORIZATION, COOKIE, HeaderValue};
 
     use super::*;
@@ -721,14 +459,10 @@ mod tests {
             .await
             .unwrap();
 
-        let raw = tokio::fs::read_to_string(
-            temp.path()
-                .join("api")
-                .join(case.id.to_string())
-                .join("dependencies.jsonl"),
-        )
-        .await
-        .unwrap();
+        let raw =
+            tokio::fs::read_to_string(recorder.case_staging_dir(&case).join("dependencies.jsonl"))
+                .await
+                .unwrap();
         let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
         assert_eq!(value["event_type"], "proxy_error");
         assert_eq!(value["case_dependency_matched_by"], "active_window");
@@ -750,10 +484,8 @@ mod tests {
             .unwrap();
 
         assert!(
-            temp.path()
-                .join("record-api")
-                .join("api-users")
-                .join(case.id.to_string())
+            recorder
+                .case_staging_dir(&case)
                 .join("request.json")
                 .exists()
         );
@@ -788,14 +520,10 @@ mod tests {
             .await
             .unwrap();
 
-        let raw = tokio::fs::read_to_string(
-            temp.path()
-                .join("api")
-                .join(case.id.to_string())
-                .join("dependencies.jsonl"),
-        )
-        .await
-        .unwrap();
+        let raw =
+            tokio::fs::read_to_string(recorder.case_staging_dir(&case).join("dependencies.jsonl"))
+                .await
+                .unwrap();
         let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
         assert_eq!(value["client_process"], 42);
         assert_eq!(value["case_dependency_matched_by"], "process");
@@ -869,7 +597,7 @@ mod tests {
             .await
             .unwrap();
 
-        let case_dir = temp.path().join("api").join(case.id.to_string());
+        let case_dir = recorder.case_staging_dir(&case);
         assert!(!case_dir.join("dependencies.jsonl").exists());
         assert!(!case_dir.join("dependencies-summary.json").exists());
 
@@ -977,7 +705,7 @@ mod tests {
             .await
             .unwrap();
 
-        let case_dir = temp.path().join("api").join(case.id.to_string());
+        let case_dir = recorder.case_staging_dir(&case);
         assert!(!case_dir.join("dependencies.jsonl").exists());
         let raw = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
             .await
@@ -986,6 +714,132 @@ mod tests {
         assert_eq!(value["event_type"], "mysql_query");
         assert_eq!(value["client_process"], 42);
         assert_eq!(value["case_dependency_matched_by"], "process");
+    }
+
+    #[tokio::test]
+    async fn publish_case_moves_staging_to_published_and_updates_report() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record api".to_string(),
+            uri_group: Some("api-users".to_string()),
+        };
+
+        recorder
+            .write_case_json(&case, "request.json", &serde_json::json!({ "ok": true }))
+            .await
+            .unwrap();
+        recorder.publish_case(&case).await.unwrap();
+
+        assert!(!recorder.case_staging_dir(&case).exists());
+        assert!(
+            temp.path()
+                .join("record-api")
+                .join("api-users")
+                .join(case.id.to_string())
+                .join("request.json")
+                .exists()
+        );
+        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
+            .await
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
+        assert_eq!(report["published_cases"], 1);
+        assert_eq!(report["failed_cases"], 0);
+    }
+
+    #[tokio::test]
+    async fn finalized_case_ignores_late_dependencies() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record api".to_string(),
+            uri_group: Some("api-users".to_string()),
+        };
+        let event = RecorderEvent::ProxyError(ProxyErrorEvent {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            protocol: "test".to_string(),
+            client_addr: None,
+            client_process: None,
+            target: Some("upstream".to_string()),
+            error: "late".to_string(),
+        });
+
+        recorder
+            .write_case_json(&case, "request.json", &serde_json::json!({ "ok": true }))
+            .await
+            .unwrap();
+        recorder.publish_case(&case).await.unwrap();
+        recorder
+            .append_case_dependency(&case, &event, "active_window")
+            .await
+            .unwrap();
+
+        assert!(!recorder.case_staging_dir(&case).exists());
+        assert!(
+            !temp
+                .path()
+                .join("record-api")
+                .join("api-users")
+                .join(case.id.to_string())
+                .join("dependencies.jsonl")
+                .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn fail_case_moves_staging_to_failed_and_records_error() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record api".to_string(),
+            uri_group: Some("api-users".to_string()),
+        };
+
+        recorder
+            .write_case_json(
+                &case,
+                "expected-response.json.truncated",
+                &serde_json::json!({ "truncated": true }),
+            )
+            .await
+            .unwrap();
+        recorder
+            .fail_case(
+                &case,
+                "expected_response_body_truncated",
+                "response exceeded recording limit",
+            )
+            .await
+            .unwrap();
+
+        assert!(!recorder.case_staging_dir(&case).exists());
+        let failed_dir = recorder.case_failed_dir(&case);
+        assert!(failed_dir.join("expected-response.json.truncated").exists());
+        assert!(failed_dir.join("recording-error.json").exists());
+        assert!(
+            !temp
+                .path()
+                .join("record-api")
+                .join("api-users")
+                .join(case.id.to_string())
+                .exists()
+        );
+        let errors_raw = tokio::fs::read_to_string(recorder.run_dir.join("errors.jsonl"))
+            .await
+            .unwrap();
+        assert!(errors_raw.contains("expected_response_body_truncated"));
+        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
+            .await
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["published_cases"], 0);
+        assert_eq!(report["failed_cases"], 1);
     }
 
     #[tokio::test]

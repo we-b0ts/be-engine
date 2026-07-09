@@ -92,7 +92,7 @@ Generated runtime artifacts are ignored by git:
 Do not commit generated CA files, traffic recordings, test captures, or local
 swap files.
 
-Case output is organized as:
+Valid case output is published as:
 
 ```text
 <rule-name>/<uri-group>/<case-id>/request.json
@@ -104,6 +104,19 @@ bootstrap-dependencies.jsonl
 bootstrap-dependencies-summary.json
 bootstrap-dependencies-debug.jsonl
 ```
+
+Every recording process also creates a run directory:
+
+```text
+_runs/<run-id>/recording-run.json
+_runs/<run-id>/errors.jsonl
+_runs/<run-id>/failed/<rule-name>/<uri-group>/<case-id>/
+```
+
+Failed cases are diagnostic artifacts, not replay fixtures. A case with a
+truncated request or expected response body is kept under `_runs/.../failed`
+with `recording-error.json` instead of being published. On clean shutdown,
+recording exits with an error if the run contains failed cases.
 
 Use `dependencies.jsonl` for replay-oriented semantic data. Use
 `dependencies-debug.jsonl` only for protocol-level debugging. Root-level

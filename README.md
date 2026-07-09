@@ -180,7 +180,7 @@ The probe itself is not recorded as a case. If this section is disabled, the
 bootstrap window still closes when the first matched gateway case starts.
 
 Matched gateway requests also create a case directory under
-`recording.output_dir`:
+`recording.output_dir` after the case is complete and valid:
 
 ```text
 <rule-name>/<uri-group>/<case-id>/request.json
@@ -191,6 +191,9 @@ Matched gateway requests also create a case directory under
 bootstrap-dependencies.jsonl
 bootstrap-dependencies-summary.json
 bootstrap-dependencies-debug.jsonl
+_runs/<run-id>/recording-run.json
+_runs/<run-id>/errors.jsonl
+_runs/<run-id>/failed/<rule-name>/<uri-group>/<case-id>/
 ```
 
 `uri-group` is built from the first `case_uri_segments` path segments joined by
@@ -201,6 +204,12 @@ directory.
 `request.json` stores the matched gateway request. `expected-response.json`
 stores the matched upstream response; if the response body has
 `Content-Encoding: gzip` or `deflate`, it is decoded before being written.
+Incomplete cases, including truncated request or expected response bodies, are
+not published into `<rule-name>/<uri-group>/<case-id>`. They are moved under
+`_runs/<run-id>/failed/...` with `recording-error.json`, and a clean shutdown
+returns an error when the run has failed cases. Fix the recording limit or
+recorder behavior and record again; do not consume failed cases as replay
+fixtures.
 While that gateway request is active, dependency traffic captured by the
 fake-IP gateway is appended to `dependencies.jsonl` or
 `dependencies-debug.jsonl`. The main `dependencies.jsonl` file is intended for

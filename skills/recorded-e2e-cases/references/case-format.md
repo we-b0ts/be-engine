@@ -5,7 +5,7 @@ target-project E2E inputs and dependency replay config.
 
 ## Directory And Files
 
-Canonical case layout:
+Canonical published case layout:
 
 ```text
 recordings/<rule>/<uri-group>/<case-id>/request.json
@@ -17,6 +17,19 @@ recordings/bootstrap-dependencies.jsonl
 recordings/bootstrap-dependencies-summary.json
 recordings/bootstrap-dependencies-debug.jsonl
 ```
+
+Recorder run diagnostics are separate from published cases:
+
+```text
+recordings/_runs/<run-id>/recording-run.json
+recordings/_runs/<run-id>/errors.jsonl
+recordings/_runs/<run-id>/failed/<rule>/<uri-group>/<case-id>/
+```
+
+Do not scan `recordings/_runs` as a case collection. Failed case directories
+may contain `.partial`, `.truncated`, and `recording-error.json` files. They are
+evidence for recorder configuration or recorder implementation fixes, not E2E
+replay fixtures.
 
 `uri-group` is usually built from the first two URI path segments joined by
 hyphens, for example `/api/users/list` becomes `api-users`. Older recordings may
@@ -44,6 +57,11 @@ Load order:
 6. root-level `bootstrap-dependencies-summary.json` when present
 7. `dependencies-debug.jsonl` only for missing semantic data, parse warnings, or
    protocol debugging
+
+If canonical `request.json` or `expected-response.json` is missing and only
+`.partial` or `.truncated` variants exist, stop. The case was not published as
+valid and must be re-recorded after fixing recorder limits, service readiness,
+or recorder behavior.
 
 ## HTTP Boundary Files
 
@@ -97,9 +115,10 @@ HTTP case body fields:
 - `decode_error`: decode error text, or null
 
 If `encoding` is `utf8`, use `data` directly. If `encoding` is `base64`, decode
-`data` before sending the request or comparing exact bytes. If `truncated` is
-true, avoid exact full-body assertions; assert only stable fields available in
-the stored data.
+`data` before sending the request or comparing exact bytes. Published HTTP
+cases should not have truncated request or expected-response bodies. If they do,
+treat the recording as invalid and report a recorder improvement instead of
+weakening assertions.
 
 ## Dependency Files
 

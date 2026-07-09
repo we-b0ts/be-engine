@@ -12,7 +12,6 @@ use hyper::http::uri::{Authority, PathAndQuery, Scheme};
 use hyper::service::service_fn;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
-use serde::Serialize;
 use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -21,10 +20,11 @@ use crate::config::{
     DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS, HttpGatewayConfig, HttpGatewayReadyConfig,
     HttpGatewayRuleConfig,
 };
+use crate::http_gateway_case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
 use crate::process_lookup::{lookup_listening_process, process_label};
 use crate::recorder::{
-    CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent,
-    RecorderEvent, capture_body, capture_case_body, redact_headers,
+    CaseContext, HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
+    capture_body, capture_case_body, redact_headers,
 };
 use crate::{ActiveCaseGuard, ActiveCaseRejection, AppState, ProxyClient};
 
@@ -235,30 +235,21 @@ async fn handle_gateway_request(
         }
     };
 
-    if let Some(case) = &case
-        && let Err(err) = write_case_request(
-            &state,
-            case,
-            CaseRequestRecord {
-                timestamp: Utc::now(),
-                client_addr: client_addr.clone(),
-                method: method.to_string(),
-                uri: original_uri.to_string(),
-                authority: authority.clone(),
-                matched_rule: matched_rule_name.clone(),
-                upstream: upstream_base.clone(),
-                headers: request_headers_for_record.clone(),
-                body: capture_case_body(
-                    &request_body,
-                    state.config().recording.max_body_bytes,
-                    Some(&request_headers),
-                ),
-            },
-        )
-        .await
-    {
-        warn!(error = %err, case_id = %case.id, "failed to write HTTP gateway case request");
-    }
+    let case_request_record = case.as_ref().map(|_| CaseRequestRecord {
+        timestamp: Utc::now(),
+        client_addr: client_addr.clone(),
+        method: method.to_string(),
+        uri: original_uri.to_string(),
+        authority: authority.clone(),
+        matched_rule: matched_rule_name.clone(),
+        upstream: upstream_base.clone(),
+        headers: request_headers_for_record.clone(),
+        body: capture_case_body(
+            &request_body,
+            state.config().recording.max_body_bytes,
+            Some(&request_headers),
+        ),
+    });
 
     let outbound_uri = match build_upstream_uri(&upstream_base, &original_uri) {
         Ok(uri) => uri,
@@ -352,7 +343,7 @@ async fn handle_gateway_request(
                     uri: original_uri.to_string(),
                     authority: authority.clone(),
                     request_headers: with_gateway_headers(
-                        request_headers_for_record,
+                        request_headers_for_record.clone(),
                         matched_rule_name.as_deref(),
                         &upstream_base,
                     ),
@@ -378,10 +369,11 @@ async fn handle_gateway_request(
                 }
             }
 
-            if let Some(case) = &case
-                && let Err(err) = write_case_response(
+            if let (Some(case), Some(request_record)) = (&case, case_request_record)
+                && let Err(err) = finalize_http_case(
                     &state,
                     case,
+                    request_record,
                     CaseResponseRecord {
                         timestamp: Utc::now(),
                         matched_rule: matched_rule_name.clone(),
@@ -399,7 +391,7 @@ async fn handle_gateway_request(
                 )
                 .await
             {
-                warn!(error = %err, case_id = %case.id, "failed to write HTTP gateway case response");
+                warn!(error = %err, case_id = %case.id, "failed to finalize HTTP gateway case");
             }
 
             build_downstream_response(status, &response_headers, body_bytes)
@@ -431,53 +423,6 @@ async fn send_upstream(
     request: Request<Full<Bytes>>,
 ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
     client.request(request).await
-}
-
-#[derive(Serialize)]
-struct CaseRequestRecord {
-    timestamp: chrono::DateTime<Utc>,
-    client_addr: Option<String>,
-    method: String,
-    uri: String,
-    authority: Option<String>,
-    matched_rule: Option<String>,
-    upstream: String,
-    headers: HeaderMapSnapshot,
-    body: CaseBodyCapture,
-}
-
-#[derive(Serialize)]
-struct CaseResponseRecord {
-    timestamp: chrono::DateTime<Utc>,
-    matched_rule: Option<String>,
-    upstream: String,
-    status: Option<u16>,
-    headers: Option<HeaderMapSnapshot>,
-    body: Option<CaseBodyCapture>,
-    duration_ms: u128,
-    error: Option<String>,
-}
-
-async fn write_case_request(
-    state: &AppState,
-    case: &CaseContext,
-    record: CaseRequestRecord,
-) -> Result<()> {
-    state
-        .recorder()
-        .write_case_json(case, "request.json", &record)
-        .await
-}
-
-async fn write_case_response(
-    state: &AppState,
-    case: &CaseContext,
-    record: CaseResponseRecord,
-) -> Result<()> {
-    state
-        .recorder()
-        .write_case_json(case, "expected-response.json", &record)
-        .await
 }
 
 fn try_register_case_for_upstream(
@@ -537,9 +482,24 @@ struct GatewayErrorContext {
 async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody> {
     let error = ctx.err.to_string();
     if let Some(case) = &ctx.case
-        && let Err(err) = write_case_response(
+        && let Err(err) = finalize_http_case(
             &ctx.state,
             case,
+            CaseRequestRecord {
+                timestamp: Utc::now(),
+                client_addr: ctx.client_addr.clone(),
+                method: ctx.method.to_string(),
+                uri: ctx.original_uri.to_string(),
+                authority: ctx.authority.clone(),
+                matched_rule: ctx.matched_rule.clone(),
+                upstream: ctx.target.clone().unwrap_or_default(),
+                headers: ctx.request_headers.clone(),
+                body: capture_case_body(
+                    &ctx.request_body,
+                    ctx.state.config().recording.max_body_bytes,
+                    None,
+                ),
+            },
             CaseResponseRecord {
                 timestamp: Utc::now(),
                 matched_rule: ctx.matched_rule.clone(),
@@ -553,7 +513,7 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
         )
         .await
     {
-        warn!(error = %err, case_id = %case.id, "failed to write HTTP gateway failed case response");
+        warn!(error = %err, case_id = %case.id, "failed to finalize failed HTTP gateway case");
     }
 
     if ctx.should_record {
