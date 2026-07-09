@@ -17,7 +17,7 @@ use crate::mysql_protocol::{
     MysqlPacket, ServerPacketInfo, parse_client_command, parse_handshake_response,
     parse_server_packet, read_packet,
 };
-use crate::mysql_semantic::MysqlSemanticTracker;
+use crate::mysql_semantic::{MysqlExchangeContext, MysqlSemanticTracker};
 use crate::recorder::{
     MysqlConnectionEvent, MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket,
     MysqlTlsRejectedEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent, capture_body,
@@ -30,6 +30,9 @@ pub(crate) struct MysqlConnectionContext {
     pub listen_addr: String,
     pub client_addr: Option<String>,
     pub client_process: Option<ProcessInfo>,
+    pub target_host: Option<String>,
+    pub target_port: Option<u16>,
+    pub target_addr: Option<String>,
     pub upstream_addr: String,
 }
 
@@ -297,11 +300,15 @@ async fn run_route(state: AppState, route: MysqlRouteConfig) -> Result<()> {
         let state = state.clone();
         let route = route.clone();
         tokio::spawn(async move {
+            let (target_host, target_port, target_addr) = mysql_target_from_addr(&route.upstream);
             let context = MysqlConnectionContext {
                 route_name: route.name.clone(),
                 listen_addr: route.listen.to_string(),
                 client_addr: Some(peer_addr.to_string()),
                 client_process: None,
+                target_host,
+                target_port,
+                target_addr,
                 upstream_addr: route.upstream.clone(),
             };
             if let Err(err) = handle_mysql_connection(client, state, context).await {
@@ -352,6 +359,9 @@ pub(crate) async fn handle_connected_mysql(
     let listen_addr = context.listen_addr.clone();
     let client_addr = context.client_addr.clone();
     let client_process = context.client_process.clone();
+    let target_host = context.target_host.clone();
+    let target_port = context.target_port;
+    let target_addr = context.target_addr.clone();
     let upstream_addr = context.upstream_addr.clone();
 
     let mut server_to_client_bytes = 0_u64;
@@ -384,6 +394,9 @@ pub(crate) async fn handle_connected_mysql(
             client_addr: client_addr.clone(),
             client_process: client_process.clone(),
             upstream_addr: upstream_addr.clone(),
+            target_host: target_host.clone(),
+            target_port,
+            target_addr: target_addr.clone(),
             capability_flags: login.capability_flags,
             reason: "MySQL TLS is detected but not implemented in v1".to_string(),
         };
@@ -395,6 +408,9 @@ pub(crate) async fn handle_connected_mysql(
             listen_addr,
             client_addr,
             client_process,
+            target_host,
+            target_port,
+            target_addr,
             upstream_addr,
             login.username,
             login.database,
@@ -421,6 +437,9 @@ pub(crate) async fn handle_connected_mysql(
         client_addr: client_addr.clone(),
         client_process: client_process.clone(),
         upstream_addr: upstream_addr.clone(),
+        target_host: target_host.clone(),
+        target_port,
+        target_addr: target_addr.clone(),
         username: login.username.clone(),
         database: login.database.clone(),
         capability_flags: Some(login.capability_flags),
@@ -440,6 +459,15 @@ pub(crate) async fn handle_connected_mysql(
     )));
     let semantic_tracker = Arc::new(Mutex::new(MysqlSemanticTracker::new(
         state.config().recording.max_body_bytes,
+        MysqlExchangeContext {
+            route_name: route_name.clone(),
+            target_host: target_host.clone(),
+            target_port,
+            target_addr: target_addr.clone(),
+            upstream_addr: Some(upstream_addr.clone()),
+            username: login.username.clone(),
+            database: login.database.clone(),
+        },
     )));
     let (mut client_read, mut client_write) = client.into_split();
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
@@ -476,6 +504,9 @@ pub(crate) async fn handle_connected_mysql(
                 };
                 let flushed_exchange = {
                     let mut tracker = c2s_semantic_tracker.lock().await;
+                    if command.command_name == "COM_INIT_DB" {
+                        tracker.set_database(command.query.clone());
+                    }
                     tracker.start_query(
                         c2s_connection_id,
                         sequence,
@@ -615,6 +646,9 @@ pub(crate) async fn handle_connected_mysql(
         listen_addr,
         client_addr,
         client_process,
+        target_host,
+        target_port,
+        target_addr,
         upstream_addr,
         login.username,
         login.database,
@@ -636,6 +670,9 @@ async fn record_connection(
     listen_addr: String,
     client_addr: Option<String>,
     client_process: Option<ProcessInfo>,
+    target_host: Option<String>,
+    target_port: Option<u16>,
+    target_addr: Option<String>,
     upstream_addr: String,
     username: Option<String>,
     database: Option<String>,
@@ -654,6 +691,9 @@ async fn record_connection(
             listen_addr,
             client_addr,
             client_process,
+            target_host,
+            target_port,
+            target_addr,
             upstream_addr,
             username,
             database,
@@ -667,9 +707,37 @@ async fn record_connection(
     .await
 }
 
+fn mysql_target_from_addr(addr: &str) -> (Option<String>, Option<u16>, Option<String>) {
+    let trimmed = addr.trim();
+    if trimmed.is_empty() {
+        return (None, None, None);
+    }
+    if let Ok(socket_addr) = trimmed.parse::<std::net::SocketAddr>() {
+        return (
+            Some(socket_addr.ip().to_string()),
+            Some(socket_addr.port()),
+            Some(socket_addr.to_string()),
+        );
+    }
+    let Some((host, port)) = trimmed.rsplit_once(':') else {
+        return (Some(trimmed.to_string()), None, Some(trimmed.to_string()));
+    };
+    let port = port.parse::<u16>().ok();
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+    let target_addr = port.map(|port| format!("{host}:{port}"));
+    (
+        Some(host),
+        port,
+        target_addr.or_else(|| Some(trimmed.to_string())),
+    )
+}
+
 async fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) -> Result<()> {
     state.recorder().record(event.clone()).await?;
-    state.record_case_dependency_if_active(&event).await;
+    state.record_dependency_if_relevant(&event).await;
     Ok(())
 }
 

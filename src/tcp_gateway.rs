@@ -199,6 +199,9 @@ async fn proxy_raw_tcp(
             listen_addr: state.config().tcp_gateway.listen.to_string(),
             client_addr,
             client_process,
+            target_host: Some(entry.domain.clone()),
+            target_port: Some(fake_addr.port()),
+            target_addr: Some(format_authority(&entry.domain, fake_addr.port(), 3306)),
             upstream_addr: upstream_addr.to_string(),
         };
         return handle_connected_mysql(client, upstream, state, context).await;
@@ -892,7 +895,7 @@ async fn record_event_and_case_dependency(
     if let Err(err) = state.recorder().record(event.clone()).await {
         warn!(error = %err, "{}", warning);
     }
-    state.record_case_dependency_if_active(&event).await;
+    state.record_dependency_if_relevant(&event).await;
 }
 
 fn build_upstream_uri(upstream_addr: SocketAddr, original_uri: &Uri) -> Result<Uri> {

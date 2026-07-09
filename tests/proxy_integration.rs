@@ -7,7 +7,9 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use traffic_recorder_proxy::{AppConfig, HttpGatewayRuleConfig, MysqlRouteConfig};
+use traffic_recorder_proxy::{
+    AppConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, MysqlRouteConfig,
+};
 
 #[tokio::test]
 async fn records_http_proxy_exchange() {
@@ -75,10 +77,9 @@ async fn http_gateway_records_only_matched_traffic() {
     config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
         name: Some("record-path".to_string()),
-        hosts: Vec::new(),
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/record/".to_string()],
-        headers: Default::default(),
+        ..Default::default()
     }];
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
@@ -106,6 +107,110 @@ async fn http_gateway_records_only_matched_traffic() {
 }
 
 #[tokio::test]
+async fn http_gateway_falls_back_before_ready() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let matched_upstream = spawn_http_response_upstream("matched", 2).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
+    let gateway_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http.listen = free_addr();
+    config.http_gateway.enabled = true;
+    config.http_gateway.listen = gateway_addr;
+    config.http_gateway.matched_upstream = format!("http://{matched_upstream}");
+    config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
+    config.http_gateway.ready = HttpGatewayReadyConfig {
+        enabled: true,
+        path: "/ready".to_string(),
+        success_status: 204,
+        interval_ms: 1000,
+    };
+    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+        name: Some("record-path".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/".to_string()],
+        ..Default::default()
+    }];
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    let response = raw_http_get(gateway_addr, "/record/one").await;
+    assert!(response.contains("fallback"));
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    handle.abort();
+
+    assert!(!temp.path().join("recordings/record-path").exists());
+}
+
+#[tokio::test]
+async fn http_gateway_allows_only_one_active_matched_case() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let matched_upstream =
+        spawn_delayed_http_response_upstream("matched", 1, Duration::from_millis(200)).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
+    let gateway_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http.listen = free_addr();
+    config.http_gateway.enabled = true;
+    config.http_gateway.listen = gateway_addr;
+    config.http_gateway.matched_upstream = format!("http://{matched_upstream}");
+    config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
+    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+        name: Some("record-path".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/".to_string()],
+        ..Default::default()
+    }];
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    let first = tokio::spawn(raw_http_get(gateway_addr, "/record/one"));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let second_response = raw_http_get(gateway_addr, "/record/two").await;
+    assert!(second_response.contains("fallback"));
+    let first_response = first.await.unwrap();
+    assert!(first_response.contains("matched"));
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    handle.abort();
+
+    let rule_dir = temp.path().join("recordings/record-path");
+    let uri_group_dirs = std::fs::read_dir(&rule_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(uri_group_dirs.len(), 1);
+    assert_eq!(
+        uri_group_dirs[0].file_name().unwrap().to_str().unwrap(),
+        "record-one"
+    );
+    let case_dirs = std::fs::read_dir(&uri_group_dirs[0])
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(case_dirs.len(), 1);
+    assert!(case_dirs[0].join("request.json").exists());
+}
+
+#[tokio::test]
 async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -122,10 +227,9 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
         name: Some("api".to_string()),
-        hosts: Vec::new(),
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/api/".to_string()],
-        headers: Default::default(),
+        ..Default::default()
     }];
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
@@ -136,13 +240,13 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
-    let response = raw_http_get(gateway_addr, "/api").await;
+    let response = raw_http_get(gateway_addr, "/api/users/list").await;
     assert!(response.contains("Content-Encoding: gzip"));
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
 
-    let rule_dir = temp.path().join("recordings/api");
+    let rule_dir = temp.path().join("recordings/api/api-users");
     let case_dirs = std::fs::read_dir(&rule_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -151,7 +255,7 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     let case_dir = &case_dirs[0];
 
     let request_json = std::fs::read_to_string(case_dir.join("request.json")).unwrap();
-    assert!(request_json.contains(r#""uri": "/api""#));
+    assert!(request_json.contains(r#""uri": "/api/users/list""#));
 
     let response_json = std::fs::read_to_string(case_dir.join("expected-response.json")).unwrap();
     let response: Value = serde_json::from_str(&response_json).unwrap();
@@ -160,6 +264,84 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     assert_eq!(response["body"]["decoded"], true);
     assert_eq!(response["body"]["content_encoding"], "gzip");
     assert_eq!(response["body"]["data"], r#"{"ok":true}"#);
+}
+
+#[tokio::test]
+async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let matched_upstream = spawn_http_response_upstream(r#"{"ok":true,"items":[1,2,3]}"#, 1).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
+    let gateway_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http.listen = free_addr();
+    config.http_gateway.enabled = true;
+    config.http_gateway.listen = gateway_addr;
+    config.http_gateway.matched_upstream = format!("http://{matched_upstream}");
+    config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
+    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+        name: Some("api".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/api/".to_string()],
+        ..Default::default()
+    }];
+    config.mysql.enabled = false;
+    config.recording.max_body_bytes = 8;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    let response = raw_http_get(gateway_addr, "/api/users/list").await;
+    assert!(response.contains(r#"{"ok":true"#));
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    handle.abort();
+
+    let published_group = temp.path().join("recordings/api/api-users");
+    assert!(
+        !published_group.exists()
+            || std::fs::read_dir(&published_group)
+                .unwrap()
+                .next()
+                .is_none()
+    );
+
+    let run_dirs = std::fs::read_dir(temp.path().join("recordings/_runs"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(run_dirs.len(), 1);
+    let failed_group = run_dirs[0].join("failed/api/api-users");
+    let failed_cases = std::fs::read_dir(&failed_group)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(failed_cases.len(), 1);
+    let failed_case = &failed_cases[0];
+    assert!(failed_case.join("request.json.partial").exists());
+    assert!(
+        failed_case
+            .join("expected-response.json.truncated")
+            .exists()
+    );
+    assert!(!failed_case.join("request.json").exists());
+    assert!(!failed_case.join("expected-response.json").exists());
+
+    let error_raw = std::fs::read_to_string(failed_case.join("recording-error.json")).unwrap();
+    assert!(error_raw.contains("expected_response_body_truncated"));
+    let report_raw = std::fs::read_to_string(run_dirs[0].join("recording-run.json")).unwrap();
+    let report: Value = serde_json::from_str(&report_raw).unwrap();
+    assert_eq!(report["status"], "failed");
+    assert_eq!(report["published_cases"], 0);
+    assert_eq!(report["failed_cases"], 1);
+    let errors_raw = std::fs::read_to_string(run_dirs[0].join("errors.jsonl")).unwrap();
+    assert!(errors_raw.contains("expected_response_body_truncated"));
 }
 
 #[tokio::test]
@@ -286,6 +468,30 @@ async fn spawn_http_response_upstream(body: &'static str, accept_count: usize) -
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut buf = [0_u8; 2048];
             let _ = stream.read(&mut buf).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    addr
+}
+
+async fn spawn_delayed_http_response_upstream(
+    body: &'static str,
+    accept_count: usize,
+    delay: Duration,
+) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        for _ in 0..accept_count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let _ = stream.read(&mut buf).await.unwrap();
+            tokio::time::sleep(delay).await;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.len(),

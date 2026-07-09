@@ -1,100 +1,111 @@
 ---
 name: recorded-e2e-cases
-description: Use when working with recorded traffic cases, E2E replay from recorded cases, case-driven E2E tests, request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, dependency replay, MySQL mysql_exchange records, generated dependency mocks, or cases where request/response alone is insufficient.
+description: Replay and fix E2E tests from recorded traffic case directories or case collections under recordings/rule/uri-group. Use when working with request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, traffic-recorder-proxy dependency replay, MySQL mysql_exchange records, case-driven E2E tests, or failures where the HTTP request/response pair is insufficient without recorded dependencies.
 ---
 
 # Recorded E2E Cases
 
-## Core Rule
-
 Treat a recorded case as an E2E recipe, not just an HTTP fixture.
 
-`request.json` and `expected-response.json` describe only the HTTP boundary.
-Most non-trivial cases will not replay successfully unless dependencies from
-`dependencies.jsonl` are recreated. Build the dependency layer first, then use
-the HTTP files to drive and assert the E2E.
+## Workflow
 
-## Case Loading Workflow
+1. Resolve the case under `recordings/<rule>/<uri-group>/<case-id>` unless the
+   user explicitly gives a different case path. Older recordings may use
+   `recordings/<rule>/<case-id>`. A user path may also point at a case
+   collection such as `recordings/<rule>/<uri-group>`; scan child case
+   directories and select matching case sets by `request.json.uri`, not by
+   directory name alone. Ignore `recordings/_runs`; it contains recorder run
+   diagnostics and failed cases, not replay fixtures. Preserve recorded files
+   exactly.
+2. Load `request.json`, canonical `expected-response.json`,
+   `dependencies.jsonl`, and `dependencies-summary.json` when present. Accept
+   `expected_response.json` as a user spelling but do not rename or rewrite it.
+   If a supplied directory only has `.truncated` or `.partial` files, stop and
+   report that the case was not published as a valid recording.
+   Read
+   [case-format.md](references/case-format.md) when parsing fields.
+3. Inspect the target project's existing E2E runner, server startup path,
+   runtime config, and dependency wiring before adding anything. Prefer existing
+   conventions.
+4. Start managed dependency replay before asserting the HTTP response. Use
+   `traffic-replay <case-or-collection-dir>` to start one replay session and
+   `traffic-replay-cli` to control case lifecycle. Ensure
+   `traffic-replay-cli`, `traffic-replay`, and `traffic-recorder-proxy` are on
+   `PATH`; do not reference this skill's filesystem path from target-project
+   tests. Wait for replay readiness before sending requests. For a case set,
+   call `traffic-replay-cli begin <case-id>` before each recorded request and
+   `traffic-replay-cli end <case-id> --fail-on-dirty` after assertions; finish
+   with a clean aggregate report and stop the replay session. Replay defaults
+   to owner filtering for the `trp-record` Unix user. Target-project E2E
+   commands should pass no user-filter argument by default and should run the
+   target process as `trp-record`. Use an exact `--owner-uid` only when the
+   harness cannot run as that user and record why. Do not put `--all-users` in
+   target-project tests, command facades, docs, or migration state; it is only
+   for manual troubleshooting on an isolated machine. Do not hand-write
+   substitute dependency mocks when replay data or relay behavior is missing;
+   report recorder/replay improvements instead.
+5. Build each test request from that case's `request.json`. Use recorded
+   `method`, `uri`, headers, and body as the source of truth. Do not hardcode
+   auth headers, query strings, bodies, or other case-specific request data in
+   the target test. Remove or override only transport headers the target harness
+   cannot set safely.
+6. Drive the recorded request, or the closest equivalent route invocation, and
+   compare it with `expected-response.json`. For JSON responses, compare parsed
+   JSON structurally: object key order is irrelevant, but field presence, value
+   type, `null`, empty string, and missing field must match exactly.
+7. Treat `dependencies.jsonl` as the case-level dependency touch contract. Use
+   `dependencies-summary.json` as the coverage checklist when it exists.
+   Response compatibility alone is not success. All case-owned dependency
+   touches, including auth/session calls and required side effects, must be
+   replay-matched with the same dependency identity. For MySQL, identity
+   includes the business target host, target port, database/schema, and
+   username/role before SQL and params are compared. Unmatched or unused case
+   dependencies block success unless the user explicitly approves a behavior
+   change or the evidence proves a recording-correlation issue that should be
+   reported upstream. Do not copy recorded dependency params into normal
+   runtime config or product logic just to satisfy coverage.
+8. Run a focused single-case or selected case-set E2E command first. After it
+   passes, run the broader relevant suite or project-standard checks.
+9. Iterate at most 3 times. Fix replay command options, target dependency
+   routing, or recorder/replay evidence first. Modify product code only when
+   dependency replay is complete and the failure clearly points to a real code
+   bug.
+10. After success, failure, or partial progress, review whether the replay pain
+   indicates recorder improvement opportunities. Do not change the recorder from
+   the target project; report evidence-backed feedback.
 
-1. Resolve the case directory.
-   - If given a path, use it directly.
-   - If given only a case id, search likely roots such as
-     `recordings/<rule>/<case-id>/`.
-2. Load these files first:
-   - `request.json`
-   - `expected-response.json`
-   - `dependencies.jsonl`
-3. Accept `expected_response.json` as a user spelling, but prefer the canonical
-   file `expected-response.json`.
-4. Load `dependencies-debug.jsonl` only when semantic dependency data is
-   missing, has parse warnings, or protocol-level debugging is required.
+Read [replay-workflow.md](references/replay-workflow.md) for target-project
+discovery, managed dependency replay, replay loops, and the fallback
+`.recorded-e2e.yaml` configuration interface.
 
-If `dependencies.jsonl` is missing or empty for a case that clearly depends on
-external systems, report the case as incomplete instead of trying to make the
-HTTP pair pass by guessing data.
+## Failure Rules
 
-## Building The Replay
+- Do not invent dependency rows, downstream responses, queue messages, cache
+  entries, or parameters when recording evidence is missing.
+- Load `dependencies-debug.jsonl` only when semantic dependency data is missing,
+  incomplete, has parse warnings, or protocol-level debugging is required.
+- If the case cannot be replayed because recording evidence is incomplete,
+  stop and output a concise missing-dependency list with recommended
+  re-recording or data-supply steps.
+- Do not mark a case as passed while replay output has unexplained unmatched
+  target calls or unused case dependency exchanges. Dynamic values such as
+  timestamps, request ids, UUIDs, durations, or generated ids may be normalized,
+  but the dependency touch itself must still be exercised.
+- Recorded params are evidence, not defaults. Keep fixed recorded values in
+  E2E replay config only; normal runtime must derive values from request input,
+  system time, generated ids, database state, or explicit product config.
+- If the HTTP assertion differs only in unstable fields, suggest JSONPath ignore
+  entries but do not add them unless the user explicitly authorizes it.
+- Use byte-level body comparison only for non-JSON bodies or when the user or
+  project config explicitly requests exact bytes.
 
-Use the host project's existing E2E framework, server startup path, and mock
-style. Do not introduce a new framework unless the repo has none.
+Read [failure-diagnosis.md](references/failure-diagnosis.md) for protocol-neutral
+triage, MySQL-specific risk signals, and recorder feedback signals.
 
-Map the case artifacts like this:
+## Output
 
-- `request.json`: inbound request method, path, query, headers, and body.
-- `expected-response.json`: expected HTTP status, headers when relevant, and
-  response body. Bodies may already be decoded from gzip/deflate.
-- `dependencies.jsonl`: semantic dependency behavior required for the request
-  to pass.
-- `dependencies-debug.jsonl`: raw/protocol fallback for investigation.
-
-The replay is complete only when the recorded request, or an equivalent route
-invocation, returns the expected response while using the dependency behavior
-from `dependencies.jsonl`.
-
-## Dependency Replay
-
-Prefer semantic dependency records over raw protocol payloads.
-
-For MySQL, prefer `mysql_exchange` records:
-
-- Match calls by normalized SQL plus parsed `params`.
-- Normalize SQL by collapsing whitespace and preserving placeholders.
-- Treat `statement_id` as connection-local context, not as a stable mock key.
-- For `response.status == "resultset"`, return `response.columns` and
-  `response.rows`.
-- For `response.status == "ok"`, return `affected_rows` and
-  `last_insert_id` when present.
-- For `response.status == "error"`, reproduce `error_code` and
-  `error_message`.
-- Preserve ordering when transactions, locks, repeated SQL, or connection
-  specific behavior matters.
-
-Do not use `mysql_query` or `mysql_response.payload` as the primary mock source.
-Those records belong in debug flows because raw/base64 protocol data is harder
-to replay reliably than `mysql_exchange`.
-
-## Incomplete Or Risky Cases
-
-Before writing the final E2E, check for:
-
-- Missing `dependencies.jsonl`.
-- `mysql_exchange` records with missing SQL or missing params for prepared
-  statement executions.
-- Non-empty `parse_warnings`.
-- Dependency calls present only in `dependencies-debug.jsonl`.
-- Response mismatches that look like missing dependency state.
-
-When these appear, state what is missing and use `dependencies-debug.jsonl` to
-investigate. Do not silently invent rows, parameters, or downstream responses.
-
-## Output Expectations
-
-When creating or fixing an E2E from a case:
-
-- Identify the case path and loaded files.
-- Summarize the dependency records used, especially MySQL exchanges.
-- Implement mocks from `dependencies.jsonl` before asserting the HTTP response.
-- Assert the HTTP status and the meaningful response body fields from
-  `expected-response.json`.
-- Keep debug/raw protocol assertions out of the normal E2E unless they are the
-  behavior under test.
+On success, keep the final response short: state whether the selected recorded
+case set passes, what changed, and the essential verification command. On a
+blocked case, include the missing evidence list. If recorder improvements are
+indicated, include only the concise evidence-backed feedback. Avoid long reports
+unless the user asks.
