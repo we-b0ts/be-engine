@@ -16,10 +16,7 @@ use tokio::net::TcpListener;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::config::{
-    DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS, HttpGatewayConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig,
-};
+use crate::config::{HttpGatewayConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig};
 use crate::http_gateway_case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
 use crate::process_lookup::{lookup_listening_process, process_label};
 use crate::recorder::{
@@ -186,7 +183,7 @@ async fn handle_gateway_request(
     let candidate_case = matched_rule.as_ref().map(|rule| CaseContext {
         id,
         rule_name: rule.name.clone(),
-        uri_group: case_uri_group(&original_uri, rule.case_uri_segments),
+        uri_group: Some(case_uri_group(&original_uri, &rule.case_path_patterns)),
     });
     let mut should_record = false;
     let mut case = None;
@@ -574,7 +571,7 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MatchedHttpGatewayRule {
     name: String,
-    case_uri_segments: usize,
+    case_path_patterns: Vec<String>,
 }
 
 fn match_rule(
@@ -586,7 +583,7 @@ fn match_rule(
     if rules.is_empty() {
         return Some(MatchedHttpGatewayRule {
             name: "default".to_string(),
-            case_uri_segments: DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS,
+            case_path_patterns: Vec::new(),
         });
     }
 
@@ -595,7 +592,7 @@ fn match_rule(
         .find(|rule| rule_matches(rule, method, uri, headers))
         .map(|rule| MatchedHttpGatewayRule {
             name: rule.name.clone().unwrap_or_else(|| "unnamed".to_string()),
-            case_uri_segments: rule.case_uri_segments,
+            case_path_patterns: rule.case_path_patterns.clone(),
         })
 }
 
@@ -650,24 +647,51 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
     path == normalized || path.starts_with(&format!("{normalized}/"))
 }
 
-fn case_uri_group(uri: &Uri, segment_count: usize) -> Option<String> {
-    if segment_count == 0 {
-        return None;
-    }
+fn case_uri_group(uri: &Uri, patterns: &[String]) -> String {
+    let path = uri.path();
+    let group_path = patterns
+        .iter()
+        .find(|pattern| path_matches_case_pattern(path, pattern))
+        .map(String::as_str)
+        .unwrap_or(path);
 
-    let group = uri
-        .path()
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .take(segment_count)
+    case_group_from_path(group_path)
+}
+
+fn path_matches_case_pattern(path: &str, pattern: &str) -> bool {
+    let actual_segments = path_segments(path);
+    let pattern_segments = path_segments(pattern);
+    actual_segments.len() == pattern_segments.len()
+        && actual_segments
+            .iter()
+            .zip(pattern_segments.iter())
+            .all(|(actual, expected)| *expected == "*" || actual == expected)
+}
+
+fn case_group_from_path(path: &str) -> String {
+    let group = path_segments(path)
+        .into_iter()
+        .map(|segment| {
+            if segment == "*" {
+                "wildcard".to_string()
+            } else {
+                segment.to_string()
+            }
+        })
         .collect::<Vec<_>>()
         .join("-");
 
-    Some(if group.is_empty() {
+    if group.is_empty() {
         "root".to_string()
     } else {
         group
-    })
+    }
+}
+
+fn path_segments(path: &str) -> Vec<&str> {
+    path.split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect()
 }
 
 fn upstream_socket_addr(base: &str) -> Option<SocketAddr> {
@@ -905,19 +929,33 @@ mod tests {
     }
 
     #[test]
-    fn builds_case_uri_group_from_path_segments() {
+    fn builds_case_uri_group_from_full_path() {
         assert_eq!(
-            case_uri_group(&"/api/users/list?x=1".parse().unwrap(), 2).as_deref(),
-            Some("api-users")
+            case_uri_group(&"/api/users/list?x=1".parse().unwrap(), &[]),
+            "api-users-list"
         );
         assert_eq!(
-            case_uri_group(&"/api/users/list".parse().unwrap(), 1).as_deref(),
-            Some("api")
+            case_uri_group(&"/api/users/123/xxx".parse().unwrap(), &[]),
+            "api-users-123-xxx"
         );
-        assert_eq!(case_uri_group(&"/api/users/list".parse().unwrap(), 0), None);
+        assert_eq!(case_uri_group(&"/".parse().unwrap(), &[]), "root");
+    }
+
+    #[test]
+    fn builds_case_uri_group_from_matching_pattern() {
+        let patterns = vec!["/api/users/*/xxx".to_string()];
+
         assert_eq!(
-            case_uri_group(&"/".parse().unwrap(), 2).as_deref(),
-            Some("root")
+            case_uri_group(&"/api/users/alice/xxx?x=1".parse().unwrap(), &patterns),
+            "api-users-wildcard-xxx"
+        );
+        assert_eq!(
+            case_uri_group(&"/api/users/bob/xxx".parse().unwrap(), &patterns),
+            "api-users-wildcard-xxx"
+        );
+        assert_eq!(
+            case_uri_group(&"/api/users/bob/other".parse().unwrap(), &patterns),
+            "api-users-bob-other"
         );
     }
 }

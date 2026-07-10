@@ -386,34 +386,46 @@ async fn discover_replay_cases(
         return Ok((ReplayMode::Single, cases, Some(case_id)));
     }
 
-    let mut entries = tokio::fs::read_dir(root_dir)
-        .await
-        .with_context(|| format!("failed to read replay case collection {}", root_dir.display()))?;
     let mut cases = BTreeMap::new();
-    while let Some(entry) = entries
-        .next_entry()
-        .await
-        .with_context(|| format!("failed to scan replay case collection {}", root_dir.display()))?
-    {
-        let file_type = entry.file_type().await.with_context(|| {
-            format!("failed to inspect replay case entry {}", entry.path().display())
-        })?;
-        if !file_type.is_dir() {
-            continue;
-        }
-        let case_dir = entry.path();
-        let dependencies_path = case_dir.join("dependencies.jsonl");
+    let mut pending = vec![root_dir.to_path_buf()];
+    while let Some(scan_dir) = pending.pop() {
+        let dependencies_path = scan_dir.join("dependencies.jsonl");
         if !dependencies_path.is_file() {
+            let mut entries = tokio::fs::read_dir(&scan_dir).await.with_context(|| {
+                format!("failed to read replay case collection {}", scan_dir.display())
+            })?;
+            while let Some(entry) = entries.next_entry().await.with_context(|| {
+                format!("failed to scan replay case collection {}", scan_dir.display())
+            })? {
+                let file_type = entry.file_type().await.with_context(|| {
+                    format!("failed to inspect replay case entry {}", entry.path().display())
+                })?;
+                if !file_type.is_dir() {
+                    continue;
+                }
+                let child = entry.path();
+                if should_skip_replay_scan_dir(&child) {
+                    continue;
+                }
+                pending.push(child);
+            }
             continue;
         }
-        let Some(case_id) = path_file_name(&case_dir) else {
+
+        let Some(case_id) = path_file_name(&scan_dir) else {
             continue;
         };
+        if cases.contains_key(&case_id) {
+            return Err(anyhow!(
+                "duplicate replay case id {case_id:?} under {}; pass a narrower case collection or re-record with unique case ids",
+                root_dir.display()
+            ));
+        }
         cases.insert(
             case_id.clone(),
             ReplayCase {
                 id: case_id,
-                dir: case_dir,
+                dir: scan_dir,
                 dependencies_path,
                 status: ReplayCaseStatus::Pending,
             },
@@ -421,11 +433,17 @@ async fn discover_replay_cases(
     }
     if cases.is_empty() {
         return Err(anyhow!(
-            "replay path {} is neither a case directory nor a collection with child dependencies.jsonl files",
+            "replay path {} is neither a case directory nor a collection/run directory with dependencies.jsonl case files",
             root_dir.display()
         ));
     }
     Ok((ReplayMode::Collection, cases, None))
+}
+
+fn should_skip_replay_scan_dir(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| matches!(name, "failed" | "staging" | ".replay"))
 }
 
 fn path_file_name(path: &Path) -> Option<String> {

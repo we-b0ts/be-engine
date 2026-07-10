@@ -458,6 +458,8 @@ run_as_root() {
       "DNS_PORT=$DNS_PORT_VALUE" \
       "UPSTREAM_DNS=$UPSTREAM_DNS_VALUE" \
       "FAKE_CIDR=$FAKE_CIDR" \
+      "ENABLE_TCP=1" \
+      "ENABLE_UDP=0" \
       "GATEWAY_PORT=$GATEWAY_PORT_VALUE" \
       "OWNER_UID=$OWNER_UID_VALUE" \
       "$@"

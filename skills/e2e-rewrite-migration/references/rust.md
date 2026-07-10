@@ -185,11 +185,17 @@ normal runnable server entrypoint for a migrated HTTP API.
 
 ## Config And Commands
 
-Development startup should read `config/default.yaml` or the repo's equivalent
-committed config by default. Support an explicit config path, such as
-`--config`, and allow environment variables to override deploy-time values.
-Keep `config/local.yaml` and `.env.local` ignored when they contain local
-secrets or machine-specific settings.
+Development startup should read `config/default.yaml` by default. Support an
+explicit config path, such as `--config`, and allow environment variables to
+override values after file loading. Derive variable names from the full config
+path in uppercase snake case, for example `aliyun.access_key_id` becomes
+`ALIYUN_ACCESS_KEY_ID` and `huaweiyun.regions.cn-north-4.secret_key` becomes
+`HUAWEIYUN_REGIONS_CN_NORTH_4_SECRET_KEY`.
+
+For secret-like keys, keep the keys present in `config/default.yaml` with blank
+values and provide `config/.env.example` with matching blank variable
+assignments. Keep real `.env`, `.env.local`, and `config/local.yaml` ignored
+when they contain local secrets or machine-specific settings.
 
 Do not put recorded dependency params in `config/default.yaml` just to satisfy
 replay coverage. `config/default.yaml` is for normal development behavior;

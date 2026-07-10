@@ -5,13 +5,12 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-pub const DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS: usize = 2;
-
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
     pub dns_mock: DnsMockConfig,
     pub tcp_gateway: TcpGatewayConfig,
+    pub udp_gateway: UdpGatewayConfig,
     pub http: HttpConfig,
     pub http_gateway: HttpGatewayConfig,
     pub mysql: MysqlConfig,
@@ -44,6 +43,14 @@ pub struct TcpGatewayConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
+pub struct UdpGatewayConfig {
+    pub enabled: bool,
+    pub listen: SocketAddr,
+    pub forward: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct HttpConfig {
     pub enabled: bool,
     pub listen: SocketAddr,
@@ -70,7 +77,7 @@ pub struct HttpGatewayReadyConfig {
     pub interval_ms: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HttpGatewayRuleConfig {
     pub name: Option<String>,
@@ -78,7 +85,7 @@ pub struct HttpGatewayRuleConfig {
     pub methods: Vec<String>,
     pub path_prefixes: Vec<String>,
     pub headers: BTreeMap<String, String>,
-    pub case_uri_segments: usize,
+    pub case_path_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -167,6 +174,18 @@ impl Default for TcpGatewayConfig {
     }
 }
 
+impl Default for UdpGatewayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: "127.0.0.1:15002"
+                .parse()
+                .expect("valid default UDP gateway listen address"),
+            forward: false,
+        }
+    }
+}
+
 impl Default for HttpGatewayConfig {
     fn default() -> Self {
         Self {
@@ -190,19 +209,6 @@ impl Default for HttpGatewayReadyConfig {
             path: "/".to_string(),
             success_status: 200,
             interval_ms: 1000,
-        }
-    }
-}
-
-impl Default for HttpGatewayRuleConfig {
-    fn default() -> Self {
-        Self {
-            name: None,
-            hosts: Vec::new(),
-            methods: Vec::new(),
-            path_prefixes: Vec::new(),
-            headers: BTreeMap::new(),
-            case_uri_segments: DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS,
         }
     }
 }
@@ -356,7 +362,7 @@ mod tests {
             hosts = ["api.example.com"]
             methods = ["GET", "POST"]
             path_prefixes = ["/api/"]
-            case_uri_segments = 3
+            case_path_patterns = ["/api/users/*/xxx"]
             headers = { "x-record" = "yes" }
 
             [[http_gateway.rules]]
@@ -372,19 +378,19 @@ mod tests {
         assert_eq!(config.http_gateway.ready.success_status, 200);
         assert_eq!(config.http_gateway.ready.interval_ms, 1000);
         assert_eq!(config.http_gateway.rules.len(), 2);
-        assert_eq!(config.http_gateway.rules[0].case_uri_segments, 3);
+        assert_eq!(
+            config.http_gateway.rules[0].case_path_patterns,
+            vec!["/api/users/*/xxx".to_string()]
+        );
         assert_eq!(
             config.http_gateway.rules[0].headers["x-record"],
             "yes".to_string()
         );
-        assert_eq!(
-            config.http_gateway.rules[1].case_uri_segments,
-            DEFAULT_HTTP_GATEWAY_CASE_URI_SEGMENTS
-        );
+        assert!(config.http_gateway.rules[1].case_path_patterns.is_empty());
     }
 
     #[test]
-    fn parses_dns_mock_and_tcp_gateway() {
+    fn parses_dns_mock_and_fake_ip_gateways() {
         let config: AppConfig = toml::from_str(
             r#"
             [dns_mock]
@@ -405,14 +411,22 @@ mod tests {
             record_http = true
             mitm_https = true
             https_ports = [443, 8443]
+
+            [udp_gateway]
+            enabled = true
+            listen = "127.0.0.1:15002"
+            forward = true
             "#,
         )
         .unwrap();
 
         assert!(config.dns_mock.enabled);
         assert!(config.tcp_gateway.enabled);
+        assert!(config.udp_gateway.enabled);
         assert!(config.tcp_gateway.mitm_https);
         assert_eq!(config.tcp_gateway.https_ports, vec![443, 8443]);
+        assert_eq!(config.udp_gateway.listen.to_string(), "127.0.0.1:15002");
+        assert!(config.udp_gateway.forward);
         assert_eq!(config.dns_mock.fake_cidr, "198.18.0.0/15");
         assert_eq!(
             config.dns_mock.bypass_domains,

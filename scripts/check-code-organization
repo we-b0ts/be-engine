@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+limit=1000
+warn=600
+failed=0
+
+changed_files() {
+  {
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      if [ -n "${CODE_ORG_BASE:-}" ] && git rev-parse --verify "$CODE_ORG_BASE" >/dev/null 2>&1; then
+        base="$CODE_ORG_BASE"
+        git diff --name-only --diff-filter=ACMRTUXB "$base"...HEAD -- 'src/**/*.rs' 'src/*.rs'
+      fi
+      git diff --name-only --diff-filter=ACMRTUXB -- 'src/**/*.rs' 'src/*.rs'
+      git diff --cached --name-only --diff-filter=ACMRTUXB -- 'src/**/*.rs' 'src/*.rs'
+      git ls-files --others --exclude-standard -- 'src/**/*.rs' 'src/*.rs'
+    else
+      find src -type f -name '*.rs'
+    fi
+  } | sort -u
+}
+
+files="$(changed_files)"
+if [ -z "$files" ]; then
+  echo "code organization check: no changed Rust product source files"
+  exit 0
+fi
+
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  [ -f "$file" ] || continue
+  lines="$(wc -l <"$file" | tr -d ' ')"
+  if [ "$lines" -gt "$limit" ]; then
+    echo "ERROR: changed file $file has $lines lines; product source files must stay <= $limit lines" >&2
+    failed=1
+  elif [ "$lines" -gt "$warn" ]; then
+    echo "WARN: changed file $file has $lines lines; review whether responsibilities should be split" >&2
+  fi
+done <<<"$files"
+
+exit "$failed"

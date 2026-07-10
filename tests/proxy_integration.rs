@@ -1,4 +1,5 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use flate2::Compression;
@@ -53,7 +54,8 @@ async fn records_http_proxy_exchange() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
 
-    let jsonl = tokio::fs::read_to_string(temp.path().join("recordings/traffic.jsonl"))
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
@@ -98,7 +100,8 @@ async fn http_gateway_records_only_matched_traffic() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
 
-    let jsonl = tokio::fs::read_to_string(temp.path().join("recordings/traffic.jsonl"))
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
@@ -148,7 +151,8 @@ async fn http_gateway_falls_back_before_ready() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
 
-    assert!(!temp.path().join("recordings/record-path").exists());
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    assert!(!run_dir.join("record-path").exists());
 }
 
 #[tokio::test]
@@ -192,7 +196,8 @@ async fn http_gateway_allows_only_one_active_matched_case() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
 
-    let rule_dir = temp.path().join("recordings/record-path");
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let rule_dir = run_dir.join("record-path");
     let uri_group_dirs = std::fs::read_dir(&rule_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -246,7 +251,8 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
 
-    let rule_dir = temp.path().join("recordings/api/api-users");
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let rule_dir = run_dir.join("api/api-users-list");
     let case_dirs = std::fs::read_dir(&rule_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -303,7 +309,8 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
 
-    let published_group = temp.path().join("recordings/api/api-users");
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let published_group = run_dir.join("api/api-users-list");
     assert!(
         !published_group.exists()
             || std::fs::read_dir(&published_group)
@@ -312,12 +319,7 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
                 .is_none()
     );
 
-    let run_dirs = std::fs::read_dir(temp.path().join("recordings/_runs"))
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .collect::<Vec<_>>();
-    assert_eq!(run_dirs.len(), 1);
-    let failed_group = run_dirs[0].join("failed/api/api-users");
+    let failed_group = run_dir.join("failed/api/api-users-list");
     let failed_cases = std::fs::read_dir(&failed_group)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -335,12 +337,12 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
 
     let error_raw = std::fs::read_to_string(failed_case.join("recording-error.json")).unwrap();
     assert!(error_raw.contains("expected_response_body_truncated"));
-    let report_raw = std::fs::read_to_string(run_dirs[0].join("recording-run.json")).unwrap();
+    let report_raw = std::fs::read_to_string(run_dir.join("recording-run.json")).unwrap();
     let report: Value = serde_json::from_str(&report_raw).unwrap();
     assert_eq!(report["status"], "failed");
     assert_eq!(report["published_cases"], 0);
     assert_eq!(report["failed_cases"], 1);
-    let errors_raw = std::fs::read_to_string(run_dirs[0].join("errors.jsonl")).unwrap();
+    let errors_raw = std::fs::read_to_string(run_dir.join("errors.jsonl")).unwrap();
     assert!(errors_raw.contains("expected_response_body_truncated"));
 }
 
@@ -394,7 +396,8 @@ async fn records_and_rejects_mysql_tls_request() {
     tokio::time::sleep(Duration::from_millis(100)).await;
     handle.abort();
 
-    let jsonl = tokio::fs::read_to_string(temp.path().join("recordings/traffic.jsonl"))
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
     assert!(jsonl.contains(r#""event_type":"mysql_tls_rejected""#));
@@ -556,6 +559,16 @@ async fn wait_for_port(addr: SocketAddr) {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("port {addr} did not open");
+}
+
+fn only_recording_run_dir(recordings_dir: &Path) -> PathBuf {
+    let run_dirs = std::fs::read_dir(recordings_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    assert_eq!(run_dirs.len(), 1);
+    run_dirs[0].clone()
 }
 
 fn mysql_packet(sequence_id: u8, payload: &[u8]) -> Vec<u8> {

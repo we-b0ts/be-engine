@@ -12,7 +12,7 @@ use traffic_recorder_proxy::{
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 struct Cli {
-    #[arg(short, long, default_value = "recorder.example.toml")]
+    #[arg(short, long, default_value = "config/recorder.example.toml")]
     config: PathBuf,
 
     #[command(subcommand)]

@@ -39,6 +39,7 @@ pub struct CaseContext {
 pub enum RecorderEvent {
     HttpExchange(HttpExchangeEvent),
     TcpGatewayConnection(TcpGatewayConnectionEvent),
+    UdpDatagram(UdpDatagramEvent),
     MysqlConnection(MysqlConnectionEvent),
     MysqlQuery(MysqlQueryEvent),
     MysqlResponse(MysqlResponseEvent),
@@ -110,6 +111,32 @@ pub struct TcpGatewayConnectionEvent {
     pub upstream_addr: Option<String>,
     pub client_to_server_bytes: u64,
     pub server_to_client_bytes: u64,
+    pub duration_ms: u128,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UdpDatagramEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub listen_addr: String,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_port: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fake_addr: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_addr: Option<String>,
+    pub protocol: String,
+    pub forwarded: bool,
+    pub payload: BodyCapture,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub payload_text: Option<String>,
     pub duration_ms: u128,
     pub error: Option<String>,
 }

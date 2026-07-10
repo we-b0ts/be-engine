@@ -19,8 +19,8 @@ Inspect before implementation:
 - existing config format and config directory conventions
 - existing logging, tracing, access-log, and runtime artifact conventions
 - existing module boundaries, package layout, and test-support conventions
-- recorded cases under the user-provided location or target
-  `tests/fixtures/recordings`
+- recorded cases under the user-provided location or the target repo's existing
+  configured case source, if any
 
 The source repo is for understanding behavior and intent. Do not assume a
 function-by-function translation is required. Preserve API/interface output
@@ -98,14 +98,28 @@ behavior, get explicit user approval for a behavior contract change, or report
 the dependency as a recording-correlation improvement when evidence proves it
 is unrelated/background traffic.
 
-Default copied case location in the target repo is `tests/fixtures/recordings`.
-Preserve original case files. A user-provided recording path may be a single
-case directory or a collection such as `recordings/<rule>/<uri-group>` whose
-child directories are case ids. When given a collection, select by reading each
-child `request.json.uri` and matching the selected API path; do not rely on the
-`uri-group` directory name alone. Do not select from `recordings/_runs`; failed
-cases with `.partial`, `.truncated`, or `recording-error.json` are recorder
-diagnostics and must be re-recorded before migration work starts.
+User-provided recorded cases are rewrite inputs. They are not PR-owned fixtures
+and should not be copied into the target repo merely because they were used
+during the rewrite. Do not add external case files to the target repo unless
+the user explicitly asks for that or the target repo already has an established
+committed-fixture convention. A target PR should instead make its E2E workflow
+able to obtain cases at runtime from the user-provided path, a CI artifact, a
+case service, object storage, or another approved source. Record that source in
+`.migration/e2e.yaml`.
+
+Do not commit bulk recordings, unrelated API cases, failed cases, `staging`,
+`.replay`, `.partial`, `.truncated`, or recorder diagnostics. If the user
+explicitly asks to commit a case fixture, preserve original case files and keep
+the fixture limited to the selected scope.
+
+A user-provided recording path may be a single case directory, a collection
+such as `recordings/<run-id>/<rule>/<uri-group>`, or an entire run directory
+such as `recordings/<run-id>`. When given a collection or run directory, select
+by reading each published child `request.json.uri` and matching the selected
+API path; do not rely on the `uri-group` directory name alone. Do not select
+from `failed`, `staging`, or `.replay`; failed cases with `.partial`,
+`.truncated`, or `recording-error.json` are recorder diagnostics and must be
+re-recorded before migration work starts.
 
 Before rewriting when multiple APIs or collection paths are involved, build a
 scope/case matrix:
@@ -128,6 +142,94 @@ If the selected scope has no recorded case, stop before rewriting and recommend
 what to record, including the route/job, expected dependencies, and completeness
 checks.
 
+## Metrics Contract
+
+Metrics are part of observable behavior when the source capability emits them.
+Do not silently drop metrics during a rewrite just because the HTTP response
+contract passes. Classify metrics by delivery model, not by source language,
+framework, or metrics library:
+
+- push metrics are outbound side effects. They may be sent over UDP, TCP, HTTP,
+  or a company-specific transport. Validate them from recorded or replayed
+  dependency evidence when that evidence exists.
+- pull metrics are exported service state. They may be exposed through
+  Prometheus, OpenMetrics, or a custom scrape endpoint. Validate them through
+  the configured exporter or scrape endpoint when the source behavior includes
+  one.
+
+For push metrics, implement the real runtime metrics client or adapter that the
+target service should use. Do not satisfy the migration by replacing metrics
+with project-local mocks or by writing recorded metric payloads from the E2E
+harness. Replay/report tooling owns side-effect comparison.
+
+For pull metrics, ensure the service starts the exporter with normal runtime
+startup and verify that a focused request or job updates the expected metric
+family. Keep labels and dimensions stable; avoid high-cardinality request data
+unless the source contract explicitly uses it.
+
+When metrics behavior exists in the source code but recorded cases, replay
+output, source docs, or existing tests are not enough to reproduce it, keep the
+migration incomplete with `metrics_contract_status: metrics_unconfirmed`.
+List the missing evidence and recommend the recording or verification step
+needed to confirm the metrics contract.
+
+## Unit And Component Test Contract
+
+Recorded E2E is the compatibility contract, not the only test layer. Add
+focused unit or component tests for local logic that would otherwise require a
+full recorded replay to diagnose.
+
+Prefer unit/component tests for:
+
+- request parsing, response shaping, serializers, and compatibility helpers
+- runtime config loading, environment overrides, redaction, and validation
+- dynamic value strategies such as clocks, request ids, table suffixes, and
+  generated ids
+- schema/type mapping and external adapter conversion logic
+- signing, canonicalization, metrics normalization, and protocol-specific
+  payload builders
+- error mapping, retry classification, and dependency boundary behavior
+
+Do not create broad brittle tests that duplicate recorded E2E assertions. The
+unit layer should make product logic easier to debug when recorded replay
+fails. If a migrated scope changes non-trivial logic but has no meaningful unit
+or component tests, record `unit_test_status: insufficient` and do not present
+the quality gate as complete without calling out that gap.
+
+## Git Baseline And PR Delivery
+
+Use `dev-migration` as the target repo integration branch for migration work.
+Do not commit completed rewrites directly to `main`, `master`, or
+`dev-migration`.
+
+Before implementation, or before handoff if work already exists, inspect
+`git status --short` and the current branch in the target repo.
+
+If the current branch is not `dev-migration`:
+
+1. Preserve current updates with a named stash, including untracked files when
+   needed.
+2. Switch to `dev-migration`, using `origin/dev-migration` as the tracking
+   source when the local branch does not exist.
+3. Pull latest with a fast-forward-only update.
+4. Create a scope branch from `dev-migration`.
+5. Reapply the stash only if it contains intended migration work, resolve
+   conflicts, and keep unrelated user changes separate or report them.
+
+If the current branch is already `dev-migration`, still create a scope branch
+before making migration commits. If `dev-migration` is missing locally and
+remotely, stop and ask whether to create it instead of guessing the base.
+
+Name the scope branch from the migrated unit, such as
+`codex/migrate-api-user-list` or `migration/api-user-list`, following the
+target repo's branch naming convention when one exists.
+
+After E2E, startup smoke, quality checks, and reviews pass, commit the focused
+changes and open a PR from the scope branch to `dev-migration`. Do not leave a
+completed migration only unstaged, staged, stashed, or on a local branch with no
+PR. If the repository has no reachable PR mechanism, keep the migration
+incomplete and report the branch, commit, and blocker.
+
 ## Target Artifacts
 
 Before implementing behavior:
@@ -136,6 +238,7 @@ Before implementing behavior:
 - ensure migration details live in structured docs under `docs/`, with
   `AGENTS.md` acting as a concise map
 - create or update `.migration/e2e.yaml`
+- identify the rewrite input case paths separately from the PR E2E case source
 - create or reuse a repo-local development command facade
 - create or reuse committed development config under `config/`
 - create or reuse diagnostic logging for service startup, access, dependency
@@ -151,8 +254,16 @@ Before implementing behavior:
 - `target_language`
 - `current_scope`
 - `scope_case_matrix` when several APIs or case sets are involved
-- `recorded_cases`
+- `rewrite_input_cases`
+- `pr_e2e_case_source`
+- `pr_e2e_cases`
+- `e2e_case_arg`
 - `status`
+- `git_base_branch`
+- `git_work_branch`
+- `pr_target_branch`
+- `pr_url`
+- `stash_name` when work was moved from another branch
 - `command_facade`
 - `package_layout`
 - `workspace_decision`
@@ -162,6 +273,7 @@ Before implementing behavior:
 - `schema_sources`
 - `schema_validation_status`
 - `e2e_command`
+- `unit_test_status`
 - `quality_commands`
 - `runtime_start_command`
 - `runtime_stop_command`
@@ -170,6 +282,7 @@ Before implementing behavior:
 - `config_files`
 - `logging_config`
 - `log_paths`
+- `metrics_contract_status`
 - `docs`
 - `agents_md_status`
 - `blockers`
@@ -198,7 +311,9 @@ Expose the commands that are relevant to the migrated scope:
 - `restart`: run the same `stop` then `start` path
 - `status`: report whether the service is running and include pid, port, or
   health details when available
-- `e2e`: run the focused recorded E2E, or the configured recorded E2E suite
+- `e2e`: run the focused recorded E2E, or the configured recorded E2E suite;
+  accept an external local case path such as `--case-dir <path>` unless the
+  repo already has an equivalent case-source argument
 - `check`: run formatting, tests, linting, and relevant quality gates
 - `build`: build the target artifact
 - `release`: run the project's release/package flow when it exists
@@ -212,14 +327,30 @@ Commands may wrap language-native tools such as `cargo`, `go`, `npm`, Docker
 Compose, `make`, or `just`; the stable interface for agents and users is the
 facade command. The focused recorded E2E should call `traffic-replay` from
 `PATH` and control active cases with `traffic-replay-cli` from `PATH`, not a
-skill-local helper path.
+skill-local helper path. It should pass the provided `--case-dir` through to
+the replay/E2E harness and must not hardcode the user's rewrite input path in
+source code, config, or tests. CI or PR workflows may download or mount cases
+first, then call the same facade with `--case-dir`.
 
 Place application config under `config/`. Development startup should read a
-committed default config directly, such as `config/default.yaml` or the target
-repo's preferred format. Add `config/e2e.yaml` when recorded E2E needs a
-different but still source-controlled isolation config. Production may specify a
-different config path, such as with `--config` or a project-specific environment
-variable, and may override individual values through environment variables.
+committed default config directly, such as `config/default.yaml`. Add
+`config/e2e.yaml` when recorded E2E needs a different but still
+source-controlled isolation config. Production may specify a different config
+path, such as with `--config` or a project-specific environment variable.
+
+Support environment-variable overrides for config values. The environment
+variable name is the full config key path converted to uppercase snake case:
+join nested keys with `_`, convert `-` and other non-alphanumeric separators to
+`_`, and collapse repeated `_`. Examples:
+
+- `aliyun.access_key_id` -> `ALIYUN_ACCESS_KEY_ID`
+- `aliyun.access_key_secret` -> `ALIYUN_ACCESS_KEY_SECRET`
+- `huaweiyun.regions.cn-north-4.secret_key` ->
+  `HUAWEIYUN_REGIONS_CN_NORTH_4_SECRET_KEY`
+
+Read config files first, then apply environment variables when they are
+present. Environment variables have higher priority than committed config and
+local config files.
 
 Default runtime config must describe behavior, not a captured case. Examples:
 use a strategy such as current-month table suffix, system clock, generated
@@ -227,12 +358,17 @@ request id, authenticated user, tenant from request/session, or ids read from
 database state. E2E config may pin recorded values only when the pin is visibly
 test-only and the normal startup path does not require it.
 
-Keep real secrets and machine-local values out of committed config. If local
-overrides are needed, use ignored files such as `config/local.yaml` or
-`.env.local`, and provide a committed template only when useful. Do not use
-`.migration/e2e.yaml` or `.recorded-e2e.yaml` as application runtime config:
-`.migration/e2e.yaml` tracks migration state, while `.recorded-e2e.yaml`
-controls recorded assertion behavior and dependency isolation.
+Keep real secrets and machine-local values out of committed config. For keys
+whose name or meaning includes password, secret, appkey/app_key, access key,
+token, authorization, or private credentials, keep the key present in
+`config/default.yaml` but leave its committed value blank. Require runtime
+values through environment variables or an ignored local override. When any
+such key exists, create or maintain `config/.env.example` with the derived
+variable names and blank values. Do not commit real `.env`, `.env.local`, or
+`config/local.yaml` files. Do not use `.migration/e2e.yaml` or
+`.recorded-e2e.yaml` as application runtime config: `.migration/e2e.yaml`
+tracks migration state, while `.recorded-e2e.yaml` controls recorded assertion
+behavior and dependency isolation.
 
 ## Logging Contract
 
@@ -419,6 +555,10 @@ the source repo and replay report:
 - no normal runtime config or product logic contains fixed values copied from
   recorded dependency params
 - dynamic values have runtime strategies recorded in `.migration/e2e.yaml`
+- metrics emitted by the source capability are implemented, verified, or
+  explicitly recorded as `metrics_unconfirmed`
+- non-trivial local logic has focused unit or component tests, or
+  `unit_test_status: insufficient` is recorded with a reason
 - DB/MySQL adapter types come from explicit schema evidence, not source-language
   model guesses
 - package/workspace decisions and module boundaries match the code that was
@@ -455,13 +595,15 @@ Use at most 3 iterations:
 8. For API/service scopes, ensure a normal runnable entrypoint exists before
    declaring success. A library-only test harness is not enough for a migrated
    service API.
-9. Run the focused recorded E2E through managed dependency replay and verify
+9. Add or update focused unit/component tests for the local logic introduced by
+   the scope.
+10. Run the focused recorded E2E through managed dependency replay and verify
    that all selected case-owned dependency touches are matched.
-10. Perform the migration semantics review.
-11. Classify failures as target implementation bug, replay issue,
+11. Perform the migration semantics review.
+12. Classify failures as target implementation bug, replay issue,
    incomplete recording, recording workflow improvement, or target setup issue.
-12. Fix target implementation only when recorded replay evidence is complete.
-13. Stop with a recording/E2E improvement list when evidence is missing or
+13. Fix target implementation only when recorded replay evidence is complete.
+14. Stop with a recording/E2E improvement list when evidence is missing or
    replay would require guessing.
 
 After focused E2E passes, run the target repo's relevant quality checks. For
@@ -469,13 +611,12 @@ Rust, use the commands in `rust.md` unless the target repo already defines a
 stricter standard.
 
 For API/service scopes, verify the default runtime can start from normal
-configuration without loading `tests/fixtures/recordings`. Prefer the command
-facade, such as `scripts/<project>-cli start`, for the startup smoke. Use
-`status` to confirm the local process and `stop` to clean it up. The smoke
-should prove the service entrypoint exists and reaches bind or configuration
-parsing. It may fail to connect to unavailable real dependencies only after
-startup or when the migrated endpoint is exercised; it must not be hard-wired
-to fixture data.
+configuration without loading recorded cases. Prefer the command facade, such
+as `scripts/<project>-cli start`, for the startup smoke. Use `status` to
+confirm the local process and `stop` to clean it up. The smoke should prove the
+service entrypoint exists and reaches bind or configuration parsing. It may
+fail to connect to unavailable real dependencies only after startup or when the
+migrated endpoint is exercised; it must not be hard-wired to fixture data.
 
 Do not complete the migration if the only runnable path is a recorded test app,
 fixture-backed repository, or helper that requires a case directory. Add or
@@ -487,6 +628,7 @@ Keep output concise:
 
 - migrated scope
 - source repo path and recorded case path or selected case set
+- git base branch, work branch, PR target, and PR URL when available
 - command facade lifecycle commands, E2E command, and quality commands run
 - schema validation status for DB-backed scopes
 - runtime lifecycle commands and verified process status for service scopes

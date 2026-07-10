@@ -1,6 +1,6 @@
 ---
 name: recorded-e2e-cases
-description: Replay and fix E2E tests from recorded traffic case directories or case collections under recordings/rule/uri-group. Use when working with request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, traffic-recorder-proxy dependency replay, MySQL mysql_exchange records, case-driven E2E tests, or failures where the HTTP request/response pair is insufficient without recorded dependencies.
+description: Replay and fix E2E tests from recorded traffic case directories, run directories, or case collections under recordings/run-id/rule/uri-group. Use when working with request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, traffic-recorder-proxy dependency replay, MySQL mysql_exchange records, case-driven E2E tests, or failures where the HTTP request/response pair is insufficient without recorded dependencies.
 ---
 
 # Recorded E2E Cases
@@ -9,14 +9,14 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
 
 ## Workflow
 
-1. Resolve the case under `recordings/<rule>/<uri-group>/<case-id>` unless the
-   user explicitly gives a different case path. Older recordings may use
-   `recordings/<rule>/<case-id>`. A user path may also point at a case
-   collection such as `recordings/<rule>/<uri-group>`; scan child case
+1. Resolve the case under
+   `recordings/<run-id>/<rule>/<uri-group>/<case-id>` unless the user
+   explicitly gives a different case path. A user path may also point at a case
+   collection such as `recordings/<run-id>/<rule>/<uri-group>` or an entire run
+   directory such as `recordings/<run-id>`; scan published child case
    directories and select matching case sets by `request.json.uri`, not by
-   directory name alone. Ignore `recordings/_runs`; it contains recorder run
-   diagnostics and failed cases, not replay fixtures. Preserve recorded files
-   exactly.
+   directory name alone. Ignore `failed`, `staging`, and `.replay` directories;
+   they are not replay fixtures. Preserve recorded files exactly.
 2. Load `request.json`, canonical `expected-response.json`,
    `dependencies.jsonl`, and `dependencies-summary.json` when present. Accept
    `expected_response.json` as a user spelling but do not rename or rewrite it.
@@ -28,7 +28,7 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    runtime config, and dependency wiring before adding anything. Prefer existing
    conventions.
 4. Start managed dependency replay before asserting the HTTP response. Use
-   `traffic-replay <case-or-collection-dir>` to start one replay session and
+   `traffic-replay <case-run-or-collection-dir>` to start one replay session and
    `traffic-replay-cli` to control case lifecycle. Ensure
    `traffic-replay-cli`, `traffic-replay`, and `traffic-recorder-proxy` are on
    `PATH`; do not reference this skill's filesystem path from target-project
@@ -62,8 +62,9 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    username/role before SQL and params are compared. Unmatched or unused case
    dependencies block success unless the user explicitly approves a behavior
    change or the evidence proves a recording-correlation issue that should be
-   reported upstream. Do not copy recorded dependency params into normal
-   runtime config or product logic just to satisfy coverage.
+   reported upstream. Recorded metrics dependencies are behavior, not optional
+   observability. Do not copy recorded dependency params into normal runtime
+   config or product logic just to satisfy coverage.
 8. Run a focused single-case or selected case-set E2E command first. After it
    passes, run the broader relevant suite or project-standard checks.
 9. Iterate at most 3 times. Fix replay command options, target dependency

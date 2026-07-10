@@ -30,6 +30,7 @@ Prefer the existing boundaries when adding or moving code:
   classification
 - `dns_mock.rs`: fake-DNS behavior
 - `tcp_gateway.rs`: fake-IP TCP interception and routing
+- `udp_gateway.rs`: fake-IP UDP datagram side-effect capture
 - `mysql_proxy.rs`: MySQL proxy/session orchestration
 - `mysql_protocol.rs`: low-level MySQL packet parsing and encoding
 - `mysql_semantic.rs`: semantic MySQL exchange parsing
@@ -49,6 +50,7 @@ Prefer the existing boundaries when adding or moving code:
 - `recorder_run.rs`: recording run reports, staging, publishing, and failed
   case handling
 - `dependency_summary.rs`: dependency summary construction
+- `dependency_summary/udp.rs`: UDP dependency summary construction
 - `process_lookup.rs`: local process ownership lookup
 - `tls.rs`: CA and TLS helpers
 
@@ -109,6 +111,13 @@ behavior. Keep the extraction tied to the current change, such as moving replay
 matching, response encoding, semantic column mapping, recorder events, or file
 writing into smaller modules. Do not perform broad unrelated rewrites.
 
+Use `scripts/check-code-organization` to enforce this on changed Rust product
+source files. By default it checks the local worktree, staged changes, and
+untracked source files. In CI or pre-push hooks, set `CODE_ORG_BASE` such as
+`CODE_ORG_BASE=origin/master` to check the full branch delta. This keeps
+historical hotspots from blocking unrelated work while still catching them as
+soon as a change touches them.
+
 ## Suggested Refactor Directions
 
 Use these as guidance when a touched file crosses a size gate:
@@ -121,6 +130,9 @@ Use these as guidance when a touched file crosses a size gate:
   if the current loose files become harder to navigate
 - split `tcp_gateway` by fake-IP routing, listener lifecycle, connection copy,
   process matching, and dependency attachment
+- split `udp_gateway` by datagram receive/original-destination handling,
+  dependency event construction, forwarding, and protocol-specific parsing if
+  it grows beyond generic UDP capture
 - group HTTP proxy/gateway/case responsibilities under an `http` namespace if
   future HTTP work makes the current top-level files noisy
 
@@ -132,7 +144,7 @@ formats unless the user explicitly asks for a breaking format change.
 Before declaring a change complete:
 
 ```bash
-wc -l src/*.rs | sort -n
+scripts/check-code-organization
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings

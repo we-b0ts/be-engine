@@ -31,6 +31,15 @@ mitm_https = true
 # Empty means attempt HTTPS MITM for all TLS-looking TCP streams.
 https_ports = []
 
+[udp_gateway]
+# Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP
+# recording is side-effect capture; it does not wait for or synthesize replies.
+enabled = true
+listen = "127.0.0.1:15002"
+# Default false keeps recording from emitting development metrics to real
+# upstream collectors.
+forward = false
+
 [http_gateway]
 enabled = true
 listen = "0.0.0.0:17171"
@@ -54,11 +63,11 @@ interval_ms = 1000
 # time; overlapping eligible requests are sent to fallback_upstream.
 [[http_gateway.rules]]
 name = "record-api"
-methods = ["GET"]
-path_prefixes = ["/api/"]
-# Number of URI path segments used in the case directory name.
-# /api/users/list with the default 2 becomes api-users.
-case_uri_segments = 2
+methods = []
+path_prefixes = ["/api"]
+# Optional full-path grouping patterns for dynamic path segments.
+# /api/users/123/xxx with "/api/users/*/xxx" becomes api-users-wildcard-xxx.
+case_path_patterns = []
 headers = {}
 
 [mysql]

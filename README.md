@@ -38,7 +38,7 @@ cargo build --release
 ## Run
 
 ```bash
-cargo run -- --config recorder.example.toml
+cargo run -- --config config/recorder.example.toml
 ```
 
 For watch-mode recording, install the repo-level command and run
@@ -50,10 +50,10 @@ skip those local rules.
 mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 command -v traffic-record
-traffic-record recorder.example.toml
+traffic-record config/recorder.example.toml
 ```
 
-`recorder.example.toml` enables local owner filtering with the `trp-record`
+`config/recorder.example.toml` enables local owner filtering with the `trp-record`
 Unix user by default:
 
 ```toml
@@ -69,7 +69,7 @@ recorder:
 ```bash
 sudo useradd --system --create-home --shell /bin/bash trp-record
 sudo -u trp-record /path/to/source-service start
-traffic-record recorder.example.toml
+traffic-record config/recorder.example.toml
 ```
 
 Use `traffic-record --user other-user`, `traffic-record --owner-uid 1002`, or
@@ -81,7 +81,7 @@ The default example listens on:
 - DNS mock: `127.0.0.153:15353`
 - TCP fake-IP gateway: `127.0.0.1:15001`
 - HTTP gateway for tcpcopy traffic: `0.0.0.0:18084`
-- JSONL output: `./recordings/traffic.jsonl`
+- JSONL output: `./recordings/<run-id>/traffic.jsonl`
 - Generated CA: `./data/traffic-recorder-ca.pem`
 
 For dependency replay, install the repo-level replay command and pass the case
@@ -97,6 +97,7 @@ command -v traffic-recorder-proxy
 command -v traffic-record
 command -v traffic-replay
 traffic-replay path/to/case-dir
+traffic-replay path/to/recordings/<run-id>
 ```
 
 `traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
@@ -163,7 +164,7 @@ name = "record-api"
 hosts = ["api.example.com"]
 methods = ["GET", "POST"]
 path_prefixes = ["/api/"]
-case_uri_segments = 2
+case_path_patterns = ["/api/users/*/xxx"]
 headers = { "x-record" = "yes" }
 ```
 
@@ -179,34 +180,38 @@ status equals `success_status`, the shared bootstrap dependency window closes.
 The probe itself is not recorded as a case. If this section is disabled, the
 bootstrap window still closes when the first matched gateway case starts.
 
-Matched gateway requests also create a case directory under
-`recording.output_dir` after the case is complete and valid:
+Each recorder process creates one run directory under `recording.output_dir`
+named `YYYYMMDDHHMMSS`. Matched gateway requests create case directories inside
+that run after the case is complete and valid:
 
 ```text
-<rule-name>/<uri-group>/<case-id>/request.json
-<rule-name>/<uri-group>/<case-id>/expected-response.json
-<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
-<rule-name>/<uri-group>/<case-id>/dependencies-summary.json
-<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
-bootstrap-dependencies.jsonl
-bootstrap-dependencies-summary.json
-bootstrap-dependencies-debug.jsonl
-_runs/<run-id>/recording-run.json
-_runs/<run-id>/errors.jsonl
-_runs/<run-id>/failed/<rule-name>/<uri-group>/<case-id>/
+<run-id>/traffic.jsonl
+<run-id>/recording-run.json
+<run-id>/errors.jsonl
+<run-id>/bootstrap-dependencies.jsonl
+<run-id>/bootstrap-dependencies-summary.json
+<run-id>/bootstrap-dependencies-debug.jsonl
+<run-id>/<rule-name>/<uri-group>/<case-id>/request.json
+<run-id>/<rule-name>/<uri-group>/<case-id>/expected-response.json
+<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
+<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-summary.json
+<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
+<run-id>/failed/<rule-name>/<uri-group>/<case-id>/
 ```
 
-`uri-group` is built from the first `case_uri_segments` path segments joined by
-hyphens. The default is `2`, so `/api/users/list` is recorded under
-`api-users`. Set `case_uri_segments = 0` on a rule to omit the URI grouping
-directory.
+`uri-group` is built from the full request URI path joined by hyphens, so
+`/api/users/list` is recorded under `api-users-list`. To group dynamic path
+segments together, configure segment-wildcard `case_path_patterns`. For
+example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
+`api-users-wildcard-xxx` when the rule has
+`case_path_patterns = ["/api/users/*/xxx"]`.
 
 `request.json` stores the matched gateway request. `expected-response.json`
 stores the matched upstream response; if the response body has
 `Content-Encoding: gzip` or `deflate`, it is decoded before being written.
 Incomplete cases, including truncated request or expected response bodies, are
 not published into `<rule-name>/<uri-group>/<case-id>`. They are moved under
-`_runs/<run-id>/failed/...` with `recording-error.json`, and a clean shutdown
+`<run-id>/failed/...` with `recording-error.json`, and a clean shutdown
 returns an error when the run has failed cases. Fix the recording limit or
 recorder behavior and record again; do not consume failed cases as replay
 fixtures.
@@ -225,11 +230,11 @@ during the request/response window. Dependency case files compact
 `traffic.jsonl` keeps the full process details.
 
 Before the first matched gateway case is registered, replay-oriented dependency
-traffic is also written to root-level `bootstrap-dependencies.jsonl`; protocol
+traffic is also written to run-level `bootstrap-dependencies.jsonl`; protocol
 debug records go to `bootstrap-dependencies-debug.jsonl`. The bootstrap window
 closes permanently when `[http_gateway.ready]` succeeds or, if no ready probe is
 configured, when the first case starts. Later idle traffic remains only in
-`traffic.jsonl` unless it belongs to an active case.
+that run's `traffic.jsonl` unless it belongs to an active case.
 
 ## Configure Local Fake-IP DNS Gateway
 
@@ -447,7 +452,7 @@ connection. Disable MySQL SSL/TLS in the client for recorded sessions.
 
 ## JSONL Events
 
-Records are appended to `traffic.jsonl`. Event types include:
+Records are appended to the current run's `traffic.jsonl`. Event types include:
 
 - `http_exchange`
 - `tcp_gateway_connection`

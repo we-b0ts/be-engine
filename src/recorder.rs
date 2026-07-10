@@ -25,7 +25,6 @@ pub use crate::recorder_event::*;
 #[derive(Clone)]
 pub struct Recorder {
     file: Arc<Mutex<File>>,
-    pub(crate) output_dir: Arc<PathBuf>,
     pub(crate) run_dir: Arc<PathBuf>,
     pub(crate) run_state: Arc<Mutex<RecorderRunState>>,
     pub(crate) dependency_write_lock: Arc<Mutex<()>>,
@@ -38,21 +37,20 @@ impl Recorder {
         tokio::fs::create_dir_all(output_dir)
             .await
             .with_context(|| format!("failed to create recording dir {}", output_dir.display()))?;
-        let path = output_dir.join("traffic.jsonl");
+        let run_id = new_run_id();
+        let run_dir = output_dir.join(&run_id);
+        tokio::fs::create_dir(&run_dir)
+            .await
+            .with_context(|| format!("failed to create recording run dir {}", run_dir.display()))?;
+        let path = run_dir.join("traffic.jsonl");
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&path)
             .await
             .with_context(|| format!("failed to open JSONL recording file {}", path.display()))?;
-        let run_id = new_run_id();
-        let run_dir = output_dir.join("_runs").join(&run_id);
-        tokio::fs::create_dir_all(&run_dir)
-            .await
-            .with_context(|| format!("failed to create recording run dir {}", run_dir.display()))?;
         let recorder = Self {
             file: Arc::new(Mutex::new(file)),
-            output_dir: Arc::new(output_dir.to_path_buf()),
             run_dir: Arc::new(run_dir),
             run_state: Arc::new(Mutex::new(RecorderRunState {
                 run_id,
@@ -157,16 +155,16 @@ impl Recorder {
             return Ok(());
         }
         let _guard = self.dependency_write_lock.lock().await;
-        tokio::fs::create_dir_all(&*self.output_dir)
+        tokio::fs::create_dir_all(&*self.run_dir)
             .await
             .with_context(|| {
                 format!(
-                    "failed to create recording dir {}",
-                    self.output_dir.display()
+                    "failed to create recording run dir {}",
+                    self.run_dir.display()
                 )
             })?;
         let filename = bootstrap_dependency_filename(event);
-        let path = self.output_dir.join(filename);
+        let path = self.run_dir.join(filename);
         let mut value = serde_json::to_value(event)
             .context("failed to serialize bootstrap dependency event")?;
         compact_case_dependency_process_info(&mut value);
@@ -197,7 +195,7 @@ impl Recorder {
             .await
             .context("failed to flush bootstrap dependency event")?;
         if filename == "bootstrap-dependencies.jsonl" {
-            write_bootstrap_dependency_summary(&self.output_dir).await?;
+            write_bootstrap_dependency_summary(&self.run_dir).await?;
         }
         Ok(())
     }
@@ -530,7 +528,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bootstrap_dependency_writes_root_file_and_summary() {
+    async fn bootstrap_dependency_writes_run_file_and_summary() {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();
         let event = RecorderEvent::ProxyError(ProxyErrorEvent {
@@ -553,7 +551,7 @@ mod tests {
             .await
             .unwrap();
 
-        let raw = tokio::fs::read_to_string(temp.path().join("bootstrap-dependencies.jsonl"))
+        let raw = tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
             .await
             .unwrap();
         let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
@@ -562,7 +560,7 @@ mod tests {
         assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
 
         let summary_raw =
-            tokio::fs::read_to_string(temp.path().join("bootstrap-dependencies-summary.json"))
+            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-summary.json"))
                 .await
                 .unwrap();
         let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
@@ -790,7 +788,8 @@ mod tests {
 
         assert!(!recorder.case_staging_dir(&case).exists());
         assert!(
-            temp.path()
+            recorder
+                .run_dir
                 .join("record-api")
                 .join("api-users")
                 .join(case.id.to_string())
@@ -836,8 +835,8 @@ mod tests {
 
         assert!(!recorder.case_staging_dir(&case).exists());
         assert!(
-            !temp
-                .path()
+            !recorder
+                .run_dir
                 .join("record-api")
                 .join("api-users")
                 .join(case.id.to_string())
@@ -878,8 +877,8 @@ mod tests {
         assert!(failed_dir.join("expected-response.json.truncated").exists());
         assert!(failed_dir.join("recording-error.json").exists());
         assert!(
-            !temp
-                .path()
+            !recorder
+                .run_dir
                 .join("record-api")
                 .join("api-users")
                 .join(case.id.to_string())
@@ -924,10 +923,16 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!temp.path().join("bootstrap-dependencies.jsonl").exists());
-        let raw = tokio::fs::read_to_string(temp.path().join("bootstrap-dependencies-debug.jsonl"))
-            .await
-            .unwrap();
+        assert!(
+            !recorder
+                .run_dir
+                .join("bootstrap-dependencies.jsonl")
+                .exists()
+        );
+        let raw =
+            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-debug.jsonl"))
+                .await
+                .unwrap();
         let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
         assert_eq!(value["event_type"], "mysql_query");
         assert_eq!(value["client_process"], 42);
