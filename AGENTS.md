@@ -62,9 +62,10 @@ traffic-replay --no-intercept path/to/case-dir
 - Keep sensitive data handling explicit. Add newly sensitive headers to
   `recording.redact_headers` defaults or document the choice.
 - Before changing product code, review the touched code against
-  [docs/code-organization.md](docs/code-organization.md). If the change does
-  not share the existing unit's owner and primary reason to change, make
-  the smallest relevant boundary adjustment before implementing it.
+  [docs/code-organization.md](docs/code-organization.md). Treat the initial
+  boundary as a hypothesis and review the implemented responsibilities again
+  before completion. Keep feature-local structural convergence in scope and
+  unrelated legacy cleanup out of scope.
 - Product source files must not exceed 1000 lines after a change. If a touched
   file is already over 1000 lines, follow
   [docs/code-organization.md](docs/code-organization.md) and split the relevant

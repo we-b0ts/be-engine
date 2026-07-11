@@ -5,8 +5,7 @@ use std::{env, io};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use traffic_recorder_proxy::{
-    AppConfig, AppState, MysqlReplayControlConfig, ReplayConfig, run_mysql_replay_control,
-    run_replay,
+    AppConfig, AppState, ReplayConfig, ReplayControlConfig, run_replay, run_replay_control,
 };
 
 #[derive(Debug, Parser)]
@@ -113,7 +112,7 @@ async fn main() -> anyhow::Result<()> {
             .await;
         }
         Some(Command::ReplayControl(args)) => {
-            let response = run_mysql_replay_control(replay_control_config(args)?).await?;
+            let response = run_replay_control(replay_control_config(args)?).await?;
             serde_json::to_writer_pretty(io::stdout(), &response)?;
             println!();
             return Ok(());
@@ -126,7 +125,7 @@ async fn main() -> anyhow::Result<()> {
     state.run().await
 }
 
-fn replay_control_config(args: ReplayControlArgs) -> anyhow::Result<MysqlReplayControlConfig> {
+fn replay_control_config(args: ReplayControlArgs) -> anyhow::Result<ReplayControlConfig> {
     let session_path = args.session.unwrap_or_else(default_replay_session_path);
     let (command, case_id, fail_on_dirty) = match args.command {
         ReplayControlCommand::WaitReady => ("wait_ready".to_string(), None, false),
@@ -142,7 +141,7 @@ fn replay_control_config(args: ReplayControlArgs) -> anyhow::Result<MysqlReplayC
         }
         ReplayControlCommand::Stop => ("stop".to_string(), None, false),
     };
-    Ok(MysqlReplayControlConfig {
+    Ok(ReplayControlConfig {
         session_path,
         command,
         case_id,

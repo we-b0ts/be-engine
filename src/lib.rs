@@ -1,3 +1,5 @@
+mod cache_protocol;
+mod cache_proxy;
 mod config;
 mod dependency_summary;
 mod dns_mock;
@@ -6,12 +8,12 @@ mod http_gateway_case;
 mod http_proxy;
 mod mysql_protocol;
 mod mysql_proxy;
-mod mysql_replay;
 mod mysql_semantic;
 mod process_lookup;
 mod recorder;
 mod recorder_event;
 mod recorder_run;
+mod replay;
 mod tcp_gateway;
 mod tls;
 mod udp_gateway;
@@ -31,20 +33,23 @@ use uuid::Uuid;
 
 pub use config::{
     AppConfig, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingConfig, TcpGatewayConfig,
-    TlsConfig, UdpGatewayConfig,
+    HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingConfig, TcpApplicationProtocol,
+    TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
+    UdpGatewayConfig,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
-pub use mysql_replay::{
-    MysqlReplayConfig, MysqlReplayControlConfig, ReplayConfig, run_mysql_replay,
-    run_mysql_replay_control, run_replay,
-};
 pub use recorder::{
-    BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent, MysqlColumn,
-    MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
-    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
-    ProxyErrorEvent, Recorder, RecorderEvent, TcpGatewayConnectionEvent, UdpDatagramEvent,
-    capture_body, capture_body_with_original_len, capture_case_body, redact_headers,
+    BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent,
+    MemcachedConnectionEvent, MemcachedExchangeEvent, MysqlColumn, MysqlConnectionEvent,
+    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
+    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
+    Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent, TcpGatewayConnectionEvent,
+    UdpDatagramEvent, capture_body, capture_body_with_original_len, capture_case_body,
+    redact_headers,
+};
+pub use replay::{
+    MysqlReplayConfig, MysqlReplayControlConfig, ReplayConfig, ReplayControlConfig,
+    run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
 };
 pub use tls::MitmCa;
 
@@ -251,15 +256,30 @@ impl AppState {
         case: CaseContext,
         upstream_pid: Option<u32>,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
-        self.inner.active_cases.try_register(case, upstream_pid)
+        let bootstrap_was_open = self.inner.active_cases.is_bootstrap_open();
+        let guard = self.inner.active_cases.try_register(case, upstream_pid)?;
+        if bootstrap_was_open {
+            self.schedule_bootstrap_dependency_summary("first active case");
+        }
+        Ok(guard)
     }
 
     pub(crate) fn close_bootstrap(&self, reason: &'static str) -> bool {
         let closed = self.inner.active_cases.close_bootstrap();
         if closed {
             info!(reason, "bootstrap dependency window closed");
+            self.schedule_bootstrap_dependency_summary(reason);
         }
         closed
+    }
+
+    fn schedule_bootstrap_dependency_summary(&self, reason: &'static str) {
+        let recorder = self.recorder().clone();
+        tokio::spawn(async move {
+            if let Err(err) = recorder.finalize_bootstrap_dependency_summary().await {
+                warn!(error = %err, reason, "failed to finalize bootstrap dependency summary");
+            }
+        });
     }
 
     pub(crate) fn is_bootstrap_open(&self) -> bool {
@@ -376,6 +396,10 @@ fn recorder_event_kind(event: &RecorderEvent) -> &'static str {
         RecorderEvent::HttpExchange(_) => "http_exchange",
         RecorderEvent::TcpGatewayConnection(_) => "tcp_gateway_connection",
         RecorderEvent::UdpDatagram(_) => "udp_datagram",
+        RecorderEvent::RedisConnection(_) => "redis_connection",
+        RecorderEvent::RedisExchange(_) => "redis_exchange",
+        RecorderEvent::MemcachedConnection(_) => "memcached_connection",
+        RecorderEvent::MemcachedExchange(_) => "memcached_exchange",
         RecorderEvent::MysqlConnection(_) => "mysql_connection",
         RecorderEvent::MysqlQuery(_) => "mysql_query",
         RecorderEvent::MysqlResponse(_) => "mysql_response",
@@ -395,6 +419,18 @@ fn event_client_pid(event: &RecorderEvent) -> Option<u32> {
             event.client_process.as_ref().map(|process| process.pid)
         }
         RecorderEvent::UdpDatagram(event) => {
+            event.client_process.as_ref().map(|process| process.pid)
+        }
+        RecorderEvent::RedisConnection(event) => {
+            event.client_process.as_ref().map(|process| process.pid)
+        }
+        RecorderEvent::RedisExchange(event) => {
+            event.client_process.as_ref().map(|process| process.pid)
+        }
+        RecorderEvent::MemcachedConnection(event) => {
+            event.client_process.as_ref().map(|process| process.pid)
+        }
+        RecorderEvent::MemcachedExchange(event) => {
             event.client_process.as_ref().map(|process| process.pid)
         }
         RecorderEvent::MysqlConnection(event) => {

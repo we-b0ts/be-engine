@@ -3,6 +3,26 @@
 Use this reference when planning or executing one behavior-preserving rewrite
 unit from a source repo into a target repo.
 
+## Contents
+
+- [Discovery](#discovery)
+- [Scope Selection](#scope-selection)
+- [Recorded E2E Contract](#recorded-e2e-contract)
+- [Metrics Contract](#metrics-contract)
+- [Unit And Component Test Contract](#unit-and-component-test-contract)
+- [Git Baseline And PR Delivery](#git-baseline-and-pr-delivery)
+- [Target Artifacts](#target-artifacts)
+- [Command And Config Contract](#command-and-config-contract)
+- [Logging Contract](#logging-contract)
+- [Documentation Map Contract](#documentation-map-contract)
+- [Runtime Value Strategy](#runtime-value-strategy)
+- [Module Design Contract](#module-design-contract)
+- [Structural Convergence](#structural-convergence)
+- [Schema Mapping Contract](#schema-mapping-contract)
+- [Migration Semantics Review](#migration-semantics-review)
+- [Implementation Loop](#implementation-loop)
+- [Completion Output](#completion-output)
+
 ## Discovery
 
 Inspect before implementation:
@@ -24,7 +44,10 @@ Inspect before implementation:
 
 The source repo is for understanding behavior and intent. Do not assume a
 function-by-function translation is required. Preserve API/interface output
-compatibility and use target-language architecture that is stable and idiomatic.
+compatibility and use target-language architecture that is stable and
+idiomatic. Existing target code is evidence of constraints and prior decisions,
+but its structure is not an automatic precedent. Validate nearby patterns
+against current target rules before extending them.
 
 ## Scope Selection
 
@@ -360,10 +383,12 @@ to make the replay coverage pass.
 
 ## Module Design Contract
 
-Before writing behavior code, choose a small module plan that fits the target
-repo and selected scope. Prefer the target repo's existing boundaries. If the
-repo is new or empty, create enough structure for the first migrated slice to
-grow safely without adding empty placeholder modules.
+Before writing behavior code, choose a small initial module plan that fits the
+target repo and selected scope. Treat existing boundaries as candidate patterns
+and validate their ownership, lifecycle, and dependency direction against the
+target repo's current rules. If the repo is new or empty, create enough
+structure for the first migrated slice to grow safely without adding empty
+placeholder modules.
 
 Review module topology before implementation and whenever expanding an existing
 domain. Look for domain clusters, prefix-sprawl files, oversized files,
@@ -402,6 +427,11 @@ Record the pre-change decision in `module_topology_review` as `keep`,
 not expand the identified problem; use `extract-first` for the smallest boundary
 needed by the current migration.
 
+The pre-change decision is a hypothesis, not a promise that the first layout is
+final. Reassess it after behavior and dependency paths exist, then update
+`architecture_review_status` from the implemented structure rather than the
+initial plan.
+
 For service/API migrations, account for these responsibilities in the design:
 
 - process startup and config loading
@@ -438,6 +468,32 @@ the library root should mostly wire or export modules. Recorded replay wiring
 should live in test support, E2E harnesses, or config used only by tests, not in
 the normal runtime path. Combine responsibilities only when the scope is
 genuinely tiny and the module plan explains why.
+
+## Structural Convergence
+
+After the focused recorded E2E case set first passes, review the implemented
+code against its actual responsibilities, names, dependency direction, and
+runtime/test separation. The passing case set protects behavior while the
+initial module hypothesis is refined.
+
+Refactor the smallest relevant boundary when the migration introduced or
+exposed any of these signals:
+
+- a name or parent no longer covers the implemented behavior
+- cross-domain behavior sits under one protocol, vendor, or first use case
+- shared infrastructure is owned by one of several unrelated consumers
+- inaccurate ownership requires wider visibility, copied code, or catch-all
+  helpers
+- new prefix sprawl or mixed runtime/test ownership appeared
+
+This convergence pass is part of the current migration. Do not defer a mismatch
+introduced or expanded by the migrated scope merely because E2E is green. Keep
+unrelated legacy cleanup as follow-up work.
+
+After structural changes, rerun the affected unit/component tests and the full
+selected recorded E2E case set. Set `architecture_review_status` from that
+post-refactor result. If the required convergence or verification is incomplete,
+do not mark the migration complete.
 
 ## Schema Mapping Contract
 
@@ -523,11 +579,13 @@ Use at most 3 iterations:
    the scope.
 10. Run the focused recorded E2E through managed dependency replay and verify
    that all selected case-owned dependency touches are matched.
-11. Perform the migration semantics review.
-12. Classify failures as target implementation bug, replay issue,
+11. After the focused case set first passes, perform structural convergence and
+   rerun the affected unit/component tests and full selected case set.
+12. Perform the migration semantics review against the converged implementation.
+13. Classify failures as target implementation bug, replay issue,
    incomplete recording, recording workflow improvement, or target setup issue.
-13. Fix target implementation only when recorded replay evidence is complete.
-14. Stop with a recording/E2E improvement list when evidence is missing or
+14. Fix target implementation only when recorded replay evidence is complete.
+15. Stop with a recording/E2E improvement list when evidence is missing or
    replay would require guessing.
 
 After focused E2E passes, run the target repo's relevant quality checks. For

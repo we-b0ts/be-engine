@@ -106,6 +106,12 @@ interception to the `trp-record` Unix user, so run the target service as that
 user or override the owner with `--user`, `--owner-uid`, or `--all-users`. Use
 `--no-intercept` to start only the replay listeners.
 
+Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
+Redis and Memcached exchanges are consumed in recorded connection order; the
+v3 replay report includes per-protocol matched, unmatched, unsupported, unsafe,
+and unused evidence. `traffic-replay-cli end/report --fail-on-dirty` treats all
+of those cache protocol discrepancies as failures.
+
 ## Optional Explicit HTTP/HTTPS Proxy
 
 The default fake-IP setup does not need a client proxy setting and does not
@@ -283,6 +289,16 @@ record_http = true
 mitm_https = true
 # Empty means attempt HTTPS MITM for all TLS-looking TCP streams.
 https_ports = []
+
+[tcp_gateway.protocol_detection]
+enabled = true
+redis_port_hints = [6379]
+memcached_port_hints = [11211]
+
+[[tcp_gateway.protocol_detection.overrides]]
+host = "cache.internal"
+port = 6380
+protocol = "redis" # redis | memcached | raw
 ```
 
 Set up local DNS capture. This keeps the recorder on non-privileged port
@@ -364,11 +380,31 @@ Trust `./data/traffic-recorder-ca.pem` on the client before enabling HTTPS
 MITM. Clients with certificate pinning, or clients that require HTTP/2 only, may
 reject the recorder certificate or protocol negotiation.
 
-MySQL upstreams are detected from the server handshake after fake-IP routing and
-recorded with parsed connection/query/packet events. Other TCP protocols are
-forwarded transparently and recorded as connection-level
+MySQL upstreams are detected from the server handshake after fake-IP routing.
+Redis RESP array commands and Memcached Basic Text/Binary frames are detected
+from client wire prefixes on any port. Detection uses complete protocol
+metadata, preserves peeked bytes, waits at most one second for a fragmented
+prefix, and falls back to raw forwarding when the bytes clearly do not match.
+Overrides take precedence; default ports are only hints for incomplete input.
+Other TCP protocols are forwarded transparently and recorded as connection-level
 `tcp_gateway_connection` events with domain, fake address, upstream address,
 byte counts, and timing.
+
+Redis recording supports plaintext standalone RESP2/RESP3 request-response
+traffic, pipelines, connection reuse, and `MULTI/EXEC`. It excludes inline
+commands, Pub/Sub, `MONITOR`, RESP3 Push, Cluster/Sentinel, TLS, and Unix
+sockets. Memcached supports plaintext TCP Basic Text and Binary, including
+multi-get, CAS, `noreply`, quiet commands, and NOOP barriers. Meta Text, SASL,
+TLS, and UDP are excluded. Entering an excluded or unparseable cache mode marks
+the dependency unsafe so the case is failed instead of publishing incomplete
+replay evidence.
+
+Cache replay returns the recorded response; it does not implement a general
+cache state machine or reproduce response timing. Redis authentication and
+common connection initialization are handled by the replay server. Passwords
+from Redis `AUTH`/`HELLO AUTH` and Memcached SASL payloads are never stored.
+Keys and values are required replay evidence and are recorded in full by
+default, so the recording directory must be handled as sensitive data.
 
 For local Linux clients, `tcp_gateway` also tries to attribute intercepted
 connections to a process by scanning `/proc/net/tcp` and `/proc/<pid>/fd`.
@@ -462,9 +498,14 @@ Records are appended to the current run's `traffic.jsonl`. Event types include:
 - `mysql_exchange`
 - `mysql_packet` (legacy/debug packet-level records)
 - `mysql_tls_rejected`
+- `redis_connection`
+- `redis_exchange`
+- `memcached_connection`
+- `memcached_exchange`
 - `proxy_error`
 
-HTTP and HTTPS bodies are base64 encoded and truncated according to
+HTTP/HTTPS bodies and binary-safe cache arguments, values, and response frames
+are base64 encoded and truncated according to
 `recording.max_body_bytes`. Original and stored byte lengths are included.
 MySQL response payloads are also base64 encoded and truncated with the same
 limit. MySQL password/auth response bytes are not recorded. For AI replay use

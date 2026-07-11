@@ -67,6 +67,12 @@ pub(crate) async fn finalize_http_case(
             .recorder()
             .write_case_json(case, "expected-response.json", &response)
             .await?;
+        if let Some(message) = state.recorder().case_dependency_safety_issue(case).await? {
+            return state
+                .recorder()
+                .fail_case(case, "dependency_replay_unsafe", message)
+                .await;
+        }
         state.recorder().publish_case(case).await
     }
 }

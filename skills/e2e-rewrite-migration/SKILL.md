@@ -41,11 +41,12 @@ implementation. Source E2E tests may supplement but not replace recordings.
    construction, managed replay, dependency coverage, response comparison,
    failure diagnosis, and recorder feedback. Do not duplicate or weaken that
    contract in the target harness.
-7. Reuse the target repo's command, config, logging, package, and module
-   conventions. When absent, follow the defaults in `migration-workflow.md` and
-   [logging.md](references/logging.md). Choose topology before behavior code;
-   prefer real namespaces and cohesive ownership over prefix-sprawl or
-   production `include!` composition.
+7. Reuse the target repo's command, config, and logging conventions. Treat
+   existing package and module structure as a candidate pattern rather than an
+   automatic precedent; validate it against current target rules. When a
+   convention is absent, follow the defaults in `migration-workflow.md` and
+   [logging.md](references/logging.md). Choose an initial topology before
+   behavior code without assuming the first boundary will be final.
 8. Implement an idiomatic real runtime dependency path and normal startup.
    Replay fixtures and recorded params must remain outside the default runtime
    path.
@@ -55,8 +56,9 @@ implementation. Source E2E tests may supplement but not replace recordings.
     contract change. Add focused unit/component tests for non-trivial local
     logic without duplicating recorded E2E assertions.
 11. Iterate implementation, focused replay, and fixes at most three times.
-    Then perform the semantics review, startup smoke, full selected-case replay,
-    and target quality checks defined in `migration-workflow.md`.
+    After the focused case set first passes, perform the structural convergence
+    review in `migration-workflow.md`, rerun the selected cases, then perform
+    the semantics review, startup smoke, and target quality checks.
 
 ## Completion Blockers
 
@@ -67,7 +69,8 @@ implementation. Source E2E tests may supplement but not replace recordings.
 - recorded params embedded in normal config or product logic
 - DB type mapping without explicit schema evidence
 - source metrics or required side effects unimplemented or unverified
-- architecture, unit-test, dynamic-value, or semantics review incomplete
+- architecture or required structural convergence incomplete
+- unit-test, dynamic-value, or semantics review incomplete
 - no focused branch, commit, or PR to `dev-migration`
 
 When recording evidence is incomplete, stop with the missing evidence and

@@ -31,6 +31,19 @@ mitm_https = true
 # Empty means attempt HTTPS MITM for all TLS-looking TCP streams.
 https_ports = []
 
+[tcp_gateway.protocol_detection]
+# Cache protocols are identified from complete, high-confidence wire prefixes,
+# so Redis and Memcached work on custom ports without per-service routing.
+enabled = true
+redis_port_hints = [6379]
+memcached_port_hints = [11211]
+
+# Overrides are an escape hatch for an ambiguous or intentionally raw endpoint.
+# [[tcp_gateway.protocol_detection.overrides]]
+# host = "cache.internal"
+# port = 6380
+# protocol = "redis" # redis | memcached | raw
+
 [udp_gateway]
 # Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP
 # recording is side-effect capture; it does not wait for or synthesize replies.

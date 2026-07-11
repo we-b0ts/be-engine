@@ -23,7 +23,26 @@ use crate::mysql_protocol::{
     parse_handshake_response, read_packet,
 };
 
+mod cache;
+#[cfg(test)]
+mod cache_tests;
+mod control;
+mod dns;
 mod http;
+#[cfg(test)]
+#[path = "tests.rs"]
+mod legacy_tests;
+mod records;
+mod response;
+mod session;
+mod values;
+
+use control::*;
+use dns::*;
+use records::*;
+use response::*;
+use session::*;
+use values::*;
 
 const CLIENT_LONG_PASSWORD: u32 = 0x0000_0001;
 const CLIENT_LONG_FLAG: u32 = 0x0000_0004;
@@ -65,7 +84,7 @@ const MYSQL_CHARSET_BINARY: u16 = 63;
 const SO_ORIGINAL_DST: libc::c_int = 80;
 
 #[derive(Debug, Clone)]
-pub struct MysqlReplayConfig {
+pub struct ReplayConfig {
     pub case_dir: PathBuf,
     pub dns_listen: SocketAddr,
     pub tcp_listen: SocketAddr,
@@ -79,31 +98,42 @@ pub struct MysqlReplayConfig {
 }
 
 #[derive(Debug, Clone)]
-pub struct MysqlReplayControlConfig {
+pub struct ReplayControlConfig {
     pub session_path: PathBuf,
     pub command: String,
     pub case_id: Option<String>,
     pub fail_on_dirty: bool,
 }
 
-pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
+pub type MysqlReplayControlConfig = ReplayControlConfig;
+
+pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }
 
-pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
+pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Result<Value> {
+    run_replay_control(config).await
+}
+
+pub async fn run_replay(config: ReplayConfig) -> Result<()> {
     let tcp_listener = TcpListener::bind(config.tcp_listen)
         .await
-        .with_context(|| format!("failed to bind MySQL replay gateway {}", config.tcp_listen))?;
+        .with_context(|| {
+            format!(
+                "failed to bind dependency replay gateway {}",
+                config.tcp_listen
+            )
+        })?;
     let tcp_listen = tcp_listener
         .local_addr()
-        .context("failed to read MySQL replay gateway listen address")?;
+        .context("failed to read dependency replay gateway listen address")?;
     let dns_socket = UdpSocket::bind(config.dns_listen)
         .await
-        .with_context(|| format!("failed to bind MySQL replay DNS {}", config.dns_listen))?;
+        .with_context(|| format!("failed to bind dependency replay DNS {}", config.dns_listen))?;
     let dns_listen = dns_socket
         .local_addr()
-        .context("failed to read MySQL replay DNS listen address")?;
-    let runtime = MysqlReplayRuntime::load(config, dns_listen, tcp_listen).await?;
+        .context("failed to read dependency replay DNS listen address")?;
+    let runtime = ReplayRuntime::load(config, dns_listen, tcp_listen).await?;
     runtime.write_report().await?;
     info!(
         dns_listen = %dns_listen,
@@ -117,13 +147,13 @@ pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
     }
 }
 
-pub type ReplayConfig = MysqlReplayConfig;
+pub type MysqlReplayConfig = ReplayConfig;
 
-pub async fn run_replay(config: ReplayConfig) -> Result<()> {
-    run_mysql_replay(config).await
+pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
+    run_replay(config).await
 }
 
-struct MysqlReplayRuntime {
+struct ReplayRuntime {
     state: Arc<Mutex<ReplayState>>,
     ca: Arc<MitmCa>,
     report_path: Option<PathBuf>,
@@ -131,9 +161,9 @@ struct MysqlReplayRuntime {
     control_socket_path: Option<PathBuf>,
 }
 
-impl MysqlReplayRuntime {
+impl ReplayRuntime {
     async fn load(
-        config: MysqlReplayConfig,
+        config: ReplayConfig,
         dns_listen: SocketAddr,
         tcp_listen: SocketAddr,
     ) -> Result<Self> {
@@ -155,6 +185,7 @@ impl MysqlReplayRuntime {
         let bootstrap_path = find_upward(&root_dir, "bootstrap-dependencies.jsonl");
         let mut exchanges = Vec::new();
         let mut http_exchanges = Vec::new();
+        let mut cache = cache::CacheReplayState::default();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
         let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
@@ -166,6 +197,7 @@ impl MysqlReplayRuntime {
                 None,
                 &mut exchanges,
                 &mut http_exchanges,
+                &mut cache,
                 &mut targets,
                 &mut connection_identities,
             )
@@ -178,6 +210,7 @@ impl MysqlReplayRuntime {
                 Some(&case.id),
                 &mut exchanges,
                 &mut http_exchanges,
+                &mut cache,
                 &mut targets,
                 &mut connection_identities,
             )
@@ -203,8 +236,10 @@ impl MysqlReplayRuntime {
             targets,
             exchanges,
             http_exchanges,
+            cache,
             events: ReplayEvents::default(),
             http_events: http::HttpReplayEvents::default(),
+            report_write_lock: Arc::new(Mutex::new(())),
             ca_cert_path,
             http_ignore_query_params: config
                 .http_ignore_query_params
@@ -226,7 +261,7 @@ impl MysqlReplayRuntime {
             let (stream, peer_addr) = listener
                 .accept()
                 .await
-                .context("failed to accept MySQL replay gateway client")?;
+                .context("failed to accept dependency replay gateway client")?;
             let state = self.state.clone();
             let ca = self.ca.clone();
             let report_path = self.report_path.clone();
@@ -247,13 +282,13 @@ impl MysqlReplayRuntime {
             let (len, peer) = socket
                 .recv_from(&mut buf)
                 .await
-                .context("failed to receive MySQL replay DNS query")?;
+                .context("failed to receive dependency replay DNS query")?;
             let query = buf[..len].to_vec();
             let socket = socket.clone();
             let state = self.state.clone();
             tokio::spawn(async move {
                 if let Err(err) = handle_dns_query(socket, state, query, peer).await {
-                    warn!(error = %err, peer = %peer, "failed to handle MySQL replay DNS query");
+                    warn!(error = %err, peer = %peer, "failed to handle dependency replay DNS query");
                 }
             });
         }
@@ -287,8 +322,10 @@ struct ReplayState {
     targets: Vec<ReplayTarget>,
     exchanges: Vec<ReplayExchange>,
     http_exchanges: Vec<http::ReplayHttpExchange>,
+    cache: cache::CacheReplayState,
     events: ReplayEvents,
     http_events: http::HttpReplayEvents,
+    report_write_lock: Arc<Mutex<()>>,
     ca_cert_path: PathBuf,
     http_ignore_query_params: Vec<String>,
 }
@@ -495,7 +532,7 @@ impl ReplayState {
 
     fn snapshot_report(&self) -> ReplayReport {
         ReplayReport {
-            version: 2,
+            version: 3,
             mode: self.mode,
             dns_listen: self.dns_listen.to_string(),
             tcp_listen: self.tcp_listen.to_string(),
@@ -527,6 +564,7 @@ impl ReplayState {
             unsupported_http_exchanges: self.http_events.unsupported.clone(),
             unused_bootstrap_http_exchanges: self.unused_http_exchanges(ReplaySource::Bootstrap),
             unused_case_http_exchanges: self.unused_http_exchanges(ReplaySource::Case),
+            protocols: self.cache.snapshot(),
             ca_cert_path: self.ca_cert_path.display().to_string(),
             http_ignored_query_params: self.http_ignore_query_params.clone(),
         }
@@ -567,9 +605,6 @@ impl ReplayState {
     }
 }
 
-include!("mysql_replay_records.rs");
-include!("mysql_replay_dns.rs");
-include!("mysql_replay_control.rs");
 async fn handle_gateway_connection(
     stream: TcpStream,
     peer_addr: SocketAddr,
@@ -590,7 +625,25 @@ async fn handle_gateway_connection(
             )
             .await
         }
-        _ => {
+        Some(ReplayProtocol::Redis) => {
+            cache::handle_redis_connection(
+                stream,
+                target.context("Redis replay connection has no target")?,
+                state,
+                report_path,
+            )
+            .await
+        }
+        Some(ReplayProtocol::Memcached) => {
+            cache::handle_memcached_connection(
+                stream,
+                target.context("Memcached replay connection has no target")?,
+                state,
+                report_path,
+            )
+            .await
+        }
+        Some(ReplayProtocol::Mysql) | None => {
             let target = target.map(|target| TargetKey {
                 host: target.host,
                 port: target.port,
@@ -781,8 +834,3 @@ async fn handle_replay_connection(
     }
     Ok(())
 }
-
-include!("mysql_replay_session.rs");
-include!("mysql_replay_response.rs");
-include!("mysql_replay_values.rs");
-include!("mysql_replay_tests.rs");

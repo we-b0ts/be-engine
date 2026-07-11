@@ -1,10 +1,10 @@
 #[derive(Debug, Deserialize)]
-struct ReplayControlRequest {
-    command: String,
+pub(super) struct ReplayControlRequest {
+    pub(super) command: String,
     #[serde(default)]
-    case_id: Option<String>,
+    pub(super) case_id: Option<String>,
     #[serde(default)]
-    fail_on_dirty: bool,
+    pub(super) fail_on_dirty: bool,
 }
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -26,13 +26,15 @@ pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Re
     send_control_request_once(config).await
 }
 
-async fn send_control_request_once(config: MysqlReplayControlConfig) -> Result<Value> {
-    let session_raw = tokio::fs::read_to_string(&config.session_path).await.with_context(|| {
-        format!(
-            "failed to read replay session {}",
-            config.session_path.display()
-        )
-    })?;
+pub(super) async fn send_control_request_once(config: MysqlReplayControlConfig) -> Result<Value> {
+    let session_raw = tokio::fs::read_to_string(&config.session_path)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to read replay session {}",
+                config.session_path.display()
+            )
+        })?;
     let session: Value =
         serde_json::from_str(&session_raw).context("failed to parse replay session JSON")?;
     let control_socket = session
@@ -84,7 +86,7 @@ async fn send_control_request_once(config: MysqlReplayControlConfig) -> Result<V
     }
 }
 
-async fn run_control_socket(
+pub(super) async fn run_control_socket(
     state: Arc<Mutex<ReplayState>>,
     report_path: Option<PathBuf>,
     session_path: Option<PathBuf>,
@@ -94,17 +96,22 @@ async fn run_control_socket(
         return pending::<Result<()>>().await;
     };
     if let Some(parent) = control_socket_path.parent() {
-        tokio::fs::create_dir_all(parent).await.with_context(|| {
-            format!("failed to create replay control dir {}", parent.display())
-        })?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create replay control dir {}", parent.display()))?;
     }
-    if tokio::fs::try_exists(&control_socket_path).await.unwrap_or(false) {
-        tokio::fs::remove_file(&control_socket_path).await.with_context(|| {
-            format!(
-                "failed to remove stale replay control socket {}",
-                control_socket_path.display()
-            )
-        })?;
+    if tokio::fs::try_exists(&control_socket_path)
+        .await
+        .unwrap_or(false)
+    {
+        tokio::fs::remove_file(&control_socket_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to remove stale replay control socket {}",
+                    control_socket_path.display()
+                )
+            })?;
     }
     let listener = UnixListener::bind(&control_socket_path).with_context(|| {
         format!(
@@ -154,7 +161,7 @@ async fn run_control_socket(
     Ok(())
 }
 
-fn process_exists(pid: u64) -> bool {
+pub(super) fn process_exists(pid: u64) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
     };
@@ -162,7 +169,7 @@ fn process_exists(pid: u64) -> bool {
     result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-async fn handle_control_stream(
+pub(super) async fn handle_control_stream(
     stream: UnixStream,
     state: Arc<Mutex<ReplayState>>,
     report_path: Option<PathBuf>,
@@ -210,7 +217,7 @@ async fn handle_control_stream(
     Ok(should_stop)
 }
 
-async fn handle_control_request(
+pub(super) async fn handle_control_request(
     request: ReplayControlRequest,
     state: Arc<Mutex<ReplayState>>,
     report_path: Option<PathBuf>,
@@ -282,7 +289,10 @@ async fn handle_control_request(
     (response, command == "stop")
 }
 
-async fn begin_case(request: &ReplayControlRequest, state: Arc<Mutex<ReplayState>>) -> Value {
+pub(super) async fn begin_case(
+    request: &ReplayControlRequest,
+    state: Arc<Mutex<ReplayState>>,
+) -> Value {
     let Some(case_id) = request.case_id.as_deref() else {
         return serde_json::json!({"ok": false, "error": "begin requires case_id"});
     };
@@ -317,7 +327,10 @@ async fn begin_case(request: &ReplayControlRequest, state: Arc<Mutex<ReplayState
     })
 }
 
-async fn end_case(request: &ReplayControlRequest, state: Arc<Mutex<ReplayState>>) -> Value {
+pub(super) async fn end_case(
+    request: &ReplayControlRequest,
+    state: Arc<Mutex<ReplayState>>,
+) -> Value {
     let Some(case_id) = request.case_id.as_deref() else {
         return serde_json::json!({"ok": false, "error": "end requires case_id"});
     };
@@ -356,7 +369,7 @@ async fn end_case(request: &ReplayControlRequest, state: Arc<Mutex<ReplayState>>
     }
 }
 
-async fn write_control_response(stream: &mut UnixStream, response: Value) -> Result<()> {
+pub(super) async fn write_control_response(stream: &mut UnixStream, response: Value) -> Result<()> {
     let mut payload =
         serde_json::to_vec(&response).context("failed to serialize replay control response")?;
     payload.push(b'\n');
@@ -366,7 +379,7 @@ async fn write_control_response(stream: &mut UnixStream, response: Value) -> Res
         .context("failed to write replay control response")
 }
 
-async fn write_session_snapshot(
+pub(super) async fn write_session_snapshot(
     state: Arc<Mutex<ReplayState>>,
     session_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
@@ -386,9 +399,9 @@ async fn write_session_snapshot(
         )
     };
     if let Some(parent) = session_path.parent() {
-        tokio::fs::create_dir_all(parent).await.with_context(|| {
-            format!("failed to create replay session dir {}", parent.display())
-        })?;
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("failed to create replay session dir {}", parent.display()))?;
     }
     let mut payload =
         serde_json::to_vec_pretty(&snapshot).context("failed to serialize replay session")?;
@@ -398,7 +411,7 @@ async fn write_session_snapshot(
         .with_context(|| format!("failed to write replay session {}", session_path.display()))
 }
 
-fn session_snapshot(
+pub(super) fn session_snapshot(
     state: &ReplayState,
     control_socket_path: Option<&PathBuf>,
     report_path: Option<&PathBuf>,
@@ -421,7 +434,7 @@ fn session_snapshot(
     })
 }
 
-fn report_is_dirty(report: &ReplayReport) -> bool {
+pub(super) fn report_is_dirty(report: &ReplayReport) -> bool {
     !report.unmatched_queries.is_empty()
         || !report.unsupported_commands.is_empty()
         || !report.unused_case_exchanges.is_empty()
@@ -430,9 +443,11 @@ fn report_is_dirty(report: &ReplayReport) -> bool {
         || !report.unsupported_http_exchanges.is_empty()
         || !report.unused_case_http_exchanges.is_empty()
         || !report.unused_bootstrap_http_exchanges.is_empty()
+        || cache_report_is_dirty(&report.protocols.redis)
+        || cache_report_is_dirty(&report.protocols.memcached)
 }
 
-fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
+pub(super) fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
     report
         .unmatched_queries
         .iter()
@@ -457,4 +472,34 @@ fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
             .unused_case_http_exchanges
             .iter()
             .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
+        || cache_case_is_dirty(&report.protocols.redis, case_id)
+        || cache_case_is_dirty(&report.protocols.memcached, case_id)
 }
+
+pub(super) fn cache_report_is_dirty(report: &cache::CacheProtocolReport) -> bool {
+    !report.unmatched.is_empty()
+        || !report.unsupported.is_empty()
+        || !report.unsafe_events.is_empty()
+        || !report.unused_case.is_empty()
+        || !report.unused_bootstrap.is_empty()
+}
+
+pub(super) fn cache_case_is_dirty(report: &cache::CacheProtocolReport, case_id: &str) -> bool {
+    report
+        .unmatched
+        .iter()
+        .any(|request| request.case_id.as_deref() == Some(case_id))
+        || report
+            .unsupported
+            .iter()
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+        || report
+            .unsafe_events
+            .iter()
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+        || report
+            .unused_case
+            .iter()
+            .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
+}
+use super::*;

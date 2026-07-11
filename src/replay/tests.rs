@@ -1,3 +1,5 @@
+use super::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,7 +513,7 @@ mod tests {
         .unwrap();
         let dns_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let dns_addr = dns_socket.local_addr().unwrap();
-        let runtime = MysqlReplayRuntime::load(
+        let runtime = ReplayRuntime::load(
             MysqlReplayConfig {
                 case_dir: case_dir.clone(),
                 dns_listen: dns_addr,
@@ -558,13 +560,9 @@ mod tests {
             .unwrap();
         let session_path = temp.path().join(".replay").join("session.json");
         let control_socket_path = temp.path().join(".replay").join("control.sock");
-        let (_addr, tasks) = spawn_replay_with_control(
-            &case_dir,
-            None,
-            session_path.clone(),
-            control_socket_path,
-        )
-        .await;
+        let (_addr, tasks) =
+            spawn_replay_with_control(&case_dir, None, session_path.clone(), control_socket_path)
+                .await;
 
         let response = run_mysql_replay_control(MysqlReplayControlConfig {
             session_path,
@@ -632,7 +630,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(report["dirty"], false);
-        assert_eq!(report["report"]["matched_queries"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            report["report"]["matched_queries"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
         abort_tasks(tasks);
     }
 
@@ -660,12 +664,7 @@ mod tests {
             .join("case-staging");
         write_string_dependency(&case_a, "SELECT name FROM user WHERE id = 1", "alice").await;
         write_string_dependency(&case_b, "SELECT name FROM user WHERE id = 2", "bob").await;
-        write_string_dependency(
-            &failed_case,
-            "SELECT name FROM user WHERE id = 3",
-            "failed",
-        )
-        .await;
+        write_string_dependency(&failed_case, "SELECT name FROM user WHERE id = 3", "failed").await;
         write_string_dependency(
             &staging_case,
             "SELECT name FROM user WHERE id = 4",
@@ -709,7 +708,7 @@ mod tests {
     ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let runtime = MysqlReplayRuntime::load(
+        let runtime = ReplayRuntime::load(
             MysqlReplayConfig {
                 case_dir: case_dir.to_path_buf(),
                 dns_listen: "127.0.0.1:0".parse().unwrap(),
@@ -743,7 +742,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let runtime = Arc::new(
-            MysqlReplayRuntime::load(
+            ReplayRuntime::load(
                 MysqlReplayConfig {
                     case_dir: case_dir.to_path_buf(),
                     dns_listen: "127.0.0.1:0".parse().unwrap(),

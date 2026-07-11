@@ -16,6 +16,7 @@ hyper-rustls = { version = "0.27", features = ["http1", "webpki-roots"] }
 hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", "tokio"] }
 libc = "0.2"
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
+redis-protocol = { version = "6", features = ["bytes"] }
 rustls = "0.23"
 rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }

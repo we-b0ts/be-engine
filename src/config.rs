@@ -39,6 +39,31 @@ pub struct TcpGatewayConfig {
     pub record_http: bool,
     pub mitm_https: bool,
     pub https_ports: Vec<u16>,
+    pub protocol_detection: TcpProtocolDetectionConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TcpProtocolDetectionConfig {
+    pub enabled: bool,
+    pub redis_port_hints: Vec<u16>,
+    pub memcached_port_hints: Vec<u16>,
+    pub overrides: Vec<TcpProtocolOverrideConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TcpProtocolOverrideConfig {
+    pub host: String,
+    pub port: u16,
+    pub protocol: TcpApplicationProtocol,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TcpApplicationProtocol {
+    Redis,
+    Memcached,
+    Raw,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -170,6 +195,18 @@ impl Default for TcpGatewayConfig {
             record_http: true,
             mitm_https: true,
             https_ports: Vec::new(),
+            protocol_detection: TcpProtocolDetectionConfig::default(),
+        }
+    }
+}
+
+impl Default for TcpProtocolDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            redis_port_hints: vec![6379],
+            memcached_port_hints: vec![11211],
+            overrides: Vec::new(),
         }
     }
 }
@@ -339,6 +376,35 @@ mod tests {
         assert_eq!(routes[0].name.as_deref(), Some("app-db"));
         assert_eq!(routes[0].listen.to_string(), "0.0.0.0:3306");
         assert_eq!(routes[0].upstream, "10.0.0.12:3306");
+    }
+
+    #[test]
+    fn parses_tcp_protocol_detection_overrides() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [tcp_gateway.protocol_detection]
+            enabled = true
+            redis_port_hints = [6379, 6380]
+            memcached_port_hints = [11211]
+
+            [[tcp_gateway.protocol_detection.overrides]]
+            host = "cache.internal"
+            port = 6380
+            protocol = "redis"
+            "#,
+        )
+        .unwrap();
+
+        assert!(config.tcp_gateway.protocol_detection.enabled);
+        assert_eq!(
+            config.tcp_gateway.protocol_detection.redis_port_hints,
+            vec![6379, 6380]
+        );
+        assert_eq!(config.tcp_gateway.protocol_detection.overrides.len(), 1);
+        assert_eq!(
+            config.tcp_gateway.protocol_detection.overrides[0].protocol,
+            TcpApplicationProtocol::Redis
+        );
     }
 
     #[test]

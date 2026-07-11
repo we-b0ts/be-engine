@@ -7,11 +7,18 @@ use serde_json::Value;
 
 use crate::recorder::RecorderEvent;
 
+mod cache;
 mod udp;
+use cache::{
+    MemcachedDependencySummary, MemcachedSummaryBuilder, RedisDependencySummary,
+    RedisSummaryBuilder,
+};
 use udp::{UdpDependencySummary, record_udp_summary};
 
 pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
     !matches!(event, RecorderEvent::MysqlExchange(exchange) if is_debug_only_mysql_exchange(exchange))
+        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.session_setup && exchange.response_kind != "error" && exchange.replay_safe)
+        && !matches!(event, RecorderEvent::RedisExchange(exchange) if matches!(exchange.command.as_str(), "PING" | "QUIT") && exchange.response_kind != "error" && exchange.replay_safe)
 }
 
 pub(crate) async fn write_case_dependency_summary(dir: &Path) -> Result<()> {
@@ -71,6 +78,10 @@ struct DependencySummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     mysql: Option<MysqlDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    redis: Option<RedisDependencySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    memcached: Option<MemcachedDependencySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     http: Option<HttpDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tcp_gateway: Option<TcpGatewayDependencySummary>,
@@ -86,6 +97,8 @@ struct DependencySummaryBuilder {
     event_types: BTreeMap<String, usize>,
     parse_errors: Vec<String>,
     mysql: MysqlDependencySummary,
+    redis: RedisSummaryBuilder,
+    memcached: MemcachedSummaryBuilder,
     http: HttpDependencySummary,
     tcp_gateway: TcpGatewayDependencySummary,
     udp: UdpDependencySummary,
@@ -94,6 +107,11 @@ struct DependencySummaryBuilder {
 
 impl DependencySummaryBuilder {
     fn finish(self) -> DependencySummary {
+        let redis = self.redis.has_activity().then(|| self.redis.finish());
+        let memcached = self
+            .memcached
+            .has_activity()
+            .then(|| self.memcached.finish());
         DependencySummary {
             version: 1,
             source: "dependencies.jsonl",
@@ -101,6 +119,8 @@ impl DependencySummaryBuilder {
             event_types: self.event_types,
             parse_errors: self.parse_errors,
             mysql: self.mysql.has_activity().then_some(self.mysql),
+            redis,
+            memcached,
             http: (self.http.calls > 0).then_some(self.http),
             tcp_gateway: (self.tcp_gateway.connections > 0).then_some(self.tcp_gateway),
             udp: (self.udp.datagrams > 0).then_some(self.udp),
@@ -253,6 +273,10 @@ fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
             "mysql_connection" => record_mysql_connection_summary(&mut builder.mysql, &value),
             "mysql_exchange" => record_mysql_summary(&mut builder.mysql, &value),
             "mysql_tls_rejected" => record_mysql_tls_rejected_summary(&mut builder.mysql, &value),
+            "redis_connection" => builder.redis.record_connection(&value),
+            "redis_exchange" => builder.redis.record_exchange(&value),
+            "memcached_connection" => builder.memcached.record_connection(&value),
+            "memcached_exchange" => builder.memcached.record_exchange(&value),
             "http_exchange" => record_http_summary(&mut builder.http, &value),
             "tcp_gateway_connection" => {
                 record_tcp_gateway_summary(&mut builder.tcp_gateway, &value);
@@ -738,5 +762,22 @@ mod tests {
             summary["mysql"]["tls_rejection_reasons"]["CLIENT_SSL is unsupported"],
             1
         );
+    }
+
+    #[test]
+    fn dependency_summary_includes_cache_protocols_without_payloads() {
+        let raw = r#"{"event_type":"redis_connection","id":"11111111-1111-1111-1111-111111111111","target_host":"redis.internal","target_port":6379,"resp_version":3}
+{"event_type":"redis_exchange","connection_id":"11111111-1111-1111-1111-111111111111","target_host":"redis.internal","target_port":6379,"resp_version":3,"command":"GET","args":[{"original_len":6}],"response_kind":"bulk_string","response":{"original_len":9},"replay_safe":true}
+{"event_type":"memcached_connection","id":"22222222-2222-2222-2222-222222222222","target_host":"cache.internal","target_port":11211,"wire_protocol":"text"}
+{"event_type":"memcached_exchange","connection_id":"22222222-2222-2222-2222-222222222222","target_host":"cache.internal","target_port":11211,"wire_protocol":"text","command":"get","response_status":"VALUE secret 0 5","response_frames":[{"original_len":31}],"replay_safe":true}"#;
+        let summary = serde_json::to_value(build_dependency_summary(raw)).unwrap();
+
+        assert_eq!(summary["redis"]["connections"], 1);
+        assert_eq!(summary["redis"]["commands"]["GET"], 1);
+        assert_eq!(summary["redis"]["request_bytes"], 6);
+        assert_eq!(summary["memcached"]["connections"], 1);
+        assert_eq!(summary["memcached"]["hits"], 1);
+        let serialized = serde_json::to_string(&summary).unwrap();
+        assert!(!serialized.contains("secret"));
     }
 }

@@ -148,6 +148,15 @@ using dependency behavior replayed from the recorded dependency file, and the
 case-owned dependency touch contract is satisfied. HTTP response compatibility
 alone is not success.
 
+Redis and Memcached replay uses recorded connection lanes. The first matching
+request deterministically binds a live connection to a recorded lane and later
+requests must consume that lane in sequence. Redis matching includes RESP
+version, selected DB, username, command, and exact arguments. Memcached matching
+includes Text/Binary wire protocol and request semantics while ignoring the
+live Binary opaque; replay rewrites response opaque to the live value. Cache
+unmatched, unsupported, unsafe, and unused evidence is dirty and must fail the
+same `end/report --fail-on-dirty` gates as HTTP and MySQL evidence.
+
 For collection replay, a passed result means the selected case set passed. Do
 not collapse a collection into one representative case. Traffic observed while
 no case is active, or while a different case is active, must not be silently
