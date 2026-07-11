@@ -56,6 +56,13 @@ struct ReplayReport {
     metadata_warnings: Vec<String>,
     unused_bootstrap_exchanges: Vec<RecordedExchangeSummary>,
     unused_case_exchanges: Vec<RecordedExchangeSummary>,
+    matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
+    unmatched_http_requests: Vec<http::HttpRequestReport>,
+    unsupported_http_exchanges: Vec<http::HttpRequestReport>,
+    unused_bootstrap_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
+    unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
+    ca_cert_path: String,
+    http_ignored_query_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -139,6 +146,15 @@ struct ReplayTarget {
     host: String,
     port: u16,
     fake_ip: Ipv4Addr,
+    protocol: ReplayProtocol,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ReplayProtocol {
+    Mysql,
+    Http,
+    Https,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -191,6 +207,7 @@ struct ReplaySessionIdentity {
 enum DependencyRecord {
     MysqlConnection(Box<RecordedMysqlConnection>),
     MysqlExchange(Box<RecordedMysqlExchange>),
+    HttpExchange(Box<http::RecordedHttpExchange>),
     #[serde(other)]
     Other,
 }
@@ -290,6 +307,7 @@ async fn load_dependency_file(
     source: ReplaySource,
     case_id: Option<&str>,
     exchanges: &mut Vec<ReplayExchange>,
+    http_exchanges: &mut Vec<http::ReplayHttpExchange>,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
 ) -> Result<()> {
@@ -318,21 +336,23 @@ async fn load_dependency_file(
         };
         if let Some(identity) = identity_from_connection(connection) {
             let target = identity.target.clone();
-            targets
-                .entry(target.clone())
-                .or_insert_with(|| ReplayTarget {
-                    host: target.host.clone(),
-                    port: target.port,
-                    fake_ip: Ipv4Addr::UNSPECIFIED,
-                });
+            register_replay_target(targets, &target, ReplayProtocol::Mysql)?;
             connection_identities.insert(connection.id, identity);
         }
     }
 
     for record in records {
-        let DependencyRecord::MysqlExchange(exchange) = record else {
+        if let DependencyRecord::HttpExchange(exchange) = record {
+            http::register_http_exchange(
+                *exchange,
+                source,
+                case_id,
+                http_exchanges,
+                targets,
+            )?;
             continue;
-        };
+        }
+        let DependencyRecord::MysqlExchange(exchange) = record else { continue };
         if exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare" {
             continue;
         }
@@ -349,13 +369,7 @@ async fn load_dependency_file(
                     exchange.sql
                 )
             })?;
-        targets
-            .entry(identity.target.clone())
-            .or_insert_with(|| ReplayTarget {
-                host: identity.target.host.clone(),
-                port: identity.target.port,
-                fake_ip: Ipv4Addr::UNSPECIFIED,
-            });
+        register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
         exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -364,6 +378,35 @@ async fn load_dependency_file(
             consumed: false,
         });
     }
+    Ok(())
+}
+
+fn register_replay_target(
+    targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+    target: &TargetKey,
+    protocol: ReplayProtocol,
+) -> Result<()> {
+    if let Some(existing) = targets.get(target) {
+        if existing.protocol != protocol {
+            return Err(anyhow!(
+                "replay target {}:{} is recorded as both {:?} and {:?}",
+                target.host,
+                target.port,
+                existing.protocol,
+                protocol
+            ));
+        }
+        return Ok(());
+    }
+    targets.insert(
+        target.clone(),
+        ReplayTarget {
+            host: target.host.clone(),
+            port: target.port,
+            fake_ip: Ipv4Addr::UNSPECIFIED,
+            protocol,
+        },
+    );
     Ok(())
 }
 
@@ -544,11 +587,19 @@ fn assign_fake_ips(
     fake_cidr: Ipv4Cidr,
 ) -> Result<Vec<ReplayTarget>> {
     let mut out = Vec::with_capacity(targets.len());
-    for (offset, (_, mut target)) in targets.into_iter().enumerate() {
-        let offset = u32::try_from(offset + 1).context("too many replay targets")?;
-        target.fake_ip = fake_cidr
-            .ip_at(offset)
-            .ok_or_else(|| anyhow!("fake CIDR exhausted by replay targets"))?;
+    let mut host_ips = BTreeMap::new();
+    for (_, mut target) in targets {
+        let fake_ip = if let Some(fake_ip) = host_ips.get(&target.host) {
+            *fake_ip
+        } else {
+            let offset = u32::try_from(host_ips.len() + 1).context("too many replay hosts")?;
+            let fake_ip = fake_cidr
+                .ip_at(offset)
+                .ok_or_else(|| anyhow!("fake CIDR exhausted by replay hosts"))?;
+            host_ips.insert(target.host.clone(), fake_ip);
+            fake_ip
+        };
+        target.fake_ip = fake_ip;
         out.push(target);
     }
     Ok(out)

@@ -17,10 +17,13 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::MitmCa;
 use crate::mysql_protocol::{
     CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, MysqlPacket, parse_client_command,
     parse_handshake_response, read_packet,
 };
+
+mod http;
 
 const CLIENT_LONG_PASSWORD: u32 = 0x0000_0001;
 const CLIENT_LONG_FLAG: u32 = 0x0000_0004;
@@ -70,6 +73,9 @@ pub struct MysqlReplayConfig {
     pub report_path: Option<PathBuf>,
     pub session_path: Option<PathBuf>,
     pub control_socket_path: Option<PathBuf>,
+    pub ca_cert_path: Option<PathBuf>,
+    pub ca_key_path: Option<PathBuf>,
+    pub http_ignore_query_params: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,7 +108,7 @@ pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
     info!(
         dns_listen = %dns_listen,
         tcp_listen = %tcp_listen,
-        "MySQL dependency replay intercept listening"
+        "dependency replay intercept listening"
     );
     tokio::select! {
         result = runtime.run_dns(dns_socket) => result,
@@ -111,8 +117,15 @@ pub async fn run_mysql_replay(config: MysqlReplayConfig) -> Result<()> {
     }
 }
 
+pub type ReplayConfig = MysqlReplayConfig;
+
+pub async fn run_replay(config: ReplayConfig) -> Result<()> {
+    run_mysql_replay(config).await
+}
+
 struct MysqlReplayRuntime {
     state: Arc<Mutex<ReplayState>>,
+    ca: Arc<MitmCa>,
     report_path: Option<PathBuf>,
     session_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
@@ -125,9 +138,23 @@ impl MysqlReplayRuntime {
         tcp_listen: SocketAddr,
     ) -> Result<Self> {
         let root_dir = config.case_dir;
+        let replay_artifact_dir = config
+            .report_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| root_dir.join(".replay"));
+        let ca_cert_path = config
+            .ca_cert_path
+            .unwrap_or_else(|| replay_artifact_dir.join("replay-ca.pem"));
+        let ca_key_path = config
+            .ca_key_path
+            .unwrap_or_else(|| replay_artifact_dir.join("replay-ca-key.pem"));
+        let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
         let (mode, mut cases, active_case_id) = discover_replay_cases(&root_dir).await?;
         let bootstrap_path = find_upward(&root_dir, "bootstrap-dependencies.jsonl");
         let mut exchanges = Vec::new();
+        let mut http_exchanges = Vec::new();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
         let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
@@ -138,6 +165,7 @@ impl MysqlReplayRuntime {
                 ReplaySource::Bootstrap,
                 None,
                 &mut exchanges,
+                &mut http_exchanges,
                 &mut targets,
                 &mut connection_identities,
             )
@@ -149,6 +177,7 @@ impl MysqlReplayRuntime {
                 ReplaySource::Case,
                 Some(&case.id),
                 &mut exchanges,
+                &mut http_exchanges,
                 &mut targets,
                 &mut connection_identities,
             )
@@ -173,10 +202,19 @@ impl MysqlReplayRuntime {
             bootstrap_path,
             targets,
             exchanges,
+            http_exchanges,
             events: ReplayEvents::default(),
+            http_events: http::HttpReplayEvents::default(),
+            ca_cert_path,
+            http_ignore_query_params: config
+                .http_ignore_query_params
+                .into_iter()
+                .map(|value| value.to_ascii_lowercase())
+                .collect(),
         };
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
+            ca,
             report_path: config.report_path,
             session_path: config.session_path,
             control_socket_path: config.control_socket_path,
@@ -190,12 +228,13 @@ impl MysqlReplayRuntime {
                 .await
                 .context("failed to accept MySQL replay gateway client")?;
             let state = self.state.clone();
+            let ca = self.ca.clone();
             let report_path = self.report_path.clone();
             tokio::spawn(async move {
                 if let Err(err) =
-                    handle_gateway_connection(stream, peer_addr, state, report_path).await
+                    handle_gateway_connection(stream, peer_addr, state, report_path, ca).await
                 {
-                    warn!(error = %err, "MySQL replay connection failed");
+                    warn!(error = %err, "dependency replay connection failed");
                 }
             });
         }
@@ -247,7 +286,11 @@ struct ReplayState {
     bootstrap_path: Option<PathBuf>,
     targets: Vec<ReplayTarget>,
     exchanges: Vec<ReplayExchange>,
+    http_exchanges: Vec<http::ReplayHttpExchange>,
     events: ReplayEvents,
+    http_events: http::HttpReplayEvents,
+    ca_cert_path: PathBuf,
+    http_ignore_query_params: Vec<String>,
 }
 
 impl ReplayState {
@@ -452,7 +495,7 @@ impl ReplayState {
 
     fn snapshot_report(&self) -> ReplayReport {
         ReplayReport {
-            version: 1,
+            version: 2,
             mode: self.mode,
             dns_listen: self.dns_listen.to_string(),
             tcp_listen: self.tcp_listen.to_string(),
@@ -479,6 +522,13 @@ impl ReplayState {
             metadata_warnings: self.events.metadata_warnings.clone(),
             unused_bootstrap_exchanges: self.unused_exchanges(ReplaySource::Bootstrap),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
+            matched_http_exchanges: self.http_events.matched.clone(),
+            unmatched_http_requests: self.http_events.unmatched.clone(),
+            unsupported_http_exchanges: self.http_events.unsupported.clone(),
+            unused_bootstrap_http_exchanges: self.unused_http_exchanges(ReplaySource::Bootstrap),
+            unused_case_http_exchanges: self.unused_http_exchanges(ReplaySource::Case),
+            ca_cert_path: self.ca_cert_path.display().to_string(),
+            http_ignored_query_params: self.http_ignore_query_params.clone(),
         }
     }
 
@@ -525,15 +575,35 @@ async fn handle_gateway_connection(
     peer_addr: SocketAddr,
     state: Arc<Mutex<ReplayState>>,
     report_path: Option<PathBuf>,
+    ca: Arc<MitmCa>,
 ) -> Result<()> {
     let target = replay_target_for_stream(&stream, &state).await;
-    handle_replay_connection(stream, peer_addr, target, state, report_path).await
+    match target.as_ref().map(|target| target.protocol) {
+        Some(ReplayProtocol::Http) | Some(ReplayProtocol::Https) => {
+            http::handle_http_replay_connection(
+                stream,
+                peer_addr,
+                target.context("HTTP replay connection has no target")?,
+                state,
+                report_path,
+                ca,
+            )
+            .await
+        }
+        _ => {
+            let target = target.map(|target| TargetKey {
+                host: target.host,
+                port: target.port,
+            });
+            handle_replay_connection(stream, peer_addr, target, state, report_path).await
+        }
+    }
 }
 
 async fn replay_target_for_stream(
     stream: &TcpStream,
     state: &Arc<Mutex<ReplayState>>,
-) -> Option<TargetKey> {
+) -> Option<ReplayTarget> {
     let original = original_dst(stream).ok();
     let state = state.lock().await;
     if let Some(SocketAddr::V4(addr)) = original {
@@ -544,18 +614,12 @@ async fn replay_target_for_stream(
             .iter()
             .find(|target| target.fake_ip == ip && target.port == port)
         {
-            return Some(TargetKey {
-                host: target.host.clone(),
-                port: target.port,
-            });
+            return Some(target.clone());
         }
     }
     if state.targets.len() == 1 {
         let target = &state.targets[0];
-        return Some(TargetKey {
-            host: target.host.clone(),
-            port: target.port,
-        });
+        return Some(target.clone());
     }
     None
 }
