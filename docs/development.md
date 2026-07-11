@@ -148,6 +148,19 @@ bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.
 
+Redis and Memcached dependencies are semantic `redis_connection`,
+`redis_exchange`, `memcached_connection`, and `memcached_exchange` records.
+Successful Redis authentication/session initialization is handled by replay
+and omitted from case dependencies; failed initialization remains as redacted
+evidence. Any truncated frame, parse/correlation failure, unsupported cache
+mode, or unsafe cache connection prevents a case from being published and
+prevents unsafe bootstrap replay from starting. The recording directory is
+sensitive because ordinary cache keys and values are needed for exact replay.
+
+Dependency summaries are generated when a case is published, when bootstrap
+recording closes, and when the run finishes. They are intentionally not rebuilt
+after every cache exchange.
+
 ## Testing Guidance
 
 Add unit tests near the parser or module being changed. Add integration tests in
@@ -159,6 +172,9 @@ Useful focused test commands:
 cargo test mysql_protocol
 cargo test mysql_semantic
 cargo test proxy_integration
+cargo test cache_protocol
+cargo test cache_proxy
+cargo test replay::cache_tests
 ```
 
 Network or root-requiring behavior should be covered with isolated unit tests

@@ -3,10 +3,6 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::dependency_summary::{
-    should_append_case_dependency, write_bootstrap_dependency_summary,
-    write_case_dependency_summary,
-};
 use crate::recorder_run::{RecorderRunState, new_run_id};
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -21,6 +17,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 pub use crate::recorder_event::*;
+
+mod dependencies;
 
 #[derive(Clone)]
 pub struct Recorder {
@@ -95,155 +93,6 @@ impl Recorder {
         tokio::fs::write(&path, payload)
             .await
             .with_context(|| format!("failed to write case recording file {}", path.display()))
-    }
-
-    pub async fn append_case_dependency(
-        &self,
-        case: &CaseContext,
-        event: &RecorderEvent,
-        matched_by: &str,
-    ) -> Result<()> {
-        if !should_append_case_dependency(event) {
-            return Ok(());
-        }
-        let _guard = self.dependency_write_lock.lock().await;
-        if self.finalized_cases.lock().await.contains(&case.id) {
-            return Ok(());
-        }
-        let dir = self.case_staging_dir(case);
-        tokio::fs::create_dir_all(&dir)
-            .await
-            .with_context(|| format!("failed to create case recording dir {}", dir.display()))?;
-        let filename = case_dependency_filename(event);
-        let path = dir.join(filename);
-        let mut value =
-            serde_json::to_value(event).context("failed to serialize case dependency event")?;
-        compact_case_dependency_process_info(&mut value);
-        if let serde_json::Value::Object(object) = &mut value {
-            object.insert(
-                "case_dependency_matched_by".to_string(),
-                serde_json::Value::String(matched_by.to_string()),
-            );
-        }
-        let mut line =
-            serde_json::to_vec(&value).context("failed to serialize case dependency event")?;
-        line.push(b'\n');
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await
-            .with_context(|| format!("failed to open case dependencies file {}", path.display()))?;
-        file.write_all(&line)
-            .await
-            .context("failed to append case dependency event")?;
-        file.flush()
-            .await
-            .context("failed to flush case dependency event")?;
-        if filename == "dependencies.jsonl" {
-            write_case_dependency_summary(&dir).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn append_bootstrap_dependency(
-        &self,
-        event: &RecorderEvent,
-        matched_by: &str,
-    ) -> Result<()> {
-        if !should_append_case_dependency(event) {
-            return Ok(());
-        }
-        let _guard = self.dependency_write_lock.lock().await;
-        tokio::fs::create_dir_all(&*self.run_dir)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create recording run dir {}",
-                    self.run_dir.display()
-                )
-            })?;
-        let filename = bootstrap_dependency_filename(event);
-        let path = self.run_dir.join(filename);
-        let mut value = serde_json::to_value(event)
-            .context("failed to serialize bootstrap dependency event")?;
-        compact_case_dependency_process_info(&mut value);
-        if let serde_json::Value::Object(object) = &mut value {
-            object.insert(
-                "bootstrap_dependency_matched_by".to_string(),
-                serde_json::Value::String(matched_by.to_string()),
-            );
-        }
-        let mut line =
-            serde_json::to_vec(&value).context("failed to serialize bootstrap dependency event")?;
-        line.push(b'\n');
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to open bootstrap dependencies file {}",
-                    path.display()
-                )
-            })?;
-        file.write_all(&line)
-            .await
-            .context("failed to append bootstrap dependency event")?;
-        file.flush()
-            .await
-            .context("failed to flush bootstrap dependency event")?;
-        if filename == "bootstrap-dependencies.jsonl" {
-            write_bootstrap_dependency_summary(&self.run_dir).await?;
-        }
-        Ok(())
-    }
-}
-
-fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
-    if is_case_dependency_debug_event(event) {
-        "dependencies-debug.jsonl"
-    } else {
-        "dependencies.jsonl"
-    }
-}
-
-fn bootstrap_dependency_filename(event: &RecorderEvent) -> &'static str {
-    if is_case_dependency_debug_event(event) {
-        "bootstrap-dependencies-debug.jsonl"
-    } else {
-        "bootstrap-dependencies.jsonl"
-    }
-}
-
-fn is_case_dependency_debug_event(event: &RecorderEvent) -> bool {
-    matches!(
-        event,
-        RecorderEvent::MysqlQuery(_)
-            | RecorderEvent::MysqlResponse(_)
-            | RecorderEvent::MysqlPacket(_)
-    )
-}
-
-fn compact_case_dependency_process_info(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            if let Some(process) = object.get_mut("client_process")
-                && let Some(pid) = process.get("pid").and_then(serde_json::Value::as_u64)
-            {
-                *process = serde_json::Value::Number(pid.into());
-            }
-            for child in object.values_mut() {
-                compact_case_dependency_process_info(child);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                compact_case_dependency_process_info(child);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -559,6 +408,9 @@ mod tests {
         assert_eq!(value["client_process"], 42);
         assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
 
+        crate::dependency_summary::write_bootstrap_dependency_summary(&recorder.run_dir)
+            .await
+            .unwrap();
         let summary_raw =
             tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-summary.json"))
                 .await
@@ -653,6 +505,9 @@ mod tests {
         assert_eq!(raw.lines().count(), 2);
         assert!(!raw.contains("\"status\":\"stmt_prepare\""));
 
+        crate::dependency_summary::write_case_dependency_summary(&case_dir)
+            .await
+            .unwrap();
         let summary_raw = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
             .await
             .unwrap();

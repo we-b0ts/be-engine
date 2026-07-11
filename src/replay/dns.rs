@@ -1,12 +1,12 @@
 #[derive(Debug)]
-struct DnsQuestion {
-    domain: String,
-    qtype: u16,
-    qclass: u16,
-    question_end: usize,
+pub(super) struct DnsQuestion {
+    pub(super) domain: String,
+    pub(super) qtype: u16,
+    pub(super) qclass: u16,
+    pub(super) question_end: usize,
 }
 
-async fn handle_dns_query(
+pub(super) async fn handle_dns_query(
     socket: Arc<UdpSocket>,
     state: Arc<Mutex<ReplayState>>,
     query: Vec<u8>,
@@ -30,11 +30,11 @@ async fn handle_dns_query(
     socket
         .send_to(&response, peer)
         .await
-        .context("failed to send MySQL replay DNS response")?;
+        .context("failed to send dependency replay DNS response")?;
     Ok(())
 }
 
-fn parse_dns_question(packet: &[u8]) -> Result<DnsQuestion> {
+pub(super) fn parse_dns_question(packet: &[u8]) -> Result<DnsQuestion> {
     if packet.len() < 12 {
         return Err(anyhow!("DNS packet too short"));
     }
@@ -53,7 +53,7 @@ fn parse_dns_question(packet: &[u8]) -> Result<DnsQuestion> {
     })
 }
 
-fn build_dns_empty_response(query: &[u8], question_end: usize) -> Result<Vec<u8>> {
+pub(super) fn build_dns_empty_response(query: &[u8], question_end: usize) -> Result<Vec<u8>> {
     let mut response = Vec::with_capacity(question_end);
     response.extend_from_slice(query.get(0..2).ok_or_else(|| anyhow!("missing DNS id"))?);
     response.extend_from_slice(&0x8180_u16.to_be_bytes());
@@ -69,7 +69,11 @@ fn build_dns_empty_response(query: &[u8], question_end: usize) -> Result<Vec<u8>
     Ok(response)
 }
 
-fn build_dns_a_response(query: &[u8], question_end: usize, fake_ip: Ipv4Addr) -> Result<Vec<u8>> {
+pub(super) fn build_dns_a_response(
+    query: &[u8],
+    question_end: usize,
+    fake_ip: Ipv4Addr,
+) -> Result<Vec<u8>> {
     let mut response = build_dns_empty_response(query, question_end)?;
     response[6..8].copy_from_slice(&1_u16.to_be_bytes());
     response.extend_from_slice(&0xC00C_u16.to_be_bytes());
@@ -81,7 +85,7 @@ fn build_dns_a_response(query: &[u8], question_end: usize, fake_ip: Ipv4Addr) ->
     Ok(response)
 }
 
-fn read_dns_name(packet: &[u8], offset: usize) -> Result<(String, usize)> {
+pub(super) fn read_dns_name(packet: &[u8], offset: usize) -> Result<(String, usize)> {
     let mut labels = Vec::new();
     let mut cursor = offset;
     let mut consumed_end = None;
@@ -118,13 +122,13 @@ fn read_dns_name(packet: &[u8], offset: usize) -> Result<(String, usize)> {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Ipv4Cidr {
-    network: u32,
-    size: u32,
+pub(super) struct Ipv4Cidr {
+    pub(super) network: u32,
+    pub(super) size: u32,
 }
 
 impl Ipv4Cidr {
-    fn parse(value: &str) -> Result<Self> {
+    pub(super) fn parse(value: &str) -> Result<Self> {
         let (ip, prefix) = value
             .split_once('/')
             .ok_or_else(|| anyhow!("CIDR must contain / prefix: {value}"))?;
@@ -143,10 +147,11 @@ impl Ipv4Cidr {
         Ok(Self { network, size })
     }
 
-    fn ip_at(&self, offset: u32) -> Option<Ipv4Addr> {
+    pub(super) fn ip_at(&self, offset: u32) -> Option<Ipv4Addr> {
         if offset >= self.size {
             return None;
         }
         Some(Ipv4Addr::from(self.network + offset))
     }
 }
+use super::*;

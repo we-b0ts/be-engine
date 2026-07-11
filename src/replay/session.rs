@@ -1,13 +1,13 @@
-struct ReplaySession {
-    target: Option<TargetKey>,
-    database: Option<String>,
-    username: Option<String>,
-    next_statement_id: u32,
-    statements: HashMap<u32, PreparedStatement>,
+pub(super) struct ReplaySession {
+    pub(super) target: Option<TargetKey>,
+    pub(super) database: Option<String>,
+    pub(super) username: Option<String>,
+    pub(super) next_statement_id: u32,
+    pub(super) statements: HashMap<u32, PreparedStatement>,
 }
 
 impl ReplaySession {
-    fn identity(&self) -> ReplaySessionIdentity {
+    pub(super) fn identity(&self) -> ReplaySessionIdentity {
         ReplaySessionIdentity {
             target: self.target.clone(),
             database: self.database.clone(),
@@ -16,7 +16,7 @@ impl ReplaySession {
     }
 }
 
-async fn handle_query(
+pub(super) async fn handle_query(
     stream: &mut TcpStream,
     state: Arc<Mutex<ReplayState>>,
     session: &ReplaySession,
@@ -68,7 +68,7 @@ async fn handle_query(
     }
 }
 
-async fn handle_stmt_prepare(
+pub(super) async fn handle_stmt_prepare(
     stream: &mut TcpStream,
     state: Arc<Mutex<ReplayState>>,
     session: &mut ReplaySession,
@@ -110,7 +110,7 @@ async fn handle_stmt_prepare(
     write_stmt_prepare_ok(stream, statement_id, &metadata).await
 }
 
-async fn handle_stmt_execute(
+pub(super) async fn handle_stmt_execute(
     stream: &mut TcpStream,
     state: Arc<Mutex<ReplayState>>,
     session: &mut ReplaySession,
@@ -206,14 +206,17 @@ async fn handle_stmt_execute(
 }
 
 #[derive(Debug)]
-struct ParsedStmtExecute {
-    statement_id: u32,
-    params: Option<Vec<RecordedMysqlValue>>,
-    param_types: Option<Vec<BoundParamType>>,
-    warnings: Vec<String>,
+pub(super) struct ParsedStmtExecute {
+    pub(super) statement_id: u32,
+    pub(super) params: Option<Vec<RecordedMysqlValue>>,
+    pub(super) param_types: Option<Vec<BoundParamType>>,
+    pub(super) warnings: Vec<String>,
 }
 
-fn parse_stmt_execute(packet: &MysqlPacket, session: &ReplaySession) -> ParsedStmtExecute {
+pub(super) fn parse_stmt_execute(
+    packet: &MysqlPacket,
+    session: &ReplaySession,
+) -> ParsedStmtExecute {
     let Some(statement_id) = read_u32_le(&packet.payload, 1) else {
         return ParsedStmtExecute {
             statement_id: 0,
@@ -354,3 +357,4 @@ fn parse_stmt_execute(packet: &MysqlPacket, session: &ReplaySession) -> ParsedSt
         warnings,
     }
 }
+use super::*;

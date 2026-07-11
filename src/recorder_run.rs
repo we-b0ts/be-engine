@@ -7,6 +7,9 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+use crate::dependency_summary::{
+    write_bootstrap_dependency_summary, write_case_dependency_summary,
+};
 use crate::recorder::{CaseContext, Recorder, sanitize_path_component};
 
 #[derive(Debug, Serialize)]
@@ -55,6 +58,7 @@ impl Recorder {
             let _guard = self.dependency_write_lock.lock().await;
             let staging_dir = self.case_staging_dir(case);
             let published_dir = self.case_dir(case);
+            write_case_dependency_summary(&staging_dir).await?;
             if let Some(parent) = published_dir.parent() {
                 tokio::fs::create_dir_all(parent).await.with_context(|| {
                     format!(
@@ -178,6 +182,7 @@ impl Recorder {
     }
 
     pub async fn finish_run(&self) -> Result<bool> {
+        self.finalize_bootstrap_dependency_summary().await?;
         let has_failed_cases = {
             let mut state = self.run_state.lock().await;
             state.finished = true;
@@ -190,6 +195,11 @@ impl Recorder {
         })
         .await?;
         Ok(has_failed_cases)
+    }
+
+    pub(crate) async fn finalize_bootstrap_dependency_summary(&self) -> Result<()> {
+        let _guard = self.dependency_write_lock.lock().await;
+        write_bootstrap_dependency_summary(&self.run_dir).await
     }
 
     pub(crate) fn case_dir(&self, case: &CaseContext) -> PathBuf {

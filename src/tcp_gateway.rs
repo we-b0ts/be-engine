@@ -1,7 +1,5 @@
 use std::convert::Infallible;
-use std::mem;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::os::fd::AsRawFd;
+use std::net::SocketAddr;
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
@@ -16,219 +14,30 @@ use hyper::service::service_fn;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_util::rt::TokioIo;
 use rustls::pki_types::ServerName;
-use tokio::io;
-use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{Duration, timeout};
+use tokio::net::TcpStream;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
-use tracing::{info, warn};
+use tracing::warn;
 use uuid::Uuid;
 
-use crate::dns_mock::{FakeDnsEntry, domain_matches};
-use crate::mysql_proxy::{MysqlConnectionContext, handle_connected_mysql};
-use crate::process_lookup::{lookup_tcp_process, process_label};
+use crate::dns_mock::FakeDnsEntry;
+use crate::process_lookup::process_label;
 use crate::recorder::{
     HeaderMapSnapshot, HttpExchangeEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent,
     TcpGatewayConnectionEvent, capture_body, redact_headers,
 };
 use crate::{AppState, ProxyClient};
 
-const SO_ORIGINAL_DST: libc::c_int = 80;
-const PROTOCOL_PEEK_TIMEOUT: Duration = Duration::from_millis(100);
+mod connection;
+
+pub(crate) use connection::run;
+use connection::upstream_addr;
 
 type GatewayBody = BoxBody<Bytes, Infallible>;
-
-pub async fn run(state: AppState) -> Result<()> {
-    let config = state.config().tcp_gateway.clone();
-    let listener = TcpListener::bind(config.listen)
-        .await
-        .with_context(|| format!("failed to bind TCP gateway {}", config.listen))?;
-    info!(listen = %config.listen, "TCP fake-IP gateway listening");
-
-    loop {
-        let (client, peer_addr) = listener
-            .accept()
-            .await
-            .context("failed to accept TCP gateway client")?;
-        let state = state.clone();
-        tokio::spawn(async move {
-            if let Err(err) = handle_connection(client, peer_addr, state).await {
-                warn!(error = %format!("{err:#}"), "TCP gateway connection failed");
-            }
-        });
-    }
-}
-
-async fn handle_connection(
-    client: TcpStream,
-    peer_addr: SocketAddr,
-    state: AppState,
-) -> Result<()> {
-    let fake_addr = original_dst(&client).or_else(|err| {
-        warn!(error = %err, "SO_ORIGINAL_DST unavailable; falling back to local_addr");
-        client.local_addr().context("failed to read local_addr")
-    })?;
-    let client_addr = Some(peer_addr.to_string());
-    let mut process_remote_candidates = vec![fake_addr];
-    if let Ok(gateway_addr) = client.local_addr() {
-        process_remote_candidates.push(gateway_addr);
-    }
-    let client_process = lookup_tcp_process(peer_addr, &process_remote_candidates);
-
-    let IpAddr::V4(fake_ip) = fake_addr.ip() else {
-        return Err(anyhow!("TCP gateway only supports IPv4 fake IPs"));
-    };
-    let Some(entry) = state.dns_registry().get_by_fake_ip(fake_ip).await else {
-        let error = format!(
-            "no DNS mock mapping for fake IP {fake_ip}; likely stale client DNS cache, recorder restart without persisted mapping, or traffic not produced by this DNS mock"
-        );
-        record_proxy_error(
-            &state,
-            "tcp_gateway",
-            client_addr.clone(),
-            client_process.clone(),
-            Some(fake_addr.to_string()),
-            error.clone(),
-        )
-        .await;
-        return Err(anyhow!("{error}"));
-    };
-
-    if domain_matches(&entry.domain, &state.config().dns_mock.bypass_domains) {
-        return proxy_raw_tcp(
-            client,
-            fake_addr,
-            entry,
-            client_addr,
-            client_process,
-            state,
-            RawTcpOptions {
-                record_connection: false,
-                sniff_server_first_protocols: false,
-            },
-        )
-        .await;
-    }
-
-    let config = state.config().tcp_gateway.clone();
-    let protocol_prefix = if config.record_http {
-        peek_protocol_prefix(&client).await.unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    if config.record_http && looks_like_http_prefix(&protocol_prefix) {
-        return serve_http_connection(client, fake_addr, entry, client_addr, client_process, state)
-            .await;
-    }
-    if config.record_http
-        && config.mitm_https
-        && should_mitm_https_prefix(fake_addr.port(), &config.https_ports, &protocol_prefix)
-    {
-        return serve_https_mitm_connection(
-            client,
-            fake_addr,
-            entry,
-            client_addr,
-            client_process,
-            state,
-        )
-        .await;
-    }
-
-    proxy_raw_tcp(
-        client,
-        fake_addr,
-        entry,
-        client_addr,
-        client_process,
-        state,
-        RawTcpOptions {
-            record_connection: true,
-            sniff_server_first_protocols: protocol_prefix.is_empty(),
-        },
-    )
-    .await
-}
 
 struct RawTcpOptions {
     record_connection: bool,
     sniff_server_first_protocols: bool,
-}
-
-async fn proxy_raw_tcp(
-    mut client: TcpStream,
-    fake_addr: SocketAddr,
-    entry: FakeDnsEntry,
-    client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
-    state: AppState,
-    options: RawTcpOptions,
-) -> Result<()> {
-    let id = Uuid::new_v4();
-    let started = Instant::now();
-    let upstream_addr = upstream_addr(&entry, fake_addr.port())?;
-    let mut upstream = match TcpStream::connect(upstream_addr).await {
-        Ok(upstream) => upstream,
-        Err(err) => {
-            if options.record_connection {
-                record_tcp_connection(
-                    &state,
-                    TcpConnectionRecord {
-                        id,
-                        client_addr: client_addr.clone(),
-                        client_process: client_process.clone(),
-                        domain: Some(entry.domain.clone()),
-                        fake_addr,
-                        upstream_addr: Some(upstream_addr),
-                        client_to_server_bytes: 0,
-                        server_to_client_bytes: 0,
-                        duration_ms: started.elapsed().as_millis(),
-                        error: Some(err.to_string()),
-                    },
-                )
-                .await;
-            }
-            return Err(err).with_context(|| format!("failed to connect upstream {upstream_addr}"));
-        }
-    };
-
-    if options.sniff_server_first_protocols
-        && upstream_looks_like_mysql(&upstream).await.unwrap_or(false)
-    {
-        let context = MysqlConnectionContext {
-            route_name: Some(format!("fake-ip:{}", entry.domain)),
-            listen_addr: state.config().tcp_gateway.listen.to_string(),
-            client_addr,
-            client_process,
-            target_host: Some(entry.domain.clone()),
-            target_port: Some(fake_addr.port()),
-            target_addr: Some(format_authority(&entry.domain, fake_addr.port(), 3306)),
-            upstream_addr: upstream_addr.to_string(),
-        };
-        return handle_connected_mysql(client, upstream, state, context).await;
-    }
-
-    let (client_to_server, server_to_client) = io::copy_bidirectional(&mut client, &mut upstream)
-        .await
-        .context("failed to proxy TCP gateway stream")?;
-    if options.record_connection {
-        record_tcp_connection(
-            &state,
-            TcpConnectionRecord {
-                id,
-                client_addr,
-                client_process,
-                domain: Some(entry.domain),
-                fake_addr,
-                upstream_addr: Some(upstream_addr),
-                client_to_server_bytes: client_to_server,
-                server_to_client_bytes: server_to_client,
-                duration_ms: started.elapsed().as_millis(),
-                error: None,
-            },
-        )
-        .await;
-    }
-    Ok(())
+    detected_protocol: Option<crate::cache_protocol::DetectedProtocol>,
 }
 
 async fn serve_http_connection(
@@ -1018,84 +827,6 @@ fn with_fake_gateway_headers(
     headers
 }
 
-fn upstream_addr(entry: &FakeDnsEntry, port: u16) -> Result<SocketAddr> {
-    let ip = entry
-        .real_ips
-        .first()
-        .copied()
-        .ok_or_else(|| anyhow!("DNS mock entry has no real IPs for {}", entry.domain))?;
-    Ok(SocketAddr::new(IpAddr::V4(ip), port))
-}
-
-async fn peek_protocol_prefix(stream: &TcpStream) -> Result<Vec<u8>> {
-    let mut buf = [0_u8; 8];
-    let n = match timeout(PROTOCOL_PEEK_TIMEOUT, stream.peek(&mut buf)).await {
-        Ok(result) => result?,
-        Err(_) => return Ok(Vec::new()),
-    };
-    Ok(buf[..n.min(buf.len())].to_vec())
-}
-
-fn looks_like_http_prefix(bytes: &[u8]) -> bool {
-    [
-        b"GET ".as_slice(),
-        b"POST ".as_slice(),
-        b"PUT ".as_slice(),
-        b"PATCH ".as_slice(),
-        b"DELETE ".as_slice(),
-        b"HEAD ".as_slice(),
-        b"OPTIONS ".as_slice(),
-    ]
-    .iter()
-    .any(|prefix| bytes.starts_with(prefix))
-}
-
-fn should_mitm_https_prefix(port: u16, https_ports: &[u16], bytes: &[u8]) -> bool {
-    if !https_ports.is_empty() && !https_ports.contains(&port) {
-        return false;
-    }
-    looks_like_tls_prefix(bytes)
-}
-
-async fn upstream_looks_like_mysql(stream: &TcpStream) -> Result<bool> {
-    let mut buf = [0_u8; 5];
-    let n = match timeout(PROTOCOL_PEEK_TIMEOUT, stream.peek(&mut buf)).await {
-        Ok(result) => result?,
-        Err(_) => return Ok(false),
-    };
-    Ok(looks_like_mysql_handshake_prefix(&buf[..n]))
-}
-
-fn looks_like_tls_prefix(bytes: &[u8]) -> bool {
-    bytes.len() >= 3 && bytes[0] == 0x16 && bytes[1] == 0x03 && bytes[2] <= 0x04
-}
-
-fn looks_like_mysql_handshake_prefix(bytes: &[u8]) -> bool {
-    bytes.len() >= 5 && bytes[3] == 0 && bytes[4] == 0x0a
-}
-
-fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
-    let fd = stream.as_raw_fd();
-    let mut addr: libc::sockaddr_in = unsafe { mem::zeroed() };
-    let mut len = mem::size_of::<libc::sockaddr_in>() as libc::socklen_t;
-    let ret = unsafe {
-        libc::getsockopt(
-            fd,
-            libc::SOL_IP,
-            SO_ORIGINAL_DST,
-            &mut addr as *mut _ as *mut libc::c_void,
-            &mut len as *mut _,
-        )
-    };
-    if ret != 0 {
-        return Err(std::io::Error::last_os_error()).context("getsockopt SO_ORIGINAL_DST failed");
-    }
-
-    let ip = Ipv4Addr::from(u32::from_be(addr.sin_addr.s_addr));
-    let port = u16::from_be(addr.sin_port);
-    Ok(SocketAddr::new(IpAddr::V4(ip), port))
-}
-
 fn is_hop_by_hop(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -1116,8 +847,10 @@ mod tests {
     use super::*;
     use crate::dns_mock::FakeDnsEntry;
     use rustls::{ClientConfig, RootCertStore};
+    use std::net::{IpAddr, Ipv4Addr};
     use std::sync::Arc;
     use tempfile::tempdir;
+    use tokio::net::TcpListener;
 
     #[test]
     fn builds_http_upstream_uri_with_original_path() {
@@ -1127,27 +860,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(uri.to_string(), "http://127.0.0.1:8080/hello?a=1");
-    }
-
-    #[test]
-    fn resolves_upstream_from_dns_entry_and_original_port() {
-        let entry = FakeDnsEntry {
-            domain: "api.example.com".to_string(),
-            fake_ip: Ipv4Addr::new(198, 18, 0, 1),
-            real_ips: vec![Ipv4Addr::new(10, 0, 0, 1)],
-            first_seen: Utc::now(),
-            last_seen: Utc::now(),
-        };
-        assert_eq!(
-            upstream_addr(&entry, 8080).unwrap(),
-            "10.0.0.1:8080".parse::<SocketAddr>().unwrap()
-        );
-    }
-
-    #[test]
-    fn detects_tls_client_hello_prefix() {
-        assert!(looks_like_tls_prefix(&[0x16, 0x03, 0x03]));
-        assert!(!looks_like_tls_prefix(b"GET /"));
     }
 
     #[tokio::test]

@@ -1,4 +1,4 @@
-fn builtin_response(sql: &str, database: Option<&str>) -> Option<RecordedMysqlResponse> {
+pub(super) fn builtin_response(sql: &str, database: Option<&str>) -> Option<RecordedMysqlResponse> {
     let normalized = normalize_sql(sql);
     if is_builtin_ok(&normalized) {
         return Some(RecordedMysqlResponse {
@@ -49,7 +49,7 @@ fn builtin_response(sql: &str, database: Option<&str>) -> Option<RecordedMysqlRe
     None
 }
 
-fn is_builtin_ok(normalized_sql: &str) -> bool {
+pub(super) fn is_builtin_ok(normalized_sql: &str) -> bool {
     is_mysql_session_setup_sql(normalized_sql)
         || matches!(
             normalized_sql,
@@ -57,7 +57,7 @@ fn is_builtin_ok(normalized_sql: &str) -> bool {
         )
 }
 
-fn is_mysql_session_setup_sql(normalized_sql: &str) -> bool {
+pub(super) fn is_mysql_session_setup_sql(normalized_sql: &str) -> bool {
     normalized_sql.starts_with("set names ")
         || normalized_sql.starts_with("set character set ")
         || normalized_sql.starts_with("set character_set_client ")
@@ -68,7 +68,7 @@ fn is_mysql_session_setup_sql(normalized_sql: &str) -> bool {
         || normalized_sql.starts_with("set sql_mode ")
 }
 
-fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {
+pub(super) fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {
     RecordedMysqlResponse {
         status: "resultset".to_string(),
         error_code: None,
@@ -80,7 +80,7 @@ fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {
     }
 }
 
-fn string_column(name: &str) -> RecordedMysqlColumn {
+pub(super) fn string_column(name: &str) -> RecordedMysqlColumn {
     RecordedMysqlColumn {
         name: name.to_string(),
         table: None,
@@ -94,7 +94,7 @@ fn string_column(name: &str) -> RecordedMysqlColumn {
     }
 }
 
-fn integer_column(name: &str) -> RecordedMysqlColumn {
+pub(super) fn integer_column(name: &str) -> RecordedMysqlColumn {
     RecordedMysqlColumn {
         name: name.to_string(),
         table: None,
@@ -108,7 +108,7 @@ fn integer_column(name: &str) -> RecordedMysqlColumn {
     }
 }
 
-fn params_match(
+pub(super) fn params_match(
     recorded: Option<&[RecordedMysqlValue]>,
     actual: Option<&[RecordedMysqlValue]>,
 ) -> bool {
@@ -122,7 +122,7 @@ fn params_match(
     }
 }
 
-fn normalize_sql(sql: &str) -> String {
+pub(super) fn normalize_sql(sql: &str) -> String {
     let mut out = String::with_capacity(sql.len());
     let mut last_was_space = false;
     for ch in sql.chars() {
@@ -144,15 +144,15 @@ fn normalize_sql(sql: &str) -> String {
     compact
 }
 
-fn count_sql_placeholders(sql: &str) -> usize {
+pub(super) fn count_sql_placeholders(sql: &str) -> usize {
     sql.chars().filter(|ch| *ch == '?').count()
 }
 
-fn looks_like_select(sql: &str) -> bool {
+pub(super) fn looks_like_select(sql: &str) -> bool {
     normalize_sql(sql).starts_with("select")
 }
 
-fn column_type_code(column: &RecordedMysqlColumn) -> u8 {
+pub(super) fn column_type_code(column: &RecordedMysqlColumn) -> u8 {
     let sql_type = column.sql_type.to_ascii_uppercase();
     match sql_type.as_str() {
         "TINYINT" => MYSQL_TYPE_TINY,
@@ -194,7 +194,7 @@ fn column_type_code(column: &RecordedMysqlColumn) -> u8 {
     }
 }
 
-fn column_length(column: &RecordedMysqlColumn) -> u32 {
+pub(super) fn column_length(column: &RecordedMysqlColumn) -> u32 {
     match column_type_code(column) {
         MYSQL_TYPE_TINY => 4,
         MYSQL_TYPE_SHORT | MYSQL_TYPE_YEAR => 6,
@@ -209,7 +209,7 @@ fn column_length(column: &RecordedMysqlColumn) -> u32 {
     }
 }
 
-fn mysql_value_bytes(value: &RecordedMysqlValue) -> Result<Vec<u8>> {
+pub(super) fn mysql_value_bytes(value: &RecordedMysqlValue) -> Result<Vec<u8>> {
     if let Some(raw) = &value.raw {
         return match raw.encoding.as_str() {
             "base64" => STANDARD
@@ -238,7 +238,7 @@ fn mysql_value_bytes(value: &RecordedMysqlValue) -> Result<Vec<u8>> {
     })
 }
 
-fn value_as_i64(value: &RecordedMysqlValue) -> Result<i64> {
+pub(super) fn value_as_i64(value: &RecordedMysqlValue) -> Result<i64> {
     if let Some(Value::Number(number)) = &value.value {
         if let Some(value) = number.as_i64() {
             return Ok(value);
@@ -252,7 +252,7 @@ fn value_as_i64(value: &RecordedMysqlValue) -> Result<i64> {
         .with_context(|| format!("recorded value `{text}` is not an integer"))
 }
 
-fn value_as_f64(value: &RecordedMysqlValue) -> Result<f64> {
+pub(super) fn value_as_f64(value: &RecordedMysqlValue) -> Result<f64> {
     if let Some(Value::Number(number)) = &value.value
         && let Some(value) = number.as_f64()
     {
@@ -263,14 +263,14 @@ fn value_as_f64(value: &RecordedMysqlValue) -> Result<f64> {
         .with_context(|| format!("recorded value `{text}` is not a float"))
 }
 
-fn value_as_str(value: &RecordedMysqlValue) -> Result<&str> {
+pub(super) fn value_as_str(value: &RecordedMysqlValue) -> Result<&str> {
     if let Some(Value::String(value)) = &value.value {
         return Ok(value);
     }
     Err(anyhow!("recorded value is not a string"))
 }
 
-fn binary_datetime_bytes(value: &str) -> Result<Vec<u8>> {
+pub(super) fn binary_datetime_bytes(value: &str) -> Result<Vec<u8>> {
     let (date, time) = value.split_once(' ').unwrap_or((value, "00:00:00"));
     let mut date_parts = date.split('-');
     let year = date_parts
@@ -316,7 +316,7 @@ fn binary_datetime_bytes(value: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn binary_time_bytes(value: &str) -> Result<Vec<u8>> {
+pub(super) fn binary_time_bytes(value: &str) -> Result<Vec<u8>> {
     let negative = value.starts_with('-');
     let value = value.trim_start_matches('-');
     let (hms, micros) = value.split_once('.').unwrap_or((value, "0"));
@@ -344,7 +344,7 @@ fn binary_time_bytes(value: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-fn parse_binary_datetime(payload: &[u8], offset: usize) -> Option<(String, usize)> {
+pub(super) fn parse_binary_datetime(payload: &[u8], offset: usize) -> Option<(String, usize)> {
     let len = *payload.get(offset)? as usize;
     let start = offset + 1;
     match len {
@@ -381,7 +381,7 @@ fn parse_binary_datetime(payload: &[u8], offset: usize) -> Option<(String, usize
     }
 }
 
-fn parse_binary_time(payload: &[u8], offset: usize) -> Option<(String, usize)> {
+pub(super) fn parse_binary_time(payload: &[u8], offset: usize) -> Option<(String, usize)> {
     let len = *payload.get(offset)? as usize;
     let start = offset + 1;
     match len {
@@ -410,13 +410,13 @@ fn parse_binary_time(payload: &[u8], offset: usize) -> Option<(String, usize)> {
     }
 }
 
-fn read_lenenc_bytes(bytes: &[u8], offset: usize) -> Option<(&[u8], usize)> {
+pub(super) fn read_lenenc_bytes(bytes: &[u8], offset: usize) -> Option<(&[u8], usize)> {
     let (len, offset) = read_lenenc_int(bytes, offset)?;
     let len = len as usize;
     Some((bytes.get(offset..offset + len)?, offset + len))
 }
 
-fn read_lenenc_int(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
+pub(super) fn read_lenenc_int(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
     let first = *bytes.get(offset)?;
     match first {
         0xfc => Some((read_u16_le(bytes, offset + 1)? as u64, offset + 3)),
@@ -432,7 +432,7 @@ fn read_lenenc_int(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
     }
 }
 
-fn lenenc_int(value: u64) -> Vec<u8> {
+pub(super) fn lenenc_int(value: u64) -> Vec<u8> {
     match value {
         0..=250 => vec![value as u8],
         251..=0xffff => {
@@ -456,20 +456,20 @@ fn lenenc_int(value: u64) -> Vec<u8> {
     }
 }
 
-fn lenenc_bytes(value: &[u8]) -> Vec<u8> {
+pub(super) fn lenenc_bytes(value: &[u8]) -> Vec<u8> {
     let mut out = lenenc_int(value.len() as u64);
     out.extend_from_slice(value);
     out
 }
 
-fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+pub(super) fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes([
         *bytes.get(offset)?,
         *bytes.get(offset + 1)?,
     ]))
 }
 
-fn read_be_u16(bytes: &[u8], offset: usize) -> Result<u16> {
+pub(super) fn read_be_u16(bytes: &[u8], offset: usize) -> Result<u16> {
     Ok(u16::from_be_bytes([
         *bytes
             .get(offset)
@@ -480,7 +480,7 @@ fn read_be_u16(bytes: &[u8], offset: usize) -> Result<u16> {
     ]))
 }
 
-fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+pub(super) fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([
         *bytes.get(offset)?,
         *bytes.get(offset + 1)?,
@@ -489,13 +489,13 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     ]))
 }
 
-fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+pub(super) fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
     Some(u64::from_le_bytes(
         bytes.get(offset..offset + 8)?.try_into().ok()?,
     ))
 }
 
-fn null_bitmap_bit(bitmap: &[u8], index: usize) -> bool {
+pub(super) fn null_bitmap_bit(bitmap: &[u8], index: usize) -> bool {
     let byte_index = index / 8;
     let bit = index % 8;
     bitmap
@@ -503,7 +503,7 @@ fn null_bitmap_bit(bitmap: &[u8], index: usize) -> bool {
         .is_some_and(|byte| byte & (1 << bit) != 0)
 }
 
-fn set_null_bitmap_bit(bitmap: &mut [u8], bit_index: usize) {
+pub(super) fn set_null_bitmap_bit(bitmap: &mut [u8], bit_index: usize) {
     let byte_index = bit_index / 8;
     let bit = bit_index % 8;
     if let Some(byte) = bitmap.get_mut(byte_index) {
@@ -511,7 +511,7 @@ fn set_null_bitmap_bit(bitmap: &mut [u8], bit_index: usize) {
     }
 }
 
-fn mysql_null() -> RecordedMysqlValue {
+pub(super) fn mysql_null() -> RecordedMysqlValue {
     RecordedMysqlValue {
         kind: "null".to_string(),
         value: None,
@@ -519,7 +519,7 @@ fn mysql_null() -> RecordedMysqlValue {
     }
 }
 
-fn mysql_json(kind: &str, value: Value) -> RecordedMysqlValue {
+pub(super) fn mysql_json(kind: &str, value: Value) -> RecordedMysqlValue {
     RecordedMysqlValue {
         kind: kind.to_string(),
         value: Some(value),
@@ -527,7 +527,7 @@ fn mysql_json(kind: &str, value: Value) -> RecordedMysqlValue {
     }
 }
 
-fn mysql_bytes_or_utf8(bytes: &[u8], force_bytes: bool) -> RecordedMysqlValue {
+pub(super) fn mysql_bytes_or_utf8(bytes: &[u8], force_bytes: bool) -> RecordedMysqlValue {
     if !force_bytes && let Ok(value) = std::str::from_utf8(bytes) {
         return mysql_json("string", Value::String(value.to_string()));
     }
@@ -541,13 +541,18 @@ fn mysql_bytes_or_utf8(bytes: &[u8], force_bytes: bool) -> RecordedMysqlValue {
     }
 }
 
-async fn write_report_snapshot(
+pub(super) async fn write_report_snapshot(
     state: Arc<Mutex<ReplayState>>,
     report_path: Option<PathBuf>,
 ) -> Result<()> {
     let Some(report_path) = report_path else {
         return Ok(());
     };
+    let report_write_lock = {
+        let state = state.lock().await;
+        state.report_write_lock.clone()
+    };
+    let _write_guard = report_write_lock.lock().await;
     let report = {
         let state = state.lock().await;
         state.snapshot_report()
@@ -564,3 +569,4 @@ async fn write_report_snapshot(
         .await
         .with_context(|| format!("failed to write replay report {}", report_path.display()))
 }
+use super::*;

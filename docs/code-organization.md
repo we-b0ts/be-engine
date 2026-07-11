@@ -1,7 +1,7 @@
 # Code Organization
 
-Use this file before changing product code. It defines the repository's module
-review, naming, dependency, and size rules.
+Use this file before and during product changes. It defines the repository's
+module review, naming, dependency, structural convergence, and size rules.
 
 ## Package Shape
 
@@ -12,17 +12,47 @@ a shared library. Ask before creating a workspace when the boundary is unclear.
 ## Pre-Change Review
 
 Before adding behavior, inspect the target unit, its parent namespace, and its
-direct collaborators. Keep the current boundary only when all are true:
+direct collaborators. Treat the initial boundary as a working hypothesis. Keep
+the current boundary initially when all are true:
 
 - the unit has one owner and one primary reason to change
 - its name covers the new behavior
 - the change does not add an unrelated domain, layer, lifecycle, or side effect
 - collaborators can use a small interface without exposing private details
 
-Otherwise, make the smallest boundary adjustment needed by the current change
-before adding behavior. Preserve public interfaces and recorded formats unless
-the user explicitly requests a contract change. Do not reorganize unrelated
-domains or create empty placeholder modules.
+When a mismatch is already clear, make the smallest enabling boundary
+adjustment before adding behavior. When ownership is still uncertain, choose
+the smallest plausible boundary and revisit it as the implementation exposes
+the actual responsibilities. Preserve public interfaces and recorded formats
+unless the user explicitly requests a contract change. Do not reorganize
+unrelated domains or create empty placeholder modules.
+
+## Existing Code And Precedent
+
+Existing code is evidence of current behavior, constraints, and previous
+decisions. Its structure and naming are candidate patterns, not automatic
+precedents for new code.
+
+Preserve verified behavior and compatibility contracts. Before copying a
+nearby pattern, validate it against the current rules and the new behavior's
+actual owner, lifecycle, and dependency direction. The existence or frequency
+of a pattern alone is not enough justification to extend it.
+
+Legacy or exempt structures may remain untouched, but do not spread their
+organization into new code solely for consistency. A legacy mismatch is not,
+by itself, permission to refactor unrelated code.
+
+## Iterative Boundary Review
+
+Module organization evolves with the implementation. Revisit the initial
+boundary whenever new behavior makes its real responsibilities visible. The
+first draft may use a provisional boundary; before completion, names, owners,
+collaborators, and dependency direction must match the code that now exists.
+
+A refactor required or exposed by the current feature is part of that feature's
+normal implementation lifecycle. Adjust the smallest relevant boundary, then
+rerun the affected behavior checks. Keep broader cleanup that the feature does
+not expand or depend on as separate follow-up work.
 
 ## Naming And Cohesion
 
@@ -62,7 +92,9 @@ boundary review.
 
 ## Refactor Triggers
 
-Review and normally extract before extending code when any signal appears:
+Review the boundary whenever any signal appears. Extract before extending when
+the mismatch is already clear; otherwise converge before completion when the
+signal emerges during implementation:
 
 - the new behavior does not fit the current name or primary reason to change
 - a protocol-, transport-, vendor-, or first-use-case-named unit starts owning
@@ -113,14 +145,16 @@ Apply these gates to product source files and to logical modules assembled with
 - over 1000 lines: hard stop until the touched responsibility is extracted,
   unless the user explicitly forbids refactoring for that task
 
-Current over-1000-line hotspots are `src/mysql_semantic.rs`, `src/recorder.rs`,
-and `src/tcp_gateway.rs`. When a task touches one, extract only the relevant
-semantic, recording, routing, connection, or protocol responsibility first.
+Do not maintain a static hotspot list in this document. File sizes vary by
+branch and change as responsibilities are extracted. Check the current working
+tree before extending a product file; when it is already over 1000 lines,
+extract only the responsibility relevant to the current change.
 
 Run `scripts/check-code-organization`. By default it checks changed and
 untracked product files; set `CODE_ORG_BASE=origin/master` or another base to
-check the full branch delta. The script is a size backstop, not a replacement
-for the ownership and cohesion review.
+check the full branch delta. Use `scripts/check-code-organization --all` for a
+repository-wide audit of the current working tree. The script is a size
+backstop, not a replacement for the ownership and cohesion review.
 
 ## Current Boundaries
 
@@ -137,6 +171,14 @@ show that a flat prefix or current parent no longer expresses ownership, choose
 the smallest real namespace that does.
 
 ## Completion Check
+
+Before running the commands, review the final responsibilities rather than
+only the initial plan:
+
+- confirm that touched names and parents still cover their implemented behavior
+- apply feature-local refactor triggers exposed by the implementation
+- keep unrelated legacy cleanup outside the current change
+- rerun affected behavior checks after structural changes
 
 ```bash
 scripts/check-code-organization

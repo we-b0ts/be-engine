@@ -1,4 +1,4 @@
-async fn write_response(
+pub(super) async fn write_response(
     stream: &mut TcpStream,
     response: &RecordedMysqlResponse,
     row_encoding: ResultRowEncoding,
@@ -52,7 +52,7 @@ async fn write_response(
     }
 }
 
-async fn write_stmt_prepare_ok(
+pub(super) async fn write_stmt_prepare_ok(
     stream: &mut TcpStream,
     statement_id: u32,
     metadata: &StatementMetadata,
@@ -129,7 +129,7 @@ async fn write_stmt_prepare_ok(
     Ok(())
 }
 
-async fn write_resultset(
+pub(super) async fn write_resultset(
     stream: &mut TcpStream,
     columns: &[RecordedMysqlColumn],
     rows: &[Vec<RecordedMysqlValue>],
@@ -203,18 +203,18 @@ async fn write_resultset(
     .await
 }
 
-async fn write_packet(stream: &mut TcpStream, packet: MysqlPacket) -> Result<()> {
+pub(super) async fn write_packet(stream: &mut TcpStream, packet: MysqlPacket) -> Result<()> {
     stream
         .write_all(&packet.to_wire_bytes())
         .await
         .context("failed to write MySQL replay packet")
 }
 
-fn advance_sequence_id(sequence_id: &mut u8) {
+pub(super) fn advance_sequence_id(sequence_id: &mut u8) {
     *sequence_id = sequence_id.wrapping_add(1);
 }
 
-fn handshake_packet(connection_id: u32) -> MysqlPacket {
+pub(super) fn handshake_packet(connection_id: u32) -> MysqlPacket {
     let capabilities = CLIENT_LONG_PASSWORD
         | CLIENT_LONG_FLAG
         | CLIENT_CONNECT_WITH_DB
@@ -245,12 +245,12 @@ fn handshake_packet(connection_id: u32) -> MysqlPacket {
     }
 }
 
-fn mysql_replay_auth_plugin_data_len() -> u8 {
+pub(super) fn mysql_replay_auth_plugin_data_len() -> u8 {
     u8::try_from(MYSQL_REPLAY_AUTH_PLUGIN_DATA_1.len() + MYSQL_REPLAY_AUTH_PLUGIN_DATA_2.len() + 1)
         .expect("MySQL replay auth plugin data length fits u8")
 }
 
-fn ok_payload(affected_rows: u64, last_insert_id: u64) -> Vec<u8> {
+pub(super) fn ok_payload(affected_rows: u64, last_insert_id: u64) -> Vec<u8> {
     let mut payload = vec![0x00];
     payload.extend_from_slice(&lenenc_int(affected_rows));
     payload.extend_from_slice(&lenenc_int(last_insert_id));
@@ -259,7 +259,7 @@ fn ok_payload(affected_rows: u64, last_insert_id: u64) -> Vec<u8> {
     payload
 }
 
-fn err_payload(code: u16, message: &str) -> Vec<u8> {
+pub(super) fn err_payload(code: u16, message: &str) -> Vec<u8> {
     let mut payload = vec![0xff];
     payload.extend_from_slice(&code.to_le_bytes());
     payload.extend_from_slice(b"#HY000");
@@ -267,14 +267,18 @@ fn err_payload(code: u16, message: &str) -> Vec<u8> {
     payload
 }
 
-fn eof_payload() -> Vec<u8> {
+pub(super) fn eof_payload() -> Vec<u8> {
     let mut payload = vec![0xfe];
     payload.extend_from_slice(&0_u16.to_le_bytes());
     payload.extend_from_slice(&SERVER_STATUS_AUTOCOMMIT.to_le_bytes());
     payload
 }
 
-fn stmt_prepare_ok_payload(statement_id: u32, column_count: u16, param_count: u16) -> Vec<u8> {
+pub(super) fn stmt_prepare_ok_payload(
+    statement_id: u32,
+    column_count: u16,
+    param_count: u16,
+) -> Vec<u8> {
     let mut payload = vec![0x00];
     payload.extend_from_slice(&statement_id.to_le_bytes());
     payload.extend_from_slice(&column_count.to_le_bytes());
@@ -284,7 +288,7 @@ fn stmt_prepare_ok_payload(statement_id: u32, column_count: u16, param_count: u1
     payload
 }
 
-fn column_definition_payload(column: &RecordedMysqlColumn) -> Vec<u8> {
+pub(super) fn column_definition_payload(column: &RecordedMysqlColumn) -> Vec<u8> {
     let type_code = column_type_code(column);
     let charset = if type_code == MYSQL_TYPE_VAR_STRING && column.family == "binary" {
         MYSQL_CHARSET_BINARY
@@ -325,7 +329,7 @@ fn column_definition_payload(column: &RecordedMysqlColumn) -> Vec<u8> {
     payload
 }
 
-fn text_row_payload(row: &[RecordedMysqlValue]) -> Result<Vec<u8>> {
+pub(super) fn text_row_payload(row: &[RecordedMysqlValue]) -> Result<Vec<u8>> {
     let mut payload = Vec::new();
     for value in row {
         if value.kind == "null" || value.value.is_none() && value.raw.is_none() {
@@ -338,7 +342,7 @@ fn text_row_payload(row: &[RecordedMysqlValue]) -> Result<Vec<u8>> {
     Ok(payload)
 }
 
-fn binary_row_payload(
+pub(super) fn binary_row_payload(
     columns: &[RecordedMysqlColumn],
     row: &[RecordedMysqlValue],
 ) -> Result<Vec<u8>> {
@@ -362,7 +366,7 @@ fn binary_row_payload(
     Ok(payload)
 }
 
-fn encode_binary_value(
+pub(super) fn encode_binary_value(
     payload: &mut Vec<u8>,
     column: &RecordedMysqlColumn,
     value: &RecordedMysqlValue,
@@ -400,7 +404,7 @@ fn encode_binary_value(
     Ok(())
 }
 
-fn parse_binary_value(
+pub(super) fn parse_binary_value(
     payload: &[u8],
     offset: usize,
     type_code: u8,
@@ -467,3 +471,4 @@ fn parse_binary_value(
         }
     }
 }
+use super::*;

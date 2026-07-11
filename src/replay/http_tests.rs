@@ -8,7 +8,7 @@ use tokio::net::TcpListener;
 use tokio_rustls::TlsConnector;
 
 use super::*;
-use crate::mysql_replay::{MysqlReplayConfig, MysqlReplayRuntime};
+use crate::replay::{MysqlReplayConfig, ReplayRuntime};
 
 #[test]
 fn ignored_query_values_are_still_required_on_both_requests() {
@@ -231,13 +231,13 @@ async fn spawn_http_replay(
     ignored_query_params: Vec<String>,
 ) -> (
     std::net::SocketAddr,
-    Arc<MysqlReplayRuntime>,
+    Arc<ReplayRuntime>,
     tokio::task::JoinHandle<()>,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let runtime = Arc::new(
-        MysqlReplayRuntime::load(
+        ReplayRuntime::load(
             MysqlReplayConfig {
                 case_dir: case_dir.to_path_buf(),
                 dns_listen: "127.0.0.1:0".parse().unwrap(),

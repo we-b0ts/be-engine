@@ -1,313 +1,324 @@
 #[derive(Debug, Default)]
-struct ReplayEvents {
-    connections: usize,
-    connection_events: Vec<ConnectionReport>,
-    builtin_queries: Vec<QueryReport>,
-    matched_queries: Vec<MatchedQueryReport>,
-    unmatched_queries: Vec<QueryReport>,
-    unsupported_commands: Vec<QueryReport>,
-    metadata_warnings: Vec<String>,
+pub(super) struct ReplayEvents {
+    pub(super) connections: usize,
+    pub(super) connection_events: Vec<ConnectionReport>,
+    pub(super) builtin_queries: Vec<QueryReport>,
+    pub(super) matched_queries: Vec<MatchedQueryReport>,
+    pub(super) unmatched_queries: Vec<QueryReport>,
+    pub(super) unsupported_commands: Vec<QueryReport>,
+    pub(super) metadata_warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
-struct ReplayExchange {
-    source: ReplaySource,
-    case_id: Option<String>,
-    identity: MysqlDependencyIdentity,
-    record: RecordedMysqlExchange,
-    consumed: bool,
+pub(super) struct ReplayExchange {
+    pub(super) source: ReplaySource,
+    pub(super) case_id: Option<String>,
+    pub(super) identity: MysqlDependencyIdentity,
+    pub(super) record: RecordedMysqlExchange,
+    pub(super) consumed: bool,
 }
 
 #[derive(Debug, Clone)]
-struct MatchedExchange {
+pub(super) struct MatchedExchange {
     #[allow(dead_code)]
-    source: ReplaySource,
+    pub(super) source: ReplaySource,
     #[allow(dead_code)]
-    index: usize,
-    record: RecordedMysqlExchange,
+    pub(super) index: usize,
+    pub(super) record: RecordedMysqlExchange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ReplaySource {
+pub(super) enum ReplaySource {
     Bootstrap,
     Case,
 }
 
 #[derive(Debug, Serialize)]
-struct ReplayReport {
-    version: u8,
-    mode: ReplayMode,
-    dns_listen: String,
-    tcp_listen: String,
-    case_dir: String,
-    case_dependencies_path: String,
-    active_case_id: Option<String>,
-    cases: Vec<ReplayCaseReport>,
+pub(super) struct ReplayReport {
+    pub(super) version: u8,
+    pub(super) mode: ReplayMode,
+    pub(super) dns_listen: String,
+    pub(super) tcp_listen: String,
+    pub(super) case_dir: String,
+    pub(super) case_dependencies_path: String,
+    pub(super) active_case_id: Option<String>,
+    pub(super) cases: Vec<ReplayCaseReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    bootstrap_dependencies_path: Option<String>,
-    targets: Vec<ReplayTarget>,
-    connections: usize,
-    connection_events: Vec<ConnectionReport>,
-    builtin_queries: Vec<QueryReport>,
-    matched_queries: Vec<MatchedQueryReport>,
-    unmatched_queries: Vec<QueryReport>,
-    unsupported_commands: Vec<QueryReport>,
-    metadata_warnings: Vec<String>,
-    unused_bootstrap_exchanges: Vec<RecordedExchangeSummary>,
-    unused_case_exchanges: Vec<RecordedExchangeSummary>,
-    matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
-    unmatched_http_requests: Vec<http::HttpRequestReport>,
-    unsupported_http_exchanges: Vec<http::HttpRequestReport>,
-    unused_bootstrap_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
-    unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
-    ca_cert_path: String,
-    http_ignored_query_params: Vec<String>,
+    pub(super) bootstrap_dependencies_path: Option<String>,
+    pub(super) targets: Vec<ReplayTarget>,
+    pub(super) connections: usize,
+    pub(super) connection_events: Vec<ConnectionReport>,
+    pub(super) builtin_queries: Vec<QueryReport>,
+    pub(super) matched_queries: Vec<MatchedQueryReport>,
+    pub(super) unmatched_queries: Vec<QueryReport>,
+    pub(super) unsupported_commands: Vec<QueryReport>,
+    pub(super) metadata_warnings: Vec<String>,
+    pub(super) unused_bootstrap_exchanges: Vec<RecordedExchangeSummary>,
+    pub(super) unused_case_exchanges: Vec<RecordedExchangeSummary>,
+    pub(super) matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
+    pub(super) unmatched_http_requests: Vec<http::HttpRequestReport>,
+    pub(super) unsupported_http_exchanges: Vec<http::HttpRequestReport>,
+    pub(super) unused_bootstrap_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
+    pub(super) unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
+    #[serde(flatten)]
+    pub(super) protocols: cache::CacheProtocolsReport,
+    pub(super) ca_cert_path: String,
+    pub(super) http_ignored_query_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ConnectionReport {
-    peer_addr: String,
+pub(super) struct ConnectionReport {
+    pub(super) peer_addr: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<TargetKey>,
+    pub(super) target: Option<TargetKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    database: Option<String>,
+    pub(super) database: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    username: Option<String>,
+    pub(super) username: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct QueryReport {
+pub(super) struct QueryReport {
     #[serde(skip_serializing_if = "Option::is_none")]
-    case_id: Option<String>,
+    pub(super) case_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<TargetKey>,
+    pub(super) target: Option<TargetKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    database: Option<String>,
+    pub(super) database: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    username: Option<String>,
-    command: String,
+    pub(super) username: Option<String>,
+    pub(super) command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sql: Option<String>,
+    pub(super) sql: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    params: Option<Vec<RecordedMysqlValue>>,
-    reason: String,
+    pub(super) params: Option<Vec<RecordedMysqlValue>>,
+    pub(super) reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    recorded_source: Option<ReplaySource>,
+    pub(super) recorded_source: Option<ReplaySource>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    recorded_index: Option<usize>,
+    pub(super) recorded_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct MatchedQueryReport {
+pub(super) struct MatchedQueryReport {
     #[serde(skip_serializing_if = "Option::is_none")]
-    case_id: Option<String>,
+    pub(super) case_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<TargetKey>,
+    pub(super) target: Option<TargetKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    database: Option<String>,
+    pub(super) database: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    username: Option<String>,
-    source: ReplaySource,
-    index: usize,
-    command: String,
+    pub(super) username: Option<String>,
+    pub(super) source: ReplaySource,
+    pub(super) index: usize,
+    pub(super) command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sql: Option<String>,
+    pub(super) sql: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    params: Option<Vec<RecordedMysqlValue>>,
-    status: String,
+    pub(super) params: Option<Vec<RecordedMysqlValue>>,
+    pub(super) status: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct RecordedExchangeSummary {
-    index: usize,
+pub(super) struct RecordedExchangeSummary {
+    pub(super) index: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    case_id: Option<String>,
+    pub(super) case_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    target: Option<TargetKey>,
+    pub(super) target: Option<TargetKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    database: Option<String>,
+    pub(super) database: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    username: Option<String>,
-    command: String,
+    pub(super) username: Option<String>,
+    pub(super) command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    sql: Option<String>,
-    status: String,
+    pub(super) sql: Option<String>,
+    pub(super) status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-struct TargetKey {
-    host: String,
-    port: u16,
+pub(super) struct TargetKey {
+    pub(super) host: String,
+    pub(super) port: u16,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ReplayTarget {
-    host: String,
-    port: u16,
-    fake_ip: Ipv4Addr,
-    protocol: ReplayProtocol,
+pub(super) struct ReplayTarget {
+    pub(super) host: String,
+    pub(super) port: u16,
+    pub(super) fake_ip: Ipv4Addr,
+    pub(super) protocol: ReplayProtocol,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ReplayProtocol {
+pub(super) enum ReplayProtocol {
     Mysql,
     Http,
     Https,
+    Redis,
+    Memcached,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ReplayMode {
+pub(super) enum ReplayMode {
     Single,
     Collection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-enum ReplayCaseStatus {
+pub(super) enum ReplayCaseStatus {
     Pending,
     Active,
     Ended,
 }
 
 #[derive(Debug, Clone)]
-struct ReplayCase {
-    id: String,
-    dir: PathBuf,
-    dependencies_path: PathBuf,
-    status: ReplayCaseStatus,
+pub(super) struct ReplayCase {
+    pub(super) id: String,
+    pub(super) dir: PathBuf,
+    pub(super) dependencies_path: PathBuf,
+    pub(super) status: ReplayCaseStatus,
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ReplayCaseReport {
-    case_id: String,
-    case_dir: String,
-    dependencies_path: String,
-    status: ReplayCaseStatus,
+pub(super) struct ReplayCaseReport {
+    pub(super) case_id: String,
+    pub(super) case_dir: String,
+    pub(super) dependencies_path: String,
+    pub(super) status: ReplayCaseStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MysqlDependencyIdentity {
-    target: TargetKey,
-    database: Option<String>,
-    username: Option<String>,
+pub(super) struct MysqlDependencyIdentity {
+    pub(super) target: TargetKey,
+    pub(super) database: Option<String>,
+    pub(super) username: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-struct ReplaySessionIdentity {
-    target: Option<TargetKey>,
-    database: Option<String>,
-    username: Option<String>,
+pub(super) struct ReplaySessionIdentity {
+    pub(super) target: Option<TargetKey>,
+    pub(super) database: Option<String>,
+    pub(super) username: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "event_type", rename_all = "snake_case")]
-enum DependencyRecord {
+pub(super) enum DependencyRecord {
     MysqlConnection(Box<RecordedMysqlConnection>),
     MysqlExchange(Box<RecordedMysqlExchange>),
     HttpExchange(Box<http::RecordedHttpExchange>),
+    RedisConnection(Box<cache::RecordedRedisConnection>),
+    RedisExchange(Box<cache::RecordedRedisExchange>),
+    MemcachedConnection(Box<cache::RecordedMemcachedConnection>),
+    MemcachedExchange(Box<cache::RecordedMemcachedExchange>),
+    ProxyError(Box<cache::RecordedCacheProxyError>),
     #[serde(other)]
     Other,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RecordedMysqlConnection {
-    id: Uuid,
-    target_host: Option<String>,
-    target_port: Option<u16>,
-    target_addr: Option<String>,
-    database: Option<String>,
-    username: Option<String>,
+pub(super) struct RecordedMysqlConnection {
+    pub(super) id: Uuid,
+    pub(super) target_host: Option<String>,
+    pub(super) target_port: Option<u16>,
+    pub(super) target_addr: Option<String>,
+    pub(super) database: Option<String>,
+    pub(super) username: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RecordedMysqlExchange {
-    connection_id: Option<Uuid>,
-    target_host: Option<String>,
-    target_port: Option<u16>,
-    target_addr: Option<String>,
-    database: Option<String>,
-    username: Option<String>,
-    command: String,
-    sql: Option<String>,
-    params: Option<Vec<RecordedMysqlValue>>,
-    response: RecordedMysqlResponse,
+pub(super) struct RecordedMysqlExchange {
+    pub(super) connection_id: Option<Uuid>,
+    pub(super) target_host: Option<String>,
+    pub(super) target_port: Option<u16>,
+    pub(super) target_addr: Option<String>,
+    pub(super) database: Option<String>,
+    pub(super) username: Option<String>,
+    pub(super) command: String,
+    pub(super) sql: Option<String>,
+    pub(super) params: Option<Vec<RecordedMysqlValue>>,
+    pub(super) response: RecordedMysqlResponse,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RecordedMysqlResponse {
-    status: String,
-    error_code: Option<u16>,
-    error_message: Option<String>,
-    affected_rows: Option<u64>,
-    last_insert_id: Option<u64>,
+pub(super) struct RecordedMysqlResponse {
+    pub(super) status: String,
+    pub(super) error_code: Option<u16>,
+    pub(super) error_message: Option<String>,
+    pub(super) affected_rows: Option<u64>,
+    pub(super) last_insert_id: Option<u64>,
     #[serde(default)]
-    columns: Vec<RecordedMysqlColumn>,
+    pub(super) columns: Vec<RecordedMysqlColumn>,
     #[serde(default)]
-    rows: Vec<Vec<RecordedMysqlValue>>,
+    pub(super) rows: Vec<Vec<RecordedMysqlValue>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RecordedMysqlColumn {
-    name: String,
-    table: Option<String>,
-    column: Option<String>,
-    family: String,
-    sql_type: String,
-    unsigned: Option<bool>,
-    bits: Option<u16>,
-    nullable: Option<bool>,
-    scale: Option<u8>,
+pub(super) struct RecordedMysqlColumn {
+    pub(super) name: String,
+    pub(super) table: Option<String>,
+    pub(super) column: Option<String>,
+    pub(super) family: String,
+    pub(super) sql_type: String,
+    pub(super) unsigned: Option<bool>,
+    pub(super) bits: Option<u16>,
+    pub(super) nullable: Option<bool>,
+    pub(super) scale: Option<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-struct RecordedMysqlValue {
-    kind: String,
+pub(super) struct RecordedMysqlValue {
+    pub(super) kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    value: Option<Value>,
+    pub(super) value: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    raw: Option<ReplayBodyCapture>,
+    pub(super) raw: Option<ReplayBodyCapture>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-struct ReplayBodyCapture {
-    encoding: String,
-    data: String,
+pub(super) struct ReplayBodyCapture {
+    pub(super) encoding: String,
+    pub(super) data: String,
 }
 
 #[derive(Debug, Clone)]
-struct StatementMetadata {
-    param_count: usize,
-    columns: Vec<RecordedMysqlColumn>,
+pub(super) struct StatementMetadata {
+    pub(super) param_count: usize,
+    pub(super) columns: Vec<RecordedMysqlColumn>,
 }
 
 #[derive(Debug, Clone)]
-struct PreparedStatement {
-    sql: String,
-    param_count: usize,
-    last_param_types: Vec<BoundParamType>,
+pub(super) struct PreparedStatement {
+    pub(super) sql: String,
+    pub(super) param_count: usize,
+    pub(super) last_param_types: Vec<BoundParamType>,
 }
 
 #[derive(Debug, Clone)]
-struct BoundParamType {
-    type_code: u8,
-    unsigned: bool,
+pub(super) struct BoundParamType {
+    pub(super) type_code: u8,
+    pub(super) unsigned: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
-enum ResultRowEncoding {
+pub(super) enum ResultRowEncoding {
     Text,
     Binary,
 }
 
-async fn load_dependency_file(
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn load_dependency_file(
     path: &Path,
     source: ReplaySource,
     case_id: Option<&str>,
     exchanges: &mut Vec<ReplayExchange>,
     http_exchanges: &mut Vec<http::ReplayHttpExchange>,
+    cache: &mut cache::CacheReplayState,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
 ) -> Result<()> {
@@ -331,28 +342,51 @@ async fn load_dependency_file(
     }
 
     for record in &records {
-        let DependencyRecord::MysqlConnection(connection) = record else {
-            continue;
-        };
-        if let Some(identity) = identity_from_connection(connection) {
-            let target = identity.target.clone();
-            register_replay_target(targets, &target, ReplayProtocol::Mysql)?;
-            connection_identities.insert(connection.id, identity);
+        match record {
+            DependencyRecord::MysqlConnection(connection) => {
+                if let Some(identity) = identity_from_connection(connection) {
+                    let target = identity.target.clone();
+                    register_replay_target(targets, &target, ReplayProtocol::Mysql)?;
+                    connection_identities.insert(connection.id, identity);
+                }
+            }
+            DependencyRecord::RedisConnection(connection) => {
+                cache.register_redis_connection((**connection).clone(), targets)?;
+            }
+            DependencyRecord::MemcachedConnection(connection) => {
+                cache.register_memcached_connection((**connection).clone(), targets)?;
+            }
+            DependencyRecord::ProxyError(error) => {
+                cache::CacheReplayState::reject_cache_proxy_error(error)?;
+            }
+            _ => {}
         }
     }
 
     for record in records {
-        if let DependencyRecord::HttpExchange(exchange) = record {
-            http::register_http_exchange(
-                *exchange,
-                source,
-                case_id,
-                http_exchanges,
-                targets,
-            )?;
-            continue;
+        match record {
+            DependencyRecord::HttpExchange(exchange) => {
+                http::register_http_exchange(*exchange, source, case_id, http_exchanges, targets)?;
+                continue;
+            }
+            DependencyRecord::RedisExchange(exchange) => {
+                cache.register_redis_exchange(*exchange, source, case_id, targets)?;
+                continue;
+            }
+            DependencyRecord::MemcachedExchange(exchange) => {
+                cache.register_memcached_exchange(*exchange, source, case_id, targets)?;
+                continue;
+            }
+            DependencyRecord::MysqlConnection(_)
+            | DependencyRecord::RedisConnection(_)
+            | DependencyRecord::MemcachedConnection(_)
+            | DependencyRecord::ProxyError(_)
+            | DependencyRecord::Other => continue,
+            DependencyRecord::MysqlExchange(_) => {}
         }
-        let DependencyRecord::MysqlExchange(exchange) = record else { continue };
+        let DependencyRecord::MysqlExchange(exchange) = record else {
+            unreachable!("non-MySQL dependency records were handled above")
+        };
         if exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare" {
             continue;
         }
@@ -381,7 +415,7 @@ async fn load_dependency_file(
     Ok(())
 }
 
-fn register_replay_target(
+pub(super) fn register_replay_target(
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     target: &TargetKey,
     protocol: ReplayProtocol,
@@ -410,7 +444,7 @@ fn register_replay_target(
     Ok(())
 }
 
-async fn discover_replay_cases(
+pub(super) async fn discover_replay_cases(
     root_dir: &Path,
 ) -> Result<(ReplayMode, BTreeMap<String, ReplayCase>, Option<String>)> {
     let direct_dependencies = root_dir.join("dependencies.jsonl");
@@ -435,13 +469,22 @@ async fn discover_replay_cases(
         let dependencies_path = scan_dir.join("dependencies.jsonl");
         if !dependencies_path.is_file() {
             let mut entries = tokio::fs::read_dir(&scan_dir).await.with_context(|| {
-                format!("failed to read replay case collection {}", scan_dir.display())
+                format!(
+                    "failed to read replay case collection {}",
+                    scan_dir.display()
+                )
             })?;
             while let Some(entry) = entries.next_entry().await.with_context(|| {
-                format!("failed to scan replay case collection {}", scan_dir.display())
+                format!(
+                    "failed to scan replay case collection {}",
+                    scan_dir.display()
+                )
             })? {
                 let file_type = entry.file_type().await.with_context(|| {
-                    format!("failed to inspect replay case entry {}", entry.path().display())
+                    format!(
+                        "failed to inspect replay case entry {}",
+                        entry.path().display()
+                    )
                 })?;
                 if !file_type.is_dir() {
                     continue;
@@ -483,26 +526,26 @@ async fn discover_replay_cases(
     Ok((ReplayMode::Collection, cases, None))
 }
 
-fn should_skip_replay_scan_dir(path: &Path) -> bool {
+pub(super) fn should_skip_replay_scan_dir(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| matches!(name, "failed" | "staging" | ".replay"))
 }
 
-fn path_file_name(path: &Path) -> Option<String> {
+pub(super) fn path_file_name(path: &Path) -> Option<String> {
     path.file_name()
         .and_then(|name| name.to_str())
         .map(ToOwned::to_owned)
 }
 
-fn active_case_matches(active_case_id: Option<&str>, exchange: &ReplayExchange) -> bool {
+pub(super) fn active_case_matches(active_case_id: Option<&str>, exchange: &ReplayExchange) -> bool {
     match exchange.source {
         ReplaySource::Bootstrap => true,
         ReplaySource::Case => exchange.case_id.as_deref() == active_case_id,
     }
 }
 
-fn find_upward(start: &Path, filename: &str) -> Option<PathBuf> {
+pub(super) fn find_upward(start: &Path, filename: &str) -> Option<PathBuf> {
     let mut current = Some(start);
     while let Some(dir) = current {
         let candidate = dir.join(filename);
@@ -514,7 +557,7 @@ fn find_upward(start: &Path, filename: &str) -> Option<PathBuf> {
     None
 }
 
-fn identity_from_connection(
+pub(super) fn identity_from_connection(
     connection: &RecordedMysqlConnection,
 ) -> Option<MysqlDependencyIdentity> {
     let target = target_from_connection(connection)?;
@@ -525,7 +568,9 @@ fn identity_from_connection(
     })
 }
 
-fn identity_from_exchange(exchange: &RecordedMysqlExchange) -> Option<MysqlDependencyIdentity> {
+pub(super) fn identity_from_exchange(
+    exchange: &RecordedMysqlExchange,
+) -> Option<MysqlDependencyIdentity> {
     let target = target_from_exchange(exchange)?;
     Some(MysqlDependencyIdentity {
         target,
@@ -534,7 +579,7 @@ fn identity_from_exchange(exchange: &RecordedMysqlExchange) -> Option<MysqlDepen
     })
 }
 
-fn target_from_connection(connection: &RecordedMysqlConnection) -> Option<TargetKey> {
+pub(super) fn target_from_connection(connection: &RecordedMysqlConnection) -> Option<TargetKey> {
     if let (Some(host), Some(port)) = (&connection.target_host, connection.target_port) {
         return Some(TargetKey {
             host: normalize_host(host),
@@ -549,7 +594,7 @@ fn target_from_connection(connection: &RecordedMysqlConnection) -> Option<Target
     None
 }
 
-fn target_from_exchange(exchange: &RecordedMysqlExchange) -> Option<TargetKey> {
+pub(super) fn target_from_exchange(exchange: &RecordedMysqlExchange) -> Option<TargetKey> {
     if let (Some(host), Some(port)) = (&exchange.target_host, exchange.target_port) {
         return Some(TargetKey {
             host: normalize_host(host),
@@ -564,7 +609,7 @@ fn target_from_exchange(exchange: &RecordedMysqlExchange) -> Option<TargetKey> {
     None
 }
 
-fn target_from_addr(value: &str) -> Option<TargetKey> {
+pub(super) fn target_from_addr(value: &str) -> Option<TargetKey> {
     let value = value.trim();
     if value.is_empty() {
         return None;
@@ -582,7 +627,7 @@ fn target_from_addr(value: &str) -> Option<TargetKey> {
     })
 }
 
-fn assign_fake_ips(
+pub(super) fn assign_fake_ips(
     targets: BTreeMap<TargetKey, ReplayTarget>,
     fake_cidr: Ipv4Cidr,
 ) -> Result<Vec<ReplayTarget>> {
@@ -605,7 +650,7 @@ fn assign_fake_ips(
     Ok(out)
 }
 
-fn identity_matches_exchange(
+pub(super) fn identity_matches_exchange(
     session: &ReplaySessionIdentity,
     exchange: &MysqlDependencyIdentity,
 ) -> bool {
@@ -616,21 +661,22 @@ fn identity_matches_exchange(
             == normalize_identity_value(exchange.username.as_deref())
 }
 
-fn normalize_host(host: &str) -> String {
+pub(super) fn normalize_host(host: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
 
-fn normalize_identity_value(value: Option<&str>) -> Option<String> {
+pub(super) fn normalize_identity_value(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
 }
 
-fn normalize_optional(value: &Option<String>) -> Option<String> {
+pub(super) fn normalize_optional(value: &Option<String>) -> Option<String> {
     value
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
+use super::*;

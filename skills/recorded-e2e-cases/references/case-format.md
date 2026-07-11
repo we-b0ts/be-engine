@@ -128,6 +128,10 @@ Common semantic records:
 
 - `mysql_exchange`: structured SQL request and response; preferred for replay
 - `mysql_connection`: connection metadata
+- `redis_connection` / `redis_exchange`: RESP version and session identity,
+  normalized command, binary-safe arguments, and exact response frame
+- `memcached_connection` / `memcached_exchange`: Text/Binary wire protocol,
+  request semantics, CAS/quiet/noreply metadata, and exact response frames
 - `tcp_gateway_connection`: captured TCP/fake-IP dependency connection metadata
 - `udp_datagram`: captured UDP/fake-IP dependency datagram or push side effect
 - `mysql_tls_rejected`: MySQL TLS rejection event; MySQL TLS MITM is out of scope
@@ -174,6 +178,12 @@ First-version summary fields:
   counts, semantic exchange counts, executed and failed CRUD counts, resultset
   and error counts, returned/affected row totals, per-table executed/failed CRUD
   counts, per-dependency identity summaries, and compact statement records.
+- `redis`: connection/exchange counts, targets, RESP versions, commands,
+  response kinds, errors, unsafe evidence, and byte counts. It never lists
+  credentials, keys, or values.
+- `memcached`: connection/exchange counts, targets, wire protocols, commands,
+  normalized response statuses, hit/miss/error and quiet/noreply counts, unsafe
+  evidence, and byte counts. It never lists keys or values.
 - `http`: call counts, methods, authorities, status codes, and errors.
 - `tcp_gateway`: connection counts, domains, upstreams, and errors.
 - `udp`: datagram counts, protocols, target hosts/addrs, upstreams, payload
