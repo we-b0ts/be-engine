@@ -41,106 +41,21 @@ trigger/input and recorded dependency behavior sufficient to replay the job.
 
 ## Recorded E2E Contract
 
-Recorded cases are mandatory. Existing source E2E tests can add context but do
-not replace recorded cases.
+Recorded cases are mandatory and external to the target repository unless the
+user explicitly approves committed fixtures. Use the `recorded-e2e-cases`
+skill as the single source for case discovery, request construction, managed
+replay, response comparison, dependency touch coverage, dynamic recorded
+values, assertion configuration, and failure diagnosis.
 
-Use `recorded-e2e-cases` for:
+For multiple APIs or collection paths, build a method/path-to-case matrix from
+published child `request.json` files. Include every matching case for the
+selected API; never select from `failed`, `staging`, or `.replay`, and do
+not collapse a case set to one representative case.
 
-- case loading and dependency replay
-- managed dependency replay from `dependencies.jsonl`
-- replay session lifecycle with `traffic-replay` and `traffic-replay-cli`
-- dependency coverage from `dependencies-summary.json`, when present
-- dependency touch contract enforcement: every case-owned recorded dependency
-  must be matched by equivalent target behavior
-- JSON structural response compatibility, with exact-byte comparison only for
-  non-JSON bodies or explicit exact-byte modes
-- configured response ignores
-- missing dependency diagnosis
-- recording improvement feedback
-
-Recorded dependency data is test evidence, not the target service's normal
-runtime storage. The migrated implementation must have a real dependency
-boundary for production-like startup, such as a database repository, external
-service client, queue adapter, or scheduler input source. Recorded replay must
-not replace that real runtime boundary; it belongs only inside the E2E harness
-and replay tooling supplied by `recorded-e2e-cases`.
-
-Target E2E requests must be constructed from the current case's `request.json`.
-Use the recorded method, URI including query string, headers, and body for that
-case. Do not hardcode auth headers, tenant ids, query params, cookies, request
-bodies, or other case-specific request data in test code. A reusable helper
-such as `build_request_from_case(case_dir)` is preferred when a scope has more
-than one recorded case. Remove or override only transport headers that the
-target framework cannot safely set.
-
-For one selected case set, start one replay session with `traffic-replay`, wait
-for readiness with `traffic-replay-cli wait-ready`, then bracket each case with
-`traffic-replay-cli begin <case-id>` and `traffic-replay-cli end <case-id>
---fail-on-dirty`. Finish with a clean aggregate report. Replay startup or
-readiness failure is a replay lifecycle/setup failure; do not send the target
-HTTP request or modify product code based on a result collected while replay was
-not ready.
-
-Recorded dependency parameters are also evidence, not product defaults. Do not
-copy fixed business ids, tenant ids, user ids, request ids, UUIDs, timestamps,
-durations, monthly table suffixes, or dependency params from recordings into
-normal runtime config or product logic. If a value must be fixed for replay
-determinism, keep it only in E2E/replay config and give it an explicit
-`recorded`, `fixed`, `override`, or `replay` name.
-
-A migration is complete only when both the HTTP response and the case-owned
-dependency touches pass for the selected recorded case set. If replay reports
-unused recorded case exchanges, unmatched target dependency calls, or missing
-required side effects, the result is incomplete even when
-`expected-response.json` matches. The agent may not silently drop legacy side
-effects such as DB request-log writes. It must either implement equivalent
-behavior, get explicit user approval for a behavior contract change, or report
-the dependency as a recording-correlation improvement when evidence proves it
-is unrelated/background traffic.
-
-User-provided recorded cases are rewrite inputs. They are not PR-owned fixtures
-and should not be copied into the target repo merely because they were used
-during the rewrite. Do not add external case files to the target repo unless
-the user explicitly asks for that or the target repo already has an established
-committed-fixture convention. A target PR should instead make its E2E workflow
-able to obtain cases at runtime from the user-provided path, a CI artifact, a
-case service, object storage, or another approved source. Record that source in
-`.migration/e2e.yaml`.
-
-Do not commit bulk recordings, unrelated API cases, failed cases, `staging`,
-`.replay`, `.partial`, `.truncated`, or recorder diagnostics. If the user
-explicitly asks to commit a case fixture, preserve original case files and keep
-the fixture limited to the selected scope.
-
-A user-provided recording path may be a single case directory, a collection
-such as `recordings/<run-id>/<rule>/<uri-group>`, or an entire run directory
-such as `recordings/<run-id>`. When given a collection or run directory, select
-by reading each published child `request.json.uri` and matching the selected
-API path; do not rely on the `uri-group` directory name alone. Do not select
-from `failed`, `staging`, or `.replay`; failed cases with `.partial`,
-`.truncated`, or `recording-error.json` are recorder diagnostics and must be
-re-recorded before migration work starts.
-
-Before rewriting when multiple APIs or collection paths are involved, build a
-scope/case matrix:
-
-- group cases by normalized HTTP method and URI path from `request.json`
-- keep query strings as part of the case request, not as grouping-only data
-- include every matching case for the selected API; multiple cases for one API
-  are expected and all must pass
-- if the user requested several APIs, process them one API/function at a time
-  in the migration order
-- if no case matches a requested API, stop that scope and recommend what to
-  record
-- if a case could belong to multiple requested scopes, ask the user before
-  rewriting that scope
-
-Do not collapse a case set to a single "representative" case unless the user
-explicitly asks for a narrower migration.
-
-If the selected scope has no recorded case, stop before rewriting and recommend
-what to record, including the route/job, expected dependencies, and completeness
-checks.
+Normal runtime must use real dependency boundaries and must not load recordings
+or copy recorded params into product config. A migration remains incomplete
+while replay has unexplained unmatched calls, unused case exchanges, missing
+required side effects, or incomplete semantic evidence.
 
 ## Metrics Contract
 
@@ -457,6 +372,19 @@ Choose a structure that makes ownership obvious. Directory namespaces are often
 better when a domain has multiple cohesive sub-responsibilities, but do not
 reorganize purely for aesthetics or against the repo's conventions.
 
+Treat names as responsibility contracts. Use package and directory namespaces
+for stable domain and capability ownership; use short leaf filenames for direct
+responsibilities. Do not repeat parent prefixes to simulate hierarchy. Three or
+more same-prefix sibling product files are a possible implicit namespace: when
+they share one owner, lifecycle, and entry point, create a real namespace before
+extending the cluster. Choose the parent by ownership, not by mechanically
+copying the prefix or preserving the first protocol, vendor, or use case.
+
+Production source composition such as Rust `include!` does not create a module
+boundary or satisfy cohesion and size gates. Generated code and macro input are
+valid exceptions; ordinary behavior should use the language's real module or
+package mechanism and narrow interfaces.
+
 Decide package layout before implementation. Default to one package/crate for
 one API/function when the target repo has no stronger convention. Use a
 workspace or multi-package layout only when the user asks for it, the target
@@ -465,18 +393,14 @@ there is a real shared library boundary needed by multiple APIs, jobs, or
 services. If the need is uncertain, record `workspace_decision:
 needs_confirmation` and ask the user before creating the workspace.
 
-Do not prescribe exact module or directory names. The agent should choose names
-that fit the project and source domain, such as `api`, `handler`, `store`,
-`repository`, `service`, `model`, `util`, `client`, or `adapter`. The important
-requirement is an explicit design with clear ownership boundaries.
+Do not prescribe exact module or directory names. Choose names that fit the
+project and source domain; require clear ownership boundaries rather than a
+template vocabulary.
 
-Avoid treating same-prefix files as the final architecture when they are really
-one domain split across loose files. A layout such as `domain_feature_a`,
-`domain_feature_b`, and `domain_feature_c` may be acceptable during a narrow
-mechanical extraction, but before completion the agent should decide whether a
-real module namespace would make the domain clearer. Record the decision in
-`module_topology_review`; a conscious "keep as-is" is acceptable when it fits
-the target repo.
+Record the pre-change decision in `module_topology_review` as `keep`,
+`extract-first`, or `follow-up`. Use `follow-up` only when the current scope does
+not expand the identified problem; use `extract-first` for the smallest boundary
+needed by the current migration.
 
 For service/API migrations, account for these responsibilities in the design:
 

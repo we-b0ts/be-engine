@@ -13,7 +13,8 @@ facades live in `scripts/`, especially `traffic-record` and `traffic-replay`.
 
 - Development, runtime, recording, replay, and testing commands:
   [docs/development.md](docs/development.md)
-- Module boundaries, code-size gates, and refactoring rules:
+- Pre-change module review, naming, cohesion, dependency direction, and
+  refactoring rules:
   [docs/code-organization.md](docs/code-organization.md)
 - Recorded E2E replay skill:
   [skills/recorded-e2e-cases/SKILL.md](skills/recorded-e2e-cases/SKILL.md)
@@ -60,6 +61,10 @@ traffic-replay --no-intercept path/to/case-dir
   detected, keep rejecting and recording the reason.
 - Keep sensitive data handling explicit. Add newly sensitive headers to
   `recording.redact_headers` defaults or document the choice.
+- Before changing product code, review the touched code against
+  [docs/code-organization.md](docs/code-organization.md). If the change does
+  not share the existing unit's owner and primary reason to change, make
+  the smallest relevant boundary adjustment before implementing it.
 - Product source files must not exceed 1000 lines after a change. If a touched
   file is already over 1000 lines, follow
   [docs/code-organization.md](docs/code-organization.md) and split the relevant

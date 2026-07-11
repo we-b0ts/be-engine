@@ -1,147 +1,142 @@
 # Code Organization
 
-Use this file for module boundaries, package decisions, code-size gates, and
-refactoring expectations in this repository.
+Use this file before changing product code. It defines the repository's module
+review, naming, dependency, and size rules.
 
 ## Package Shape
 
-This repository is currently a single Rust binary crate. Keep it that way unless
-there is strong evidence that a workspace is needed.
+Keep this repository as one Rust crate unless the user asks for a workspace,
+the project gains multiple deployable artifacts, or multiple real packages need
+a shared library. Ask before creating a workspace when the boundary is unclear.
 
-Create a Cargo workspace only when:
+## Pre-Change Review
 
-- the user explicitly asks for one
-- the project gains multiple deployable binaries or services
-- a shared library boundary is needed by multiple real packages
-- the existing repo structure has already moved to a workspace
+Before adding behavior, inspect the target unit, its parent namespace, and its
+direct collaborators. Keep the current boundary only when all are true:
 
-If the need is uncertain, ask before creating the workspace.
+- the unit has one owner and one primary reason to change
+- its name covers the new behavior
+- the change does not add an unrelated domain, layer, lifecycle, or side effect
+- collaborators can use a small interface without exposing private details
 
-## Current Module Map
+Otherwise, make the smallest boundary adjustment needed by the current change
+before adding behavior. Preserve public interfaces and recorded formats unless
+the user explicitly requests a contract change. Do not reorganize unrelated
+domains or create empty placeholder modules.
 
-Prefer the existing boundaries when adding or moving code:
+## Naming And Cohesion
 
-- `main.rs`: binary bootstrap only
-- `lib.rs`: application wiring, shared state, and module exports
-- `config.rs`: runtime configuration structures and loading
-- `http_proxy.rs`: explicit HTTP/HTTPS proxy behavior
-- `http_gateway.rs`: tcpcopy-style HTTP gateway behavior
-- `http_gateway_case.rs`: HTTP gateway case finalization and invalid-case
-  classification
-- `dns_mock.rs`: fake-DNS behavior
-- `tcp_gateway.rs`: fake-IP TCP interception and routing
-- `udp_gateway.rs`: fake-IP UDP datagram side-effect capture
-- `mysql_proxy.rs`: MySQL proxy/session orchestration
-- `mysql_protocol.rs`: low-level MySQL packet parsing and encoding
-- `mysql_semantic.rs`: semantic MySQL exchange parsing
-- `mysql_replay.rs`: managed MySQL dependency replay
-- `mysql_replay_control.rs`: replay session control socket, session state, and
-  control client
-- `mysql_replay_records.rs`: replay dependency records, identity matching,
-  target assignment, and report model
-- `mysql_replay_dns.rs`: replay DNS question parsing and fake A responses
-- `mysql_replay_session.rs`: replay MySQL session command handling
-- `mysql_replay_response.rs`: replay MySQL response packet encoding
-- `mysql_replay_values.rs`: replay value conversion, built-in responses, and
-  low-level value helpers
-- `recorder.rs`: JSONL writes, case file writes, dependency attachment, and
-  body capture helpers
-- `recorder_event.rs`: recorder event and payload data structures
-- `recorder_run.rs`: recording run reports, staging, publishing, and failed
-  case handling
-- `dependency_summary.rs`: dependency summary construction
-- `dependency_summary/udp.rs`: UDP dependency summary construction
-- `process_lookup.rs`: local process ownership lookup
-- `tls.rs`: CA and TLS helpers
+Names are responsibility contracts. Name code by its current owner, not by
+history, the first implementation, or a technology it happens to use.
+
+Organize namespaces from stable ownership to implementation detail:
+
+1. product capability or domain
+2. cohesive sub-capability
+3. architectural role
+4. protocol, transport, framework, database, or vendor adapter
+
+The parent must naturally describe every child. Use directories and ordinary
+Rust modules for ownership levels, and short leaf filenames for direct
+responsibilities:
+
+```text
+domain/capability/session.rs
+```
+
+Do not simulate that hierarchy with names such as
+`domain_capability_session.rs`, and do not repeat parent names in child files.
+Choose the parent by ownership rather than mechanically copying a string
+prefix. Keep paths to roughly two to four meaningful levels.
+
+Group code by shared domain responsibility and lifecycle, not merely because it
+uses TCP, JSON, a database driver, or a common context. Parsing, runtime
+orchestration, persistence, recording, and protocol I/O are separate change
+axes unless one narrow unit genuinely owns them together.
+
+Avoid vague owners such as `common`, `misc`, `utils`, `helpers`, `manager`, or
+`processor` when a precise domain or role exists. Prefer roles such as parser,
+matcher, registry, writer, repository, client, adapter, or runtime. A unit that
+can only be described with "and", "also", or "but it also owns" needs a
+boundary review.
+
+## Refactor Triggers
+
+Review and normally extract before extending code when any signal appears:
+
+- the new behavior does not fit the current name or primary reason to change
+- a protocol-, transport-, vendor-, or first-use-case-named unit starts owning
+  broader orchestration or another domain
+- one file mixes transport, semantic decoding, business orchestration,
+  persistence, recording, or runtime lifecycle
+- three or more sibling product files share a semantic prefix and their
+  suffixes are responsibilities of one owner or lifecycle
+- a filename repeats two or more ownership levels
+- a new file would extend prefix sprawl instead of a real namespace
+- implementation requires copied code, wider visibility, or a catch-all helper
+- normal runtime code would depend on replay-only or test support
+- production `include!` composition is added or extended
+- a code-size gate below is reached
+
+Three or more same-prefix siblings are a possible implicit namespace. If they
+share one owner, lifecycle, and entry point, promote them to an ordinary module
+before changing behavior in that cluster and remove the repeated prefix. A
+documented keep-as-is decision is acceptable only when the files are genuinely
+independent or follow an established flat convention.
+
+`include!` does not create a module boundary and does not satisfy a size or
+cohesion gate. Use it in production only for generated code, macro input, or a
+similarly explicit reason. Ordinary implementation code should use `mod` and
+narrow `pub(super)` or `pub(crate)` interfaces.
 
 ## Dependency Direction
 
-Keep responsibilities separated:
+- protocol parsers do not write files or mutate recording directories
+- record writers do not parse protocol bytes
+- gateway and proxy modules orchestrate sessions but do not own semantic codecs
+- config loading stays separate from runtime behavior
+- adapters do not control their caller's runtime or lifecycle
+- normal recorder and replay startup do not depend on tests or fixtures
 
-- protocol parsers should not write files or mutate recording directories
-- record writers should not parse protocol bytes
-- gateway/proxy modules should orchestrate sessions, not own semantic decoders
-- replay modules should prefer semantic `mysql_exchange` records over raw packet
-  payloads
-- config loading should stay separate from runtime behavior
-- tests and fixtures must not be required by normal recorder or replay startup
-
-Avoid catch-all helper files. If a helper grows, split it by topic such as
-paths, time, redaction, process lookup, packet codec, matching, or report
-formatting.
-
-## Module Topology Review
-
-Before adding behavior to an existing domain, review whether the current module
-topology still explains ownership clearly. Pay attention to domain clusters,
-same-prefix files, oversized files, catch-all helper modules, and test/replay
-support leaking into normal runtime paths.
-
-Prefer real Rust module namespaces when they make a domain clearer. For example,
-a growing group such as `mysql_replay_*` can become a `mysql::replay` module
-tree when the next MySQL replay change needs to touch or extend it. The goal is
-clarity of ownership, not cosmetic directory churn; keeping the current layout
-is fine when it is the least surprising shape for the change.
-
-Do not treat `include!`-based extraction or loose same-prefix files as a
-long-term architecture by default. They are acceptable as temporary or
-mechanical steps, but the next substantial change in that area should consider
-moving to ordinary Rust modules unless there is a generated-code or
-macro-driven reason to keep `include!`.
+Circular dependencies, widespread visibility, shared mutable global state,
+implementation types leaking through interfaces, or unrelated sibling changes
+are coupling signals. Sharing a small helper does not justify depending on an
+unrelated large module.
 
 ## Code-Size Gates
 
-Product source files must stay below 1000 lines after a change.
+Apply these gates to product source files and to logical modules assembled with
+`include!`:
 
-Use these thresholds:
+- over 600 lines: review for mixed responsibilities
+- over 800 lines: split or document the single cohesive responsibility
+- over 1000 lines: hard stop until the touched responsibility is extracted,
+  unless the user explicitly forbids refactoring for that task
 
-- 600 lines: self-review whether responsibilities are mixing
-- 800 lines: split or document why the file still has one clear responsibility
-- 1000 lines: hard stop; do not complete the change until the relevant
-  responsibility is extracted, unless the user explicitly forbids refactoring
-  for that turn
+Current over-1000-line hotspots are `src/mysql_semantic.rs`, `src/recorder.rs`,
+and `src/tcp_gateway.rs`. When a task touches one, extract only the relevant
+semantic, recording, routing, connection, or protocol responsibility first.
 
-Existing files already over 1000 lines are refactor hotspots:
+Run `scripts/check-code-organization`. By default it checks changed and
+untracked product files; set `CODE_ORG_BASE=origin/master` or another base to
+check the full branch delta. The script is a size backstop, not a replacement
+for the ownership and cohesion review.
 
-- `src/mysql_semantic.rs`
-- `src/tcp_gateway.rs`
+## Current Boundaries
 
-When a task touches one of these files, do a scoped extraction before adding new
-behavior. Keep the extraction tied to the current change, such as moving replay
-matching, response encoding, semantic column mapping, recorder events, or file
-writing into smaller modules. Do not perform broad unrelated rewrites.
+- `main.rs`: CLI and binary bootstrap only
+- `lib.rs`: application wiring, shared state, and stable exports
+- proxy/gateway modules: connection and request orchestration
+- protocol/semantic modules: parsing, encoding, and semantic interpretation
+- recorder/event/run/summary modules: capture, persistence, and reporting
+- replay modules: recorded dependency matching and replay lifecycle
+- config, TLS, DNS, and process lookup: focused infrastructure concerns
 
-Use `scripts/check-code-organization` to enforce this on changed Rust product
-source files. By default it checks the local worktree, staged changes, and
-untracked source files. In CI or pre-push hooks, set `CODE_ORG_BASE` such as
-`CODE_ORG_BASE=origin/master` to check the full branch delta. This keeps
-historical hotspots from blocking unrelated work while still catching them as
-soon as a change touches them.
-
-## Suggested Refactor Directions
-
-Use these as guidance when a touched file crosses a size gate:
-
-- move `mysql_replay` leaf files toward a real `mysql::replay` namespace when a
-  replay change needs to extend that area
-- split `mysql_semantic` by tracker, prepared statements, resultset parsing,
-  column schema, value decoding, and tests
-- move recorder event/run/body responsibilities toward a `recorder` namespace
-  if the current loose files become harder to navigate
-- split `tcp_gateway` by fake-IP routing, listener lifecycle, connection copy,
-  process matching, and dependency attachment
-- split `udp_gateway` by datagram receive/original-destination handling,
-  dependency event construction, forwarding, and protocol-specific parsing if
-  it grows beyond generic UDP capture
-- group HTTP proxy/gateway/case responsibilities under an `http` namespace if
-  future HTTP work makes the current top-level files noisy
-
-Prefer small, reversible extractions with focused tests. Preserve public event
-formats unless the user explicitly asks for a breaking format change.
+Prefer these boundaries while they remain accurate. When the refactor triggers
+show that a flat prefix or current parent no longer expresses ownership, choose
+the smallest real namespace that does.
 
 ## Completion Check
-
-Before declaring a change complete:
 
 ```bash
 scripts/check-code-organization
@@ -150,5 +145,6 @@ cargo test
 cargo clippy --all-targets -- -D warnings
 ```
 
-If any touched product source file remains over 1000 lines, report the
-refactoring blocker or the explicit user exception in the final response.
+Do not declare completion when a touched product file or logical `include!`
+module violates the hard gate, or when the change weakens naming accuracy,
+cohesion, dependency direction, or runtime/test separation.
