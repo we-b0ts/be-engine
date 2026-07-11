@@ -71,7 +71,9 @@ recording/E2E evidence.
    services must expose `start`, `stop`, `restart`, `status`, `e2e`, `check`,
    and `doctor`. The `e2e` command must accept an external case directory
    argument such as `--case-dir <path>` unless an existing equivalent already
-   exists.
+   exists. Make this command implement the target E2E proxy isolation required
+   by `recorded-e2e-cases`, scoped only to recorded E2E so other facade commands
+   and normal product runtime retain the caller's environment.
 10. Manage runtime config under `config/`. Development startup should read a
    committed default config directly, then let environment variables override
    config values by full config path converted to uppercase snake case. Keep

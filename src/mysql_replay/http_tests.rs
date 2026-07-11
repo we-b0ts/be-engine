@@ -1,0 +1,343 @@
+use std::path::Path;
+
+use hyper::client::conn::http1;
+use rustls::pki_types::ServerName;
+use rustls::{ClientConfig, RootCertStore};
+use tempfile::tempdir;
+use tokio::net::TcpListener;
+use tokio_rustls::TlsConnector;
+
+use super::*;
+use crate::mysql_replay::{MysqlReplayConfig, MysqlReplayRuntime};
+
+#[test]
+fn ignored_query_values_are_still_required_on_both_requests() {
+    let ignored = vec!["signature".to_string()];
+    assert!(
+        uri_mismatch_reason(
+            "/path?a=1&Signature=recorded",
+            "/path?Signature=current&a=1",
+            &ignored,
+        )
+        .is_none()
+    );
+    assert!(uri_mismatch_reason("/path?a=1&Signature=recorded", "/path?a=1", &ignored,).is_some());
+}
+
+#[test]
+fn uri_mismatch_diagnostics_never_include_query_values() {
+    let ignored = vec!["signature".to_string()];
+    let reason = uri_mismatch_reason(
+        "/path?a=recorded-secret&Signature=recorded-signature",
+        "/path?a=current-secret&Signature=current-signature",
+        &ignored,
+    )
+    .unwrap();
+    assert_eq!(reason, "HTTP stable query parameter values differed for: a");
+    assert!(!reason.contains("secret"));
+    assert!(!reason.contains("signature"));
+
+    let reason = uri_mismatch_reason(
+        "/path?a=1&Signature=recorded-signature",
+        "/path?b=1",
+        &ignored,
+    )
+    .unwrap();
+    assert_eq!(
+        reason,
+        "HTTP ignored query parameter presence differed: signature (recorded 1, actual 0)"
+    );
+    assert!(!reason.contains("recorded-signature"));
+}
+
+#[test]
+fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
+    let mut targets = BTreeMap::new();
+    for (port, protocol) in [(80, ReplayProtocol::Http), (443, ReplayProtocol::Https)] {
+        let key = TargetKey {
+            host: "same.example.test".to_string(),
+            port,
+        };
+        register_replay_target(&mut targets, &key, protocol).unwrap();
+    }
+    let targets = super::super::assign_fake_ips(
+        targets,
+        super::super::Ipv4Cidr::parse("198.18.0.0/15").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(targets.len(), 2);
+    assert_eq!(targets[0].fake_ip, targets[1].fake_ip);
+}
+
+#[tokio::test]
+async fn replays_http_exchange_with_stable_query_matching() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-http");
+    write_http_case(
+        &case_dir,
+        "fake_ip_http",
+        "api.example.test",
+        "/hello?b=2&Signature=recorded&a=1",
+        "hello",
+        "world",
+    )
+    .await;
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, vec!["signature".to_string()]).await;
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(
+        TokioIo::new(stream),
+        "api.example.test",
+        "/hello?a=1&Signature=current&b=2",
+        "hello",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "world"
+    );
+
+    let state = runtime.state.lock().await;
+    assert_eq!(state.http_events.matched.len(), 1);
+    assert!(state.http_events.unmatched.is_empty());
+    assert!(state.unused_http_exchanges(ReplaySource::Case).is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn replays_https_exchange_with_generated_mitm_certificate() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-https");
+    write_http_case(
+        &case_dir,
+        "fake_ip_https",
+        "secure.example.test",
+        "/secure",
+        "request",
+        "secure-response",
+    )
+    .await;
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, Vec::new()).await;
+
+    let mut roots = RootCertStore::empty();
+    roots.add(runtime.ca.ca_cert_der()).unwrap();
+    let client_config = Arc::new(
+        ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth(),
+    );
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let tls = TlsConnector::from(client_config)
+        .connect(
+            ServerName::try_from("secure.example.test".to_string()).unwrap(),
+            stream,
+        )
+        .await
+        .unwrap();
+    let response = send_request(
+        TokioIo::new(tls),
+        "secure.example.test",
+        "/secure",
+        "request",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "secure-response"
+    );
+
+    let state = runtime.state.lock().await;
+    assert_eq!(state.http_events.matched.len(), 1);
+    assert!(state.http_events.unmatched.is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn searches_past_same_target_bootstrap_exchange_for_active_case_match() {
+    let temp = tempdir().unwrap();
+    write_http_dependency(
+        &temp.path().join("bootstrap-dependencies.jsonl"),
+        "fake_ip_http",
+        "api.example.test",
+        "/bootstrap",
+        "",
+        "bootstrap-response",
+    )
+    .await;
+    let case_dir = temp.path().join("case-http");
+    write_http_case(
+        &case_dir,
+        "fake_ip_http",
+        "api.example.test",
+        "/case",
+        "",
+        "case-response",
+    )
+    .await;
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, Vec::new()).await;
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(TokioIo::new(stream), "api.example.test", "/case", "").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.into_body().collect().await.unwrap().to_bytes(),
+        "case-response"
+    );
+
+    let state = runtime.state.lock().await;
+    assert_eq!(state.http_events.matched.len(), 1);
+    assert_eq!(state.http_events.matched[0].source, ReplaySource::Case);
+    assert!(state.http_events.unmatched.is_empty());
+    assert_eq!(
+        state.unused_http_exchanges(ReplaySource::Bootstrap).len(),
+        1
+    );
+    assert!(state.unused_http_exchanges(ReplaySource::Case).is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn unmatched_http_request_is_dirty_and_does_not_consume_exchange() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-unmatched");
+    write_http_case(
+        &case_dir,
+        "fake_ip_http",
+        "api.example.test",
+        "/expected",
+        "",
+        "ok",
+    )
+    .await;
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, Vec::new()).await;
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(TokioIo::new(stream), "api.example.test", "/different", "").await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+    let state = runtime.state.lock().await;
+    let report = state.snapshot_report();
+    assert_eq!(report.unmatched_http_requests.len(), 1);
+    assert_eq!(report.unused_case_http_exchanges.len(), 1);
+    assert!(super::super::report_is_dirty(&report));
+    task.abort();
+}
+
+async fn spawn_http_replay(
+    case_dir: &Path,
+    ignored_query_params: Vec<String>,
+) -> (
+    std::net::SocketAddr,
+    Arc<MysqlReplayRuntime>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let runtime = Arc::new(
+        MysqlReplayRuntime::load(
+            MysqlReplayConfig {
+                case_dir: case_dir.to_path_buf(),
+                dns_listen: "127.0.0.1:0".parse().unwrap(),
+                tcp_listen: addr,
+                fake_cidr: "198.18.0.0/15".to_string(),
+                report_path: Some(case_dir.join(".replay/report.json")),
+                session_path: None,
+                control_socket_path: None,
+                ca_cert_path: Some(case_dir.join(".replay/ca.pem")),
+                ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
+                http_ignore_query_params: ignored_query_params,
+            },
+            "127.0.0.1:0".parse().unwrap(),
+            addr,
+        )
+        .await
+        .unwrap(),
+    );
+    let task_runtime = runtime.clone();
+    let task = tokio::spawn(async move {
+        let _ = task_runtime.run_tcp(listener).await;
+    });
+    (addr, runtime, task)
+}
+
+async fn send_request<T>(io: TokioIo<T>, host: &str, uri: &str, body: &str) -> Response<Incoming>
+where
+    T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut sender, connection) = http1::handshake(io).await.unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+    sender
+        .send_request(
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(HOST, host)
+                .body(Full::new(Bytes::copy_from_slice(body.as_bytes())))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+async fn write_http_case(
+    case_dir: &Path,
+    scheme: &str,
+    authority: &str,
+    uri: &str,
+    request_body: &str,
+    response_body: &str,
+) {
+    tokio::fs::create_dir_all(case_dir).await.unwrap();
+    write_http_dependency(
+        &case_dir.join("dependencies.jsonl"),
+        scheme,
+        authority,
+        uri,
+        request_body,
+        response_body,
+    )
+    .await;
+}
+
+async fn write_http_dependency(
+    path: &Path,
+    scheme: &str,
+    authority: &str,
+    uri: &str,
+    request_body: &str,
+    response_body: &str,
+) {
+    let dependency = serde_json::json!({
+        "event_type": "http_exchange",
+        "scheme": scheme,
+        "method": "POST",
+        "uri": uri,
+        "authority": authority,
+        "request_body": body_capture(request_body),
+        "response_status": 200,
+        "response_headers": {"content-type": ["text/plain"], "content-length": [response_body.len().to_string()]},
+        "response_body": body_capture(response_body),
+        "error": null
+    });
+    tokio::fs::write(
+        path,
+        format!("{}\n", serde_json::to_string(&dependency).unwrap()),
+    )
+    .await
+    .unwrap();
+}
+
+fn body_capture(value: &str) -> Value {
+    serde_json::json!({
+        "encoding": "base64",
+        "original_len": value.len(),
+        "stored_len": value.len(),
+        "truncated": false,
+        "data": STANDARD.encode(value.as_bytes())
+    })
+}

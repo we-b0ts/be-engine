@@ -19,6 +19,39 @@ Use the project's existing E2E framework and startup style. If no framework
 exists, add the smallest conventional E2E setup for that technology stack and
 explain why. Do not introduce a broad new architecture just for one case.
 
+## Target E2E Proxy Isolation
+
+Recorded dependency replay expects the target process to connect directly so
+DNS and fake-IP interception can observe its traffic. Make the target project's
+recorded E2E entrypoint clear inherited HTTP proxy variables before starting
+replay or the target process. When the project has or needs a command facade,
+put the isolation inside its `e2e` command:
+
+```bash
+e2e() {
+  unset \
+    HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY \
+    http_proxy https_proxy all_proxy no_proxy
+
+  # Start replay and run the recorded E2E command.
+}
+```
+
+Keep this inside the recorded E2E command rather than at the script's top level,
+so `start`, `build`, `check`, and other commands retain the caller's environment.
+Do not change the Agent's global proxy settings or add proxy handling to product
+code or normal runtime configuration.
+
+If an existing project has no facade that can own this behavior, apply the same
+isolation to the target E2E invocation:
+
+```bash
+env \
+  -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u NO_PROXY \
+  -u http_proxy -u https_proxy -u all_proxy -u no_proxy \
+  <target-recorded-e2e-command>
+```
+
 ## Managed Replay CLI
 
 Use the repository-level replay commands, not skill-local script paths:

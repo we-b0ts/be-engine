@@ -415,6 +415,7 @@ fn session_snapshot(
         "ready": ready,
         "dns_listen": state.dns_listen.to_string(),
         "tcp_listen": state.tcp_listen.to_string(),
+        "ca_cert_path": state.ca_cert_path.display().to_string(),
         "active_case_id": state.active_case_id.clone(),
         "cases": state.case_reports(),
     })
@@ -425,6 +426,10 @@ fn report_is_dirty(report: &ReplayReport) -> bool {
         || !report.unsupported_commands.is_empty()
         || !report.unused_case_exchanges.is_empty()
         || !report.unused_bootstrap_exchanges.is_empty()
+        || !report.unmatched_http_requests.is_empty()
+        || !report.unsupported_http_exchanges.is_empty()
+        || !report.unused_case_http_exchanges.is_empty()
+        || !report.unused_bootstrap_http_exchanges.is_empty()
 }
 
 fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
@@ -438,6 +443,18 @@ fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
             .any(|query| query.case_id.as_deref() == Some(case_id))
         || report
             .unused_case_exchanges
+            .iter()
+            .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
+        || report
+            .unmatched_http_requests
+            .iter()
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+        || report
+            .unsupported_http_exchanges
+            .iter()
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+        || report
+            .unused_case_http_exchanges
             .iter()
             .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
 }

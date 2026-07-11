@@ -5,8 +5,8 @@ use std::{env, io};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use traffic_recorder_proxy::{
-    AppConfig, AppState, MysqlReplayConfig, MysqlReplayControlConfig, run_mysql_replay,
-    run_mysql_replay_control,
+    AppConfig, AppState, MysqlReplayControlConfig, ReplayConfig, run_mysql_replay_control,
+    run_replay,
 };
 
 #[derive(Debug, Parser)]
@@ -47,6 +47,15 @@ struct ReplayArgs {
 
     #[arg(long)]
     control_socket: Option<PathBuf>,
+
+    #[arg(long)]
+    ca_cert: Option<PathBuf>,
+
+    #[arg(long)]
+    ca_key: Option<PathBuf>,
+
+    #[arg(long = "http-ignore-query-param")]
+    http_ignore_query_params: Vec<String>,
 }
 
 #[derive(Debug, Parser)]
@@ -89,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Replay(args)) => {
-            return run_mysql_replay(MysqlReplayConfig {
+            return run_replay(ReplayConfig {
                 case_dir: args.case,
                 dns_listen: args.dns_listen,
                 tcp_listen: args.tcp_listen,
@@ -97,6 +106,9 @@ async fn main() -> anyhow::Result<()> {
                 report_path: args.report,
                 session_path: args.session,
                 control_socket_path: args.control_socket,
+                ca_cert_path: args.ca_cert,
+                ca_key_path: args.ca_key,
+                http_ignore_query_params: args.http_ignore_query_params,
             })
             .await;
         }

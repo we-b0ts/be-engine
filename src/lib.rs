@@ -36,7 +36,8 @@ pub use config::{
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
 pub use mysql_replay::{
-    MysqlReplayConfig, MysqlReplayControlConfig, run_mysql_replay, run_mysql_replay_control,
+    MysqlReplayConfig, MysqlReplayControlConfig, ReplayConfig, run_mysql_replay,
+    run_mysql_replay_control, run_replay,
 };
 pub use recorder::{
     BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent, MysqlColumn,

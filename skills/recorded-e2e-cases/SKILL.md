@@ -32,7 +32,12 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    `traffic-replay-cli` to control case lifecycle. Ensure
    `traffic-replay-cli`, `traffic-replay`, and `traffic-recorder-proxy` are on
    `PATH`; do not reference this skill's filesystem path from target-project
-   tests. Wait for replay readiness before sending requests. For a case set,
+   tests. Make the target project's recorded E2E command clear uppercase and
+   lowercase HTTP proxy environment variables before it starts replay or the
+   target process. Put this isolation inside `scripts/<project>-cli e2e` when
+   that facade exists or is added, and apply it only to recorded E2E; do not
+   change global shell settings, normal runtime commands, or product code. Wait
+   for replay readiness before sending requests. For a case set,
    call `traffic-replay-cli begin <case-id>` before each recorded request and
    `traffic-replay-cli end <case-id> --fail-on-dirty` after assertions; finish
    with a clean aggregate report and stop the replay session. Replay defaults
@@ -76,8 +81,8 @@ Treat a recorded case as an E2E recipe, not just an HTTP fixture.
    the target project; report evidence-backed feedback.
 
 Read [replay-workflow.md](references/replay-workflow.md) for target-project
-discovery, managed dependency replay, replay loops, and the fallback
-`.recorded-e2e.yaml` configuration interface.
+discovery, target E2E proxy isolation, managed dependency replay, replay loops,
+and the fallback `.recorded-e2e.yaml` configuration interface.
 
 ## Failure Rules
 

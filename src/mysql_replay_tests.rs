@@ -294,7 +294,7 @@ mod tests {
         let err = read_packet(&mut client).await.unwrap().unwrap();
         assert_eq!(err.payload[0], 0xff);
 
-        wait_for_report_contains(&report_path, r#""unmatched_queries""#).await;
+        wait_for_report_contains(&report_path, r#""sql": "SET @tenant_id = 1""#).await;
         let report: Value =
             serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
         assert!(report["builtin_queries"].as_array().unwrap().is_empty());
@@ -513,13 +513,16 @@ mod tests {
         let dns_addr = dns_socket.local_addr().unwrap();
         let runtime = MysqlReplayRuntime::load(
             MysqlReplayConfig {
-                case_dir,
+                case_dir: case_dir.clone(),
                 dns_listen: dns_addr,
                 tcp_listen: "127.0.0.1:0".parse().unwrap(),
                 fake_cidr: "198.18.0.0/15".to_string(),
                 report_path: None,
                 session_path: None,
                 control_socket_path: None,
+                ca_cert_path: Some(case_dir.join(".replay/ca.pem")),
+                ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
+                http_ignore_query_params: Vec::new(),
             },
             dns_addr,
             "127.0.0.1:0".parse().unwrap(),
@@ -715,6 +718,9 @@ mod tests {
                 report_path,
                 session_path: None,
                 control_socket_path: None,
+                ca_cert_path: Some(case_dir.join(".replay/ca.pem")),
+                ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
+                http_ignore_query_params: Vec::new(),
             },
             "127.0.0.1:0".parse().unwrap(),
             addr,
@@ -746,6 +752,9 @@ mod tests {
                     report_path,
                     session_path: Some(session_path),
                     control_socket_path: Some(control_socket_path),
+                    ca_cert_path: Some(case_dir.join(".replay/ca.pem")),
+                    ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
+                    http_ignore_query_params: Vec::new(),
                 },
                 "127.0.0.1:0".parse().unwrap(),
                 addr,
