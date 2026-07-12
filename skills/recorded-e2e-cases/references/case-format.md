@@ -132,6 +132,11 @@ Common semantic records:
   normalized command, binary-safe arguments, and exact response frame
 - `memcached_connection` / `memcached_exchange`: Text/Binary wire protocol,
   request semantics, CAS/quiet/noreply metadata, and exact response frames
+- `kafka_connection`: business target and replay-safety metadata
+- `kafka_produce`: exact topic, nullable key/value bytes, headers, and accepted
+  result for an outbound Kafka record
+- `kafka_delivery`: exact topic, nullable key/value bytes, headers, and timestamp
+  for a Kafka record delivered to the application
 - `tcp_gateway_connection`: captured TCP/fake-IP dependency connection metadata
 - `udp_datagram`: captured UDP/fake-IP dependency datagram or push side effect
 - `mysql_tls_rejected`: MySQL TLS rejection event; MySQL TLS MITM is out of scope
@@ -184,6 +189,9 @@ First-version summary fields:
 - `memcached`: connection/exchange counts, targets, wire protocols, commands,
   normalized response statuses, hit/miss/error and quiet/noreply counts, unsafe
   evidence, and byte counts. It never lists keys or values.
+- `kafka`: connection, produced and delivered record counts, topics, targets,
+  unsafe evidence, and aggregate key/header/value byte counts. It never lists
+  message contents.
 - `http`: call counts, methods, authorities, status codes, and errors.
 - `tcp_gateway`: connection counts, domains, upstreams, and errors.
 - `udp`: datagram counts, protocols, target hosts/addrs, upstreams, payload

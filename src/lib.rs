@@ -6,6 +6,7 @@ mod dns_mock;
 mod http_gateway;
 mod http_gateway_case;
 mod http_proxy;
+mod kafka;
 mod mysql_protocol;
 mod mysql_proxy;
 mod mysql_semantic;
@@ -40,6 +41,7 @@ pub use config::{
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
 pub use recorder::{
     BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent,
+    KafkaConnectionEvent, KafkaDeliveryEvent, KafkaHeaderCapture, KafkaProduceEvent,
     MemcachedConnectionEvent, MemcachedExchangeEvent, MysqlColumn, MysqlConnectionEvent,
     MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
     MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
@@ -400,6 +402,9 @@ fn recorder_event_kind(event: &RecorderEvent) -> &'static str {
         RecorderEvent::RedisExchange(_) => "redis_exchange",
         RecorderEvent::MemcachedConnection(_) => "memcached_connection",
         RecorderEvent::MemcachedExchange(_) => "memcached_exchange",
+        RecorderEvent::KafkaConnection(_) => "kafka_connection",
+        RecorderEvent::KafkaProduce(_) => "kafka_produce",
+        RecorderEvent::KafkaDelivery(_) => "kafka_delivery",
         RecorderEvent::MysqlConnection(_) => "mysql_connection",
         RecorderEvent::MysqlQuery(_) => "mysql_query",
         RecorderEvent::MysqlResponse(_) => "mysql_response",
@@ -431,6 +436,15 @@ fn event_client_pid(event: &RecorderEvent) -> Option<u32> {
             event.client_process.as_ref().map(|process| process.pid)
         }
         RecorderEvent::MemcachedExchange(event) => {
+            event.client_process.as_ref().map(|process| process.pid)
+        }
+        RecorderEvent::KafkaConnection(event) => {
+            event.client_process.as_ref().map(|process| process.pid)
+        }
+        RecorderEvent::KafkaProduce(event) => {
+            event.client_process.as_ref().map(|process| process.pid)
+        }
+        RecorderEvent::KafkaDelivery(event) => {
             event.client_process.as_ref().map(|process| process.pid)
         }
         RecorderEvent::MysqlConnection(event) => {

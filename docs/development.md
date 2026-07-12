@@ -157,6 +157,18 @@ mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe bootstrap replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
 
+Kafka dependencies are semantic `kafka_connection`, `kafka_produce`, and
+`kafka_delivery` records. V1 is a successful-path dependency facade rather than
+a full Kafka broker: use an E2E client profile with
+`security.protocol=PLAINTEXT`, `compression.type=none`,
+`enable.idempotence=false`, and `acks=1`. Replay advertises one broker and one
+partition, synthesizes control-plane responses, matches Produce by exact topic,
+key, headers, and value bytes, and delivers recorded Fetch records once.
+Transactions, Admin APIs, compression, TLS/SASL, rebalance behavior, retries,
+and Kafka failure injection are unsupported and fail closed. Schema Registry
+remains an ordinary HTTP dependency. Kafka payloads and headers are sensitive
+because exact bytes are required for replay.
+
 Dependency summaries are generated when a case is published, when bootstrap
 recording closes, and when the run finishes. They are intentionally not rebuilt
 after every cache exchange.
@@ -175,6 +187,7 @@ cargo test proxy_integration
 cargo test cache_protocol
 cargo test cache_proxy
 cargo test replay::cache_tests
+cargo test kafka::
 ```
 
 Network or root-requiring behavior should be covered with isolated unit tests

@@ -59,12 +59,6 @@ pub(super) struct RecordedMemcachedConnection {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub(super) struct RecordedCacheProxyError {
-    protocol: String,
-    error: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedMemcachedExchange {
     connection_id: Uuid,
     sequence: u64,
@@ -180,7 +174,7 @@ impl CacheReplayState {
         )
     }
 
-    pub(super) fn reject_cache_proxy_error(record: &RecordedCacheProxyError) -> Result<()> {
+    pub(super) fn reject_cache_proxy_error(record: &super::RecordedProxyError) -> Result<()> {
         if matches!(record.protocol.as_str(), "redis" | "memcached") {
             return Err(anyhow!(
                 "unsafe {} dependency proxy error: {}",

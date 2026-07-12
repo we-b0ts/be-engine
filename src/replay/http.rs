@@ -202,9 +202,10 @@ pub(super) async fn handle_http_replay_connection(
                 })?;
             serve_http_io(tls, target, state, report_path).await
         }
-        ReplayProtocol::Mysql | ReplayProtocol::Redis | ReplayProtocol::Memcached => {
-            Err(anyhow!("HTTP replay received a non-HTTP target"))
-        }
+        ReplayProtocol::Mysql
+        | ReplayProtocol::Redis
+        | ReplayProtocol::Memcached
+        | ReplayProtocol::Kafka => Err(anyhow!("HTTP replay received a non-HTTP target")),
     }
 }
 

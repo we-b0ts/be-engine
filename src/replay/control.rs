@@ -443,8 +443,9 @@ pub(super) fn report_is_dirty(report: &ReplayReport) -> bool {
         || !report.unsupported_http_exchanges.is_empty()
         || !report.unused_case_http_exchanges.is_empty()
         || !report.unused_bootstrap_http_exchanges.is_empty()
-        || cache_report_is_dirty(&report.protocols.redis)
-        || cache_report_is_dirty(&report.protocols.memcached)
+        || cache_report_is_dirty(&report.protocols.cache.redis)
+        || cache_report_is_dirty(&report.protocols.cache.memcached)
+        || kafka_report_is_dirty(&report.protocols.kafka)
 }
 
 pub(super) fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
@@ -472,8 +473,9 @@ pub(super) fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
             .unused_case_http_exchanges
             .iter()
             .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
-        || cache_case_is_dirty(&report.protocols.redis, case_id)
-        || cache_case_is_dirty(&report.protocols.memcached, case_id)
+        || cache_case_is_dirty(&report.protocols.cache.redis, case_id)
+        || cache_case_is_dirty(&report.protocols.cache.memcached, case_id)
+        || kafka_case_is_dirty(&report.protocols.kafka, case_id)
 }
 
 pub(super) fn cache_report_is_dirty(report: &cache::CacheProtocolReport) -> bool {
@@ -485,6 +487,33 @@ pub(super) fn cache_report_is_dirty(report: &cache::CacheProtocolReport) -> bool
 }
 
 pub(super) fn cache_case_is_dirty(report: &cache::CacheProtocolReport, case_id: &str) -> bool {
+    report
+        .unmatched
+        .iter()
+        .any(|request| request.case_id.as_deref() == Some(case_id))
+        || report
+            .unsupported
+            .iter()
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+        || report
+            .unsafe_events
+            .iter()
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+        || report
+            .unused_case
+            .iter()
+            .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
+}
+
+pub(super) fn kafka_report_is_dirty(report: &kafka::KafkaProtocolReport) -> bool {
+    !report.unmatched.is_empty()
+        || !report.unsupported.is_empty()
+        || !report.unsafe_events.is_empty()
+        || !report.unused_case.is_empty()
+        || !report.unused_bootstrap.is_empty()
+}
+
+pub(super) fn kafka_case_is_dirty(report: &kafka::KafkaProtocolReport, case_id: &str) -> bool {
     report
         .unmatched
         .iter()

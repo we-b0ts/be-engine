@@ -151,7 +151,7 @@ where
     }
 }
 
-pub(super) fn text_request_line_is_valid(tokens: &[&str], allow_meta: bool) -> bool {
+pub(crate) fn text_request_line_is_valid(tokens: &[&str], allow_meta: bool) -> bool {
     let Some(command) = tokens.first().map(|value| value.to_ascii_lowercase()) else {
         return false;
     };

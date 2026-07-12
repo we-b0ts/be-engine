@@ -37,12 +37,17 @@ https_ports = []
 enabled = true
 redis_port_hints = [6379]
 memcached_port_hints = [11211]
+kafka_port_hints = [9092]
+# Kafka semantic recording v1 expects the E2E client profile to use
+# security.protocol=PLAINTEXT, compression.type=none, enable.idempotence=false,
+# and acks=1. Replay exposes one broker and one partition and does not support
+# transactions, Admin APIs, failures, or compressed record batches.
 
 # Overrides are an escape hatch for an ambiguous or intentionally raw endpoint.
 # [[tcp_gateway.protocol_detection.overrides]]
 # host = "cache.internal"
 # port = 6380
-# protocol = "redis" # redis | memcached | raw
+# protocol = "redis" # redis | memcached | kafka | raw
 
 [udp_gateway]
 # Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP

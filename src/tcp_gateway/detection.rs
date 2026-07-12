@@ -1,6 +1,5 @@
+use crate::cache_protocol::text_request_line_is_valid;
 use crate::config::{TcpApplicationProtocol, TcpProtocolDetectionConfig};
-
-use super::memcached::text_request_line_is_valid;
 
 const MEMCACHED_BINARY_REQUEST_MAGIC: u8 = 0x80;
 const MYSQL_HANDSHAKE_PROTOCOL_VERSION: u8 = 0x0a;
@@ -13,6 +12,7 @@ pub(crate) enum DetectedProtocol {
     Redis,
     MemcachedText,
     MemcachedBinary,
+    Kafka,
     Raw,
 }
 
@@ -41,6 +41,7 @@ pub(crate) fn protocol_override(
         .map(|candidate| match candidate.protocol {
             TcpApplicationProtocol::Redis => DetectedProtocol::Redis,
             TcpApplicationProtocol::Memcached => DetectedProtocol::MemcachedText,
+            TcpApplicationProtocol::Kafka => DetectedProtocol::Kafka,
             TcpApplicationProtocol::Raw => DetectedProtocol::Raw,
         })
 }

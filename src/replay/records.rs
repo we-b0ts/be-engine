@@ -62,9 +62,16 @@ pub(super) struct ReplayReport {
     pub(super) unused_bootstrap_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
     pub(super) unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
     #[serde(flatten)]
-    pub(super) protocols: cache::CacheProtocolsReport,
+    pub(super) protocols: ProtocolsReport,
     pub(super) ca_cert_path: String,
     pub(super) http_ignored_query_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub(super) struct ProtocolsReport {
+    #[serde(flatten)]
+    pub(super) cache: cache::CacheProtocolsReport,
+    pub(super) kafka: kafka::KafkaProtocolReport,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -159,6 +166,7 @@ pub(super) enum ReplayProtocol {
     Https,
     Redis,
     Memcached,
+    Kafka,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -216,9 +224,18 @@ pub(super) enum DependencyRecord {
     RedisExchange(Box<cache::RecordedRedisExchange>),
     MemcachedConnection(Box<cache::RecordedMemcachedConnection>),
     MemcachedExchange(Box<cache::RecordedMemcachedExchange>),
-    ProxyError(Box<cache::RecordedCacheProxyError>),
+    KafkaConnection(Box<kafka::RecordedKafkaConnection>),
+    KafkaProduce(Box<kafka::RecordedKafkaProduce>),
+    KafkaDelivery(Box<kafka::RecordedKafkaDelivery>),
+    ProxyError(Box<RecordedProxyError>),
     #[serde(other)]
     Other,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct RecordedProxyError {
+    pub(super) protocol: String,
+    pub(super) error: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -319,6 +336,7 @@ pub(super) async fn load_dependency_file(
     exchanges: &mut Vec<ReplayExchange>,
     http_exchanges: &mut Vec<http::ReplayHttpExchange>,
     cache: &mut cache::CacheReplayState,
+    kafka: &mut kafka::KafkaReplayState,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
 ) -> Result<()> {
@@ -356,8 +374,17 @@ pub(super) async fn load_dependency_file(
             DependencyRecord::MemcachedConnection(connection) => {
                 cache.register_memcached_connection((**connection).clone(), targets)?;
             }
+            DependencyRecord::KafkaConnection(connection) => {
+                kafka.register_connection((**connection).clone(), targets)?;
+            }
             DependencyRecord::ProxyError(error) => {
                 cache::CacheReplayState::reject_cache_proxy_error(error)?;
+                if error.protocol == "kafka" {
+                    return Err(anyhow!(
+                        "unsafe Kafka dependency proxy error: {}",
+                        error.error
+                    ));
+                }
             }
             _ => {}
         }
@@ -377,9 +404,18 @@ pub(super) async fn load_dependency_file(
                 cache.register_memcached_exchange(*exchange, source, case_id, targets)?;
                 continue;
             }
+            DependencyRecord::KafkaProduce(exchange) => {
+                kafka.register_produce(*exchange, source, case_id, targets)?;
+                continue;
+            }
+            DependencyRecord::KafkaDelivery(exchange) => {
+                kafka.register_delivery(*exchange, source, case_id, targets)?;
+                continue;
+            }
             DependencyRecord::MysqlConnection(_)
             | DependencyRecord::RedisConnection(_)
             | DependencyRecord::MemcachedConnection(_)
+            | DependencyRecord::KafkaConnection(_)
             | DependencyRecord::ProxyError(_)
             | DependencyRecord::Other => continue,
             DependencyRecord::MysqlExchange(_) => {}

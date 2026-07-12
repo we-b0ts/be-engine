@@ -157,6 +157,14 @@ live Binary opaque; replay rewrites response opaque to the live value. Cache
 unmatched, unsupported, unsafe, and unused evidence is dirty and must fail the
 same `end/report --fail-on-dirty` gates as HTTP and MySQL evidence.
 
+Kafka replay uses the standard client wire protocol with a constrained
+one-broker, one-partition facade. Use the E2E Kafka profile documented by the
+recorder; match Produce records by exact topic/key/headers/value and deliver
+recorded Fetch data once. Kafka unmatched, unsupported, unsafe, and unused
+records are dirty under the same case and aggregate gates. Do not substitute a
+real broker or hand-written queue fixture when the selected case contains Kafka
+semantic dependencies.
+
 For collection replay, a passed result means the selected case set passed. Do
 not collapse a collection into one representative case. Traffic observed while
 no case is active, or while a different case is active, must not be silently
