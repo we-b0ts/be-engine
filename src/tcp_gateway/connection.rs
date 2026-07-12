@@ -11,15 +11,18 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::cache_protocol::MemcachedWireProtocol;
-use crate::cache_proxy::{
-    CacheConnectionContext, handle_connected_memcached, handle_connected_redis,
-};
 use crate::dns_mock::{FakeDnsEntry, domain_matches};
-use crate::kafka::{KafkaConnectionContext, handle_connected as handle_connected_kafka};
-use crate::mysql::proxy::{MysqlConnectionContext, handle_connected_mysql};
+use crate::memcached::MemcachedWireProtocol;
 use crate::process_lookup::lookup_tcp_process;
 use crate::recorder::ProcessInfo;
+use crate::recorder::kafka::{KafkaConnectionContext, handle_connected as handle_connected_kafka};
+use crate::recorder::memcached::{
+    ConnectionContext as MemcachedConnectionContext, handle_connected as handle_connected_memcached,
+};
+use crate::recorder::mysql::{MysqlConnectionContext, handle_connected_mysql};
+use crate::recorder::redis::{
+    ConnectionContext as RedisConnectionContext, handle_connected as handle_connected_redis,
+};
 
 use super::{
     RawTcpOptions, TcpConnectionRecord, detection::DetectedProtocol, detection::Detection,
@@ -131,16 +134,16 @@ async fn handle_connection(
             .await;
     }
     if detection == Detection::Match(DetectedProtocol::Tls)
-        && let Some(cache_protocol) = cache_port_hint(&state, fake_addr.port())
+        && let Some(protocol) = plaintext_protocol_port_hint(&state, fake_addr.port())
     {
-        reject_cache_tls_if_needed(
+        reject_protocol_tls_if_needed(
             &client,
             &state,
             &entry.domain,
             fake_addr,
             client_addr.clone(),
             client_process.clone(),
-            cache_protocol,
+            protocol,
         )
         .await?;
     }
@@ -257,7 +260,7 @@ async fn proxy_raw_tcp(
             handle_connected_mysql(client, upstream, state, context).await
         }
         DetectedProtocol::Redis => {
-            reject_cache_tls_if_needed(
+            reject_protocol_tls_if_needed(
                 &client,
                 &state,
                 &entry.domain,
@@ -271,7 +274,7 @@ async fn proxy_raw_tcp(
                 client,
                 upstream,
                 state,
-                cache_context(
+                redis_context(
                     &entry,
                     fake_addr,
                     upstream_addr,
@@ -282,7 +285,7 @@ async fn proxy_raw_tcp(
             .await
         }
         DetectedProtocol::MemcachedText | DetectedProtocol::MemcachedBinary => {
-            reject_cache_tls_if_needed(
+            reject_protocol_tls_if_needed(
                 &client,
                 &state,
                 &entry.domain,
@@ -301,7 +304,7 @@ async fn proxy_raw_tcp(
                 client,
                 upstream,
                 state,
-                cache_context(
+                memcached_context(
                     &entry,
                     fake_addr,
                     upstream_addr,
@@ -360,14 +363,14 @@ async fn proxy_raw_tcp(
     }
 }
 
-fn cache_context(
+fn redis_context(
     entry: &FakeDnsEntry,
     fake_addr: SocketAddr,
     upstream_addr: SocketAddr,
     client_addr: Option<String>,
     client_process: Option<ProcessInfo>,
-) -> CacheConnectionContext {
-    CacheConnectionContext {
+) -> RedisConnectionContext {
+    RedisConnectionContext {
         client_addr,
         client_process,
         target_host: entry.domain.clone(),
@@ -377,7 +380,24 @@ fn cache_context(
     }
 }
 
-async fn reject_cache_tls_if_needed(
+fn memcached_context(
+    entry: &FakeDnsEntry,
+    fake_addr: SocketAddr,
+    upstream_addr: SocketAddr,
+    client_addr: Option<String>,
+    client_process: Option<ProcessInfo>,
+) -> MemcachedConnectionContext {
+    MemcachedConnectionContext {
+        client_addr,
+        client_process,
+        target_host: entry.domain.clone(),
+        target_port: fake_addr.port(),
+        target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
+        upstream_addr: upstream_addr.to_string(),
+    }
+}
+
+async fn reject_protocol_tls_if_needed(
     client: &TcpStream,
     state: &AppState,
     domain: &str,
@@ -421,7 +441,7 @@ fn protocol_hint(state: &AppState, port: u16) -> Option<DetectedProtocol> {
     }
 }
 
-fn cache_port_hint(state: &AppState, port: u16) -> Option<&'static str> {
+fn plaintext_protocol_port_hint(state: &AppState, port: u16) -> Option<&'static str> {
     let detection = &state.config().tcp_gateway.protocol_detection;
     if !detection.enabled {
         return None;

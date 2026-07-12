@@ -41,3 +41,31 @@ pub(in crate::replay) struct KafkaProtocolReport {
     pub(in crate::replay) unused_case: Vec<KafkaUnusedReport>,
     pub(in crate::replay) unused_bootstrap: Vec<KafkaUnusedReport>,
 }
+
+impl KafkaProtocolReport {
+    pub(in crate::replay) fn is_dirty(&self) -> bool {
+        !self.unmatched.is_empty()
+            || !self.unsupported.is_empty()
+            || !self.unsafe_events.is_empty()
+            || !self.unused_case.is_empty()
+            || !self.unused_bootstrap.is_empty()
+    }
+
+    pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
+        self.unmatched
+            .iter()
+            .any(|request| request.case_id.as_deref() == Some(case_id))
+            || self
+                .unsupported
+                .iter()
+                .any(|request| request.case_id.as_deref() == Some(case_id))
+            || self
+                .unsafe_events
+                .iter()
+                .any(|request| request.case_id.as_deref() == Some(case_id))
+            || self
+                .unused_case
+                .iter()
+                .any(|exchange| exchange.case_id.as_deref() == Some(case_id))
+    }
+}

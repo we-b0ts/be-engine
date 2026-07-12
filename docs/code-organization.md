@@ -166,6 +166,14 @@ backstop, not a replacement for the ownership and cohesion review.
 
 - supported dependency protocols are peer domains: MySQL, Redis, Memcached,
   and Kafka; do not group protocols by a presumed business use such as cache
+- top-level `mysql`, `redis`, `memcached`, and `kafka` modules own reusable
+  protocol parsing and encoding only; they do not own recording or replay
+- top-level `http` owns reusable HTTP forwarding policy; `proxy/http` and
+  `gateway/http` own their respective runtimes, while `recorder/http` owns
+  recorded HTTP case persistence
+- `recorder/<protocol>` owns capture-time protocol adapters, while
+  `replay/<protocol>` owns matching and response behavior for recorded evidence;
+  both may depend on the top-level protocol module, never the reverse
 - `main.rs`: CLI and binary bootstrap only
 - `lib.rs`: application wiring, shared state, and stable exports
 - proxy/gateway modules: connection and request orchestration

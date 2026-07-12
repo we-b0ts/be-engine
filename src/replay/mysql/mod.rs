@@ -1,11 +1,13 @@
 mod broker;
 mod matcher;
+mod model;
 mod response;
 mod session;
 mod values;
 
 pub(super) use broker::handle_connection;
 pub(super) use matcher::MysqlReplayState;
+pub(super) use model::*;
 pub(super) use response::*;
 pub(super) use session::*;
 pub(super) use values::*;

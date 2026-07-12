@@ -37,7 +37,7 @@ Useful focused tests:
 
 ```bash
 cargo test mysql::wire
-cargo test mysql::semantic
+cargo test recorder::mysql::semantic
 cargo test proxy_integration
 ```
 

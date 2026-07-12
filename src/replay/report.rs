@@ -1,5 +1,10 @@
 use super::*;
 
+pub(super) mod command;
+mod model;
+
+pub(super) use model::*;
+
 pub(super) async fn write_report_snapshot(
     state: Arc<Mutex<ReplayState>>,
     report_path: Option<PathBuf>,

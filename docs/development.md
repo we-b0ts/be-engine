@@ -182,11 +182,11 @@ Useful focused test commands:
 
 ```bash
 cargo test mysql::wire
-cargo test mysql::semantic
+cargo test recorder::mysql::semantic
 cargo test proxy_integration
-cargo test cache_protocol
-cargo test cache_proxy
-cargo test replay::cache_tests
+cargo test redis::
+cargo test memcached::
+cargo test replay::command_protocol_tests
 cargo test kafka::
 ```
 
