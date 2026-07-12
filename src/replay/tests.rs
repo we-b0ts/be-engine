@@ -1,4 +1,7 @@
 use super::*;
+use crate::mysql::wire::{
+    CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, MysqlPacket, read_packet,
+};
 
 #[cfg(test)]
 mod tests {

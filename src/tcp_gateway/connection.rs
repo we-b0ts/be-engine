@@ -17,7 +17,7 @@ use crate::cache_proxy::{
 };
 use crate::dns_mock::{FakeDnsEntry, domain_matches};
 use crate::kafka::{KafkaConnectionContext, handle_connected as handle_connected_kafka};
-use crate::mysql_proxy::{MysqlConnectionContext, handle_connected_mysql};
+use crate::mysql::proxy::{MysqlConnectionContext, handle_connected_mysql};
 use crate::process_lookup::lookup_tcp_process;
 use crate::recorder::ProcessInfo;
 
