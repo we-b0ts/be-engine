@@ -1,5 +1,5 @@
-use crate::cache_protocol::text_request_line_is_valid;
 use crate::config::{TcpApplicationProtocol, TcpProtocolDetectionConfig};
+use crate::memcached::text_request_line_is_valid;
 
 const MEMCACHED_BINARY_REQUEST_MAGIC: u8 = 0x80;
 const MYSQL_HANDSHAKE_PROTOCOL_VERSION: u8 = 0x0a;

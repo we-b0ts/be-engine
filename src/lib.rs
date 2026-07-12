@@ -1,17 +1,14 @@
-mod cache_protocol;
-mod cache_proxy;
 mod config;
-mod dependency_summary;
 mod dns_mock;
-mod http_gateway;
-mod http_gateway_case;
-mod http_proxy;
+mod gateway;
+mod http;
 mod kafka;
+mod memcached;
 mod mysql;
 mod process_lookup;
+mod proxy;
 mod recorder;
-mod recorder_event;
-mod recorder_run;
+mod redis;
 mod replay;
 mod tcp_gateway;
 mod tls;
@@ -287,7 +284,7 @@ impl AppState {
     }
 
     pub(crate) async fn record_dependency_if_relevant(&self, event: &RecorderEvent) {
-        let event_pid = event_client_pid(event);
+        let event_pid = event.client_pid();
         let targets = self.inner.active_cases.current_targets_for_event(event_pid);
         if targets.bootstrap_open
             && let Err(err) = self
@@ -303,7 +300,7 @@ impl AppState {
         if targets.ambiguous_active_cases > 0 {
             warn!(
                 active_cases = targets.ambiguous_active_cases,
-                event_type = recorder_event_kind(event),
+                event_type = event.kind(),
                 "skipping case dependency because active case ownership is ambiguous"
             );
         }
@@ -329,7 +326,7 @@ impl AppState {
 
         if self.config().http.enabled {
             let http_state = self.clone();
-            tasks.spawn(async move { http_proxy::run(http_state).await });
+            tasks.spawn(async move { proxy::http::run(http_state).await });
         }
 
         if self.config().dns_mock.enabled {
@@ -349,12 +346,12 @@ impl AppState {
 
         if self.config().http_gateway.enabled {
             let gateway_state = self.clone();
-            tasks.spawn(async move { http_gateway::run(gateway_state).await });
+            tasks.spawn(async move { gateway::http::run(gateway_state).await });
         }
 
         if self.config().mysql.enabled {
             let mysql_state = self.clone();
-            tasks.spawn(async move { mysql::proxy::run(mysql_state).await });
+            tasks.spawn(async move { recorder::mysql::run(mysql_state).await });
         }
 
         info!(
@@ -388,84 +385,6 @@ impl AppState {
             anyhow::bail!("recording run finished with failed cases");
         }
         Ok(())
-    }
-}
-
-fn recorder_event_kind(event: &RecorderEvent) -> &'static str {
-    match event {
-        RecorderEvent::HttpExchange(_) => "http_exchange",
-        RecorderEvent::TcpGatewayConnection(_) => "tcp_gateway_connection",
-        RecorderEvent::UdpDatagram(_) => "udp_datagram",
-        RecorderEvent::RedisConnection(_) => "redis_connection",
-        RecorderEvent::RedisExchange(_) => "redis_exchange",
-        RecorderEvent::MemcachedConnection(_) => "memcached_connection",
-        RecorderEvent::MemcachedExchange(_) => "memcached_exchange",
-        RecorderEvent::KafkaConnection(_) => "kafka_connection",
-        RecorderEvent::KafkaProduce(_) => "kafka_produce",
-        RecorderEvent::KafkaDelivery(_) => "kafka_delivery",
-        RecorderEvent::MysqlConnection(_) => "mysql_connection",
-        RecorderEvent::MysqlQuery(_) => "mysql_query",
-        RecorderEvent::MysqlResponse(_) => "mysql_response",
-        RecorderEvent::MysqlExchange(_) => "mysql_exchange",
-        RecorderEvent::MysqlPacket(_) => "mysql_packet",
-        RecorderEvent::MysqlTlsRejected(_) => "mysql_tls_rejected",
-        RecorderEvent::ProxyError(_) => "proxy_error",
-    }
-}
-
-fn event_client_pid(event: &RecorderEvent) -> Option<u32> {
-    match event {
-        RecorderEvent::HttpExchange(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::TcpGatewayConnection(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::UdpDatagram(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::RedisConnection(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::RedisExchange(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::MemcachedConnection(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::MemcachedExchange(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::KafkaConnection(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::KafkaProduce(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::KafkaDelivery(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::MysqlConnection(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::MysqlQuery(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::MysqlResponse(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::MysqlExchange(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::MysqlPacket(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::MysqlTlsRejected(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
-        RecorderEvent::ProxyError(event) => {
-            event.client_process.as_ref().map(|process| process.pid)
-        }
     }
 }
 

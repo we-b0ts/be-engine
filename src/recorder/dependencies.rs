@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 
-use crate::dependency_summary::should_append_case_dependency;
+use super::summary::should_append_case_dependency;
 use crate::recorder::{CaseContext, Recorder, RecorderEvent};
 
 impl Recorder {
@@ -115,11 +115,11 @@ impl Recorder {
                 )
             {
                 return Ok(Some(format!(
-                    "cache dependency proxy error: {}",
+                    "dependency proxy error: {}",
                     value
                         .get("error")
                         .and_then(serde_json::Value::as_str)
-                        .unwrap_or("unknown cache proxy error")
+                        .unwrap_or("unknown dependency proxy error")
                 )));
             }
         }

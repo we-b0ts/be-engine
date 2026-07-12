@@ -8,7 +8,7 @@ use chrono::Utc;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
 use hyper::client::conn::http1;
-use hyper::header::{CONNECTION, HOST};
+use hyper::header::HOST;
 use hyper::http::uri::{Authority, PathAndQuery, Scheme};
 use hyper::service::service_fn;
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
@@ -20,6 +20,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::dns_mock::FakeDnsEntry;
+use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 use crate::process_lookup::process_label;
 use crate::recorder::{
     HeaderMapSnapshot, HttpExchangeEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent,
@@ -741,12 +742,7 @@ fn build_upstream_request(
 ) -> Result<Request<Full<Bytes>>> {
     let mut builder = Request::builder().method(method).uri(uri);
     let headers = builder.headers_mut().expect("request builder headers");
-    for (name, value) in source_headers {
-        if is_hop_by_hop(name.as_str()) {
-            continue;
-        }
-        headers.append(name, value.clone());
-    }
+    append_end_to_end_headers(source_headers, headers, HostHeaderPolicy::Preserve);
     if !headers.contains_key(HOST) {
         let host = if original_port == 80 {
             domain.to_string()
@@ -767,12 +763,7 @@ fn build_downstream_response(
 ) -> Response<GatewayBody> {
     let mut builder = Response::builder().status(status);
     let out_headers = builder.headers_mut().expect("response builder headers");
-    for (name, value) in headers {
-        if is_hop_by_hop(name.as_str()) {
-            continue;
-        }
-        out_headers.append(name, value.clone());
-    }
+    append_end_to_end_headers(headers, out_headers, HostHeaderPolicy::Preserve);
     builder
         .body(boxed_body(body))
         .unwrap_or_else(|_| simple_response(StatusCode::BAD_GATEWAY, "failed to build response"))
@@ -827,21 +818,6 @@ fn with_fake_gateway_headers(
             .push(upstream_addr.to_string());
     }
     headers
-}
-
-fn is_hop_by_hop(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "proxy-connection"
-            | "te"
-            | "trailer"
-            | "transfer-encoding"
-            | "upgrade"
-    ) || name.eq_ignore_ascii_case(CONNECTION.as_str())
 }
 
 #[cfg(test)]
@@ -958,7 +934,7 @@ mod tests {
                 Ok::<_, Infallible>(
                     Response::builder()
                         .status(StatusCode::OK)
-                        .header(CONNECTION, "close")
+                        .header(hyper::header::CONNECTION, "close")
                         .body(Full::new(Bytes::from_static(b"secure")))
                         .unwrap(),
                 )

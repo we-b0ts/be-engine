@@ -18,25 +18,28 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::MitmCa;
-mod cache;
 #[cfg(test)]
-mod cache_tests;
+mod command_protocol_tests;
 mod control;
+mod dependencies;
 mod dns;
 mod http;
 mod kafka;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod legacy_tests;
+mod memcached;
+mod model;
 mod mysql;
-mod records;
+mod redis;
 mod report;
 
 use control::*;
+use dependencies::*;
 use dns::*;
+use model::*;
 use mysql::*;
-use records::*;
-use report::write_report_snapshot;
+use report::*;
 
 const SO_ORIGINAL_DST: libc::c_int = 80;
 
@@ -142,7 +145,8 @@ impl ReplayRuntime {
         let bootstrap_path = find_upward(&root_dir, "bootstrap-dependencies.jsonl");
         let mut mysql = MysqlReplayState::default();
         let mut http_exchanges = Vec::new();
-        let mut cache = cache::CacheReplayState::default();
+        let mut redis = redis::RedisReplayState::default();
+        let mut memcached = memcached::MemcachedReplayState::default();
         let mut kafka = kafka::KafkaReplayState::default();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
@@ -155,7 +159,8 @@ impl ReplayRuntime {
                 None,
                 &mut mysql.exchanges,
                 &mut http_exchanges,
-                &mut cache,
+                &mut redis,
+                &mut memcached,
                 &mut kafka,
                 &mut targets,
                 &mut connection_identities,
@@ -169,7 +174,8 @@ impl ReplayRuntime {
                 Some(&case.id),
                 &mut mysql.exchanges,
                 &mut http_exchanges,
-                &mut cache,
+                &mut redis,
+                &mut memcached,
                 &mut kafka,
                 &mut targets,
                 &mut connection_identities,
@@ -196,7 +202,8 @@ impl ReplayRuntime {
             targets,
             mysql,
             http_exchanges,
-            cache,
+            redis,
+            memcached,
             kafka,
             http_events: http::HttpReplayEvents::default(),
             report_write_lock: Arc::new(Mutex::new(())),
@@ -282,7 +289,8 @@ struct ReplayState {
     targets: Vec<ReplayTarget>,
     mysql: mysql::MysqlReplayState,
     http_exchanges: Vec<http::ReplayHttpExchange>,
-    cache: cache::CacheReplayState,
+    redis: redis::RedisReplayState,
+    memcached: memcached::MemcachedReplayState,
     kafka: kafka::KafkaReplayState,
     http_events: http::HttpReplayEvents,
     report_write_lock: Arc<Mutex<()>>,
@@ -326,7 +334,8 @@ impl ReplayState {
             unused_bootstrap_http_exchanges: self.unused_http_exchanges(ReplaySource::Bootstrap),
             unused_case_http_exchanges: self.unused_http_exchanges(ReplaySource::Case),
             protocols: ProtocolsReport {
-                cache: self.cache.snapshot(),
+                redis: self.redis.snapshot(),
+                memcached: self.memcached.snapshot(),
                 kafka: self.kafka.snapshot(),
             },
             ca_cert_path: self.ca_cert_path.display().to_string(),
@@ -368,7 +377,7 @@ async fn handle_gateway_connection(
             .await
         }
         Some(ReplayProtocol::Redis) => {
-            cache::handle_redis_connection(
+            redis::handle_connection(
                 stream,
                 target.context("Redis replay connection has no target")?,
                 state,
@@ -377,7 +386,7 @@ async fn handle_gateway_connection(
             .await
         }
         Some(ReplayProtocol::Memcached) => {
-            cache::handle_memcached_connection(
+            memcached::handle_connection(
                 stream,
                 target.context("Memcached replay connection has no target")?,
                 state,
