@@ -92,6 +92,9 @@ impl Recorder {
                     | "redis_exchange"
                     | "memcached_connection"
                     | "memcached_exchange"
+                    | "kafka_connection"
+                    | "kafka_produce"
+                    | "kafka_delivery"
             ) && value
                 .get("replay_safe")
                 .and_then(serde_json::Value::as_bool)
@@ -108,7 +111,7 @@ impl Recorder {
             if event_type == "proxy_error"
                 && matches!(
                     value.get("protocol").and_then(serde_json::Value::as_str),
-                    Some("redis" | "memcached")
+                    Some("redis" | "memcached" | "kafka")
                 )
             {
                 return Ok(Some(format!(

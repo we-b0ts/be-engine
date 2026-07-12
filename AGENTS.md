@@ -3,7 +3,8 @@
 ## Overview
 
 This is a Rust single-binary traffic recorder proxy. It records HTTP, HTTPS,
-HTTP gateway, fake-DNS TCP/UDP gateways, and MySQL traffic to JSONL files.
+HTTP gateway, fake-DNS TCP/UDP gateways, MySQL, cache, and constrained Kafka
+traffic to JSONL files.
 
 The primary crate is in `src/` and builds the `traffic-recorder-proxy` binary.
 Recorder configuration starts from `config/recorder.example.toml`. Local command

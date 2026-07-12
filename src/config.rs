@@ -48,6 +48,7 @@ pub struct TcpProtocolDetectionConfig {
     pub enabled: bool,
     pub redis_port_hints: Vec<u16>,
     pub memcached_port_hints: Vec<u16>,
+    pub kafka_port_hints: Vec<u16>,
     pub overrides: Vec<TcpProtocolOverrideConfig>,
 }
 
@@ -63,6 +64,7 @@ pub struct TcpProtocolOverrideConfig {
 pub enum TcpApplicationProtocol {
     Redis,
     Memcached,
+    Kafka,
     Raw,
 }
 
@@ -206,6 +208,7 @@ impl Default for TcpProtocolDetectionConfig {
             enabled: true,
             redis_port_hints: vec![6379],
             memcached_port_hints: vec![11211],
+            kafka_port_hints: vec![9092],
             overrides: Vec::new(),
         }
     }

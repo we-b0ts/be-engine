@@ -44,6 +44,9 @@ pub enum RecorderEvent {
     RedisExchange(RedisExchangeEvent),
     MemcachedConnection(MemcachedConnectionEvent),
     MemcachedExchange(MemcachedExchangeEvent),
+    KafkaConnection(KafkaConnectionEvent),
+    KafkaProduce(KafkaProduceEvent),
+    KafkaDelivery(KafkaDeliveryEvent),
     MysqlConnection(MysqlConnectionEvent),
     MysqlQuery(MysqlQueryEvent),
     MysqlResponse(MysqlResponseEvent),
@@ -211,6 +214,75 @@ pub struct MemcachedExchangeEvent {
     pub response_frames: Vec<BodyCapture>,
     pub no_response: bool,
     pub duration_ms: u128,
+    pub replay_safe: bool,
+    pub parse_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaConnectionEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub phase: String,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub target_addr: String,
+    pub upstream_addr: String,
+    pub duration_ms: Option<u128>,
+    pub client_to_server_bytes: u64,
+    pub server_to_client_bytes: u64,
+    pub replay_safe: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct KafkaHeaderCapture {
+    pub name: String,
+    pub value: Option<BodyCapture>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaProduceEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub target_addr: String,
+    pub upstream_addr: String,
+    pub api_version: i16,
+    pub topic: String,
+    pub key: Option<BodyCapture>,
+    pub headers: Vec<KafkaHeaderCapture>,
+    pub value: Option<BodyCapture>,
+    pub result: String,
+    pub duration_ms: u128,
+    pub replay_safe: bool,
+    pub parse_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaDeliveryEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub target_addr: String,
+    pub upstream_addr: String,
+    pub api_version: i16,
+    pub topic: String,
+    pub key: Option<BodyCapture>,
+    pub headers: Vec<KafkaHeaderCapture>,
+    pub value: Option<BodyCapture>,
+    pub message_timestamp_ms: i64,
     pub replay_safe: bool,
     pub parse_warnings: Vec<String>,
 }

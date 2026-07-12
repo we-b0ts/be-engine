@@ -28,16 +28,18 @@ use crate::recorder::{
 use crate::{AppState, ProxyClient};
 
 mod connection;
+mod detection;
 
 pub(crate) use connection::run;
 use connection::upstream_addr;
+use detection::DetectedProtocol;
 
 type GatewayBody = BoxBody<Bytes, Infallible>;
 
 struct RawTcpOptions {
     record_connection: bool,
     sniff_server_first_protocols: bool,
-    detected_protocol: Option<crate::cache_protocol::DetectedProtocol>,
+    detected_protocol: Option<DetectedProtocol>,
 }
 
 async fn serve_http_connection(

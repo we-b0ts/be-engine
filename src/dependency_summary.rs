@@ -8,11 +8,13 @@ use serde_json::Value;
 use crate::recorder::RecorderEvent;
 
 mod cache;
+mod kafka;
 mod udp;
 use cache::{
     MemcachedDependencySummary, MemcachedSummaryBuilder, RedisDependencySummary,
     RedisSummaryBuilder,
 };
+use kafka::{KafkaDependencySummary, record_kafka_connection_summary, record_kafka_record_summary};
 use udp::{UdpDependencySummary, record_udp_summary};
 
 pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
@@ -82,6 +84,8 @@ struct DependencySummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     memcached: Option<MemcachedDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    kafka: Option<KafkaDependencySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     http: Option<HttpDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tcp_gateway: Option<TcpGatewayDependencySummary>,
@@ -99,6 +103,7 @@ struct DependencySummaryBuilder {
     mysql: MysqlDependencySummary,
     redis: RedisSummaryBuilder,
     memcached: MemcachedSummaryBuilder,
+    kafka: KafkaDependencySummary,
     http: HttpDependencySummary,
     tcp_gateway: TcpGatewayDependencySummary,
     udp: UdpDependencySummary,
@@ -121,6 +126,7 @@ impl DependencySummaryBuilder {
             mysql: self.mysql.has_activity().then_some(self.mysql),
             redis,
             memcached,
+            kafka: self.kafka.has_activity().then_some(self.kafka),
             http: (self.http.calls > 0).then_some(self.http),
             tcp_gateway: (self.tcp_gateway.connections > 0).then_some(self.tcp_gateway),
             udp: (self.udp.datagrams > 0).then_some(self.udp),
@@ -277,6 +283,9 @@ fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
             "redis_exchange" => builder.redis.record_exchange(&value),
             "memcached_connection" => builder.memcached.record_connection(&value),
             "memcached_exchange" => builder.memcached.record_exchange(&value),
+            "kafka_connection" => record_kafka_connection_summary(&mut builder.kafka, &value),
+            "kafka_produce" => record_kafka_record_summary(&mut builder.kafka, &value, true),
+            "kafka_delivery" => record_kafka_record_summary(&mut builder.kafka, &value, false),
             "http_exchange" => record_http_summary(&mut builder.http, &value),
             "tcp_gateway_connection" => {
                 record_tcp_gateway_summary(&mut builder.tcp_gateway, &value);

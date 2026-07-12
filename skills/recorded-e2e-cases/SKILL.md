@@ -45,6 +45,14 @@ port, database/schema, and username/role before SQL and params. Use semantic
 column schema for target types. Load `dependencies-debug.jsonl` only to explain
 missing semantic data or protocol failures.
 
+For Kafka, use semantic `kafka_produce` and `kafka_delivery` records. V1 uses a
+PLAINTEXT, uncompressed, non-idempotent, `acks=1` client profile and a one-broker,
+one-partition replay facade. Match exact topic, key, headers, and value bytes;
+require every expected produce and delivery to be consumed. Treat transactions,
+Admin APIs, compression, authentication, unsupported API versions, unsafe
+captures, and Kafka proxy errors as incomplete evidence rather than inventing
+broker behavior.
+
 ## Stop And Report
 
 Read [failure-diagnosis.md](references/failure-diagnosis.md) after the first

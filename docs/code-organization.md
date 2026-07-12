@@ -59,6 +59,12 @@ not expand or depend on as separate follow-up work.
 Names are responsibility contracts. Name code by its current owner, not by
 history, the first implementation, or a technology it happens to use.
 
+Names may contain multiple words when they form one cohesive concept. Each
+module or path segment must represent one ownership level or one primary
+responsibility. Express multiple ownership levels through module nesting rather
+than underscore-separated compound prefixes, and do not repeat parent context
+in child names.
+
 Organize namespaces from stable ownership to implementation detail:
 
 1. product capability or domain

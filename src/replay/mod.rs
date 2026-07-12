@@ -29,6 +29,7 @@ mod cache_tests;
 mod control;
 mod dns;
 mod http;
+mod kafka;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod legacy_tests;
@@ -186,6 +187,7 @@ impl ReplayRuntime {
         let mut exchanges = Vec::new();
         let mut http_exchanges = Vec::new();
         let mut cache = cache::CacheReplayState::default();
+        let mut kafka = kafka::KafkaReplayState::default();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
         let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
@@ -198,6 +200,7 @@ impl ReplayRuntime {
                 &mut exchanges,
                 &mut http_exchanges,
                 &mut cache,
+                &mut kafka,
                 &mut targets,
                 &mut connection_identities,
             )
@@ -211,6 +214,7 @@ impl ReplayRuntime {
                 &mut exchanges,
                 &mut http_exchanges,
                 &mut cache,
+                &mut kafka,
                 &mut targets,
                 &mut connection_identities,
             )
@@ -237,6 +241,7 @@ impl ReplayRuntime {
             exchanges,
             http_exchanges,
             cache,
+            kafka,
             events: ReplayEvents::default(),
             http_events: http::HttpReplayEvents::default(),
             report_write_lock: Arc::new(Mutex::new(())),
@@ -323,6 +328,7 @@ struct ReplayState {
     exchanges: Vec<ReplayExchange>,
     http_exchanges: Vec<http::ReplayHttpExchange>,
     cache: cache::CacheReplayState,
+    kafka: kafka::KafkaReplayState,
     events: ReplayEvents,
     http_events: http::HttpReplayEvents,
     report_write_lock: Arc<Mutex<()>>,
@@ -564,7 +570,10 @@ impl ReplayState {
             unsupported_http_exchanges: self.http_events.unsupported.clone(),
             unused_bootstrap_http_exchanges: self.unused_http_exchanges(ReplaySource::Bootstrap),
             unused_case_http_exchanges: self.unused_http_exchanges(ReplaySource::Case),
-            protocols: self.cache.snapshot(),
+            protocols: ProtocolsReport {
+                cache: self.cache.snapshot(),
+                kafka: self.kafka.snapshot(),
+            },
             ca_cert_path: self.ca_cert_path.display().to_string(),
             http_ignored_query_params: self.http_ignore_query_params.clone(),
         }
@@ -638,6 +647,15 @@ async fn handle_gateway_connection(
             cache::handle_memcached_connection(
                 stream,
                 target.context("Memcached replay connection has no target")?,
+                state,
+                report_path,
+            )
+            .await
+        }
+        Some(ReplayProtocol::Kafka) => {
+            kafka::handle_connection(
+                stream,
+                target.context("Kafka replay connection has no target")?,
                 state,
                 report_path,
             )

@@ -11,21 +11,21 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
-use crate::cache_protocol::{
-    DetectedProtocol, Detection, MemcachedWireProtocol, detect_client_protocol,
-    detect_mysql_server, protocol_override,
-};
+use crate::cache_protocol::MemcachedWireProtocol;
 use crate::cache_proxy::{
     CacheConnectionContext, handle_connected_memcached, handle_connected_redis,
 };
 use crate::dns_mock::{FakeDnsEntry, domain_matches};
+use crate::kafka::{KafkaConnectionContext, handle_connected as handle_connected_kafka};
 use crate::mysql_proxy::{MysqlConnectionContext, handle_connected_mysql};
 use crate::process_lookup::lookup_tcp_process;
 use crate::recorder::ProcessInfo;
 
 use super::{
-    RawTcpOptions, TcpConnectionRecord, record_proxy_error, record_tcp_connection,
-    serve_http_connection, serve_https_mitm_connection,
+    RawTcpOptions, TcpConnectionRecord, detection::DetectedProtocol, detection::Detection,
+    detection::detect_client_protocol, detection::detect_mysql_server,
+    detection::protocol_override, record_proxy_error, record_tcp_connection, serve_http_connection,
+    serve_https_mitm_connection,
 };
 
 const SO_ORIGINAL_DST: libc::c_int = 80;
@@ -111,6 +111,13 @@ async fn handle_connection(
         protocol_override(&config.protocol_detection, &entry.domain, fake_addr.port());
     let detection = if let Some(protocol) = override_protocol {
         Detection::Match(protocol)
+    } else if config.protocol_detection.enabled
+        && config
+            .protocol_detection
+            .kafka_port_hints
+            .contains(&fake_addr.port())
+    {
+        Detection::Match(DetectedProtocol::Kafka)
     } else if config.protocol_detection.enabled || config.record_http {
         peek_client_protocol(&client)
             .await
@@ -305,6 +312,22 @@ async fn proxy_raw_tcp(
             )
             .await
         }
+        DetectedProtocol::Kafka => {
+            handle_connected_kafka(
+                client,
+                upstream,
+                state,
+                KafkaConnectionContext {
+                    client_addr,
+                    client_process,
+                    target_host: entry.domain.clone(),
+                    target_port: fake_addr.port(),
+                    target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
+                    upstream_addr: upstream_addr.to_string(),
+                },
+            )
+            .await
+        }
         DetectedProtocol::Tls => Err(anyhow!(
             "TLS-looking connection was not eligible for HTTPS MITM on port {}",
             fake_addr.port()
@@ -391,6 +414,8 @@ fn protocol_hint(state: &AppState, port: u16) -> Option<DetectedProtocol> {
         Some(DetectedProtocol::Redis)
     } else if detection.memcached_port_hints.contains(&port) {
         Some(DetectedProtocol::MemcachedText)
+    } else if detection.kafka_port_hints.contains(&port) {
+        Some(DetectedProtocol::Kafka)
     } else {
         None
     }
