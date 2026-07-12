@@ -1,13 +1,13 @@
-pub(super) struct ReplaySession {
-    pub(super) target: Option<TargetKey>,
-    pub(super) database: Option<String>,
-    pub(super) username: Option<String>,
-    pub(super) next_statement_id: u32,
-    pub(super) statements: HashMap<u32, PreparedStatement>,
+pub(in crate::replay) struct ReplaySession {
+    pub(in crate::replay) target: Option<TargetKey>,
+    pub(in crate::replay) database: Option<String>,
+    pub(in crate::replay) username: Option<String>,
+    pub(in crate::replay) next_statement_id: u32,
+    pub(in crate::replay) statements: HashMap<u32, PreparedStatement>,
 }
 
 impl ReplaySession {
-    pub(super) fn identity(&self) -> ReplaySessionIdentity {
+    pub(in crate::replay) fn identity(&self) -> ReplaySessionIdentity {
         ReplaySessionIdentity {
             target: self.target.clone(),
             database: self.database.clone(),
@@ -16,7 +16,7 @@ impl ReplaySession {
     }
 }
 
-pub(super) async fn handle_query(
+pub(in crate::replay) async fn handle_query(
     stream: &mut TcpStream,
     state: Arc<Mutex<ReplayState>>,
     session: &ReplaySession,
@@ -68,7 +68,7 @@ pub(super) async fn handle_query(
     }
 }
 
-pub(super) async fn handle_stmt_prepare(
+pub(in crate::replay) async fn handle_stmt_prepare(
     stream: &mut TcpStream,
     state: Arc<Mutex<ReplayState>>,
     session: &mut ReplaySession,
@@ -110,7 +110,7 @@ pub(super) async fn handle_stmt_prepare(
     write_stmt_prepare_ok(stream, statement_id, &metadata).await
 }
 
-pub(super) async fn handle_stmt_execute(
+pub(in crate::replay) async fn handle_stmt_execute(
     stream: &mut TcpStream,
     state: Arc<Mutex<ReplayState>>,
     session: &mut ReplaySession,
@@ -206,14 +206,14 @@ pub(super) async fn handle_stmt_execute(
 }
 
 #[derive(Debug)]
-pub(super) struct ParsedStmtExecute {
-    pub(super) statement_id: u32,
-    pub(super) params: Option<Vec<RecordedMysqlValue>>,
-    pub(super) param_types: Option<Vec<BoundParamType>>,
-    pub(super) warnings: Vec<String>,
+pub(in crate::replay) struct ParsedStmtExecute {
+    pub(in crate::replay) statement_id: u32,
+    pub(in crate::replay) params: Option<Vec<RecordedMysqlValue>>,
+    pub(in crate::replay) param_types: Option<Vec<BoundParamType>>,
+    pub(in crate::replay) warnings: Vec<String>,
 }
 
-pub(super) fn parse_stmt_execute(
+pub(in crate::replay) fn parse_stmt_execute(
     packet: &MysqlPacket,
     session: &ReplaySession,
 ) -> ParsedStmtExecute {

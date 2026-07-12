@@ -181,8 +181,8 @@ Add unit tests near the parser or module being changed. Add integration tests in
 Useful focused test commands:
 
 ```bash
-cargo test mysql_protocol
-cargo test mysql_semantic
+cargo test mysql::wire
+cargo test mysql::semantic
 cargo test proxy_integration
 cargo test cache_protocol
 cargo test cache_proxy

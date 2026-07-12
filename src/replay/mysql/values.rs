@@ -1,4 +1,7 @@
-pub(super) fn builtin_response(sql: &str, database: Option<&str>) -> Option<RecordedMysqlResponse> {
+pub(in crate::replay) fn builtin_response(
+    sql: &str,
+    database: Option<&str>,
+) -> Option<RecordedMysqlResponse> {
     let normalized = normalize_sql(sql);
     if is_builtin_ok(&normalized) {
         return Some(RecordedMysqlResponse {
@@ -49,7 +52,7 @@ pub(super) fn builtin_response(sql: &str, database: Option<&str>) -> Option<Reco
     None
 }
 
-pub(super) fn is_builtin_ok(normalized_sql: &str) -> bool {
+pub(in crate::replay) fn is_builtin_ok(normalized_sql: &str) -> bool {
     is_mysql_session_setup_sql(normalized_sql)
         || matches!(
             normalized_sql,
@@ -57,7 +60,7 @@ pub(super) fn is_builtin_ok(normalized_sql: &str) -> bool {
         )
 }
 
-pub(super) fn is_mysql_session_setup_sql(normalized_sql: &str) -> bool {
+pub(in crate::replay) fn is_mysql_session_setup_sql(normalized_sql: &str) -> bool {
     normalized_sql.starts_with("set names ")
         || normalized_sql.starts_with("set character set ")
         || normalized_sql.starts_with("set character_set_client ")
@@ -68,7 +71,7 @@ pub(super) fn is_mysql_session_setup_sql(normalized_sql: &str) -> bool {
         || normalized_sql.starts_with("set sql_mode ")
 }
 
-pub(super) fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {
+pub(in crate::replay) fn single_string_result(name: &str, value: &str) -> RecordedMysqlResponse {
     RecordedMysqlResponse {
         status: "resultset".to_string(),
         error_code: None,
@@ -80,7 +83,7 @@ pub(super) fn single_string_result(name: &str, value: &str) -> RecordedMysqlResp
     }
 }
 
-pub(super) fn string_column(name: &str) -> RecordedMysqlColumn {
+pub(in crate::replay) fn string_column(name: &str) -> RecordedMysqlColumn {
     RecordedMysqlColumn {
         name: name.to_string(),
         table: None,
@@ -94,7 +97,7 @@ pub(super) fn string_column(name: &str) -> RecordedMysqlColumn {
     }
 }
 
-pub(super) fn integer_column(name: &str) -> RecordedMysqlColumn {
+pub(in crate::replay) fn integer_column(name: &str) -> RecordedMysqlColumn {
     RecordedMysqlColumn {
         name: name.to_string(),
         table: None,
@@ -108,7 +111,7 @@ pub(super) fn integer_column(name: &str) -> RecordedMysqlColumn {
     }
 }
 
-pub(super) fn params_match(
+pub(in crate::replay) fn params_match(
     recorded: Option<&[RecordedMysqlValue]>,
     actual: Option<&[RecordedMysqlValue]>,
 ) -> bool {
@@ -122,7 +125,7 @@ pub(super) fn params_match(
     }
 }
 
-pub(super) fn normalize_sql(sql: &str) -> String {
+pub(in crate::replay) fn normalize_sql(sql: &str) -> String {
     let mut out = String::with_capacity(sql.len());
     let mut last_was_space = false;
     for ch in sql.chars() {
@@ -144,15 +147,15 @@ pub(super) fn normalize_sql(sql: &str) -> String {
     compact
 }
 
-pub(super) fn count_sql_placeholders(sql: &str) -> usize {
+pub(in crate::replay) fn count_sql_placeholders(sql: &str) -> usize {
     sql.chars().filter(|ch| *ch == '?').count()
 }
 
-pub(super) fn looks_like_select(sql: &str) -> bool {
+pub(in crate::replay) fn looks_like_select(sql: &str) -> bool {
     normalize_sql(sql).starts_with("select")
 }
 
-pub(super) fn column_type_code(column: &RecordedMysqlColumn) -> u8 {
+pub(in crate::replay) fn column_type_code(column: &RecordedMysqlColumn) -> u8 {
     let sql_type = column.sql_type.to_ascii_uppercase();
     match sql_type.as_str() {
         "TINYINT" => MYSQL_TYPE_TINY,
@@ -194,7 +197,7 @@ pub(super) fn column_type_code(column: &RecordedMysqlColumn) -> u8 {
     }
 }
 
-pub(super) fn column_length(column: &RecordedMysqlColumn) -> u32 {
+pub(in crate::replay) fn column_length(column: &RecordedMysqlColumn) -> u32 {
     match column_type_code(column) {
         MYSQL_TYPE_TINY => 4,
         MYSQL_TYPE_SHORT | MYSQL_TYPE_YEAR => 6,
@@ -209,7 +212,7 @@ pub(super) fn column_length(column: &RecordedMysqlColumn) -> u32 {
     }
 }
 
-pub(super) fn mysql_value_bytes(value: &RecordedMysqlValue) -> Result<Vec<u8>> {
+pub(in crate::replay) fn mysql_value_bytes(value: &RecordedMysqlValue) -> Result<Vec<u8>> {
     if let Some(raw) = &value.raw {
         return match raw.encoding.as_str() {
             "base64" => STANDARD
@@ -238,7 +241,7 @@ pub(super) fn mysql_value_bytes(value: &RecordedMysqlValue) -> Result<Vec<u8>> {
     })
 }
 
-pub(super) fn value_as_i64(value: &RecordedMysqlValue) -> Result<i64> {
+pub(in crate::replay) fn value_as_i64(value: &RecordedMysqlValue) -> Result<i64> {
     if let Some(Value::Number(number)) = &value.value {
         if let Some(value) = number.as_i64() {
             return Ok(value);
@@ -252,7 +255,7 @@ pub(super) fn value_as_i64(value: &RecordedMysqlValue) -> Result<i64> {
         .with_context(|| format!("recorded value `{text}` is not an integer"))
 }
 
-pub(super) fn value_as_f64(value: &RecordedMysqlValue) -> Result<f64> {
+pub(in crate::replay) fn value_as_f64(value: &RecordedMysqlValue) -> Result<f64> {
     if let Some(Value::Number(number)) = &value.value
         && let Some(value) = number.as_f64()
     {
@@ -263,14 +266,14 @@ pub(super) fn value_as_f64(value: &RecordedMysqlValue) -> Result<f64> {
         .with_context(|| format!("recorded value `{text}` is not a float"))
 }
 
-pub(super) fn value_as_str(value: &RecordedMysqlValue) -> Result<&str> {
+pub(in crate::replay) fn value_as_str(value: &RecordedMysqlValue) -> Result<&str> {
     if let Some(Value::String(value)) = &value.value {
         return Ok(value);
     }
     Err(anyhow!("recorded value is not a string"))
 }
 
-pub(super) fn binary_datetime_bytes(value: &str) -> Result<Vec<u8>> {
+pub(in crate::replay) fn binary_datetime_bytes(value: &str) -> Result<Vec<u8>> {
     let (date, time) = value.split_once(' ').unwrap_or((value, "00:00:00"));
     let mut date_parts = date.split('-');
     let year = date_parts
@@ -316,7 +319,7 @@ pub(super) fn binary_datetime_bytes(value: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-pub(super) fn binary_time_bytes(value: &str) -> Result<Vec<u8>> {
+pub(in crate::replay) fn binary_time_bytes(value: &str) -> Result<Vec<u8>> {
     let negative = value.starts_with('-');
     let value = value.trim_start_matches('-');
     let (hms, micros) = value.split_once('.').unwrap_or((value, "0"));
@@ -344,7 +347,10 @@ pub(super) fn binary_time_bytes(value: &str) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-pub(super) fn parse_binary_datetime(payload: &[u8], offset: usize) -> Option<(String, usize)> {
+pub(in crate::replay) fn parse_binary_datetime(
+    payload: &[u8],
+    offset: usize,
+) -> Option<(String, usize)> {
     let len = *payload.get(offset)? as usize;
     let start = offset + 1;
     match len {
@@ -381,7 +387,10 @@ pub(super) fn parse_binary_datetime(payload: &[u8], offset: usize) -> Option<(St
     }
 }
 
-pub(super) fn parse_binary_time(payload: &[u8], offset: usize) -> Option<(String, usize)> {
+pub(in crate::replay) fn parse_binary_time(
+    payload: &[u8],
+    offset: usize,
+) -> Option<(String, usize)> {
     let len = *payload.get(offset)? as usize;
     let start = offset + 1;
     match len {
@@ -410,13 +419,13 @@ pub(super) fn parse_binary_time(payload: &[u8], offset: usize) -> Option<(String
     }
 }
 
-pub(super) fn read_lenenc_bytes(bytes: &[u8], offset: usize) -> Option<(&[u8], usize)> {
+pub(in crate::replay) fn read_lenenc_bytes(bytes: &[u8], offset: usize) -> Option<(&[u8], usize)> {
     let (len, offset) = read_lenenc_int(bytes, offset)?;
     let len = len as usize;
     Some((bytes.get(offset..offset + len)?, offset + len))
 }
 
-pub(super) fn read_lenenc_int(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
+pub(in crate::replay) fn read_lenenc_int(bytes: &[u8], offset: usize) -> Option<(u64, usize)> {
     let first = *bytes.get(offset)?;
     match first {
         0xfc => Some((read_u16_le(bytes, offset + 1)? as u64, offset + 3)),
@@ -432,7 +441,7 @@ pub(super) fn read_lenenc_int(bytes: &[u8], offset: usize) -> Option<(u64, usize
     }
 }
 
-pub(super) fn lenenc_int(value: u64) -> Vec<u8> {
+pub(in crate::replay) fn lenenc_int(value: u64) -> Vec<u8> {
     match value {
         0..=250 => vec![value as u8],
         251..=0xffff => {
@@ -456,31 +465,20 @@ pub(super) fn lenenc_int(value: u64) -> Vec<u8> {
     }
 }
 
-pub(super) fn lenenc_bytes(value: &[u8]) -> Vec<u8> {
+pub(in crate::replay) fn lenenc_bytes(value: &[u8]) -> Vec<u8> {
     let mut out = lenenc_int(value.len() as u64);
     out.extend_from_slice(value);
     out
 }
 
-pub(super) fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+pub(in crate::replay) fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
     Some(u16::from_le_bytes([
         *bytes.get(offset)?,
         *bytes.get(offset + 1)?,
     ]))
 }
 
-pub(super) fn read_be_u16(bytes: &[u8], offset: usize) -> Result<u16> {
-    Ok(u16::from_be_bytes([
-        *bytes
-            .get(offset)
-            .ok_or_else(|| anyhow!("u16 out of bounds"))?,
-        *bytes
-            .get(offset + 1)
-            .ok_or_else(|| anyhow!("u16 out of bounds"))?,
-    ]))
-}
-
-pub(super) fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+pub(in crate::replay) fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([
         *bytes.get(offset)?,
         *bytes.get(offset + 1)?,
@@ -489,13 +487,13 @@ pub(super) fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     ]))
 }
 
-pub(super) fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
+pub(in crate::replay) fn read_u64_le(bytes: &[u8], offset: usize) -> Option<u64> {
     Some(u64::from_le_bytes(
         bytes.get(offset..offset + 8)?.try_into().ok()?,
     ))
 }
 
-pub(super) fn null_bitmap_bit(bitmap: &[u8], index: usize) -> bool {
+pub(in crate::replay) fn null_bitmap_bit(bitmap: &[u8], index: usize) -> bool {
     let byte_index = index / 8;
     let bit = index % 8;
     bitmap
@@ -503,7 +501,7 @@ pub(super) fn null_bitmap_bit(bitmap: &[u8], index: usize) -> bool {
         .is_some_and(|byte| byte & (1 << bit) != 0)
 }
 
-pub(super) fn set_null_bitmap_bit(bitmap: &mut [u8], bit_index: usize) {
+pub(in crate::replay) fn set_null_bitmap_bit(bitmap: &mut [u8], bit_index: usize) {
     let byte_index = bit_index / 8;
     let bit = bit_index % 8;
     if let Some(byte) = bitmap.get_mut(byte_index) {
@@ -511,7 +509,7 @@ pub(super) fn set_null_bitmap_bit(bitmap: &mut [u8], bit_index: usize) {
     }
 }
 
-pub(super) fn mysql_null() -> RecordedMysqlValue {
+pub(in crate::replay) fn mysql_null() -> RecordedMysqlValue {
     RecordedMysqlValue {
         kind: "null".to_string(),
         value: None,
@@ -519,7 +517,7 @@ pub(super) fn mysql_null() -> RecordedMysqlValue {
     }
 }
 
-pub(super) fn mysql_json(kind: &str, value: Value) -> RecordedMysqlValue {
+pub(in crate::replay) fn mysql_json(kind: &str, value: Value) -> RecordedMysqlValue {
     RecordedMysqlValue {
         kind: kind.to_string(),
         value: Some(value),
@@ -527,7 +525,10 @@ pub(super) fn mysql_json(kind: &str, value: Value) -> RecordedMysqlValue {
     }
 }
 
-pub(super) fn mysql_bytes_or_utf8(bytes: &[u8], force_bytes: bool) -> RecordedMysqlValue {
+pub(in crate::replay) fn mysql_bytes_or_utf8(
+    bytes: &[u8],
+    force_bytes: bool,
+) -> RecordedMysqlValue {
     if !force_bytes && let Ok(value) = std::str::from_utf8(bytes) {
         return mysql_json("string", Value::String(value.to_string()));
     }
@@ -541,32 +542,4 @@ pub(super) fn mysql_bytes_or_utf8(bytes: &[u8], force_bytes: bool) -> RecordedMy
     }
 }
 
-pub(super) async fn write_report_snapshot(
-    state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
-) -> Result<()> {
-    let Some(report_path) = report_path else {
-        return Ok(());
-    };
-    let report_write_lock = {
-        let state = state.lock().await;
-        state.report_write_lock.clone()
-    };
-    let _write_guard = report_write_lock.lock().await;
-    let report = {
-        let state = state.lock().await;
-        state.snapshot_report()
-    };
-    if let Some(parent) = report_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .with_context(|| format!("failed to create replay report dir {}", parent.display()))?;
-    }
-    let mut payload =
-        serde_json::to_vec_pretty(&report).context("failed to serialize replay report")?;
-    payload.push(b'\n');
-    tokio::fs::write(&report_path, payload)
-        .await
-        .with_context(|| format!("failed to write replay report {}", report_path.display()))
-}
 use super::*;

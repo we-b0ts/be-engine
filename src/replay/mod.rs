@@ -18,11 +18,6 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::MitmCa;
-use crate::mysql_protocol::{
-    CLIENT_CONNECT_WITH_DB, CLIENT_SECURE_CONNECTION, MysqlPacket, parse_client_command,
-    parse_handshake_response, read_packet,
-};
-
 mod cache;
 #[cfg(test)]
 mod cache_tests;
@@ -33,55 +28,16 @@ mod kafka;
 #[cfg(test)]
 #[path = "tests.rs"]
 mod legacy_tests;
+mod mysql;
 mod records;
-mod response;
-mod session;
-mod values;
+mod report;
 
 use control::*;
 use dns::*;
+use mysql::*;
 use records::*;
-use response::*;
-use session::*;
-use values::*;
+use report::write_report_snapshot;
 
-const CLIENT_LONG_PASSWORD: u32 = 0x0000_0001;
-const CLIENT_LONG_FLAG: u32 = 0x0000_0004;
-const CLIENT_PROTOCOL_41: u32 = 0x0000_0200;
-const CLIENT_TRANSACTIONS: u32 = 0x0000_2000;
-const CLIENT_MULTI_RESULTS: u32 = 0x0002_0000;
-const CLIENT_PLUGIN_AUTH: u32 = 0x0008_0000;
-
-const SERVER_STATUS_AUTOCOMMIT: u16 = 0x0002;
-const MYSQL_REPLAY_AUTH_PLUGIN: &[u8] = b"mysql_native_password";
-const MYSQL_REPLAY_AUTH_PLUGIN_DATA_1: &[u8; 8] = b"replay01";
-const MYSQL_REPLAY_AUTH_PLUGIN_DATA_2: &[u8; 12] = b"replay-seed2";
-
-const MYSQL_TYPE_TINY: u8 = 1;
-const MYSQL_TYPE_SHORT: u8 = 2;
-const MYSQL_TYPE_LONG: u8 = 3;
-const MYSQL_TYPE_FLOAT: u8 = 4;
-const MYSQL_TYPE_DOUBLE: u8 = 5;
-const MYSQL_TYPE_NULL: u8 = 6;
-const MYSQL_TYPE_TIMESTAMP: u8 = 7;
-const MYSQL_TYPE_LONGLONG: u8 = 8;
-const MYSQL_TYPE_INT24: u8 = 9;
-const MYSQL_TYPE_DATE: u8 = 10;
-const MYSQL_TYPE_TIME: u8 = 11;
-const MYSQL_TYPE_DATETIME: u8 = 12;
-const MYSQL_TYPE_YEAR: u8 = 13;
-const MYSQL_TYPE_BIT: u8 = 16;
-const MYSQL_TYPE_JSON: u8 = 245;
-const MYSQL_TYPE_NEWDECIMAL: u8 = 246;
-const MYSQL_TYPE_VAR_STRING: u8 = 253;
-const MYSQL_TYPE_STRING: u8 = 254;
-const MYSQL_TYPE_GEOMETRY: u8 = 255;
-
-const MYSQL_FLAG_NOT_NULL: u16 = 0x0001;
-const MYSQL_FLAG_UNSIGNED: u16 = 0x0020;
-const MYSQL_FLAG_BINARY: u16 = 0x0080;
-const MYSQL_CHARSET_UTF8_GENERAL_CI: u16 = 33;
-const MYSQL_CHARSET_BINARY: u16 = 63;
 const SO_ORIGINAL_DST: libc::c_int = 80;
 
 #[derive(Debug, Clone)]
@@ -184,7 +140,7 @@ impl ReplayRuntime {
         let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
         let (mode, mut cases, active_case_id) = discover_replay_cases(&root_dir).await?;
         let bootstrap_path = find_upward(&root_dir, "bootstrap-dependencies.jsonl");
-        let mut exchanges = Vec::new();
+        let mut mysql = MysqlReplayState::default();
         let mut http_exchanges = Vec::new();
         let mut cache = cache::CacheReplayState::default();
         let mut kafka = kafka::KafkaReplayState::default();
@@ -197,7 +153,7 @@ impl ReplayRuntime {
                 path,
                 ReplaySource::Bootstrap,
                 None,
-                &mut exchanges,
+                &mut mysql.exchanges,
                 &mut http_exchanges,
                 &mut cache,
                 &mut kafka,
@@ -211,7 +167,7 @@ impl ReplayRuntime {
                 &case.dependencies_path,
                 ReplaySource::Case,
                 Some(&case.id),
-                &mut exchanges,
+                &mut mysql.exchanges,
                 &mut http_exchanges,
                 &mut cache,
                 &mut kafka,
@@ -238,11 +194,10 @@ impl ReplayRuntime {
             active_case_id,
             bootstrap_path,
             targets,
-            exchanges,
+            mysql,
             http_exchanges,
             cache,
             kafka,
-            events: ReplayEvents::default(),
             http_events: http::HttpReplayEvents::default(),
             report_write_lock: Arc::new(Mutex::new(())),
             ca_cert_path,
@@ -325,11 +280,10 @@ struct ReplayState {
     active_case_id: Option<String>,
     bootstrap_path: Option<PathBuf>,
     targets: Vec<ReplayTarget>,
-    exchanges: Vec<ReplayExchange>,
+    mysql: mysql::MysqlReplayState,
     http_exchanges: Vec<http::ReplayHttpExchange>,
     cache: cache::CacheReplayState,
     kafka: kafka::KafkaReplayState,
-    events: ReplayEvents,
     http_events: http::HttpReplayEvents,
     report_write_lock: Arc<Mutex<()>>,
     ca_cert_path: PathBuf,
@@ -337,205 +291,6 @@ struct ReplayState {
 }
 
 impl ReplayState {
-    fn record_connection(
-        &mut self,
-        peer_addr: SocketAddr,
-        target: Option<&TargetKey>,
-        database: Option<String>,
-        username: Option<String>,
-    ) {
-        self.events.connections += 1;
-        self.events.connection_events.push(ConnectionReport {
-            peer_addr: peer_addr.to_string(),
-            target: target.cloned(),
-            database,
-            username,
-        });
-    }
-
-    fn record_builtin(
-        &mut self,
-        identity: &ReplaySessionIdentity,
-        command: &str,
-        sql: Option<&str>,
-        reason: &str,
-    ) {
-        let recorded_match = self.consume_builtin_exchange(identity, command, sql);
-        self.events.builtin_queries.push(QueryReport {
-            case_id: self.active_case_id.clone(),
-            target: identity.target.clone(),
-            database: identity.database.clone(),
-            username: identity.username.clone(),
-            command: command.to_string(),
-            sql: sql.map(ToOwned::to_owned),
-            params: None,
-            reason: reason.to_string(),
-            recorded_source: recorded_match.map(|(source, _)| source),
-            recorded_index: recorded_match.map(|(_, index)| index),
-        });
-    }
-
-    fn record_unsupported(
-        &mut self,
-        identity: &ReplaySessionIdentity,
-        command: &str,
-        sql: Option<&str>,
-        params: Option<&[RecordedMysqlValue]>,
-        reason: &str,
-    ) {
-        self.events.unsupported_commands.push(QueryReport {
-            case_id: self.active_case_id.clone(),
-            target: identity.target.clone(),
-            database: identity.database.clone(),
-            username: identity.username.clone(),
-            command: command.to_string(),
-            sql: sql.map(ToOwned::to_owned),
-            params: params.map(ToOwned::to_owned),
-            reason: reason.to_string(),
-            recorded_source: None,
-            recorded_index: None,
-        });
-    }
-
-    fn record_unmatched(
-        &mut self,
-        identity: &ReplaySessionIdentity,
-        command: &str,
-        sql: Option<&str>,
-        params: Option<&[RecordedMysqlValue]>,
-        reason: &str,
-    ) {
-        self.events.unmatched_queries.push(QueryReport {
-            case_id: self.active_case_id.clone(),
-            target: identity.target.clone(),
-            database: identity.database.clone(),
-            username: identity.username.clone(),
-            command: command.to_string(),
-            sql: sql.map(ToOwned::to_owned),
-            params: params.map(ToOwned::to_owned),
-            reason: reason.to_string(),
-            recorded_source: None,
-            recorded_index: None,
-        });
-    }
-
-    fn record_metadata_warning(&mut self, warning: String) {
-        self.events.metadata_warnings.push(warning);
-    }
-
-    fn match_exchange(
-        &mut self,
-        identity: &ReplaySessionIdentity,
-        command: &str,
-        sql: Option<&str>,
-        params: Option<&[RecordedMysqlValue]>,
-    ) -> Option<MatchedExchange> {
-        let normalized_sql = sql.map(normalize_sql);
-        let active_case_id = self.active_case_id.clone();
-        for (index, exchange) in self.exchanges.iter_mut().enumerate() {
-            if exchange.consumed || exchange.record.command != command {
-                continue;
-            }
-            if !active_case_matches(active_case_id.as_deref(), exchange) {
-                continue;
-            }
-            if !identity_matches_exchange(identity, &exchange.identity) {
-                continue;
-            }
-            let Some(recorded_sql) = exchange.record.sql.as_deref().map(normalize_sql) else {
-                continue;
-            };
-            if Some(recorded_sql) != normalized_sql {
-                continue;
-            }
-            if !params_match(exchange.record.params.as_deref(), params) {
-                continue;
-            }
-            exchange.consumed = true;
-            let matched = MatchedQueryReport {
-                case_id: exchange.case_id.clone(),
-                target: Some(exchange.identity.target.clone()),
-                database: exchange.identity.database.clone(),
-                username: exchange.identity.username.clone(),
-                source: exchange.source,
-                index,
-                command: command.to_string(),
-                sql: sql.map(ToOwned::to_owned),
-                params: params.map(ToOwned::to_owned),
-                status: exchange.record.response.status.clone(),
-            };
-            self.events.matched_queries.push(matched);
-            return Some(MatchedExchange {
-                source: exchange.source,
-                index,
-                record: exchange.record.clone(),
-            });
-        }
-        None
-    }
-
-    fn consume_builtin_exchange(
-        &mut self,
-        identity: &ReplaySessionIdentity,
-        command: &str,
-        sql: Option<&str>,
-    ) -> Option<(ReplaySource, usize)> {
-        let normalized_sql = sql.map(normalize_sql);
-        let active_case_id = self.active_case_id.clone();
-        for (index, exchange) in self.exchanges.iter_mut().enumerate() {
-            if exchange.consumed || exchange.record.command != command {
-                continue;
-            }
-            if !active_case_matches(active_case_id.as_deref(), exchange) {
-                continue;
-            }
-            if !identity_matches_exchange(identity, &exchange.identity) {
-                continue;
-            }
-            let recorded_sql = exchange.record.sql.as_deref().map(normalize_sql);
-            if recorded_sql != normalized_sql {
-                continue;
-            }
-            exchange.consumed = true;
-            return Some((exchange.source, index));
-        }
-        None
-    }
-
-    fn statement_metadata(&self, identity: &ReplaySessionIdentity, sql: &str) -> StatementMetadata {
-        let normalized_sql = normalize_sql(sql);
-        for exchange in &self.exchanges {
-            if exchange.record.command != "COM_STMT_EXECUTE" {
-                continue;
-            }
-            if !self.active_case_matches(exchange) {
-                continue;
-            }
-            if !identity_matches_exchange(identity, &exchange.identity) {
-                continue;
-            }
-            if exchange
-                .record
-                .sql
-                .as_deref()
-                .is_some_and(|recorded_sql| normalize_sql(recorded_sql) == normalized_sql)
-            {
-                return StatementMetadata {
-                    param_count: exchange
-                        .record
-                        .params
-                        .as_ref()
-                        .map_or_else(|| count_sql_placeholders(sql), Vec::len),
-                    columns: exchange.record.response.columns.clone(),
-                };
-            }
-        }
-        StatementMetadata {
-            param_count: count_sql_placeholders(sql),
-            columns: Vec::new(),
-        }
-    }
-
     fn snapshot_report(&self) -> ReplayReport {
         ReplayReport {
             version: 3,
@@ -556,13 +311,13 @@ impl ReplayState {
                 .as_ref()
                 .map(|path| path.display().to_string()),
             targets: self.targets.clone(),
-            connections: self.events.connections,
-            connection_events: self.events.connection_events.clone(),
-            builtin_queries: self.events.builtin_queries.clone(),
-            matched_queries: self.events.matched_queries.clone(),
-            unmatched_queries: self.events.unmatched_queries.clone(),
-            unsupported_commands: self.events.unsupported_commands.clone(),
-            metadata_warnings: self.events.metadata_warnings.clone(),
+            connections: self.mysql.events.connections,
+            connection_events: self.mysql.events.connection_events.clone(),
+            builtin_queries: self.mysql.events.builtin_queries.clone(),
+            matched_queries: self.mysql.events.matched_queries.clone(),
+            unmatched_queries: self.mysql.events.unmatched_queries.clone(),
+            unsupported_commands: self.mysql.events.unsupported_commands.clone(),
+            metadata_warnings: self.mysql.events.metadata_warnings.clone(),
             unused_bootstrap_exchanges: self.unused_exchanges(ReplaySource::Bootstrap),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
             matched_http_exchanges: self.http_events.matched.clone(),
@@ -577,28 +332,6 @@ impl ReplayState {
             ca_cert_path: self.ca_cert_path.display().to_string(),
             http_ignored_query_params: self.http_ignore_query_params.clone(),
         }
-    }
-
-    fn unused_exchanges(&self, source: ReplaySource) -> Vec<RecordedExchangeSummary> {
-        self.exchanges
-            .iter()
-            .enumerate()
-            .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
-            .map(|(index, exchange)| RecordedExchangeSummary {
-                index,
-                case_id: exchange.case_id.clone(),
-                target: Some(exchange.identity.target.clone()),
-                database: exchange.identity.database.clone(),
-                username: exchange.identity.username.clone(),
-                command: exchange.record.command.clone(),
-                sql: exchange.record.sql.clone(),
-                status: exchange.record.response.status.clone(),
-            })
-            .collect()
-    }
-
-    fn active_case_matches(&self, exchange: &ReplayExchange) -> bool {
-        active_case_matches(self.active_case_id.as_deref(), exchange)
     }
 
     fn case_reports(&self) -> Vec<ReplayCaseReport> {
@@ -666,7 +399,7 @@ async fn handle_gateway_connection(
                 host: target.host,
                 port: target.port,
             });
-            handle_replay_connection(stream, peer_addr, target, state, report_path).await
+            mysql::handle_connection(stream, peer_addr, target, state, report_path).await
         }
     }
 }
@@ -715,140 +448,4 @@ fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
     let ip = Ipv4Addr::from(u32::from_be(addr.sin_addr.s_addr));
     let port = u16::from_be(addr.sin_port);
     Ok(SocketAddr::new(IpAddr::V4(ip), port))
-}
-
-async fn handle_replay_connection(
-    mut stream: TcpStream,
-    peer_addr: SocketAddr,
-    target: Option<TargetKey>,
-    state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
-) -> Result<()> {
-    write_packet(&mut stream, handshake_packet(1)).await?;
-    let login_packet = read_packet(&mut stream)
-        .await
-        .context("failed to read MySQL replay login packet")?
-        .context("MySQL replay client closed before login packet")?;
-    let login = parse_handshake_response(&login_packet);
-    if login.tls_requested {
-        write_packet(
-            &mut stream,
-            MysqlPacket {
-                sequence_id: 2,
-                payload: err_payload(3159, "MySQL TLS is not supported by replay mode"),
-            },
-        )
-        .await?;
-        {
-            let mut state = state.lock().await;
-            let identity = ReplaySessionIdentity {
-                target: target.clone(),
-                database: login.database.clone(),
-                username: login.username.clone(),
-            };
-            state.record_unsupported(
-                &identity,
-                "HANDSHAKE",
-                None,
-                None,
-                "MySQL TLS requested; replay mode requires a non-TLS test connection",
-            );
-        }
-        write_report_snapshot(state, report_path).await?;
-        return Ok(());
-    }
-    {
-        let mut state = state.lock().await;
-        state.record_connection(
-            peer_addr,
-            target.as_ref(),
-            login.database.clone(),
-            login.username.clone(),
-        );
-    }
-    write_packet(
-        &mut stream,
-        MysqlPacket {
-            sequence_id: 2,
-            payload: ok_payload(0, 0),
-        },
-    )
-    .await?;
-    write_report_snapshot(state.clone(), report_path.clone()).await?;
-
-    let mut session = ReplaySession {
-        target,
-        database: login.database,
-        username: login.username,
-        next_statement_id: 1,
-        statements: HashMap::new(),
-    };
-    loop {
-        let Some(packet) = read_packet(&mut stream).await? else {
-            break;
-        };
-        let Some(command) = parse_client_command(&packet) else {
-            continue;
-        };
-        match command.command_name.as_str() {
-            "COM_QUIT" => break,
-            "COM_PING" | "COM_INIT_DB" => {
-                if command.command_name == "COM_INIT_DB" {
-                    session.database = command.query.clone();
-                }
-                write_packet(
-                    &mut stream,
-                    MysqlPacket {
-                        sequence_id: 1,
-                        payload: ok_payload(0, 0),
-                    },
-                )
-                .await?;
-                {
-                    let mut state = state.lock().await;
-                    let identity = session.identity();
-                    state.record_builtin(
-                        &identity,
-                        &command.command_name,
-                        command.query.as_deref(),
-                        "driver/session command handled by replay server",
-                    );
-                }
-            }
-            "COM_QUERY" => {
-                let sql = command.query.as_deref().unwrap_or_default();
-                handle_query(&mut stream, state.clone(), &session, sql).await?;
-            }
-            "COM_STMT_PREPARE" => {
-                let sql = command.query.as_deref().unwrap_or_default();
-                handle_stmt_prepare(&mut stream, state.clone(), &mut session, sql).await?;
-            }
-            "COM_STMT_EXECUTE" => {
-                handle_stmt_execute(&mut stream, state.clone(), &mut session, &packet).await?;
-            }
-            other => {
-                {
-                    let mut state = state.lock().await;
-                    let identity = session.identity();
-                    state.record_unsupported(
-                        &identity,
-                        other,
-                        command.query.as_deref(),
-                        None,
-                        "unsupported MySQL command",
-                    );
-                }
-                write_packet(
-                    &mut stream,
-                    MysqlPacket {
-                        sequence_id: 1,
-                        payload: err_payload(1105, &format!("unsupported replay command {other}")),
-                    },
-                )
-                .await?;
-            }
-        }
-        write_report_snapshot(state.clone(), report_path.clone()).await?;
-    }
-    Ok(())
 }

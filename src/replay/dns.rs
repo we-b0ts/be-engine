@@ -34,6 +34,17 @@ pub(super) async fn handle_dns_query(
     Ok(())
 }
 
+fn read_be_u16(bytes: &[u8], offset: usize) -> Result<u16> {
+    Ok(u16::from_be_bytes([
+        *bytes
+            .get(offset)
+            .ok_or_else(|| anyhow!("u16 out of bounds"))?,
+        *bytes
+            .get(offset + 1)
+            .ok_or_else(|| anyhow!("u16 out of bounds"))?,
+    ]))
+}
+
 pub(super) fn parse_dns_question(packet: &[u8]) -> Result<DnsQuestion> {
     if packet.len() < 12 {
         return Err(anyhow!("DNS packet too short"));

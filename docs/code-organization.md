@@ -164,6 +164,8 @@ backstop, not a replacement for the ownership and cohesion review.
 
 ## Current Boundaries
 
+- supported dependency protocols are peer domains: MySQL, Redis, Memcached,
+  and Kafka; do not group protocols by a presumed business use such as cache
 - `main.rs`: CLI and binary bootstrap only
 - `lib.rs`: application wiring, shared state, and stable exports
 - proxy/gateway modules: connection and request orchestration

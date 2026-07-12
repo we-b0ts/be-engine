@@ -7,9 +7,7 @@ mod http_gateway;
 mod http_gateway_case;
 mod http_proxy;
 mod kafka;
-mod mysql_protocol;
-mod mysql_proxy;
-mod mysql_semantic;
+mod mysql;
 mod process_lookup;
 mod recorder;
 mod recorder_event;
@@ -356,7 +354,7 @@ impl AppState {
 
         if self.config().mysql.enabled {
             let mysql_state = self.clone();
-            tasks.spawn(async move { mysql_proxy::run(mysql_state).await });
+            tasks.spawn(async move { mysql::proxy::run(mysql_state).await });
         }
 
         info!(
