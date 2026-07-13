@@ -4,6 +4,21 @@ use serde::Serialize;
 
 use crate::recorder::{CaseBodyCapture, CaseContext, HeaderMapSnapshot, Recorder};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CaseInvalidation {
+    reason: String,
+    message: String,
+}
+
+impl CaseInvalidation {
+    pub(crate) fn new(reason: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            reason: reason.into(),
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct CaseRequestRecord {
     pub(crate) timestamp: DateTime<Utc>,
@@ -34,7 +49,19 @@ pub(crate) async fn finalize_http_case(
     case: &CaseContext,
     request: CaseRequestRecord,
     response: CaseResponseRecord,
+    invalidation: Option<CaseInvalidation>,
 ) -> Result<()> {
+    if let Some(invalidation) = invalidation {
+        recorder
+            .write_case_json(case, "request.json.invalid", &request)
+            .await?;
+        recorder
+            .write_case_json(case, "expected-response.json.invalid", &response)
+            .await?;
+        return recorder
+            .fail_case(case, invalidation.reason, invalidation.message)
+            .await;
+    }
     if let Some((reason, message)) = invalid_case_reason(&request, &response) {
         let request_filename = if request.body.truncated {
             "request.json.truncated"

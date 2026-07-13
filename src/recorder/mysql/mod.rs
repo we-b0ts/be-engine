@@ -13,8 +13,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::MysqlRouteConfig;
-use crate::access_policy::AccessDecision;
-use crate::mysql::access::classify_command;
+use crate::access_policy::{AccessDecision, MysqlAccessContext, evaluate_mysql_access};
+use crate::mysql::access::analyze_command;
 use crate::mysql::wire::{
     MysqlPacket, ServerPacketInfo, parse_client_command, parse_handshake_response,
     parse_server_packet, read_packet, readonly_error_packet,
@@ -261,6 +261,9 @@ pub(crate) async fn handle_connected_mysql(
     let c2s_response_tracker = response_tracker.clone();
     let c2s_semantic_tracker = semantic_tracker.clone();
     let c2s_client_write = client_write.clone();
+    let c2s_route_name = route_name.clone();
+    let c2s_target_host = target_host.clone();
+    let c2s_target_addr = target_addr.clone();
     let c2s_target = target_addr
         .clone()
         .or_else(|| target_host.clone())
@@ -276,21 +279,34 @@ pub(crate) async fn handle_connected_mysql(
             if c2s_authenticated.load(Ordering::SeqCst)
                 && let Some(command) = parse_client_command(&packet)
             {
-                let prepared_sql = if command.command_name == "COM_STMT_EXECUTE" {
-                    c2s_semantic_tracker
-                        .lock()
-                        .await
-                        .prepared_sql_for_packet(&packet)
-                        .map(ToOwned::to_owned)
-                } else {
-                    None
+                let (prepared_sql, current_database) = {
+                    let tracker = c2s_semantic_tracker.lock().await;
+                    let prepared_sql = if command.command_name == "COM_STMT_EXECUTE" {
+                        tracker
+                            .prepared_sql_for_packet(&packet)
+                            .map(ToOwned::to_owned)
+                    } else {
+                        None
+                    };
+                    (prepared_sql, tracker.database().map(ToOwned::to_owned))
                 };
-                let operation_class = classify_command(&command, prepared_sql.as_deref());
-                if c2s_state.access_decision(operation_class) == AccessDecision::Reject {
+                let analysis = analyze_command(&command, prepared_sql.as_deref());
+                let access = evaluate_mysql_access(
+                    c2s_state.config().recording.access_policy,
+                    &c2s_state.config().recording.access_rules,
+                    &analysis,
+                    MysqlAccessContext {
+                        route_name: c2s_route_name.as_deref(),
+                        target_host: c2s_target_host.as_deref(),
+                        target_addr: c2s_target_addr.as_deref(),
+                        database: current_database.as_deref(),
+                    },
+                );
+                if access.decision == AccessDecision::Reject {
                     c2s_state
                         .record_readonly_rejection(
                             "mysql",
-                            operation_class,
+                            analysis.class,
                             command.command_name,
                             c2s_client_addr.clone(),
                             c2s_client_process.clone(),
@@ -308,6 +324,21 @@ pub(crate) async fn handle_connected_mysql(
                         .await?;
                     continue;
                 }
+                if let Some(rule) = access.matched_rule {
+                    c2s_state
+                        .record_access_policy_allow(
+                            rule,
+                            "mysql",
+                            analysis.class,
+                            analysis.operation_names(),
+                            analysis.resource_names(current_database.as_deref()),
+                            c2s_client_addr.clone(),
+                            c2s_client_process.clone(),
+                            c2s_target.clone(),
+                            "MySQL write matched a configured recording access rule",
+                        )
+                        .await;
+                }
                 let sequence = c2s_query_sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 let flushed_response = {
                     let mut tracker = c2s_response_tracker.lock().await;
@@ -321,9 +352,6 @@ pub(crate) async fn handle_connected_mysql(
                 };
                 let flushed_exchange = {
                     let mut tracker = c2s_semantic_tracker.lock().await;
-                    if command.command_name == "COM_INIT_DB" {
-                        tracker.set_database(command.query.clone());
-                    }
                     tracker.start_query(
                         c2s_connection_id,
                         sequence,

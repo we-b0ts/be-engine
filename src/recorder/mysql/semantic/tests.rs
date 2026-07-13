@@ -61,6 +61,40 @@ fn parses_text_resultset_exchange() {
 }
 
 #[test]
+fn changes_database_only_after_successful_init_db_response() {
+    let mut context = test_context();
+    context.database = Some("original".to_string());
+    let mut tracker = MysqlSemanticTracker::new(1024, context);
+    let init_db = MysqlPacket {
+        sequence_id: 0,
+        payload: [vec![0x02], b"pluto".to_vec()].concat(),
+    };
+    let command = parse_client_command(&init_db).unwrap();
+    tracker.start_query(Uuid::nil(), 1, &command, &init_db, None, None);
+    assert_eq!(tracker.database(), Some("original"));
+
+    let response = MysqlResponseEvent {
+        id: Uuid::new_v4(),
+        connection_id: Uuid::nil(),
+        query_sequence: 1,
+        timestamp: Utc::now(),
+        client_addr: None,
+        client_process: None,
+        status: "ok".to_string(),
+        packet_count: 1,
+        payload_bytes: 1,
+        duration_ms: 1,
+        error_code: None,
+        error_message: None,
+        payload: capture_body(&[0x00], 1024),
+        packets: None,
+    };
+    let exchange = tracker.finish_from_response(&response).unwrap();
+    assert_eq!(exchange.database.as_deref(), Some("original"));
+    assert_eq!(tracker.database(), Some("pluto"));
+}
+
+#[test]
 fn serializes_column_as_semantic_schema() {
     let column = parse_column_definition(&column_def_with_flags(
         "id",

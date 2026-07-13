@@ -155,8 +155,8 @@ impl MysqlSemanticTracker {
         }
     }
 
-    pub(crate) fn set_database(&mut self, database: Option<String>) {
-        self.context.database = database;
+    pub(crate) fn database(&self) -> Option<&str> {
+        self.context.database.as_deref()
     }
 
     pub(crate) fn prepared_sql_for_packet(&self, packet: &MysqlPacket) -> Option<&str> {
@@ -170,12 +170,21 @@ impl MysqlSemanticTracker {
         &mut self,
         response: &MysqlResponseEvent,
     ) -> Option<MysqlExchangeEvent> {
-        self.finish_active(
+        let confirmed_database = (response.status == "ok")
+            .then_some(self.active.as_ref())
+            .flatten()
+            .filter(|active| active.command == "COM_INIT_DB")
+            .and_then(|active| active.sql.clone());
+        let exchange = self.finish_active(
             &response.status,
             response.error_code,
             response.error_message.clone(),
             Some(response.duration_ms),
-        )
+        );
+        if let Some(database) = confirmed_database {
+            self.context.database = Some(database);
+        }
+        exchange
     }
 
     pub(crate) fn finish_active(

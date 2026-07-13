@@ -1,0 +1,80 @@
+# Manual verification profile for recording.access_policy = block_known_writes.
+# A rejected dependency write invalidates the active gateway case, so the case
+# is kept only under failed/ and is not published for replay.
+#
+# Topology:
+#   client -> http_gateway :18084
+#              matched GET -> local app mock 127.0.0.1:18085
+#              unmatched   -> local dependency mock 127.0.0.1:18086
+#   local app mock -> explicit HTTP proxy 127.0.0.1:18081
+#                  -> local dependency mock 127.0.0.1:18086
+
+[dns_mock]
+enabled = false
+
+[local_record]
+enabled = false
+record_user = ""
+owner_uid = ""
+
+[tcp_gateway]
+enabled = false
+
+[udp_gateway]
+enabled = false
+
+[http]
+enabled = true
+listen = "127.0.0.1:18081"
+
+[http_gateway]
+enabled = true
+listen = "0.0.0.0:18084"
+matched_upstream = "http://127.0.0.1:18085"
+fallback_upstream = "http://127.0.0.1:18086"
+preserve_host = true
+
+[http_gateway.ready]
+enabled = true
+path = "/healthz"
+success_status = 200
+interval_ms = 500
+
+[[http_gateway.exclude_rules]]
+name = "exclude-health"
+methods = ["GET"]
+path_prefixes = ["/healthz"]
+headers = {}
+
+[[http_gateway.rules]]
+name = "readonly-manual"
+methods = ["GET"]
+path_prefixes = ["/scenario/readonly"]
+case_path_patterns = []
+headers = {}
+
+[recording]
+output_dir = "./recordings/readonly-manual"
+max_body_bytes = 1048576
+access_policy = "block_known_writes"
+redact_headers = [
+  "authorization",
+  "cookie",
+  "set-cookie",
+  "proxy-authorization",
+  "proxy-authenticate",
+]
+
+# Optional MySQL write allowance example:
+# [[recording.access_rules]]
+# name = "allow-request-log-insert"
+# effect = "allow"
+# protocol = "mysql"
+# operations = ["insert"]
+# routes = ["audit-db"]
+# databases = ["pluto"]
+# tables = ["request_log"]
+
+[tls]
+ca_cert_path = "./data/traffic-recorder-readonly-ca.pem"
+ca_key_path = "./data/traffic-recorder-readonly-ca-key.pem"

@@ -1,9 +1,15 @@
+use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+
+mod recording;
+
+pub use recording::{
+    RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
+};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -136,32 +142,6 @@ pub struct MysqlRouteConfig {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
-pub struct RecordingConfig {
-    pub output_dir: PathBuf,
-    pub max_body_bytes: usize,
-    pub redact_headers: Vec<String>,
-    pub access_policy: RecordingAccessPolicy,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RecordingAccessPolicy {
-    #[default]
-    Unrestricted,
-    BlockKnownWrites,
-}
-
-impl RecordingAccessPolicy {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unrestricted => "unrestricted",
-            Self::BlockKnownWrites => "block_known_writes",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
 pub struct TlsConfig {
     pub ca_cert_path: PathBuf,
     pub ca_key_path: PathBuf,
@@ -172,7 +152,16 @@ impl AppConfig {
         let path = path.as_ref();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
-        toml::from_str(&raw).with_context(|| format!("failed to parse config {}", path.display()))
+        let config: Self = toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config {}", path.display()))?;
+        config
+            .validate()
+            .with_context(|| format!("invalid config {}", path.display()))?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        self.recording.validate()
     }
 }
 
@@ -313,23 +302,6 @@ impl Default for MysqlRouteConfig {
     }
 }
 
-impl Default for RecordingConfig {
-    fn default() -> Self {
-        Self {
-            output_dir: PathBuf::from("./recordings"),
-            max_body_bytes: 1024 * 1024,
-            redact_headers: vec![
-                "authorization".to_string(),
-                "cookie".to_string(),
-                "set-cookie".to_string(),
-                "proxy-authorization".to_string(),
-                "proxy-authenticate".to_string(),
-            ],
-            access_policy: RecordingAccessPolicy::Unrestricted,
-        }
-    }
-}
-
 impl Default for TlsConfig {
     fn default() -> Self {
         Self {
@@ -362,31 +334,7 @@ mod tests {
             config.recording.access_policy,
             RecordingAccessPolicy::Unrestricted
         );
-    }
-
-    #[test]
-    fn parses_recording_access_policy() {
-        let config: AppConfig = toml::from_str(
-            r#"
-            [recording]
-            access_policy = "block_known_writes"
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            config.recording.access_policy,
-            RecordingAccessPolicy::BlockKnownWrites
-        );
-        assert!(
-            toml::from_str::<AppConfig>(
-                r#"
-            [recording]
-            access_policy = "allow_known_reads"
-            "#
-            )
-            .is_err()
-        );
+        assert!(config.recording.access_rules.is_empty());
     }
 
     #[test]

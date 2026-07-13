@@ -32,7 +32,7 @@ For watch-mode recording, install the repo-level command and run
 ```bash
 mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
-traffic-record config/recorder.example.toml
+traffic-record --config config/recorder.example.toml
 ```
 
 `traffic-record` enables local DNS capture and fake-IP TCP/UDP redirect by default,
@@ -41,14 +41,14 @@ when you intentionally want the recorder to intercept local traffic. To skip
 those rules:
 
 ```bash
-traffic-record --no-dns config/recorder.example.toml
+traffic-record --config config/recorder.example.toml --no-dns
 ```
 
 `config/recorder.example.toml` enables `[local_record]` owner filtering for the
 dedicated Unix user `trp-record`. Prefer running the source service as that user
 so bootstrap and case dependencies are not polluted by unrelated local
-processes. `traffic-record --user`, `traffic-record --owner-uid`,
-`traffic-record --all-users`, or `OWNER_UID` override the config.
+processes. `--user`, `--owner-uid`, `--all-users`, or `OWNER_UID` override the
+owner scope when used with `traffic-record --config ...`.
 
 HTTP gateway recording is intentionally conservative. Until the configured
 ready probe succeeds, matching traffic is sent to `fallback_upstream` and no
@@ -119,7 +119,44 @@ access_policy = "block_known_writes"
 MySQL, Redis, Memcached, and Kafka adapters. Read, session-setup, unknown, raw
 TCP, and UDP operations continue to be forwarded, so this compatibility policy
 is not a strict security boundary. Rejections are written to `traffic.jsonl` as
-`readonly_rejection` events and are not added to replay dependencies.
+payload-free `readonly_rejection` events. A rejection during an active HTTP
+gateway case is also added to that case's `dependencies.jsonl` for diagnosis
+and invalidates the whole case. The case is moved under `failed/` and is never
+published as replay evidence. A rejection outside an active case remains a
+run-level audit event and does not create dependency evidence.
+
+`block_known_writes` can explicitly allow narrowly scoped MySQL writes:
+
+```toml
+[[recording.access_rules]]
+name = "allow-request-log-insert"
+effect = "allow"
+protocol = "mysql"
+operations = ["insert"]
+routes = ["audit-db"]
+databases = ["pluto"]
+tables = ["request_log"]
+```
+
+`operations`, `databases`, and `tables` are required and non-empty. A rule must
+also contain at least one exact `route` or business `target`; when both are
+present, both must match. Supported operations are `insert`, `update`,
+`delete`, `replace`, and `upsert`. A missing field, empty required list,
+unsupported operation, incomplete SQL classification, multi-table write, or a
+multi-statement query not wholly covered by one rule is rejected. Database and
+table identifiers are matched exactly and case-sensitively. Mixing session
+changes such as `USE` with an allowed write in one multi-statement query is
+also rejected. Rules cover the SQL-visible target only; operators must account
+for database triggers or other server-side side effects on an allowed table.
+
+An allowed write is forwarded and recorded as a normal `mysql_exchange`, so it
+can remain part of a valid case dependency contract. The rule match is also
+audited in run-level `traffic.jsonl` as a payload-free `access_policy_allow`;
+that audit event itself is not appended to `dependencies.jsonl`.
+
+The automated gateway GET plus dependency GET/POST scenario lives in
+`tests/readonly_case_integration.rs`. The local two-mock and optional
+cross-machine manual procedure lives in `tests/manual/readonly/README.md`.
 
 Generated runtime artifacts are ignored by git:
 
