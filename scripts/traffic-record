@@ -25,9 +25,10 @@ unset BASH_ENV ENV
 usage() {
   cat >&2 <<EOF
 Usage:
-  traffic-record [options] [recorder-config.toml] [-- extra traffic-recorder-proxy args...]
+  traffic-record --config recorder-config.toml [options] [-- extra traffic-recorder-proxy args...]
 
 Options:
+  --config PATH    Recorder TOML configuration. Required.
   --dns            Enable local DNS capture and fake-IP TCP/UDP redirect. This is default.
   --no-dns         Skip local DNS capture and fake-IP TCP/UDP redirect.
   --user USER      Limit capture to this Unix user. Defaults to [local_record].record_user.
@@ -40,8 +41,7 @@ EOF
 }
 
 ENABLE_DNS=1
-CONFIG="config/recorder.example.toml"
-CONFIG_SET=0
+CONFIG=""
 OWNER_MODE="config"
 OWNER_USER_OVERRIDE=""
 OWNER_UID_OVERRIDE=""
@@ -58,6 +58,15 @@ need_value() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --config)
+      need_value "$1" "${2:-}"
+      if [ -n "$CONFIG" ]; then
+        echo "--config may only be specified once" >&2
+        exit 2
+      fi
+      CONFIG="$2"
+      shift 2
+      ;;
     --dns)
       ENABLE_DNS=1
       shift
@@ -96,23 +105,27 @@ while [ "$#" -gt 0 ]; do
       break
       ;;
     *)
-      if [ "$CONFIG_SET" -eq 0 ]; then
-        CONFIG="$1"
-        CONFIG_SET=1
-      else
-        APP_ARGS+=("$1")
-      fi
-      shift
+      echo "unknown option or positional argument: $1" >&2
+      usage
+      exit 2
       ;;
   esac
 done
 
+if [ -z "$CONFIG" ]; then
+  echo "--config is required" >&2
+  usage
+  exit 2
+fi
+
+if [ ! -f "$CONFIG" ]; then
+  echo "recorder config not found: $CONFIG" >&2
+  exit 1
+fi
+
 export RUST_LOG="${RUST_LOG:-info}"
 
 load_local_record_config() {
-  if [ ! -f "$CONFIG" ]; then
-    return
-  fi
   if ! command -v python3 >/dev/null 2>&1; then
     echo "python3 is required to read [local_record] from $CONFIG" >&2
     exit 1

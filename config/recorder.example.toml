@@ -119,6 +119,19 @@ redact_headers = [
   "proxy-authenticate",
 ]
 
+# MySQL-only first version of explicit write allowances. Every field is exact
+# and all configured dimensions must match. operations, databases, and tables
+# must be non-empty, and at least one route or target is required.
+# [[recording.access_rules]]
+# name = "allow-request-log-insert"
+# effect = "allow"
+# protocol = "mysql"
+# operations = ["insert"] # insert | update | delete | replace | upsert
+# routes = ["audit-db"]
+# targets = [] # business host or host:port, for example mysql-log.internal:3306
+# databases = ["pluto"]
+# tables = ["request_log"]
+
 [tls]
 ca_cert_path = "./data/traffic-recorder-ca.pem"
 ca_key_path = "./data/traffic-recorder-ca-key.pem"

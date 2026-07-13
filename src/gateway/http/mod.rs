@@ -339,6 +339,7 @@ async fn handle_gateway_request(
                         duration_ms: started.elapsed().as_millis(),
                         error: None,
                     },
+                    state.active_case_invalidation(case.id),
                 )
                 .await
             {
@@ -454,6 +455,7 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
                 duration_ms: ctx.started.elapsed().as_millis(),
                 error: Some(error.clone()),
             },
+            ctx.state.active_case_invalidation(case.id),
         )
         .await
     {

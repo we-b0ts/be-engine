@@ -45,7 +45,7 @@ For local recording and replay:
 
 ```bash
 cargo run -- --config config/recorder.example.toml
-traffic-record config/recorder.example.toml
+traffic-record --config config/recorder.example.toml
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```

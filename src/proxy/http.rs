@@ -306,13 +306,12 @@ async fn forward_and_record(
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
             };
-            if let Err(err) = state
-                .recorder()
-                .record(RecorderEvent::HttpExchange(event))
-                .await
-            {
-                warn!(error = %err, "failed to record HTTP exchange");
-            }
+            record_event_and_case_dependency(
+                &state,
+                RecorderEvent::HttpExchange(event),
+                "failed to record HTTP exchange",
+            )
+            .await;
 
             build_downstream_response(status, &response_headers, body_bytes)
         }
@@ -378,18 +377,15 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),
     };
-    if let Err(record_err) = ctx
-        .state
-        .recorder()
-        .record(RecorderEvent::HttpExchange(event))
-        .await
-    {
-        warn!(error = %record_err, "failed to record failed HTTP exchange");
-    }
-    if let Err(record_err) = ctx
-        .state
-        .recorder()
-        .record(RecorderEvent::ProxyError(ProxyErrorEvent {
+    record_event_and_case_dependency(
+        &ctx.state,
+        RecorderEvent::HttpExchange(event),
+        "failed to record failed HTTP exchange",
+    )
+    .await;
+    record_event_and_case_dependency(
+        &ctx.state,
+        RecorderEvent::ProxyError(ProxyErrorEvent {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             protocol: ctx.scheme,
@@ -397,12 +393,22 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
             client_process: None,
             target: ctx.authority,
             error: error.clone(),
-        }))
-        .await
-    {
-        warn!(error = %record_err, "failed to record proxy error");
-    }
+        }),
+        "failed to record proxy error",
+    )
+    .await;
     simple_response(StatusCode::BAD_GATEWAY, &error)
+}
+
+async fn record_event_and_case_dependency(
+    state: &AppState,
+    event: RecorderEvent,
+    warning: &'static str,
+) {
+    if let Err(err) = state.recorder().record(event.clone()).await {
+        warn!(error = %err, "{}", warning);
+    }
+    state.record_dependency_if_relevant(&event).await;
 }
 
 fn build_upstream_request(

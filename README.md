@@ -50,7 +50,7 @@ skip those local rules.
 mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 command -v traffic-record
-traffic-record config/recorder.example.toml
+traffic-record --config config/recorder.example.toml
 ```
 
 `config/recorder.example.toml` enables local owner filtering with the `trp-record`
@@ -69,12 +69,12 @@ recorder:
 ```bash
 sudo useradd --system --create-home --shell /bin/bash trp-record
 sudo -u trp-record /path/to/source-service start
-traffic-record config/recorder.example.toml
+traffic-record --config config/recorder.example.toml
 ```
 
-Use `traffic-record --user other-user`, `traffic-record --owner-uid 1002`, or
-`traffic-record --all-users` when you need to override the default owner scope.
-`OWNER_UID=... traffic-record` also overrides `[local_record]`.
+Use `--user other-user`, `--owner-uid 1002`, or `--all-users` alongside
+`--config` when you need to override the default owner scope.
+`OWNER_UID=... traffic-record --config ...` also overrides `[local_record]`.
 
 The default example listens on:
 
@@ -231,10 +231,39 @@ not published into `<rule-name>/<uri-group>/<case-id>`. They are moved under
 returns an error when the run has failed cases. Fix the recording limit or
 recorder behavior and record again; do not consume failed cases as replay
 fixtures.
+When `block_known_writes` rejects a dependency during an active case, the
+payload-free `readonly_rejection` is retained in the failed case's
+`dependencies.jsonl` and the complete case is moved under `failed/`. The
+rejected request never reaches its upstream and the invalid case is not
+published for replay.
+
+MySQL writes can be allowed narrowly under `block_known_writes` with an exact
+recording access rule:
+
+```toml
+[[recording.access_rules]]
+name = "allow-request-log-insert"
+effect = "allow"
+protocol = "mysql"
+operations = ["insert"]
+routes = ["audit-db"]
+databases = ["pluto"]
+tables = ["request_log"]
+```
+
+The required non-empty operation, database, and table scopes are matched
+exactly; each rule must also specify a route or business target. One rule must
+cover every write in a multi-statement query, and queries mixing session
+changes with writes are rejected. Allowed writes are forwarded and recorded as
+normal `mysql_exchange` dependencies without invalidating the case. A
+payload-free `access_policy_allow` audit stays in run-level `traffic.jsonl`.
+The rule describes SQL-visible targets; database triggers on an allowed table
+remain part of the operator-trusted database schema.
 While that gateway request is active, dependency traffic captured by the
-fake-IP gateway is appended to `dependencies.jsonl` or
-`dependencies-debug.jsonl`. The main `dependencies.jsonl` file is intended for
-managed replay and keeps semantic events such as `mysql_exchange`,
+fake-IP gateway or explicit HTTP/HTTPS proxy is appended to
+`dependencies.jsonl` or `dependencies-debug.jsonl`. The main
+`dependencies.jsonl` file is intended for managed replay and keeps semantic
+events such as `mysql_exchange`,
 `mysql_connection`, and dependency errors. MySQL protocol details such as
 `mysql_query`, `mysql_response`, and `mysql_packet` are written to
 `dependencies-debug.jsonl` so raw/base64 payloads do not distract the replay path.
@@ -244,6 +273,11 @@ upstream process, or `active_window` when it was recorded because it happened
 during the request/response window. Dependency case files compact
 `client_process` to just the process id to keep them small; the global
 `traffic.jsonl` keeps the full process details.
+
+Run the automated readonly gateway/dependency integration test with
+`cargo test --test readonly_case_integration`. For a local two-mock or optional
+cross-machine system check, follow
+[`tests/manual/readonly/README.md`](tests/manual/readonly/README.md).
 
 Before the first matched gateway case is registered, replay-oriented dependency
 traffic is also written to run-level `bootstrap-dependencies.jsonl`; protocol

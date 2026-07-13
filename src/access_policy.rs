@@ -2,6 +2,10 @@ use serde::Serialize;
 
 use crate::config::RecordingAccessPolicy;
 
+mod mysql;
+
+pub(crate) use mysql::{MysqlAccessContext, evaluate_mysql_access};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OperationClass {
@@ -26,6 +30,28 @@ impl OperationClass {
 pub(crate) enum AccessDecision {
     Allow,
     Reject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AccessEvaluation {
+    pub(crate) decision: AccessDecision,
+    pub(crate) matched_rule: Option<String>,
+}
+
+impl AccessEvaluation {
+    const fn from_decision(decision: AccessDecision) -> Self {
+        Self {
+            decision,
+            matched_rule: None,
+        }
+    }
+
+    fn allowed_by(rule: impl Into<String>) -> Self {
+        Self {
+            decision: AccessDecision::Allow,
+            matched_rule: Some(rule.into()),
+        }
+    }
 }
 
 pub(crate) const fn decide(

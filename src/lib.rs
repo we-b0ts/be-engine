@@ -1,4 +1,5 @@
 mod access_policy;
+mod active_case;
 mod config;
 mod dns_mock;
 mod gateway;
@@ -16,7 +17,6 @@ mod tls;
 mod udp_gateway;
 
 use std::sync::Arc;
-use std::sync::Mutex as StdMutex;
 
 use anyhow::{Context, Result};
 use hyper_rustls::HttpsConnector;
@@ -29,23 +29,29 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::access_policy::{AccessDecision, OperationClass, decide};
+use crate::active_case::{
+    ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection, DependencyTargets,
+};
+use crate::recorder::http::case::CaseInvalidation;
 
 pub use config::{
     AppConfig, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy, RecordingConfig,
-    TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
-    TcpProtocolOverrideConfig, TlsConfig, UdpGatewayConfig,
+    HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy,
+    RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol,
+    TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
+    UdpGatewayConfig,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
+pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
-    BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot, HttpExchangeEvent,
-    KafkaConnectionEvent, KafkaDeliveryEvent, KafkaHeaderCapture, KafkaProduceEvent,
-    MemcachedConnectionEvent, MemcachedExchangeEvent, MysqlColumn, MysqlConnectionEvent,
-    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
-    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
-    ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
-    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
-    capture_case_body, redact_headers,
+    AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
+    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaHeaderCapture,
+    KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent, MysqlColumn,
+    MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
+    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
+    ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
+    RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,
+    capture_body_with_original_len, capture_case_body, redact_headers,
 };
 pub use replay::{
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayConfig, ReplayControlConfig,
@@ -70,130 +76,11 @@ struct AppStateInner {
     active_cases: ActiveCaseRegistry,
 }
 
-#[derive(Clone)]
-struct ActiveCaseRegistry {
-    state: Arc<StdMutex<ActiveCaseState>>,
-}
-
-struct ActiveCaseState {
-    active: Vec<ActiveCaseRegistration>,
-    bootstrap_open: bool,
-    case_matching_ready: bool,
-}
-
-#[derive(Debug, Clone)]
-struct ActiveCaseRegistration {
-    case: CaseContext,
-    upstream_pid: Option<u32>,
-}
-
-pub(crate) struct ActiveCaseGuard {
-    registry: ActiveCaseRegistry,
-    case_id: Uuid,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ActiveCaseRejection {
-    NotReady,
-    Busy,
-}
-
-impl Drop for ActiveCaseGuard {
-    fn drop(&mut self) {
-        self.registry.unregister(self.case_id);
-    }
-}
-
-impl Default for ActiveCaseRegistry {
-    fn default() -> Self {
-        Self::new(true)
-    }
-}
-
-impl ActiveCaseRegistry {
-    fn new(case_matching_ready: bool) -> Self {
-        Self {
-            state: Arc::new(StdMutex::new(ActiveCaseState {
-                active: Vec::new(),
-                bootstrap_open: true,
-                case_matching_ready,
-            })),
-        }
-    }
-
-    fn try_register(
-        &self,
-        case: CaseContext,
-        upstream_pid: Option<u32>,
-    ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
-        let mut state = self.state.lock().expect("active case registry poisoned");
-        if !state.case_matching_ready {
-            return Err(ActiveCaseRejection::NotReady);
-        }
-        if !state.active.is_empty() {
-            return Err(ActiveCaseRejection::Busy);
-        }
-        state.bootstrap_open = false;
-        state.active.push(ActiveCaseRegistration {
-            case: case.clone(),
-            upstream_pid,
-        });
-        Ok(ActiveCaseGuard {
-            registry: self.clone(),
-            case_id: case.id,
-        })
-    }
-
-    fn unregister(&self, case_id: Uuid) {
-        let mut state = self.state.lock().expect("active case registry poisoned");
-        state
-            .active
-            .retain(|registration| registration.case.id != case_id);
-    }
-
-    fn close_bootstrap(&self) -> bool {
-        let mut state = self.state.lock().expect("active case registry poisoned");
-        let was_open = state.bootstrap_open;
-        state.bootstrap_open = false;
-        state.case_matching_ready = true;
-        was_open
-    }
-
-    fn is_bootstrap_open(&self) -> bool {
-        let state = self.state.lock().expect("active case registry poisoned");
-        state.bootstrap_open
-    }
-
-    fn current_targets_for_event(&self, event_pid: Option<u32>) -> DependencyTargets {
-        let state = self.state.lock().expect("active case registry poisoned");
-        let active_count = state.active.len();
-        let (cases, ambiguous_active_cases) = match state.active.as_slice() {
-            [] => (Vec::new(), 0),
-            [registration] => {
-                let matched_by = match (registration.upstream_pid, event_pid) {
-                    (Some(upstream_pid), Some(event_pid)) if upstream_pid == event_pid => "process",
-                    _ => "active_window",
-                };
-                (vec![(registration.case.clone(), matched_by)], 0)
-            }
-            active => (Vec::new(), active.len()),
-        };
-        DependencyTargets {
-            bootstrap_open: state.bootstrap_open && active_count == 0,
-            cases,
-            ambiguous_active_cases,
-        }
-    }
-}
-
-struct DependencyTargets {
-    cases: Vec<(CaseContext, &'static str)>,
-    bootstrap_open: bool,
-    ambiguous_active_cases: usize,
-}
-
 impl AppState {
     pub async fn new(config: AppConfig) -> Result<Self> {
+        config
+            .validate()
+            .context("invalid recorder configuration")?;
         let recorder = Recorder::new_with_access_policy(
             &config.recording.output_dir,
             config.recording.access_policy,
@@ -243,6 +130,51 @@ impl AppState {
     }
 
     #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn record_access_policy_allow(
+        &self,
+        rule: impl Into<String>,
+        protocol: &str,
+        operation_class: OperationClass,
+        operations: Vec<String>,
+        resources: Vec<String>,
+        client_addr: Option<String>,
+        client_process: Option<crate::recorder::ProcessInfo>,
+        target: Option<String>,
+        reason: impl Into<String>,
+    ) {
+        let rule = rule.into();
+        let reason = reason.into();
+        let access_policy = self.config().recording.access_policy.as_str();
+        info!(
+            access_policy,
+            rule,
+            protocol,
+            operation_class = operation_class.as_str(),
+            operations = ?operations,
+            resources = ?resources,
+            target = target.as_deref(),
+            "recording access rule allowed request"
+        );
+        let event = RecorderEvent::AccessPolicyAllow(AccessPolicyAllowEvent {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            access_policy: access_policy.to_string(),
+            rule,
+            protocol: protocol.to_string(),
+            operation_class: operation_class.as_str().to_string(),
+            operations,
+            resources,
+            client_addr,
+            client_process,
+            target,
+            reason,
+        });
+        if let Err(error) = self.recorder().record(event).await {
+            warn!(error = %error, "failed to record access policy allow event");
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn record_readonly_rejection(
         &self,
         protocol: &str,
@@ -255,8 +187,19 @@ impl AppState {
     ) {
         let operation = operation.into();
         let reason = reason.into();
+        let access_policy = self.config().recording.access_policy.as_str();
+        let target_label = target.as_deref().unwrap_or("unknown target");
+        let invalidated_case = self.inner.active_cases.invalidate_current_case(
+            CaseInvalidation::new(
+                "recording_access_policy_rejection",
+                format!(
+                    "access policy {access_policy} rejected {protocol} {} operation {operation} targeting {target_label}: {reason}",
+                    operation_class.as_str()
+                ),
+            ),
+        );
         warn!(
-            access_policy = self.config().recording.access_policy.as_str(),
+            access_policy,
             protocol,
             operation_class = operation_class.as_str(),
             operation,
@@ -264,24 +207,29 @@ impl AppState {
             reason,
             "recording access policy rejected request"
         );
-        if let Err(error) = self
-            .recorder()
-            .record(RecorderEvent::ReadonlyRejection(ReadonlyRejectionEvent {
-                id: Uuid::new_v4(),
-                timestamp: chrono::Utc::now(),
-                access_policy: self.config().recording.access_policy.as_str().to_string(),
-                protocol: protocol.to_string(),
-                operation_class: operation_class.as_str().to_string(),
-                operation,
-                client_addr,
-                client_process,
-                target,
-                reason,
-            }))
-            .await
-        {
+        if let Some(case) = &invalidated_case {
+            warn!(
+                case_id = %case.id,
+                rule = %case.rule_name,
+                "active recording case invalidated by access policy rejection"
+            );
+        }
+        let event = RecorderEvent::ReadonlyRejection(ReadonlyRejectionEvent {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            access_policy: access_policy.to_string(),
+            protocol: protocol.to_string(),
+            operation_class: operation_class.as_str().to_string(),
+            operation,
+            client_addr,
+            client_process,
+            target,
+            reason,
+        });
+        if let Err(error) = self.recorder().record(event.clone()).await {
             warn!(error = %error, "failed to record access policy rejection");
         }
+        self.record_active_case_dependency_if_relevant(&event).await;
     }
 
     pub fn dns_registry(&self) -> &FakeDnsRegistry {
@@ -335,6 +283,10 @@ impl AppState {
         self.inner.active_cases.is_bootstrap_open()
     }
 
+    pub(crate) fn active_case_invalidation(&self, case_id: Uuid) -> Option<CaseInvalidation> {
+        self.inner.active_cases.invalidation_for(case_id)
+    }
+
     pub(crate) async fn record_dependency_if_relevant(&self, event: &RecorderEvent) {
         let event_pid = event.client_pid();
         let targets = self.inner.active_cases.current_targets_for_event(event_pid);
@@ -349,6 +301,16 @@ impl AppState {
                 "failed to append bootstrap dependency"
             );
         }
+        self.record_case_dependencies(event, targets).await;
+    }
+
+    async fn record_active_case_dependency_if_relevant(&self, event: &RecorderEvent) {
+        let event_pid = event.client_pid();
+        let targets = self.inner.active_cases.current_targets_for_event(event_pid);
+        self.record_case_dependencies(event, targets).await;
+    }
+
+    async fn record_case_dependencies(&self, event: &RecorderEvent, targets: DependencyTargets) {
         if targets.ambiguous_active_cases > 0 {
             warn!(
                 active_cases = targets.ambiguous_active_cases,
@@ -408,6 +370,7 @@ impl AppState {
 
         info!(
             access_policy = self.config().recording.access_policy.as_str(),
+            access_rules = self.config().recording.access_rules.len(),
             http_enabled = self.config().http.enabled,
             http_listen = %self.config().http.listen,
             dns_mock_enabled = self.config().dns_mock.enabled,
@@ -452,129 +415,4 @@ fn build_upstream_tls_config(ca: &MitmCa) -> Result<Arc<ClientConfig>> {
             .with_root_certificates(roots)
             .with_no_client_auth(),
     ))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn active_case_registry_closes_bootstrap_on_first_case() {
-        let registry = ActiveCaseRegistry::default();
-
-        let initial = registry.current_targets_for_event(None);
-        assert!(initial.bootstrap_open);
-        assert!(initial.cases.is_empty());
-
-        let case = CaseContext {
-            id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
-            uri_group: Some("api-user".to_string()),
-        };
-        let guard = registry.try_register(case.clone(), Some(42)).unwrap();
-
-        let active = registry.current_targets_for_event(Some(42));
-        assert!(!active.bootstrap_open);
-        assert_eq!(active.cases, vec![(case, "process")]);
-
-        drop(guard);
-        let after_case = registry.current_targets_for_event(None);
-        assert!(!after_case.bootstrap_open);
-        assert!(after_case.cases.is_empty());
-    }
-
-    #[test]
-    fn active_case_registry_rejects_cases_before_ready() {
-        let registry = ActiveCaseRegistry::new(false);
-        let case = CaseContext {
-            id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
-            uri_group: Some("api-user".to_string()),
-        };
-
-        assert!(matches!(
-            registry.try_register(case.clone(), Some(42)),
-            Err(ActiveCaseRejection::NotReady)
-        ));
-        assert!(registry.current_targets_for_event(None).bootstrap_open);
-
-        assert!(registry.close_bootstrap());
-        let guard = registry.try_register(case.clone(), Some(42)).unwrap();
-        let active = registry.current_targets_for_event(Some(42));
-        assert_eq!(active.cases, vec![(case, "process")]);
-        drop(guard);
-    }
-
-    #[test]
-    fn active_case_registry_allows_only_one_active_case() {
-        let registry = ActiveCaseRegistry::default();
-        let first = CaseContext {
-            id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
-            uri_group: Some("api-user".to_string()),
-        };
-        let second = CaseContext {
-            id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
-            uri_group: Some("api-user".to_string()),
-        };
-
-        let guard = registry.try_register(first, Some(42)).unwrap();
-        assert!(matches!(
-            registry.try_register(second.clone(), Some(43)),
-            Err(ActiveCaseRejection::Busy)
-        ));
-
-        drop(guard);
-        assert!(registry.try_register(second, Some(43)).is_ok());
-    }
-
-    #[test]
-    fn active_case_registry_does_not_share_ambiguous_dependencies() {
-        let registry = ActiveCaseRegistry::default();
-        let first = CaseContext {
-            id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
-            uri_group: Some("api-user".to_string()),
-        };
-        let second = CaseContext {
-            id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
-            uri_group: Some("api-user".to_string()),
-        };
-        {
-            let mut state = registry
-                .state
-                .lock()
-                .expect("active case registry poisoned");
-            state.bootstrap_open = false;
-            state.active.push(ActiveCaseRegistration {
-                case: first,
-                upstream_pid: None,
-            });
-            state.active.push(ActiveCaseRegistration {
-                case: second,
-                upstream_pid: None,
-            });
-        }
-
-        let targets = registry.current_targets_for_event(None);
-        assert!(targets.cases.is_empty());
-        assert_eq!(targets.ambiguous_active_cases, 2);
-        assert!(!targets.bootstrap_open);
-    }
-
-    #[test]
-    fn active_case_registry_can_close_bootstrap_explicitly() {
-        let registry = ActiveCaseRegistry::default();
-
-        assert!(registry.is_bootstrap_open());
-        assert!(registry.close_bootstrap());
-        assert!(!registry.is_bootstrap_open());
-        assert!(!registry.close_bootstrap());
-
-        let targets = registry.current_targets_for_event(None);
-        assert!(!targets.bootstrap_open);
-        assert!(targets.cases.is_empty());
-    }
 }
