@@ -1,4 +1,4 @@
 interface:
   display_name: "Recorded E2E Cases"
-  short_description: "Replay E2E from recorded case data"
-  default_prompt: "Use $recorded-e2e-cases to turn this recorded traffic case, run directory, or case collection into a replayable E2E test."
+  short_description: "Replay cases and maintain recorder feedback"
+  default_prompt: "Use $recorded-e2e-cases to replay these recorded cases, associate them with source APIs, and maintain safe recorder feedback in the target repo."
