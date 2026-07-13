@@ -13,9 +13,11 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::MysqlRouteConfig;
+use crate::access_policy::AccessDecision;
+use crate::mysql::access::classify_command;
 use crate::mysql::wire::{
     MysqlPacket, ServerPacketInfo, parse_client_command, parse_handshake_response,
-    parse_server_packet, read_packet,
+    parse_server_packet, read_packet, readonly_error_packet,
 };
 use crate::recorder::{
     MysqlConnectionEvent, MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket,
@@ -246,8 +248,9 @@ pub(crate) async fn handle_connected_mysql(
             database: login.database.clone(),
         },
     )));
-    let (mut client_read, mut client_write) = client.into_split();
+    let (mut client_read, client_write) = client.into_split();
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let client_write = Arc::new(Mutex::new(client_write));
 
     let c2s_state = state.clone();
     let c2s_client_addr = client_addr.clone();
@@ -257,6 +260,11 @@ pub(crate) async fn handle_connected_mysql(
     let c2s_connection_id = connection_id;
     let c2s_response_tracker = response_tracker.clone();
     let c2s_semantic_tracker = semantic_tracker.clone();
+    let c2s_client_write = client_write.clone();
+    let c2s_target = target_addr
+        .clone()
+        .or_else(|| target_host.clone())
+        .or_else(|| Some(upstream_addr.clone()));
     let client_to_server = tokio::spawn(async move {
         let mut bytes = 0_u64;
         loop {
@@ -268,6 +276,38 @@ pub(crate) async fn handle_connected_mysql(
             if c2s_authenticated.load(Ordering::SeqCst)
                 && let Some(command) = parse_client_command(&packet)
             {
+                let prepared_sql = if command.command_name == "COM_STMT_EXECUTE" {
+                    c2s_semantic_tracker
+                        .lock()
+                        .await
+                        .prepared_sql_for_packet(&packet)
+                        .map(ToOwned::to_owned)
+                } else {
+                    None
+                };
+                let operation_class = classify_command(&command, prepared_sql.as_deref());
+                if c2s_state.access_decision(operation_class) == AccessDecision::Reject {
+                    c2s_state
+                        .record_readonly_rejection(
+                            "mysql",
+                            operation_class,
+                            command.command_name,
+                            c2s_client_addr.clone(),
+                            c2s_client_process.clone(),
+                            c2s_target.clone(),
+                            "MySQL command is classified as a write operation",
+                        )
+                        .await;
+                    c2s_client_write
+                        .lock()
+                        .await
+                        .write_all(
+                            &readonly_error_packet(packet.sequence_id.wrapping_add(1))
+                                .to_wire_bytes(),
+                        )
+                        .await?;
+                    continue;
+                }
                 let sequence = c2s_query_sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 let flushed_response = {
                     let mut tracker = c2s_response_tracker.lock().await;
@@ -333,6 +373,7 @@ pub(crate) async fn handle_connected_mysql(
     let s2c_authenticated = authenticated.clone();
     let s2c_response_tracker = response_tracker.clone();
     let s2c_semantic_tracker = semantic_tracker.clone();
+    let s2c_client_write = client_write.clone();
     let server_to_client = tokio::spawn(async move {
         let mut bytes = 0_u64;
         loop {
@@ -373,7 +414,11 @@ pub(crate) async fn handle_connected_mysql(
                     }
                 }
             }
-            client_write.write_all(&packet.to_wire_bytes()).await?;
+            s2c_client_write
+                .lock()
+                .await
+                .write_all(&packet.to_wire_bytes())
+                .await?;
         }
         let response = {
             let mut tracker = s2c_response_tracker.lock().await;
@@ -406,7 +451,7 @@ pub(crate) async fn handle_connected_mysql(
                 .await?;
             }
         }
-        let _ = client_write.shutdown().await;
+        let _ = s2c_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
     });
 

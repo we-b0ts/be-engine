@@ -12,6 +12,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::FakeDnsEntry;
 use crate::process_lookup::lookup_udp_process;
 use crate::recorder::{BodyCapture, RecorderEvent, UdpDatagramEvent, capture_body};
@@ -82,7 +83,25 @@ async fn handle_datagram(
 
     let mut error = None;
     let mut forwarded = false;
-    if state.config().udp_gateway.forward {
+    let operation_class = OperationClass::Unknown;
+    let policy_rejected = state.access_decision(operation_class) == AccessDecision::Reject;
+    if policy_rejected {
+        state
+            .record_readonly_rejection(
+                "udp",
+                operation_class,
+                "datagram",
+                client_addr.clone(),
+                client_process.clone(),
+                Some(match &target {
+                    Some(target) => format!("{}:{}", target.entry.domain, fake_addr.port()),
+                    None => fake_addr.to_string(),
+                }),
+                "UDP traffic is not allowed by the recording access policy",
+            )
+            .await;
+        error = Some("request blocked by recording access policy".to_string());
+    } else if state.config().udp_gateway.forward {
         match upstream_addr {
             Some(upstream) => {
                 if let Err(err) = forward_udp(payload, upstream).await {

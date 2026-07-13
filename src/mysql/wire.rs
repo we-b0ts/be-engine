@@ -51,6 +51,18 @@ impl MysqlPacket {
     }
 }
 
+pub(crate) fn readonly_error_packet(sequence_id: u8) -> MysqlPacket {
+    let mut payload = Vec::new();
+    payload.push(0xff);
+    payload.extend_from_slice(&1290_u16.to_le_bytes());
+    payload.extend_from_slice(b"#HY000");
+    payload.extend_from_slice(b"request blocked by recording access policy");
+    MysqlPacket {
+        sequence_id,
+        payload,
+    }
+}
+
 pub async fn read_packet<R>(reader: &mut R) -> io::Result<Option<MysqlPacket>>
 where
     R: AsyncRead + Unpin,
@@ -277,5 +289,17 @@ mod tests {
         let command = parse_client_command(&packet).unwrap();
         assert_eq!(command.command_name, "COM_QUERY");
         assert_eq!(command.query.as_deref(), Some("select 1"));
+    }
+
+    #[test]
+    fn builds_native_readonly_error_packet() {
+        let packet = readonly_error_packet(7);
+        assert_eq!(packet.sequence_id, 7);
+        assert_eq!(packet.payload[0], 0xff);
+        assert_eq!(
+            u16::from_le_bytes([packet.payload[1], packet.payload[2]]),
+            1290
+        );
+        assert!(packet.payload.windows(5).any(|window| window == b"HY000"));
     }
 }

@@ -139,6 +139,24 @@ pub struct RecordingConfig {
     pub output_dir: PathBuf,
     pub max_body_bytes: usize,
     pub redact_headers: Vec<String>,
+    pub access_policy: RecordingAccessPolicy,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RecordingAccessPolicy {
+    #[default]
+    Unrestricted,
+    BlockKnownWrites,
+}
+
+impl RecordingAccessPolicy {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unrestricted => "unrestricted",
+            Self::BlockKnownWrites => "block_known_writes",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -305,6 +323,7 @@ impl Default for RecordingConfig {
                 "proxy-authorization".to_string(),
                 "proxy-authenticate".to_string(),
             ],
+            access_policy: RecordingAccessPolicy::Unrestricted,
         }
     }
 }
@@ -337,6 +356,35 @@ mod tests {
         assert!(!config.mysql.enabled);
         assert!(!config.mysql.record_raw_packets);
         assert_eq!(config.recording.max_body_bytes, 1024 * 1024);
+        assert_eq!(
+            config.recording.access_policy,
+            RecordingAccessPolicy::Unrestricted
+        );
+    }
+
+    #[test]
+    fn parses_recording_access_policy() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [recording]
+            access_policy = "block_known_writes"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.recording.access_policy,
+            RecordingAccessPolicy::BlockKnownWrites
+        );
+        assert!(
+            toml::from_str::<AppConfig>(
+                r#"
+            [recording]
+            access_policy = "allow_known_reads"
+            "#
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -107,6 +107,20 @@ sudo ./scripts/setup_local_dns.sh down
 
 ## Recording Files
 
+Recording access can be limited with the recording configuration:
+
+```toml
+[recording]
+access_policy = "block_known_writes"
+```
+
+`unrestricted` is the default and preserves normal forwarding. The
+`block_known_writes` policy rejects requests classified as writes by the HTTP,
+MySQL, Redis, Memcached, and Kafka adapters. Read, session-setup, unknown, raw
+TCP, and UDP operations continue to be forwarded, so this compatibility policy
+is not a strict security boundary. Rejections are written to `traffic.jsonl` as
+`readonly_rejection` events and are not added to replay dependencies.
+
 Generated runtime artifacts are ignored by git:
 
 - `target/`

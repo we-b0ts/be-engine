@@ -1,3 +1,4 @@
+mod access_policy;
 mod config;
 mod dns_mock;
 mod gateway;
@@ -27,11 +28,13 @@ use tokio::task::JoinSet;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::access_policy::{AccessDecision, OperationClass, decide};
+
 pub use config::{
     AppConfig, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingConfig, TcpApplicationProtocol,
-    TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
-    UdpGatewayConfig,
+    HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy, RecordingConfig,
+    TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
+    TcpProtocolOverrideConfig, TlsConfig, UdpGatewayConfig,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
 pub use recorder::{
@@ -40,9 +43,9 @@ pub use recorder::{
     MemcachedConnectionEvent, MemcachedExchangeEvent, MysqlColumn, MysqlConnectionEvent,
     MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
     MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
-    Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent, TcpGatewayConnectionEvent,
-    UdpDatagramEvent, capture_body, capture_body_with_original_len, capture_case_body,
-    redact_headers,
+    ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
+    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
+    capture_case_body, redact_headers,
 };
 pub use replay::{
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayConfig, ReplayControlConfig,
@@ -191,9 +194,12 @@ struct DependencyTargets {
 
 impl AppState {
     pub async fn new(config: AppConfig) -> Result<Self> {
-        let recorder = Recorder::new(&config.recording.output_dir)
-            .await
-            .context("failed to initialize JSONL recorder")?;
+        let recorder = Recorder::new_with_access_policy(
+            &config.recording.output_dir,
+            config.recording.access_policy,
+        )
+        .await
+        .context("failed to initialize JSONL recorder")?;
         let dns_registry = FakeDnsRegistry::load_or_new(
             &config.dns_mock.fake_cidr,
             Some(&config.dns_mock.registry_path),
@@ -230,6 +236,52 @@ impl AppState {
 
     pub fn recorder(&self) -> &Recorder {
         &self.inner.recorder
+    }
+
+    pub(crate) fn access_decision(&self, operation: OperationClass) -> AccessDecision {
+        decide(self.config().recording.access_policy, operation)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn record_readonly_rejection(
+        &self,
+        protocol: &str,
+        operation_class: OperationClass,
+        operation: impl Into<String>,
+        client_addr: Option<String>,
+        client_process: Option<crate::recorder::ProcessInfo>,
+        target: Option<String>,
+        reason: impl Into<String>,
+    ) {
+        let operation = operation.into();
+        let reason = reason.into();
+        warn!(
+            access_policy = self.config().recording.access_policy.as_str(),
+            protocol,
+            operation_class = operation_class.as_str(),
+            operation,
+            target = target.as_deref(),
+            reason,
+            "recording access policy rejected request"
+        );
+        if let Err(error) = self
+            .recorder()
+            .record(RecorderEvent::ReadonlyRejection(ReadonlyRejectionEvent {
+                id: Uuid::new_v4(),
+                timestamp: chrono::Utc::now(),
+                access_policy: self.config().recording.access_policy.as_str().to_string(),
+                protocol: protocol.to_string(),
+                operation_class: operation_class.as_str().to_string(),
+                operation,
+                client_addr,
+                client_process,
+                target,
+                reason,
+            }))
+            .await
+        {
+            warn!(error = %error, "failed to record access policy rejection");
+        }
     }
 
     pub fn dns_registry(&self) -> &FakeDnsRegistry {
@@ -355,6 +407,7 @@ impl AppState {
         }
 
         info!(
+            access_policy = self.config().recording.access_policy.as_str(),
             http_enabled = self.config().http.enabled,
             http_listen = %self.config().http.listen,
             dns_mock_enabled = self.config().dns_mock.enabled,

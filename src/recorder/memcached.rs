@@ -5,19 +5,28 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
-use tokio::io::{self, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::access_policy::AccessDecision;
+use crate::memcached::access::classify_request;
 use crate::memcached::{
     BinaryFrame, BufferedReader, MemcachedRequest, MemcachedWireProtocol,
-    binary_response_is_complete, read_binary_frame, read_text_request, read_text_response,
+    binary_access_denied_response, binary_response_is_complete, read_binary_frame,
+    read_text_request, read_text_response,
 };
 use crate::recorder::{
     MemcachedConnectionEvent, MemcachedExchangeEvent, RecorderEvent, capture_body,
 };
+
+mod fallback;
+#[cfg(test)]
+mod tests;
+
+use fallback::{activate_raw_fallback, forward_buffer_and_copy};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
@@ -117,13 +126,17 @@ async fn proxy_text(
     let pending = Arc::new(Mutex::new(VecDeque::<PendingMemcachedExchange>::new()));
     let raw_fallback = Arc::new(AtomicBool::new(false));
     let fallback_reason = Arc::new(Mutex::new(None::<String>));
-    let (client_read, mut client_write) = client.into_split();
+    let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
+    let client_write = Arc::new(Mutex::new(client_write));
+    let pending_drained = Arc::new(Notify::new());
     let c2s_state = state.clone();
     let c2s_context = context.clone();
     let c2s_pending = pending.clone();
     let c2s_raw_fallback = raw_fallback.clone();
     let c2s_fallback_reason = fallback_reason.clone();
+    let c2s_client_write = client_write.clone();
+    let c2s_pending_drained = pending_drained.clone();
     let c2s = tokio::spawn(async move {
         let mut reader = BufferedReader::new(client_read, max_frame_bytes);
         let mut sequence = 0_u64;
@@ -148,6 +161,36 @@ async fn proxy_text(
                 }
             };
             sequence += 1;
+            let operation_class = classify_request(&request);
+            if c2s_state.access_decision(operation_class) == AccessDecision::Reject {
+                c2s_state
+                    .record_readonly_rejection(
+                        "memcached",
+                        operation_class,
+                        request.command.clone(),
+                        c2s_context.client_addr.clone(),
+                        c2s_context.client_process.clone(),
+                        Some(c2s_context.target_addr.clone()),
+                        "Memcached command is classified as a write operation",
+                    )
+                    .await;
+                loop {
+                    let notified = c2s_pending_drained.notified();
+                    if c2s_pending.lock().await.is_empty() {
+                        break;
+                    }
+                    notified.await;
+                }
+                if !request.noreply {
+                    c2s_client_write
+                        .lock()
+                        .await
+                        .write_all(b"CLIENT_ERROR request blocked by recording access policy\r\n")
+                        .await?;
+                }
+                bytes += request.raw.len() as u64;
+                continue;
+            }
             let no_response = request.noreply || request.command == "quit";
             let replay_safe = !is_meta_command(&request.command);
             let warnings = if replay_safe {
@@ -189,6 +232,8 @@ async fn proxy_text(
     let s2c_pending = pending.clone();
     let s2c_raw_fallback = raw_fallback.clone();
     let s2c_fallback_reason = fallback_reason.clone();
+    let s2c_client_write = client_write.clone();
+    let s2c_pending_drained = pending_drained.clone();
     let s2c = tokio::spawn(async move {
         let mut reader = BufferedReader::new(upstream_read, max_frame_bytes);
         let mut bytes = 0_u64;
@@ -207,7 +252,8 @@ async fn proxy_text(
                     continue;
                 }
                 if s2c_raw_fallback.load(Ordering::Acquire) {
-                    bytes += forward_buffer_and_copy(&mut reader, &mut client_write).await?;
+                    let mut writer = s2c_client_write.lock().await;
+                    bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                     break;
                 }
                 let mut probe = [0_u8; 1];
@@ -223,7 +269,8 @@ async fn proxy_text(
                             &s2c_context,
                         )
                         .await?;
-                        bytes += forward_buffer_and_copy(&mut reader, &mut client_write).await?;
+                        let mut writer = s2c_client_write.lock().await;
+                        bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                         break;
                     }
                     Err(err) => return Err(err.into()),
@@ -243,14 +290,16 @@ async fn proxy_text(
                         &s2c_context,
                     )
                     .await?;
-                    bytes += forward_buffer_and_copy(&mut reader, &mut client_write).await?;
+                    let mut writer = s2c_client_write.lock().await;
+                    bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                     break;
                 }
             };
             if s2c_raw_fallback.load(Ordering::Acquire) {
-                client_write.write_all(&response).await?;
+                s2c_client_write.lock().await.write_all(&response).await?;
                 bytes += response.len() as u64;
-                bytes += forward_buffer_and_copy(&mut reader, &mut client_write).await?;
+                let mut writer = s2c_client_write.lock().await;
+                bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                 break;
             }
             let mut exchange = s2c_pending
@@ -258,6 +307,7 @@ async fn proxy_text(
                 .await
                 .pop_front()
                 .expect("pending Memcached text request");
+            s2c_pending_drained.notify_waiters();
             exchange.response_frames.push(response.to_vec());
             record_exchange(
                 &s2c_state,
@@ -269,10 +319,10 @@ async fn proxy_text(
                 max_frame_bytes,
             )
             .await?;
-            client_write.write_all(&response).await?;
+            s2c_client_write.lock().await.write_all(&response).await?;
             bytes += response.len() as u64;
         }
-        let _ = client_write.shutdown().await;
+        let _ = s2c_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -305,13 +355,15 @@ async fn proxy_binary(
     let pending = Arc::new(Mutex::new(VecDeque::<PendingMemcachedExchange>::new()));
     let raw_fallback = Arc::new(AtomicBool::new(false));
     let fallback_reason = Arc::new(Mutex::new(None::<String>));
-    let (client_read, mut client_write) = client.into_split();
+    let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
+    let client_write = Arc::new(Mutex::new(client_write));
     let c2s_pending = pending.clone();
     let c2s_raw_fallback = raw_fallback.clone();
     let c2s_fallback_reason = fallback_reason.clone();
     let c2s_state = state.clone();
     let c2s_context = context.clone();
+    let c2s_client_write = client_write.clone();
     let c2s = tokio::spawn(async move {
         let mut reader = BufferedReader::new(client_read, max_frame_bytes);
         let mut sequence = 0_u64;
@@ -355,6 +407,27 @@ async fn proxy_binary(
                 }
             };
             sequence += 1;
+            let operation_class = classify_request(&request);
+            if c2s_state.access_decision(operation_class) == AccessDecision::Reject {
+                c2s_state
+                    .record_readonly_rejection(
+                        "memcached",
+                        operation_class,
+                        request.command.clone(),
+                        c2s_context.client_addr.clone(),
+                        c2s_context.client_process.clone(),
+                        Some(c2s_context.target_addr.clone()),
+                        "Memcached command is classified as a write operation",
+                    )
+                    .await;
+                c2s_client_write
+                    .lock()
+                    .await
+                    .write_all(&binary_access_denied_response(&frame))
+                    .await?;
+                bytes += frame.raw.len() as u64;
+                continue;
+            }
             let sasl = matches!(frame.opcode, 0x20..=0x22);
             let unknown = request.command == "unknown";
             let warnings = if unknown {
@@ -397,6 +470,7 @@ async fn proxy_binary(
     let s2c_pending = pending.clone();
     let s2c_raw_fallback = raw_fallback.clone();
     let s2c_fallback_reason = fallback_reason.clone();
+    let s2c_client_write = client_write.clone();
     let s2c = tokio::spawn(async move {
         let mut reader = BufferedReader::new(upstream_read, max_frame_bytes);
         let mut bytes = 0_u64;
@@ -415,14 +489,16 @@ async fn proxy_binary(
                         &s2c_context,
                     )
                     .await?;
-                    bytes += forward_buffer_and_copy(&mut reader, &mut client_write).await?;
+                    let mut writer = s2c_client_write.lock().await;
+                    bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                     break;
                 }
             };
             if s2c_raw_fallback.load(Ordering::Acquire) {
-                client_write.write_all(&frame.raw).await?;
+                s2c_client_write.lock().await.write_all(&frame.raw).await?;
                 bytes += frame.raw.len() as u64;
-                bytes += forward_buffer_and_copy(&mut reader, &mut client_write).await?;
+                let mut writer = s2c_client_write.lock().await;
+                bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                 break;
             }
             if frame.magic != 0x81 {
@@ -435,9 +511,10 @@ async fn proxy_binary(
                     &s2c_context,
                 )
                 .await?;
-                client_write.write_all(&frame.raw).await?;
+                s2c_client_write.lock().await.write_all(&frame.raw).await?;
                 bytes += frame.raw.len() as u64;
-                bytes += forward_buffer_and_copy(&mut reader, &mut client_write).await?;
+                let mut writer = s2c_client_write.lock().await;
+                bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                 break;
             }
             let (quiet_completed, completed) =
@@ -466,10 +543,10 @@ async fn proxy_binary(
                 )
                 .await?;
             }
-            client_write.write_all(&frame.raw).await?;
+            s2c_client_write.lock().await.write_all(&frame.raw).await?;
             bytes += frame.raw.len() as u64;
         }
-        let _ = client_write.shutdown().await;
+        let _ = s2c_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
     });
 
@@ -686,112 +763,8 @@ fn is_meta_command(command: &str) -> bool {
     matches!(command, "mg" | "ms" | "md" | "ma" | "me" | "mn")
 }
 
-async fn activate_raw_fallback(
-    raw_fallback: &AtomicBool,
-    reason: &Mutex<Option<String>>,
-    message: String,
-    state: &AppState,
-    context: &ConnectionContext,
-) -> Result<()> {
-    let first = !raw_fallback.swap(true, Ordering::AcqRel);
-    let mut reason = reason.lock().await;
-    reason.get_or_insert_with(|| message.clone());
-    drop(reason);
-    if first {
-        record_fallback_error(state, context, message).await?;
-    }
-    Ok(())
-}
-
-async fn forward_buffer_and_copy<R, W>(
-    reader: &mut BufferedReader<R>,
-    writer: &mut W,
-) -> Result<u64>
-where
-    R: tokio::io::AsyncRead + Unpin,
-    W: tokio::io::AsyncWrite + Unpin,
-{
-    let buffered = reader.buffer.split().freeze();
-    writer.write_all(&buffered).await?;
-    let copied = io::copy(&mut reader.inner, writer).await?;
-    Ok(buffered.len() as u64 + copied)
-}
-
-async fn record_fallback_error(
-    state: &AppState,
-    context: &ConnectionContext,
-    error: String,
-) -> Result<()> {
-    record_event(
-        state,
-        RecorderEvent::ProxyError(crate::recorder::ProxyErrorEvent {
-            id: Uuid::new_v4(),
-            timestamp: Utc::now(),
-            protocol: "memcached".to_string(),
-            client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
-            target: Some(context.target_addr.clone()),
-            error,
-        }),
-    )
-    .await
-}
-
 async fn record_event(state: &AppState, event: RecorderEvent) -> Result<()> {
     state.recorder().record(event.clone()).await?;
     state.record_dependency_if_relevant(&event).await;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bytes::Bytes;
-
-    #[tokio::test]
-    async fn noop_response_confirms_preceding_quiet_success() {
-        let pending = Arc::new(Mutex::new(VecDeque::from([
-            pending_binary_request(1, 0x09, true),
-            pending_binary_request(2, 0x0a, false),
-        ])));
-        let frame = BinaryFrame {
-            raw: Bytes::from(vec![0x81; 24]),
-            magic: 0x81,
-            opcode: 0x0a,
-            opaque: 2,
-            cas: 0,
-            extras: Vec::new(),
-            key: Vec::new(),
-            value: Vec::new(),
-        };
-
-        let (quiet, completed) = correlate_binary_response(&pending, &frame).await.unwrap();
-        assert_eq!(quiet.len(), 1);
-        assert_eq!(quiet[0].request.opaque, Some(1));
-        assert_eq!(completed.unwrap().request.opaque, Some(2));
-        assert!(pending.lock().await.is_empty());
-    }
-
-    fn pending_binary_request(opaque: u32, opcode: u8, quiet: bool) -> PendingMemcachedExchange {
-        PendingMemcachedExchange {
-            sequence: opaque as u64,
-            request: MemcachedRequest {
-                raw: Bytes::new(),
-                command: "get".to_string(),
-                opcode: Some(opcode),
-                opaque: Some(opaque),
-                key: Some(b"key".to_vec()),
-                args: Vec::new(),
-                value: None,
-                extras: None,
-                cas: None,
-                noreply: false,
-                quiet,
-            },
-            response_frames: Vec::new(),
-            replay_safe: true,
-            warnings: Vec::new(),
-            started: Instant::now(),
-        }
-    }
 }
