@@ -10,6 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use traffic_recorder_proxy::{
     AppConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, MysqlRouteConfig,
+    RecordingAccessPolicy,
 };
 
 #[tokio::test]
@@ -63,12 +64,126 @@ async fn records_http_proxy_exchange() {
 }
 
 #[tokio::test]
-async fn http_gateway_records_only_matched_traffic() {
+async fn recording_policy_blocks_http_write_before_upstream_and_audits_it() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream.local_addr().unwrap();
+    let proxy_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http.enabled = true;
+    config.http.listen = proxy_addr;
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.recording.access_policy = RecordingAccessPolicy::BlockKnownWrites;
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(proxy_addr).await;
+
+    let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+    let request = format!(
+        "POST http://{upstream_addr}/write HTTP/1.1\r\nHost: {upstream_addr}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    );
+    client.write_all(request.as_bytes()).await.unwrap();
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).await.unwrap();
+    assert!(String::from_utf8_lossy(&response).contains("403 Forbidden"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), upstream.accept())
+            .await
+            .is_err()
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    handle.abort();
+
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    assert!(jsonl.contains(r#""event_type":"readonly_rejection""#));
+    assert!(jsonl.contains(r#""operation_class":"write""#));
+    assert!(!run_dir.join("bootstrap-dependencies.jsonl").exists());
+
+    let report: Value = serde_json::from_str(
+        &tokio::fs::read_to_string(run_dir.join("recording-run.json"))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["access_policy"], "block_known_writes");
+}
+
+#[tokio::test]
+async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let matched = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http_gateway.enabled = true;
+    config.http_gateway.listen = gateway_addr;
+    config.http_gateway.matched_upstream = format!("http://{}", matched.local_addr().unwrap());
+    config.http_gateway.fallback_upstream = format!("http://{}", fallback.local_addr().unwrap());
+    config.http_gateway.exclude_rules = vec![HttpGatewayRuleConfig {
+        name: Some("exclude-delete".to_string()),
+        methods: vec!["DELETE".to_string()],
+        ..Default::default()
+    }];
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.recording.access_policy = RecordingAccessPolicy::BlockKnownWrites;
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    let mut client = TcpStream::connect(gateway_addr).await.unwrap();
+    client
+        .write_all(b"DELETE /items/1 HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut response = Vec::new();
+    client.read_to_end(&mut response).await.unwrap();
+    assert!(String::from_utf8_lossy(&response).contains("403 Forbidden"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), matched.accept())
+            .await
+            .is_err()
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), fallback.accept())
+            .await
+            .is_err()
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    handle.abort();
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    assert!(!run_dir.join("default").exists());
+    let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    assert!(jsonl.contains(r#""protocol":"http_gateway""#));
+}
+
+#[tokio::test]
+async fn http_gateway_excludes_traffic_before_positive_matching() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
     let matched_upstream = spawn_http_response_upstream("matched", 1).await;
-    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 2).await;
     let gateway_addr = free_addr();
 
     let mut config = AppConfig::default();
@@ -83,6 +198,12 @@ async fn http_gateway_records_only_matched_traffic() {
         path_prefixes: vec!["/record/".to_string()],
         ..Default::default()
     }];
+    config.http_gateway.exclude_rules = vec![HttpGatewayRuleConfig {
+        name: Some("exclude-private".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/private".to_string()],
+        ..Default::default()
+    }];
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
     config.tls.ca_cert_path = temp.path().join("ca.pem");
@@ -94,6 +215,8 @@ async fn http_gateway_records_only_matched_traffic() {
 
     let matched_response = raw_http_get(gateway_addr, "/record").await;
     assert!(matched_response.contains("matched"));
+    let excluded_response = raw_http_get(gateway_addr, "/record/private").await;
+    assert!(excluded_response.contains("fallback"));
     let fallback_response = raw_http_get(gateway_addr, "/recording/two").await;
     assert!(fallback_response.contains("fallback"));
 
@@ -106,6 +229,7 @@ async fn http_gateway_records_only_matched_traffic() {
         .unwrap();
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
     assert!(jsonl.contains("/record"));
+    assert!(!jsonl.contains("/record/private"));
     assert!(!jsonl.contains("/recording/two"));
 }
 

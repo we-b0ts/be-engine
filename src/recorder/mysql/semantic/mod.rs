@@ -159,6 +159,13 @@ impl MysqlSemanticTracker {
         self.context.database = database;
     }
 
+    pub(crate) fn prepared_sql_for_packet(&self, packet: &MysqlPacket) -> Option<&str> {
+        let statement_id = read_u32_le(&packet.payload, 1)?;
+        self.statements
+            .get(&statement_id)
+            .map(|statement| statement.sql.as_str())
+    }
+
     pub(crate) fn finish_from_response(
         &mut self,
         response: &MysqlResponseEvent,

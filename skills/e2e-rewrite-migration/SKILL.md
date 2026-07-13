@@ -32,14 +32,17 @@ implementation. Source E2E tests may supplement but not replace recordings.
    focused commit and PR to `dev-migration`.
 4. Keep target `AGENTS.md` as a concise navigation map with detailed migration
    rules under `docs/`. Create or update the small, auditable
-   `.migration/e2e.yaml` described in
+   `.migration/e2e.yaml`, including project recorder config and route-pattern
+   feedback state when present, as described in
    [migration-workflow.md](references/migration-workflow.md).
 5. Treat recordings as external inputs. Do not copy or commit them unless the
    user asks or the target repo has that convention. Make the E2E command accept
    an external case path, normally `--case-dir <path>`.
-6. Use `recorded-e2e-cases` as the single source for case selection, request
-   construction, managed replay, dependency coverage, response comparison,
-   failure diagnosis, and recorder feedback. Do not duplicate or weaken that
+6. Use `recorded-e2e-cases` as the single source for case selection,
+   case-to-source-route association, request construction, managed replay,
+   dependency coverage, response comparison, failure diagnosis, and recorder
+   feedback. Keep replay and recordings read-only; place project-specific
+   recorder config feedback in the target repo. Do not duplicate or weaken that
    contract in the target harness.
 7. Reuse the target repo's command, config, and logging conventions. Treat
    existing package and module structure as a candidate pattern rather than an
@@ -80,4 +83,5 @@ recorder improvement list instead of guessing.
 
 Keep the final response short: migrated scope and source, rewrite input and PR
 case sources, selected case-set result, startup/E2E/quality commands, PR target
-and URL, blockers, and evidence-backed recording feedback when present.
+and URL, blockers, route-pattern feedback status, and evidence-backed recording
+feedback when present.

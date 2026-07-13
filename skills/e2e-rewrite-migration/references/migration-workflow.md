@@ -225,6 +225,10 @@ Before implementing behavior:
 - `agents_md_status`
 - `blockers`
 - `recording_feedback`
+- `recorder_config`
+- `route_pattern_case_source`
+- `route_pattern_source_revision`
+- `route_pattern_feedback_status`
 - `runtime_dependency_status`
 - `recorded_replay_status`
 - `dynamic_value_strategy_status`
@@ -275,6 +279,15 @@ committed default config directly, such as `config/default.yaml`. Add
 `config/e2e.yaml` when recorded E2E needs a different but still
 source-controlled isolation config. Production may specify a different config
 path, such as with `--config` or a project-specific environment variable.
+
+When the target workflow maintains project-specific traffic recorder settings,
+keep the stable recorder config under target `config/` and track its path in
+`.migration/e2e.yaml`. Keep recordings external. During replay discovery, use
+`recorded-e2e-cases` to associate actual case URIs with source routes and
+produce safe `case_path_patterns` feedback for future manual recordings.
+`traffic-replay` must not edit config or recording artifacts. A focused case
+source may add confirmed patterns but must not delete existing entries; only a
+declared authoritative collection may rebuild the managed pattern list.
 
 Support environment-variable overrides for config values. The environment
 variable name is the full config key path converted to uppercase snake case:

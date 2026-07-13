@@ -13,7 +13,9 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 use uuid::Uuid;
 
+use crate::access_policy::AccessDecision;
 use crate::config::HttpGatewayConfig;
+use crate::http::access::classify_method;
 use crate::process_lookup::{lookup_listening_process, process_label};
 use crate::recorder::http::case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
 use crate::recorder::{
@@ -26,7 +28,7 @@ mod ready;
 mod rules;
 mod transport;
 
-use rules::{case_uri_group, match_request, request_authority};
+use rules::{RuleDecision, case_uri_group, evaluate_request, request_authority};
 use transport::{
     GatewayBody, build_downstream_response, build_upstream_request, build_upstream_uri,
     send_upstream, simple_response, upstream_socket_addr,
@@ -95,11 +97,42 @@ async fn handle_gateway_request(
     let started = Instant::now();
     let method = req.method().clone();
     let original_uri = req.uri().clone();
+    let operation_class = classify_method(&method);
+    if state.access_decision(operation_class) == AccessDecision::Reject {
+        state
+            .record_readonly_rejection(
+                "http_gateway",
+                operation_class,
+                method.to_string(),
+                client_addr,
+                None,
+                Some(original_uri.to_string()),
+                "HTTP method is classified as a write operation",
+            )
+            .await;
+        return simple_response(
+            StatusCode::FORBIDDEN,
+            "request blocked by recording access policy",
+        );
+    }
     let request_headers = req.headers().clone();
     let request_headers_for_record =
         redact_headers(&request_headers, &state.config().recording.redact_headers);
     let authority = request_authority(&original_uri, &request_headers);
-    let matched_rule = match_request(&config.rules, &method, &original_uri, &request_headers);
+    let matched_rule = match evaluate_request(
+        &config.exclude_rules,
+        &config.rules,
+        &method,
+        &original_uri,
+        &request_headers,
+    ) {
+        RuleDecision::Matched(rule) => Some(rule),
+        RuleDecision::Excluded { name } => {
+            info!(exclude_rule = %name, uri = %original_uri, "HTTP gateway request excluded from matching");
+            None
+        }
+        RuleDecision::Unmatched => None,
+    };
     let matched_rule_name = matched_rule.as_ref().map(|rule| rule.name.clone());
     let candidate_case = matched_rule.as_ref().map(|rule| CaseContext {
         id,

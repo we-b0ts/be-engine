@@ -10,6 +10,8 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::config::RecordingAccessPolicy;
+
 mod capture;
 mod dependencies;
 mod event;
@@ -31,10 +33,18 @@ pub struct Recorder {
     pub(crate) run_state: Arc<Mutex<RecorderRunState>>,
     pub(crate) dependency_write_lock: Arc<Mutex<()>>,
     pub(crate) finalized_cases: Arc<Mutex<HashSet<Uuid>>>,
+    pub(crate) access_policy: RecordingAccessPolicy,
 }
 
 impl Recorder {
     pub async fn new(output_dir: impl AsRef<Path>) -> Result<Self> {
+        Self::new_with_access_policy(output_dir, RecordingAccessPolicy::Unrestricted).await
+    }
+
+    pub(crate) async fn new_with_access_policy(
+        output_dir: impl AsRef<Path>,
+        access_policy: RecordingAccessPolicy,
+    ) -> Result<Self> {
         let output_dir = output_dir.as_ref();
         tokio::fs::create_dir_all(output_dir)
             .await
@@ -60,6 +70,7 @@ impl Recorder {
             })),
             dependency_write_lock: Arc::new(Mutex::new(())),
             finalized_cases: Arc::new(Mutex::new(HashSet::new())),
+            access_policy,
         };
         recorder.write_run_report("running").await?;
         Ok(recorder)

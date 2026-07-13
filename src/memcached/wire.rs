@@ -103,6 +103,24 @@ where
     }
 }
 
+pub(crate) fn binary_access_denied_response(request: &BinaryFrame) -> Bytes {
+    const STATUS_INVALID_ARGUMENTS: u16 = 0x0004;
+    const MESSAGE: &[u8] = b"request blocked by recording access policy";
+
+    let mut response = Vec::with_capacity(24 + MESSAGE.len());
+    response.push(0x81);
+    response.push(request.opcode);
+    response.extend_from_slice(&0_u16.to_be_bytes());
+    response.push(0);
+    response.push(0);
+    response.extend_from_slice(&STATUS_INVALID_ARGUMENTS.to_be_bytes());
+    response.extend_from_slice(&(MESSAGE.len() as u32).to_be_bytes());
+    response.extend_from_slice(&request.opaque.to_be_bytes());
+    response.extend_from_slice(&0_u64.to_be_bytes());
+    response.extend_from_slice(MESSAGE);
+    Bytes::from(response)
+}
+
 pub(crate) async fn read_text_request<R>(
     reader: &mut BufferedReader<R>,
 ) -> Result<Option<MemcachedRequest>>
@@ -447,6 +465,28 @@ mod tests {
         let frame = read_binary_frame(&mut reader).await.unwrap().unwrap();
         assert_eq!(frame.key, b"key");
         assert_eq!(frame.opaque, 42);
+    }
+
+    #[test]
+    fn builds_binary_access_denied_response_with_matching_correlation_fields() {
+        let request = BinaryFrame {
+            raw: Bytes::new(),
+            magic: 0x80,
+            opcode: 0x01,
+            opaque: 0x1234_5678,
+            cas: 0,
+            extras: Vec::new(),
+            key: Vec::new(),
+            value: Vec::new(),
+        };
+        let response = binary_access_denied_response(&request);
+        assert_eq!(response[0], 0x81);
+        assert_eq!(response[1], 0x01);
+        assert_eq!(u16::from_be_bytes([response[6], response[7]]), 0x0004);
+        assert_eq!(
+            u32::from_be_bytes(response[12..16].try_into().unwrap()),
+            0x1234_5678
+        );
     }
 
     #[tokio::test]

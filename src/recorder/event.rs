@@ -53,6 +53,7 @@ pub enum RecorderEvent {
     MysqlExchange(MysqlExchangeEvent),
     MysqlPacket(MysqlPacketEvent),
     MysqlTlsRejected(MysqlTlsRejectedEvent),
+    ReadonlyRejection(ReadonlyRejectionEvent),
     ProxyError(ProxyErrorEvent),
 }
 
@@ -75,6 +76,7 @@ impl RecorderEvent {
             Self::MysqlExchange(_) => "mysql_exchange",
             Self::MysqlPacket(_) => "mysql_packet",
             Self::MysqlTlsRejected(_) => "mysql_tls_rejected",
+            Self::ReadonlyRejection(_) => "readonly_rejection",
             Self::ProxyError(_) => "proxy_error",
         }
     }
@@ -97,6 +99,7 @@ impl RecorderEvent {
             Self::MysqlExchange(event) => event.client_process.as_ref(),
             Self::MysqlPacket(event) => event.client_process.as_ref(),
             Self::MysqlTlsRejected(event) => event.client_process.as_ref(),
+            Self::ReadonlyRejection(event) => event.client_process.as_ref(),
             Self::ProxyError(event) => event.client_process.as_ref(),
         };
         process.map(|process| process.pid)
@@ -522,4 +525,18 @@ pub struct ProxyErrorEvent {
     pub client_process: Option<ProcessInfo>,
     pub target: Option<String>,
     pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReadonlyRejectionEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub access_policy: String,
+    pub protocol: String,
+    pub operation_class: String,
+    pub operation: String,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub target: Option<String>,
+    pub reason: String,
 }

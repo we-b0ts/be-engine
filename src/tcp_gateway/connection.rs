@@ -11,6 +11,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::{FakeDnsEntry, domain_matches};
 use crate::memcached::MemcachedWireProtocol;
 use crate::process_lookup::lookup_tcp_process;
@@ -336,6 +337,21 @@ async fn proxy_raw_tcp(
             fake_addr.port()
         )),
         DetectedProtocol::Http | DetectedProtocol::Raw => {
+            let operation_class = OperationClass::Unknown;
+            if state.access_decision(operation_class) == AccessDecision::Reject {
+                state
+                    .record_readonly_rejection(
+                        "raw_tcp",
+                        operation_class,
+                        "raw_stream",
+                        client_addr.clone(),
+                        client_process.clone(),
+                        Some(format!("{}:{}", entry.domain, fake_addr.port())),
+                        "unstructured TCP traffic is not allowed by the recording access policy",
+                    )
+                    .await;
+                return Ok(());
+            }
             let (client_to_server, server_to_client) =
                 io::copy_bidirectional(&mut client, &mut upstream)
                     .await

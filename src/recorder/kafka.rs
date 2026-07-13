@@ -5,20 +5,22 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
-use kafka_protocol::messages::{ApiKey, ResponseKind};
+use kafka_protocol::messages::{ApiKey, RequestKind, ResponseKind};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::access_policy::AccessDecision;
+use crate::kafka::access::{classify_api, rejection_response};
 use crate::recorder::{
     KafkaConnectionEvent, KafkaDeliveryEvent, KafkaHeaderCapture, KafkaProduceEvent, ProcessInfo,
     ProxyErrorEvent, RecorderEvent, capture_body,
 };
 
 use crate::kafka::{
-    KafkaRecord, decode_request, decode_response, read_frame, records_from_fetch,
+    KafkaRecord, decode_request, decode_response, encode_response, read_frame, records_from_fetch,
     records_from_produce, replay_supports_api, response_correlation_id, write_frame,
 };
 
@@ -66,6 +68,7 @@ pub(crate) async fn handle_connected(
     let connection_id = Uuid::new_v4();
     let started = Instant::now();
     let pending = Arc::new(Mutex::new(HashMap::<i32, PendingRequest>::new()));
+    let pending_changed = Arc::new(Notify::new());
     let replay_safe = Arc::new(AtomicBool::new(true));
     record_connection(
         &state,
@@ -85,22 +88,62 @@ pub(crate) async fn handle_connected(
         .recording
         .max_body_bytes
         .saturating_add(1024 * 1024);
-    let (mut client_read, mut client_write) = client.into_split();
+    let (mut client_read, client_write) = client.into_split();
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
+    let client_write = Arc::new(Mutex::new(client_write));
 
     let request_pending = pending.clone();
     let request_safe = replay_safe.clone();
     let request_state = state.clone();
     let request_context = context.clone();
+    let request_client_write = client_write.clone();
+    let request_pending_changed = pending_changed.clone();
     let requests = tokio::spawn(async move {
         let mut bytes = 0_u64;
         let mut request_sequence = 0_u64;
         let mut produce_sequence = 0_u64;
-        while let Some(payload) = read_frame(&mut client_read, max_frame_bytes).await? {
+        'requests: while let Some(payload) = read_frame(&mut client_read, max_frame_bytes).await? {
             bytes += payload.len() as u64 + 4;
             request_sequence += 1;
             match decode_request(&payload) {
                 Ok(decoded) => {
+                    let operation_class = classify_api(decoded.api_key);
+                    if request_state.access_decision(operation_class) == AccessDecision::Reject {
+                        request_state
+                            .record_readonly_rejection(
+                                "kafka",
+                                operation_class,
+                                format!("{:?}", decoded.api_key),
+                                request_context.client_addr.clone(),
+                                request_context.client_process.clone(),
+                                Some(request_context.target_addr.clone()),
+                                "Kafka API is classified as a write operation",
+                            )
+                            .await;
+                        if let Some(response) = rejection_response(&decoded.request) {
+                            let payload = encode_response(
+                                decoded.header.correlation_id,
+                                decoded.api_key,
+                                decoded.header.request_api_version,
+                                &response,
+                            )?;
+                            let mut client_write = request_client_write.lock().await;
+                            write_frame(&mut *client_write, &payload).await?;
+                        } else if !matches!(
+                            &decoded.request,
+                            RequestKind::Produce(request) if request.acks == 0
+                        ) {
+                            loop {
+                                let notified = request_pending_changed.notified();
+                                if request_pending.lock().await.is_empty() {
+                                    break;
+                                }
+                                notified.await;
+                            }
+                            break 'requests;
+                        }
+                        continue;
+                    }
                     let (kind, sequence) = if !replay_supports_api(decoded.api_key) {
                         let reason = format!(
                             "Kafka API {:?} is outside the replay V1 profile",
@@ -181,6 +224,8 @@ pub(crate) async fn handle_connected(
     let response_safe = replay_safe.clone();
     let response_state = state.clone();
     let response_context = context.clone();
+    let response_client_write = client_write.clone();
+    let response_pending_changed = pending_changed.clone();
     let responses = tokio::spawn(async move {
         let mut bytes = 0_u64;
         let mut delivery_sequence = 0_u64;
@@ -188,6 +233,7 @@ pub(crate) async fn handle_connected(
             bytes += payload.len() as u64 + 4;
             let correlation_id = response_correlation_id(&payload)?;
             let request = response_pending.lock().await.remove(&correlation_id);
+            response_pending_changed.notify_waiters();
             match request {
                 Some(request) => {
                     let PendingRequest {
@@ -273,9 +319,10 @@ pub(crate) async fn handle_connected(
                     .await?;
                 }
             }
-            write_frame(&mut client_write, &payload).await?;
+            let mut client_write = response_client_write.lock().await;
+            write_frame(&mut *client_write, &payload).await?;
         }
-        let _ = client_write.shutdown().await;
+        let _ = response_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
     });
 

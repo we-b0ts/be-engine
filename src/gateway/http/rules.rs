@@ -9,14 +9,31 @@ pub(super) struct Match {
     pub(super) case_path_patterns: Vec<String>,
 }
 
-pub(super) fn match_request(
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum RuleDecision {
+    Matched(Match),
+    Excluded { name: String },
+    Unmatched,
+}
+
+pub(super) fn evaluate_request(
+    exclude_rules: &[HttpGatewayRuleConfig],
     rules: &[HttpGatewayRuleConfig],
     method: &Method,
     uri: &Uri,
     headers: &HeaderMap,
-) -> Option<Match> {
+) -> RuleDecision {
+    if let Some(rule) = exclude_rules
+        .iter()
+        .find(|rule| rule_matches(rule, method, uri, headers))
+    {
+        return RuleDecision::Excluded {
+            name: rule.name.clone().unwrap_or_else(|| "unnamed".to_string()),
+        };
+    }
+
     if rules.is_empty() {
-        return Some(Match {
+        return RuleDecision::Matched(Match {
             name: "default".to_string(),
             case_path_patterns: Vec::new(),
         });
@@ -29,6 +46,7 @@ pub(super) fn match_request(
             name: rule.name.clone().unwrap_or_else(|| "unnamed".to_string()),
             case_path_patterns: rule.case_path_patterns.clone(),
         })
+        .map_or(RuleDecision::Unmatched, RuleDecision::Matched)
 }
 
 pub(super) fn case_uri_group(uri: &Uri, patterns: &[String]) -> String {
@@ -168,6 +186,86 @@ mod tests {
             request.uri(),
             request.headers()
         ));
+    }
+
+    #[test]
+    fn exclusion_rules_take_priority_over_matching_rules() {
+        let exclude_rules = vec![HttpGatewayRuleConfig {
+            name: Some("skip-internal".to_string()),
+            methods: vec!["GET".to_string()],
+            path_prefixes: vec!["/api/internal".to_string()],
+            headers: [("x-app-id".to_string(), "internal".to_string())].into(),
+            ..Default::default()
+        }];
+        let rules = vec![HttpGatewayRuleConfig {
+            name: Some("record-api".to_string()),
+            path_prefixes: vec!["/api".to_string()],
+            ..Default::default()
+        }];
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/internal/users")
+            .header("x-app-id", "internal")
+            .body(())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_request(
+                &exclude_rules,
+                &rules,
+                request.method(),
+                request.uri(),
+                request.headers()
+            ),
+            RuleDecision::Excluded {
+                name: "skip-internal".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn exclusion_rules_can_carve_out_default_matching() {
+        let exclude_rules = vec![HttpGatewayRuleConfig {
+            name: Some("skip-health".to_string()),
+            path_prefixes: vec!["/health".to_string()],
+            ..Default::default()
+        }];
+        let ordinary_request = Request::builder()
+            .method("GET")
+            .uri("/api/users")
+            .body(())
+            .unwrap();
+        let excluded_request = Request::builder()
+            .method("GET")
+            .uri("/health/ready")
+            .body(())
+            .unwrap();
+
+        assert_eq!(
+            evaluate_request(
+                &exclude_rules,
+                &[],
+                ordinary_request.method(),
+                ordinary_request.uri(),
+                ordinary_request.headers()
+            ),
+            RuleDecision::Matched(Match {
+                name: "default".to_string(),
+                case_path_patterns: Vec::new()
+            })
+        );
+        assert_eq!(
+            evaluate_request(
+                &exclude_rules,
+                &[],
+                excluded_request.method(),
+                excluded_request.uri(),
+                excluded_request.headers()
+            ),
+            RuleDecision::Excluded {
+                name: "skip-health".to_string()
+            }
+        );
     }
 
     #[test]
