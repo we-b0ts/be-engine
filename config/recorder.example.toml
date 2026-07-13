@@ -77,8 +77,16 @@ success_status = 200
 interval_ms = 1000
 
 # tcpcopy HTTP traffic matching rules. If no rules are configured, all gateway
-# traffic is eligible for matching. At most one matched case is recorded at a
-# time; overlapping eligible requests are sent to fallback_upstream.
+# traffic not selected by exclude_rules is eligible for matching. Exclusions
+# always take priority and are sent to fallback_upstream without creating a
+# case. At most one matched case is recorded at a time; overlapping eligible
+# requests are also sent to fallback_upstream.
+[[http_gateway.exclude_rules]]
+name = "exclude-health"
+methods = ["GET"]
+path_prefixes = ["/health", "/metrics"]
+headers = {}
+
 [[http_gateway.rules]]
 name = "record-api"
 methods = []

@@ -92,6 +92,7 @@ pub struct HttpGatewayConfig {
     pub fallback_upstream: String,
     pub preserve_host: bool,
     pub ready: HttpGatewayReadyConfig,
+    pub exclude_rules: Vec<HttpGatewayRuleConfig>,
     pub rules: Vec<HttpGatewayRuleConfig>,
 }
 
@@ -255,6 +256,7 @@ impl Default for HttpGatewayConfig {
             fallback_upstream: "http://127.0.0.1:8082".to_string(),
             preserve_host: true,
             ready: HttpGatewayReadyConfig::default(),
+            exclude_rules: Vec::new(),
             rules: Vec::new(),
         }
     }
@@ -482,6 +484,11 @@ mod tests {
             case_path_patterns = ["/api/users/*/xxx"]
             headers = { "x-record" = "yes" }
 
+            [[http_gateway.exclude_rules]]
+            name = "exclude-health"
+            methods = ["GET"]
+            path_prefixes = ["/health"]
+
             [[http_gateway.rules]]
             name = "record-default-depth"
             path_prefixes = ["/default/"]
@@ -495,6 +502,15 @@ mod tests {
         assert_eq!(config.http_gateway.ready.success_status, 200);
         assert_eq!(config.http_gateway.ready.interval_ms, 1000);
         assert_eq!(config.http_gateway.rules.len(), 2);
+        assert_eq!(config.http_gateway.exclude_rules.len(), 1);
+        assert_eq!(
+            config.http_gateway.exclude_rules[0].name.as_deref(),
+            Some("exclude-health")
+        );
+        assert_eq!(
+            config.http_gateway.exclude_rules[0].path_prefixes,
+            vec!["/health".to_string()]
+        );
         assert_eq!(
             config.http_gateway.rules[0].case_path_patterns,
             vec!["/api/users/*/xxx".to_string()]

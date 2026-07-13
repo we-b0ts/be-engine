@@ -133,6 +133,11 @@ async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
     config.http_gateway.listen = gateway_addr;
     config.http_gateway.matched_upstream = format!("http://{}", matched.local_addr().unwrap());
     config.http_gateway.fallback_upstream = format!("http://{}", fallback.local_addr().unwrap());
+    config.http_gateway.exclude_rules = vec![HttpGatewayRuleConfig {
+        name: Some("exclude-delete".to_string()),
+        methods: vec!["DELETE".to_string()],
+        ..Default::default()
+    }];
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
     config.recording.access_policy = RecordingAccessPolicy::BlockKnownWrites;
@@ -173,12 +178,12 @@ async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
 }
 
 #[tokio::test]
-async fn http_gateway_records_only_matched_traffic() {
+async fn http_gateway_excludes_traffic_before_positive_matching() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
     let matched_upstream = spawn_http_response_upstream("matched", 1).await;
-    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 2).await;
     let gateway_addr = free_addr();
 
     let mut config = AppConfig::default();
@@ -193,6 +198,12 @@ async fn http_gateway_records_only_matched_traffic() {
         path_prefixes: vec!["/record/".to_string()],
         ..Default::default()
     }];
+    config.http_gateway.exclude_rules = vec![HttpGatewayRuleConfig {
+        name: Some("exclude-private".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/private".to_string()],
+        ..Default::default()
+    }];
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
     config.tls.ca_cert_path = temp.path().join("ca.pem");
@@ -204,6 +215,8 @@ async fn http_gateway_records_only_matched_traffic() {
 
     let matched_response = raw_http_get(gateway_addr, "/record").await;
     assert!(matched_response.contains("matched"));
+    let excluded_response = raw_http_get(gateway_addr, "/record/private").await;
+    assert!(excluded_response.contains("fallback"));
     let fallback_response = raw_http_get(gateway_addr, "/recording/two").await;
     assert!(fallback_response.contains("fallback"));
 
@@ -216,6 +229,7 @@ async fn http_gateway_records_only_matched_traffic() {
         .unwrap();
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
     assert!(jsonl.contains("/record"));
+    assert!(!jsonl.contains("/record/private"));
     assert!(!jsonl.contains("/recording/two"));
 }
 

@@ -165,6 +165,11 @@ path = "/"
 success_status = 200
 interval_ms = 1000
 
+[[http_gateway.exclude_rules]]
+name = "exclude-health"
+methods = ["GET"]
+path_prefixes = ["/health", "/metrics"]
+
 [[http_gateway.rules]]
 name = "record-api"
 hosts = ["api.example.com"]
@@ -174,10 +179,15 @@ case_path_patterns = ["/api/users/*/xxx"]
 headers = { "x-record" = "yes" }
 ```
 
-If no `[[http_gateway.rules]]` entries are configured, all gateway traffic is
-treated as matched and recorded. Matching supports host, method, path prefix,
-and exact header value checks. `preserve_host = true` keeps the original `Host`
-header when forwarding.
+`[[http_gateway.exclude_rules]]` uses the same host, method, path-prefix, and
+exact-header conditions as ordinary rules. Exclusions are evaluated first;
+matching traffic is sent to `fallback_upstream` and does not create a case. If
+no `[[http_gateway.rules]]` entries are configured, all non-excluded gateway
+traffic is treated as matched and recorded. Within a rule, values in one list
+are alternatives while different fields must all match. `preserve_host = true`
+keeps the original `Host` header when forwarding. Recording access policy is
+evaluated before both rule sets, so exclusion rules do not bypass
+`block_known_writes`.
 
 `[http_gateway.ready]` is an optional active readiness probe against
 `matched_upstream`. When enabled, the recorder sends `GET path` every
