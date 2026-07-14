@@ -67,6 +67,8 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
+pub use report::aggregate::{ReplayAggregateReport, aggregate_replay_reports};
+
 pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
 }

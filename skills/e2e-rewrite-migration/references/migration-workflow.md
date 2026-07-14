@@ -175,7 +175,9 @@ Before implementing behavior:
 - ensure `AGENTS.md` exists or is merged as a concise documentation map
 - ensure migration details live in structured docs under `docs/`, with
   `AGENTS.md` acting as a concise map
-- create or update `.migration/e2e.yaml`
+- create or update the current index `.migration/e2e.yaml` and one
+  `.migration/runs/<run-key>.yaml` for the selected recording source, following
+  [e2e-run-state.md](e2e-run-state.md)
 - identify the rewrite input case paths separately from the PR E2E case source
 - create or reuse a repo-local development command facade
 - create or reuse committed development config under `config/`
@@ -186,59 +188,26 @@ Before implementing behavior:
 - identify the focused recorded E2E command
 - identify target quality check commands
 
-`.migration/e2e.yaml` must remain small and auditable. Track:
+Keep `.migration/e2e.yaml` small and auditable: stable project, Git/PR,
+command-facade, recorder-config, and documentation metadata plus only the
+current run pointers and current status. Put recording-specific scope, command,
+case matrix, counts, replay results, validation statuses, blockers, and feedback
+in `.migration/runs/<run-key>.yaml`. Never mix results from different recording
+sources in either file.
 
-- `source_repo`
-- `target_language`
-- `current_scope`
-- `scope_case_matrix` when several APIs or case sets are involved
-- `rewrite_input_cases`
-- `pr_e2e_case_source`
-- `pr_e2e_cases`
-- `e2e_case_arg`
-- `status`
-- `git_base_branch`
-- `git_work_branch`
-- `pr_target_branch`
-- `pr_url`
-- `stash_name` when work was moved from another branch
-- `command_facade`
-- `package_layout`
-- `workspace_decision`
-- `module_plan`
-- `module_topology_review`
-- `architecture_review_status`
-- `schema_sources`
-- `schema_validation_status`
-- `e2e_command`
-- `unit_test_status`
-- `quality_commands`
-- `runtime_start_command`
-- `runtime_stop_command`
-- `runtime_status_command`
-- `runtime_start_status`
-- `config_files`
-- `logging_config`
-- `log_paths`
-- `metrics_contract_status`
-- `docs`
-- `agents_md_status`
-- `blockers`
-- `recording_feedback`
-- `recorder_config`
-- `route_pattern_case_source`
-- `route_pattern_source_revision`
-- `route_pattern_feedback_status`
-- `runtime_dependency_status`
-- `recorded_replay_status`
-- `dynamic_value_strategy_status`
-- `semantics_review_status`
+When the current recording source contains more than one standard replay
+report, generate `.migration/run-reports/<run-key>.json` with
+`traffic-replay-aggregate --case-source <path> --output <path>`. The target
+facade may orchestrate its own tests and invoke this command, but it must not
+parse or sum recorder report internals. The aggregate tool discovers report
+files and published cases recursively from the supplied source root; it does
+not parse target-language test output or classify unreported cases.
 
 ## Command And Config Contract
 
 Prefer the target repo's existing command facade. If it already uses `make`,
 `just`, package scripts, or another clear convention, wire migration commands
-through that convention and record them in `.migration/e2e.yaml`.
+through that convention and record them in the current run state.
 
 If no convention exists, create a source-controlled development CLI facade at
 `scripts/<project>-cli`. This is a development/debug/build script, not a
@@ -254,14 +223,16 @@ Expose the commands that are relevant to the migrated scope:
 - `status`: report whether the service is running and include pid, port, or
   health details when available
 - `e2e`: run the focused recorded E2E, or the configured recorded E2E suite;
-  accept an external local case path such as `--case-dir <path>` unless the
-  repo already has an equivalent case-source argument
+  require an explicit external local case path such as `--case-dir <path>`
+  unless the repo already has an equivalent explicit case-source argument
 - `check`: run formatting, tests, linting, and relevant quality gates
 - `build`: build the target artifact
 - `release`: run the project's release/package flow when it exists
 - `doctor`: print missing config, dependency, port, and toolchain problems
-  including `traffic-replay`, `traffic-replay-cli`, and
-  `traffic-recorder-proxy` when recorded E2E is part of the repo workflow
+  including `traffic-recorder-proxy`, `traffic-replay`, `traffic-replay-cli`,
+  and `traffic-replay-aggregate` when recorded E2E is part of the repo workflow;
+  when a replay policy is configured, verify that its single configured file
+  exists
 
 For the first migration slice, implement at least `start`, `stop`, `restart`,
 `status`, `e2e`, `check`, and `doctor` when the target is a runnable service.
@@ -271,8 +242,17 @@ facade command. The focused recorded E2E should call `traffic-replay` from
 `PATH` and control active cases with `traffic-replay-cli` from `PATH`, not a
 skill-local helper path. It should pass the provided `--case-dir` through to
 the replay/E2E harness and must not hardcode the user's rewrite input path in
-source code, config, or tests. CI or PR workflows may download or mount cases
-first, then call the same facade with `--case-dir`.
+source code, config, or tests. It must not use a developer-machine recordings
+root or a known batch as an implicit default; missing case input must fail
+clearly. CI or PR workflows may download or mount cases first, then call the
+same facade with `--case-dir`.
+
+When replay needs evidence-backed dependency exceptions or background/noise
+classification, keep them in one source-controlled replay/assertion policy
+file. Reuse the target's existing policy format or the `recorded-e2e-cases`
+fallback. The command facade passes that file to the target-language E2E
+runner; Bash and language code must not each own a separate case-id or
+dependency-signature allowlist. Record the policy path in the current run state.
 
 Place application config under `config/`. Development startup should read a
 committed default config directly, such as `config/default.yaml`. Add
@@ -316,10 +296,10 @@ token, authorization, or private credentials, keep the key present in
 values through environment variables or an ignored local override. When any
 such key exists, create or maintain `config/.env.example` with the derived
 variable names and blank values. Do not commit real `.env`, `.env.local`, or
-`config/local.yaml` files. Do not use `.migration/e2e.yaml` or
-`.recorded-e2e.yaml` as application runtime config: `.migration/e2e.yaml`
-tracks migration state, while `.recorded-e2e.yaml` controls recorded assertion
-behavior and dependency isolation.
+`config/local.yaml` files. Do not use `.migration/e2e.yaml`, a per-run migration
+state, or `.recorded-e2e.yaml` as application runtime config: migration files
+track evidence, while `.recorded-e2e.yaml` controls recorded assertion behavior
+and dependency isolation.
 
 ## Logging Contract
 
@@ -361,7 +341,8 @@ When creating or substantially updating target repo docs:
   small structure under `docs/` that fits the project
 - do not create empty boilerplate docs just to satisfy a template
 - avoid duplicating the same rule in `AGENTS.md` and detailed docs
-- update `.migration/e2e.yaml` with the docs paths and `agents_md_status`
+- update `.migration/e2e.yaml` with project-wide docs paths and
+  `agents_md_status`
 
 If an existing `AGENTS.md` is already longer than 100 lines, do not make it
 longer. Add the shortest possible migration map entry and move new migration
@@ -521,7 +502,7 @@ The recorded dependency schema is query-level schema: it describes columns
 returned by recorded dependency calls, not necessarily the full database. It is
 still the first source of truth for runtime decode types on the migrated query.
 
-If explicit schema is available, record it in `.migration/e2e.yaml` under
+If explicit schema is available, record it in the current run state under
 `schema_sources` and set `schema_validation_status` to `confirmed` or a more
 specific passed status. If schema is missing or incomplete, the agent may still
 write code and pass recorded E2E, but it must set
@@ -539,15 +520,20 @@ the source repo and replay report:
   unrelated/background with source or recorder evidence
 - target E2E requests are built from each case's `request.json`, without
   hardcoded case-specific headers, query params, or bodies
+- the E2E case source is explicit for the current invocation, with no
+  developer-machine recording path or historical batch selected by default
 - replay session readiness is verified before requests, every selected case is
   bracketed by begin/end, and aggregate replay reports are clean
+- replay exceptions and background/noise classifications, when present, come
+  from one source-controlled policy file rather than duplicated shell and
+  target-language allowlists
 - MySQL touches use the recorded business target host, database/schema, and
   username/role as dependency identity; log databases, read/write roles,
   tenants, and shards must map to explicit runtime adapters instead of sharing
   one pool by accident
 - no normal runtime config or product logic contains fixed values copied from
   recorded dependency params
-- dynamic values have runtime strategies recorded in `.migration/e2e.yaml`
+- dynamic values have runtime strategies recorded in the current run state
 - metrics emitted by the source capability are implemented, verified, or
   explicitly recorded as `metrics_unconfirmed`
 - non-trivial local logic has focused unit or component tests, or
@@ -615,7 +601,7 @@ migrated endpoint is exercised; it must not be hard-wired to fixture data.
 
 Do not complete the migration if the only runnable path is a recorded test app,
 fixture-backed repository, or helper that requires a case directory. Add or
-document the normal startup command, then update `.migration/e2e.yaml`.
+document the normal startup command, then update the current run state.
 
 ## Completion Output
 

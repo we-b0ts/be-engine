@@ -55,8 +55,9 @@ pub use recorder::{
     capture_body_with_original_len, capture_case_body, redact_headers,
 };
 pub use replay::{
-    MysqlReplayConfig, MysqlReplayControlConfig, ReplayConfig, ReplayControlConfig,
-    run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
+    MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateReport, ReplayConfig,
+    ReplayControlConfig, aggregate_replay_reports, run_mysql_replay, run_mysql_replay_control,
+    run_replay, run_replay_control,
 };
 pub use tls::MitmCa;
 

@@ -7,6 +7,20 @@ use tokio::io::AsyncWriteExt;
 use super::summary::should_append_case_dependency;
 use crate::recorder::{CaseContext, Recorder, RecorderEvent};
 
+pub(super) async fn ensure_case_dependency_file(dir: &Path) -> Result<()> {
+    tokio::fs::create_dir_all(dir)
+        .await
+        .with_context(|| format!("failed to create case recording dir {}", dir.display()))?;
+    let path = dir.join("dependencies.jsonl");
+    OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .await
+        .with_context(|| format!("failed to create dependencies file {}", path.display()))?;
+    Ok(())
+}
+
 impl Recorder {
     pub async fn append_case_dependency(
         &self,

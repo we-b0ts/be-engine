@@ -8,8 +8,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_recorder_proxy::{
     AppConfig, AppState, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternReport,
-    ReplayConfig, ReplayControlConfig, plan_case_path_pattern_feedback, run_replay,
-    run_replay_control,
+    ReplayConfig, ReplayControlConfig, aggregate_replay_reports, plan_case_path_pattern_feedback,
+    run_replay, run_replay_control,
 };
 
 #[derive(Debug, Parser)]
@@ -31,6 +31,7 @@ struct Cli {
 enum Command {
     Replay(ReplayArgs),
     ReplayControl(ReplayControlArgs),
+    ReplayAggregate(ReplayAggregateArgs),
     RecorderConfig(RecorderConfigArgs),
 }
 
@@ -64,6 +65,18 @@ struct ReplayControlArgs {
     session: Option<PathBuf>,
     #[command(subcommand)]
     command: ReplayControlCommand,
+}
+
+#[derive(Debug, Args)]
+struct ReplayAggregateArgs {
+    #[arg(long)]
+    case_source: PathBuf,
+    #[arg(long)]
+    output: Option<PathBuf>,
+    #[arg(long)]
+    fail_on_dirty: bool,
+    #[arg(long)]
+    fail_on_incomplete: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -164,9 +177,32 @@ pub(crate) async fn run() -> Result<()> {
     match cli.command {
         Some(Command::Replay(args)) => run_replay_command(args).await,
         Some(Command::ReplayControl(args)) => run_replay_control_command(args).await,
+        Some(Command::ReplayAggregate(args)) => run_replay_aggregate_command(args),
         Some(Command::RecorderConfig(args)) => run_recorder_config(cli.config, args),
         None => run_recorder(cli.config).await,
     }
+}
+
+fn run_replay_aggregate_command(args: ReplayAggregateArgs) -> Result<()> {
+    let aggregate = aggregate_replay_reports(&args.case_source)?;
+    let mut payload = serde_json::to_vec_pretty(&aggregate)?;
+    payload.push(b'\n');
+    if let Some(output) = args.output {
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&output, payload)?;
+    } else {
+        use std::io::Write;
+        io::stdout().write_all(&payload)?;
+    }
+    if args.fail_on_incomplete && !aggregate.is_complete() {
+        anyhow::bail!("aggregate replay report has unreported or unfinished cases");
+    }
+    if args.fail_on_dirty && aggregate.is_dirty() {
+        anyhow::bail!("aggregate replay report contains dirty dependency evidence");
+    }
+    Ok(())
 }
 
 async fn run_replay_command(args: ReplayArgs) -> Result<()> {

@@ -7,6 +7,7 @@ use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+use super::dependencies::ensure_case_dependency_file;
 use super::summary::{write_bootstrap_dependency_summary, write_case_dependency_summary};
 use super::{CaseContext, Recorder, sanitize_path_component};
 
@@ -57,6 +58,7 @@ impl Recorder {
             let _guard = self.dependency_write_lock.lock().await;
             let staging_dir = self.case_staging_dir(case);
             let published_dir = self.case_dir(case);
+            ensure_case_dependency_file(&staging_dir).await?;
             write_case_dependency_summary(&staging_dir).await?;
             if let Some(parent) = published_dir.parent() {
                 tokio::fs::create_dir_all(parent).await.with_context(|| {
