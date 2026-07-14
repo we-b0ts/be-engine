@@ -1,6 +1,6 @@
 ---
 name: recorded-e2e-cases
-description: Replay and fix E2E tests from recorded traffic case directories, run directories, or case collections, and maintain replay-time recorder feedback in a target repo. Use when working with request.json, expected-response.json or expected_response.json, dependencies.jsonl, dependencies-debug.jsonl, traffic-recorder-proxy dependency replay, recorder.toml case_path_patterns, case-to-source-route association, MySQL mysql_exchange records, case-driven E2E tests, or failures where the HTTP request/response pair is insufficient without recorded dependencies.
+description: Replay and diagnose E2E tests from traffic-recorder-proxy case, collection, or run directories, and maintain replay-time recorder feedback in the target repo. Use for recorded request/response artifacts, dependencies.jsonl dependency replay, aggregate replay reports, recorder.toml case_path_patterns, or case-driven failures requiring dependency evidence.
 ---
 
 # Recorded E2E Cases
@@ -21,7 +21,9 @@ dependency touch form one compatibility contract.
    request or expected response is missing.
 3. Inspect the target project's E2E runner, startup path, config, source repo
    reference, and dependency wiring. Reuse its conventions and isolate real
-   dependencies only inside the recorded-E2E entrypoint.
+   dependencies only inside the recorded-E2E entrypoint. Require the selected
+   case source as an explicit external input such as `--case-dir`; never
+   hardcode or silently default to a developer-machine recording path.
 4. When a source repo and target recorder config are available, read
    [route-pattern-feedback.md](references/route-pattern-feedback.md). During
    replay discovery, associate each case to a source API using method plus
@@ -30,21 +32,32 @@ dependency touch form one compatibility contract.
 5. Follow [replay-workflow.md](references/replay-workflow.md): use
    `traffic-replay` and `traffic-replay-cli` from `PATH`, wait for readiness,
    bracket every case with `begin` and `end --fail-on-dirty`, require a clean
-   aggregate report, and stop the session.
+   aggregate report, and stop the session. When one case source produces more
+   than one replay report, read [aggregate-report.md](references/aggregate-report.md)
+   and use `traffic-replay-aggregate` from `PATH`; never calculate totals
+   manually or make the target project parse replay report internals.
 6. Build each request from its `request.json`; do not hardcode case-specific
    method, URI, headers, query, or body data. Compare JSON structurally and use
    exact bytes only for non-JSON or an explicitly configured exact-byte mode.
 7. Treat `dependencies.jsonl` as the touch contract and its summary as the
    coverage checklist. Response compatibility alone is incomplete while replay
    has unexplained unmatched target calls, unused case exchanges, or missing
-   required side effects. Recorded metrics are behavior.
+   required side effects. Recorded metrics are behavior. If evidence requires
+   replay exceptions or background/noise classification, keep that policy in
+   one source-controlled target file consumed by every orchestration and test
+   layer; never duplicate case-id or dependency-signature allowlists in shell
+   and target-language code.
 8. Keep recorded params in replay evidence or E2E-only config. Normal runtime
    must derive dynamic values from request/session context, time, generated ids,
    dependency state, or explicit product config.
 9. After replay, update a source-controlled target `recorder.toml` only when it
-   has an explicit AI-managed `case_path_patterns` block. Treat a focused or
-   partial case source as add-only; rebuild or delete patterns only from the
-   target's declared authoritative case collection. Validate TOML after edits.
+   has an explicit AI-managed `case_path_patterns` block. Use
+   `traffic-recorder-config case-path-patterns plan`, inspect its diff and JSON
+   report, then use `apply`; never edit the TOML directly. Treat a focused or
+   partial case source as add-only. Rebuild or delete patterns only from the
+   target's declared authoritative case collection and pass `--allow-delete`
+   only after reviewing the authoritative plan. If the command or managed
+   block is unavailable, report feedback without changing the config.
 10. Run the focused case set first, then relevant project checks. Iterate at
    most three times and modify product code only after replay evidence and
    routing are complete and the failure is a real behavior defect.
@@ -80,7 +93,8 @@ requested API scope.
 
 ## Output
 
-Keep the final response short: selected case set and pass/fail state, essential
-changes, verification command, missing evidence when blocked, case-to-route and
-route-pattern feedback status when applicable, and concise evidence-backed
+Keep the final response short: selected case set and pass/fail state, aggregate
+report path and published/reported/unreported coverage when applicable,
+essential changes, verification command, missing evidence when blocked,
+case-to-route and route-pattern feedback status, and concise evidence-backed
 recorder feedback.

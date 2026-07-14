@@ -7,6 +7,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use chrono::Utc;
+use tokio::io::Interest;
 use tokio::net::UdpSocket;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -48,20 +49,21 @@ async fn run_socket(state: AppState, socket: UdpSocket) -> Result<()> {
         .context("failed to read UDP gateway local address")?;
     let mut buf = vec![0_u8; UDP_RECV_BUFFER_BYTES];
     loop {
-        socket
-            .readable()
+        let datagram = receive_datagram(&socket, &mut buf)
             .await
-            .context("failed to wait for UDP gateway datagram")?;
-        match recv_udp_datagram(socket.as_raw_fd(), &mut buf) {
-            Ok(datagram) => {
-                if let Err(err) = handle_datagram(&state, listen_addr, datagram).await {
-                    warn!(error = %format!("{err:#}"), "UDP gateway datagram failed");
-                }
-            }
-            Err(err) if err.kind() == io::ErrorKind::WouldBlock => continue,
-            Err(err) => return Err(err).context("failed to receive UDP gateway datagram"),
+            .context("failed to receive UDP gateway datagram")?;
+        if let Err(err) = handle_datagram(&state, listen_addr, datagram).await {
+            warn!(error = %format!("{err:#}"), "UDP gateway datagram failed");
         }
     }
+}
+
+async fn receive_datagram(socket: &UdpSocket, buf: &mut [u8]) -> io::Result<ReceivedDatagram> {
+    socket
+        .async_io(Interest::READABLE, || {
+            recv_udp_datagram(socket.as_raw_fd(), buf)
+        })
+        .await
 }
 
 async fn handle_datagram(
@@ -303,6 +305,7 @@ fn sockaddr_in6_to_addr(addr: libc::sockaddr_in6) -> SocketAddr {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use tokio::time::{Duration, timeout};
 
     #[test]
     fn converts_ipv4_sockaddr() {
@@ -318,6 +321,36 @@ mod tests {
             sockaddr_in_to_addr(addr),
             "127.0.0.1:8125".parse::<SocketAddr>().unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn waits_for_readiness_again_after_receiving_a_datagram() {
+        let socket = bind_udp_socket("127.0.0.1:0".parse().unwrap()).unwrap();
+        let listen_addr = socket.local_addr().unwrap();
+        let sender = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut buf = vec![0_u8; UDP_RECV_BUFFER_BYTES];
+
+        sender.send_to(b"first", listen_addr).await.unwrap();
+        let first = timeout(Duration::from_secs(1), receive_datagram(&socket, &mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.payload, b"first");
+
+        let second_receive = receive_datagram(&socket, &mut buf);
+        assert!(
+            timeout(Duration::from_millis(50), second_receive)
+                .await
+                .is_err(),
+            "empty UDP socket should wait instead of retrying recvmsg"
+        );
+
+        sender.send_to(b"second", listen_addr).await.unwrap();
+        let second = timeout(Duration::from_secs(1), receive_datagram(&socket, &mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.payload, b"second");
     }
 
     #[tokio::test]

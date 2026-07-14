@@ -124,6 +124,12 @@ weakening assertions.
 `dependencies.jsonl` contains semantic dependency records for managed replay.
 Each line is a JSON object with `event_type`.
 
+Newly published cases include this file even when they have no semantic
+third-party dependencies. In that case the file is empty and
+`dependencies-summary.json` has `total_events: 0`; treat this as a confirmed
+zero-dependency contract. A missing file in an older recording is not
+equivalent evidence and still requires case-specific investigation.
+
 Common semantic records:
 
 - `mysql_exchange`: structured SQL request and response; preferred for replay

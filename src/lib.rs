@@ -35,11 +35,12 @@ use crate::active_case::{
 use crate::recorder::http::case::CaseInvalidation;
 
 pub use config::{
-    AppConfig, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
+    AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
+    CasePathPatternReport, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
     HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy,
     RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol,
     TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
-    UdpGatewayConfig,
+    UdpGatewayConfig, plan_case_path_pattern_feedback,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
 pub use mysql::operation::MysqlWriteOperation;
@@ -54,8 +55,9 @@ pub use recorder::{
     capture_body_with_original_len, capture_case_body, redact_headers,
 };
 pub use replay::{
-    MysqlReplayConfig, MysqlReplayControlConfig, ReplayConfig, ReplayControlConfig,
-    run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
+    MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateReport, ReplayConfig,
+    ReplayControlConfig, aggregate_replay_reports, run_mysql_replay, run_mysql_replay_control,
+    run_replay, run_replay_control,
 };
 pub use tls::MitmCa;
 

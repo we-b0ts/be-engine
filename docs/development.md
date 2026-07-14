@@ -65,6 +65,8 @@ ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-reco
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
 ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
+ln -sf "$PWD/scripts/traffic-replay-aggregate" "$HOME/.local/bin/traffic-replay-aggregate"
+ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
@@ -87,10 +89,56 @@ traffic-replay-cli report --fail-on-dirty
 traffic-replay-cli stop
 ```
 
+When one recording source has been replayed through several sessions, generate
+one deterministic coverage and dependency summary from the recording source
+root. The command recursively finds standard `.replay/replay-report.json`
+files and also reports published cases that have no replay report:
+
+```bash
+traffic-replay-aggregate \
+  --case-source recordings/<run-id>/<rule> \
+  --output aggregate-report.json
+```
+
+Use `--fail-on-incomplete` to fail when a published case has no report or has
+not ended. Use `--fail-on-dirty` to apply the recorder's strict raw dependency
+dirty check. The aggregate command does not parse target-project test output or
+classify why an unreported case was skipped.
+
 `traffic-replay-cli` is a thin facade over `traffic-recorder-proxy
 replay-control`; the Rust binary owns the control protocol and Unix socket
 client. The script should stay small and should not implement JSON/socket
 protocol logic.
+
+Replay-time route discovery can produce safe `case_path_patterns` feedback for
+a target repository. Preview focused, add-only feedback before applying it:
+
+```bash
+traffic-recorder-config case-path-patterns plan \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --authority focused \
+  --source-revision "$(git -C ../source rev-parse HEAD)" \
+  --case-source /path/to/focused-cases \
+  --pattern '/api/users/*/xxx'
+
+traffic-recorder-config case-path-patterns apply \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --authority focused \
+  --source-revision "$(git -C ../source rev-parse HEAD)" \
+  --case-source /path/to/focused-cases \
+  --pattern '/api/users/*/xxx'
+```
+
+The selected rule must already contain exactly one explicit
+`BEGIN/END AI-MANAGED CASE PATH PATTERNS` block. The command preserves all text
+outside that block, sorts and deduplicates patterns, validates the complete
+recorder config, and replaces the file atomically. Focused feedback cannot
+remove patterns. Authoritative feedback may remove them only when the case
+collection is declared authoritative and `apply` includes `--allow-delete`.
+Use `--format json` for machine-readable feedback. The command never modifies
+recordings or existing case directories.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup
@@ -185,6 +233,12 @@ named `YYYYMMDDHHMMSS`. Valid case output is published inside that run:
 <run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
 <run-id>/failed/<rule-name>/<uri-group>/<case-id>/
 ```
+
+Every newly published case contains `dependencies.jsonl` and
+`dependencies-summary.json`, including cases with no semantic third-party
+dependencies. For a zero-dependency case, `dependencies.jsonl` is empty and
+the summary has `total_events: 0`. This distinguishes a confirmed empty
+dependency contract from missing capture evidence.
 
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`

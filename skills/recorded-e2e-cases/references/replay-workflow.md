@@ -59,6 +59,8 @@ Use the repository-level replay commands, not skill-local script paths:
 - `traffic-replay` starts one replay session for a case or case collection
 - `traffic-replay-cli` controls readiness, active case lifecycle, reports, and
   shutdown
+- `traffic-replay-aggregate` recursively summarizes this recorder's standard
+  replay reports under one supplied case source
 
 `traffic-replay-cli` is a thin PATH facade over `traffic-recorder-proxy
 replay-control`; do not generate it inside the target project.
@@ -71,6 +73,7 @@ user PATH directory such as `~/.local/bin`.
 command -v traffic-recorder-proxy
 command -v traffic-replay
 command -v traffic-replay-cli
+command -v traffic-replay-aggregate
 traffic-replay path/to/case-run-or-collection-dir
 traffic-replay-cli wait-ready
 ```
@@ -82,6 +85,12 @@ directly. A collection directory is usually
 selected case files, but case dependencies are not a global pool. The active
 case is selected with `traffic-replay-cli begin <case-id>` and closed with
 `traffic-replay-cli end <case-id> --fail-on-dirty`.
+
+The target E2E facade must require that source through `--case-dir` or an
+equivalent explicit CI/environment input. Do not embed a developer-machine
+absolute recording path, a known recordings root, or a sample batch as an
+implicit default. A missing case source is an input error, not permission to
+select an older local recording.
 
 Use `traffic-replay-cli wait-ready` before sending any target request. If the
 session cannot bind listeners, install DNS/fake-IP rules, or write its initial
@@ -142,6 +151,14 @@ Implement in this order:
    checklist for replay.
 8. After the selected case set finishes, run `traffic-replay-cli report
    --fail-on-dirty` and stop the session with `traffic-replay-cli stop`.
+
+When a supplied recording source is replayed through multiple sessions, run
+`traffic-replay-aggregate --case-source <source> --output <path>` after all
+sessions stop. Pass only the recording source root; do not enumerate report
+paths or manually add their counters. Read [aggregate-report.md](aggregate-report.md)
+for coverage and dirty-state semantics. The aggregate covers recorder replay
+evidence only; the target runner still owns its HTTP assertions and process
+exit status.
 
 The replay is complete only when the request returns the expected response while
 using dependency behavior replayed from the recorded dependency file, and the
@@ -329,6 +346,15 @@ The fallback config is YAML, per case, and limited to assertion behavior plus
 external dependency isolation. Use JSONPath selectors for response body ignore
 paths. Keep it small; do not use it for broad test orchestration or dependency
 payload data.
+
+Use the same source-controlled file as the single replay/assertion policy for
+every target orchestration and test layer. The shell facade may pass its path to
+the target-language E2E runner, but must not maintain a second copy of case ids,
+dependency signatures, or background/noise exceptions. If the target already
+has a suitable policy file, reuse it instead of adding `.recorded-e2e.yaml`.
+When an evidence-backed dependency exception is necessary, identify it by the
+smallest exact case and dependency signature and record the rationale there;
+do not turn it into a broad route or process-wide allowlist.
 
 Minimum supported concepts:
 

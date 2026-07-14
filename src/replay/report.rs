@@ -1,5 +1,8 @@
 use super::*;
 
+pub(crate) mod aggregate;
+#[cfg(test)]
+mod aggregate_tests;
 pub(super) mod command;
 mod model;
 

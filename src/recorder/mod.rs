@@ -495,15 +495,24 @@ mod tests {
         recorder.publish_case(&case).await.unwrap();
 
         assert!(!recorder.case_staging_dir(&case).exists());
-        assert!(
-            recorder
-                .run_dir
-                .join("record-api")
-                .join("api-users")
-                .join(case.id.to_string())
-                .join("request.json")
-                .exists()
-        );
+        let published_case_dir = recorder
+            .run_dir
+            .join("record-api")
+            .join("api-users")
+            .join(case.id.to_string());
+        assert!(published_case_dir.join("request.json").exists());
+        let dependencies = tokio::fs::read_to_string(published_case_dir.join("dependencies.jsonl"))
+            .await
+            .unwrap();
+        assert!(dependencies.is_empty());
+        let summary_raw =
+            tokio::fs::read_to_string(published_case_dir.join("dependencies-summary.json"))
+                .await
+                .unwrap();
+        let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
+        assert_eq!(summary["source"], "dependencies.jsonl");
+        assert_eq!(summary["total_events"], 0);
+        assert_eq!(summary["event_types"], serde_json::json!({}));
         let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
             .await
             .unwrap();
@@ -542,15 +551,21 @@ mod tests {
             .unwrap();
 
         assert!(!recorder.case_staging_dir(&case).exists());
-        assert!(
-            !recorder
-                .run_dir
-                .join("record-api")
-                .join("api-users")
-                .join(case.id.to_string())
-                .join("dependencies.jsonl")
-                .exists()
-        );
+        let published_case_dir = recorder
+            .run_dir
+            .join("record-api")
+            .join("api-users")
+            .join(case.id.to_string());
+        let dependencies = tokio::fs::read_to_string(published_case_dir.join("dependencies.jsonl"))
+            .await
+            .unwrap();
+        assert!(dependencies.is_empty());
+        let summary_raw =
+            tokio::fs::read_to_string(published_case_dir.join("dependencies-summary.json"))
+                .await
+                .unwrap();
+        let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
+        assert_eq!(summary["total_events"], 0);
     }
 
     #[tokio::test]
