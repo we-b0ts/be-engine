@@ -42,9 +42,13 @@ dependency touch form one compatibility contract.
    must derive dynamic values from request/session context, time, generated ids,
    dependency state, or explicit product config.
 9. After replay, update a source-controlled target `recorder.toml` only when it
-   has an explicit AI-managed `case_path_patterns` block. Treat a focused or
-   partial case source as add-only; rebuild or delete patterns only from the
-   target's declared authoritative case collection. Validate TOML after edits.
+   has an explicit AI-managed `case_path_patterns` block. Use
+   `traffic-recorder-config case-path-patterns plan`, inspect its diff and JSON
+   report, then use `apply`; never edit the TOML directly. Treat a focused or
+   partial case source as add-only. Rebuild or delete patterns only from the
+   target's declared authoritative case collection and pass `--allow-delete`
+   only after reviewing the authoritative plan. If the command or managed
+   block is unavailable, report feedback without changing the config.
 10. Run the focused case set first, then relevant project checks. Iterate at
    most three times and modify product code only after replay evidence and
    routing are complete and the failure is a real behavior defect.

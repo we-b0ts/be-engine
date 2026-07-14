@@ -35,11 +35,12 @@ use crate::active_case::{
 use crate::recorder::http::case::CaseInvalidation;
 
 pub use config::{
-    AppConfig, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
+    AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
+    CasePathPatternReport, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
     HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy,
     RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol,
     TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
-    UdpGatewayConfig,
+    UdpGatewayConfig, plan_case_path_pattern_feedback,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
 pub use mysql::operation::MysqlWriteOperation;

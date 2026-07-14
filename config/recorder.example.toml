@@ -94,8 +94,11 @@ path_prefixes = ["/api"]
 # Keep project-specific patterns in the destination repository's recorder
 # config. The recorded-E2E replay workflow can add safe patterns after it
 # associates actual case URIs with source routes.
+# BEGIN AI-MANAGED CASE PATH PATTERNS
+# source_revision = ""
 case_path_patterns = [
 ]
+# END AI-MANAGED CASE PATH PATTERNS
 headers = {}
 
 [mysql]

@@ -64,12 +64,37 @@ case_path_patterns = [
 # END AI-MANAGED CASE PATH PATTERNS
 ```
 
+- Require `traffic-recorder-config` from `PATH`. Never edit the target TOML
+  directly and never create the managed markers on the target's behalf. If the
+  command is unavailable or rejects the managed block, report the confirmed
+  patterns and stop the config-update step.
+- Preview feedback first. Supply the target config, rule name, source revision,
+  case source, authority mode, and every accepted pattern:
+
+```bash
+traffic-recorder-config case-path-patterns plan \
+  --config path/to/recorder.toml \
+  --rule record-api \
+  --authority focused \
+  --source-revision <revision> \
+  --case-source path/to/cases \
+  --pattern '/api/example/*' \
+  --format json
+```
+
+- Inspect `added`, `removed`, and `diff`. For focused feedback, require
+  `removed` to be empty. Run the same command with `apply` instead of `plan`
+  only after the report matches the route decisions.
+- For an authoritative collection, pass `--authority authoritative`. If the
+  reviewed plan removes patterns, the apply command must also include
+  `--allow-delete`. Never use that flag for focused feedback.
 - For a focused or partial case source, preserve existing entries and add only
   newly confirmed safe patterns.
 - Rebuild or delete entries only when the case source is declared authoritative
   by the target workflow.
 - Never copy recorded parameter values into product config or product code.
-- Validate TOML after writing and show the config diff to the user.
+- The CLI must validate the complete TOML, preserve text outside the managed
+  block, and show the config diff. Show that diff to the user.
 - Do not move or rename existing case directories; new patterns affect only
   future manual recordings.
 

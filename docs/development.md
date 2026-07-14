@@ -65,6 +65,7 @@ ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-reco
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
 ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
+ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
@@ -91,6 +92,36 @@ traffic-replay-cli stop
 replay-control`; the Rust binary owns the control protocol and Unix socket
 client. The script should stay small and should not implement JSON/socket
 protocol logic.
+
+Replay-time route discovery can produce safe `case_path_patterns` feedback for
+a target repository. Preview focused, add-only feedback before applying it:
+
+```bash
+traffic-recorder-config case-path-patterns plan \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --authority focused \
+  --source-revision "$(git -C ../source rev-parse HEAD)" \
+  --case-source /path/to/focused-cases \
+  --pattern '/api/users/*/xxx'
+
+traffic-recorder-config case-path-patterns apply \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --authority focused \
+  --source-revision "$(git -C ../source rev-parse HEAD)" \
+  --case-source /path/to/focused-cases \
+  --pattern '/api/users/*/xxx'
+```
+
+The selected rule must already contain exactly one explicit
+`BEGIN/END AI-MANAGED CASE PATH PATTERNS` block. The command preserves all text
+outside that block, sorts and deduplicates patterns, validates the complete
+recorder config, and replaces the file atomically. Focused feedback cannot
+remove patterns. Authoritative feedback may remove them only when the case
+collection is declared authoritative and `apply` includes `--allow-delete`.
+Use `--format json` for machine-readable feedback. The command never modifies
+recordings or existing case directories.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup

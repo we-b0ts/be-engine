@@ -93,6 +93,7 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
+ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
 command -v traffic-recorder-proxy
 command -v traffic-record
 command -v traffic-replay
@@ -175,7 +176,10 @@ name = "record-api"
 hosts = ["api.example.com"]
 methods = ["GET", "POST"]
 path_prefixes = ["/api/"]
+# BEGIN AI-MANAGED CASE PATH PATTERNS
+# source_revision = "source-git-revision"
 case_path_patterns = ["/api/users/*/xxx"]
+# END AI-MANAGED CASE PATH PATTERNS
 headers = { "x-record" = "yes" }
 ```
 
@@ -221,6 +225,13 @@ segments together, configure segment-wildcard `case_path_patterns`. For
 example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
 `api-users-wildcard-xxx` when the rule has
 `case_path_patterns = ["/api/users/*/xxx"]`.
+
+For replay-time AI feedback, keep patterns inside the explicit managed block
+shown above. Use `traffic-recorder-config case-path-patterns plan` to inspect
+the proposed diff, then rerun it with `apply`. Focused case sources are
+add-only; deletion requires an authoritative case source and the explicit
+`--allow-delete` flag. See [docs/development.md](docs/development.md) for the
+complete command.
 
 `request.json` stores the matched gateway request. `expected-response.json`
 stores the matched upstream response; if the response body has
