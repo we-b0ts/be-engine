@@ -273,12 +273,108 @@ run_as_root() {
 
 DNS_CAPTURE_UP=0
 FAKE_REDIRECT_UP=0
+WATCH_PID=""
+WATCH_SESSION_ID=""
+
+session_is_running() {
+  local session_id="$1"
+  [ -n "$session_id" ] && pgrep -s "$session_id" -f '.' >/dev/null 2>&1
+}
+
+collect_descendant_session_ids() {
+  local parent_pid="$1"
+  local child_pid
+  local session_id
+
+  while IFS= read -r child_pid; do
+    if [ -z "$child_pid" ]; then
+      continue
+    fi
+    session_id="$(ps -o sid= -p "$child_pid" 2>/dev/null | tr -d ' ')"
+    if [ -n "$session_id" ]; then
+      printf '%s\n' "$session_id"
+    fi
+    collect_descendant_session_ids "$child_pid"
+  done < <(pgrep -P "$parent_pid" 2>/dev/null || true)
+}
+
+stop_watch_session() {
+  local attempt
+  local running
+  local session_id
+  local -a session_ids=()
+
+  if [ -z "$WATCH_PID" ]; then
+    return
+  fi
+
+  # cargo-watch starts the recorder command in its own process group. Run the
+  # watcher in a dedicated session so cleanup can stop every process group it
+  # created, including a recorder that outlived cargo-watch itself.
+  mapfile -t session_ids < <(
+    {
+      printf '%s\n' "$WATCH_SESSION_ID"
+      collect_descendant_session_ids "$WATCH_PID"
+    } | sort -u
+  )
+
+  for session_id in "${session_ids[@]}"; do
+    if [ "$session_id" != "$WATCH_SESSION_ID" ]; then
+      pkill -INT -s "$session_id" -f '.' 2>/dev/null || true
+    fi
+  done
+
+  # Give the recorder's SIGINT handler time to flush the active run before
+  # stopping cargo-watch. Escalate only if a child session does not exit.
+  for ((attempt = 0; attempt < 30; attempt++)); do
+    running=0
+    for session_id in "${session_ids[@]}"; do
+      if [ "$session_id" != "$WATCH_SESSION_ID" ] && session_is_running "$session_id"; then
+        running=1
+        break
+      fi
+    done
+    if [ "$running" -eq 0 ]; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  kill -TERM "$WATCH_PID" 2>/dev/null || true
+  for session_id in "${session_ids[@]}"; do
+    if session_is_running "$session_id"; then
+      pkill -TERM -s "$session_id" -f '.' 2>/dev/null || true
+    fi
+  done
+
+  for ((attempt = 0; attempt < 20; attempt++)); do
+    running=0
+    for session_id in "${session_ids[@]}"; do
+      if session_is_running "$session_id"; then
+        running=1
+        break
+      fi
+    done
+    if [ "$running" -eq 0 ]; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  for session_id in "${session_ids[@]}"; do
+    if session_is_running "$session_id"; then
+      pkill -KILL -s "$session_id" -f '.' 2>/dev/null || true
+    fi
+  done
+  wait "$WATCH_PID" 2>/dev/null || true
+}
 
 cleanup_dns() {
   local exit_code=$?
-  trap - EXIT
+  trap - EXIT HUP INT TERM
+  set +e
+  stop_watch_session
   if [ "$ENABLE_DNS" -eq 1 ]; then
-    set +e
     if [ "$FAKE_REDIRECT_UP" -eq 1 ]; then
       run_as_root "$ROOT_DIR/scripts/setup_fake_ip_redirect.sh" down
     fi
@@ -289,8 +385,12 @@ cleanup_dns() {
   exit "$exit_code"
 }
 
+trap cleanup_dns EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 if [ "$ENABLE_DNS" -eq 1 ]; then
-  trap cleanup_dns EXIT
   if [ -n "$OWNER_UID" ]; then
     echo "local recording owner filter enabled: OWNER_UID=$OWNER_UID" >&2
   fi
@@ -300,10 +400,19 @@ if [ "$ENABLE_DNS" -eq 1 ]; then
   FAKE_REDIRECT_UP=1
 fi
 
-cargo watch \
+setsid cargo watch \
   --watch src \
   --watch tests \
   --watch Cargo.toml \
   --watch Cargo.lock \
   --watch "$CONFIG" \
-  --exec "run ${run_args[*]}"
+  --exec "run ${run_args[*]}" &
+WATCH_PID=$!
+WATCH_SESSION_ID="$WATCH_PID"
+
+if wait "$WATCH_PID"; then
+  WATCH_EXIT_CODE=0
+else
+  WATCH_EXIT_CODE=$?
+fi
+exit "$WATCH_EXIT_CODE"
