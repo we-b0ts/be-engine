@@ -139,6 +139,10 @@ impl MitmCa {
         self.ca_cert_pem.clone()
     }
 
+    pub(crate) fn ca_cert_pem_ref(&self) -> &str {
+        &self.ca_cert_pem
+    }
+
     pub fn ca_cert_der(&self) -> CertificateDer<'static> {
         self.ca_cert_der.clone()
     }

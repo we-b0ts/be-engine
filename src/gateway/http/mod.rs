@@ -16,6 +16,7 @@ use uuid::Uuid;
 use crate::access_policy::AccessDecision;
 use crate::config::HttpGatewayConfig;
 use crate::http::access::classify_method;
+use crate::http::rewrite::{self, RewriteInput};
 use crate::process_lookup::{lookup_listening_process, process_label};
 use crate::recorder::http::case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
 use crate::recorder::{
@@ -257,10 +258,8 @@ async fn handle_gateway_request(
     match send_upstream(state.client(), outbound).await {
         Ok(upstream_response) => {
             let status = upstream_response.status();
-            let response_headers = upstream_response.headers().clone();
-            let response_headers_for_record =
-                redact_headers(&response_headers, &state.config().recording.redact_headers);
-            let body_bytes = match upstream_response.into_body().collect().await {
+            let mut response_headers = upstream_response.headers().clone();
+            let mut body_bytes = match upstream_response.into_body().collect().await {
                 Ok(collected) => collected.to_bytes(),
                 Err(err) => {
                     return record_gateway_error(GatewayErrorContext {
@@ -282,6 +281,49 @@ async fn handle_gateway_request(
                     .await;
                 }
             };
+            match rewrite::apply(
+                &state.config().http_response_rewrite,
+                state.dns_registry(),
+                state.kubectl_proxy_manager(),
+                state.ca().ca_cert_pem_ref(),
+                RewriteInput {
+                    method: &method,
+                    uri: &original_uri,
+                    authority: authority.as_deref(),
+                    status,
+                    headers: &response_headers,
+                    body: &body_bytes,
+                },
+            )
+            .await
+            {
+                Ok(Some(rewritten)) => {
+                    response_headers = rewritten.headers;
+                    body_bytes = rewritten.body;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return record_gateway_error(GatewayErrorContext {
+                        state,
+                        id,
+                        client_addr,
+                        method,
+                        original_uri,
+                        authority,
+                        request_headers: request_headers_for_record,
+                        request_body,
+                        started,
+                        matched_rule: matched_rule_name.clone(),
+                        case,
+                        should_record,
+                        target: Some(upstream_base.clone()),
+                        err,
+                    })
+                    .await;
+                }
+            }
+            let response_headers_for_record =
+                redact_headers(&response_headers, &state.config().recording.redact_headers);
 
             if should_record {
                 let event = HttpExchangeEvent {
