@@ -519,6 +519,7 @@ mod tests {
         let runtime = ReplayRuntime::load(
             MysqlReplayConfig {
                 case_dir: case_dir.clone(),
+                selected_case_ids: Vec::new(),
                 dns_listen: dns_addr,
                 tcp_listen: "127.0.0.1:0".parse().unwrap(),
                 fake_cidr: "198.18.0.0/15".to_string(),
@@ -572,6 +573,7 @@ mod tests {
             command: "wait_ready".to_string(),
             case_id: None,
             fail_on_dirty: false,
+            fail_on_incomplete: false,
         })
         .await
         .unwrap();
@@ -629,10 +631,14 @@ mod tests {
             .await
             .unwrap();
 
-        let report = run_control(&session_path, "report", None, true)
+        let report = run_control_with_gates(&session_path, "finalize", None, true, true)
             .await
             .unwrap();
         assert_eq!(report["dirty"], false);
+        assert_eq!(report["complete"], true);
+        assert_eq!(report["finalized"], true);
+        assert_eq!(report["report"]["version"], 4);
+        assert_eq!(report["report"]["finalized"], true);
         assert_eq!(
             report["report"]["matched_queries"]
                 .as_array()
@@ -640,6 +646,96 @@ mod tests {
                 .len(),
             2
         );
+        abort_tasks(tasks);
+    }
+
+    #[tokio::test]
+    async fn finalize_rejects_pending_collection_cases() {
+        let temp = tempfile::tempdir().unwrap();
+        let collection_dir = temp.path().join("record-api").join("api-user");
+        for case_id in ["case-a", "case-b"] {
+            let case_dir = collection_dir.join(case_id);
+            tokio::fs::create_dir_all(&case_dir).await.unwrap();
+            tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
+                .await
+                .unwrap();
+        }
+        let session_path = temp.path().join(".replay").join("session.json");
+        let control_socket_path = temp.path().join(".replay").join("control.sock");
+        let (_addr, tasks) = spawn_replay_with_control(
+            &collection_dir,
+            Some(temp.path().join("report.json")),
+            session_path.clone(),
+            control_socket_path,
+        )
+        .await;
+
+        run_control(&session_path, "wait_ready", None, false)
+            .await
+            .unwrap();
+        let error = run_control_with_gates(&session_path, "finalize", None, true, true)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("pending or active cases"));
+        let status = run_control(&session_path, "status", None, false)
+            .await
+            .unwrap();
+        assert_eq!(status["session"]["ready"], true);
+        abort_tasks(tasks);
+    }
+
+    #[tokio::test]
+    async fn finalize_keeps_session_running_when_report_cannot_be_persisted() {
+        let temp = tempfile::tempdir().unwrap();
+        let collection_dir = temp.path().join("record-api").join("api-user");
+        let case_dir = collection_dir.join("case-a");
+        tokio::fs::create_dir_all(&case_dir).await.unwrap();
+        tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
+            .await
+            .unwrap();
+        let session_path = temp.path().join(".replay").join("session.json");
+        let control_socket_path = temp.path().join(".replay").join("control.sock");
+        let report_path = temp.path().join("report.json");
+        let (_addr, tasks) = spawn_replay_with_control(
+            &collection_dir,
+            Some(report_path.clone()),
+            session_path.clone(),
+            control_socket_path,
+        )
+        .await;
+
+        run_control(&session_path, "wait_ready", None, false)
+            .await
+            .unwrap();
+        run_control(&session_path, "begin", Some("case-a"), false)
+            .await
+            .unwrap();
+        run_control(&session_path, "end", Some("case-a"), true)
+            .await
+            .unwrap();
+        tokio::fs::remove_file(&report_path).await.unwrap();
+        tokio::fs::create_dir(&report_path).await.unwrap();
+
+        let error = run_control_with_gates(&session_path, "finalize", None, true, true)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("failed to persist replay report")
+        );
+        let status = run_control(&session_path, "status", None, false)
+            .await
+            .unwrap();
+        assert_eq!(status["session"]["ready"], true);
+        assert_eq!(status["session"]["finalized"], false);
+
+        tokio::fs::remove_dir(&report_path).await.unwrap();
+        let finalized = run_control_with_gates(&session_path, "finalize", None, true, true)
+            .await
+            .unwrap();
+        assert_eq!(finalized["report"]["finalized"], true);
         abort_tasks(tasks);
     }
 
@@ -705,6 +801,37 @@ mod tests {
         abort_tasks(tasks);
     }
 
+    #[tokio::test]
+    async fn replay_selection_loads_only_requested_cases() {
+        let temp = tempfile::tempdir().unwrap();
+        let collection_dir = temp.path().join("record-api").join("api-user");
+        let case_a = collection_dir.join("case-a");
+        let case_b = collection_dir.join("case-b");
+        write_string_dependency(&case_a, "SELECT 1", "alice").await;
+        write_string_dependency(&case_b, "SELECT 2", "bob").await;
+        let session_path = temp.path().join(".replay").join("session.json");
+        let control_socket_path = temp.path().join(".replay").join("control.sock");
+        let (_addr, tasks) = spawn_replay_with_control_and_selection(
+            &collection_dir,
+            Some(temp.path().join("report.json")),
+            session_path.clone(),
+            control_socket_path,
+            vec!["case-b".to_string()],
+        )
+        .await;
+
+        let cases = run_control(&session_path, "wait_ready", None, false)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            cases["session"]["selected_case_ids"],
+            serde_json::json!(["case-b"])
+        );
+        assert_eq!(cases["session"]["cases"].as_array().unwrap().len(), 1);
+        abort_tasks(tasks);
+    }
+
     async fn spawn_replay(
         case_dir: &Path,
         report_path: Option<PathBuf>,
@@ -714,6 +841,7 @@ mod tests {
         let runtime = ReplayRuntime::load(
             MysqlReplayConfig {
                 case_dir: case_dir.to_path_buf(),
+                selected_case_ids: Vec::new(),
                 dns_listen: "127.0.0.1:0".parse().unwrap(),
                 tcp_listen: addr,
                 fake_cidr: "198.18.0.0/15".to_string(),
@@ -742,12 +870,30 @@ mod tests {
         session_path: PathBuf,
         control_socket_path: PathBuf,
     ) -> (SocketAddr, Vec<tokio::task::JoinHandle<()>>) {
+        spawn_replay_with_control_and_selection(
+            case_dir,
+            report_path,
+            session_path,
+            control_socket_path,
+            Vec::new(),
+        )
+        .await
+    }
+
+    async fn spawn_replay_with_control_and_selection(
+        case_dir: &Path,
+        report_path: Option<PathBuf>,
+        session_path: PathBuf,
+        control_socket_path: PathBuf,
+        selected_case_ids: Vec<String>,
+    ) -> (SocketAddr, Vec<tokio::task::JoinHandle<()>>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let runtime = Arc::new(
             ReplayRuntime::load(
                 MysqlReplayConfig {
                     case_dir: case_dir.to_path_buf(),
+                    selected_case_ids,
                     dns_listen: "127.0.0.1:0".parse().unwrap(),
                     tcp_listen: addr,
                     fake_cidr: "198.18.0.0/15".to_string(),
@@ -782,176 +928,25 @@ mod tests {
         case_id: Option<&str>,
         fail_on_dirty: bool,
     ) -> Result<Value> {
+        run_control_with_gates(session_path, command, case_id, fail_on_dirty, false).await
+    }
+
+    async fn run_control_with_gates(
+        session_path: &Path,
+        command: &str,
+        case_id: Option<&str>,
+        fail_on_dirty: bool,
+        fail_on_incomplete: bool,
+    ) -> Result<Value> {
         run_mysql_replay_control(MysqlReplayControlConfig {
             session_path: session_path.to_path_buf(),
             command: command.to_string(),
             case_id: case_id.map(ToOwned::to_owned),
             fail_on_dirty,
+            fail_on_incomplete,
         })
         .await
     }
 
-    async fn write_string_dependency(case_dir: &Path, sql: &str, value: &str) {
-        tokio::fs::create_dir_all(case_dir).await.unwrap();
-        let dependency = serde_json::json!({
-            "event_type": "mysql_exchange",
-            "target_host": "mysql.internal",
-            "target_port": 3306,
-            "target_addr": "mysql.internal:3306",
-            "database": "appdb",
-            "username": "root",
-            "command": "COM_QUERY",
-            "sql": sql,
-            "response": {
-                "status": "resultset",
-                "columns": [{
-                    "name": "name",
-                    "table": "user",
-                    "column": "name",
-                    "family": "string",
-                    "sql_type": "VARCHAR",
-                    "nullable": false
-                }],
-                "rows": [[{"kind": "string", "value": value}]]
-            }
-        });
-        tokio::fs::write(
-            case_dir.join("dependencies.jsonl"),
-            serde_json::to_string(&dependency).unwrap(),
-        )
-        .await
-        .unwrap();
-    }
-
-    async fn query_one_string(addr: SocketAddr, sql: &str, expected: &str) {
-        let mut client = connect_login(addr).await;
-        write_packet_bytes(
-            &mut client,
-            MysqlPacket {
-                sequence_id: 0,
-                payload: [vec![0x03], sql.as_bytes().to_vec()].concat(),
-            },
-        )
-        .await;
-        assert_eq!(
-            read_packet(&mut client).await.unwrap().unwrap().payload,
-            vec![1]
-        );
-        let _column = read_packet(&mut client).await.unwrap().unwrap();
-        let _columns_eof = read_packet(&mut client).await.unwrap().unwrap();
-        let row = read_packet(&mut client).await.unwrap().unwrap();
-        assert_eq!(row.payload, lenenc_bytes(expected.as_bytes()));
-        let _rows_eof = read_packet(&mut client).await.unwrap().unwrap();
-    }
-
-    fn abort_tasks(tasks: Vec<tokio::task::JoinHandle<()>>) {
-        for task in tasks {
-            task.abort();
-        }
-    }
-
-    async fn connect_login(addr: SocketAddr) -> TcpStream {
-        let mut client = TcpStream::connect(addr).await.unwrap();
-        let handshake = read_packet(&mut client).await.unwrap().unwrap();
-        assert_eq!(handshake.sequence_id, 0);
-        write_packet_bytes(
-            &mut client,
-            MysqlPacket {
-                sequence_id: 1,
-                payload: login_payload("appdb"),
-            },
-        )
-        .await;
-        let ok = read_packet(&mut client).await.unwrap().unwrap();
-        assert_eq!(ok.payload[0], 0x00);
-        client
-    }
-
-    async fn write_packet_bytes(stream: &mut TcpStream, packet: MysqlPacket) {
-        stream.write_all(&packet.to_wire_bytes()).await.unwrap();
-    }
-
-    fn nul_terminated_len(bytes: &[u8]) -> usize {
-        bytes
-            .iter()
-            .position(|byte| *byte == 0)
-            .expect("missing NUL terminator")
-    }
-
-    fn replay_column_type_and_flags(payload: &[u8]) -> (u8, u16) {
-        let mut offset = 0;
-        for _ in 0..6 {
-            let (_, next) = read_lenenc_bytes(payload, offset).expect("lenenc column field");
-            offset = next;
-        }
-        let (_, offset) = read_lenenc_int(payload, offset).expect("column fixed length marker");
-        let type_code = *payload.get(offset + 6).expect("column type code");
-        let flags = u16::from_le_bytes([
-            *payload.get(offset + 7).expect("column flags low byte"),
-            *payload.get(offset + 8).expect("column flags high byte"),
-        ]);
-        (type_code, flags)
-    }
-
-    fn login_payload(database: &str) -> Vec<u8> {
-        let flags = CLIENT_PROTOCOL_41
-            | CLIENT_SECURE_CONNECTION
-            | CLIENT_CONNECT_WITH_DB
-            | CLIENT_PLUGIN_AUTH;
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&flags.to_le_bytes());
-        payload.extend_from_slice(&0_u32.to_le_bytes());
-        payload.push(45);
-        payload.extend_from_slice(&[0; 23]);
-        payload.extend_from_slice(b"root\0");
-        payload.push(0);
-        payload.extend_from_slice(database.as_bytes());
-        payload.push(0);
-        payload.extend_from_slice(b"mysql_native_password\0");
-        payload
-    }
-
-    fn stmt_execute_long_param(statement_id: u32, value: u32) -> Vec<u8> {
-        let mut payload = vec![0x17];
-        payload.extend_from_slice(&statement_id.to_le_bytes());
-        payload.push(0);
-        payload.extend_from_slice(&1_u32.to_le_bytes());
-        payload.push(0);
-        payload.push(1);
-        payload.push(MYSQL_TYPE_LONG);
-        payload.push(0);
-        payload.extend_from_slice(&value.to_le_bytes());
-        payload
-    }
-
-    fn dns_query(domain: &str) -> Vec<u8> {
-        let mut packet = Vec::new();
-        packet.extend_from_slice(&0x1234_u16.to_be_bytes());
-        packet.extend_from_slice(&0x0100_u16.to_be_bytes());
-        packet.extend_from_slice(&1_u16.to_be_bytes());
-        packet.extend_from_slice(&0_u16.to_be_bytes());
-        packet.extend_from_slice(&0_u16.to_be_bytes());
-        packet.extend_from_slice(&0_u16.to_be_bytes());
-        for label in domain.split('.') {
-            packet.push(label.len() as u8);
-            packet.extend_from_slice(label.as_bytes());
-        }
-        packet.push(0);
-        packet.extend_from_slice(&1_u16.to_be_bytes());
-        packet.extend_from_slice(&1_u16.to_be_bytes());
-        packet
-    }
-
-    async fn wait_for_report_contains(path: &Path, expected: &str) {
-        for _ in 0..50 {
-            if tokio::fs::read_to_string(path)
-                .await
-                .is_ok_and(|raw| raw.contains(expected))
-            {
-                return;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        panic!("replay report was not written");
-    }
+    include!("test_helpers.rs");
 }

@@ -1,4 +1,4 @@
 interface:
   display_name: "Recorded E2E Cases"
   short_description: "Replay cases and maintain recorder feedback"
-  default_prompt: "Use $recorded-e2e-cases to replay these recorded cases, associate them with source APIs, and maintain safe recorder feedback in the target repo."
+  default_prompt: "Use $recorded-e2e-cases to replay these cases and enforce canonical final-replay, aggregate, and managed route-pattern evidence gates."

@@ -47,6 +47,7 @@ pub struct CasePathPatternReport {
     pub source_revision: String,
     pub case_source: String,
     pub authority: CasePathPatternAuthority,
+    pub no_candidates: bool,
     pub changed: bool,
     pub applied: bool,
     pub patterns_before: Vec<String>,
@@ -139,18 +140,34 @@ pub fn plan_case_path_pattern_feedback(
         .iter()
         .map(|pattern| validate_feedback_pattern(pattern, rule))
         .collect::<Result<BTreeSet<_>>>()?;
-    if feedback.authority == CasePathPatternAuthority::Focused {
-        ensure!(
-            !requested.is_empty(),
-            "focused feedback requires at least one --pattern"
-        );
-    }
-
     let before = rule
         .case_path_patterns
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
+    if feedback.authority == CasePathPatternAuthority::Focused && requested.is_empty() {
+        let patterns = before.into_iter().collect::<Vec<_>>();
+        return Ok(CasePathPatternPlan {
+            config_path: feedback.config_path.clone(),
+            original: original.clone(),
+            updated: original,
+            report: CasePathPatternReport {
+                config: feedback.config_path,
+                rule: feedback.rule_name,
+                source_revision: feedback.source_revision,
+                case_source: feedback.case_source,
+                authority: feedback.authority,
+                no_candidates: true,
+                changed: false,
+                applied: false,
+                patterns_before: patterns.clone(),
+                patterns_after: patterns,
+                added: Vec::new(),
+                removed: Vec::new(),
+                diff: String::new(),
+            },
+        });
+    }
     let after = match feedback.authority {
         CasePathPatternAuthority::Focused => before.union(&requested).cloned().collect(),
         CasePathPatternAuthority::Authoritative => requested,
@@ -202,6 +219,7 @@ pub fn plan_case_path_pattern_feedback(
             source_revision: feedback.source_revision,
             case_source: feedback.case_source,
             authority: feedback.authority,
+            no_candidates: false,
             changed,
             applied: false,
             patterns_before,

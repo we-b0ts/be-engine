@@ -163,18 +163,25 @@ Name the scope branch from the migrated unit, such as
 target repo's branch naming convention when one exists.
 
 After E2E, startup smoke, quality checks, and reviews pass, commit the focused
-changes and open a PR from the scope branch to `dev-migration`. Do not leave a
-completed migration only unstaged, staged, stashed, or on a local branch with no
-PR. If the repository has no reachable PR mechanism, keep the migration
-incomplete and report the branch, commit, and blocker.
+changes, push the scope branch, and open a PR from it to `dev-migration`.
+Independently verify the remote branch, focused commit SHA, PR URL, and PR base
+through canonical Git and hosting interfaces. Do not leave a completed
+migration only unstaged, staged, stashed, locally committed, or pushed without
+a PR. If the repository has no reachable PR mechanism or authority is missing,
+keep the migration `blocked_delivery` and report the branch, commit, and exact
+blocker.
 
 ## Target Artifacts
 
 Before implementing behavior:
 
-- ensure `AGENTS.md` exists or is merged as a concise documentation map
-- ensure migration details live in structured docs under `docs/`, with
-  `AGENTS.md` acting as a concise map
+- inspect target `AGENTS.md` without modifying it and require it to state or
+  link to the recorded-migration definition of done in this skill
+- stop as `blocked_repository_contract` when that contract is absent or weaker;
+  do not create, append to, or repair target `AGENTS.md` unless the user
+  separately and explicitly requests that exact file change
+- require linked migration details to live in structured docs under `docs/`,
+  with `AGENTS.md` acting only as a concise map
 - create or update the current index `.migration/e2e.yaml` and one
   `.migration/runs/<run-key>.yaml` for the selected recording source, following
   [e2e-run-state.md](e2e-run-state.md)
@@ -195,19 +202,30 @@ case matrix, counts, replay results, validation statuses, blockers, and feedback
 in `.migration/runs/<run-key>.yaml`. Never mix results from different recording
 sources in either file.
 
-When the current recording source contains more than one standard replay
-report, generate `.migration/run-reports/<run-key>.json` with
-`traffic-replay-aggregate --case-source <path> --output <path>`. The target
-facade may orchestrate its own tests and invoke this command, but it must not
-parse or sum recorder report internals. The aggregate tool discovers report
-files and published cases recursively from the supplied source root; it does
-not parse target-language test output or classify unreported cases.
+For every collection/run source, multi-case selection, or source with multiple
+standard replay reports/sessions, generate
+`.migration/run-reports/<run-key>.json` with `traffic-replay-aggregate
+--case-source <path> --case-id <selected-id> --session-id <final-session-id>
+--output <path> --fail-on-incomplete --fail-on-dirty`; repeat case and session
+ids for the exact completion set. Only one published case replayed in one
+finalized session/report can use
+`not_applicable_single_case_single_session`. A target facade may already
+orchestrate the command, but the agent must inspect the recorder-owned artifact
+directly and must not modify the facade solely to implement or self-report this
+gate. The aggregate tool discovers report files and published cases recursively
+from the supplied source root; it does not parse target-language test output or
+classify unreported cases.
 
 ## Command And Config Contract
 
 Prefer the target repo's existing command facade. If it already uses `make`,
 `just`, package scripts, or another clear convention, wire migration commands
 through that convention and record them in the current run state.
+
+A facade is a convenience interface, never the authority for migration
+completion. Its exit code, summary, or self-written ledger MUST NOT substitute
+for direct recorder, Git, remote-branch, or PR evidence. Do not add checks to a
+facade merely to manufacture that evidence.
 
 If no convention exists, create a source-controlled development CLI facade at
 `scripts/<project>-cli`. This is a development/debug/build script, not a
@@ -326,33 +344,30 @@ make E2E failures point to the relevant log path(s).
 
 ## Documentation Map Contract
 
-Treat `AGENTS.md` as a navigation map, not the storage place for detailed
-migration rules. Keep this contract short enough that agents can apply it
-without a separate template file.
+Treat target `AGENTS.md` as a read-only repository contract during ordinary
+migration work. This skill does not authorize creating or editing it. Only an
+explicit user request naming that file can authorize a change.
 
-When creating or substantially updating target repo docs:
+Before implementation, verify that target `AGENTS.md` states or links to all of
+these mandatory clauses:
 
-- keep `AGENTS.md` at 100 lines or fewer
-- include only repo overview, essential entry points, and links to detailed
-  docs
-- place design decisions, execution plans, product/API specs, operations notes,
-  recorded E2E contracts, failure handling, and references under `docs/`
-- prefer the target repo's existing docs organization; if none exists, design a
-  small structure under `docs/` that fits the project
-- do not create empty boilerplate docs just to satisfy a template
-- avoid duplicating the same rule in `AGENTS.md` and detailed docs
-- update `.migration/e2e.yaml` with project-wide docs paths and
-  `agents_md_status`
+- replay the entire selected case set after the final behavior-affecting change
+- generate required recorder-owned aggregate evidence and require clean,
+  complete in-scope coverage
+- always plan managed `case_path_patterns` feedback when inputs exist and apply
+  every confirmed safe diff through `traffic-recorder-config`, then rerun the
+  plan and require no remaining diff
+- create a focused commit, push the scope branch, and open a PR to
+  `dev-migration`
+- treat target scripts and AI-authored facades as orchestration helpers, not
+  independent completion evidence
 
-If an existing `AGENTS.md` is already longer than 100 lines, do not make it
-longer. Add the shortest possible migration map entry and move new migration
-details into `docs/`. If safe, shrink the existing file into a map; otherwise
-record a docs hygiene blocker.
-
-Cross-links must be verifiable. Use the target repo's markdown/link checker or
-CI convention when one exists. If none exists, make the command facade's
-`doctor` or `check` verify that the files linked from `AGENTS.md` exist, and
-record the command in `.migration/e2e.yaml`.
+The file should remain a concise map, with detailed rules under linked `docs/`.
+If any clause or link target is missing, record
+`agents_md_status: blocked_repository_contract`, list the exact gap, and stop
+before product implementation. Do not silently add text, weaken the clause, or
+move the gate into a target script. Verify cross-links with the target repo's
+existing checker when available, otherwise inspect them directly.
 
 ## Runtime Value Strategy
 
@@ -523,7 +538,8 @@ the source repo and replay report:
 - the E2E case source is explicit for the current invocation, with no
   developer-machine recording path or historical batch selected by default
 - replay session readiness is verified before requests, every selected case is
-  bracketed by begin/end, and aggregate replay reports are clean
+  bracketed by begin/end, the final session report is version four and
+  finalized, and aggregate replay reports are complete and clean
 - replay exceptions and background/noise classifications, when present, come
   from one source-controlled policy file rather than duplicated shell and
   target-language allowlists
@@ -605,7 +621,7 @@ document the normal startup command, then update the current run state.
 
 ## Completion Output
 
-Keep output concise:
+Start with `complete`, `incomplete`, or `blocked`. Keep output concise:
 
 - migrated scope
 - source repo path and recorded case path or selected case set
@@ -615,8 +631,15 @@ Keep output concise:
 - runtime lifecycle commands and verified process status for service scopes
 - logging config and essential log path(s) for service scopes
 - selected recorded case set pass/fail result
+- final replay report and session ids, aggregate report status/path/counts, and
+  case-path-pattern plan status/path
+- focused commit SHA, pushed branch verification, PR target, and PR URL
 - package/workspace decision and architecture review status
 - dependency touch status, especially any unmatched target calls or unused case
   exchanges
 - dynamic value strategy and semantics review status
 - blockers or recording improvement feedback only when present
+
+Do not use `done`, `passed`, `delivered`, or equivalent success wording while
+any repository-contract, replay, aggregate, pattern, quality, push, or PR gate
+is missing.

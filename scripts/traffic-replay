@@ -32,7 +32,8 @@ Options:
   --intercept              Enable local DNS capture and fake-IP TCP redirect. This is default.
   --no-intercept           Start replay listeners without changing local DNS/iptables.
   --config PATH            Read optional replay settings from a TOML file.
-  --report PATH            Replay report path. Defaults to <case-dir>/.replay/replay-report.json.
+  --case-id ID             Replay only this published case. Repeat for a case set.
+  --report PATH            Replay report path. Defaults to a unique session report.
   --session PATH           Session JSON path. Defaults to ./.replay/session.json in caller cwd.
   --control-socket PATH    Control socket path. Defaults to session dir/control.sock.
   --dns-listen ADDR        DNS replay listener. Default: 127.0.0.153:15353.
@@ -58,6 +59,7 @@ CONFIG=""
 CASE_DIR=""
 CASE_BASE="$CALLER_CWD"
 CASE_SET=0
+CASE_IDS=()
 REPORT_PATH=""
 REPORT_BASE="$CALLER_CWD"
 REPORT_SET=0
@@ -106,6 +108,11 @@ while [ "$#" -gt 0 ]; do
     --config)
       need_value "$1" "${2:-}"
       CONFIG="$2"
+      shift 2
+      ;;
+    --case-id)
+      need_value "$1" "${2:-}"
+      CASE_IDS+=("$2")
       shift 2
       ;;
     --report)
@@ -334,7 +341,9 @@ if [ ! -d "$CASE_DIR" ]; then
 fi
 
 if [ -z "$REPORT_PATH" ]; then
-  REPORT_PATH="$CASE_DIR/.replay/replay-report.json"
+  mkdir -p "$CASE_DIR/.replay/sessions"
+  REPORT_DIR="$(mktemp -d "$CASE_DIR/.replay/sessions/session.XXXXXXXX")"
+  REPORT_PATH="$REPORT_DIR/replay-report.json"
 else
   REPORT_PATH="$(resolve_path "$REPORT_PATH" "$REPORT_BASE")"
 fi
@@ -498,6 +507,9 @@ if [ "$ENABLE_INTERCEPT" = "1" ]; then
 fi
 
 args=(replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LISTEN" --fake-cidr "$FAKE_CIDR" --report "$REPORT_PATH" --session "$SESSION_PATH" --control-socket "$CONTROL_SOCKET_PATH")
+for case_id in "${CASE_IDS[@]}"; do
+  args+=(--case-id "$case_id")
+done
 args+=("${APP_ARGS[@]}")
 
 export RUST_LOG="${RUST_LOG:-info}"

@@ -5,6 +5,8 @@ pub(super) struct ReplayControlRequest {
     pub(super) case_id: Option<String>,
     #[serde(default)]
     pub(super) fail_on_dirty: bool,
+    #[serde(default)]
+    pub(super) fail_on_incomplete: bool,
 }
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
@@ -56,6 +58,7 @@ pub(super) async fn send_control_request_once(config: MysqlReplayControlConfig) 
         "command": config.command,
         "case_id": config.case_id,
         "fail_on_dirty": config.fail_on_dirty,
+        "fail_on_incomplete": config.fail_on_incomplete,
     });
     let mut stream = UnixStream::connect(control_socket)
         .await
@@ -252,9 +255,19 @@ pub(super) async fn handle_control_request(
             let state = state.lock().await;
             let report = state.snapshot_report();
             let dirty = report_is_dirty(&report);
-            if request.fail_on_dirty && dirty {
+            let complete = report_is_complete(&report);
+            if request.fail_on_incomplete && !complete {
                 serde_json::json!({
                     "ok": false,
+                    "complete": false,
+                    "dirty": dirty,
+                    "error": "replay report has pending or active cases",
+                    "report": report,
+                })
+            } else if request.fail_on_dirty && dirty {
+                serde_json::json!({
+                    "ok": false,
+                    "complete": complete,
                     "dirty": true,
                     "error": "replay report has unmatched, unused, or unsupported exchanges",
                     "report": report,
@@ -262,11 +275,13 @@ pub(super) async fn handle_control_request(
             } else {
                 serde_json::json!({
                     "ok": true,
+                    "complete": complete,
                     "dirty": dirty,
                     "report": report,
                 })
             }
         }
+        "finalize" => finalize_replay(&request, state.clone()).await,
         "stop" => {
             let state = state.lock().await;
             serde_json::json!({
@@ -285,8 +300,76 @@ pub(super) async fn handle_control_request(
             "error": format!("unknown replay control command {other}"),
         }),
     };
-    let _ = write_report_snapshot(state, report_path).await;
-    (response, command == "stop")
+    let should_stop = command == "stop"
+        || (command == "finalize" && response.get("ok").and_then(Value::as_bool).unwrap_or(false));
+    if command == "finalize" && should_stop && report_path.is_none() {
+        state.lock().await.finalized_at = None;
+        return (
+            serde_json::json!({
+                "ok": false,
+                "error": "cannot finalize replay without a configured report path",
+            }),
+            false,
+        );
+    }
+    let write_result = if command == "finalize" && should_stop {
+        write_final_report_value(
+            state.clone(),
+            report_path.clone().expect("finalize report path checked"),
+            &response["report"],
+        )
+        .await
+    } else {
+        write_report_snapshot(state.clone(), report_path.clone()).await
+    };
+    if let Err(error) = write_result
+        && command == "finalize"
+        && should_stop
+    {
+        state.lock().await.finalized_at = None;
+        let _ = write_report_snapshot(state, report_path).await;
+        return (
+            serde_json::json!({
+                "ok": false,
+                "error": format!("failed to persist replay report: {error:#}"),
+            }),
+            false,
+        );
+    }
+    (response, should_stop)
+}
+
+async fn finalize_replay(request: &ReplayControlRequest, state: Arc<Mutex<ReplayState>>) -> Value {
+    let mut state = state.lock().await;
+    let report = state.snapshot_report();
+    let complete = report_is_complete(&report);
+    let dirty = report_is_dirty(&report);
+    if request.fail_on_incomplete && !complete {
+        return serde_json::json!({
+            "ok": false,
+            "complete": false,
+            "dirty": dirty,
+            "error": "cannot finalize replay with pending or active cases",
+            "report": report,
+        });
+    }
+    if request.fail_on_dirty && dirty {
+        return serde_json::json!({
+            "ok": false,
+            "complete": complete,
+            "dirty": true,
+            "error": "cannot finalize replay with unmatched, unused, or unsupported exchanges",
+            "report": report,
+        });
+    }
+    state.finalized_at = Some(Utc::now());
+    serde_json::json!({
+        "ok": true,
+        "complete": complete,
+        "dirty": dirty,
+        "finalized": true,
+        "report": state.snapshot_report(),
+    })
 }
 
 pub(super) async fn begin_case(
@@ -418,8 +501,11 @@ pub(super) fn session_snapshot(
     ready: bool,
 ) -> Value {
     serde_json::json!({
-        "version": 1,
+        "version": 2,
         "session_id": state.session_id.to_string(),
+        "started_at": state.started_at,
+        "finalized_at": state.finalized_at,
+        "finalized": state.finalized_at.is_some(),
         "root": state.root_dir.display().to_string(),
         "mode": state.mode,
         "control_socket": control_socket_path.map(|path| path.display().to_string()),
@@ -431,11 +517,16 @@ pub(super) fn session_snapshot(
         "ca_cert_path": state.ca_cert_path.display().to_string(),
         "active_case_id": state.active_case_id.clone(),
         "cases": state.case_reports(),
+        "selected_case_ids": state.cases.keys().cloned().collect::<Vec<_>>(),
     })
 }
 
 pub(super) fn report_is_dirty(report: &ReplayReport) -> bool {
     report.is_dirty()
+}
+
+pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
+    report.is_complete()
 }
 
 pub(super) fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {

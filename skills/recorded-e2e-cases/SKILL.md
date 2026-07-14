@@ -8,6 +8,18 @@ description: Replay and diagnose E2E tests from traffic-recorder-proxy case, col
 Treat a recorded case as an E2E recipe: the HTTP boundary and every case-owned
 dependency touch form one compatibility contract.
 
+## Mandatory Semantics
+
+Interpret `MUST`, `MUST NOT`, `REQUIRED`, and `BLOCKED` literally. Completion is
+the conjunction of every applicable gate; one passing layer never compensates
+for a missing layer. If the user narrows the task or a required tool/action is
+unavailable, hand off the useful work but keep the result `incomplete` or
+`blocked`. Never downgrade a missing gate to a warning.
+
+Before replay, record the exact completion case source and selected published
+case ids. A completion claim applies only to that set. MUST NOT claim that a
+parent collection or run passed after replaying only a subset.
+
 ## Workflow
 
 1. Resolve the supplied case, collection, or run directory. For collections,
@@ -32,10 +44,17 @@ dependency touch form one compatibility contract.
 5. Follow [replay-workflow.md](references/replay-workflow.md): use
    `traffic-replay` and `traffic-replay-cli` from `PATH`, wait for readiness,
    bracket every case with `begin` and `end --fail-on-dirty`, require a clean
-   aggregate report, and stop the session. When one case source produces more
-   than one replay report, read [aggregate-report.md](references/aggregate-report.md)
-   and use `traffic-replay-aggregate` from `PATH`; never calculate totals
-   manually or make the target project parse replay report internals.
+   `finalize --fail-on-dirty --fail-on-incomplete` result, and retain its final
+   session id and version-four report. Successful finalization means that exact
+   report was atomically published before replay stopped; a write failure keeps
+   the session open and is incomplete evidence.
+   Read
+   [aggregate-report.md](references/aggregate-report.md) and run
+   `traffic-replay-aggregate` from `PATH` for every collection/run source,
+   multi-case selection, or source replayed through multiple reports/sessions.
+   Only one published case replayed in exactly one session/report can be marked
+   `not_applicable_single_case_single_session`. Never calculate totals manually
+   or make the target project parse replay report internals.
 6. Build each request from its `request.json`; do not hardcode case-specific
    method, URI, headers, query, or body data. Compare JSON structurally and use
    exact bytes only for non-JSON or an explicitly configured exact-byte mode.
@@ -53,11 +72,13 @@ dependency touch form one compatibility contract.
 9. After replay, update a source-controlled target `recorder.toml` only when it
    has an explicit AI-managed `case_path_patterns` block. Use
    `traffic-recorder-config case-path-patterns plan`, inspect its diff and JSON
-   report, then use `apply`; never edit the TOML directly. Treat a focused or
+   report even when zero patterns or no diff are expected, then use `apply` for
+   every confirmed safe diff; never edit the TOML directly. Treat a focused or
    partial case source as add-only. Rebuild or delete patterns only from the
    target's declared authoritative case collection and pass `--allow-delete`
    only after reviewing the authoritative plan. If the command or managed
-   block is unavailable, report feedback without changing the config.
+   block is unavailable, report the exact prerequisite without changing or
+   creating the config or managed block.
 10. Run the focused case set first, then relevant project checks. Iterate at
    most three times and modify product code only after replay evidence and
    routing are complete and the failure is a real behavior defect.
@@ -74,6 +95,57 @@ require every expected produce and delivery to be consumed. Treat transactions,
 Admin APIs, compression, authentication, unsupported API versions, unsafe
 captures, and Kafka proxy errors as incomplete evidence rather than inventing
 broker behavior.
+
+## Non-Negotiable Completion Gate
+
+MUST NOT report a selected case source as passed, complete, or delivered unless
+all applicable items below are evidenced by canonical tools and artifacts from
+the final state:
+
+1. End every selected case, run the final replay report with
+   `traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete`, and
+   require its version-four report to contain the exact selected case ids,
+   final session id, `finalized: true`, and `finalized_at`. A stale active case,
+   pending case, live session, or non-finalized report is incomplete evidence.
+2. For every collection/run source, multi-case selection, or source with more
+   than one replay report/session, run `traffic-replay-aggregate` with
+   exact repeated `--case-id` and `--session-id` values plus
+   `--fail-on-incomplete --fail-on-dirty`. Require a persisted aggregate report
+   for the exact completion case source with all selected published cases
+   reported, no in-scope unreported cases, every reported case ended,
+   `complete: true`, and no dirty evidence. The only allowed aggregate
+   exemption is `not_applicable_single_case_single_session`, backed by one
+   published case and one finalized session/report. Never substitute
+   hand-maintained totals, target-runner output, or migration-ledger counts.
+3. When a source repo and a target recorder config with an explicit AI-managed
+   `case_path_patterns` block are available, always run
+   `traffic-recorder-config case-path-patterns plan`, even when no pattern or
+   change is expected. Persist and inspect its JSON report. Record `applied`
+   only after applying every confirmed safe diff, persisting the apply report,
+   and rerunning `plan` to prove the final config has no diff. Record
+   `confirmed_no_change` only when the initial plan has no diff; a focused plan
+   with no candidate patterns MUST report `no_candidates: true`. The only
+   allowed non-applicable reasons are
+   `not_applicable_missing_source_repo` and
+   `not_applicable_missing_managed_config`; state the missing input explicitly.
+   A missing command when all inputs exist is `blocked`, not non-applicable.
+   `path_prefixes` controls capture scope;
+   `case_path_patterns` controls case grouping, so broad capture is not evidence
+   that grouping feedback is unnecessary. Apply a confirmed diff only through
+   the managed command and keep focused case sources add-only.
+4. Treat target-project scripts and command facades as orchestration helpers,
+   not independent proof that this gate passed. MUST verify replay lifecycle,
+   aggregate coverage, and route-pattern outcome from recorder-owned CLI output
+   and artifacts. MUST NOT patch a target facade merely to manufacture or
+   self-report completion evidence.
+
+The following never satisfy this gate: a zero exit code from an AI-authored
+facade, manually summed case counts, a stale report from before the final
+change, `path_prefixes`, a planned-but-unapplied safe pattern diff, or a ledger
+entry without its referenced canonical artifact.
+
+If any applicable item is missing, report the result as `incomplete` or
+`blocked` with the missing artifact or action. Do not use success wording.
 
 ## Stop And Report
 
@@ -93,8 +165,9 @@ requested API scope.
 
 ## Output
 
-Keep the final response short: selected case set and pass/fail state, aggregate
-report path and published/reported/unreported coverage when applicable,
-essential changes, verification command, missing evidence when blocked,
-case-to-route and route-pattern feedback status, and concise evidence-backed
-recorder feedback.
+Start the final response with exactly one state: `complete`, `incomplete`, or
+`blocked`. Then keep it short: exact completion case source and selected case
+ids, final replay report and session ids, aggregate status/path and coverage,
+case-path-pattern plan status/path, essential changes, verification command,
+missing evidence, case-to-route status, and concise evidence-backed recorder
+feedback. MUST NOT use success wording when any applicable gate is missing.

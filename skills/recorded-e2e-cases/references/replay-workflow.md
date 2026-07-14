@@ -82,7 +82,8 @@ Pass the selected case directory, collection directory, or run directory
 directly. A collection directory is usually
 `recordings/<run-id>/<rule>/<uri-group>`; a run directory is
 `recordings/<run-id>`. The replay session loads bootstrap dependencies plus the
-selected case files, but case dependencies are not a global pool. The active
+selected case files. Repeat `--case-id` to load an exact subset from a broader
+source. Case dependencies are not a global pool. The active
 case is selected with `traffic-replay-cli begin <case-id>` and closed with
 `traffic-replay-cli end <case-id> --fail-on-dirty`.
 
@@ -149,16 +150,31 @@ Implement in this order:
 7. End the case with `traffic-replay-cli end <case-id> --fail-on-dirty` and use
    `dependencies-summary.json`, when present, as the dependency coverage
    checklist for replay.
-8. After the selected case set finishes, run `traffic-replay-cli report
-   --fail-on-dirty` and stop the session with `traffic-replay-cli stop`.
+8. After the selected case set finishes, run `traffic-replay-cli finalize
+   --fail-on-dirty --fail-on-incomplete`. Require a version-four report with
+   the exact selected case ids, its session id, `finalized: true`, and
+   `finalized_at`. Successful finalization atomically publishes that exact
+   report and stops replay. A validation or report-write failure leaves replay
+   running; retain the diagnostic report and use `traffic-replay-cli stop` only
+   for cleanup.
 
-When a supplied recording source is replayed through multiple sessions, run
-`traffic-replay-aggregate --case-source <source> --output <path>` after all
-sessions stop. Pass only the recording source root; do not enumerate report
-paths or manually add their counters. Read [aggregate-report.md](aggregate-report.md)
-for coverage and dirty-state semantics. The aggregate covers recorder replay
-evidence only; the target runner still owns its HTTP assertions and process
-exit status.
+After all sessions finalize, run `traffic-replay-aggregate --case-source
+<source> --case-id <id> --session-id <id> --output <path>
+--fail-on-incomplete --fail-on-dirty` for every collection/run source,
+multi-case selection, or source replayed through multiple reports or sessions.
+Repeat case and session ids to describe the exact final evidence. Retained
+attempts that overlap the same case without an exact session selection are an
+error, not evidence to merge or guess. The only allowed exemption is one
+published case replayed in exactly one finalized session/report; record it as
+`not_applicable_single_case_single_session`. Pass only the exact completion
+case source root; do not enumerate report paths or manually add counters. Read
+[aggregate-report.md](aggregate-report.md) for coverage and dirty-state
+semantics. The aggregate covers recorder replay evidence only; the target
+runner still owns its HTTP assertions and process exit status.
+
+Run and inspect recorder-owned commands directly even when a target facade
+invokes them. A facade exit code, its summary text, or its self-written state is
+not evidence. Do not patch a target facade solely to add or claim this gate.
 
 The replay is complete only when the request returns the expected response while
 using dependency behavior replayed from the recorded dependency file, and the
@@ -172,7 +188,8 @@ version, selected DB, username, command, and exact arguments. Memcached matching
 includes Text/Binary wire protocol and request semantics while ignoring the
 live Binary opaque; replay rewrites response opaque to the live value. Cache
 unmatched, unsupported, unsafe, and unused evidence is dirty and must fail the
-same `end/report --fail-on-dirty` gates as HTTP and MySQL evidence.
+same `end` and `finalize --fail-on-dirty --fail-on-incomplete` gates as HTTP and
+MySQL evidence.
 
 Kafka replay uses the standard client wire protocol with a constrained
 one-broker, one-partition facade. Use the E2E Kafka profile documented by the
@@ -402,9 +419,13 @@ unmatched/unused dependency list and do not finish as success.
 
 ## Final Response
 
-On success, keep the final response short:
+Start with `complete`, `incomplete`, or `blocked`. On success, keep the final
+response short:
 
 - selected recorded case set pass/fail conclusion
+- final replay report path and session id
+- aggregate status, path, and published/reported/unreported counts
+- case-path-pattern plan status and path
 - essential changes
 - verification command
 - concise recorder feedback when replay required guessing, debug-only data, or

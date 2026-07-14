@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::pending;
 use std::mem;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -6,9 +6,10 @@ use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -46,6 +47,7 @@ const SO_ORIGINAL_DST: libc::c_int = 80;
 #[derive(Debug, Clone)]
 pub struct ReplayConfig {
     pub case_dir: PathBuf,
+    pub selected_case_ids: Vec<String>,
     pub dns_listen: SocketAddr,
     pub tcp_listen: SocketAddr,
     pub fake_cidr: String,
@@ -63,11 +65,15 @@ pub struct ReplayControlConfig {
     pub command: String,
     pub case_id: Option<String>,
     pub fail_on_dirty: bool,
+    pub fail_on_incomplete: bool,
 }
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
-pub use report::aggregate::{ReplayAggregateReport, aggregate_replay_reports};
+pub use report::aggregate::{
+    ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
+    aggregate_replay_reports_with_options,
+};
 
 pub async fn run_replay_control(config: ReplayControlConfig) -> Result<Value> {
     send_control_request(config).await
@@ -143,7 +149,12 @@ impl ReplayRuntime {
             .ca_key_path
             .unwrap_or_else(|| replay_artifact_dir.join("replay-ca-key.pem"));
         let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
-        let (mode, mut cases, active_case_id) = discover_replay_cases(&root_dir).await?;
+        let selected_case_ids = config
+            .selected_case_ids
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let (mode, mut cases, active_case_id) =
+            discover_replay_cases(&root_dir, &selected_case_ids).await?;
         let bootstrap_path = find_upward(&root_dir, "bootstrap-dependencies.jsonl");
         let mut mysql = MysqlReplayState::default();
         let mut http_exchanges = Vec::new();
@@ -194,6 +205,8 @@ impl ReplayRuntime {
 
         let state = ReplayState {
             session_id: Uuid::new_v4(),
+            started_at: Utc::now(),
+            finalized_at: None,
             dns_listen,
             tcp_listen,
             mode,
@@ -281,6 +294,8 @@ impl ReplayRuntime {
 #[derive(Debug)]
 struct ReplayState {
     session_id: Uuid,
+    started_at: DateTime<Utc>,
+    finalized_at: Option<DateTime<Utc>>,
     dns_listen: SocketAddr,
     tcp_listen: SocketAddr,
     mode: ReplayMode,
@@ -303,7 +318,11 @@ struct ReplayState {
 impl ReplayState {
     fn snapshot_report(&self) -> ReplayReport {
         ReplayReport {
-            version: 3,
+            version: 4,
+            session_id: self.session_id.to_string(),
+            started_at: self.started_at,
+            finalized_at: self.finalized_at,
+            finalized: self.finalized_at.is_some(),
             mode: self.mode,
             dns_listen: self.dns_listen.to_string(),
             tcp_listen: self.tcp_listen.to_string(),
@@ -316,6 +335,7 @@ impl ReplayState {
                 .unwrap_or_default(),
             active_case_id: self.active_case_id.clone(),
             cases: self.case_reports(),
+            selected_case_ids: self.cases.keys().cloned().collect(),
             bootstrap_dependencies_path: self
                 .bootstrap_path
                 .as_ref()
