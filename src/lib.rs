@@ -32,17 +32,19 @@ use crate::access_policy::{AccessDecision, OperationClass, decide};
 use crate::active_case::{
     ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection, DependencyTargets,
 };
+use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::http::case::CaseInvalidation;
 
 pub use config::{
     AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
     CasePathPatternReport, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy,
+    HttpGatewayRuleConfig, HttpResponseRewriteConfig, HttpResponseRewritePluginConfig,
+    HttpResponseRewriteRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy,
     RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol,
     TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
     UdpGatewayConfig, plan_case_path_pattern_feedback,
 };
-pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry};
+pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
     AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
@@ -76,6 +78,7 @@ struct AppStateInner {
     client: ProxyClient,
     upstream_tls_config: Arc<ClientConfig>,
     active_cases: ActiveCaseRegistry,
+    kubectl_proxy_manager: KubectlProxyManager,
 }
 
 impl AppState {
@@ -115,6 +118,7 @@ impl AppState {
                 client,
                 upstream_tls_config,
                 active_cases: ActiveCaseRegistry::new(case_matching_ready),
+                kubectl_proxy_manager: KubectlProxyManager::default(),
             }),
         })
     }
@@ -236,6 +240,10 @@ impl AppState {
 
     pub fn dns_registry(&self) -> &FakeDnsRegistry {
         &self.inner.dns_registry
+    }
+
+    pub(crate) fn kubectl_proxy_manager(&self) -> &KubectlProxyManager {
+        &self.inner.kubectl_proxy_manager
     }
 
     pub fn ca(&self) -> &MitmCa {
@@ -393,6 +401,7 @@ impl AppState {
             }
         };
 
+        self.kubectl_proxy_manager().shutdown().await;
         let has_failed_cases = self
             .recorder()
             .finish_run()

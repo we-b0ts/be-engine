@@ -49,6 +49,23 @@ kafka_port_hints = [9092]
 # port = 6380
 # protocol = "redis" # redis | memcached | kafka | raw
 
+[http_response_rewrite]
+# Response rewriting is opt-in. Recorder starts and manages kubectl proxy at
+# the address configured by the plugin below.
+enabled = false
+
+[[http_response_rewrite.rules]]
+name = "pluto-eci-kubeconfig"
+authorities = ["cs.aliyuncs.com"]
+methods = ["GET"]
+# Exact path match. Keep the Pluto ECI cluster ID in the configured path.
+path = "/api/v2/k8s/c142fe56e07d04a749c1630fb5f1b680b/user_config"
+status_codes = [200]
+content_types = ["application/json"]
+# The plugin owns the fixed synthetic domain. Recorder starts and manages the
+# configured kubectl binary using the original kubeconfig from this response.
+plugin = { name = "pluto-eci-kubeconfig", kubectl_binary = "kubectl", proxy_listen = "127.0.0.1:8001" }
+
 [udp_gateway]
 # Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP
 # recording is side-effect capture; it does not wait for or synthesize replies.

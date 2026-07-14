@@ -2,15 +2,19 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 mod feedback;
+mod http_response_rewrite;
 mod recording;
 
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
     plan_case_path_pattern_feedback,
+};
+pub use http_response_rewrite::{
+    HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
@@ -23,6 +27,7 @@ pub struct AppConfig {
     pub tcp_gateway: TcpGatewayConfig,
     pub udp_gateway: UdpGatewayConfig,
     pub http: HttpConfig,
+    pub http_response_rewrite: HttpResponseRewriteConfig,
     pub http_gateway: HttpGatewayConfig,
     pub mysql: MysqlConfig,
     pub recording: RecordingConfig,
@@ -166,7 +171,18 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
-        self.recording.validate()
+        self.recording.validate()?;
+        self.http_response_rewrite.validate()?;
+        if self.http_response_rewrite.enabled
+            && (!self.dns_mock.enabled
+                || !self.tcp_gateway.enabled
+                || !self.tcp_gateway.record_http)
+        {
+            bail!(
+                "http_response_rewrite requires dns_mock.enabled, tcp_gateway.enabled, and tcp_gateway.record_http"
+            );
+        }
+        Ok(())
     }
 }
 

@@ -13,11 +13,24 @@ use tracing::{info, warn};
 
 use crate::AppState;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FakeDnsUpstreamProtocol {
+    Http,
+    Https,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FakeDnsEntry {
     pub domain: String,
     pub fake_ip: Ipv4Addr,
     pub real_ips: Vec<Ipv4Addr>,
+    #[serde(default)]
+    pub response_alias: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_authority: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_protocol: Option<FakeDnsUpstreamProtocol>,
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
 }
@@ -86,15 +99,56 @@ impl FakeDnsRegistry {
         inner.by_domain.get(domain).cloned()
     }
 
+    pub async fn get_response_alias_by_domain(&self, domain: &str) -> Option<FakeDnsEntry> {
+        let inner = self.inner.lock().await;
+        inner
+            .by_domain
+            .get(&normalize_domain(domain))
+            .filter(|entry| entry.response_alias)
+            .cloned()
+    }
+
+    pub async fn register_response_alias(
+        &self,
+        domain: &str,
+        real_ip: Ipv4Addr,
+        upstream_authority: &str,
+        upstream_protocol: FakeDnsUpstreamProtocol,
+    ) -> Result<FakeDnsEntry> {
+        self.allocate_or_update_entry(
+            domain,
+            vec![real_ip],
+            true,
+            Some(upstream_authority.to_string()),
+            Some(upstream_protocol),
+        )
+        .await
+    }
+
     async fn allocate_or_update(
         &self,
         domain: &str,
         real_ips: Vec<Ipv4Addr>,
     ) -> Result<FakeDnsEntry> {
+        self.allocate_or_update_entry(domain, real_ips, false, None, None)
+            .await
+    }
+
+    async fn allocate_or_update_entry(
+        &self,
+        domain: &str,
+        real_ips: Vec<Ipv4Addr>,
+        response_alias: bool,
+        upstream_authority: Option<String>,
+        upstream_protocol: Option<FakeDnsUpstreamProtocol>,
+    ) -> Result<FakeDnsEntry> {
         let mut inner = self.inner.lock().await;
         let key = normalize_domain(domain);
         if let Some(entry) = inner.by_domain.get_mut(&key) {
             entry.real_ips = real_ips;
+            entry.response_alias = response_alias;
+            entry.upstream_authority = upstream_authority;
+            entry.upstream_protocol = upstream_protocol;
             entry.last_seen = Utc::now();
             let entry = entry.clone();
             inner.persist_entries()?;
@@ -116,6 +170,9 @@ impl FakeDnsRegistry {
                 domain: key.clone(),
                 fake_ip,
                 real_ips,
+                response_alias,
+                upstream_authority,
+                upstream_protocol,
                 first_seen: now,
                 last_seen: now,
             };
@@ -226,7 +283,18 @@ async fn handle_query(
     let config = state.config().dns_mock.clone();
     let question = parse_question(&query)?;
     let response = if question.qtype == 1 && question.qclass == 1 {
-        if let Some(real_ips) = static_hosts_for_domain(&config.hosts, &question.domain) {
+        if let Some(entry) = state
+            .dns_registry()
+            .get_response_alias_by_domain(&question.domain)
+            .await
+        {
+            build_fake_a_response(
+                &query,
+                question.question_end,
+                entry.fake_ip,
+                config.ttl_seconds,
+            )?
+        } else if let Some(real_ips) = static_hosts_for_domain(&config.hosts, &question.domain) {
             let entry = state
                 .dns_registry()
                 .allocate_or_update(&question.domain, real_ips)
@@ -596,6 +664,32 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(first.fake_ip, second.fake_ip);
+    }
+
+    #[tokio::test]
+    async fn registry_persists_response_alias_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fake_dns_registry.json");
+        let registry = FakeDnsRegistry::load_or_new("198.18.0.0/15", Some(&path), &[]).unwrap();
+        let entry = registry
+            .register_response_alias(
+                "K8S-CLUSTER.PLUTO-ECI.TRP.TEST.",
+                Ipv4Addr::LOCALHOST,
+                "127.0.0.1:8001",
+                FakeDnsUpstreamProtocol::Http,
+            )
+            .await
+            .unwrap();
+
+        let registry = FakeDnsRegistry::load_or_new("198.18.0.0/15", Some(&path), &[]).unwrap();
+        let alias = registry
+            .get_response_alias_by_domain("k8s-cluster.pluto-eci.trp.test")
+            .await
+            .unwrap();
+        assert_eq!(alias.fake_ip, entry.fake_ip);
+        assert_eq!(alias.real_ips, vec![Ipv4Addr::LOCALHOST]);
+        assert_eq!(alias.upstream_authority.as_deref(), Some("127.0.0.1:8001"));
+        assert_eq!(alias.upstream_protocol, Some(FakeDnsUpstreamProtocol::Http));
     }
 
     #[tokio::test]

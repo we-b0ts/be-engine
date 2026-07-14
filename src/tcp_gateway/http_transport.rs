@@ -41,11 +41,19 @@ pub(super) fn build_upstream_request(
     source_headers: &HeaderMap,
     domain: &str,
     original_port: u16,
+    upstream_authority: Option<&str>,
 ) -> Result<Request<Full<Bytes>>> {
     let mut builder = Request::builder().method(method).uri(uri);
     let headers = builder.headers_mut().expect("request builder headers");
-    append_end_to_end_headers(source_headers, headers, HostHeaderPolicy::Preserve);
-    if !headers.contains_key(HOST) {
+    let host_policy = if upstream_authority.is_some() {
+        HostHeaderPolicy::Replace
+    } else {
+        HostHeaderPolicy::Preserve
+    };
+    append_end_to_end_headers(source_headers, headers, host_policy);
+    if let Some(upstream_authority) = upstream_authority {
+        headers.insert(HOST, upstream_authority.parse()?);
+    } else if !headers.contains_key(HOST) {
         let host = if original_port == 80 {
             domain.to_string()
         } else {
@@ -94,5 +102,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(uri.to_string(), "http://127.0.0.1:8080/hello?a=1");
+    }
+
+    #[test]
+    fn response_alias_replaces_host_for_local_upstream() {
+        let mut source_headers = HeaderMap::new();
+        source_headers.insert(HOST, "k8s-cluster.pluto-eci.trp.test:8001".parse().unwrap());
+        let request = build_upstream_request(
+            &Method::GET,
+            "/api".parse().unwrap(),
+            Bytes::new(),
+            &source_headers,
+            "k8s-cluster.pluto-eci.trp.test",
+            8001,
+            Some("127.0.0.1:8001"),
+        )
+        .unwrap();
+
+        assert_eq!(request.headers()[HOST], "127.0.0.1:8001");
     }
 }

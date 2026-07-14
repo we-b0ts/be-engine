@@ -56,6 +56,59 @@ case is created. After ready, only one matched case can be active at a time;
 overlapping matching requests are also sent to fallback so dependencies are not
 shared across cases.
 
+### Rewriting HTTP Responses
+
+HTTP response rewriting is an opt-in recording feature for responses that
+publish a later connection target. The first built-in plugin,
+`pluto-eci-kubeconfig`, rewrites the Kubernetes API server in Pluto ECI's
+`user_config` JSON response from an IPv4 address to a synthetic `.test` domain.
+That domain is registered in the recorder's fake-DNS registry and routed to a
+local `kubectl proxy`, allowing the later HTTPS traffic to pass through the TCP
+gateway and be recorded. The rewritten kubeconfig uses HTTPS and replaces its
+cluster CA with the Recorder CA so client-go retains the TLS credentials and
+trusts the Recorder-generated certificate for the synthetic domain. The
+original kubeconfig, including its original CA and Kubernetes server IP, is
+passed unchanged to the managed `kubectl proxy`.
+
+The rewrite rule reads the request authority and full path from configuration.
+Its `path` value includes the Pluto ECI cluster ID and is matched exactly, not
+as a prefix. The plugin owns the fixed synthetic domain
+`k8s-c142fe56e07d04a749c1630fb5f1b680b.pluto-eci.trp.test`. Configure the
+`kubectl_binary` executable and an unused IPv4 loopback `proxy_listen` address.
+
+Recorder manages the proxy lifecycle; do not start `kubectl proxy` separately.
+When a response matches, Recorder writes its original kubeconfig to a unique
+owner-only (`0600`) temporary file, starts `kubectl proxy`, waits for the
+configured TCP address to accept connections, and only then registers the DNS
+alias and returns the rewritten response. An unchanged kubeconfig reuses the
+running process; changed credentials restart it. Recorder terminates the child
+and removes its temporary file during replacement or shutdown. Kubeconfig
+contents and paths are never logged or added as separate recording events.
+The fake-IP gateway terminates the synthetic HTTPS connection and forwards the
+decrypted request over plain HTTP to the managed proxy; the proxy independently
+uses the original kubeconfig for HTTPS and client authentication to Kubernetes.
+
+Enable the example `[http_response_rewrite]` configuration in
+`config/recorder.example.toml` and ensure the configured `kubectl_binary` is
+installed. The rewrite feature requires `dns_mock`, `tcp_gateway`, and
+`tcp_gateway.record_http` to be enabled. The configured `proxy_listen` address
+must not already be occupied.
+
+Rules are evaluated in configuration order and only the first matching rule is
+run. Version one accepts complete, identity-encoded HTTP response bodies; a
+matched response with compression is rejected instead of being partially
+rewritten. Plugin parse or rewrite failures fail the HTTP exchange and active
+case, so an original IP-bearing response is never silently published. On
+success, body-dependent headers such as `Content-Length`, `ETag`, and `Digest`
+are normalized, and the rewritten response is what the recorder stores.
+
+Plugins are compiled into the binary. They receive request/response metadata
+and the complete decoded body, then return a rewritten body plus any synthetic
+route and managed local-process requirement discovered from the response. The
+Recorder core owns process and secret-file lifecycle. Adding another plugin
+therefore requires a code change and rebuild; no dynamic `.so` loading is
+involved.
+
 For replay-mode development:
 
 ```bash

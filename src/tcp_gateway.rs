@@ -19,8 +19,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use crate::access_policy::AccessDecision;
-use crate::dns_mock::FakeDnsEntry;
+use crate::dns_mock::{FakeDnsEntry, FakeDnsUpstreamProtocol};
 use crate::http::access::classify_method;
+use crate::http::rewrite::{self, RewriteInput};
 use crate::process_lookup::process_label;
 use crate::recorder::{
     HeaderMapSnapshot, HttpExchangeEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent,
@@ -258,6 +259,7 @@ async fn handle_http_request(
         &request_headers,
         &entry.domain,
         fake_addr.port(),
+        entry.upstream_authority.as_deref(),
     ) {
         Ok(req) => req,
         Err(err) => {
@@ -285,10 +287,8 @@ async fn handle_http_request(
     match send_upstream(state.client(), outbound).await {
         Ok(upstream_response) => {
             let status = upstream_response.status();
-            let response_headers = upstream_response.headers().clone();
-            let response_headers_for_record =
-                redact_headers(&response_headers, &state.config().recording.redact_headers);
-            let body_bytes = match upstream_response.into_body().collect().await {
+            let mut response_headers = upstream_response.headers().clone();
+            let mut body_bytes = match upstream_response.into_body().collect().await {
                 Ok(collected) => collected.to_bytes(),
                 Err(err) => {
                     return record_http_error(HttpErrorContext {
@@ -311,6 +311,50 @@ async fn handle_http_request(
                     .await;
                 }
             };
+            match rewrite::apply(
+                &state.config().http_response_rewrite,
+                state.dns_registry(),
+                state.kubectl_proxy_manager(),
+                state.ca().ca_cert_pem_ref(),
+                RewriteInput {
+                    method: &method,
+                    uri: &original_uri,
+                    authority: authority.as_deref(),
+                    status,
+                    headers: &response_headers,
+                    body: &body_bytes,
+                },
+            )
+            .await
+            {
+                Ok(Some(rewritten)) => {
+                    response_headers = rewritten.headers;
+                    body_bytes = rewritten.body;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return record_http_error(HttpErrorContext {
+                        state,
+                        id,
+                        client_addr,
+                        client_process,
+                        scheme: "fake_ip_http".to_string(),
+                        method,
+                        original_uri,
+                        authority,
+                        request_headers: request_headers_for_record,
+                        request_body,
+                        started,
+                        entry,
+                        fake_addr,
+                        upstream_addr: Some(upstream_addr),
+                        err,
+                    })
+                    .await;
+                }
+            }
+            let response_headers_for_record =
+                redact_headers(&response_headers, &state.config().recording.redact_headers);
 
             let event = HttpExchangeEvent {
                 id,
@@ -440,7 +484,12 @@ async fn handle_https_request(
         }
     };
 
-    let outbound_uri = match build_origin_form_uri(&original_uri) {
+    let plain_http_upstream = entry.upstream_protocol == Some(FakeDnsUpstreamProtocol::Http);
+    let outbound_uri = match if plain_http_upstream {
+        build_upstream_uri(upstream_addr, &original_uri)
+    } else {
+        build_origin_form_uri(&original_uri)
+    } {
         Ok(uri) => uri,
         Err(err) => {
             return record_http_error(HttpErrorContext {
@@ -471,6 +520,7 @@ async fn handle_https_request(
         &request_headers,
         &entry.domain,
         fake_addr.port(),
+        entry.upstream_authority.as_deref(),
     ) {
         Ok(req) => req,
         Err(err) => {
@@ -495,13 +545,18 @@ async fn handle_https_request(
         }
     };
 
-    match send_https_upstream(&state, upstream_addr, &entry.domain, outbound).await {
+    let upstream_response = if plain_http_upstream {
+        send_upstream(state.client(), outbound)
+            .await
+            .map_err(anyhow::Error::from)
+    } else {
+        send_https_upstream(&state, upstream_addr, &entry.domain, outbound).await
+    };
+    match upstream_response {
         Ok(upstream_response) => {
             let status = upstream_response.status();
-            let response_headers = upstream_response.headers().clone();
-            let response_headers_for_record =
-                redact_headers(&response_headers, &state.config().recording.redact_headers);
-            let body_bytes = match upstream_response.into_body().collect().await {
+            let mut response_headers = upstream_response.headers().clone();
+            let mut body_bytes = match upstream_response.into_body().collect().await {
                 Ok(collected) => collected.to_bytes(),
                 Err(err) => {
                     return record_http_error(HttpErrorContext {
@@ -524,6 +579,50 @@ async fn handle_https_request(
                     .await;
                 }
             };
+            match rewrite::apply(
+                &state.config().http_response_rewrite,
+                state.dns_registry(),
+                state.kubectl_proxy_manager(),
+                state.ca().ca_cert_pem_ref(),
+                RewriteInput {
+                    method: &method,
+                    uri: &original_uri,
+                    authority: authority.as_deref(),
+                    status,
+                    headers: &response_headers,
+                    body: &body_bytes,
+                },
+            )
+            .await
+            {
+                Ok(Some(rewritten)) => {
+                    response_headers = rewritten.headers;
+                    body_bytes = rewritten.body;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    return record_http_error(HttpErrorContext {
+                        state,
+                        id,
+                        client_addr,
+                        client_process,
+                        scheme: "fake_ip_https".to_string(),
+                        method,
+                        original_uri,
+                        authority,
+                        request_headers: request_headers_for_record,
+                        request_body,
+                        started,
+                        entry,
+                        fake_addr,
+                        upstream_addr: Some(upstream_addr),
+                        err,
+                    })
+                    .await;
+                }
+            }
+            let response_headers_for_record =
+                redact_headers(&response_headers, &state.config().recording.redact_headers);
 
             let event = HttpExchangeEvent {
                 id,
@@ -575,7 +674,7 @@ async fn handle_https_request(
                 entry,
                 fake_addr,
                 upstream_addr: Some(upstream_addr),
-                err: anyhow!("fake-IP HTTPS upstream request failed: {err}"),
+                err: anyhow!("fake-IP HTTPS client upstream request failed: {err}"),
             })
             .await
         }
