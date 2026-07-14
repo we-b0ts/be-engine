@@ -8,12 +8,20 @@ use serde_json::Value;
 
 const AGGREGATE_VERSION: u8 = 1;
 const MIN_REPLAY_REPORT_VERSION: u64 = 2;
-const MAX_REPLAY_REPORT_VERSION: u64 = 3;
+const MAX_REPLAY_REPORT_VERSION: u64 = 4;
+
+#[derive(Debug, Clone, Default)]
+pub struct ReplayAggregateOptions {
+    pub case_ids: BTreeSet<String>,
+    pub session_ids: BTreeSet<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReplayAggregateReport {
     pub version: u8,
     pub case_source: String,
+    pub selected_case_ids: Vec<String>,
+    pub selected_session_ids: Vec<String>,
     pub complete: bool,
     pub dirty: bool,
     pub reports: Vec<ReplayReportSummary>,
@@ -27,6 +35,14 @@ pub struct ReplayReportSummary {
     pub path: String,
     pub version: u64,
     pub case_dir: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finalized_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finalized: Option<bool>,
     pub complete: bool,
     pub dirty: bool,
     pub case_statuses: BTreeMap<String, usize>,
@@ -111,13 +127,25 @@ impl ReplayAggregateReport {
 }
 
 pub fn aggregate_replay_reports(case_source: &Path) -> Result<ReplayAggregateReport> {
+    aggregate_replay_reports_with_options(case_source, &ReplayAggregateOptions::default())
+}
+
+pub fn aggregate_replay_reports_with_options(
+    case_source: &Path,
+    options: &ReplayAggregateOptions,
+) -> Result<ReplayAggregateReport> {
     let case_source = canonical_dir(case_source, "case source")?;
-    let published_cases = discover_published_cases(&case_source)?;
+    let mut published_cases = discover_published_cases(&case_source)?;
+    validate_case_selection(&case_source, &published_cases, &options.case_ids)?;
+    if !options.case_ids.is_empty() {
+        published_cases.retain(|case_id, _| options.case_ids.contains(case_id));
+    }
     let canonical_reports = discover_replay_reports(&case_source)?;
 
     let mut summaries = Vec::with_capacity(canonical_reports.len());
     let mut cases = Vec::new();
     let mut case_ids = BTreeSet::new();
+    let mut session_ids = BTreeSet::new();
     let mut aggregate_counts = ReplayAggregateCounts::default();
 
     for report_path in canonical_reports {
@@ -126,6 +154,9 @@ pub fn aggregate_replay_reports(case_source: &Path) -> Result<ReplayAggregateRep
             .with_context(|| format!("failed to read replay report {}", report_path.display()))?;
         let report: Value = serde_json::from_slice(&payload)
             .with_context(|| format!("invalid replay report JSON {}", report_path.display()))?;
+        if !report_matches_selection(&report, &report_path, options, &mut session_ids)? {
+            continue;
+        }
         let summary = summarize_report(&case_source, &report_path, &report, &mut case_ids)?;
         for case in required_array(&report, "cases", &report_path)? {
             cases.push(ReplayAggregateCase {
@@ -137,6 +168,19 @@ pub fn aggregate_replay_reports(case_source: &Path) -> Result<ReplayAggregateRep
         merge_statuses(&mut aggregate_counts.case_statuses, &summary.case_statuses);
         aggregate_counts.events.add(&summary.counts);
         summaries.push(summary);
+    }
+
+    let missing_sessions = options
+        .session_ids
+        .difference(&session_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing_sessions.is_empty() {
+        bail!(
+            "selected replay session ids were not found for the selected cases under {}: {}",
+            case_source.display(),
+            missing_sessions.join(", ")
+        );
     }
 
     cases.sort_by(|left, right| left.case_id.cmp(&right.case_id));
@@ -163,12 +207,15 @@ pub fn aggregate_replay_reports(case_source: &Path) -> Result<ReplayAggregateRep
     aggregate_counts.unreported_cases = unreported_cases.len();
     let complete = unreported_cases.is_empty()
         && !cases.is_empty()
-        && cases.iter().all(|case| case.status == "ended");
+        && cases.iter().all(|case| case.status == "ended")
+        && summaries.iter().all(|report| report.complete);
     let dirty = summaries.iter().any(|report| report.dirty);
 
     Ok(ReplayAggregateReport {
         version: AGGREGATE_VERSION,
         case_source: case_source.display().to_string(),
+        selected_case_ids: published_cases.keys().cloned().collect(),
+        selected_session_ids: options.session_ids.iter().cloned().collect(),
         complete,
         dirty,
         reports: summaries,
@@ -176,6 +223,71 @@ pub fn aggregate_replay_reports(case_source: &Path) -> Result<ReplayAggregateRep
         unreported_cases,
         counts: aggregate_counts,
     })
+}
+
+fn validate_case_selection(
+    case_source: &Path,
+    published_cases: &BTreeMap<String, PublishedCase>,
+    selected_case_ids: &BTreeSet<String>,
+) -> Result<()> {
+    let missing = selected_case_ids
+        .iter()
+        .filter(|case_id| !published_cases.contains_key(*case_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        bail!(
+            "selected replay case ids are not published under {}: {}",
+            case_source.display(),
+            missing.join(", ")
+        );
+    }
+    Ok(())
+}
+
+fn report_matches_selection(
+    report: &Value,
+    report_path: &Path,
+    options: &ReplayAggregateOptions,
+    selected_sessions_found: &mut BTreeSet<String>,
+) -> Result<bool> {
+    let selected_session_id = if options.session_ids.is_empty() {
+        None
+    } else {
+        let Some(session_id) = report.get("session_id").and_then(Value::as_str) else {
+            return Ok(false);
+        };
+        if !options.session_ids.contains(session_id) {
+            return Ok(false);
+        }
+        Some(session_id.to_owned())
+    };
+    let report_case_ids = required_array(report, "cases", report_path)?
+        .iter()
+        .map(|case| required_string(case, "case_id", report_path).map(ToOwned::to_owned))
+        .collect::<Result<BTreeSet<_>>>()?;
+    if !options.case_ids.is_empty() {
+        if report_case_ids.is_disjoint(&options.case_ids) {
+            return Ok(false);
+        }
+        let extra = report_case_ids
+            .difference(&options.case_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        if !extra.is_empty() {
+            bail!(
+                "replay report {} overlaps the selected cases but also contains unselected cases: {}; replay the exact selection",
+                report_path.display(),
+                extra.join(", ")
+            );
+        }
+    }
+    if let Some(session_id) = selected_session_id
+        && !selected_sessions_found.insert(session_id.clone())
+    {
+        bail!("duplicate replay session id {session_id:?} across aggregate reports");
+    }
+    Ok(true)
 }
 
 #[derive(Debug)]
@@ -245,15 +357,12 @@ fn discover_replay_reports(case_source: &Path) -> Result<Vec<PathBuf>> {
     let mut reports = Vec::new();
     let mut pending = vec![case_source.to_path_buf()];
     while let Some(directory) = pending.pop() {
+        let report = directory.join("replay-report.json");
+        if report.is_file() {
+            reports.push(canonical_file(&report, "replay report")?);
+        }
         for child in child_directories(&directory)? {
             if should_skip_scan_dir(&child) {
-                continue;
-            }
-            if child.file_name().is_some_and(|name| name == ".replay") {
-                let report = child.join("replay-report.json");
-                if report.is_file() {
-                    reports.push(canonical_file(&report, "replay report")?);
-                }
                 continue;
             }
             pending.push(child);
@@ -331,9 +440,41 @@ fn summarize_report(
         let status = required_case_status(case, report_path)?;
         *case_statuses.entry(status.to_owned()).or_insert(0) += 1;
     }
+    let (session_id, started_at, finalized_at, finalized) = if version >= 4 {
+        let session_id = required_string(report, "session_id", report_path)?.to_owned();
+        let started_at = required_string(report, "started_at", report_path)?.to_owned();
+        let finalized = required_bool(report, "finalized", report_path)?;
+        let finalized_at = optional_string(report, "finalized_at");
+        if finalized && finalized_at.is_none() {
+            bail!(
+                "finalized replay report {} has no finalized_at",
+                report_path.display()
+            );
+        }
+        let selected_case_ids = required_string_array(report, "selected_case_ids", report_path)?;
+        let reported_case_ids = required_array(report, "cases", report_path)?
+            .iter()
+            .map(|case| required_string(case, "case_id", report_path).map(ToOwned::to_owned))
+            .collect::<Result<BTreeSet<_>>>()?;
+        if selected_case_ids != reported_case_ids {
+            bail!(
+                "replay report {} selected_case_ids do not match reported cases",
+                report_path.display()
+            );
+        }
+        (
+            Some(session_id),
+            Some(started_at),
+            finalized_at,
+            Some(finalized),
+        )
+    } else {
+        (None, None, None, None)
+    };
     let complete = case_statuses
         .iter()
-        .all(|(status, count)| status == "ended" || *count == 0);
+        .all(|(status, count)| status == "ended" || *count == 0)
+        && finalized.unwrap_or(true);
     let counts = event_counts(report, version, report_path)?;
     let dirty = counts.is_dirty();
 
@@ -341,11 +482,43 @@ fn summarize_report(
         path: report_name,
         version,
         case_dir: case_dir.display().to_string(),
+        session_id,
+        started_at,
+        finalized_at,
+        finalized,
         complete,
         dirty,
         case_statuses,
         counts,
     })
+}
+
+fn optional_string(value: &Value, field: &str) -> Option<String> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn required_string_array(value: &Value, field: &str, path: &Path) -> Result<BTreeSet<String>> {
+    required_array(value, field, path)?
+        .iter()
+        .map(|item| {
+            item.as_str().map(ToOwned::to_owned).ok_or_else(|| {
+                anyhow!(
+                    "replay report {} field {field} must contain only strings",
+                    path.display()
+                )
+            })
+        })
+        .collect()
+}
+
+fn required_bool(value: &Value, field: &str, path: &Path) -> Result<bool> {
+    value
+        .get(field)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| anyhow!("replay report {} has no boolean {field}", path.display()))
 }
 
 fn event_counts(report: &Value, version: u64, path: &Path) -> Result<ReplayEventCounts> {

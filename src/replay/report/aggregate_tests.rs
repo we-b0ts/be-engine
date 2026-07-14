@@ -1,10 +1,13 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 use tempfile::TempDir;
 
-use super::aggregate::aggregate_replay_reports;
+use super::aggregate::{
+    ReplayAggregateOptions, aggregate_replay_reports, aggregate_replay_reports_with_options,
+};
 
 #[test]
 fn aggregates_version_two_and_three_reports() {
@@ -102,6 +105,123 @@ fn marks_pending_and_unused_evidence_in_summary() {
     assert_eq!(aggregate.counts.case_statuses["pending"], 1);
 }
 
+#[test]
+fn selects_exact_cases_and_final_sessions() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let session_a = "00000000-0000-4000-8000-000000000001";
+    let session_b = "00000000-0000-4000-8000-000000000002";
+    write_session_report(
+        &source,
+        "api",
+        "attempt-a",
+        report_value_v4(
+            &source.join("api"),
+            &[("case-a", "ended"), ("case-b", "ended")],
+            session_a,
+            true,
+        ),
+    );
+    write_session_report(
+        &source,
+        "api",
+        "attempt-b",
+        report_value_v4(&source.join("api"), &[("case-b", "ended")], session_b, true),
+    );
+    let options = ReplayAggregateOptions {
+        case_ids: BTreeSet::from(["case-b".to_string()]),
+        session_ids: BTreeSet::from([session_b.to_string()]),
+    };
+
+    let aggregate = aggregate_replay_reports_with_options(&source, &options).unwrap();
+
+    assert!(aggregate.complete);
+    assert!(!aggregate.dirty);
+    assert_eq!(aggregate.counts.reports, 1);
+    assert_eq!(aggregate.selected_case_ids, vec!["case-b"]);
+    assert_eq!(aggregate.selected_session_ids, vec![session_b]);
+    assert_eq!(aggregate.reports[0].session_id.as_deref(), Some(session_b));
+}
+
+#[test]
+fn rerun_requires_an_explicit_session_selection() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let first = "00000000-0000-4000-8000-000000000011";
+    let second = "00000000-0000-4000-8000-000000000012";
+    write_session_report(
+        &source,
+        "api",
+        "attempt-one",
+        report_value_v4(&source.join("api"), &[("case-a", "ended")], first, true),
+    );
+    write_session_report(
+        &source,
+        "api",
+        "attempt-two",
+        report_value_v4(&source.join("api"), &[("case-a", "ended")], second, true),
+    );
+
+    let error = aggregate_replay_reports(&source).unwrap_err();
+    assert!(error.to_string().contains("duplicate replay case id"));
+
+    let options = ReplayAggregateOptions {
+        case_ids: BTreeSet::from(["case-a".to_string()]),
+        session_ids: BTreeSet::from([second.to_string()]),
+    };
+    let aggregate = aggregate_replay_reports_with_options(&source, &options).unwrap();
+    assert!(aggregate.complete);
+    assert_eq!(aggregate.selected_session_ids, vec![second]);
+}
+
+#[test]
+fn version_four_report_must_be_finalized_to_be_complete() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    write_session_report(
+        &source,
+        "api",
+        "unfinished",
+        report_value_v4(
+            &source.join("api"),
+            &[("case-a", "ended")],
+            "00000000-0000-4000-8000-000000000021",
+            false,
+        ),
+    );
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(!aggregate.complete);
+    assert_eq!(aggregate.reports[0].finalized, Some(false));
+}
+
+#[test]
+fn selected_session_must_cover_the_selected_cases() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let session = "00000000-0000-4000-8000-000000000031";
+    write_session_report(
+        &source,
+        "api",
+        "other-case",
+        report_value_v4(&source.join("api"), &[("case-a", "ended")], session, true),
+    );
+    write_case(&source.join("api").join("case-b"), true);
+    let options = ReplayAggregateOptions {
+        case_ids: BTreeSet::from(["case-b".to_string()]),
+        session_ids: BTreeSet::from([session.to_string()]),
+    };
+
+    let error = aggregate_replay_reports_with_options(&source, &options).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("session ids were not found for the selected cases")
+    );
+}
+
 fn write_report(source: &Path, group: &str, value: Value) -> PathBuf {
     let group_dir = source.join(group);
     for case in value["cases"].as_array().unwrap() {
@@ -109,6 +229,19 @@ fn write_report(source: &Path, group: &str, value: Value) -> PathBuf {
         write_case(&group_dir.join(case_id), true);
     }
     let replay_dir = group_dir.join(".replay");
+    fs::create_dir_all(&replay_dir).unwrap();
+    let path = replay_dir.join("replay-report.json");
+    fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+    path
+}
+
+fn write_session_report(source: &Path, group: &str, attempt: &str, value: Value) -> PathBuf {
+    let group_dir = source.join(group);
+    for case in value["cases"].as_array().unwrap() {
+        let case_id = case["case_id"].as_str().unwrap();
+        write_case(&group_dir.join(case_id), true);
+    }
+    let replay_dir = group_dir.join(".replay").join("sessions").join(attempt);
     fs::create_dir_all(&replay_dir).unwrap();
     let path = replay_dir.join("replay-report.json");
     fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
@@ -157,6 +290,27 @@ fn report_value(
             .map(|index| json!({"index": index}))
             .collect(),
     );
+    report
+}
+
+fn report_value_v4(
+    case_dir: &Path,
+    cases: &[(&str, &str)],
+    session_id: &str,
+    finalized: bool,
+) -> Value {
+    let mut report = report_value(4, case_dir, cases, 0);
+    report["session_id"] = json!(session_id);
+    report["started_at"] = json!("2026-07-14T00:00:00Z");
+    report["finalized"] = json!(finalized);
+    if finalized {
+        report["finalized_at"] = json!("2026-07-14T00:01:00Z");
+    }
+    report["selected_case_ids"] =
+        Value::Array(cases.iter().map(|(case_id, _)| json!(case_id)).collect());
+    report["redis"] = protocol_value(0, 0, 0, 0, 0, 0, 0);
+    report["memcached"] = protocol_value(0, 0, 0, 0, 0, 0, 0);
+    report["kafka"] = protocol_value(0, 0, 0, 0, 0, 0, 0);
     report
 }
 

@@ -63,6 +63,24 @@ fn focused_feedback_adds_without_removing_and_preserves_other_text() {
 }
 
 #[test]
+fn focused_feedback_without_candidates_is_a_no_op_plan() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("recorder.toml");
+    fs::write(&path, CONFIG).unwrap();
+    let mut feedback = feedback(&path, CasePathPatternAuthority::Focused);
+    feedback.patterns.clear();
+
+    let plan = plan_case_path_pattern_feedback(feedback).unwrap();
+
+    assert!(plan.report().no_candidates);
+    assert!(!plan.report().changed);
+    assert!(plan.report().added.is_empty());
+    assert!(plan.report().removed.is_empty());
+    assert!(plan.report().diff.is_empty());
+    assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
+}
+
+#[test]
 fn authoritative_removal_requires_explicit_allow_delete() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("recorder.toml");

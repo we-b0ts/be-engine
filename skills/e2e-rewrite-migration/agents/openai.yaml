@@ -1,4 +1,4 @@
 interface:
   display_name: "E2E Rewrite Migration"
   short_description: "Rewrite services with recorded E2E guardrails"
-  default_prompt: "Use $e2e-rewrite-migration to rewrite one recorded API or function into a target language with E2E proof."
+  default_prompt: "Use $e2e-rewrite-migration to rewrite one recorded API or function with canonical E2E evidence and pushed-PR delivery gates."

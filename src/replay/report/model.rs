@@ -3,6 +3,11 @@ use super::super::*;
 #[derive(Debug, Serialize)]
 pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) version: u8,
+    pub(in crate::replay) session_id: String,
+    pub(in crate::replay) started_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) finalized_at: Option<DateTime<Utc>>,
+    pub(in crate::replay) finalized: bool,
     pub(in crate::replay) mode: ReplayMode,
     pub(in crate::replay) dns_listen: String,
     pub(in crate::replay) tcp_listen: String,
@@ -10,6 +15,7 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) case_dependencies_path: String,
     pub(in crate::replay) active_case_id: Option<String>,
     pub(in crate::replay) cases: Vec<ReplayCaseReport>,
+    pub(in crate::replay) selected_case_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) bootstrap_dependencies_path: Option<String>,
     pub(in crate::replay) targets: Vec<ReplayTarget>,
@@ -34,6 +40,15 @@ pub(in crate::replay) struct ReplayReport {
 }
 
 impl ReplayReport {
+    pub(in crate::replay) fn is_complete(&self) -> bool {
+        self.active_case_id.is_none()
+            && !self.cases.is_empty()
+            && self
+                .cases
+                .iter()
+                .all(|case| case.status == ReplayCaseStatus::Ended)
+    }
+
     pub(in crate::replay) fn is_dirty(&self) -> bool {
         !self.unmatched_queries.is_empty()
             || !self.unsupported_commands.is_empty()

@@ -94,6 +94,7 @@ pub(super) fn register_replay_target(
 
 pub(super) async fn discover_replay_cases(
     root_dir: &Path,
+    selected_case_ids: &BTreeSet<String>,
 ) -> Result<(ReplayMode, BTreeMap<String, ReplayCase>, Option<String>)> {
     let direct_dependencies = root_dir.join("dependencies.jsonl");
     if direct_dependencies.is_file() {
@@ -108,6 +109,8 @@ pub(super) async fn discover_replay_cases(
                 status: ReplayCaseStatus::Pending,
             },
         );
+        ensure_selected_cases_exist(root_dir, &cases, selected_case_ids)?;
+        cases.retain(|id, _| selected_case_ids.is_empty() || selected_case_ids.contains(id));
         return Ok((ReplayMode::Single, cases, Some(case_id)));
     }
 
@@ -171,7 +174,28 @@ pub(super) async fn discover_replay_cases(
             root_dir.display()
         ));
     }
+    ensure_selected_cases_exist(root_dir, &cases, selected_case_ids)?;
+    cases.retain(|id, _| selected_case_ids.is_empty() || selected_case_ids.contains(id));
     Ok((ReplayMode::Collection, cases, None))
+}
+
+fn ensure_selected_cases_exist(
+    root_dir: &Path,
+    cases: &BTreeMap<String, ReplayCase>,
+    selected_case_ids: &BTreeSet<String>,
+) -> Result<()> {
+    let missing = selected_case_ids
+        .iter()
+        .filter(|case_id| !cases.contains_key(*case_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    ensure!(
+        missing.is_empty(),
+        "selected replay cases are not published under {}: {}",
+        root_dir.display(),
+        missing.join(", ")
+    );
+    Ok(())
 }
 
 fn should_skip_replay_scan_dir(path: &Path) -> bool {

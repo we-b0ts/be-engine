@@ -240,6 +240,7 @@ async fn spawn_http_replay(
         ReplayRuntime::load(
             MysqlReplayConfig {
                 case_dir: case_dir.to_path_buf(),
+                selected_case_ids: Vec::new(),
                 dns_listen: "127.0.0.1:0".parse().unwrap(),
                 tcp_listen: addr,
                 fake_cidr: "198.18.0.0/15".to_string(),

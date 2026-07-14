@@ -8,9 +8,11 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_recorder_proxy::{
     AppConfig, AppState, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternReport,
-    ReplayConfig, ReplayControlConfig, aggregate_replay_reports, plan_case_path_pattern_feedback,
-    run_replay, run_replay_control,
+    ReplayAggregateOptions, ReplayConfig, ReplayControlConfig,
+    aggregate_replay_reports_with_options, plan_case_path_pattern_feedback, run_replay,
+    run_replay_control,
 };
+use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -39,6 +41,8 @@ enum Command {
 struct ReplayArgs {
     #[arg(long)]
     case: PathBuf,
+    #[arg(long = "case-id")]
+    case_ids: Vec<String>,
     #[arg(long, default_value = "127.0.0.153:15353")]
     dns_listen: SocketAddr,
     #[arg(long, default_value = "127.0.0.1:15001")]
@@ -77,6 +81,10 @@ struct ReplayAggregateArgs {
     fail_on_dirty: bool,
     #[arg(long)]
     fail_on_incomplete: bool,
+    #[arg(long = "case-id")]
+    case_ids: Vec<String>,
+    #[arg(long = "session-id")]
+    session_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -95,6 +103,14 @@ enum ReplayControlCommand {
     Report {
         #[arg(long)]
         fail_on_dirty: bool,
+        #[arg(long)]
+        fail_on_incomplete: bool,
+    },
+    Finalize {
+        #[arg(long)]
+        fail_on_dirty: bool,
+        #[arg(long)]
+        fail_on_incomplete: bool,
     },
     Stop,
 }
@@ -184,7 +200,15 @@ pub(crate) async fn run() -> Result<()> {
 }
 
 fn run_replay_aggregate_command(args: ReplayAggregateArgs) -> Result<()> {
-    let aggregate = aggregate_replay_reports(&args.case_source)?;
+    let options = ReplayAggregateOptions {
+        case_ids: args.case_ids.into_iter().collect(),
+        session_ids: args
+            .session_ids
+            .into_iter()
+            .map(|session_id| session_id.to_string())
+            .collect(),
+    };
+    let aggregate = aggregate_replay_reports_with_options(&args.case_source, &options)?;
     let mut payload = serde_json::to_vec_pretty(&aggregate)?;
     payload.push(b'\n');
     if let Some(output) = args.output {
@@ -208,6 +232,7 @@ fn run_replay_aggregate_command(args: ReplayAggregateArgs) -> Result<()> {
 async fn run_replay_command(args: ReplayArgs) -> Result<()> {
     run_replay(ReplayConfig {
         case_dir: args.case,
+        selected_case_ids: args.case_ids,
         dns_listen: args.dns_listen,
         tcp_listen: args.tcp_listen,
         fake_cidr: args.fake_cidr,
@@ -267,6 +292,7 @@ fn print_pattern_report(report: &CasePathPatternReport, format: OutputFormat) ->
             println!("config: {}", report.config.display());
             println!("rule: {}", report.rule);
             println!("authority: {}", report.authority);
+            println!("no_candidates: {}", report.no_candidates);
             println!("changed: {}", report.changed);
             println!("applied: {}", report.applied);
             println!("added: {}", report.added.len());
@@ -287,25 +313,43 @@ async fn run_recorder(config_path: PathBuf) -> Result<()> {
 
 fn replay_control_config(args: ReplayControlArgs) -> Result<ReplayControlConfig> {
     let session_path = args.session.unwrap_or_else(default_replay_session_path);
-    let (command, case_id, fail_on_dirty) = match args.command {
-        ReplayControlCommand::WaitReady => ("wait_ready".to_string(), None, false),
-        ReplayControlCommand::Status => ("status".to_string(), None, false),
-        ReplayControlCommand::Cases => ("cases".to_string(), None, false),
-        ReplayControlCommand::Begin { case_id } => ("begin".to_string(), Some(case_id), false),
+    let (command, case_id, fail_on_dirty, fail_on_incomplete) = match args.command {
+        ReplayControlCommand::WaitReady => ("wait_ready".to_string(), None, false, false),
+        ReplayControlCommand::Status => ("status".to_string(), None, false, false),
+        ReplayControlCommand::Cases => ("cases".to_string(), None, false, false),
+        ReplayControlCommand::Begin { case_id } => {
+            ("begin".to_string(), Some(case_id), false, false)
+        }
         ReplayControlCommand::End {
             case_id,
             fail_on_dirty,
-        } => ("end".to_string(), Some(case_id), fail_on_dirty),
-        ReplayControlCommand::Report { fail_on_dirty } => {
-            ("report".to_string(), None, fail_on_dirty)
-        }
-        ReplayControlCommand::Stop => ("stop".to_string(), None, false),
+        } => ("end".to_string(), Some(case_id), fail_on_dirty, false),
+        ReplayControlCommand::Report {
+            fail_on_dirty,
+            fail_on_incomplete,
+        } => (
+            "report".to_string(),
+            None,
+            fail_on_dirty,
+            fail_on_incomplete,
+        ),
+        ReplayControlCommand::Finalize {
+            fail_on_dirty,
+            fail_on_incomplete,
+        } => (
+            "finalize".to_string(),
+            None,
+            fail_on_dirty,
+            fail_on_incomplete,
+        ),
+        ReplayControlCommand::Stop => ("stop".to_string(), None, false, false),
     };
     Ok(ReplayControlConfig {
         session_path,
         command,
         case_id,
         fail_on_dirty,
+        fail_on_incomplete,
     })
 }
 

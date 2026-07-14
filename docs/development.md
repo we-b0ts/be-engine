@@ -134,29 +134,42 @@ ownership through the CLI:
 ```bash
 traffic-replay path/to/recordings/<run-id>/<rule>/<uri-group>
 traffic-replay path/to/recordings/<run-id>
+traffic-replay --case-id <case-id> path/to/recordings/<run-id>
 traffic-replay-cli wait-ready
 traffic-replay-cli cases
 traffic-replay-cli begin <case-id>
 traffic-replay-cli end <case-id> --fail-on-dirty
-traffic-replay-cli report --fail-on-dirty
-traffic-replay-cli stop
+traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete
 ```
 
-When one recording source has been replayed through several sessions, generate
-one deterministic coverage and dependency summary from the recording source
-root. The command recursively finds standard `.replay/replay-report.json`
-files and also reports published cases that have no replay report:
+Successful `finalize` writes a version-four report with its session id,
+timestamps, exact selected case ids, and `finalized: true`, then stops replay.
+The command returns success only after atomically publishing that exact report;
+a report-write failure leaves the session open for retry. If finalization
+fails, preserve the diagnostic report and use
+`traffic-replay-cli stop` only for cleanup. Default replay reports are retained
+under a unique `.replay/sessions/<attempt>/replay-report.json` directory.
+
+For a collection, multi-case selection, or multiple sessions, generate one
+deterministic coverage and dependency summary from the recording source root.
+Select the exact final case and session ids so older attempts cannot satisfy the
+gate:
 
 ```bash
 traffic-replay-aggregate \
   --case-source recordings/<run-id>/<rule> \
-  --output aggregate-report.json
+  --case-id <case-id> \
+  --session-id <session-id> \
+  --output aggregate-report.json \
+  --fail-on-incomplete \
+  --fail-on-dirty
 ```
 
-Use `--fail-on-incomplete` to fail when a published case has no report or has
-not ended. Use `--fail-on-dirty` to apply the recorder's strict raw dependency
-dirty check. The aggregate command does not parse target-project test output or
-classify why an unreported case was skipped.
+Repeat `--case-id` and `--session-id` for an exact set. Without a case filter,
+all published cases under the source are in scope. If retained attempts report
+the same case and no exact session selection resolves them, aggregation fails
+instead of guessing which run is final. The aggregate command does not parse
+target-project test output or classify why an unreported case was skipped.
 
 `traffic-replay-cli` is a thin facade over `traffic-recorder-proxy
 replay-control`; the Rust binary owns the control protocol and Unix socket
@@ -192,6 +205,10 @@ remove patterns. Authoritative feedback may remove them only when the case
 collection is declared authoritative and `apply` includes `--allow-delete`.
 Use `--format json` for machine-readable feedback. The command never modifies
 recordings or existing case directories.
+
+A focused plan with no `--pattern` is valid and returns `no_candidates: true`
+with no config diff. This provides mandatory no-change evidence without
+rewriting the managed block or its source revision.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup

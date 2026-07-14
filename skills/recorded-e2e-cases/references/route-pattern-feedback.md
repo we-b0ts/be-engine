@@ -65,11 +65,18 @@ case_path_patterns = [
 ```
 
 - Require `traffic-recorder-config` from `PATH`. Never edit the target TOML
-  directly and never create the managed markers on the target's behalf. If the
-  command is unavailable or rejects the managed block, report the confirmed
-  patterns and stop the config-update step.
-- Preview feedback first. Supply the target config, rule name, source revision,
-  case source, authority mode, and every accepted pattern:
+  directly and never create the config or managed markers on the target's
+  behalf. If the command is unavailable or rejects an existing managed block,
+  report `blocked` with the confirmed patterns and stop the config-update step.
+  If the source repo or managed target config is absent, record exactly
+  `not_applicable_missing_source_repo` or
+  `not_applicable_missing_managed_config`; generic `not-applicable` is invalid.
+- Preview feedback first. The plan command is mandatory whenever the source
+  repo and managed target config exist, including when no pattern or no diff is
+  expected. A focused plan with no candidate patterns omits `--pattern` and
+  MUST return `no_candidates: true`, `changed: false`, and an empty diff.
+  Persist its JSON output as evidence. Supply the target config, rule
+  name, source revision, case source, authority mode, and every accepted pattern:
 
 ```bash
 traffic-recorder-config case-path-patterns plan \
@@ -83,8 +90,12 @@ traffic-recorder-config case-path-patterns plan \
 ```
 
 - Inspect `added`, `removed`, and `diff`. For focused feedback, require
-  `removed` to be empty. Run the same command with `apply` instead of `plan`
-  only after the report matches the route decisions.
+  `removed` to be empty. When the reviewed plan contains a confirmed safe diff,
+  running the same command with `apply` is mandatory; a planned-but-unapplied
+  diff is incomplete. Persist the JSON apply report, then rerun and persist
+  `plan` with the same inputs; its final `diff` MUST be empty. Record
+  `confirmed_no_change` only when the initial plan has no diff, and `applied`
+  only after this apply-and-replan verification closes the loop.
 - For an authoritative collection, pass `--authority authoritative`. If the
   reviewed plan removes patterns, the apply command must also include
   `--allow-delete`. Never use that flag for focused feedback.
