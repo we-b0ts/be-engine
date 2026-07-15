@@ -36,6 +36,8 @@ pub(in crate::replay) struct ReplayReport {
     #[serde(flatten)]
     pub(in crate::replay) protocols: ProtocolsReport,
     pub(in crate::replay) ca_cert_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) replay_policy: Option<ReplayPolicyReport>,
     pub(in crate::replay) http_ignored_query_params: Vec<String>,
 }
 
@@ -61,6 +63,10 @@ impl ReplayReport {
             || self.protocols.redis.is_dirty()
             || self.protocols.memcached.is_dirty()
             || self.protocols.kafka.is_dirty()
+            || self
+                .replay_policy
+                .as_ref()
+                .is_some_and(|policy| !policy.unused_applicable_rule_ids.is_empty())
     }
 
     pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {

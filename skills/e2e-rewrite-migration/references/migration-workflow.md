@@ -188,6 +188,9 @@ Before implementing behavior:
 - identify the rewrite input case paths separately from the PR E2E case source
 - create or reuse a repo-local development command facade
 - create or reuse committed development config under `config/`
+- create or reuse `config/replay.yaml`, declare
+  `expected_response: assertions_only`, and validate it with
+  `traffic-replay-policy validate`
 - create or reuse diagnostic logging for service startup, access, dependency
   failures, and replay diagnostics
 - choose the target package/module layout for the selected scope and apply code
@@ -248,9 +251,9 @@ Expose the commands that are relevant to the migrated scope:
 - `release`: run the project's release/package flow when it exists
 - `doctor`: print missing config, dependency, port, and toolchain problems
   including `traffic-recorder-proxy`, `traffic-replay`, `traffic-replay-cli`,
-  and `traffic-replay-aggregate` when recorded E2E is part of the repo workflow;
-  when a replay policy is configured, verify that its single configured file
-  exists
+  `traffic-replay-aggregate`, and `traffic-replay-policy` when recorded E2E is
+  part of the repo workflow; verify that `config/replay.yaml` exists and
+  validates successfully
 
 For the first migration slice, implement at least `start`, `stop`, `restart`,
 `status`, `e2e`, `check`, and `doctor` when the target is a runnable service.
@@ -265,12 +268,15 @@ root or a known batch as an implicit default; missing case input must fail
 clearly. CI or PR workflows may download or mount cases first, then call the
 same facade with `--case-dir`.
 
-When replay needs evidence-backed dependency exceptions or background/noise
-classification, keep them in one source-controlled replay/assertion policy
-file. Reuse the target's existing policy format or the `recorded-e2e-cases`
-fallback. The command facade passes that file to the target-language E2E
-runner; Bash and language code must not each own a separate case-id or
-dependency-signature allowlist. Record the policy path in the current run state.
+Keep dynamic replay rules in the target's single source-controlled
+`config/replay.yaml`. It MUST declare `expected_response: assertions_only`,
+MUST validate with `traffic-replay-policy validate`, and MUST be passed
+explicitly to every `traffic-replay` invocation. Bash and target-language code
+must not own duplicate dynamic-value rules. Replay-policy v1 does not support
+background/noise exceptions or case-id allowlists; when those are needed, keep
+the group incomplete or obtain a better recording. Record the canonical policy
+path, content fingerprint, rule usage, and unused applicable rules in the
+current run state.
 
 Place application config under `config/`. Development startup should read a
 committed default config directly, such as `config/default.yaml`. Add
@@ -286,6 +292,16 @@ produce safe `case_path_patterns` feedback for future manual recordings.
 `traffic-replay` must not edit config or recording artifacts. A focused case
 source may add confirmed patterns but must not delete existing entries; only a
 declared authoritative collection may rebuild the managed pattern list.
+
+When target `recorder.toml` contains
+`[http_gateway.verified_excludes]`, keep its `consecutive_successes` threshold
+there, not in `replay.yaml`. After the final aggregate and target assertions,
+emit the assertion report required by `recorded-e2e-cases` and run the
+recorder-owned `verified-excludes ensure`. Persist its status and count. Let
+that command alone decide whether to apply and verify an exclusion; do not
+reimplement eligibility branching in AI logic or a target facade. Never edit
+the managed exclude block directly or infer response-assertion success from
+replay alone.
 
 Support environment-variable overrides for config values. The environment
 variable name is the full config key path converted to uppercase snake case:
@@ -315,9 +331,9 @@ values through environment variables or an ignored local override. When any
 such key exists, create or maintain `config/.env.example` with the derived
 variable names and blank values. Do not commit real `.env`, `.env.local`, or
 `config/local.yaml` files. Do not use `.migration/e2e.yaml`, a per-run migration
-state, or `.recorded-e2e.yaml` as application runtime config: migration files
-track evidence, while `.recorded-e2e.yaml` controls recorded assertion behavior
-and dependency isolation.
+state, or `config/replay.yaml` as application runtime config: migration files
+track evidence, while `config/replay.yaml` controls only replay-time dynamic
+dependency matching and never product behavior or response construction.
 
 ## Logging Contract
 
@@ -352,11 +368,17 @@ Before implementation, verify that target `AGENTS.md` states or links to all of
 these mandatory clauses:
 
 - replay the entire selected case set after the final behavior-affecting change
+- keep validated dynamic-value rules in one source-controlled
+  `config/replay.yaml`, pass it explicitly to replay, and use
+  `expected-response.json` only for final assertions
 - generate required recorder-owned aggregate evidence and require clean,
   complete in-scope coverage
 - always plan managed `case_path_patterns` feedback when inputs exist and apply
   every confirmed safe diff through `traffic-recorder-config`, then rerun the
   plan and require no remaining diff
+- when managed verified excludes are configured, always run recorder-owned
+  `verified-excludes ensure` for the current exact `rule + method +
+  path_pattern`; never let AI or target orchestration decide eligibility
 - create a focused commit, push the scope branch, and open a PR to
   `dev-migration`
 - treat target scripts and AI-authored facades as orchestration helpers, not
@@ -371,9 +393,14 @@ existing checker when available, otherwise inspect them directly.
 
 ## Runtime Value Strategy
 
-Before declaring success, identify dynamic values seen in `request.json`,
-`expected-response.json`, and `dependencies.jsonl`, then map each value to its
-runtime source:
+Before declaring success, identify dynamic values seen in `request.json` and
+`dependencies.jsonl`, then map each value to its runtime source. Inspect
+`expected-response.json` only to define the final assertion; never use it to
+seed runtime inputs, construct actual responses, configure dependency mocks,
+select branches, decide cache hits, or drive side effects. A passing E2E built
+on that reverse data flow is circular and invalid.
+
+Map each dynamic value to one of these sources:
 
 - request input or headers
 - authenticated/session context
@@ -383,6 +410,13 @@ runtime source:
 - deterministic product rule, such as current `YYYYMM` table suffix
 - explicit product config supplied by the user or source repo
 - E2E-only replay override
+
+For an evidence-backed replay-only UUID or time value, put the scoped
+`bind`/`ref`, validator, or replay-relative time rule in `config/replay.yaml`.
+Do not copy the recorded value into that file. Validate the file before replay,
+pass it explicitly, and require the final replay report to show every
+applicable rule was used. Rules cannot compensate for missing product behavior
+or unsupported field-level transformations.
 
 Values found only in recorded dependencies are not enough to create product
 defaults. If source code does not show why the selected request owns a value or
@@ -540,9 +574,15 @@ the source repo and replay report:
 - replay session readiness is verified before requests, every selected case is
   bracketed by begin/end, the final session report is version four and
   finalized, and aggregate replay reports are complete and clean
-- replay exceptions and background/noise classifications, when present, come
-  from one source-controlled policy file rather than duplicated shell and
-  target-language allowlists
+- dynamic replay rules come from validated `config/replay.yaml`, are passed
+  explicitly, contain no copied recorded literals, and have zero unused
+  applicable rules
+- `expected-response.json` is read only by the final assertion path; no product,
+  setup, mock, branch, cache, or side-effect path uses it to create actual
+  behavior
+- managed verified-exclude ensure uses the exact grouped case set, clean
+  aggregate, target assertion report, and recorder-configured threshold; an
+  `applied` result embeds apply and no-change verification evidence
 - MySQL touches use the recorded business target host, database/schema, and
   username/role as dependency identity; log databases, read/write roles,
   tenants, and shards must map to explicit runtime adapters instead of sharing
@@ -571,7 +611,12 @@ incomplete` and include the specific blocker.
 
 ## Implementation Loop
 
-Use at most 3 iterations:
+Continue the implementation/replay loop while each cycle produces new evidence
+or fixes a distinct evidenced defect. There is no fixed three-iteration cap.
+If the same root cause repeats for three consecutive cycles without new
+evidence or meaningful progress, stop the group as `blocked` or `incomplete`
+with that root cause. A final verification replay after the last
+behavior-affecting change is mandatory and is not counted as a retry.
 
 1. Implement the smallest target behavior needed for the selected scope.
 2. Add or reuse the command facade and config files needed for normal
@@ -584,7 +629,8 @@ Use at most 3 iterations:
    types. If schema is missing, record the unconfirmed status.
 6. Define runtime strategies for dynamic recorded values. Keep fixed recorded
    values out of normal config unless the source repo proves they are true
-   product defaults.
+   product defaults. Put supported replay-only rules in `config/replay.yaml`,
+   validate it, and audit `expected-response.json` as assertion-only.
 7. Implement or wire the real runtime dependency path separately from recorded
    replay. The default app/server startup must not require a recorded case path.
 8. For API/service scopes, ensure a normal runnable entrypoint exists before
@@ -633,11 +679,13 @@ Start with `complete`, `incomplete`, or `blocked`. Keep output concise:
 - selected recorded case set pass/fail result
 - final replay report and session ids, aggregate report status/path/counts, and
   case-path-pattern plan status/path
+- verified-exclude threshold/count/status and assertion/ensure-report paths
 - focused commit SHA, pushed branch verification, PR target, and PR URL
 - package/workspace decision and architecture review status
 - dependency touch status, especially any unmatched target calls or unused case
   exchanges
-- dynamic value strategy and semantics review status
+- replay-policy path/fingerprint/rule usage, expected-response assertion-only
+  audit, dynamic value strategy, and semantics review status
 - blockers or recording improvement feedback only when present
 
 Do not use `done`, `passed`, `delivered`, or equivalent success wording while

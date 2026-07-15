@@ -8,6 +8,7 @@ mod http;
 mod kafka;
 mod memcached;
 mod mysql;
+mod path_pattern;
 mod process_lookup;
 mod proxy;
 mod recorder;
@@ -47,7 +48,10 @@ pub use config::{
     HttpResponseRewriteRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy,
     RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol,
     TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
-    UdpGatewayConfig, plan_case_path_pattern_feedback,
+    UdpGatewayConfig, VerifiedApiExclude, VerifiedApiExcludeEnsureReport,
+    VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback, VerifiedApiExcludePlan,
+    VerifiedApiExcludeReport, VerifiedApiExcludesConfig, ensure_verified_api_exclude,
+    plan_case_path_pattern_feedback, plan_verified_api_exclude,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use mysql::operation::MysqlWriteOperation;
@@ -63,9 +67,9 @@ pub use recorder::{
 };
 pub use replay::{
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,
-    ReplayConfig, ReplayControlConfig, aggregate_replay_reports,
+    ReplayConfig, ReplayControlConfig, ReplayPolicyValidationReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options, run_mysql_replay, run_mysql_replay_control, run_replay,
-    run_replay_control,
+    run_replay_control, validate_replay_policy,
 };
 pub use tls::MitmCa;
 

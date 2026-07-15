@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+mod edit;
 mod feedback;
 mod http_response_rewrite;
 mod recording;
+mod verified_excludes;
 
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
@@ -18,6 +20,11 @@ pub use http_response_rewrite::{
 };
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
+};
+pub use verified_excludes::{
+    VerifiedApiExclude, VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus,
+    VerifiedApiExcludeFeedback, VerifiedApiExcludePlan, VerifiedApiExcludeReport,
+    VerifiedApiExcludesConfig, ensure_verified_api_exclude, plan_verified_api_exclude,
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -108,6 +115,7 @@ pub struct HttpGatewayConfig {
     pub fallback_upstream: String,
     pub preserve_host: bool,
     pub ready: HttpGatewayReadyConfig,
+    pub verified_excludes: VerifiedApiExcludesConfig,
     pub exclude_rules: Vec<HttpGatewayRuleConfig>,
     pub rules: Vec<HttpGatewayRuleConfig>,
 }
@@ -173,6 +181,9 @@ impl AppConfig {
     pub fn validate(&self) -> Result<()> {
         self.recording.validate()?;
         self.http_response_rewrite.validate()?;
+        self.http_gateway
+            .verified_excludes
+            .validate(&self.http_gateway.rules)?;
         if self.http_response_rewrite.enabled
             && (!self.dns_mock.enabled
                 || !self.tcp_gateway.enabled
@@ -266,6 +277,7 @@ impl Default for HttpGatewayConfig {
             fallback_upstream: "http://127.0.0.1:8082".to_string(),
             preserve_host: true,
             ready: HttpGatewayReadyConfig::default(),
+            verified_excludes: VerifiedApiExcludesConfig::default(),
             exclude_rules: Vec::new(),
             rules: Vec::new(),
         }
@@ -335,6 +347,14 @@ impl Default for TlsConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loads_example_recorder_config() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("config")
+            .join("recorder.example.toml");
+        AppConfig::load(path).unwrap();
+    }
 
     #[test]
     fn parses_minimal_config_with_defaults() {
@@ -421,6 +441,12 @@ mod tests {
             matched_upstream = "http://127.0.0.1:9001"
             fallback_upstream = "http://127.0.0.1:9002"
 
+            [http_gateway.verified_excludes]
+            consecutive_successes = 3
+            apis = [
+              { rule = "record-api", method = "GET", path_pattern = "/api/users/*" },
+            ]
+
             [http_gateway.ready]
             enabled = true
             path = "/"
@@ -446,6 +472,7 @@ mod tests {
             "#,
         )
         .unwrap();
+        config.validate().unwrap();
 
         assert!(config.http_gateway.enabled);
         assert!(config.http_gateway.ready.enabled);
@@ -453,6 +480,11 @@ mod tests {
         assert_eq!(config.http_gateway.ready.success_status, 200);
         assert_eq!(config.http_gateway.ready.interval_ms, 1000);
         assert_eq!(config.http_gateway.rules.len(), 2);
+        assert_eq!(
+            config.http_gateway.verified_excludes.consecutive_successes,
+            3
+        );
+        assert_eq!(config.http_gateway.verified_excludes.apis.len(), 1);
         assert_eq!(config.http_gateway.exclude_rules.len(), 1);
         assert_eq!(
             config.http_gateway.exclude_rules[0].name.as_deref(),

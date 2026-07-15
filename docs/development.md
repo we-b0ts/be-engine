@@ -117,6 +117,7 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
+ln -sf "$PWD/scripts/traffic-replay-policy" "$HOME/.local/bin/traffic-replay-policy"
 ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
 ln -sf "$PWD/scripts/traffic-replay-aggregate" "$HOME/.local/bin/traffic-replay-aggregate"
 ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
@@ -124,6 +125,18 @@ ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
+
+Target-specific dynamic UUID, timestamp, and signed-query matching belongs in
+a source-controlled `config/replay.yaml`, not product code or recorded fixture
+overrides. Validate and load it explicitly:
+
+```bash
+traffic-replay-policy validate --policy ../target/config/replay.yaml
+traffic-replay --policy ../target/config/replay.yaml path/to/case-dir
+```
+
+See [replay-policy.md](replay-policy.md) for the v1 schema, assertion-only
+`expected-response.json` contract, rule scoping, and dirty-evidence behavior.
 
 `traffic-replay` also uses the fixed `trp-record` owner filter. Run the
 dependency-producing target process as that user. Build steps, replay itself,
@@ -236,6 +249,31 @@ recordings or existing case directories.
 A focused plan with no `--pattern` is valid and returns `no_candidates: true`
 with no config diff. This provides mandatory no-change evidence without
 rewriting the managed block or its source revision.
+
+After the final aggregate and target response-assertion report exist, ensure
+the recorder exclusion deterministically:
+
+```bash
+traffic-recorder-config verified-excludes ensure \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --method GET \
+  --pattern '/api/users/*' \
+  --aggregate-report ../target/.migration/run-reports/run.json \
+  --assertion-report ../target/.migration/run-reports/assertions.json \
+  --format json
+```
+
+`ensure` returns `below_threshold` without changing the config, returns
+`already_present` for an existing exact entry, or atomically applies an
+eligible entry and replans before returning `applied`. Dirty, incomplete, or
+mismatched evidence fails the command. `plan` and `apply` remain available for
+diagnostics, but migration automation must not reimplement their eligibility
+branching.
+
+The threshold and managed exclusions live in `recorder.toml`, never
+`replay.yaml`. See [verified-api-excludes.md](verified-api-excludes.md) for the
+assertion report schema, exact case-set gate, and runtime behavior.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup

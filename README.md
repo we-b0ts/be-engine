@@ -84,15 +84,22 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
+ln -sf "$PWD/scripts/traffic-replay-policy" "$HOME/.local/bin/traffic-replay-policy"
 ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
 ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
 command -v traffic-recorder-proxy
 command -v traffic-record
 command -v traffic-replay
+command -v traffic-replay-policy
 command -v traffic-case-group
 traffic-replay path/to/case-dir
 traffic-replay path/to/recordings/<run-id>
 ```
+
+For runtime-generated UUIDs, timestamps, and signed query fields, keep a
+source-controlled `config/replay.yaml` in the target project and pass it with
+`--policy`. Validate it with `traffic-replay-policy validate --policy
+config/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
 
 `traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
@@ -160,6 +167,14 @@ path = "/"
 success_status = 200
 interval_ms = 1000
 
+[http_gateway.verified_excludes]
+consecutive_successes = 3
+# BEGIN AI-MANAGED VERIFIED API EXCLUDES
+apis = [
+  # { rule = "record-api", method = "GET", path_pattern = "/api/users/*" },
+]
+# END AI-MANAGED VERIFIED API EXCLUDES
+
 [[http_gateway.exclude_rules]]
 name = "exclude-health"
 methods = ["GET"]
@@ -186,6 +201,15 @@ are alternatives while different fields must all match. `preserve_host = true`
 keeps the original `Host` header when forwarding. Recording access policy is
 evaluated before both rule sets, so exclusion rules do not bypass
 `block_known_writes`.
+
+`[http_gateway.verified_excludes]` contains recorder-owned, replay-verified API
+exclusions. After the configured number of consecutive clean cases also pass
+the target response assertions, run the managed `verified-excludes ensure`
+command. It decides the threshold outcome, applies an eligible exact
+`rule + method + path_pattern`, and verifies convergence without AI judgment.
+On the next recorder start, matching traffic goes to `fallback_upstream`
+without creating a case.
+See [Verified API Excludes](docs/verified-api-excludes.md).
 
 `[http_gateway.ready]` is an optional active readiness probe against
 `matched_upstream`. When enabled, the recorder sends `GET path` every

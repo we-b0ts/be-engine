@@ -395,6 +395,9 @@ pub(super) async fn begin_case(
         });
     }
     state.active_case_id = Some(case_id.to_string());
+    if let Some(policy) = &mut state.replay_policy {
+        policy.begin_case(case_id);
+    }
     if let Some(case) = state.cases.get_mut(case_id) {
         case.status = ReplayCaseStatus::Active;
     }
@@ -515,6 +518,7 @@ pub(super) fn session_snapshot(
         "dns_listen": state.dns_listen.to_string(),
         "tcp_listen": state.tcp_listen.to_string(),
         "ca_cert_path": state.ca_cert_path.display().to_string(),
+        "replay_policy": state.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
         "active_case_id": state.active_case_id.clone(),
         "cases": state.case_reports(),
         "selected_case_ids": state.cases.keys().cloned().collect::<Vec<_>>(),

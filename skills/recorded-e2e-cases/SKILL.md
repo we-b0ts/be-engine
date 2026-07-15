@@ -1,6 +1,6 @@
 ---
 name: recorded-e2e-cases
-description: Replay, group, and diagnose E2E tests from traffic-recorder-proxy case, collection, or run directories, and maintain replay-time recorder feedback in the target repo. Use for recorded request/response artifacts, API-by-API case grouping, dependencies.jsonl dependency replay, aggregate replay reports, recorder.toml case_path_patterns, or case-driven failures requiring dependency evidence.
+description: Replay, group, and diagnose E2E tests from traffic-recorder-proxy case, collection, or run directories, and maintain replay-time recorder feedback in the target repo. Use for recorded request/response artifacts, API-by-API case grouping, dependencies.jsonl dependency replay, aggregate replay reports, recorder.toml case_path_patterns, replay-verified API excludes, or case-driven failures requiring dependency evidence.
 ---
 
 # Recorded E2E Cases
@@ -20,6 +20,11 @@ Before replay, record the exact completion case source and selected published
 case ids. A completion claim applies only to that set. MUST NOT claim that a
 parent collection or run passed after replaying only a subset.
 
+Treat `expected-response.json` as an assertion oracle only. MUST NOT read its
+status, headers, body, or derived values to configure product behavior, produce
+the actual response, seed a dependency mock, choose whether a dependency is
+called, or create a cache/side-effect result.
+
 ## Workflow
 
 1. Resolve the supplied case, collection, or run directory. Ignore `failed`,
@@ -32,12 +37,17 @@ parent collection or run passed after replaying only a subset.
 2. Load `request.json`, canonical `expected-response.json`,
    `dependencies.jsonl`, and `dependencies-summary.json` when present. Tolerate
    `expected_response.json` as user input without renaming it. Stop if a valid
-   request or expected response is missing.
+   request or expected response is missing. Use expected response data only in
+   the assertion path; audit the target runner for reverse data flow before
+   implementation and again before completion.
 3. Inspect the target project's E2E runner, startup path, config, source repo
    reference, and dependency wiring. Reuse its conventions and isolate real
    dependencies only inside the recorded-E2E entrypoint. Require the selected
    case source as an explicit external input such as `--case-dir`; never
-   hardcode or silently default to a developer-machine recording path.
+   hardcode or silently default to a developer-machine recording path. Create
+   or reuse the source-controlled target `config/replay.yaml`, require
+   `expected_response: assertions_only`, validate it with
+   `traffic-replay-policy validate`, and pass it explicitly to every replay.
 4. During replay discovery, use the selected directory's first published case
    only to resolve a candidate source API by method plus actual URI path. Read
    source route registrations before grouping, but do not inspect business
@@ -52,7 +62,8 @@ parent collection or run passed after replaying only a subset.
    or overlapping, stop with `blocked_grouping`; do not move or copy cases or
    emulate the command in the target repo.
 5. Follow [replay-workflow.md](references/replay-workflow.md): use
-   `traffic-replay` and `traffic-replay-cli` from `PATH`, wait for readiness,
+   `traffic-replay`, `traffic-replay-policy`, and `traffic-replay-cli` from
+   `PATH`, wait for readiness,
    require fixed-user interception and verify the dependency-producing target
    process runs as the recorder-declared fixed interception user,
    bracket every case with `begin` and `end --fail-on-dirty`, require a clean
@@ -73,14 +84,18 @@ parent collection or run passed after replaying only a subset.
 7. Treat `dependencies.jsonl` as the touch contract and its summary as the
    coverage checklist. Response compatibility alone is incomplete while replay
    has unexplained unmatched target calls, unused case exchanges, or missing
-   required side effects. Recorded metrics are behavior. If evidence requires
-   replay exceptions or background/noise classification, keep that policy in
-   one source-controlled target file consumed by every orchestration and test
-   layer; never duplicate case-id or dependency-signature allowlists in shell
-   and target-language code.
+   required side effects. Recorded metrics are behavior. Replay-policy v1 does
+   not support background/noise exceptions or case-id allowlists; keep the case
+   incomplete or re-record instead of duplicating exceptions in shell and
+   target-language code. Dynamic-value rules MUST select the case API,
+   dependency identity/fingerprint, and exact field; MUST NOT contain recorded
+   literals, secrets, absolute case paths, or case-id exceptions.
 8. Keep recorded params in replay evidence or E2E-only config. Normal runtime
    must derive dynamic values from request/session context, time, generated ids,
-   dependency state, or explicit product config.
+   dependency state, or explicit product config. Use replay-policy `bind/ref`,
+   value validation, or time rules only after source and dependency evidence
+   proves the field is legitimately dynamic. Never replace a whole dependency
+   or business result because one field is dynamic.
 9. After replay, update a source-controlled target `recorder.toml` only when it
    has an explicit AI-managed `case_path_patterns` block. Use
    `traffic-recorder-config case-path-patterns plan`, inspect its diff and JSON
@@ -91,7 +106,17 @@ parent collection or run passed after replaying only a subset.
    only after reviewing the authoritative plan. If the command or managed
    block is unavailable, report the exact prerequisite without changing or
    creating the config or managed block.
-10. Run and finish the current API group's focused case set before selecting
+10. After the final response assertions and aggregate complete, read
+    [verified-excludes.md](references/verified-excludes.md). When the target
+    recorder config has an explicit managed `http_gateway.verified_excludes`
+    block, generate the exact assertion report and always run
+    `traffic-recorder-config verified-excludes ensure` for the current
+    `rule + method + path_pattern`, and persist its JSON output. Let the
+    recorder command alone decide `below_threshold`, `already_present`, or
+    `applied`; MUST NOT branch on eligibility in AI logic or a target facade.
+    Never infer success from replay alone, edit the managed block directly, or
+    put the threshold in `replay.yaml`.
+11. Run and finish the current API group's focused case set before selecting
     the next group, then run relevant project checks. Iterate while each cycle
     produces new evidence or fixes a distinct evidenced defect. After every
     behavior-affecting change, rerun the group; the mandatory final verification
@@ -129,7 +154,16 @@ the final state:
    `traffic-case-group ensure` evidence. Published recordings must remain
    unchanged. A blocked group may end the current group's work and allow a
    handoff, but the parent selected case source remains incomplete.
-2. For intercepted replay, retain pre-request evidence that the process which
+2. Require the source-controlled target `config/replay.yaml`, a successful
+   `traffic-replay-policy validate`, and final replay report evidence containing
+   its canonical path, fingerprint, `expected_response: assertions_only`, rule
+   applicability, and zero unused applicable rules. Directly audit the target
+   runner and product wiring and confirm no expected-response value flows into
+   actual response generation, dependency fixtures/mocks, branch decisions,
+   caches, or side effects. A missing policy, unvalidated policy, unused
+   applicable rule, recorded literal/case-id exception, or reverse oracle flow
+   is `blocked_replay_policy` and cannot be waived by a passing response.
+3. For intercepted replay, retain pre-request evidence that the process which
    emits dependency traffic runs as the fixed user returned by
    `traffic-replay --print-intercept-user`. A missing user, unverified process
    identity, login-user target, arbitrary owner UID,
@@ -138,12 +172,12 @@ the final state:
    `--owner-uid`, `--user`, `--all-users`, `OWNER_UID`, or equivalent owner
    selection. `--no-intercept` is applicable only when all
    dependencies are explicitly routed to replay listeners.
-3. End every selected case, run the final replay report with
+4. End every selected case, run the final replay report with
    `traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete`, and
    require its version-four report to contain the exact selected case ids,
    final session id, `finalized: true`, and `finalized_at`. A stale active case,
    pending case, live session, or non-finalized report is incomplete evidence.
-4. For every collection/run source, multi-case selection, or source with more
+5. For every collection/run source, multi-case selection, or source with more
    than one replay report/session, run `traffic-replay-aggregate` with
    exact repeated `--case-id` and `--session-id` values plus
    `--fail-on-incomplete --fail-on-dirty`. Require a persisted aggregate report
@@ -153,7 +187,7 @@ the final state:
    exemption is `not_applicable_single_case_single_session`, backed by one
    published case and one finalized session/report. Never substitute
    hand-maintained totals, target-runner output, or migration-ledger counts.
-5. When a source repo and a target recorder config with an explicit AI-managed
+6. When a source repo and a target recorder config with an explicit AI-managed
    `case_path_patterns` block are available, always run
    `traffic-recorder-config case-path-patterns plan`, even when no pattern or
    change is expected. Persist and inspect its JSON report. Record `applied`
@@ -169,7 +203,15 @@ the final state:
    `case_path_patterns` controls case grouping, so broad capture is not evidence
    that grouping feedback is unnecessary. Apply a confirmed diff only through
    the managed command and keep focused case sources add-only.
-6. Treat target-project scripts and command facades as orchestration helpers,
+7. When target `recorder.toml` contains an explicit managed
+   `http_gateway.verified_excludes` block, retain the target assertion report
+   and recorder-owned `verified-excludes ensure` JSON report for every
+   completed API group. Require exact case-set agreement with the clean
+   aggregate. Accept only `applied`, `already_present`, or `below_threshold`;
+   `applied` MUST contain an apply result and a no-change verification plan.
+   Missing managed config must be recorded explicitly; generic
+   skipped/not-needed is invalid. AI-authored eligibility branching is invalid.
+8. Treat target-project scripts and command facades as orchestration helpers,
    not independent proof that this gate passed. MUST verify replay lifecycle,
    aggregate coverage, and route-pattern outcome from recorder-owned CLI output
    and artifacts. MUST NOT patch a target facade merely to manufacture or
@@ -205,7 +247,9 @@ requested API scope.
 Start the final response with exactly one state: `complete`, `incomplete`, or
 `blocked`. Then keep it short: exact completion case source; ordered API groups,
 grouping reports, and selected case ids; final replay report and session ids;
-aggregate status/path and coverage; case-path-pattern plan status/path;
-essential changes; verification command; missing evidence; case-to-route
-status; and concise evidence-backed recorder feedback. MUST NOT use success
-wording when any applicable gate is missing.
+aggregate status/path and coverage; replay-policy path/fingerprint/usage and
+expected-response audit status; case-path-pattern plan status/path; essential
+verified-exclude threshold/count/status and assertion/ensure-report path;
+changes; verification command; missing evidence; case-to-route status; and
+concise evidence-backed recorder feedback. MUST NOT use success wording when
+any applicable gate is missing.

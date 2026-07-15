@@ -7,6 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
+use chrono::Utc;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::header::{CONNECTION, CONTENT_LENGTH, HOST, TRANSFER_ENCODING};
@@ -23,8 +24,8 @@ use tokio_rustls::TlsAcceptor;
 use url::form_urlencoded;
 
 use super::{
-    MitmCa, ReplayProtocol, ReplaySource, ReplayState, ReplayTarget, TargetKey,
-    register_replay_target, write_report_snapshot,
+    HttpPolicyContext, MitmCa, PolicyDecision, ReplayProtocol, ReplaySource, ReplayState,
+    ReplayTarget, TargetKey, register_replay_target, write_report_snapshot,
 };
 
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
@@ -293,6 +294,7 @@ impl ReplayState {
         }
 
         let mut matching_index = None;
+        let mut matching_policy_decision = PolicyDecision::default();
         let mut closest_mismatch = None;
         'sources: for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
@@ -304,18 +306,41 @@ impl ReplayState {
                 {
                     continue;
                 }
+                let policy_decision = if let Some(policy) = &self.replay_policy {
+                    match policy.preview_http(
+                        &HttpPolicyContext {
+                            case_id: active_case_id.as_deref(),
+                            target,
+                            method: method.as_str(),
+                            recorded_uri: &exchange.record.uri,
+                            actual_uri: &uri.to_string(),
+                        },
+                        Utc::now(),
+                    ) {
+                        Ok(decision) => decision,
+                        Err(reason) => {
+                            closest_mismatch.get_or_insert(reason);
+                            continue;
+                        }
+                    }
+                } else {
+                    PolicyDecision::default()
+                };
+                let mut ignored_query_params = self.http_ignore_query_params.clone();
+                ignored_query_params.extend(policy_decision.dynamic_query_params.iter().cloned());
                 let mismatch = http_request_mismatch_reason(
                     exchange,
                     method,
                     uri,
                     body,
-                    &self.http_ignore_query_params,
+                    &ignored_query_params,
                 );
                 if let Some(reason) = mismatch {
                     closest_mismatch.get_or_insert(reason);
                     continue;
                 }
                 matching_index = Some(index);
+                matching_policy_decision = policy_decision;
                 break 'sources;
             }
         }
@@ -343,6 +368,9 @@ impl ReplayState {
         }
 
         self.http_exchanges[index].consumed = true;
+        if let Some(policy) = &mut self.replay_policy {
+            policy.commit(active_case_id.as_deref(), matching_policy_decision);
+        }
         self.http_events.matched.push(MatchedHttpExchangeReport {
             case_id: exchange.case_id,
             source: exchange.source,

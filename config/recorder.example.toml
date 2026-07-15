@@ -84,6 +84,18 @@ path = "/"
 success_status = 200
 interval_ms = 1000
 
+# APIs with enough consecutive clean replay + response-assertion successes can
+# be added here by `traffic-recorder-config verified-excludes ensure`. The
+# command, not AI logic, owns the threshold decision, apply, and verification.
+# This threshold belongs to recorder scope because these entries suppress
+# future recording; replay.yaml never controls capture scope.
+[http_gateway.verified_excludes]
+consecutive_successes = 3
+# BEGIN AI-MANAGED VERIFIED API EXCLUDES
+apis = [
+]
+# END AI-MANAGED VERIFIED API EXCLUDES
+
 # tcpcopy HTTP traffic matching rules. If no rules are configured, all gateway
 # traffic not selected by exclude_rules is eligible for matching. Exclusions
 # always take priority and are sent to fallback_upstream without creating a

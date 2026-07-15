@@ -6,6 +6,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use serde_json::Value;
 
+mod policy;
+
 const AGGREGATE_VERSION: u8 = 1;
 const MIN_REPLAY_REPORT_VERSION: u64 = 2;
 const MAX_REPLAY_REPORT_VERSION: u64 = 4;
@@ -45,8 +47,18 @@ pub struct ReplayReportSummary {
     pub finalized: Option<bool>,
     pub complete: bool,
     pub dirty: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_policy: Option<ReplayPolicyAggregateSummary>,
     pub case_statuses: BTreeMap<String, usize>,
     pub counts: ReplayEventCounts,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplayPolicyAggregateSummary {
+    pub path: String,
+    pub fingerprint: String,
+    pub expected_response: String,
+    pub unused_applicable_rule_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -476,7 +488,11 @@ fn summarize_report(
         .all(|(status, count)| status == "ended" || *count == 0)
         && finalized.unwrap_or(true);
     let counts = event_counts(report, version, report_path)?;
-    let dirty = counts.is_dirty();
+    let replay_policy = policy::summary(report, report_path)?;
+    let dirty = counts.is_dirty()
+        || replay_policy
+            .as_ref()
+            .is_some_and(|policy| !policy.unused_applicable_rule_ids.is_empty());
 
     Ok(ReplayReportSummary {
         path: report_name,
@@ -488,6 +504,7 @@ fn summarize_report(
         finalized,
         complete,
         dirty,
+        replay_policy,
         case_statuses,
         counts,
     })

@@ -106,6 +106,59 @@ fn marks_pending_and_unused_evidence_in_summary() {
 }
 
 #[test]
+fn marks_unused_applicable_replay_policy_rule_dirty() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v4(
+        &source.join("api"),
+        &[("case-a", "ended")],
+        "00000000-0000-4000-8000-000000000099",
+        true,
+    );
+    report["replay_policy"] = json!({
+        "version": 1,
+        "path": "/target/config/replay.yaml",
+        "fingerprint": "fnv1a64:0123456789abcdef",
+        "expected_response": "assertions_only",
+        "rules": [],
+        "unused_applicable_rule_ids": ["audit-id"]
+    });
+    write_report(&source, "api", report);
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(aggregate.dirty);
+    let policy = aggregate.reports[0].replay_policy.as_ref().unwrap();
+    assert_eq!(policy.expected_response, "assertions_only");
+    assert_eq!(policy.unused_applicable_rule_ids, vec!["audit-id"]);
+}
+
+#[test]
+fn rejects_replay_policy_that_does_not_declare_assertion_only_expected_response() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v4(
+        &source.join("api"),
+        &[("case-a", "ended")],
+        "00000000-0000-4000-8000-000000000098",
+        true,
+    );
+    report["replay_policy"] = json!({
+        "version": 1,
+        "path": "/target/config/replay.yaml",
+        "fingerprint": "fnv1a64:0123456789abcdef",
+        "expected_response": "fixture_input",
+        "rules": [],
+        "unused_applicable_rule_ids": []
+    });
+    write_report(&source, "api", report);
+
+    let error = aggregate_replay_reports(&source).unwrap_err();
+
+    assert!(error.to_string().contains("must be assertions_only"));
+}
+
+#[test]
 fn selects_exact_cases_and_final_sessions() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");

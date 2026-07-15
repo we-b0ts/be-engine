@@ -11,7 +11,9 @@ with historical batches.
 ├── runs/
 │   └── <run-key>.yaml
 └── run-reports/
-    └── <run-key>.json
+    ├── <run-key>.json
+    ├── <run-key>-assertions.json
+    └── <run-key>-verified-exclude.json
 ```
 
 Derive `<run-key>` from the recording run id plus collection name. For example,
@@ -47,11 +49,16 @@ Store recording-specific evidence under `.migration/runs/<run-key>.yaml`:
   status/report/manifest, member directories, exact case ids, and terminal state
 - rewrite input and PR E2E case sources
 - exact E2E command
-- replay/assertion policy path when one is configured
+- canonical `config/replay.yaml` path, content fingerprint, validation result,
+  applicable-rule usage, and unused applicable rules
+- direct audit result proving `expected-response.json` is read only by final
+  assertion comparison and never constructs actual behavior
 - final replay session ids, report paths, and results
 - aggregate status, report path, and published/reported/unreported counts
 - case-path-pattern status and persisted plan, apply, and final verification
   JSON report paths when applicable
+- verified-exclude threshold, trailing success count, assertion report,
+  recorder-owned ensure-report path, and terminal status
 - target test result, startup result, and quality commands
 - work branch, focused commit SHA, PR target, and PR URL
 - missing evidence and blocker classifications
@@ -71,7 +78,10 @@ report parsing or counting.
 
 Use only these route-pattern terminal states: `applied`,
 `confirmed_no_change`, `not_applicable_missing_source_repo`,
-`not_applicable_missing_managed_config`, or `blocked`. Use delivery state
+`not_applicable_missing_managed_config`, or `blocked`. Use only these
+verified-exclude terminal states: `applied`, `already_present`,
+`below_threshold`, `not_applicable_missing_verified_excludes_config`, or
+`blocked`. Use delivery state
 `pr_created` only after the pushed branch and PR target are independently
 verified. The run state records canonical evidence paths and identifiers; it
 is never proof by itself.

@@ -1,4 +1,4 @@
 interface:
   display_name: "Recorded E2E Cases"
   short_description: "Replay cases and maintain recorder feedback"
-  default_prompt: "Use $recorded-e2e-cases to select one canonical API group at a time, replay it with fixed-user isolation, and enforce final-replay, aggregate, and managed route-pattern evidence gates."
+  default_prompt: "Use $recorded-e2e-cases to select one canonical API group at a time, enforce assertion-only expected responses, require clean replay and route-pattern evidence, and run recorder-owned verified-exclude ensure after final evidence."
