@@ -19,8 +19,9 @@ resolve_script_path() {
 SCRIPT_PATH="$(resolve_script_path)"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/intercept-user.sh"
 cd "$ROOT_DIR"
-unset BASH_ENV ENV
+unset BASH_ENV ENV OWNER_UID
 
 usage() {
   cat >&2 <<EOF
@@ -31,20 +32,14 @@ Options:
   --config PATH    Recorder TOML configuration. Required.
   --dns            Enable local DNS capture and fake-IP TCP/UDP redirect. This is default.
   --no-dns         Skip local DNS capture and fake-IP TCP/UDP redirect.
-  --user USER      Limit capture to this Unix user. Defaults to [local_record].record_user.
-  --owner-uid UID  Limit capture to this numeric Unix uid.
-  --all-users      Capture all local users. Use only on isolated machines.
 
 DNS/fake-IP rules are automatically removed when this script exits.
-CLI owner options override OWNER_UID, which overrides [local_record].
+Interception is always limited to the fixed Unix user $TRAFFIC_INTERCEPT_USER.
 EOF
 }
 
 ENABLE_DNS=1
 CONFIG=""
-OWNER_MODE="config"
-OWNER_USER_OVERRIDE=""
-OWNER_UID_OVERRIDE=""
 APP_ARGS=()
 
 need_value() {
@@ -75,25 +70,9 @@ while [ "$#" -gt 0 ]; do
       ENABLE_DNS=0
       shift
       ;;
-    --user)
-      need_value "$1" "${2:-}"
-      OWNER_MODE="user"
-      OWNER_USER_OVERRIDE="$2"
-      OWNER_UID_OVERRIDE=""
-      shift 2
-      ;;
-    --owner-uid)
-      need_value "$1" "${2:-}"
-      OWNER_MODE="uid"
-      OWNER_UID_OVERRIDE="$2"
-      OWNER_USER_OVERRIDE=""
-      shift 2
-      ;;
-    --all-users)
-      OWNER_MODE="all"
-      OWNER_USER_OVERRIDE=""
-      OWNER_UID_OVERRIDE=""
-      shift
+    --owner-uid|--uid-owner|--user|--all-users)
+      echo "$1 is not supported; interception always uses $TRAFFIC_INTERCEPT_USER" >&2
+      exit 2
       ;;
     -h|--help)
       usage
@@ -123,15 +102,12 @@ if [ ! -f "$CONFIG" ]; then
   exit 1
 fi
 
-export RUST_LOG="${RUST_LOG:-info}"
-
-load_local_record_config() {
+reject_owner_config() {
   if ! command -v python3 >/dev/null 2>&1; then
-    echo "python3 is required to read [local_record] from $CONFIG" >&2
+    echo "python3 is required to validate owner isolation in $CONFIG" >&2
     exit 1
   fi
-
-  mapfile -t local_record_values < <(python3 - "$CONFIG" <<'PY'
+  python3 - "$CONFIG" <<'PY'
 import sys
 
 try:
@@ -144,90 +120,23 @@ path = sys.argv[1]
 with open(path, "rb") as fh:
     config = tomllib.load(fh)
 local_record = config.get("local_record", {})
-
-def value(name, default=""):
-    item = local_record.get(name, default)
-    if isinstance(item, bool):
-        return "1" if item else "0"
-    return str(item)
-
-print(value("enabled", False))
-print(value("record_user"))
-print(value("owner_uid"))
+forbidden = [name for name in ("owner_uid", "user", "record_user", "all_users") if name in local_record]
+if forbidden:
+    sys.stderr.write(
+        "unsupported local_record owner settings: "
+        + ", ".join(forbidden)
+        + "; interception always uses the recorder-owned fixed user\n"
+    )
+    raise SystemExit(2)
 PY
-)
-
-  LOCAL_RECORD_ENABLED="${local_record_values[0]}"
-  LOCAL_RECORD_USER="${local_record_values[1]}"
-  LOCAL_RECORD_OWNER_UID="${local_record_values[2]}"
 }
 
-uid_for_user() {
-  local user="$1"
-  if [ -z "$user" ]; then
-    echo "user name is required" >&2
-    exit 2
-  fi
-  if ! id -u "$user" 2>/dev/null; then
-    cat >&2 <<EOF
-record user not found: $user
-Create it with:
-  sudo useradd --system --create-home --shell /bin/bash $user
-EOF
-    exit 1
-  fi
-}
+reject_owner_config
 
-resolve_owner_uid() {
-  if [ "$OWNER_MODE" = "all" ]; then
-    export OWNER_UID=""
-    return
-  fi
-
-  if [ "$OWNER_MODE" = "uid" ]; then
-    export OWNER_UID="$OWNER_UID_OVERRIDE"
-    return
-  fi
-
-  if [ "$OWNER_MODE" = "user" ]; then
-    OWNER_UID="$(uid_for_user "$OWNER_USER_OVERRIDE")"
-    export OWNER_UID
-    return
-  fi
-
-  if [ -n "${OWNER_UID:-}" ]; then
-    export OWNER_UID
-    return
-  fi
-
-  LOCAL_RECORD_ENABLED=1
-  LOCAL_RECORD_USER="trp-record"
-  LOCAL_RECORD_OWNER_UID=""
-  load_local_record_config
-
-  if [ "$LOCAL_RECORD_ENABLED" != "1" ]; then
-    export OWNER_UID=""
-    return
-  fi
-
-  if [ -n "$LOCAL_RECORD_OWNER_UID" ]; then
-    export OWNER_UID="$LOCAL_RECORD_OWNER_UID"
-    return
-  fi
-
-  if [ -z "$LOCAL_RECORD_USER" ]; then
-    echo "[local_record] is enabled but neither record_user nor owner_uid is set in $CONFIG" >&2
-    exit 1
-  fi
-
-  OWNER_UID="$(uid_for_user "$LOCAL_RECORD_USER")"
-  export OWNER_UID
-}
+export RUST_LOG="${RUST_LOG:-info}"
 
 if [ "$ENABLE_DNS" -eq 1 ]; then
-  resolve_owner_uid
-else
-  export OWNER_UID="${OWNER_UID:-}"
+  INTERCEPT_UID="$(traffic_intercept_uid)"
 fi
 
 if ! command -v cargo >/dev/null 2>&1; then
@@ -266,7 +175,6 @@ run_as_root() {
       "ENABLE_UDP=${ENABLE_UDP:-1}" \
       "GATEWAY_PORT=${GATEWAY_PORT:-15001}" \
       "UDP_GATEWAY_PORT=${UDP_GATEWAY_PORT:-15002}" \
-      "OWNER_UID=$OWNER_UID" \
       "$@"
   fi
 }
@@ -391,9 +299,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ "$ENABLE_DNS" -eq 1 ]; then
-  if [ -n "$OWNER_UID" ]; then
-    echo "local recording owner filter enabled: OWNER_UID=$OWNER_UID" >&2
-  fi
+  echo "local recording owner filter enabled: $TRAFFIC_INTERCEPT_USER (uid $INTERCEPT_UID)" >&2
   run_as_root "$ROOT_DIR/scripts/setup_local_dns.sh" up
   DNS_CAPTURE_UP=1
   run_as_root "$ROOT_DIR/scripts/setup_fake_ip_redirect.sh" up

@@ -44,11 +44,11 @@ those rules:
 traffic-record --config config/recorder.example.toml --no-dns
 ```
 
-`config/recorder.example.toml` enables `[local_record]` owner filtering for the
-dedicated Unix user `trp-record`. Prefer running the source service as that user
-so bootstrap and case dependencies are not polluted by unrelated local
-processes. `--user`, `--owner-uid`, `--all-users`, or `OWNER_UID` override the
-owner scope when used with `traffic-record --config ...`.
+`traffic-record` always limits DNS and fake-IP interception to the dedicated
+Unix user `trp-record`. Run the source service as that user so bootstrap and
+case dependencies are not polluted by unrelated local processes. The owner
+scope cannot be overridden by CLI options, environment variables, or recorder
+configuration.
 
 HTTP gateway recording is intentionally conservative. Until the configured
 ready probe succeeds, matching traffic is sent to `fallback_upstream` and no
@@ -125,9 +125,11 @@ traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
 
-`traffic-replay` also defaults to owner filtering for `trp-record`. Run the
-target service as that user, or pass `--user`, `--owner-uid`, or `--all-users`
-when the replay environment requires a different scope.
+`traffic-replay` also uses the fixed `trp-record` owner filter. Run the
+dependency-producing target process as that user. Build steps, replay itself,
+and replay-control commands may remain under the developer account. If the
+target cannot run as `trp-record`, intercepted replay is blocked; do not widen
+the owner scope to the login user or all local users.
 
 For a case collection, start one replay session and control active case
 ownership through the CLI:

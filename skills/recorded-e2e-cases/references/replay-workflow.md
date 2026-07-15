@@ -102,13 +102,47 @@ leftover replay cleanup.
 
 Use `--no-intercept` only when the target project already routes dependencies
 to the replay listeners.
-`traffic-replay` defaults to owner filtering for the `trp-record` Unix user.
-Target-project E2E commands should pass no user-filter argument by default and
-should ensure the target process runs as `trp-record`. If the harness truly
-cannot run as that user, use an exact `--owner-uid` with a recorded rationale.
-Do not put `--all-users` in target-project tests, command facades, docs, or
-migration state. Use `--all-users` only as a manual troubleshooting command on
-an isolated machine, then remove it from committed artifacts.
+`traffic-replay` always filters interception to its recorder-owned fixed Unix
+user. Resolve that identity with `traffic-replay --print-intercept-user`; do not
+copy its current name into the skill or target project. The CLI does not accept
+an arbitrary user, UID, environment override, or all-user mode.
+Target-project tests, command facades, docs, and
+migration state MUST NOT pass, emulate, or recommend `--owner-uid`, `--user`,
+`--all-users`, `OWNER_UID`, or any equivalent owner selection.
+
+Before replay, resolve the recorder-owned identity and require it to exist:
+
+```bash
+intercept_user="$(traffic-replay --print-intercept-user)"
+id -u "$intercept_user"
+```
+
+Build and orchestration may run as the developer, but the process that emits
+dependency connections MUST run as `$intercept_user`. For an out-of-process
+service, verify that service PID. For an in-process E2E, build first as the
+developer and execute the prebuilt E2E binary as `$intercept_user`; do not run
+the build tool or write shared build caches as the system user. If the
+workspace or build output is private,
+stage only the executable and required public runtime inputs in a temporary
+directory owned by `$intercept_user`; do not make the workspace, build cache,
+session file, report, or control socket world-writable. Retain the effective
+UID check before sending the first case request.
+
+Keep `traffic-replay-cli` lifecycle orchestration under the developer account.
+For an in-process E2E, make one invocation handle exactly one selected case:
+the outer facade calls `begin`, executes that case's staged binary as
+`$intercept_user`, then calls `end`. The fixed-user test process MUST NOT own
+replay lifecycle or require access to the private control socket. If the
+existing test loops over cases and calls `traffic-replay-cli` internally,
+refactor that recorded-E2E boundary before replay; this is isolation work, not
+business-code behavior.
+
+If the user is absent, the dependency-producing process identity cannot be
+verified, or the harness cannot run it as `$intercept_user`, stop with
+`blocked_replay_isolation`. Never fall back to the login user's UID, a
+configurable username, all-user capture, or widened session/socket
+permissions. `--no-intercept` is not a bypass; it is valid only when every
+dependency is explicitly routed to replay listeners.
 Do not hardcode the traffic-recorder-proxy repository path or skill path inside
 target-project tests. A test harness may allow `TRAFFIC_REPLAY` or a similar
 local override, but the default commands must be `traffic-replay` and

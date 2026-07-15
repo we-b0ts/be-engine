@@ -14,15 +14,6 @@ bypass_domains = [
 [dns_mock.hosts]
 "db-10-185-28-119.test" = ["10.185.28.119"]
 
-[local_record]
-# Development recording should usually isolate traffic to one Unix user. Run the
-# source service as this user, then traffic-record resolves it to OWNER_UID
-# for DNS and fake-IP iptables owner matching. OWNER_UID in the environment
-# overrides this config.
-enabled = true
-record_user = "trp-record"
-owner_uid = ""
-
 [tcp_gateway]
 enabled = true
 listen = "127.0.0.1:15001"

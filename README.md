@@ -53,18 +53,9 @@ command -v traffic-record
 traffic-record --config config/recorder.example.toml
 ```
 
-`config/recorder.example.toml` enables local owner filtering with the `trp-record`
-Unix user by default:
-
-```toml
-[local_record]
-enabled = true
-record_user = "trp-record"
-owner_uid = ""
-```
-
-Create the user once, run the source service as that user, then start the
-recorder:
+Local interception is always filtered to the fixed `trp-record` Unix user.
+This is a project-created system account, not a Linux built-in. Create it once,
+run the source service as that user, then start the recorder:
 
 ```bash
 sudo useradd --system --create-home --shell /bin/bash trp-record
@@ -72,9 +63,9 @@ sudo -u trp-record /path/to/source-service start
 traffic-record --config config/recorder.example.toml
 ```
 
-Use `--user other-user`, `--owner-uid 1002`, or `--all-users` alongside
-`--config` when you need to override the default owner scope.
-`OWNER_UID=... traffic-record --config ...` also overrides `[local_record]`.
+The owner scope cannot be overridden from the CLI, environment, or recorder
+configuration. This prevents a recording session from intercepting DNS and
+fake-IP traffic belonging to the developer's login user.
 
 The default example listens on:
 
@@ -104,10 +95,11 @@ traffic-replay path/to/recordings/<run-id>
 ```
 
 `traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
-the same local interception rules used for recording. By default it limits
-interception to the `trp-record` Unix user, so run the target service as that
-user or override the owner with `--user`, `--owner-uid`, or `--all-users`. Use
-`--no-intercept` to start only the replay listeners.
+the same local interception rules used for recording. Interception is always
+limited to `trp-record`, so the dependency-producing target process must run as
+that user. Build steps, replay itself, and replay-control commands may remain
+under the developer account. Use `--no-intercept` only when the target already
+routes dependencies directly to the replay listeners.
 
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are consumed in recorded connection order; the

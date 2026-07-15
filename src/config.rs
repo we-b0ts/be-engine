@@ -359,24 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn ignores_local_record_script_config() {
-        let config: AppConfig = toml::from_str(
-            r#"
-            [local_record]
-            enabled = true
-            record_user = "trp-record"
-            owner_uid = ""
-
-            [recording]
-            output_dir = "./recordings"
-            "#,
-        )
-        .unwrap();
-
-        assert_eq!(config.recording.output_dir, PathBuf::from("./recordings"));
-    }
-
-    #[test]
     fn parses_mysql_dns_routes() {
         let config: AppConfig = toml::from_str(
             r#"

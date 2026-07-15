@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+source "$SCRIPT_DIR/intercept-user.sh"
+
 ACTION="${1:-up}"
 FAKE_CIDR="${FAKE_CIDR:-198.18.0.0/15}"
 GATEWAY_PORT="${GATEWAY_PORT:-15001}"
 UDP_GATEWAY_PORT="${UDP_GATEWAY_PORT:-15002}"
-OWNER_UID="${OWNER_UID:-}"
 ENABLE_TCP="${ENABLE_TCP:-1}"
 ENABLE_UDP="${ENABLE_UDP:-1}"
+INTERCEPT_UID=""
 
 usage() {
   cat >&2 <<EOF
 Usage:
-  sudo FAKE_CIDR=$FAKE_CIDR GATEWAY_PORT=$GATEWAY_PORT UDP_GATEWAY_PORT=$UDP_GATEWAY_PORT OWNER_UID=$OWNER_UID $0 up
-  sudo FAKE_CIDR=$FAKE_CIDR GATEWAY_PORT=$GATEWAY_PORT UDP_GATEWAY_PORT=$UDP_GATEWAY_PORT OWNER_UID=$OWNER_UID $0 down
+  sudo FAKE_CIDR=$FAKE_CIDR GATEWAY_PORT=$GATEWAY_PORT UDP_GATEWAY_PORT=$UDP_GATEWAY_PORT $0 up
+  sudo FAKE_CIDR=$FAKE_CIDR GATEWAY_PORT=$GATEWAY_PORT UDP_GATEWAY_PORT=$UDP_GATEWAY_PORT $0 down
 
 This redirects TCP and UDP traffic whose destination is inside FAKE_CIDR.
-Set OWNER_UID to limit redirect to one Unix user.
+Redirects are always limited to the fixed Unix user $TRAFFIC_INTERCEPT_USER.
 Set ENABLE_TCP=0 or ENABLE_UDP=0 to skip either protocol.
 EOF
 }
@@ -65,24 +69,34 @@ add_rule() {
 delete_rules() {
   local protocol="$1"
   local port="$2"
-  while rule_exists "$protocol" "$port"; do
-    owner_args=()
-    mapfile -t owner_args < <(owner_match_args)
-    iptables -t nat -D OUTPUT \
-      -p "$protocol" \
-      "${owner_args[@]}" \
-      -d "$FAKE_CIDR" \
-      -j REDIRECT --to-ports "$port"
+  local protocol_number
+  local rule_number
+  case "$protocol" in
+    tcp) protocol_number=6 ;;
+    udp) protocol_number=17 ;;
+    *) echo "unsupported redirect protocol: $protocol" >&2; return 2 ;;
+  esac
+  while true; do
+    rule_number="$(
+      iptables -t nat -L OUTPUT --line-numbers -n \
+        | awk -v protocol="$protocol_number" -v cidr="$FAKE_CIDR" -v port="$port" \
+          '$2 == "REDIRECT" && $3 == protocol && $6 == cidr && $0 ~ ("redir ports " port "$") { print $1; exit }'
+    )"
+    if [ -z "$rule_number" ]; then
+      break
+    fi
+    iptables -t nat -D OUTPUT "$rule_number"
   done
 }
 
 owner_match_args() {
-  if [ -n "$OWNER_UID" ]; then
-    printf '%s\n' -m owner --uid-owner "$OWNER_UID"
-  fi
+  printf '%s\n' -m owner --uid-owner "$INTERCEPT_UID"
 }
 
 if [ "$ACTION" = "up" ]; then
+  INTERCEPT_UID="$(traffic_intercept_uid)"
+  delete_rules tcp "$GATEWAY_PORT"
+  delete_rules udp "$UDP_GATEWAY_PORT"
   if ! route_exists; then
     ip route add local "$FAKE_CIDR" dev lo
   fi
@@ -95,9 +109,7 @@ if [ "$ACTION" = "up" ]; then
   fi
 
   echo "fake IP redirect enabled: $FAKE_CIDR tcp=$ENABLE_TCP:$GATEWAY_PORT udp=$ENABLE_UDP:$UDP_GATEWAY_PORT"
-  if [ -n "$OWNER_UID" ]; then
-    echo "owner UID scope: $OWNER_UID"
-  fi
+  echo "owner scope: $TRAFFIC_INTERCEPT_USER (uid $INTERCEPT_UID)"
 else
   if [ "$ENABLE_TCP" = "1" ]; then
     delete_rules tcp "$GATEWAY_PORT"

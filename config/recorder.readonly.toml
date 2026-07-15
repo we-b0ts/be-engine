@@ -12,11 +12,6 @@
 [dns_mock]
 enabled = false
 
-[local_record]
-enabled = false
-record_user = ""
-owner_uid = ""
-
 [tcp_gateway]
 enabled = false
 

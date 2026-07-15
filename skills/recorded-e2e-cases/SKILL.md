@@ -53,6 +53,8 @@ parent collection or run passed after replaying only a subset.
    emulate the command in the target repo.
 5. Follow [replay-workflow.md](references/replay-workflow.md): use
    `traffic-replay` and `traffic-replay-cli` from `PATH`, wait for readiness,
+   require fixed-user interception and verify the dependency-producing target
+   process runs as the recorder-declared fixed interception user,
    bracket every case with `begin` and `end --fail-on-dirty`, require a clean
    `finalize --fail-on-dirty --fail-on-incomplete` result, and retain its final
    session id and version-four report. Successful finalization means that exact
@@ -127,12 +129,21 @@ the final state:
    `traffic-case-group ensure` evidence. Published recordings must remain
    unchanged. A blocked group may end the current group's work and allow a
    handoff, but the parent selected case source remains incomplete.
-2. End every selected case, run the final replay report with
+2. For intercepted replay, retain pre-request evidence that the process which
+   emits dependency traffic runs as the fixed user returned by
+   `traffic-replay --print-intercept-user`. A missing user, unverified process
+   identity, login-user target, arbitrary owner UID,
+   configurable owner user, or all-user capture is
+   `blocked_replay_isolation`. Target-project facades MUST NOT pass or emulate
+   `--owner-uid`, `--user`, `--all-users`, `OWNER_UID`, or equivalent owner
+   selection. `--no-intercept` is applicable only when all
+   dependencies are explicitly routed to replay listeners.
+3. End every selected case, run the final replay report with
    `traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete`, and
    require its version-four report to contain the exact selected case ids,
    final session id, `finalized: true`, and `finalized_at`. A stale active case,
    pending case, live session, or non-finalized report is incomplete evidence.
-3. For every collection/run source, multi-case selection, or source with more
+4. For every collection/run source, multi-case selection, or source with more
    than one replay report/session, run `traffic-replay-aggregate` with
    exact repeated `--case-id` and `--session-id` values plus
    `--fail-on-incomplete --fail-on-dirty`. Require a persisted aggregate report
@@ -142,7 +153,7 @@ the final state:
    exemption is `not_applicable_single_case_single_session`, backed by one
    published case and one finalized session/report. Never substitute
    hand-maintained totals, target-runner output, or migration-ledger counts.
-4. When a source repo and a target recorder config with an explicit AI-managed
+5. When a source repo and a target recorder config with an explicit AI-managed
    `case_path_patterns` block are available, always run
    `traffic-recorder-config case-path-patterns plan`, even when no pattern or
    change is expected. Persist and inspect its JSON report. Record `applied`
@@ -158,7 +169,7 @@ the final state:
    `case_path_patterns` controls case grouping, so broad capture is not evidence
    that grouping feedback is unnecessary. Apply a confirmed diff only through
    the managed command and keep focused case sources add-only.
-5. Treat target-project scripts and command facades as orchestration helpers,
+6. Treat target-project scripts and command facades as orchestration helpers,
    not independent proof that this gate passed. MUST verify replay lifecycle,
    aggregate coverage, and route-pattern outcome from recorder-owned CLI output
    and artifacts. MUST NOT patch a target facade merely to manufacture or

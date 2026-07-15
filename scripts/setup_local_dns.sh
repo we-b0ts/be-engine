@@ -1,24 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+source "$SCRIPT_DIR/intercept-user.sh"
+
 ACTION="${1:-up}"
 DNS_IP="${DNS_IP:-127.0.0.153}"
 DNS_PORT="${DNS_PORT:-15353}"
 UPSTREAM_DNS="${UPSTREAM_DNS:-10.10.10.10:53}"
-OWNER_UID="${OWNER_UID:-}"
 CHAIN="${CHAIN:-TRP_DNS}"
+INTERCEPT_UID=""
 
 usage() {
   cat >&2 <<EOF
 Usage:
-  sudo DNS_IP=$DNS_IP DNS_PORT=$DNS_PORT UPSTREAM_DNS=$UPSTREAM_DNS OWNER_UID=$OWNER_UID $0 up
-  sudo DNS_IP=$DNS_IP DNS_PORT=$DNS_PORT UPSTREAM_DNS=$UPSTREAM_DNS OWNER_UID=$OWNER_UID $0 down
+  sudo DNS_IP=$DNS_IP DNS_PORT=$DNS_PORT UPSTREAM_DNS=$UPSTREAM_DNS $0 up
+  sudo DNS_IP=$DNS_IP DNS_PORT=$DNS_PORT UPSTREAM_DNS=$UPSTREAM_DNS $0 down
 
 This captures local UDP/TCP DNS traffic on port 53 and sends it to
 DNS_IP:DNS_PORT. UPSTREAM_DNS is excluded so the recorder can forward DNS
 queries upstream without recursively hitting itself. For multiple upstreams,
 use a comma-separated list. IPv4 values may include an optional :53 suffix.
-Set OWNER_UID to limit capture to one Unix user.
+Capture is always limited to the fixed Unix user $TRAFFIC_INTERCEPT_USER.
 EOF
 }
 
@@ -41,9 +45,7 @@ chain_exists() {
 }
 
 owner_match_args() {
-  if [ -n "$OWNER_UID" ]; then
-    printf '%s\n' -m owner --uid-owner "$OWNER_UID"
-  fi
+  printf '%s\n' -m owner --uid-owner "$INTERCEPT_UID"
 }
 
 ensure_chain() {
@@ -77,16 +79,17 @@ add_output_rule() {
   fi
 }
 
-delete_output_rule() {
-  local proto="$1"
-  local owner_args=()
-  mapfile -t owner_args < <(owner_match_args)
-  while output_rule_exists "$proto"; do
-    iptables -t nat -D OUTPUT \
-      -p "$proto" \
-      "${owner_args[@]}" \
-      --dport 53 \
-      -j "$CHAIN"
+delete_output_rules() {
+  local rule_number
+  while true; do
+    rule_number="$(
+      iptables -t nat -L OUTPUT --line-numbers -n \
+        | awk -v chain="$CHAIN" '$2 == chain { print $1; exit }'
+    )"
+    if [ -z "$rule_number" ]; then
+      break
+    fi
+    iptables -t nat -D OUTPUT "$rule_number"
   done
 }
 
@@ -114,11 +117,7 @@ populate_chain() {
 print_status() {
   echo "DNS listener expected at $DNS_IP:$DNS_PORT"
   echo "DNS upstream exclusion: $UPSTREAM_DNS"
-  if [ -n "$OWNER_UID" ]; then
-    echo "Owner UID scope: $OWNER_UID"
-  else
-    echo "Owner UID scope: all local processes"
-  fi
+  echo "Owner scope: $TRAFFIC_INTERCEPT_USER (uid $INTERCEPT_UID)"
   echo
   echo "iptables DNS capture rules:"
   iptables -t nat -S OUTPUT | grep -F -- "-j $CHAIN" || true
@@ -129,6 +128,8 @@ print_status() {
 
 case "$ACTION" in
   up)
+    INTERCEPT_UID="$(traffic_intercept_uid)"
+    delete_output_rules
     ensure_chain
     populate_chain
     add_output_rule udp
@@ -136,8 +137,7 @@ case "$ACTION" in
     echo "local DNS capture enabled: *:53 -> $DNS_IP:$DNS_PORT, excluding $UPSTREAM_DNS"
     ;;
   down)
-    delete_output_rule udp
-    delete_output_rule tcp
+    delete_output_rules
     if chain_exists; then
       iptables -t nat -F "$CHAIN"
       iptables -t nat -X "$CHAIN"
@@ -145,6 +145,7 @@ case "$ACTION" in
     echo "local DNS capture disabled: *:53 -> $DNS_IP:$DNS_PORT"
     ;;
   status)
+    INTERCEPT_UID="$(traffic_intercept_uid)"
     print_status
     ;;
 esac
