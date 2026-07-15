@@ -1,5 +1,6 @@
 mod access_policy;
 mod active_case;
+mod case_group;
 mod config;
 mod dns_mock;
 mod gateway;
@@ -35,6 +36,10 @@ use crate::active_case::{
 use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::http::case::CaseInvalidation;
 
+pub use case_group::{
+    CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
+    ensure_case_group,
+};
 pub use config::{
     AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
     CasePathPatternReport, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,

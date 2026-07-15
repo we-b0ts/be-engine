@@ -94,9 +94,11 @@ ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-reco
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
 ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
+ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
 command -v traffic-recorder-proxy
 command -v traffic-record
 command -v traffic-replay
+command -v traffic-case-group
 traffic-replay path/to/case-dir
 traffic-replay path/to/recordings/<run-id>
 ```
@@ -231,7 +233,9 @@ shown above. Use `traffic-recorder-config case-path-patterns plan` to inspect
 the proposed diff, then rerun it with `apply`. Focused case sources are
 add-only; deletion requires an authoritative case source and the explicit
 `--allow-delete` flag. See [docs/development.md](docs/development.md) for the
-complete command.
+complete command. Use `traffic-case-group ensure` to persist exact static or
+dynamic API membership before migration; it writes a manifest outside the
+recording source and never moves or edits published cases.
 
 `request.json` stores the matched gateway request. `expected-response.json`
 stores the matched upstream response; if the response body has

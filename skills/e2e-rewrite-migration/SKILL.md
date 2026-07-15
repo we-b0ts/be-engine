@@ -33,18 +33,27 @@ but not replace recordings.
 
 ## Workflow
 
-1. Inspect source routes/jobs, target conventions and startup, and recorded
-   cases. Build a method/path-to-case matrix when several APIs or a collection
-   is supplied. If scope is unspecified, propose one complete low-risk GET and
-   ask for confirmation.
-2. Migrate one API/function at a time and include every matching case. Prefer
-   GET, then scheduled jobs, then writes and complex side effects.
+1. Inspect target conventions and startup, the supplied recording layout, and
+   source route registrations. When several APIs or a collection are supplied,
+   do not analyze every business implementation or build one simultaneous
+   migration scope. Use the incremental directory and API-group selection in
+   `recorded-e2e-cases`: select one unprocessed directory, resolve its first
+   published case to a source route, then run `traffic-case-group ensure`
+   without `--pattern` for a static route or with the safe pattern for a dynamic
+   route. Retain the canonical grouping evidence. If scope is unspecified,
+   start with one complete low-risk GET group.
+2. Only after selecting a valid group, inspect and migrate that one API/function
+   and include every returned matching case. Finish the group as `complete`,
+   `incomplete`, or `blocked` before selecting another group. Prefer GET, then
+   scheduled jobs, then writes and complex side effects.
 3. Prepare a scope branch from `dev-migration`. If that branch is missing,
    stop and ask; preserve unrelated work. Completed migrations require a
    focused commit, pushed scope branch, and PR to `dev-migration`.
 4. Before changing product code, inspect target `AGENTS.md` as a read-only
    repository contract. It MUST state or link to a recorded-migration
    definition of done covering all of these clauses:
+   - source-route-resolved directory grouping before business implementation,
+     exactly one API group at a time, and immutable published recordings;
    - final-state replay of the entire selected case set;
    - required recorder-owned aggregate evidence;
    - managed `case_path_patterns` planning and application;
@@ -84,34 +93,45 @@ but not replace recordings.
 10. Preserve source metrics and side effects unless the user approves a
     contract change. Add focused unit/component tests for non-trivial local
     logic without duplicating recorded E2E assertions.
-11. Iterate implementation, focused replay, and fixes at most three times.
-    After the focused case set first passes, perform the structural convergence
-    review in `migration-workflow.md`, rerun the selected cases, then perform
-    the semantics review, startup smoke, and target quality checks.
+11. Iterate implementation, focused replay, and fixes while each cycle produces
+    new evidence or fixes a distinct evidenced defect. Always replay after a
+    behavior-affecting change; final verification is mandatory and is not a
+    retry. If the same root cause repeats for three consecutive cycles without
+    new evidence or meaningful progress, stop that group as `blocked` or
+    `incomplete`. After the focused group first passes, perform the structural
+    convergence review in `migration-workflow.md`, rerun that group, then
+    perform the semantics review, startup smoke, and target quality checks.
 
 ## Non-Negotiable Completion Gate
 
-Apply these gates in order: repository contract, final replay, aggregate,
-route-pattern feedback, startup/quality checks, focused commit, push, PR, and
-run-ledger update. MUST NOT report a migration as complete or delivered until
-every item is independently verified:
+Apply these gates in order: repository contract, canonical API grouping, final
+replay, aggregate, route-pattern feedback, startup/quality checks, focused
+commit, push, PR, and run-ledger update. MUST NOT report a migration as complete
+or delivered until every item is independently verified:
 
 1. Set `repository_contract_status: confirmed` only after directly verifying
    every required target `AGENTS.md` clause and linked document. Any missing or
    weaker clause is `blocked_repository_contract`, not a warning.
-2. Rerun the entire selected case set after the final change to product code,
+2. Verify every selected directory and case belongs to exactly one ordered API
+   group from `recorded-e2e-cases`. Retain each static validation or dynamic
+   `traffic-case-group ensure` report and returned group directory or manifest.
+   Require the current group to reach a terminal state before the next begins,
+   and confirm the original recording tree was not moved, copied, renamed,
+   deleted, or edited. A blocked group permits an explicit partial handoff but
+   keeps the parent selected scope incomplete.
+3. Rerun the entire selected case set after the final change to product code,
    runtime/dependency config, E2E harness, replay/assertion policy, or dependency
    wiring. Any later change in those categories invalidates the replay and
-   returns the workflow to this gate. Reaching the iteration limit after an
-   unverified fix leaves the migration `incomplete`.
-3. Satisfy the `recorded-e2e-cases` completion gate. Record its exact aggregate
+   returns the workflow to this gate. Any unverified fix leaves the migration
+   `incomplete`.
+4. Satisfy the `recorded-e2e-cases` completion gate. Record its exact aggregate
    status/path/coverage and case-path-pattern plan status/path. Generic
    `not-applicable`, `skipped`, `not-needed`, or an unpersisted terminal result
    is forbidden.
-4. Run normal-startup smoke and all target-required quality checks against the
+5. Run normal-startup smoke and all target-required quality checks against the
    final verified tree. Record the exact commands and results. A subset of
    checks, an earlier run, or a facade summary cannot satisfy this gate.
-5. Create a focused commit containing only the intended migration, push the
+6. Create a focused commit containing only the intended migration, push the
    scope branch, and create a PR targeting
    `dev-migration`. Verify the remote branch and PR target through canonical Git
    and hosting interfaces. Record the branch, commit SHA, PR target, and PR URL.
@@ -120,9 +140,10 @@ every item is independently verified:
    an external write, stop as `blocked_delivery`; do not silently omit it or
    claim completion. After committing, require no uncommitted intended-scope
    changes; otherwise the committed tree is not the verified final tree.
-6. Store these artifacts in the per-run state: final case source and selected
-   ids, final session ids and replay reports, aggregate status/path/counts,
-   pattern status and plan/apply/verification paths, startup/quality results,
+7. Store these artifacts in the per-run state: final case source; ordered API
+   groups, member directories, grouping statuses/reports/manifests, and selected
+   ids; final session ids and replay reports; aggregate status/path/counts;
+   pattern status and plan/apply/verification paths; startup/quality results;
    branch, commit SHA, PR target, and PR URL. The ledger records evidence; it
    does not create evidence.
 
@@ -144,6 +165,8 @@ pushed branch, and PR state independently through canonical interfaces.
 - architecture or required structural convergence incomplete
 - unit-test, dynamic-value, or semantics review incomplete
 - missing or incomplete target `AGENTS.md` recorded-migration contract
+- missing, mixed, ambiguous, stale, overlapping, or unprocessed API grouping
+- published recording directories changed during grouping or migration
 - final behavior-affecting change not replayed against the entire selected set
 - missing or incomplete aggregate replay report
 - missing applicable case-path-pattern plan report or unresolved plan diff
@@ -156,7 +179,8 @@ recorder improvement list instead of guessing.
 
 Start the final response with exactly one state: `complete`, `incomplete`, or
 `blocked`. Then keep it short: migrated scope and current recording run,
-rewrite input and PR case sources, final selected-case replay, aggregate and
-pattern-plan artifact paths/statuses, startup/E2E/quality commands, branch,
-commit SHA, PR target/URL, blockers, and evidence-backed recording feedback.
-MUST NOT use success wording while any gate is missing.
+ordered API groups and grouping artifacts, rewrite input and PR case sources,
+final selected-case replay, aggregate and pattern-plan artifact paths/statuses,
+startup/E2E/quality commands, branch, commit SHA, PR target/URL, blockers, and
+evidence-backed recording feedback. MUST NOT use success wording while any gate
+is missing.

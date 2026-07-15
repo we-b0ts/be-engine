@@ -4,6 +4,12 @@ Use this workflow only during replay discovery or replay follow-up. Recording
 remains manually triggered and does not require source-repo scanning.
 `traffic-replay` and all recording artifacts remain read-only.
 
+For a collection or run with multiple canonical input directories, read
+[case-grouping.md](case-grouping.md) first. Route registration analysis may
+produce the candidate used by `traffic-case-group ensure` before business-code
+analysis begins. A grouping result never waives the final managed pattern
+plan/apply/replan gate below.
+
 ## Inputs
 
 - published case, collection, rule, or run directory

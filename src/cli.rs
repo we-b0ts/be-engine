@@ -7,10 +7,10 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_recorder_proxy::{
-    AppConfig, AppState, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternReport,
-    ReplayAggregateOptions, ReplayConfig, ReplayControlConfig,
-    aggregate_replay_reports_with_options, plan_case_path_pattern_feedback, run_replay,
-    run_replay_control,
+    AppConfig, AppState, CaseGroupOptions, CasePathPatternAuthority, CasePathPatternFeedback,
+    CasePathPatternReport, ReplayAggregateOptions, ReplayConfig, ReplayControlConfig,
+    aggregate_replay_reports_with_options, ensure_case_group, plan_case_path_pattern_feedback,
+    run_replay, run_replay_control,
 };
 use uuid::Uuid;
 
@@ -31,10 +31,44 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    CaseGroup(CaseGroupArgs),
     Replay(ReplayArgs),
     ReplayControl(ReplayControlArgs),
     ReplayAggregate(ReplayAggregateArgs),
     RecorderConfig(RecorderConfigArgs),
+}
+
+#[derive(Debug, Args)]
+struct CaseGroupArgs {
+    #[command(subcommand)]
+    command: CaseGroupCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum CaseGroupCommand {
+    Ensure(CaseGroupEnsureArgs),
+}
+
+#[derive(Debug, Args)]
+struct CaseGroupEnsureArgs {
+    #[arg(long)]
+    case_source: PathBuf,
+    #[arg(long)]
+    case_dir: PathBuf,
+    #[arg(long)]
+    method: String,
+    #[arg(long)]
+    source_route: String,
+    #[arg(long)]
+    pattern: Option<String>,
+    #[arg(long)]
+    source_revision: String,
+    #[arg(long)]
+    output: PathBuf,
+    #[arg(long)]
+    recorder_config: Option<PathBuf>,
+    #[arg(long)]
+    rule: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -191,11 +225,33 @@ pub(crate) async fn run() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
+        Some(Command::CaseGroup(args)) => run_case_group(args),
         Some(Command::Replay(args)) => run_replay_command(args).await,
         Some(Command::ReplayControl(args)) => run_replay_control_command(args).await,
         Some(Command::ReplayAggregate(args)) => run_replay_aggregate_command(args),
         Some(Command::RecorderConfig(args)) => run_recorder_config(cli.config, args),
         None => run_recorder(cli.config).await,
+    }
+}
+
+fn run_case_group(args: CaseGroupArgs) -> Result<()> {
+    match args.command {
+        CaseGroupCommand::Ensure(args) => {
+            let result = ensure_case_group(CaseGroupOptions {
+                case_source: args.case_source,
+                case_dir: args.case_dir,
+                method: args.method,
+                source_route: args.source_route,
+                pattern: args.pattern,
+                source_revision: args.source_revision,
+                output: args.output,
+                recorder_config: args.recorder_config,
+                rule: args.rule,
+            })?;
+            serde_json::to_writer_pretty(io::stdout(), &result)?;
+            println!();
+            Ok(())
+        }
     }
 }
 

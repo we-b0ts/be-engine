@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+unset BASH_ENV ENV
+
+if ! command -v traffic-recorder-proxy >/dev/null 2>&1; then
+  echo "traffic-recorder-proxy command not found on PATH" >&2
+  exit 1
+fi
+
+exec env -u BASH_ENV -u ENV traffic-recorder-proxy case-group "$@"

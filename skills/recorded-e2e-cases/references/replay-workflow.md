@@ -118,7 +118,10 @@ local override, but the default commands must be `traffic-replay` and
 
 Implement in this order:
 
-1. Create or extend a test helper that can load one case from
+1. For a collection or run with multiple canonical input directories, complete
+   [case-grouping.md](case-grouping.md) first and select exactly one returned API
+   group. Do not expand the whole batch into one simultaneous implementation
+   scope. Create or extend a test helper that can load one case from
    `recordings/<run-id>/<rule>/<uri-group>/<case-id>`. If the user supplied a
    collection directory such as `recordings/<run-id>/<rule>/<uri-group>` or an
    entire run directory such as `recordings/<run-id>`, inspect each published
