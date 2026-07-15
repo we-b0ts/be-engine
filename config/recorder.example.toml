@@ -14,15 +14,6 @@ bypass_domains = [
 [dns_mock.hosts]
 "db-10-185-28-119.test" = ["10.185.28.119"]
 
-[local_record]
-# Development recording should usually isolate traffic to one Unix user. Run the
-# source service as this user, then traffic-record resolves it to OWNER_UID
-# for DNS and fake-IP iptables owner matching. OWNER_UID in the environment
-# overrides this config.
-enabled = true
-record_user = "trp-record"
-owner_uid = ""
-
 [tcp_gateway]
 enabled = true
 listen = "127.0.0.1:15001"
@@ -92,6 +83,18 @@ enabled = true
 path = "/"
 success_status = 200
 interval_ms = 1000
+
+# APIs with enough consecutive clean replay + response-assertion successes can
+# be added here by `traffic-recorder-config verified-excludes ensure`. The
+# command, not AI logic, owns the threshold decision, apply, and verification.
+# This threshold belongs to recorder scope because these entries suppress
+# future recording; replay.yaml never controls capture scope.
+[http_gateway.verified_excludes]
+consecutive_successes = 3
+# BEGIN AI-MANAGED VERIFIED API EXCLUDES
+apis = [
+]
+# END AI-MANAGED VERIFIED API EXCLUDES
 
 # tcpcopy HTTP traffic matching rules. If no rules are configured, all gateway
 # traffic not selected by exclude_rules is eligible for matching. Exclusions

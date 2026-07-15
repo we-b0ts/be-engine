@@ -100,9 +100,10 @@ Common unstable fields:
 - generated ids when the exact id is not business-relevant
 - ordering in arrays that the product contract treats as unordered
 
-Suggest JSONPath ignore entries for unstable body fields, but do not edit
-`.recorded-e2e.yaml` without explicit user authorization. Prefer asserting
-stable semantic fields over broad ignores.
+Identify the exact JSONPath for an unstable body field, but do not add an
+assertion ignore anywhere without explicit user authorization. Replay-policy
+v1 cannot encode response ignores; never put one in `config/replay.yaml`.
+Prefer asserting stable semantic fields over broad ignores.
 
 ## Product Code Bugs
 

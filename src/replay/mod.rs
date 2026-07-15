@@ -32,6 +32,7 @@ mod legacy_tests;
 mod memcached;
 mod model;
 mod mysql;
+mod policy;
 mod redis;
 mod report;
 
@@ -40,6 +41,7 @@ use dependencies::*;
 use dns::*;
 use model::*;
 use mysql::*;
+use policy::*;
 use report::*;
 
 const SO_ORIGINAL_DST: libc::c_int = 80;
@@ -56,6 +58,7 @@ pub struct ReplayConfig {
     pub control_socket_path: Option<PathBuf>,
     pub ca_cert_path: Option<PathBuf>,
     pub ca_key_path: Option<PathBuf>,
+    pub policy_path: Option<PathBuf>,
     pub http_ignore_query_params: Vec<String>,
 }
 
@@ -70,6 +73,7 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
+pub use policy::{ReplayPolicyValidationReport, validate_replay_policy};
 pub use report::aggregate::{
     ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,
@@ -203,6 +207,20 @@ impl ReplayRuntime {
             case.status = ReplayCaseStatus::Active;
         }
 
+        let http_ignore_query_params = config
+            .http_ignore_query_params
+            .into_iter()
+            .map(|value| value.to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        let replay_policy = config
+            .policy_path
+            .as_deref()
+            .map(|path| ReplayPolicyRuntime::load(path, &cases))
+            .transpose()?;
+        if let Some(policy) = &replay_policy {
+            policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
+        }
+
         let state = ReplayState {
             session_id: Uuid::new_v4(),
             started_at: Utc::now(),
@@ -223,11 +241,8 @@ impl ReplayRuntime {
             http_events: http::HttpReplayEvents::default(),
             report_write_lock: Arc::new(Mutex::new(())),
             ca_cert_path,
-            http_ignore_query_params: config
-                .http_ignore_query_params
-                .into_iter()
-                .map(|value| value.to_ascii_lowercase())
-                .collect(),
+            replay_policy,
+            http_ignore_query_params,
         };
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
@@ -312,6 +327,7 @@ struct ReplayState {
     http_events: http::HttpReplayEvents,
     report_write_lock: Arc<Mutex<()>>,
     ca_cert_path: PathBuf,
+    replay_policy: Option<ReplayPolicyRuntime>,
     http_ignore_query_params: Vec<String>,
 }
 
@@ -361,6 +377,7 @@ impl ReplayState {
                 kafka: self.kafka.snapshot(),
             },
             ca_cert_path: self.ca_cert_path.display().to_string(),
+            replay_policy: self.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
             http_ignored_query_params: self.http_ignore_query_params.clone(),
         }
     }

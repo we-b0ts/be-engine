@@ -121,6 +121,7 @@ async fn handle_gateway_request(
         redact_headers(&request_headers, &state.config().recording.redact_headers);
     let authority = request_authority(&original_uri, &request_headers);
     let matched_rule = match evaluate_request(
+        &config.verified_excludes,
         &config.exclude_rules,
         &config.rules,
         &method,

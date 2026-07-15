@@ -91,6 +91,15 @@ Use `method`, `uri`, headers, and body to drive the request. Use `status` and
 the response body for assertions. Assert headers only when they are
 business-relevant or the target project's existing E2E style already does so.
 
+`expected-response.json` is assertion-only evidence. MUST NOT read its status,
+headers, body, or derived values to produce the target's actual response,
+configure product/replay behavior, seed database/HTTP/cache/queue dependency
+results, decide whether a dependency is called, or manufacture a cache or side
+effect. If the target cannot generate the result from request/session context,
+source behavior, product config, time/generated values, and recorded
+dependencies alone, keep the case incomplete. A passing comparison after
+reverse-feeding expected data is an invalid circular test.
+
 For JSON response bodies, parse recorded and actual bodies and compare JSON
 values structurally. Object member order is not meaningful. Field presence and
 value kind are meaningful: a missing field, `null`, and `""` are three different

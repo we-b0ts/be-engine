@@ -102,7 +102,8 @@ impl ReplayState {
     ) -> Option<MatchedExchange> {
         let normalized_sql = sql.map(normalize_sql);
         let active_case_id = self.active_case_id.clone();
-        for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
+        for index in 0..self.mysql.exchanges.len() {
+            let exchange = &self.mysql.exchanges[index];
             if exchange.consumed || exchange.record.command != command {
                 continue;
             }
@@ -115,13 +116,37 @@ impl ReplayState {
             let Some(recorded_sql) = exchange.record.sql.as_deref().map(normalize_sql) else {
                 continue;
             };
-            if Some(recorded_sql) != normalized_sql {
+            let policy_decision = if let Some(policy) = &self.replay_policy {
+                let context = MysqlPolicyContext {
+                    case_id: active_case_id.as_deref(),
+                    identity,
+                    command,
+                    recorded_sql: exchange.record.sql.as_deref(),
+                    sql,
+                    recorded: exchange.record.params.as_deref(),
+                    actual: params,
+                };
+                if Some(recorded_sql) != normalized_sql
+                    && !policy.allows_mysql_sql_difference(&context)
+                {
+                    continue;
+                }
+                match policy.preview_mysql(&context, Utc::now()) {
+                    Ok(decision) => decision,
+                    Err(_) => continue,
+                }
+            } else if Some(recorded_sql) != normalized_sql {
                 continue;
-            }
-            if !params_match(exchange.record.params.as_deref(), params) {
+            } else if params_match(exchange.record.params.as_deref(), params) {
+                PolicyDecision::default()
+            } else {
                 continue;
+            };
+            let exchange = self.mysql.exchanges[index].clone();
+            self.mysql.exchanges[index].consumed = true;
+            if let Some(policy) = &mut self.replay_policy {
+                policy.commit(active_case_id.as_deref(), policy_decision);
             }
-            exchange.consumed = true;
             let matched = MatchedQueryReport {
                 case_id: exchange.case_id.clone(),
                 target: Some(exchange.identity.target.clone()),

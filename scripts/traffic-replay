@@ -20,7 +20,8 @@ SCRIPT_PATH="$(resolve_script_path)"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_CWD="$(pwd)"
-unset BASH_ENV ENV TRAFFIC_RECORDER_PROXY_BIN
+source "$SCRIPT_DIR/intercept-user.sh"
+unset BASH_ENV ENV OWNER_UID TRAFFIC_RECORDER_PROXY_BIN
 
 usage() {
   cat >&2 <<EOF
@@ -40,9 +41,8 @@ Options:
   --tcp-listen ADDR        Fake-IP TCP replay listener. Default: 127.0.0.1:15001.
   --fake-cidr CIDR         Fake IP CIDR. Default: 198.18.0.0/15.
   --upstream-dns ADDR      DNS upstream excluded from capture. Default: 10.10.10.10:53.
-  --user USER              Limit capture to this Unix user. Default: trp-record.
-  --owner-uid UID          Limit capture to this numeric Unix uid.
-  --all-users              Capture all local users. Use only on isolated machines.
+  --policy PATH            Source-controlled replay dynamic-value policy YAML.
+  --print-intercept-user   Print the recorder-owned fixed interception user and exit.
   --proxy-bin PATH         Explicit traffic-recorder-proxy binary override.
 
 Ensure traffic-replay, traffic-replay-cli, and traffic-recorder-proxy are
@@ -50,6 +50,7 @@ available on PATH for target-project E2E runs. Use --proxy-bin only for local
 proxy development.
 Replay child processes are run with shell startup hooks such as BASH_ENV cleared.
 DNS/fake-IP rules are removed when this script exits.
+Interception is always limited to the fixed Unix user $TRAFFIC_INTERCEPT_USER.
 EOF
 }
 
@@ -77,11 +78,10 @@ FAKE_CIDR="198.18.0.0/15"
 FAKE_SET=0
 UPSTREAM_DNS_VALUE="10.10.10.10:53"
 UPSTREAM_SET=0
-OWNER_MODE="user"
-OWNER_USER_VALUE="trp-record"
-OWNER_UID_VALUE=""
-OWNER_SET=0
 PROXY_BIN_OVERRIDE=""
+POLICY_PATH=""
+POLICY_BASE="$CALLER_CWD"
+POLICY_SET=0
 APP_ARGS=()
 
 need_value() {
@@ -95,6 +95,10 @@ need_value() {
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --print-intercept-user)
+      printf '%s\n' "$TRAFFIC_INTERCEPT_USER"
+      exit 0
+      ;;
     --intercept)
       ENABLE_INTERCEPT=1
       INTERCEPT_SET=1
@@ -160,28 +164,16 @@ while [ "$#" -gt 0 ]; do
       UPSTREAM_SET=1
       shift 2
       ;;
-    --user)
+    --policy)
       need_value "$1" "${2:-}"
-      OWNER_MODE="user"
-      OWNER_USER_VALUE="$2"
-      OWNER_UID_VALUE=""
-      OWNER_SET=1
+      POLICY_PATH="$2"
+      POLICY_BASE="$CALLER_CWD"
+      POLICY_SET=1
       shift 2
       ;;
-    --owner-uid)
-      need_value "$1" "${2:-}"
-      OWNER_MODE="uid"
-      OWNER_UID_VALUE="$2"
-      OWNER_USER_VALUE=""
-      OWNER_SET=1
-      shift 2
-      ;;
-    --all-users)
-      OWNER_MODE="all"
-      OWNER_USER_VALUE=""
-      OWNER_UID_VALUE=""
-      OWNER_SET=1
-      shift
+    --owner-uid|--uid-owner|--user|--all-users)
+      echo "$1 is not supported; interception always uses $TRAFFIC_INTERCEPT_USER" >&2
+      exit 2
       ;;
     --proxy-bin)
       need_value "$1" "${2:-}"
@@ -240,7 +232,8 @@ load_config() {
   fi
 
   local -a replay_values
-  mapfile -t replay_values < <(python3 - "$config_path" <<'PY'
+  local replay_config_output
+  if ! replay_config_output="$(python3 - "$config_path" <<'PY'
 import sys
 
 try:
@@ -253,6 +246,14 @@ path = sys.argv[1]
 with open(path, "rb") as fh:
     config = tomllib.load(fh)
 replay = config.get("replay", {})
+forbidden = [name for name in ("owner_uid", "user", "record_user", "all_users") if name in replay]
+if forbidden:
+    sys.stderr.write(
+        "unsupported replay owner settings: "
+        + ", ".join(forbidden)
+        + "; interception always uses the recorder-owned fixed user\n"
+    )
+    raise SystemExit(2)
 
 def value(name, default=""):
     item = replay.get(name, default)
@@ -269,11 +270,12 @@ print(value("session"))
 print(value("control_socket"))
 print(value("enable_intercept"))
 print(value("upstream_dns"))
-print(value("owner_uid"))
-print(value("user", value("record_user")))
-print(value("all_users"))
+print(value("policy"))
 PY
-)
+)"; then
+    exit 2
+  fi
+  mapfile -t replay_values <<<"$replay_config_output"
 
   if [ "$CASE_SET" -eq 0 ] && [ -n "${replay_values[0]}" ]; then
     CASE_DIR="${replay_values[0]}"
@@ -307,20 +309,9 @@ PY
   if [ "$UPSTREAM_SET" -eq 0 ] && [ -n "${replay_values[8]}" ]; then
     UPSTREAM_DNS_VALUE="${replay_values[8]}"
   fi
-  if [ "$OWNER_SET" -eq 0 ]; then
-    if [ "${replay_values[11]}" = "1" ]; then
-      OWNER_MODE="all"
-      OWNER_USER_VALUE=""
-      OWNER_UID_VALUE=""
-    elif [ -n "${replay_values[9]}" ]; then
-      OWNER_MODE="uid"
-      OWNER_UID_VALUE="${replay_values[9]}"
-      OWNER_USER_VALUE=""
-    elif [ -n "${replay_values[10]}" ]; then
-      OWNER_MODE="user"
-      OWNER_USER_VALUE="${replay_values[10]}"
-      OWNER_UID_VALUE=""
-    fi
+  if [ "$POLICY_SET" -eq 0 ] && [ -n "${replay_values[9]}" ]; then
+    POLICY_PATH="${replay_values[9]}"
+    POLICY_BASE="$config_dir"
   fi
 }
 
@@ -338,6 +329,13 @@ CASE_DIR="$(resolve_path "$CASE_DIR" "$CASE_BASE")"
 if [ ! -d "$CASE_DIR" ]; then
   echo "case directory not found: $CASE_DIR" >&2
   exit 1
+fi
+if [ -n "$POLICY_PATH" ]; then
+  POLICY_PATH="$(resolve_path "$POLICY_PATH" "$POLICY_BASE")"
+  if [ ! -f "$POLICY_PATH" ]; then
+    echo "replay policy not found: $POLICY_PATH" >&2
+    exit 1
+  fi
 fi
 
 if [ -z "$REPORT_PATH" ]; then
@@ -396,45 +394,12 @@ find_proxy_binary() {
   exit 1
 }
 
-resolve_owner_uid() {
-  case "$OWNER_MODE" in
-    all)
-      printf '\n'
-      ;;
-    uid)
-      if [ -z "$OWNER_UID_VALUE" ]; then
-        echo "--owner-uid requires a non-empty uid" >&2
-        exit 2
-      fi
-      printf '%s\n' "$OWNER_UID_VALUE"
-      ;;
-    user)
-      if [ -z "$OWNER_USER_VALUE" ]; then
-        echo "--user requires a non-empty Unix user" >&2
-        exit 2
-      fi
-      if ! id -u "$OWNER_USER_VALUE" 2>/dev/null; then
-        cat >&2 <<EOF
-replay user not found: $OWNER_USER_VALUE
-Create it with:
-  sudo useradd --system --create-home --shell /bin/bash $OWNER_USER_VALUE
-EOF
-        exit 1
-      fi
-      ;;
-    *)
-      echo "unknown owner mode: $OWNER_MODE" >&2
-      exit 2
-      ;;
-  esac
-}
-
 PROXY_BIN="$(find_proxy_binary)"
 
 if [ "$ENABLE_INTERCEPT" = "1" ]; then
-  OWNER_UID_VALUE="$(resolve_owner_uid)"
+  INTERCEPT_UID="$(traffic_intercept_uid)"
 else
-  OWNER_UID_VALUE=""
+  INTERCEPT_UID=""
 fi
 
 split_host_port() {
@@ -470,7 +435,6 @@ run_as_root() {
       "ENABLE_TCP=1" \
       "ENABLE_UDP=0" \
       "GATEWAY_PORT=$GATEWAY_PORT_VALUE" \
-      "OWNER_UID=$OWNER_UID_VALUE" \
       "$@"
   fi
 }
@@ -495,11 +459,7 @@ cleanup_intercept() {
 
 if [ "$ENABLE_INTERCEPT" = "1" ]; then
   trap cleanup_intercept EXIT
-  if [ -n "$OWNER_UID_VALUE" ]; then
-    echo "local replay owner filter enabled: OWNER_UID=$OWNER_UID_VALUE" >&2
-  else
-    echo "local replay owner filter disabled: capturing all local users" >&2
-  fi
+  echo "local replay owner filter enabled: $TRAFFIC_INTERCEPT_USER (uid $INTERCEPT_UID)" >&2
   run_as_root "$SCRIPT_DIR/setup_local_dns.sh" up
   DNS_CAPTURE_UP=1
   run_as_root "$SCRIPT_DIR/setup_fake_ip_redirect.sh" up
@@ -507,6 +467,9 @@ if [ "$ENABLE_INTERCEPT" = "1" ]; then
 fi
 
 args=(replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LISTEN" --fake-cidr "$FAKE_CIDR" --report "$REPORT_PATH" --session "$SESSION_PATH" --control-socket "$CONTROL_SOCKET_PATH")
+if [ -n "$POLICY_PATH" ]; then
+  args+=(--policy "$POLICY_PATH")
+fi
 for case_id in "${CASE_IDS[@]}"; do
   args+=(--case-id "$case_id")
 done

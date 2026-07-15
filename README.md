@@ -53,18 +53,9 @@ command -v traffic-record
 traffic-record --config config/recorder.example.toml
 ```
 
-`config/recorder.example.toml` enables local owner filtering with the `trp-record`
-Unix user by default:
-
-```toml
-[local_record]
-enabled = true
-record_user = "trp-record"
-owner_uid = ""
-```
-
-Create the user once, run the source service as that user, then start the
-recorder:
+Local interception is always filtered to the fixed `trp-record` Unix user.
+This is a project-created system account, not a Linux built-in. Create it once,
+run the source service as that user, then start the recorder:
 
 ```bash
 sudo useradd --system --create-home --shell /bin/bash trp-record
@@ -72,9 +63,9 @@ sudo -u trp-record /path/to/source-service start
 traffic-record --config config/recorder.example.toml
 ```
 
-Use `--user other-user`, `--owner-uid 1002`, or `--all-users` alongside
-`--config` when you need to override the default owner scope.
-`OWNER_UID=... traffic-record --config ...` also overrides `[local_record]`.
+The owner scope cannot be overridden from the CLI, environment, or recorder
+configuration. This prevents a recording session from intercepting DNS and
+fake-IP traffic belonging to the developer's login user.
 
 The default example listens on:
 
@@ -93,21 +84,29 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
+ln -sf "$PWD/scripts/traffic-replay-policy" "$HOME/.local/bin/traffic-replay-policy"
 ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
 ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
 command -v traffic-recorder-proxy
 command -v traffic-record
 command -v traffic-replay
+command -v traffic-replay-policy
 command -v traffic-case-group
 traffic-replay path/to/case-dir
 traffic-replay path/to/recordings/<run-id>
 ```
 
+For runtime-generated UUIDs, timestamps, and signed query fields, keep a
+source-controlled `config/replay.yaml` in the target project and pass it with
+`--policy`. Validate it with `traffic-replay-policy validate --policy
+config/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
+
 `traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
-the same local interception rules used for recording. By default it limits
-interception to the `trp-record` Unix user, so run the target service as that
-user or override the owner with `--user`, `--owner-uid`, or `--all-users`. Use
-`--no-intercept` to start only the replay listeners.
+the same local interception rules used for recording. Interception is always
+limited to `trp-record`, so the dependency-producing target process must run as
+that user. Build steps, replay itself, and replay-control commands may remain
+under the developer account. Use `--no-intercept` only when the target already
+routes dependencies directly to the replay listeners.
 
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are consumed in recorded connection order; the
@@ -168,6 +167,14 @@ path = "/"
 success_status = 200
 interval_ms = 1000
 
+[http_gateway.verified_excludes]
+consecutive_successes = 3
+# BEGIN AI-MANAGED VERIFIED API EXCLUDES
+apis = [
+  # { rule = "record-api", method = "GET", path_pattern = "/api/users/*" },
+]
+# END AI-MANAGED VERIFIED API EXCLUDES
+
 [[http_gateway.exclude_rules]]
 name = "exclude-health"
 methods = ["GET"]
@@ -194,6 +201,15 @@ are alternatives while different fields must all match. `preserve_host = true`
 keeps the original `Host` header when forwarding. Recording access policy is
 evaluated before both rule sets, so exclusion rules do not bypass
 `block_known_writes`.
+
+`[http_gateway.verified_excludes]` contains recorder-owned, replay-verified API
+exclusions. After the configured number of consecutive clean cases also pass
+the target response assertions, run the managed `verified-excludes ensure`
+command. It decides the threshold outcome, applies an eligible exact
+`rule + method + path_pattern`, and verifies convergence without AI judgment.
+On the next recorder start, matching traffic goes to `fallback_upstream`
+without creating a case.
+See [Verified API Excludes](docs/verified-api-excludes.md).
 
 `[http_gateway.ready]` is an optional active readiness probe against
 `matched_upstream`. When enabled, the recorder sends `GET path` every

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hyper::client::conn::http1;
 use rustls::pki_types::ServerName;
@@ -102,6 +102,84 @@ async fn replays_http_exchange_with_stable_query_matching() {
     assert_eq!(state.http_events.matched.len(), 1);
     assert!(state.http_events.unmatched.is_empty());
     assert!(state.unused_http_exchanges(ReplaySource::Case).is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn replays_http_exchange_with_scoped_dynamic_query_policy() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-http-policy");
+    let recorded_uri = "/?Action=DescribeInstances&SignatureNonce=11111111111141118111111111111111&Timestamp=2026-07-15T04%3A30%3A00Z&Signature=old";
+    write_http_case(
+        &case_dir,
+        "fake_ip_http",
+        "api.example.test",
+        recorded_uri,
+        "hello",
+        "world",
+    )
+    .await;
+    tokio::fs::write(
+        case_dir.join("request.json"),
+        r#"{"method":"GET","uri":"/api/aliyun/instance/attr"}"#,
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(case_dir.join("expected-response.json"), "{}")
+        .await
+        .unwrap();
+    let policy_path = temp.path().join("replay.yaml");
+    tokio::fs::write(
+        &policy_path,
+        r#"
+version: 1
+expected_response: assertions_only
+rules:
+  - id: aliyun-signature
+    case:
+      method: GET
+      path: /api/aliyun/instance/attr
+    protocol: http
+    target:
+      host: api.example.test
+      port: 80
+    http:
+      method: POST
+      path: /
+      query:
+        Signature:
+          validate: non_empty
+        SignatureNonce:
+          validate: uuid_v4
+        Timestamp:
+          time:
+            relative_to: replay_now
+            tolerance: 2s
+"#,
+    )
+    .await
+    .unwrap();
+    let timestamp = Utc::now().format("%Y-%m-%dT%H%%3A%M%%3A%SZ");
+    let actual_uri = format!(
+        "/?Action=DescribeInstances&SignatureNonce=22222222222242228222222222222222&Timestamp={timestamp}&Signature=new"
+    );
+    let (addr, runtime, task) =
+        spawn_http_replay_with_policy(&case_dir, Vec::new(), Some(policy_path)).await;
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(
+        TokioIo::new(stream),
+        "api.example.test",
+        &actual_uri,
+        "hello",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let state = runtime.state.lock().await;
+    let policy = state.snapshot_report().replay_policy.unwrap();
+    assert_eq!(policy.rules[0].matches, 1);
+    assert!(policy.unused_applicable_rule_ids.is_empty());
     task.abort();
 }
 
@@ -234,6 +312,18 @@ async fn spawn_http_replay(
     Arc<ReplayRuntime>,
     tokio::task::JoinHandle<()>,
 ) {
+    spawn_http_replay_with_policy(case_dir, ignored_query_params, None).await
+}
+
+async fn spawn_http_replay_with_policy(
+    case_dir: &Path,
+    ignored_query_params: Vec<String>,
+    policy_path: Option<PathBuf>,
+) -> (
+    std::net::SocketAddr,
+    Arc<ReplayRuntime>,
+    tokio::task::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let runtime = Arc::new(
@@ -249,6 +339,7 @@ async fn spawn_http_replay(
                 control_socket_path: None,
                 ca_cert_path: Some(case_dir.join(".replay/ca.pem")),
                 ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
+                policy_path,
                 http_ignore_query_params: ignored_query_params,
             },
             "127.0.0.1:0".parse().unwrap(),

@@ -57,6 +57,8 @@ env \
 Use the repository-level replay commands, not skill-local script paths:
 
 - `traffic-replay` starts one replay session for a case or case collection
+- `traffic-replay-policy` validates the target's source-controlled dynamic-value
+  policy
 - `traffic-replay-cli` controls readiness, active case lifecycle, reports, and
   shutdown
 - `traffic-replay-aggregate` recursively summarizes this recorder's standard
@@ -72,6 +74,7 @@ user PATH directory such as `~/.local/bin`.
 ```bash
 command -v traffic-recorder-proxy
 command -v traffic-replay
+command -v traffic-replay-policy
 command -v traffic-replay-cli
 command -v traffic-replay-aggregate
 traffic-replay path/to/case-run-or-collection-dir
@@ -93,6 +96,13 @@ absolute recording path, a known recordings root, or a sample batch as an
 implicit default. A missing case source is an input error, not permission to
 select an older local recording.
 
+The target repository MUST maintain `config/replay.yaml` and every replay MUST
+pass it explicitly with `--policy`. Before startup, run
+`traffic-replay-policy validate --policy config/replay.yaml` and require
+`expected_response: assertions_only`. Do not auto-discover a policy from the
+working directory. This keeps the exact reviewed policy visible in the command
+and final report.
+
 Use `traffic-replay-cli wait-ready` before sending any target request. If the
 session cannot bind listeners, install DNS/fake-IP rules, or write its initial
 report, treat it as a replay lifecycle/setup failure and stop. Do not continue
@@ -102,13 +112,47 @@ leftover replay cleanup.
 
 Use `--no-intercept` only when the target project already routes dependencies
 to the replay listeners.
-`traffic-replay` defaults to owner filtering for the `trp-record` Unix user.
-Target-project E2E commands should pass no user-filter argument by default and
-should ensure the target process runs as `trp-record`. If the harness truly
-cannot run as that user, use an exact `--owner-uid` with a recorded rationale.
-Do not put `--all-users` in target-project tests, command facades, docs, or
-migration state. Use `--all-users` only as a manual troubleshooting command on
-an isolated machine, then remove it from committed artifacts.
+`traffic-replay` always filters interception to its recorder-owned fixed Unix
+user. Resolve that identity with `traffic-replay --print-intercept-user`; do not
+copy its current name into the skill or target project. The CLI does not accept
+an arbitrary user, UID, environment override, or all-user mode.
+Target-project tests, command facades, docs, and
+migration state MUST NOT pass, emulate, or recommend `--owner-uid`, `--user`,
+`--all-users`, `OWNER_UID`, or any equivalent owner selection.
+
+Before replay, resolve the recorder-owned identity and require it to exist:
+
+```bash
+intercept_user="$(traffic-replay --print-intercept-user)"
+id -u "$intercept_user"
+```
+
+Build and orchestration may run as the developer, but the process that emits
+dependency connections MUST run as `$intercept_user`. For an out-of-process
+service, verify that service PID. For an in-process E2E, build first as the
+developer and execute the prebuilt E2E binary as `$intercept_user`; do not run
+the build tool or write shared build caches as the system user. If the
+workspace or build output is private,
+stage only the executable and required public runtime inputs in a temporary
+directory owned by `$intercept_user`; do not make the workspace, build cache,
+session file, report, or control socket world-writable. Retain the effective
+UID check before sending the first case request.
+
+Keep `traffic-replay-cli` lifecycle orchestration under the developer account.
+For an in-process E2E, make one invocation handle exactly one selected case:
+the outer facade calls `begin`, executes that case's staged binary as
+`$intercept_user`, then calls `end`. The fixed-user test process MUST NOT own
+replay lifecycle or require access to the private control socket. If the
+existing test loops over cases and calls `traffic-replay-cli` internally,
+refactor that recorded-E2E boundary before replay; this is isolation work, not
+business-code behavior.
+
+If the user is absent, the dependency-producing process identity cannot be
+verified, or the harness cannot run it as `$intercept_user`, stop with
+`blocked_replay_isolation`. Never fall back to the login user's UID, a
+configurable username, all-user capture, or widened session/socket
+permissions. `--no-intercept` is not a bypass; it is valid only when every
+dependency is explicitly routed to replay listeners.
 Do not hardcode the traffic-recorder-proxy repository path or skill path inside
 target-project tests. A test harness may allow `TRAFFIC_REPLAY` or a similar
 local override, but the default commands must be `traffic-replay` and
@@ -138,22 +182,29 @@ Implement in this order:
    such as hop-by-hop transport headers (`connection`, `content-length`,
    `host`, `transfer-encoding`) or compression headers that the harness cannot
    reproduce.
-3. Start managed dependency replay with `traffic-replay
-   <case-run-or-collection-dir>`. It uses `dependencies.jsonl` from each
+3. Audit the target runner and product wiring for every read of
+   `expected-response.json`. Permit reads only in the final assertion path.
+   MUST NOT use its status, headers, body, or derived values to configure the
+   target, seed dependencies, choose branches, populate caches, generate side
+   effects, or produce the actual result.
+4. Validate the source-controlled target policy, then start managed dependency
+   replay with
+   `traffic-replay --policy config/replay.yaml <case-run-or-collection-dir>`.
+   It uses `dependencies.jsonl` from each
    selected case and bootstrap dependencies discovered above the case
    directory. The canonical bootstrap file is
    `recordings/<run-id>/bootstrap-dependencies.jsonl`.
-4. Wait for readiness with `traffic-replay-cli wait-ready`, then point the app
+5. Wait for readiness with `traffic-replay-cli wait-ready`, then point the app
    under test at the replay listeners and keep real external dependencies
    isolated.
-5. For each selected case, call `traffic-replay-cli begin <case-id>`, then send
+6. For each selected case, call `traffic-replay-cli begin <case-id>`, then send
    the request built from that case or invoke the equivalent route.
-6. Assert status and response body compatibility. Assert headers only when
+7. Assert status and response body compatibility. Assert headers only when
    stable and relevant.
-7. End the case with `traffic-replay-cli end <case-id> --fail-on-dirty` and use
+8. End the case with `traffic-replay-cli end <case-id> --fail-on-dirty` and use
    `dependencies-summary.json`, when present, as the dependency coverage
    checklist for replay.
-8. After the selected case set finishes, run `traffic-replay-cli finalize
+9. After the selected case set finishes, run `traffic-replay-cli finalize
    --fail-on-dirty --fail-on-incomplete`. Require a version-four report with
    the exact selected case ids, its session id, `finalized: true`, and
    `finalized_at`. Successful finalization atomically publishes that exact
@@ -247,6 +298,13 @@ success. Examples: current-month table suffix, request-start timestamp,
 generated request id, system clock, current authenticated user, or ids derived
 from database state. If the strategy is unknown, keep the case incomplete and
 report the missing source of truth instead of pinning the recorded value.
+Put evidence-backed dependency-field strategies in `config/replay.yaml`. Use
+`bind/ref` for same-case generated-value relationships, shape validation for
+UUID/non-empty fields, and relative-time validation for clock values. Require
+the rule to select the outer API, dependency target, dependency fingerprint,
+and exact field. Do not add a case-id rule or copy the recorded value into the
+policy. After every policy edit, revalidate and rerun the affected API group;
+the previous replay report is stale.
 
 Before relying on replay results, classify each recorded dependency:
 
@@ -315,10 +373,11 @@ evidence for:
 Do not mark the E2E as passed when replay output contains unexplained
 `unmatched` target dependency calls, `unused_case_exchanges`, or equivalent
 unused recorded case dependencies. An unused case exchange may mean the target
-omitted logic. It can be ignored only after evidence proves it is unrelated
-background traffic, or after the user approves a behavior change. If the summary
-shows a dependency category that the target test never exercises and it is not
-safe to classify it as unrelated, treat the replay as incomplete.
+omitted logic. Evidence that it is unrelated/background is useful recorder
+feedback, but replay-policy v1 cannot waive it and user approval does not make
+dirty recorder evidence clean. Re-record with correct attribution/filtering or
+keep the case incomplete. If ownership is ambiguous, report the correlation
+blocker as well.
 
 For non-MySQL dependencies:
 
@@ -356,44 +415,33 @@ evidence as recorder/replay feedback. If metrics are intentionally dropped or
 replaced with another telemetry contract, require explicit user approval and
 record the behavior-contract change.
 
-## Assertion And Config Fallback
+## Replay And Assertion Policy
 
-Prefer the target project's existing assertion configuration. If none exists and
-the case needs configurable assertion behavior, create `.recorded-e2e.yaml` at
-the target project root.
+Use the target's `config/replay.yaml` as the single policy file. Create it when
+absent; do not create `.recorded-e2e.yaml` or a second assertion config.
+Initialize it with `version: 1`, `expected_response: assertions_only`, and an
+empty `rules` list before adding evidence-backed dynamic fields.
 
-The fallback config is YAML, per case, and limited to assertion behavior plus
-external dependency isolation. Use JSONPath selectors for response body ignore
-paths. Keep it small; do not use it for broad test orchestration or dependency
-payload data.
+Use the same source-controlled file path in every target orchestration layer;
+the shell facade must pass it to recorder replay and must not maintain a second
+dynamic-value rule set. Version one deliberately does not support case-id
+exceptions, background allowlists, response ignores, or dependency payloads.
 
-Use the same source-controlled file as the single replay/assertion policy for
-every target orchestration and test layer. The shell facade may pass its path to
-the target-language E2E runner, but must not maintain a second copy of case ids,
-dependency signatures, or background/noise exceptions. If the target already
-has a suitable policy file, reuse it instead of adding `.recorded-e2e.yaml`.
-When an evidence-backed dependency exception is necessary, identify it by the
-smallest exact case and dependency signature and record the rationale there;
-do not turn it into a broad route or process-wide allowlist.
+Recorder replay-policy v1 currently applies dynamic rules only to scalar MySQL
+params and single-occurrence HTTP query params. It does not share bindings with
+the target runner's final HTTP assertion or apply JSONPath inside response
+bodies/MySQL JSON strings. A case requiring those missing semantics remains
+incomplete; do not compensate by feeding expected response data into the
+target.
 
-Minimum supported concepts:
-
-- case key: `recordings/<run-id>/<rule>/<uri-group>/<case-id>`
-- optional case collection key: `recordings/<run-id>/<rule>/<uri-group>` or
-  `recordings/<run-id>` plus a selected case id after matching
-  `request.json.uri`
-- body assertion mode: strict JSON, exact bytes, semantic fields, or status-only
-- ignored response JSONPaths
-- ignored or asserted headers
-- external dependency isolation flag
-
-Never add ignore JSONPaths automatically. When a mismatch appears unstable,
-suggest the JSONPath and wait for explicit user authorization before editing the
-config.
+Never add a response ignore automatically. When a mismatch appears unstable,
+report the exact field and wait for explicit user authorization; replay-policy
+v1 cannot encode that ignore.
 
 ## Run Loop
 
-Use at most 3 iterations:
+Continue while each cycle produces new evidence or fixes a distinct evidenced
+defect:
 
 1. Run the focused single-case or selected case-set E2E command.
 2. If it fails, classify the failure as incomplete recording, replay routing
@@ -407,14 +455,19 @@ Use at most 3 iterations:
 6. Before finishing, note whether replay exposed recorder data quality gaps,
    even if the case now passes.
 
+If the same root cause repeats for three consecutive cycles without new
+evidence or meaningful progress, stop as blocked or incomplete. A final replay
+after the last behavior, policy, assertion, or wiring change is mandatory and
+is never skipped because of an iteration count.
+
 After the focused case passes, run the broader relevant suite or project-standard
 checks that are reasonable for the repository.
 
 When dependency files contain both relevant business calls and unrelated
 process-wide traffic, include a short working-note summary of which dependency
-classes were replayed, explained, or ignored. Surface recorder feedback if
-better dependency attribution, role tagging, or noise filtering would have
-reduced manual triage.
+classes were replayed and which require re-recording. Do not call the latter
+ignored or passed. Surface recorder feedback if better dependency attribution,
+role tagging, or noise filtering would have reduced manual triage.
 
 If replay passes the HTTP assertion but leaves case dependencies unused, report
 the result as partial: response passed, dependency touch incomplete. Include the

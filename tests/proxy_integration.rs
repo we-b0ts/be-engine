@@ -14,7 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use traffic_recorder_proxy::{
     AppConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
     HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlRouteConfig,
-    RecordingAccessPolicy,
+    RecordingAccessPolicy, VerifiedApiExclude, VerifiedApiExcludesConfig,
 };
 
 #[tokio::test]
@@ -182,12 +182,12 @@ async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
 }
 
 #[tokio::test]
-async fn http_gateway_excludes_traffic_before_positive_matching() {
+async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
     let matched_upstream = spawn_http_response_upstream("matched", 1).await;
-    let fallback_upstream = spawn_http_response_upstream("fallback", 2).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 3).await;
     let gateway_addr = free_addr();
 
     let mut config = AppConfig::default();
@@ -208,6 +208,14 @@ async fn http_gateway_excludes_traffic_before_positive_matching() {
         path_prefixes: vec!["/record/private".to_string()],
         ..Default::default()
     }];
+    config.http_gateway.verified_excludes = VerifiedApiExcludesConfig {
+        consecutive_successes: 3,
+        apis: vec![VerifiedApiExclude {
+            rule: "record-path".to_string(),
+            method: "GET".to_string(),
+            path_pattern: "/record/verified/*".to_string(),
+        }],
+    };
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
     config.tls.ca_cert_path = temp.path().join("ca.pem");
@@ -221,6 +229,8 @@ async fn http_gateway_excludes_traffic_before_positive_matching() {
     assert!(matched_response.contains("matched"));
     let excluded_response = raw_http_get(gateway_addr, "/record/private").await;
     assert!(excluded_response.contains("fallback"));
+    let verified_response = raw_http_get(gateway_addr, "/record/verified/123").await;
+    assert!(verified_response.contains("fallback"));
     let fallback_response = raw_http_get(gateway_addr, "/recording/two").await;
     assert!(fallback_response.contains("fallback"));
 
@@ -234,6 +244,7 @@ async fn http_gateway_excludes_traffic_before_positive_matching() {
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
     assert!(jsonl.contains("/record"));
     assert!(!jsonl.contains("/record/private"));
+    assert!(!jsonl.contains("/record/verified/123"));
     assert!(!jsonl.contains("/recording/two"));
 }
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "E2E Rewrite Migration"
   short_description: "Rewrite services with recorded E2E guardrails"
-  default_prompt: "Use $e2e-rewrite-migration to group and rewrite one recorded API at a time with canonical E2E evidence and pushed-PR delivery gates."
+  default_prompt: "Use $e2e-rewrite-migration to rewrite one recorded API at a time with assertion-only replay evidence, managed route feedback, recorder-owned verified-exclude ensure, and pushed-PR delivery."

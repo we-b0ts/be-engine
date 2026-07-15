@@ -1,7 +1,8 @@
 use hyper::header::HOST;
 use hyper::{HeaderMap, Method, Uri};
 
-use crate::config::HttpGatewayRuleConfig;
+use crate::config::{HttpGatewayRuleConfig, VerifiedApiExcludesConfig};
+use crate::path_pattern::{matches_segment_pattern, segments};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Match {
@@ -17,6 +18,7 @@ pub(super) enum RuleDecision {
 }
 
 pub(super) fn evaluate_request(
+    verified_excludes: &VerifiedApiExcludesConfig,
     exclude_rules: &[HttpGatewayRuleConfig],
     rules: &[HttpGatewayRuleConfig],
     method: &Method,
@@ -29,6 +31,19 @@ pub(super) fn evaluate_request(
     {
         return RuleDecision::Excluded {
             name: rule.name.clone().unwrap_or_else(|| "unnamed".to_string()),
+        };
+    }
+
+    if let Some(api) = verified_excludes.apis.iter().find(|api| {
+        api.method == method.as_str()
+            && matches_segment_pattern(&api.path_pattern, uri.path())
+            && rules.iter().any(|rule| {
+                rule.name.as_deref() == Some(api.rule.as_str())
+                    && rule_matches(rule, method, uri, headers)
+            })
+    }) {
+        return RuleDecision::Excluded {
+            name: format!("verified:{}:{} {}", api.rule, api.method, api.path_pattern),
         };
     }
 
@@ -53,7 +68,7 @@ pub(super) fn case_uri_group(uri: &Uri, patterns: &[String]) -> String {
     let path = uri.path();
     let group_path = patterns
         .iter()
-        .find(|pattern| path_matches_case_pattern(path, pattern))
+        .find(|pattern| matches_segment_pattern(pattern, path))
         .map(String::as_str)
         .unwrap_or(path);
 
@@ -120,18 +135,8 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
     path == normalized || path.starts_with(&format!("{normalized}/"))
 }
 
-fn path_matches_case_pattern(path: &str, pattern: &str) -> bool {
-    let actual_segments = path_segments(path);
-    let pattern_segments = path_segments(pattern);
-    actual_segments.len() == pattern_segments.len()
-        && actual_segments
-            .iter()
-            .zip(pattern_segments.iter())
-            .all(|(actual, expected)| *expected == "*" || actual == expected)
-}
-
 fn case_group_from_path(path: &str) -> String {
-    let group = path_segments(path)
+    let group = segments(path)
         .into_iter()
         .map(|segment| {
             if segment == "*" {
@@ -148,12 +153,6 @@ fn case_group_from_path(path: &str) -> String {
     } else {
         group
     }
-}
-
-fn path_segments(path: &str) -> Vec<&str> {
-    path.split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect()
 }
 
 #[cfg(test)]
@@ -211,6 +210,7 @@ mod tests {
 
         assert_eq!(
             evaluate_request(
+                &VerifiedApiExcludesConfig::default(),
                 &exclude_rules,
                 &rules,
                 request.method(),
@@ -243,6 +243,7 @@ mod tests {
 
         assert_eq!(
             evaluate_request(
+                &VerifiedApiExcludesConfig::default(),
                 &exclude_rules,
                 &[],
                 ordinary_request.method(),
@@ -256,6 +257,7 @@ mod tests {
         );
         assert_eq!(
             evaluate_request(
+                &VerifiedApiExcludesConfig::default(),
                 &exclude_rules,
                 &[],
                 excluded_request.method(),
@@ -265,6 +267,60 @@ mod tests {
             RuleDecision::Excluded {
                 name: "skip-health".to_string()
             }
+        );
+    }
+
+    #[test]
+    fn verified_api_exclude_uses_rule_scope_and_segment_pattern() {
+        let verified_excludes = VerifiedApiExcludesConfig {
+            consecutive_successes: 3,
+            apis: vec![crate::config::VerifiedApiExclude {
+                rule: "record-api".to_string(),
+                method: "GET".to_string(),
+                path_pattern: "/api/users/*".to_string(),
+            }],
+        };
+        let rules = vec![HttpGatewayRuleConfig {
+            name: Some("record-api".to_string()),
+            hosts: vec!["api.example.com".to_string()],
+            methods: vec!["GET".to_string()],
+            path_prefixes: vec!["/api".to_string()],
+            ..Default::default()
+        }];
+        let excluded = Request::builder()
+            .method("GET")
+            .uri("/api/users/alice")
+            .header(HOST, "api.example.com")
+            .body(())
+            .unwrap();
+        let wrong_host = Request::builder()
+            .method("GET")
+            .uri("/api/users/alice")
+            .header(HOST, "other.example.com")
+            .body(())
+            .unwrap();
+
+        assert!(matches!(
+            evaluate_request(
+                &verified_excludes,
+                &[],
+                &rules,
+                excluded.method(),
+                excluded.uri(),
+                excluded.headers(),
+            ),
+            RuleDecision::Excluded { .. }
+        ));
+        assert_eq!(
+            evaluate_request(
+                &verified_excludes,
+                &[],
+                &rules,
+                wrong_host.method(),
+                wrong_host.uri(),
+                wrong_host.headers(),
+            ),
+            RuleDecision::Unmatched
         );
     }
 

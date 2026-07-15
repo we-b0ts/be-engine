@@ -55,8 +55,13 @@ but not replace recordings.
    - source-route-resolved directory grouping before business implementation,
      exactly one API group at a time, and immutable published recordings;
    - final-state replay of the entire selected case set;
+   - a source-controlled `config/replay.yaml`, validated dynamic-value policy
+     evidence, and `expected-response.json` used only as the final assertion
+     oracle;
    - required recorder-owned aggregate evidence;
    - managed `case_path_patterns` planning and application;
+   - recorder-owned `verified-excludes ensure` after final aggregate and
+     assertions, with no AI eligibility decision;
    - focused commit, pushed scope branch, and PR to `dev-migration`;
    - target scripts and AI-authored facades are helpers, not completion proof.
    This skill does not authorize creating or modifying target `AGENTS.md`.
@@ -76,9 +81,14 @@ but not replace recordings.
    dependency coverage, response comparison, failure diagnosis, and recorder
    feedback. Keep replay and recordings read-only; place project-specific
    recorder config feedback in the target repo. Do not duplicate or weaken that
-   contract in the target harness. Keep any replay exception/background policy
-   in one source-controlled target file shared by the command facade and
-   target-language E2E; do not duplicate allowlists between them.
+   contract in the target harness. Maintain the single source-controlled
+   `config/replay.yaml` required by `recorded-e2e-cases`, validate it before
+   replay, and pass it explicitly to every replay. `expected-response.json`
+   MUST remain assertion-only: product code, test setup, dependency mocks,
+   replay rules, branch decisions, cache decisions, and side effects MUST NOT
+   read it to construct actual behavior. Replay-policy v1 does not support
+   background/noise exceptions or case-id allowlists; keep such groups
+   incomplete or re-record them instead of duplicating exceptions elsewhere.
 7. Reuse the target repo's command, config, and logging conventions. Treat
    existing package and module structure as a candidate pattern rather than an
    automatic precedent; validate it against current target rules. When a
@@ -124,14 +134,21 @@ or delivered until every item is independently verified:
    wiring. Any later change in those categories invalidates the replay and
    returns the workflow to this gate. Any unverified fix leaves the migration
    `incomplete`.
-4. Satisfy the `recorded-e2e-cases` completion gate. Record its exact aggregate
-   status/path/coverage and case-path-pattern plan status/path. Generic
+4. Validate the target `config/replay.yaml`, record its canonical path and
+   fingerprint, require zero unused applicable rules, and retain a direct audit
+   showing that `expected-response.json` is read only by final assertion code.
+   Any reverse data flow from the expected response into actual responses,
+   dependency mocks, runtime inputs, branches, caches, or side effects is a
+   hard failure, even when all assertions pass.
+5. Satisfy the `recorded-e2e-cases` completion gate. Record its exact aggregate
+   status/path/coverage, case-path-pattern plan status/path, and verified API
+   exclude threshold/count/ensure status and report path. Generic
    `not-applicable`, `skipped`, `not-needed`, or an unpersisted terminal result
    is forbidden.
-5. Run normal-startup smoke and all target-required quality checks against the
+6. Run normal-startup smoke and all target-required quality checks against the
    final verified tree. Record the exact commands and results. A subset of
    checks, an earlier run, or a facade summary cannot satisfy this gate.
-6. Create a focused commit containing only the intended migration, push the
+7. Create a focused commit containing only the intended migration, push the
    scope branch, and create a PR targeting
    `dev-migration`. Verify the remote branch and PR target through canonical Git
    and hosting interfaces. Record the branch, commit SHA, PR target, and PR URL.
@@ -140,10 +157,12 @@ or delivered until every item is independently verified:
    an external write, stop as `blocked_delivery`; do not silently omit it or
    claim completion. After committing, require no uncommitted intended-scope
    changes; otherwise the committed tree is not the verified final tree.
-7. Store these artifacts in the per-run state: final case source; ordered API
+8. Store these artifacts in the per-run state: final case source; ordered API
    groups, member directories, grouping statuses/reports/manifests, and selected
-   ids; final session ids and replay reports; aggregate status/path/counts;
-   pattern status and plan/apply/verification paths; startup/quality results;
+   ids; replay-policy path/fingerprint/rule usage and expected-response audit;
+   final session ids and replay reports; aggregate status/path/counts;
+   pattern status and plan/apply/verification paths; verified-exclude assertion
+   and ensure-report paths/status; startup/quality results;
    branch, commit SHA, PR target, and PR URL. The ledger records evidence; it
    does not create evidence.
 
@@ -164,12 +183,20 @@ pushed branch, and PR state independently through canonical interfaces.
 - source metrics or required side effects unimplemented or unverified
 - architecture or required structural convergence incomplete
 - unit-test, dynamic-value, or semantics review incomplete
+- missing, invalid, implicit, or stale `config/replay.yaml`, or unused
+  applicable dynamic-value rules
+- `expected-response.json` read outside final assertion comparison, including
+  any use to construct actual responses, dependency mocks, inputs, decisions,
+  caches, or side effects
 - missing or incomplete target `AGENTS.md` recorded-migration contract
 - missing, mixed, ambiguous, stale, overlapping, or unprocessed API grouping
 - published recording directories changed during grouping or migration
 - final behavior-affecting change not replayed against the entire selected set
 - missing or incomplete aggregate replay report
 - missing applicable case-path-pattern plan report or unresolved plan diff
+- missing verified-exclude ensure report/count when managed config exists,
+  AI-authored eligibility branching, or an `applied` result without embedded
+  apply and no-change verification evidence
 - no focused branch, commit, pushed branch, or PR to `dev-migration`
 
 When recording evidence is incomplete, stop with the missing evidence and
@@ -180,7 +207,9 @@ recorder improvement list instead of guessing.
 Start the final response with exactly one state: `complete`, `incomplete`, or
 `blocked`. Then keep it short: migrated scope and current recording run,
 ordered API groups and grouping artifacts, rewrite input and PR case sources,
-final selected-case replay, aggregate and pattern-plan artifact paths/statuses,
+replay-policy path/fingerprint/rule usage, expected-response assertion-only
+audit, final selected-case replay, aggregate, pattern-plan, and verified-exclude
+artifact paths/statuses,
 startup/E2E/quality commands, branch, commit SHA, PR target/URL, blockers, and
 evidence-backed recording feedback. MUST NOT use success wording while any gate
 is missing.
