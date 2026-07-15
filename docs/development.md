@@ -120,6 +120,7 @@ ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
 ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
 ln -sf "$PWD/scripts/traffic-replay-aggregate" "$HOME/.local/bin/traffic-replay-aggregate"
 ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
+ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
@@ -175,6 +176,30 @@ target-project test output or classify why an unreported case was skipped.
 replay-control`; the Rust binary owns the control protocol and Unix socket
 client. The script should stay small and should not implement JSON/socket
 protocol logic.
+
+Before migrating a dynamic API from a collection, persist its exact immutable
+case grouping outside the recording source:
+
+```bash
+traffic-case-group ensure \
+  --case-source /path/to/recordings/<run-id>/<rule> \
+  --case-dir /path/to/recordings/<run-id>/<rule>/<current-uri-group> \
+  --method GET \
+  --source-route '/api/users/:id' \
+  --pattern '/api/users/*' \
+  --source-revision "$(git -C ../source rev-parse HEAD)" \
+  --output ../target/.migration/run-reports/<run-id>-case-groups.json \
+  --recorder-config ../target/config/recorder.toml \
+  --rule record-api
+```
+
+For an exact static route, omit `--pattern`, `--recorder-config`, and `--rule`.
+The command validates every case in the current directory and returns
+`already_canonical`. A dynamic first call returns `created`; a repeat from any
+member directory returns `already_grouped`. Dynamic groups are manifest-backed
+and do not create or move a group directory. The output path must remain outside
+the canonical case source. Mixed directories, duplicate case ids, overlapping
+groups, a changed source revision, or a changed case inventory fail the command.
 
 Replay-time route discovery can produce safe `case_path_patterns` feedback for
 a target repository. Preview focused, add-only feedback before applying it:

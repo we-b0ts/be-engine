@@ -1,6 +1,6 @@
 ---
 name: recorded-e2e-cases
-description: Replay and diagnose E2E tests from traffic-recorder-proxy case, collection, or run directories, and maintain replay-time recorder feedback in the target repo. Use for recorded request/response artifacts, dependencies.jsonl dependency replay, aggregate replay reports, recorder.toml case_path_patterns, or case-driven failures requiring dependency evidence.
+description: Replay, group, and diagnose E2E tests from traffic-recorder-proxy case, collection, or run directories, and maintain replay-time recorder feedback in the target repo. Use for recorded request/response artifacts, API-by-API case grouping, dependencies.jsonl dependency replay, aggregate replay reports, recorder.toml case_path_patterns, or case-driven failures requiring dependency evidence.
 ---
 
 # Recorded E2E Cases
@@ -22,11 +22,13 @@ parent collection or run passed after replaying only a subset.
 
 ## Workflow
 
-1. Resolve the supplied case, collection, or run directory. For collections,
-   select every published case matching `request.json.uri`; ignore `failed`,
+1. Resolve the supplied case, collection, or run directory. Ignore `failed`,
    `staging`, `.replay`, `.partial`, and `.truncated` artifacts. Preserve
    recordings exactly. Read [case-format.md](references/case-format.md) when
-   parsing artifacts.
+   parsing artifacts. For a collection or run containing multiple canonical
+   input directories, read [case-grouping.md](references/case-grouping.md) and
+   select exactly one API group at a time. Do not build one simultaneous
+   implementation scope for the whole collection.
 2. Load `request.json`, canonical `expected-response.json`,
    `dependencies.jsonl`, and `dependencies-summary.json` when present. Tolerate
    `expected_response.json` as user input without renaming it. Stop if a valid
@@ -36,11 +38,19 @@ parent collection or run passed after replaying only a subset.
    dependencies only inside the recorded-E2E entrypoint. Require the selected
    case source as an explicit external input such as `--case-dir`; never
    hardcode or silently default to a developer-machine recording path.
-4. When a source repo and target recorder config are available, read
-   [route-pattern-feedback.md](references/route-pattern-feedback.md). During
-   replay discovery, associate each case to a source API using method plus
-   actual URI. Keep `traffic-replay` and recording artifacts read-only; apply
-   confirmed feedback only through the target repo's explicit managed config.
+4. During replay discovery, use the selected directory's first published case
+   only to resolve a candidate source API by method plus actual URI path. Read
+   source route registrations before grouping, but do not inspect business
+   implementation details or modify product code yet. Run the canonical
+   `traffic-case-group ensure` command for both route shapes: omit `--pattern`
+   for an exact static route, or first read
+   [route-pattern-feedback.md](references/route-pattern-feedback.md) and pass
+   the safe pattern for a dynamic route. Use only its returned group directory
+   or manifest and exact case ids. Mark all returned member directories
+   processed. If that canonical
+   command is unavailable or grouping is mixed, ambiguous, stale, incomplete,
+   or overlapping, stop with `blocked_grouping`; do not move or copy cases or
+   emulate the command in the target repo.
 5. Follow [replay-workflow.md](references/replay-workflow.md): use
    `traffic-replay` and `traffic-replay-cli` from `PATH`, wait for readiness,
    bracket every case with `begin` and `end --fail-on-dirty`, require a clean
@@ -79,9 +89,15 @@ parent collection or run passed after replaying only a subset.
    only after reviewing the authoritative plan. If the command or managed
    block is unavailable, report the exact prerequisite without changing or
    creating the config or managed block.
-10. Run the focused case set first, then relevant project checks. Iterate at
-   most three times and modify product code only after replay evidence and
-   routing are complete and the failure is a real behavior defect.
+10. Run and finish the current API group's focused case set before selecting
+    the next group, then run relevant project checks. Iterate while each cycle
+    produces new evidence or fixes a distinct evidenced defect. After every
+    behavior-affecting change, rerun the group; the mandatory final verification
+    is never skipped or counted as a retry. If the same root cause repeats for
+    three consecutive cycles without new evidence or meaningful progress, stop
+    that group as `blocked` or `incomplete`. Modify product code only after
+    replay evidence and routing are complete and the failure is a real behavior
+    defect.
 
 For MySQL, match semantic `mysql_exchange` records by business target host,
 port, database/schema, and username/role before SQL and params. Use semantic
@@ -102,12 +118,21 @@ MUST NOT report a selected case source as passed, complete, or delivered unless
 all applicable items below are evidenced by canonical tools and artifacts from
 the final state:
 
-1. End every selected case, run the final replay report with
+1. For every collection or run with multiple canonical input directories,
+   retain the exact ordered API groups, grouping status and report, method and
+   source route, group directory or manifest, member directories, and case ids.
+   Require every selected case id to occur in exactly one group, no unprocessed
+   or overlapping directory, and every group to finish or retain an explicit
+   blocker before the next begins. Every group requires canonical
+   `traffic-case-group ensure` evidence. Published recordings must remain
+   unchanged. A blocked group may end the current group's work and allow a
+   handoff, but the parent selected case source remains incomplete.
+2. End every selected case, run the final replay report with
    `traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete`, and
    require its version-four report to contain the exact selected case ids,
    final session id, `finalized: true`, and `finalized_at`. A stale active case,
    pending case, live session, or non-finalized report is incomplete evidence.
-2. For every collection/run source, multi-case selection, or source with more
+3. For every collection/run source, multi-case selection, or source with more
    than one replay report/session, run `traffic-replay-aggregate` with
    exact repeated `--case-id` and `--session-id` values plus
    `--fail-on-incomplete --fail-on-dirty`. Require a persisted aggregate report
@@ -117,7 +142,7 @@ the final state:
    exemption is `not_applicable_single_case_single_session`, backed by one
    published case and one finalized session/report. Never substitute
    hand-maintained totals, target-runner output, or migration-ledger counts.
-3. When a source repo and a target recorder config with an explicit AI-managed
+4. When a source repo and a target recorder config with an explicit AI-managed
    `case_path_patterns` block are available, always run
    `traffic-recorder-config case-path-patterns plan`, even when no pattern or
    change is expected. Persist and inspect its JSON report. Record `applied`
@@ -133,16 +158,17 @@ the final state:
    `case_path_patterns` controls case grouping, so broad capture is not evidence
    that grouping feedback is unnecessary. Apply a confirmed diff only through
    the managed command and keep focused case sources add-only.
-4. Treat target-project scripts and command facades as orchestration helpers,
+5. Treat target-project scripts and command facades as orchestration helpers,
    not independent proof that this gate passed. MUST verify replay lifecycle,
    aggregate coverage, and route-pattern outcome from recorder-owned CLI output
    and artifacts. MUST NOT patch a target facade merely to manufacture or
    self-report completion evidence.
 
 The following never satisfy this gate: a zero exit code from an AI-authored
-facade, manually summed case counts, a stale report from before the final
-change, `path_prefixes`, a planned-but-unapplied safe pattern diff, or a ledger
-entry without its referenced canonical artifact.
+facade, a hand-maintained group or case list, manually summed case counts, a
+stale report from before the final change, `path_prefixes`, a
+planned-but-unapplied safe pattern diff, or a ledger entry without its
+referenced canonical artifact.
 
 If any applicable item is missing, report the result as `incomplete` or
 `blocked` with the missing artifact or action. Do not use success wording.
@@ -166,8 +192,9 @@ requested API scope.
 ## Output
 
 Start the final response with exactly one state: `complete`, `incomplete`, or
-`blocked`. Then keep it short: exact completion case source and selected case
-ids, final replay report and session ids, aggregate status/path and coverage,
-case-path-pattern plan status/path, essential changes, verification command,
-missing evidence, case-to-route status, and concise evidence-backed recorder
-feedback. MUST NOT use success wording when any applicable gate is missing.
+`blocked`. Then keep it short: exact completion case source; ordered API groups,
+grouping reports, and selected case ids; final replay report and session ids;
+aggregate status/path and coverage; case-path-pattern plan status/path;
+essential changes; verification command; missing evidence; case-to-route
+status; and concise evidence-backed recorder feedback. MUST NOT use success
+wording when any applicable gate is missing.

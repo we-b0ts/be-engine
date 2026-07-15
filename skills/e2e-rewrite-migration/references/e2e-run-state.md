@@ -43,7 +43,8 @@ case counts, report paths, blockers, or replay results to this file.
 Store recording-specific evidence under `.migration/runs/<run-key>.yaml`:
 
 - exact `case_source` and source revision when available
-- selected scope and method/path-to-case matrix
+- selected scope plus ordered API groups with method, source route, grouping
+  status/report/manifest, member directories, exact case ids, and terminal state
 - rewrite input and PR E2E case sources
 - exact E2E command
 - replay/assertion policy path when one is configured
@@ -78,6 +79,8 @@ is never proof by itself.
 ## Consistency
 
 Require the current index, per-run state, E2E command, aggregate `case_source`,
-and raw report roots to describe the same recording source. Treat a mismatch as
-an incomplete migration report. Historical run state is immutable except when
-the same recording source is deliberately replayed again.
+group inventory, and raw report roots to describe the same recording source and
+exact case-id set. Require each selected case to occur in exactly one group and
+the published recording tree to remain unchanged. Treat a mismatch as an
+incomplete migration report. Historical run state is immutable except when the
+same recording source is deliberately replayed again.
