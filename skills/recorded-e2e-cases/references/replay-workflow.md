@@ -57,6 +57,8 @@ env \
 Use the repository-level replay commands, not skill-local script paths:
 
 - `traffic-replay` starts one replay session for a case or case collection
+- `traffic-replay-target` stages and runs one prebuilt target command as the
+  recorder-owned fixed interception user
 - `traffic-replay-policy` validates the target's source-controlled dynamic-value
   policy
 - `traffic-replay-cli` controls readiness, active case lifecycle, reports, and
@@ -74,6 +76,7 @@ user PATH directory such as `~/.local/bin`.
 ```bash
 command -v traffic-recorder-proxy
 command -v traffic-replay
+command -v traffic-replay-target
 command -v traffic-replay-policy
 command -v traffic-replay-cli
 command -v traffic-replay-aggregate
@@ -130,19 +133,22 @@ id -u "$intercept_user"
 Build and orchestration may run as the developer, but the process that emits
 dependency connections MUST run as `$intercept_user`. For an out-of-process
 service, verify that service PID. For an in-process E2E, build first as the
-developer and execute the prebuilt E2E binary as `$intercept_user`; do not run
-the build tool or write shared build caches as the system user. If the
-workspace or build output is private,
-stage only the executable and required public runtime inputs in a temporary
-directory owned by `$intercept_user`; do not make the workspace, build cache,
-session file, report, or control socket world-writable. Retain the effective
-UID check before sending the first case request.
+developer and execute the prebuilt E2E command with `traffic-replay-target`;
+do not run the build tool or write shared build caches as the system user. Use
+`--copy-env NAME=PATH` for private configuration or the public replay CA,
+`--path-env NAME=PATH` only for an already-readable case source, and
+`--write-dir PATH` only for target-owned runtime output. The canonical command
+stages the executable and copied inputs, clears the inherited environment,
+verifies the effective UID, and cleans up its work tree. It never accepts an
+owner user or UID. Do not make the workspace, build cache, session file,
+report, control socket, or replay CA private key readable or writable by the
+fixed user. Retain its identity output before sending the first case request.
 
 Keep `traffic-replay-cli` lifecycle orchestration under the developer account.
 For an in-process E2E, make one invocation handle exactly one selected case:
-the outer facade calls `begin`, executes that case's staged binary as
-`$intercept_user`, then calls `end`. The fixed-user test process MUST NOT own
-replay lifecycle or require access to the private control socket. If the
+the outer facade calls `begin`, executes that case's staged binary through
+`traffic-replay-target`, then calls `end`. The fixed-user test process MUST NOT
+own replay lifecycle or require access to the private control socket. If the
 existing test loops over cases and calls `traffic-replay-cli` internally,
 refactor that recorded-E2E boundary before replay; this is isolation work, not
 business-code behavior.

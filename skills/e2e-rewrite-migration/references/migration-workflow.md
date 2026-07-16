@@ -250,7 +250,8 @@ Expose the commands that are relevant to the migrated scope:
 - `build`: build the target artifact
 - `release`: run the project's release/package flow when it exists
 - `doctor`: print missing config, dependency, port, and toolchain problems
-  including `traffic-recorder-proxy`, `traffic-replay`, `traffic-replay-cli`,
+  including `traffic-recorder-proxy`, `traffic-replay`,
+  `traffic-replay-target`, `traffic-replay-cli`,
   `traffic-replay-aggregate`, and `traffic-replay-policy` when recorded E2E is
   part of the repo workflow; verify that `config/replay.yaml` exists and
   validates successfully
