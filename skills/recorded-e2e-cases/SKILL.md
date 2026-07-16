@@ -62,10 +62,13 @@ called, or create a cache/side-effect result.
    or overlapping, stop with `blocked_grouping`; do not move or copy cases or
    emulate the command in the target repo.
 5. Follow [replay-workflow.md](references/replay-workflow.md): use
-   `traffic-replay`, `traffic-replay-policy`, and `traffic-replay-cli` from
+   `traffic-replay`, `traffic-replay-target`, `traffic-replay-policy`, and
+   `traffic-replay-cli` from
    `PATH`, wait for readiness,
    require fixed-user interception and verify the dependency-producing target
-   process runs as the recorder-declared fixed interception user,
+   process runs as the recorder-declared fixed interception user; for a
+   prebuilt in-process E2E, require the canonical `traffic-replay-target`
+   staging command rather than widening workspace or replay artifact access,
    bracket every case with `begin` and `end --fail-on-dirty`, require a clean
    `finalize --fail-on-dirty --fail-on-incomplete` result, and retain its final
    session id and version-four report. Successful finalization means that exact
