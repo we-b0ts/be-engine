@@ -395,13 +395,16 @@ async fn spawn_replay(
     .unwrap();
     runtime.write_report().await.unwrap();
     let task = tokio::spawn(async move {
-        let _ = runtime.run_tcp(listener).await;
+        tokio::select! {
+            _ = runtime.run_tcp(listener) => {},
+            _ = runtime.run_report_writer() => {},
+        }
     });
     (addr, task)
 }
 
 async fn wait_for_kafka_matches(path: &Path, expected: usize) -> Value {
-    for _ in 0..50 {
+    for _ in 0..150 {
         if let Ok(raw) = tokio::fs::read_to_string(path).await
             && let Ok(report) = serde_json::from_str::<Value>(&raw)
             && report["kafka"]["matched"]

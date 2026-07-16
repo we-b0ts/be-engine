@@ -150,10 +150,11 @@ fn dns_query(domain: &str) -> Vec<u8> {
 }
 
 async fn wait_for_report_contains(path: &Path, expected: &str) {
-    for _ in 0..50 {
+    let compact_expected = expected.replace("\": ", "\":");
+    for _ in 0..150 {
         if tokio::fs::read_to_string(path)
             .await
-            .is_ok_and(|raw| raw.contains(expected))
+            .is_ok_and(|raw| raw.contains(expected) || raw.contains(&compact_expected))
         {
             return;
         }

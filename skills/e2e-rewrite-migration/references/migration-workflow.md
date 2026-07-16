@@ -572,7 +572,7 @@ the source repo and replay report:
 - the E2E case source is explicit for the current invocation, with no
   developer-machine recording path or historical batch selected by default
 - replay session readiness is verified before requests, every selected case is
-  bracketed by begin/end, the final session report is version four and
+  bracketed by begin/end, the final session report is version five and
   finalized, and aggregate replay reports are complete and clean
 - dynamic replay rules come from validated `config/replay.yaml`, are passed
   explicitly, contain no copied recorded literals, and have zero unused

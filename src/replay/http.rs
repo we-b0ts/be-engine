@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 use std::convert::Infallible;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -24,8 +23,8 @@ use tokio_rustls::TlsAcceptor;
 use url::form_urlencoded;
 
 use super::{
-    HttpPolicyContext, MitmCa, PolicyDecision, ReplayProtocol, ReplaySource, ReplayState,
-    ReplayTarget, TargetKey, register_replay_target, write_report_snapshot,
+    HttpPolicyContext, MitmCa, PolicyDecision, ReplayProtocol, ReplayReportWriter, ReplaySource,
+    ReplayState, ReplayTarget, TargetKey, push_success_detail, register_replay_target,
 };
 
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
@@ -74,6 +73,7 @@ pub(super) struct ReplayHttpExchange {
 
 #[derive(Debug, Default)]
 pub(super) struct HttpReplayEvents {
+    pub(super) matched_count: usize,
     pub(super) matched: Vec<MatchedHttpExchangeReport>,
     pub(super) unmatched: Vec<HttpRequestReport>,
     pub(super) unsupported: Vec<HttpRequestReport>,
@@ -188,11 +188,11 @@ pub(super) async fn handle_http_replay_connection(
     _peer_addr: std::net::SocketAddr,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
     match target.protocol {
-        ReplayProtocol::Http => serve_http_io(stream, target, state, report_path).await,
+        ReplayProtocol::Http => serve_http_io(stream, target, state, report_writer).await,
         ReplayProtocol::Https => {
             let server_config = ca.server_config_for_host(&target.host)?;
             let tls = TlsAcceptor::from(server_config)
@@ -201,7 +201,7 @@ pub(super) async fn handle_http_replay_connection(
                 .with_context(|| {
                     format!("HTTPS replay TLS handshake failed for {}", target.host)
                 })?;
-            serve_http_io(tls, target, state, report_path).await
+            serve_http_io(tls, target, state, report_writer).await
         }
         ReplayProtocol::Mysql
         | ReplayProtocol::Redis
@@ -214,13 +214,18 @@ async fn serve_http_io<T>(
     io: T,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
 ) -> Result<()>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let service = service_fn(move |request| {
-        handle_http_request(request, target.clone(), state.clone(), report_path.clone())
+        handle_http_request(
+            request,
+            target.clone(),
+            state.clone(),
+            report_writer.clone(),
+        )
     });
     hyper::server::conn::http1::Builder::new()
         .serve_connection(TokioIo::new(io), service)
@@ -232,7 +237,7 @@ async fn handle_http_request(
     request: Request<Incoming>,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -267,7 +272,7 @@ async fn handle_http_request(
         Err(reason) => Ok(error_response(StatusCode::BAD_GATEWAY, &reason)),
     }
     .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, &error.to_string()));
-    let _ = write_report_snapshot(state, report_path).await;
+    report_writer.request();
     Ok(response)
 }
 
@@ -371,16 +376,20 @@ impl ReplayState {
         if let Some(policy) = &mut self.replay_policy {
             policy.commit(active_case_id.as_deref(), matching_policy_decision);
         }
-        self.http_events.matched.push(MatchedHttpExchangeReport {
-            case_id: exchange.case_id,
-            source: exchange.source,
-            index,
-            scheme,
-            target: target.clone(),
-            method: method.to_string(),
-            uri: uri_path_only(&uri.to_string()),
-            status: exchange.record.response_status.unwrap_or_default(),
-        });
+        push_success_detail(
+            &mut self.http_events.matched_count,
+            &mut self.http_events.matched,
+            MatchedHttpExchangeReport {
+                case_id: exchange.case_id,
+                source: exchange.source,
+                index,
+                scheme,
+                target: target.clone(),
+                method: method.to_string(),
+                uri: uri_path_only(&uri.to_string()),
+                status: exchange.record.response_status.unwrap_or_default(),
+            },
+        );
         Ok(exchange.record)
     }
 

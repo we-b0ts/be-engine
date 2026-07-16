@@ -68,7 +68,7 @@ called, or create a cache/side-effect result.
    process runs as the recorder-declared fixed interception user,
    bracket every case with `begin` and `end --fail-on-dirty`, require a clean
    `finalize --fail-on-dirty --fail-on-incomplete` result, and retain its final
-   session id and version-four report. Successful finalization means that exact
+   session id and version-five report. Successful finalization means that exact
    report was atomically published before replay stopped; a write failure keeps
    the session open and is incomplete evidence.
    Read
@@ -174,7 +174,7 @@ the final state:
    dependencies are explicitly routed to replay listeners.
 4. End every selected case, run the final replay report with
    `traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete`, and
-   require its version-four report to contain the exact selected case ids,
+   require its version-five report to contain the exact selected case ids,
    final session id, `finalized: true`, and `finalized_at`. A stale active case,
    pending case, live session, or non-finalized report is incomplete evidence.
 5. For every collection/run source, multi-case selection, or source with more

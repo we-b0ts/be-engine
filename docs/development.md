@@ -158,13 +158,19 @@ traffic-replay-cli end <case-id> --fail-on-dirty
 traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete
 ```
 
-Successful `finalize` writes a version-four report with its session id,
+Successful `finalize` writes a version-five report with its session id,
 timestamps, exact selected case ids, and `finalized: true`, then stops replay.
 The command returns success only after atomically publishing that exact report;
 a report-write failure leaves the session open for retry. If finalization
 fails, preserve the diagnostic report and use
 `traffic-replay-cli stop` only for cleanup. Default replay reports are retained
 under a unique `.replay/sessions/<attempt>/replay-report.json` directory.
+Protocol traffic requests live snapshots through one coalescing writer, which
+writes at most once per second; lifecycle commands and finalization force an
+immediate snapshot. Version five keeps exact success counters while retaining
+at most `success_detail_limit` successful event details per category. Dirty
+event details remain complete, and unused MySQL entries reference bounded SQL
+previews plus fingerprints instead of copying arbitrarily large SQL strings.
 
 For a collection, multi-case selection, or multiple sessions, generate one
 deterministic coverage and dependency summary from the recording source root.

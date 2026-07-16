@@ -205,7 +205,7 @@ Implement in this order:
    `dependencies-summary.json`, when present, as the dependency coverage
    checklist for replay.
 9. After the selected case set finishes, run `traffic-replay-cli finalize
-   --fail-on-dirty --fail-on-incomplete`. Require a version-four report with
+   --fail-on-dirty --fail-on-incomplete`. Require a version-five report with
    the exact selected case ids, its session id, `finalized: true`, and
    `finalized_at`. Successful finalization atomically publishes that exact
    report and stops replay. A validation or report-write failure leaves replay

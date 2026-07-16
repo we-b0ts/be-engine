@@ -109,10 +109,11 @@ under the developer account. Use `--no-intercept` only when the target already
 routes dependencies directly to the replay listeners.
 
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
-Redis and Memcached exchanges are consumed in recorded connection order; the
-v3 replay report includes per-protocol matched, unmatched, unsupported, unsafe,
-and unused evidence. `traffic-replay-cli end/report --fail-on-dirty` treats all
-of those cache protocol discrepancies as failures.
+Redis and Memcached exchanges are consumed in recorded connection order. The
+v5 replay report keeps complete unmatched, unsupported, unsafe, and unused
+evidence, records exact success totals, and retains a bounded prefix of success
+details. `traffic-replay-cli end/report --fail-on-dirty` treats all cache
+protocol discrepancies as failures.
 
 ## Optional Explicit HTTP/HTTPS Proxy
 

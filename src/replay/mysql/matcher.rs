@@ -15,12 +15,14 @@ impl ReplayState {
         username: Option<String>,
     ) {
         self.mysql.events.connections += 1;
-        self.mysql.events.connection_events.push(ConnectionReport {
-            peer_addr: peer_addr.to_string(),
-            target: target.cloned(),
-            database,
-            username,
-        });
+        if self.mysql.events.connection_events.len() < SUCCESS_DETAIL_LIMIT {
+            self.mysql.events.connection_events.push(ConnectionReport {
+                peer_addr: peer_addr.to_string(),
+                target: target.cloned(),
+                database,
+                username,
+            });
+        }
     }
 
     pub(in crate::replay) fn record_builtin(
@@ -31,18 +33,22 @@ impl ReplayState {
         reason: &str,
     ) {
         let recorded_match = self.consume_builtin_exchange(identity, command, sql);
-        self.mysql.events.builtin_queries.push(QueryReport {
-            case_id: self.active_case_id.clone(),
-            target: identity.target.clone(),
-            database: identity.database.clone(),
-            username: identity.username.clone(),
-            command: command.to_string(),
-            sql: sql.map(ToOwned::to_owned),
-            params: None,
-            reason: reason.to_string(),
-            recorded_source: recorded_match.map(|(source, _)| source),
-            recorded_index: recorded_match.map(|(_, index)| index),
-        });
+        push_success_detail(
+            &mut self.mysql.events.builtin_query_count,
+            &mut self.mysql.events.builtin_queries,
+            QueryReport {
+                case_id: self.active_case_id.clone(),
+                target: identity.target.clone(),
+                database: identity.database.clone(),
+                username: identity.username.clone(),
+                command: command.to_string(),
+                sql: sql.map(ToOwned::to_owned),
+                params: None,
+                reason: reason.to_string(),
+                recorded_source: recorded_match.map(|(source, _)| source),
+                recorded_index: recorded_match.map(|(_, index)| index),
+            },
+        );
     }
 
     pub(in crate::replay) fn record_unsupported(
@@ -159,7 +165,11 @@ impl ReplayState {
                 params: params.map(ToOwned::to_owned),
                 status: exchange.record.response.status.clone(),
             };
-            self.mysql.events.matched_queries.push(matched);
+            push_success_detail(
+                &mut self.mysql.events.matched_query_count,
+                &mut self.mysql.events.matched_queries,
+                matched,
+            );
             return Some(MatchedExchange {
                 source: exchange.source,
                 index,
@@ -251,7 +261,7 @@ impl ReplayState {
                 database: exchange.identity.database.clone(),
                 username: exchange.identity.username.clone(),
                 command: exchange.record.command.clone(),
-                sql: exchange.record.sql.clone(),
+                sql_summary: exchange.record.sql.as_deref().map(SqlSummary::new),
                 status: exchange.record.response.status.clone(),
             })
             .collect()

@@ -116,6 +116,7 @@ pub async fn run_replay(config: ReplayConfig) -> Result<()> {
         result = runtime.run_dns(dns_socket) => result,
         result = runtime.run_tcp(tcp_listener) => result,
         result = runtime.run_control() => result,
+        result = runtime.run_report_writer() => result,
     }
 }
 
@@ -129,6 +130,7 @@ struct ReplayRuntime {
     state: Arc<Mutex<ReplayState>>,
     ca: Arc<MitmCa>,
     report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
     session_path: Option<PathBuf>,
     control_socket_path: Option<PathBuf>,
 }
@@ -244,10 +246,12 @@ impl ReplayRuntime {
             replay_policy,
             http_ignore_query_params,
         };
+        let report_writer = ReplayReportWriter::new(config.report_path.clone());
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
             ca,
             report_path: config.report_path,
+            report_writer,
             session_path: config.session_path,
             control_socket_path: config.control_socket_path,
         })
@@ -261,10 +265,10 @@ impl ReplayRuntime {
                 .context("failed to accept dependency replay gateway client")?;
             let state = self.state.clone();
             let ca = self.ca.clone();
-            let report_path = self.report_path.clone();
+            let report_writer = self.report_writer.clone();
             tokio::spawn(async move {
                 if let Err(err) =
-                    handle_gateway_connection(stream, peer_addr, state, report_path, ca).await
+                    handle_gateway_connection(stream, peer_addr, state, report_writer, ca).await
                 {
                     warn!(error = %err, "dependency replay connection failed");
                 }
@@ -292,7 +296,11 @@ impl ReplayRuntime {
     }
 
     async fn write_report(&self) -> Result<()> {
-        write_report_snapshot(self.state.clone(), self.report_path.clone()).await
+        self.report_writer.flush(self.state.clone()).await
+    }
+
+    async fn run_report_writer(&self) -> Result<()> {
+        self.report_writer.run(self.state.clone()).await
     }
 
     async fn run_control(&self) -> Result<()> {
@@ -334,7 +342,7 @@ struct ReplayState {
 impl ReplayState {
     fn snapshot_report(&self) -> ReplayReport {
         ReplayReport {
-            version: 4,
+            version: 5,
             session_id: self.session_id.to_string(),
             started_at: self.started_at,
             finalized_at: self.finalized_at,
@@ -357,15 +365,19 @@ impl ReplayState {
                 .as_ref()
                 .map(|path| path.display().to_string()),
             targets: self.targets.clone(),
+            success_detail_limit: SUCCESS_DETAIL_LIMIT,
             connections: self.mysql.events.connections,
             connection_events: self.mysql.events.connection_events.clone(),
+            builtin_query_count: self.mysql.events.builtin_query_count,
             builtin_queries: self.mysql.events.builtin_queries.clone(),
+            matched_query_count: self.mysql.events.matched_query_count,
             matched_queries: self.mysql.events.matched_queries.clone(),
             unmatched_queries: self.mysql.events.unmatched_queries.clone(),
             unsupported_commands: self.mysql.events.unsupported_commands.clone(),
             metadata_warnings: self.mysql.events.metadata_warnings.clone(),
             unused_bootstrap_exchanges: self.unused_exchanges(ReplaySource::Bootstrap),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
+            matched_http_exchange_count: self.http_events.matched_count,
             matched_http_exchanges: self.http_events.matched.clone(),
             unmatched_http_requests: self.http_events.unmatched.clone(),
             unsupported_http_exchanges: self.http_events.unsupported.clone(),
@@ -399,7 +411,7 @@ async fn handle_gateway_connection(
     stream: TcpStream,
     peer_addr: SocketAddr,
     state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
     let target = replay_target_for_stream(&stream, &state).await;
@@ -410,7 +422,7 @@ async fn handle_gateway_connection(
                 peer_addr,
                 target.context("HTTP replay connection has no target")?,
                 state,
-                report_path,
+                report_writer,
                 ca,
             )
             .await
@@ -420,7 +432,7 @@ async fn handle_gateway_connection(
                 stream,
                 target.context("Redis replay connection has no target")?,
                 state,
-                report_path,
+                report_writer,
             )
             .await
         }
@@ -429,7 +441,7 @@ async fn handle_gateway_connection(
                 stream,
                 target.context("Memcached replay connection has no target")?,
                 state,
-                report_path,
+                report_writer,
             )
             .await
         }
@@ -438,7 +450,7 @@ async fn handle_gateway_connection(
                 stream,
                 target.context("Kafka replay connection has no target")?,
                 state,
-                report_path,
+                report_writer,
             )
             .await
         }
@@ -447,7 +459,7 @@ async fn handle_gateway_connection(
                 host: target.host,
                 port: target.port,
             });
-            mysql::handle_connection(stream, peer_addr, target, state, report_path).await
+            mysql::handle_connection(stream, peer_addr, target, state, report_writer).await
         }
     }
 }
