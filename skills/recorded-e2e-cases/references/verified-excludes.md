@@ -1,7 +1,9 @@
 # Replay-Verified API Excludes
 
-Use this gate after one canonical API group finishes its final replay and target
-response assertions.
+Use this gate immediately after one canonical API group finishes its final
+replay and target response assertions. Persist its result before selecting the
+next group; do not defer per-group ensure calls to the end of a multi-group
+migration.
 
 ## Ownership
 

@@ -244,7 +244,18 @@ fn policy_fixture(policy: &str) -> PolicyFixture {
     fs::create_dir_all(&case_dir).unwrap();
     fs::write(
         case_dir.join("request.json"),
-        r#"{"method":"GET","uri":"/api/resource/token"}"#,
+        r#"{
+  "timestamp": "2026-07-16T06:53:32.117486280Z",
+  "client_addr": "127.0.0.1:12345",
+  "method": "GET",
+  "uri": "/api/resource/token",
+  "authority": "pluto.example",
+  "matched_rule": "pluto",
+  "upstream": "http://127.0.0.1:8080",
+  "headers": {"accept": ["application/json"]},
+  "body": {"encoding": "utf8", "data": ""},
+  "future_extension": {"version": 2}
+}"#,
     )
     .unwrap();
     fs::write(case_dir.join("expected-response.json"), "{}").unwrap();
