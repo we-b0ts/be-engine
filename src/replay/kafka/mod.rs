@@ -4,7 +4,6 @@ pub(super) mod report;
 #[cfg(test)]
 mod tests;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -18,20 +17,20 @@ pub(super) use matcher::{
 };
 pub(super) use report::KafkaProtocolReport;
 
-use super::{ReplayState, ReplayTarget, TargetKey, write_report_snapshot};
+use super::{ReplayReportWriter, ReplayState, ReplayTarget, TargetKey};
 
 pub(super) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
         port: target.port,
     };
     state.lock().await.kafka.events.connections += 1;
-    write_report_snapshot(state.clone(), report_path.clone()).await?;
+    report_writer.request();
 
     while let Some(payload) = read_frame(&mut stream, 64 * 1024 * 1024).await? {
         let decoded = decode_request(&payload)?;
@@ -47,7 +46,7 @@ pub(super) async fn handle_connection(
                 format!("{:?}", decoded.api_key),
                 reason.clone(),
             );
-            write_report_snapshot(state.clone(), report_path.clone()).await?;
+            report_writer.request();
             anyhow::bail!(reason);
         }
         let response = broker::response_for(&decoded, &target_key, state.clone())
@@ -65,7 +64,7 @@ pub(super) async fn handle_connection(
             &response,
         )?;
         write_frame(&mut stream, &payload).await?;
-        write_report_snapshot(state.clone(), report_path.clone()).await?;
+        report_writer.request();
     }
     Ok(())
 }

@@ -34,6 +34,7 @@ pub(in crate::replay) struct KafkaUnusedReport {
 #[derive(Debug, Clone, Default, Serialize)]
 pub(in crate::replay) struct KafkaProtocolReport {
     pub(in crate::replay) connections: usize,
+    pub(in crate::replay) matched_count: usize,
     pub(in crate::replay) matched: Vec<KafkaMatchedReport>,
     pub(in crate::replay) unmatched: Vec<KafkaRequestReport>,
     pub(in crate::replay) unsupported: Vec<KafkaRequestReport>,

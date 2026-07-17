@@ -4,7 +4,9 @@ use super::*;
 pub(in crate::replay) struct ReplayEvents {
     pub(in crate::replay) connections: usize,
     pub(in crate::replay) connection_events: Vec<ConnectionReport>,
+    pub(in crate::replay) builtin_query_count: usize,
     pub(in crate::replay) builtin_queries: Vec<QueryReport>,
+    pub(in crate::replay) matched_query_count: usize,
     pub(in crate::replay) matched_queries: Vec<MatchedQueryReport>,
     pub(in crate::replay) unmatched_queries: Vec<QueryReport>,
     pub(in crate::replay) unsupported_commands: Vec<QueryReport>,

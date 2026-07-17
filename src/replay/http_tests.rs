@@ -350,7 +350,10 @@ async fn spawn_http_replay_with_policy(
     );
     let task_runtime = runtime.clone();
     let task = tokio::spawn(async move {
-        let _ = task_runtime.run_tcp(listener).await;
+        tokio::select! {
+            _ = task_runtime.run_tcp(listener) => {},
+            _ = task_runtime.run_report_writer() => {},
+        }
     });
     (addr, runtime, task)
 }

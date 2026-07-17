@@ -250,6 +250,37 @@ fn version_four_report_must_be_finalized_to_be_complete() {
 }
 
 #[test]
+fn version_five_uses_total_success_counts_beyond_retained_details() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v4(
+        &source.join("api"),
+        &[("case-a", "ended")],
+        "00000000-0000-4000-8000-000000000051",
+        true,
+    );
+    report["version"] = json!(5);
+    report["success_detail_limit"] = json!(100);
+    report["builtin_queries"] = json!([{"index": 0}]);
+    report["builtin_query_count"] = json!(6_592);
+    report["matched_queries"] = json!([{"index": 0}, {"index": 1}]);
+    report["matched_query_count"] = json!(2_295);
+    report["matched_http_exchanges"] = json!([{"index": 0}]);
+    report["matched_http_exchange_count"] = json!(202);
+    for protocol in ["redis", "memcached", "kafka"] {
+        report[protocol]["matched_count"] = json!(0);
+    }
+    write_session_report(&source, "api", "v5", report);
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(aggregate.complete);
+    assert_eq!(aggregate.counts.events.mysql.builtin_queries, 6_592);
+    assert_eq!(aggregate.counts.events.mysql.matched_queries, 2_295);
+    assert_eq!(aggregate.counts.events.http.matched_exchanges, 202);
+}
+
+#[test]
 fn selected_session_must_cover_the_selected_cases() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");

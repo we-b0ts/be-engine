@@ -8,7 +8,10 @@ use serde::Deserialize;
 
 use crate::kafka::{KafkaHeader, KafkaRecord};
 
-use super::super::{ReplayProtocol, ReplaySource, ReplayTarget, TargetKey, register_replay_target};
+use super::super::{
+    ReplayProtocol, ReplaySource, ReplayTarget, TargetKey, push_success_detail,
+    register_replay_target,
+};
 use super::report::{
     KafkaMatchedReport, KafkaProtocolReport, KafkaRequestReport, KafkaUnusedReport,
 };
@@ -103,6 +106,7 @@ pub(in crate::replay) struct KafkaReplayState {
 #[derive(Debug, Default)]
 pub(super) struct KafkaReplayEvents {
     pub(super) connections: usize,
+    matched_count: usize,
     matched: Vec<KafkaMatchedReport>,
     unmatched: Vec<KafkaRequestReport>,
     unsupported: Vec<KafkaRequestReport>,
@@ -244,14 +248,18 @@ impl KafkaReplayState {
         for index in selected {
             let exchange = &mut self.produces[index];
             exchange.consumed = true;
-            self.events.matched.push(KafkaMatchedReport {
-                case_id: exchange.case_id.clone(),
-                source: exchange.source,
-                index,
-                target: target.clone(),
-                operation: "produce".to_string(),
-                topic: exchange.record.topic.clone(),
-            });
+            push_success_detail(
+                &mut self.events.matched_count,
+                &mut self.events.matched,
+                KafkaMatchedReport {
+                    case_id: exchange.case_id.clone(),
+                    source: exchange.source,
+                    index,
+                    target: target.clone(),
+                    operation: "produce".to_string(),
+                    topic: exchange.record.topic.clone(),
+                },
+            );
         }
         true
     }
@@ -279,14 +287,18 @@ impl KafkaReplayState {
             let exchange = &mut self.deliveries[index];
             exchange.consumed = true;
             records.push(exchange.record.clone());
-            self.events.matched.push(KafkaMatchedReport {
-                case_id: exchange.case_id.clone(),
-                source: exchange.source,
-                index,
-                target: target.clone(),
-                operation: "delivery".to_string(),
-                topic: exchange.record.topic.clone(),
-            });
+            push_success_detail(
+                &mut self.events.matched_count,
+                &mut self.events.matched,
+                KafkaMatchedReport {
+                    case_id: exchange.case_id.clone(),
+                    source: exchange.source,
+                    index,
+                    target: target.clone(),
+                    operation: "delivery".to_string(),
+                    topic: exchange.record.topic.clone(),
+                },
+            );
         }
         records
     }
@@ -310,6 +322,7 @@ impl KafkaReplayState {
     pub(in crate::replay) fn snapshot(&self) -> KafkaProtocolReport {
         KafkaProtocolReport {
             connections: self.events.connections,
+            matched_count: self.events.matched_count,
             matched: self.events.matched.clone(),
             unmatched: self.events.unmatched.clone(),
             unsupported: self.events.unsupported.clone(),

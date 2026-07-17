@@ -6,11 +6,12 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use serde_json::Value;
 
+mod counts;
 mod policy;
 
 const AGGREGATE_VERSION: u8 = 1;
 const MIN_REPLAY_REPORT_VERSION: u64 = 2;
-const MAX_REPLAY_REPORT_VERSION: u64 = 4;
+const MAX_REPLAY_REPORT_VERSION: u64 = 5;
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplayAggregateOptions {
@@ -487,7 +488,7 @@ fn summarize_report(
         .iter()
         .all(|(status, count)| status == "ended" || *count == 0)
         && finalized.unwrap_or(true);
-    let counts = event_counts(report, version, report_path)?;
+    let counts = counts::read(report, version, report_path)?;
     let replay_policy = policy::summary(report, report_path)?;
     let dirty = counts.is_dirty()
         || replay_policy
@@ -538,68 +539,6 @@ fn required_bool(value: &Value, field: &str, path: &Path) -> Result<bool> {
         .ok_or_else(|| anyhow!("replay report {} has no boolean {field}", path.display()))
 }
 
-fn event_counts(report: &Value, version: u64, path: &Path) -> Result<ReplayEventCounts> {
-    Ok(ReplayEventCounts {
-        mysql: MysqlEventCounts {
-            connections: required_usize(report, "connections", path)?,
-            builtin_queries: required_len(report, "builtin_queries", path)?,
-            matched_queries: required_len(report, "matched_queries", path)?,
-            unmatched_queries: required_len(report, "unmatched_queries", path)?,
-            unsupported_commands: required_len(report, "unsupported_commands", path)?,
-            unused_case_exchanges: required_len(report, "unused_case_exchanges", path)?,
-            unused_bootstrap_exchanges: required_len(report, "unused_bootstrap_exchanges", path)?,
-            metadata_warnings: required_len(report, "metadata_warnings", path)?,
-        },
-        http: HttpEventCounts {
-            matched_exchanges: required_len(report, "matched_http_exchanges", path)?,
-            unmatched_requests: required_len(report, "unmatched_http_requests", path)?,
-            unsupported_exchanges: required_len(report, "unsupported_http_exchanges", path)?,
-            unused_case_exchanges: required_len(report, "unused_case_http_exchanges", path)?,
-            unused_bootstrap_exchanges: required_len(
-                report,
-                "unused_bootstrap_http_exchanges",
-                path,
-            )?,
-        },
-        redis: protocol_counts(report, "redis", version >= 3, path)?,
-        memcached: protocol_counts(report, "memcached", version >= 3, path)?,
-        kafka: protocol_counts(report, "kafka", version >= 3, path)?,
-    })
-}
-
-fn protocol_counts(
-    report: &Value,
-    protocol: &str,
-    required: bool,
-    path: &Path,
-) -> Result<CommandProtocolCounts> {
-    let Some(value) = report.get(protocol) else {
-        if required {
-            bail!(
-                "replay report {} version 3 is missing {protocol}",
-                path.display()
-            );
-        }
-        return Ok(CommandProtocolCounts::default());
-    };
-    if !value.is_object() {
-        bail!(
-            "replay report {} field {protocol} must be an object",
-            path.display()
-        );
-    }
-    Ok(CommandProtocolCounts {
-        connections: required_usize(value, "connections", path)?,
-        matched: required_len(value, "matched", path)?,
-        unmatched: required_len(value, "unmatched", path)?,
-        unsupported: required_len(value, "unsupported", path)?,
-        unsafe_events: required_len(value, "unsafe_events", path)?,
-        unused_case: required_len(value, "unused_case", path)?,
-        unused_bootstrap: required_len(value, "unused_bootstrap", path)?,
-        warnings: optional_len(value, "warnings", path)?,
-    })
-}
-
 fn required_case_status<'a>(case: &'a Value, path: &Path) -> Result<&'a str> {
     let status = required_string(case, "status", path)?;
     if !matches!(status, "pending" | "active" | "ended") {
@@ -624,32 +563,6 @@ fn required_array<'a>(value: &'a Value, field: &str, path: &Path) -> Result<&'a 
     value.get(field).and_then(Value::as_array).ok_or_else(|| {
         anyhow!(
             "replay report {} field {field} must be an array",
-            path.display()
-        )
-    })
-}
-
-fn required_len(value: &Value, field: &str, path: &Path) -> Result<usize> {
-    Ok(required_array(value, field, path)?.len())
-}
-
-fn optional_len(value: &Value, field: &str, path: &Path) -> Result<usize> {
-    match value.get(field) {
-        Some(_) => required_len(value, field, path),
-        None => Ok(0),
-    }
-}
-
-fn required_usize(value: &Value, field: &str, path: &Path) -> Result<usize> {
-    let number = value.get(field).and_then(Value::as_u64).ok_or_else(|| {
-        anyhow!(
-            "replay report {} field {field} must be a non-negative integer",
-            path.display()
-        )
-    })?;
-    usize::try_from(number).with_context(|| {
-        format!(
-            "replay report {} field {field} does not fit usize",
             path.display()
         )
     })

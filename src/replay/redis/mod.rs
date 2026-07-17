@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -17,8 +16,8 @@ use crate::redis::{
 };
 
 use super::{
-    ReplayProtocol, ReplaySource, ReplayState, ReplayTarget, TargetKey, normalize_host,
-    register_replay_target, write_report_snapshot,
+    ReplayProtocol, ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey,
+    normalize_host, push_success_detail, register_replay_target,
 };
 
 mod builtins;
@@ -77,6 +76,7 @@ pub(super) struct RedisReplayState {
 #[derive(Debug, Default)]
 pub(super) struct RedisReplayEvents {
     pub(super) connections: usize,
+    matched_count: usize,
     matched: Vec<CommandMatchedReport>,
     pub(super) unmatched: Vec<CommandRequestReport>,
     pub(super) unsupported: Vec<CommandRequestReport>,
@@ -181,15 +181,19 @@ impl RedisReplayState {
         })?;
         let exchange = &mut self.exchanges[index];
         exchange.consumed = true;
-        self.events.matched.push(CommandMatchedReport {
-            case_id: exchange.case_id.clone(),
-            source: exchange.source,
-            index,
-            target: target.clone(),
-            connection_id: exchange.record.connection_id,
-            sequence: exchange.record.sequence,
-            command: exchange.record.command.clone(),
-        });
+        push_success_detail(
+            &mut self.events.matched_count,
+            &mut self.events.matched,
+            CommandMatchedReport {
+                case_id: exchange.case_id.clone(),
+                source: exchange.source,
+                index,
+                target: target.clone(),
+                connection_id: exchange.record.connection_id,
+                sequence: exchange.record.sequence,
+                command: exchange.record.command.clone(),
+            },
+        );
         Some((exchange.record.connection_id, exchange.response.clone()))
     }
 
@@ -224,21 +228,26 @@ impl RedisReplayState {
         })?;
         let exchange = &mut self.exchanges[index];
         exchange.consumed = true;
-        self.events.matched.push(CommandMatchedReport {
-            case_id: exchange.case_id.clone(),
-            source: exchange.source,
-            index,
-            target: target.clone(),
-            connection_id: exchange.record.connection_id,
-            sequence: exchange.record.sequence,
-            command: exchange.record.command.clone(),
-        });
+        push_success_detail(
+            &mut self.events.matched_count,
+            &mut self.events.matched,
+            CommandMatchedReport {
+                case_id: exchange.case_id.clone(),
+                source: exchange.source,
+                index,
+                target: target.clone(),
+                connection_id: exchange.record.connection_id,
+                sequence: exchange.record.sequence,
+                command: exchange.record.command.clone(),
+            },
+        );
         Some((exchange.record.connection_id, exchange.response.clone()))
     }
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
             connections: self.events.connections,
+            matched_count: self.events.matched_count,
             matched: self.events.matched.clone(),
             unmatched: self.events.unmatched.clone(),
             unsupported: self.events.unsupported.clone(),
@@ -254,14 +263,14 @@ pub(super) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
         port: target.port,
     };
     state.lock().await.redis.events.connections += 1;
-    write_report_snapshot(state.clone(), report_path.clone()).await?;
+    report_writer.request();
     let mut reader = RedisBufferedReader::new(&mut stream, 64 * 1024 * 1024);
     let mut resp_version = 2_u8;
     let mut database = 0_i64;
@@ -280,7 +289,7 @@ pub(super) async fn handle_connection(
                     error.to_string(),
                 )
                 .await;
-                write_report_snapshot(state.clone(), report_path.clone()).await?;
+                report_writer.request();
                 return Err(error);
             }
         };
@@ -295,7 +304,7 @@ pub(super) async fn handle_connection(
                     error.to_string(),
                 )
                 .await;
-                write_report_snapshot(state.clone(), report_path.clone()).await?;
+                report_writer.request();
                 return Err(error);
             }
         };
@@ -317,7 +326,7 @@ pub(super) async fn handle_connection(
                 .inner
                 .write_all(b"-ERR Redis command mode is unsupported for replay\r\n")
                 .await?;
-            write_report_snapshot(state.clone(), report_path.clone()).await?;
+            report_writer.request();
             continue;
         }
         let recorded_failure = if redis_is_builtin(&command.name) {
@@ -338,14 +347,14 @@ pub(super) async fn handle_connection(
         if let Some((connection_id, response)) = recorded_failure {
             bound_connection.get_or_insert(connection_id);
             reader.inner.write_all(&response).await?;
-            write_report_snapshot(state.clone(), report_path.clone()).await?;
+            report_writer.request();
             continue;
         }
         if let Some(response) =
             redis_builtin(&command, &mut resp_version, &mut database, &mut username)
         {
             reader.inner.write_all(&response).await?;
-            write_report_snapshot(state.clone(), report_path.clone()).await?;
+            report_writer.request();
             if command.name == "QUIT" {
                 break;
             }
@@ -381,7 +390,7 @@ pub(super) async fn handle_connection(
             }
         };
         reader.inner.write_all(&response).await?;
-        write_report_snapshot(state.clone(), report_path.clone()).await?;
+        report_writer.request();
     }
     Ok(())
 }

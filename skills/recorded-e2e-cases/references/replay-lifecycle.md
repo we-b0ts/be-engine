@@ -75,7 +75,7 @@ For the exact selected case source and case ids:
 9. repeat begin through end for every exact selected case;
 10. call `traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete`.
 
-Require the final version-four report to contain the exact selected case ids,
+Require the final version-five report to contain the exact selected case ids,
 session id, `finalized: true`, and `finalized_at`. Successful finalization
 atomically publishes the report and stops replay. A validation or report-write
 failure leaves the session incomplete; retain diagnostics and use the canonical

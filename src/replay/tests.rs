@@ -123,7 +123,7 @@ mod tests {
         );
         let _rows_eof = read_packet(&mut client).await.unwrap().unwrap();
 
-        wait_for_report_contains(&report_path, r#""command": "COM_QUERY""#).await;
+        wait_for_report_contains(&report_path, r#""matched_query_count": 1"#).await;
         let report: Value =
             serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
         assert_eq!(report["matched_queries"][0]["source"], "case");
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(row.payload, lenenc_bytes(b"7"));
         let _rows_eof = read_packet(&mut client).await.unwrap().unwrap();
 
-        wait_for_report_contains(&report_path, "mysql-user.internal").await;
+        wait_for_report_contains(&report_path, r#""matched_query_count": 1"#).await;
         let report: Value =
             serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
         assert_eq!(report["targets"][0]["host"], "mysql-user.internal");
@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(report["dirty"], false);
         assert_eq!(report["complete"], true);
         assert_eq!(report["finalized"], true);
-        assert_eq!(report["report"]["version"], 4);
+        assert_eq!(report["report"]["version"], 5);
         assert_eq!(report["report"]["finalized"], true);
         assert_eq!(
             report["report"]["matched_queries"]
@@ -861,7 +861,10 @@ mod tests {
         .unwrap();
         runtime.write_report().await.unwrap();
         let task = tokio::spawn(async move {
-            let _ = runtime.run_tcp(listener).await;
+            tokio::select! {
+                _ = runtime.run_tcp(listener) => {},
+                _ = runtime.run_report_writer() => {},
+            }
         });
         (addr, task)
     }
@@ -918,11 +921,15 @@ mod tests {
         let tcp_task = tokio::spawn(async move {
             let _ = tcp_runtime.run_tcp(listener).await;
         });
+        let writer_runtime = runtime.clone();
+        let writer_task = tokio::spawn(async move {
+            let _ = writer_runtime.run_report_writer().await;
+        });
         let control_runtime = runtime;
         let control_task = tokio::spawn(async move {
             let _ = control_runtime.run_control().await;
         });
-        (addr, vec![tcp_task, control_task])
+        (addr, vec![tcp_task, writer_task, control_task])
     }
 
     async fn run_control(

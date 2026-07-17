@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
@@ -12,8 +11,8 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::{
-    ReplayProtocol, ReplaySource, ReplayState, ReplayTarget, TargetKey, normalize_host,
-    register_replay_target, write_report_snapshot,
+    ReplayProtocol, ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey,
+    normalize_host, push_success_detail, register_replay_target,
 };
 use crate::memcached::{
     BufferedReader as MemcachedBufferedReader, MemcachedRequest, MemcachedWireProtocol,
@@ -86,6 +85,7 @@ pub(super) struct MemcachedReplayState {
 #[derive(Debug, Default)]
 pub(super) struct MemcachedReplayEvents {
     pub(super) connections: usize,
+    matched_count: usize,
     matched: Vec<CommandMatchedReport>,
     pub(super) unmatched: Vec<CommandRequestReport>,
     pub(super) unsupported: Vec<CommandRequestReport>,
@@ -230,15 +230,19 @@ impl MemcachedReplayState {
         })?;
         let exchange = &mut self.exchanges[index];
         exchange.consumed = true;
-        self.events.matched.push(CommandMatchedReport {
-            case_id: exchange.case_id.clone(),
-            source: exchange.source,
-            index,
-            target: target.clone(),
-            connection_id: exchange.record.connection_id,
-            sequence: exchange.record.sequence,
-            command: exchange.record.command.clone(),
-        });
+        push_success_detail(
+            &mut self.events.matched_count,
+            &mut self.events.matched,
+            CommandMatchedReport {
+                case_id: exchange.case_id.clone(),
+                source: exchange.source,
+                index,
+                target: target.clone(),
+                connection_id: exchange.record.connection_id,
+                sequence: exchange.record.sequence,
+                command: exchange.record.command.clone(),
+            },
+        );
         Some((
             exchange.record.connection_id,
             exchange.response_frames.clone(),
@@ -249,6 +253,7 @@ impl MemcachedReplayState {
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
         CommandProtocolReport {
             connections: self.events.connections,
+            matched_count: self.events.matched_count,
             matched: self.events.matched.clone(),
             unmatched: self.events.unmatched.clone(),
             unsupported: self.events.unsupported.clone(),
@@ -264,14 +269,14 @@ pub(super) async fn handle_connection(
     mut stream: TcpStream,
     target: ReplayTarget,
     state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     let target_key = TargetKey {
         host: target.host,
         port: target.port,
     };
     state.lock().await.memcached.events.connections += 1;
-    write_report_snapshot(state.clone(), report_path.clone()).await?;
+    report_writer.request();
     let mut prefix = [0_u8; 1];
     let len = stream.peek(&mut prefix).await?;
     if len == 0 {
@@ -299,7 +304,7 @@ pub(super) async fn handle_connection(
                             error.to_string(),
                         )
                         .await;
-                        write_report_snapshot(state.clone(), report_path.clone()).await?;
+                        report_writer.request();
                         return Err(error);
                     }
                 };
@@ -330,7 +335,7 @@ pub(super) async fn handle_connection(
                         }
                     }
                 }
-                write_report_snapshot(state.clone(), report_path.clone()).await?;
+                report_writer.request();
             }
         }
         MemcachedWireProtocol::Binary => {
@@ -348,7 +353,7 @@ pub(super) async fn handle_connection(
                             error.to_string(),
                         )
                         .await;
-                        write_report_snapshot(state.clone(), report_path.clone()).await?;
+                        report_writer.request();
                         return Err(error);
                     }
                 };
@@ -363,7 +368,7 @@ pub(super) async fn handle_connection(
                             error.to_string(),
                         )
                         .await;
-                        write_report_snapshot(state.clone(), report_path.clone()).await?;
+                        report_writer.request();
                         return Err(error);
                     }
                 };
@@ -393,7 +398,7 @@ pub(super) async fn handle_connection(
                             .await?;
                     }
                 }
-                write_report_snapshot(state.clone(), report_path.clone()).await?;
+                report_writer.request();
             }
         }
     }

@@ -36,6 +36,7 @@ pub(in crate::replay) struct CommandUnusedReport {
 #[derive(Debug, Clone, Default, Serialize)]
 pub(in crate::replay) struct CommandProtocolReport {
     pub(in crate::replay) connections: usize,
+    pub(in crate::replay) matched_count: usize,
     pub(in crate::replay) matched: Vec<CommandMatchedReport>,
     pub(in crate::replay) unmatched: Vec<CommandRequestReport>,
     pub(in crate::replay) unsupported: Vec<CommandRequestReport>,

@@ -19,15 +19,19 @@ pub(in crate::replay) struct ReplayReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) bootstrap_dependencies_path: Option<String>,
     pub(in crate::replay) targets: Vec<ReplayTarget>,
+    pub(in crate::replay) success_detail_limit: usize,
     pub(in crate::replay) connections: usize,
     pub(in crate::replay) connection_events: Vec<ConnectionReport>,
+    pub(in crate::replay) builtin_query_count: usize,
     pub(in crate::replay) builtin_queries: Vec<QueryReport>,
+    pub(in crate::replay) matched_query_count: usize,
     pub(in crate::replay) matched_queries: Vec<MatchedQueryReport>,
     pub(in crate::replay) unmatched_queries: Vec<QueryReport>,
     pub(in crate::replay) unsupported_commands: Vec<QueryReport>,
     pub(in crate::replay) metadata_warnings: Vec<String>,
     pub(in crate::replay) unused_bootstrap_exchanges: Vec<RecordedExchangeSummary>,
     pub(in crate::replay) unused_case_exchanges: Vec<RecordedExchangeSummary>,
+    pub(in crate::replay) matched_http_exchange_count: usize,
     pub(in crate::replay) matched_http_exchanges: Vec<http::MatchedHttpExchangeReport>,
     pub(in crate::replay) unmatched_http_requests: Vec<http::HttpRequestReport>,
     pub(in crate::replay) unsupported_http_exchanges: Vec<http::HttpRequestReport>,
@@ -172,6 +176,58 @@ pub(in crate::replay) struct RecordedExchangeSummary {
     pub(in crate::replay) username: Option<String>,
     pub(in crate::replay) command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(in crate::replay) sql: Option<String>,
+    pub(in crate::replay) sql_summary: Option<SqlSummary>,
     pub(in crate::replay) status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(in crate::replay) struct SqlSummary {
+    preview: String,
+    fingerprint: String,
+    truncated: bool,
+}
+
+impl SqlSummary {
+    const PREVIEW_CHARS: usize = 256;
+
+    pub(in crate::replay) fn new(sql: &str) -> Self {
+        let mut chars = sql.chars();
+        let preview = chars.by_ref().take(Self::PREVIEW_CHARS).collect::<String>();
+        let truncated = chars.next().is_some();
+        Self {
+            preview,
+            fingerprint: fnv1a64(sql.as_bytes()),
+            truncated,
+        }
+    }
+}
+
+fn fnv1a64(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv1a64:{hash:016x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unused_sql_summary_bounds_preview_and_keeps_fingerprint() {
+        let sql = "SELECT very_long_column ".repeat(100);
+        let summary = serde_json::to_value(SqlSummary::new(&sql)).unwrap();
+
+        assert_eq!(summary["preview"].as_str().unwrap().chars().count(), 256);
+        assert_eq!(summary["truncated"], true);
+        assert!(
+            summary["fingerprint"]
+                .as_str()
+                .unwrap()
+                .starts_with("fnv1a64:")
+        );
+        assert!(!summary.to_string().contains(&sql));
+    }
 }

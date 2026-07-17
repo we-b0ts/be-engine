@@ -5,7 +5,7 @@ pub(in crate::replay) async fn handle_connection(
     peer_addr: SocketAddr,
     target: Option<TargetKey>,
     state: Arc<Mutex<ReplayState>>,
-    report_path: Option<PathBuf>,
+    report_writer: ReplayReportWriter,
 ) -> Result<()> {
     write_packet(&mut stream, handshake_packet(1)).await?;
     let login_packet = read_packet(&mut stream)
@@ -37,7 +37,7 @@ pub(in crate::replay) async fn handle_connection(
                 "MySQL TLS requested; replay mode requires a non-TLS test connection",
             );
         }
-        write_report_snapshot(state, report_path).await?;
+        report_writer.request();
         return Ok(());
     }
     {
@@ -57,7 +57,7 @@ pub(in crate::replay) async fn handle_connection(
         },
     )
     .await?;
-    write_report_snapshot(state.clone(), report_path.clone()).await?;
+    report_writer.request();
 
     let mut session = ReplaySession {
         target,
@@ -131,7 +131,7 @@ pub(in crate::replay) async fn handle_connection(
                 .await?;
             }
         }
-        write_report_snapshot(state.clone(), report_path.clone()).await?;
+        report_writer.request();
     }
     Ok(())
 }
