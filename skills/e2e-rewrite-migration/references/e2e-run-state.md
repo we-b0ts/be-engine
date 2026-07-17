@@ -115,6 +115,7 @@ traffic-e2e-run init \
   --target-root <target> \
   --project-cli scripts/<project>-cli \
   --replay-policy config/replay.yaml \
+  --integration-branch <confirmed-base-branch> \
   --recorder-config config/recorder.toml \
   --recording-rule record-api
 ```
@@ -122,18 +123,23 @@ traffic-e2e-run init \
 The resulting file is:
 
 ```yaml
-version: 2
+version: 3
 project_cli: scripts/<project>-cli
 replay_policy: config/replay.yaml
+integration_branch: <confirmed-base-branch>
 recorder_config: config/recorder.toml
 recording_rule: record-api
 local_root: local
 ```
 
-`recorder_config` and `recording_rule` are optional only as a pair. Do not put a
-current run id, case count, API list, status, session, report result, blocker,
-PID, address, or temporary path in this file. If required project paths cannot
-be confirmed, ask the user; do not hand-edit the file.
+`project_cli`, `replay_policy`, and `integration_branch` are required. `init`
+validates that the integration branch exists locally or as an `origin`
+remote-tracking branch. `recorder_config` and `recording_rule` are optional only
+as a pair. Every runner command rejects a missing, incomplete, obsolete, or
+unresolvable project config before using migration state. Do not put a current
+run id, case count, API list, status, session, report result, blocker, PID,
+address, or temporary path in this file. If required project facts cannot be
+confirmed, ask the user; do not hand-edit the file.
 
 ## Focused API State
 

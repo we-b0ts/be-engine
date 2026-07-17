@@ -8,14 +8,15 @@ the verified change.
 Resolve the PR base in this order:
 
 1. the user's explicit instruction;
-2. target `AGENTS.md` or linked repository documentation;
-3. an existing repository migration configuration or documented integration
-   branch;
+2. the generated and validated `.migration/e2e.yaml` `integration_branch`;
+3. target `AGENTS.md` or linked repository documentation;
 4. the hosting repository's default branch when it is clearly the intended
    integration target.
 
 If these sources disagree or no intended base can be established, stop and ask.
 Never assume a universal integration branch name for a generic target.
+`traffic-e2e-run init` must validate and persist the resolved branch before
+prepare or replay; every later runner command revalidates it.
 
 ## Protect Existing Work
 

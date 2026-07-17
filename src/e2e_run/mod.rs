@@ -27,6 +27,7 @@ pub struct E2eRunInitOptions {
     pub target_root: PathBuf,
     pub project_cli: PathBuf,
     pub replay_policy: PathBuf,
+    pub integration_branch: String,
     pub recorder_config: Option<PathBuf>,
     pub recording_rule: Option<String>,
     pub force: bool,
@@ -36,6 +37,7 @@ pub struct E2eRunInitOptions {
 pub struct E2eRunInitResult {
     pub config: PathBuf,
     pub local_root: PathBuf,
+    pub integration_branch: String,
     pub recorder_feedback: bool,
     pub replaced: bool,
 }

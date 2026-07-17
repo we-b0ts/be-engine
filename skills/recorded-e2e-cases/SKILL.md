@@ -63,9 +63,11 @@ fakes, in-process mocks, or recording-backed target implementations.
    every replay. Audit target code and wiring for forbidden expected-response,
    dependency-file, and fixture data flows before replay and before completion.
 4. If `.migration/e2e.yaml` is missing, call `traffic-e2e-run init` with the
-   confirmed target project CLI and replay policy. The command generates and
-   validates the file; do not hand-write it. If either required path cannot be
-   confirmed from the target repository, ask the user for it before replay.
+   confirmed target project CLI, replay policy, and integration branch. The
+   command generates and validates the file; do not hand-write it. If any
+   required project fact cannot be confirmed from the target repository, ask
+   the user for it before replay. Every later runner command must reject a
+   missing or incomplete config or an integration branch that no longer exists.
 5. For each API being migrated, select one unprocessed directory, use its first
    case only to discover the candidate source route, then call
    `traffic-e2e-run prepare`. Supply the confirmed source route and, for a

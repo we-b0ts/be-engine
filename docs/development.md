@@ -329,18 +329,21 @@ traffic-e2e-run init \
   --target-root ../target \
   --project-cli scripts/<project>-cli \
   --replay-policy config/replay.yaml \
+  --integration-branch <confirmed-base-branch> \
   --recorder-config config/recorder.toml \
   --recording-rule record-api
 ```
 
-The command requires confirmed `project_cli` and `replay_policy` paths,
-validates them, checks that `.migration/local/` is ignored, and generates
-`.migration/e2e.yaml`:
+The command requires confirmed `project_cli`, `replay_policy`, and
+`integration_branch` values, validates that the branch exists locally or as an
+`origin` remote-tracking branch, checks that `.migration/local/` is ignored,
+and generates `.migration/e2e.yaml`:
 
 ```yaml
-version: 2
+version: 3
 project_cli: scripts/<project>-cli
 replay_policy: config/replay.yaml
+integration_branch: <confirmed-base-branch>
 recorder_config: config/recorder.toml
 recording_rule: record-api
 local_root: local
@@ -348,8 +351,10 @@ local_root: local
 
 The recorder flags are optional only as a pair. Existing configuration is not
 overwritten unless `--force` is explicit. If the file is missing, every other
-runner command points back to `init`; do not hand-write it. Prepare each API
-only after confirming whether its source URI is static or dynamic:
+runner command points back to `init`; if any required field is missing or the
+configured integration branch no longer resolves, every command fails before
+using migration state. Do not hand-write it. Prepare each API only after
+confirming whether its source URI is static or dynamic:
 
 ```bash
 traffic-e2e-run prepare \

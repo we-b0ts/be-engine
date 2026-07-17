@@ -36,6 +36,9 @@ struct InitArgs {
     /// Replay policy with expected responses restricted to assertions.
     #[arg(long)]
     replay_policy: PathBuf,
+    /// Confirmed branch that migration pull requests target.
+    #[arg(long)]
+    integration_branch: String,
     /// Managed recorder configuration; requires --recording-rule.
     #[arg(long, requires = "recording_rule")]
     recorder_config: Option<PathBuf>,
@@ -87,6 +90,7 @@ pub(super) async fn run(args: E2eRunArgs) -> Result<()> {
             target_root: args.target_root,
             project_cli: args.project_cli,
             replay_policy: args.replay_policy,
+            integration_branch: args.integration_branch,
             recorder_config: args.recorder_config,
             recording_rule: args.recording_rule,
             force: args.force,

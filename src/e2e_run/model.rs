@@ -15,6 +15,7 @@ pub(super) struct ProjectConfig {
     pub version: u32,
     pub project_cli: PathBuf,
     pub replay_policy: PathBuf,
+    pub integration_branch: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recorder_config: Option<PathBuf>,
     #[serde(default = "default_local_root")]
