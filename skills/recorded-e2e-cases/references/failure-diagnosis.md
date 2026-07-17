@@ -31,8 +31,8 @@ evidence:
   dependency calls that cannot be proven unrelated/background
 - satisfying replay coverage would require hardcoding recorded params into
   normal runtime config or product logic
-- downstream data is needed but no semantic record or trusted project fixture
-  supplies it
+- downstream data is needed but recorder-owned semantic replay evidence does
+  not supply it
 - the recorded HTTP response depends on data that cannot be explained by the
   recorded dependencies
 
@@ -144,8 +144,8 @@ Report recorder feedback when replay required:
   migration and therefore needs user-approved contract-change tracking
 - discovering that a recorded dependency touch has no clear ownership in the
   selected request path and would require hardcoded recorded params to replay
-- adding large amounts of target-project fixture data that should have been
-  captured as semantic dependency output
+- attempting to add target-project fixture data that should instead be
+  recorder-owned semantic dependency output
 - identifying unstable response fields that the recorder could tag or summarize
   for later assertion configuration
 
@@ -166,5 +166,5 @@ When blocked, output:
 - missing evidence or incomplete dependency records
 - why it is unsafe to invent the data
 - recommended next step, such as re-recording with the missing service captured
-  or supplying a trusted fixture
+  or adding recorder-supported semantic capture for that dependency
 - recorder feedback, when the missing evidence suggests a recorder improvement

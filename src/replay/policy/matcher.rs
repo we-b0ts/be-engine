@@ -69,7 +69,8 @@ pub(in crate::replay) struct MysqlPolicyContext<'a> {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+// Replay policy only needs the route identity from the evolving request artifact.
+// All other canonical and future request.json fields are intentionally ignored.
 struct RecordedCaseRequest {
     method: String,
     uri: String,

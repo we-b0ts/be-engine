@@ -363,6 +363,11 @@ async fn handle_gateway_request(
                 }
             }
 
+            let drain_invalidation = if let Some(case) = &case {
+                state.drain_active_case_dependencies(case.id).await
+            } else {
+                None
+            };
             if let (Some(case), Some(request_record)) = (&case, case_request_record)
                 && let Err(err) = finalize_http_case(
                     state.recorder(),
@@ -382,7 +387,9 @@ async fn handle_gateway_request(
                         duration_ms: started.elapsed().as_millis(),
                         error: None,
                     },
-                    state.active_case_invalidation(case.id),
+                    state
+                        .active_case_invalidation(case.id)
+                        .or(drain_invalidation),
                 )
                 .await
             {
@@ -469,6 +476,11 @@ struct GatewayErrorContext {
 
 async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody> {
     let error = ctx.err.to_string();
+    let drain_invalidation = if let Some(case) = &ctx.case {
+        ctx.state.drain_active_case_dependencies(case.id).await
+    } else {
+        None
+    };
     if let Some(case) = &ctx.case
         && let Err(err) = finalize_http_case(
             ctx.state.recorder(),
@@ -498,7 +510,9 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
                 duration_ms: ctx.started.elapsed().as_millis(),
                 error: Some(error.clone()),
             },
-            ctx.state.active_case_invalidation(case.id),
+            ctx.state
+                .active_case_invalidation(case.id)
+                .or(drain_invalidation),
         )
         .await
     {

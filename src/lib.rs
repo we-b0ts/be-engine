@@ -19,6 +19,7 @@ mod tls;
 mod udp_gateway;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use hyper_rustls::HttpsConnector;
@@ -32,7 +33,8 @@ use uuid::Uuid;
 
 use crate::access_policy::{AccessDecision, OperationClass, decide};
 use crate::active_case::{
-    ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection, DependencyTargets,
+    ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection, DependencyDrainResult,
+    DependencyTargets,
 };
 use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::http::case::CaseInvalidation;
@@ -292,7 +294,9 @@ impl AppState {
 
     fn schedule_bootstrap_dependency_summary(&self, reason: &'static str) {
         let recorder = self.recorder().clone();
+        let active_cases = self.inner.active_cases.clone();
         tokio::spawn(async move {
+            active_cases.wait_for_bootstrap_dependencies().await;
             if let Err(err) = recorder.finalize_bootstrap_dependency_summary().await {
                 warn!(error = %err, reason, "failed to finalize bootstrap dependency summary");
             }
@@ -307,9 +311,55 @@ impl AppState {
         self.inner.active_cases.invalidation_for(case_id)
     }
 
+    pub(crate) async fn drain_active_case_dependencies(
+        &self,
+        case_id: Uuid,
+    ) -> Option<CaseInvalidation> {
+        let quiet_period =
+            Duration::from_millis(self.config().recording.case_dependency_quiet_period_ms);
+        let timeout =
+            Duration::from_millis(self.config().recording.case_dependency_drain_timeout_ms);
+        let result = self
+            .inner
+            .active_cases
+            .drain_case_dependencies(case_id, quiet_period, timeout)
+            .await;
+        match result {
+            DependencyDrainResult::Drained => None,
+            DependencyDrainResult::TimedOut => {
+                warn!(
+                    case_id = %case_id,
+                    quiet_period_ms = quiet_period.as_millis(),
+                    timeout_ms = timeout.as_millis(),
+                    "recording case dependency drain timed out"
+                );
+                Some(CaseInvalidation::new(
+                    "dependency_drain_timeout",
+                    format!(
+                        "case dependencies did not become idle for {} ms within {} ms",
+                        quiet_period.as_millis(),
+                        timeout.as_millis()
+                    ),
+                ))
+            }
+        }
+    }
+
+    pub(crate) fn capture_dependency_targets(&self, event_pid: Option<u32>) -> DependencyTargets {
+        self.inner.active_cases.current_targets_for_event(event_pid)
+    }
+
     pub(crate) async fn record_dependency_if_relevant(&self, event: &RecorderEvent) {
         let event_pid = event.client_pid();
-        let targets = self.inner.active_cases.current_targets_for_event(event_pid);
+        let targets = self.capture_dependency_targets(event_pid);
+        self.record_dependency_for_targets(event, &targets).await;
+    }
+
+    pub(crate) async fn record_dependency_for_targets(
+        &self,
+        event: &RecorderEvent,
+        targets: &DependencyTargets,
+    ) {
         if targets.bootstrap_open
             && let Err(err) = self
                 .recorder()
@@ -326,11 +376,11 @@ impl AppState {
 
     async fn record_active_case_dependency_if_relevant(&self, event: &RecorderEvent) {
         let event_pid = event.client_pid();
-        let targets = self.inner.active_cases.current_targets_for_event(event_pid);
-        self.record_case_dependencies(event, targets).await;
+        let targets = self.capture_dependency_targets(event_pid);
+        self.record_case_dependencies(event, &targets).await;
     }
 
-    async fn record_case_dependencies(&self, event: &RecorderEvent, targets: DependencyTargets) {
+    async fn record_case_dependencies(&self, event: &RecorderEvent, targets: &DependencyTargets) {
         if targets.ambiguous_active_cases > 0 {
             warn!(
                 active_cases = targets.ambiguous_active_cases,
@@ -338,10 +388,10 @@ impl AppState {
                 "skipping case dependency because active case ownership is ambiguous"
             );
         }
-        for (case, matched_by) in targets.cases {
+        for (case, matched_by) in &targets.cases {
             if let Err(err) = self
                 .recorder()
-                .append_case_dependency(&case, event, matched_by)
+                .append_case_dependency(case, event, matched_by)
                 .await
             {
                 warn!(

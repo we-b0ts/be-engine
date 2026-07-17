@@ -84,12 +84,14 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
+ln -sf "$PWD/scripts/traffic-replay-target" "$HOME/.local/bin/traffic-replay-target"
 ln -sf "$PWD/scripts/traffic-replay-policy" "$HOME/.local/bin/traffic-replay-policy"
 ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
 ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
 command -v traffic-recorder-proxy
 command -v traffic-record
 command -v traffic-replay
+command -v traffic-replay-target
 command -v traffic-replay-policy
 command -v traffic-case-group
 traffic-replay path/to/case-dir
@@ -107,6 +109,14 @@ limited to `trp-record`, so the dependency-producing target process must run as
 that user. Build steps, replay itself, and replay-control commands may remain
 under the developer account. Use `--no-intercept` only when the target already
 routes dependencies directly to the replay listeners.
+
+For an in-process E2E, build its executable as the developer and run the
+prebuilt command through `traffic-replay-target`. The command stages the
+executable and copied inputs, clears the inherited environment, provides a
+private writable work directory, and resolves the fixed user from
+`traffic-replay --print-intercept-user`. It never accepts a username or UID.
+Keep `traffic-replay-cli begin/end/finalize` in the outer developer-owned
+facade; the target process must not access the replay session or control socket.
 
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are consumed in recorded connection order. The

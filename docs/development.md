@@ -56,6 +56,17 @@ case is created. After ready, only one matched case can be active at a time;
 overlapping matching requests are also sent to fallback so dependencies are not
 shared across cases.
 
+After an upstream HTTP response completes, Recorder keeps the case active until
+captured dependencies are idle for
+`recording.case_dependency_quiet_period_ms`. This captures synchronous
+server-side after-hooks that start dependency requests only after writing the
+response. The quiet timer restarts when dependency activity begins or ends, and
+in-flight MySQL queries retain their original case ownership through the
+semantic exchange. If the case does not become quiet within
+`recording.case_dependency_drain_timeout_ms`, Recorder fails the case instead
+of publishing incomplete dependency evidence. Matching requests continue to
+use the fallback upstream while the previous case drains.
+
 ### Rewriting HTTP Responses
 
 HTTP response rewriting is an opt-in recording feature for responses that
@@ -117,6 +128,7 @@ mkdir -p "$HOME/.local/bin"
 ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
+ln -sf "$PWD/scripts/traffic-replay-target" "$HOME/.local/bin/traffic-replay-target"
 ln -sf "$PWD/scripts/traffic-replay-policy" "$HOME/.local/bin/traffic-replay-policy"
 ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
 ln -sf "$PWD/scripts/traffic-replay-aggregate" "$HOME/.local/bin/traffic-replay-aggregate"
@@ -143,6 +155,27 @@ dependency-producing target process as that user. Build steps, replay itself,
 and replay-control commands may remain under the developer account. If the
 target cannot run as `trp-record`, intercepted replay is blocked; do not widen
 the owner scope to the login user or all local users.
+
+For a prebuilt in-process E2E command, use `traffic-replay-target` rather than
+granting the fixed user access to the workspace or build cache:
+
+```bash
+traffic-replay-target \
+  --copy-env APP_CONFIG=path/to/e2e.yaml \
+  --copy-env REPLAY_CA=path/to/replay-ca.pem \
+  --path-env CASE_DIR=path/to/readable/case-group \
+  --write-dir logs \
+  -- path/to/prebuilt-e2e --case-id <case-id>
+```
+
+The caller must have non-interactive sudo permission for staging ownership and
+for running as the recorder's fixed user. Copied inputs are read-only to the
+target; the temporary work tree is writable and removed after execution.
+`--path-env` does not widen source permissions and fails when the fixed user
+cannot already read the path. The
+helper clears inherited proxy and shell-hook variables, verifies the effective
+UID, and never accepts a user or UID option. Keep replay lifecycle commands
+outside the target process.
 
 For a case collection, start one replay session and control active case
 ownership through the CLI:
