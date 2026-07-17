@@ -29,7 +29,6 @@ pub struct E2eRunInitOptions {
     pub replay_policy: PathBuf,
     pub recorder_config: Option<PathBuf>,
     pub recording_rule: Option<String>,
-    pub required_consecutive_successful_runs: u32,
     pub force: bool,
 }
 
@@ -37,7 +36,6 @@ pub struct E2eRunInitOptions {
 pub struct E2eRunInitResult {
     pub config: PathBuf,
     pub local_root: PathBuf,
-    pub required_consecutive_successful_runs: u32,
     pub recorder_feedback: bool,
     pub replaced: bool,
 }

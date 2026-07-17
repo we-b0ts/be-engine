@@ -73,22 +73,23 @@ fakes, in-process mocks, or recording-backed target implementations.
    and exact case ids returned by the runner.
 6. During migration, call `traffic-e2e-run run-api --api '<METHOD pattern>'`.
    Fix the focused API and rerun it until its complete group passes. Focused
-   attempts persist evidence but MUST NOT update full-round counts, consecutive
-   success, `e2e-progress.yaml`, verified excludes, or the global `latest`.
+   attempts persist evidence but MUST NOT update full-round counts,
+   `e2e-progress.yaml`, verified excludes, or the global `latest`.
 7. Compare JSON responses structurally; use exact bytes only for non-JSON or an
    explicit exact-byte mode. Treat recorder reports and summaries as dependency
-   coverage evidence. Unmatched, unused, unsupported, unsafe, or missing
-   required side effects keep the group incomplete.
+   coverage evidence. Unmatched, case-owned unused, unsupported, unsafe, or
+   missing required side effects keep the group incomplete. Unused bootstrap
+   traffic is retained as a non-blocking startup diagnostic because traffic
+   observed before readiness is outside the selected E2E contract.
 8. After every published case is grouped and every migrated API passes its
    focused loop, call `traffic-e2e-run run` for one full round. The runner MUST
    start replay once, load bootstrap and the exact full case set once, execute
    cases sequentially, finalize once, aggregate once, then run per-API
    verified-excludes ensure and publish progress. Do not modify target behavior
-   during a full round. Repeat unchanged successful full rounds until the
-   generated progress reaches its configured consecutive-success requirement.
+   during a full round. One successful full round with finalized, complete,
+   clean evidence makes generated progress `status: complete`.
 9. If a full round fails, diagnose the affected API, return to `run-api`, fix
-   it, and restart the full round from the beginning. Only an unmodified full
-   round may change consecutive-success counts.
+   it, and restart the full round from the beginning.
 
 If the same root cause repeats for three consecutive cycles without new
 evidence or meaningful progress, stop as `blocked` or `incomplete`. The final
@@ -137,9 +138,9 @@ items hold:
    and verification evidence.
 8. The full-round state is terminal, `.active` was atomically published as
    `latest`, and the runner-generated `.migration/e2e-progress.yaml` reports
-   `status: complete` with the configured global and per-API consecutive-success
-   requirement met. Focused attempts are never accepted as full-round
-   completion evidence.
+   `status: complete` from one successful full round with finalized, complete,
+   clean evidence. Focused attempts are never accepted as full-round completion
+   evidence.
 9. Target scripts and AI-authored facades remain orchestration helpers. Their
    exit status, summaries, hand-maintained counts, or ledgers do not replace
    canonical grouping, replay, aggregate, pattern, or exclude artifacts.

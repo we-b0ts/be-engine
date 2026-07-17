@@ -50,16 +50,7 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
     let inventory =
         load_complete_case_group_inventory(&layout.group_index_path, &layout.case_source)
             .context("E2E run prepare is incomplete or stale")?;
-    let mut index = store::load_or_create_index(
-        &layout,
-        &layout.run_key,
-        &layout.case_source,
-        config.required_consecutive_successful_runs,
-    )?;
-    ensure!(
-        index.required_consecutive_successful == config.required_consecutive_successful_runs,
-        "required_consecutive_successful_runs changed; start a new run key or restore the configured value"
-    );
+    let mut index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
 
     let sequence = index.executions + 1;
     let mut state = ActiveRunState::new(
@@ -67,7 +58,6 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
         sequence,
         &inventory,
         config.recording_rule.clone(),
-        config.required_consecutive_successful_runs,
         &layout.active_dir,
     );
     state.replay_report = allocate_replay_report(
@@ -98,12 +88,7 @@ pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
         "there is no active E2E run to abort"
     );
     let mut state = store::read_active(&layout)?;
-    let mut index = store::load_or_create_index(
-        &layout,
-        &layout.run_key,
-        &layout.case_source,
-        config.required_consecutive_successful_runs,
-    )?;
+    let mut index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
     best_effort_stop(&config, &layout, &mut state).await;
     state.status = RunStatus::Interrupted;
     state
@@ -189,7 +174,6 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         attempt,
         &focused_inventory,
         config.recording_rule.clone(),
-        config.required_consecutive_successful_runs,
         &layout.active_dir,
     );
     state.replay_report = allocate_replay_report(
@@ -219,7 +203,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
 }
 
 pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
-    let (config, layout) = config::resolve_layout(
+    let (_, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
         context.run_key.as_deref(),
@@ -230,12 +214,8 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
     if layout.active_dir.is_dir() {
         let mut state = store::read_active(&layout)?;
         if state.status.is_terminal() {
-            let mut index = store::load_or_create_index(
-                &layout,
-                &layout.run_key,
-                &layout.case_source,
-                config.required_consecutive_successful_runs,
-            )?;
+            let mut index =
+                store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
             return finish_and_publish(&layout, &mut index, &mut state);
         }
         return abort_e2e_run(context).await;

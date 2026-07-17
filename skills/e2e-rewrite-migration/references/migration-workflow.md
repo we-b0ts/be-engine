@@ -74,7 +74,7 @@ local tests needed by the selected scope. Provide the standard
 Run the complete selected API through `traffic-e2e-run run-api`. Fix product
 code only after grouping, replay lifecycle, dependency routing, and evidence
 are complete enough to prove a behavior defect. Focused attempts do not change
-full-round progress, streaks, or verified excludes.
+full-round progress or verified excludes.
 
 Continue while each cycle provides new evidence or fixes a distinct evidenced
 defect. If the same root cause repeats for three consecutive cycles without new
@@ -89,13 +89,13 @@ or structural change; final verification is not a retry.
 After every published case is prepared exactly once and every migrated API has
 a current focused pass, call `traffic-e2e-run run`. Do not edit target behavior
 during the command. The runner executes the full case set, finalizes and
-aggregates, runs per-API verified-excludes ensure, updates full-round streaks
-and `e2e-progress.yaml`, and atomically publishes global `latest`. Repeat
-unchanged successful full rounds until progress reaches `status: complete`.
+aggregates, runs per-API verified-excludes ensure, updates
+`e2e-progress.yaml`, and atomically publishes global `latest`. One successful
+round with finalized, complete, clean evidence reaches `status: complete`.
 
 If the full round fails, return to focused `run-api` for the affected API. After
-the fix, restart the full round from the beginning; earlier passing cases from
-the failed round cannot contribute to consecutive success.
+the fix, restart the full round from the beginning; the failed round is not
+completion evidence.
 
 ## 7. Converge And Verify
 

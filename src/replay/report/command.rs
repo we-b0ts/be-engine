@@ -52,7 +52,6 @@ impl CommandProtocolReport {
             || !self.unsupported.is_empty()
             || !self.unsafe_events.is_empty()
             || !self.unused_case.is_empty()
-            || !self.unused_bootstrap.is_empty()
     }
 
     pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {

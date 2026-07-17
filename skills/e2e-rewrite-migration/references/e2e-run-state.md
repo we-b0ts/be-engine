@@ -44,11 +44,11 @@ force-add `local/`. The runner writes all JSON/YAML evidence under `local/`;
 AI MUST NOT create, edit, merge, repair, or copy these files by hand.
 
 `e2e-progress.yaml` is different: it is a concise runner-generated report for
-humans and is expected to be committed. It contains counts, status, consecutive
-success, latest full-round summaries, failure highlights, and per-API progress.
-It intentionally excludes protocol evidence, connections, policies, sessions,
-aggregates, root causes, and repair suggestions. AI reads local evidence when
-diagnosis is needed.
+humans and is expected to be committed. It contains counts, status, latest
+full-round summaries, failure highlights, and per-API progress. It intentionally
+excludes protocol evidence, connections, policies, sessions, aggregates, root
+causes, and repair suggestions. AI reads local evidence when diagnosis is
+needed.
 
 Details for unresolved or unfixable problems remain in runner-generated reports
 and evidence under `.migration/local/`.
@@ -58,7 +58,7 @@ The generated shape is:
 ```yaml
 version: 1
 updated_at: "2026-07-17T08:00:00Z"
-status: in_progress
+status: complete
 run:
   key: 20260717080000-record-api
 progress:
@@ -67,8 +67,6 @@ progress:
     successful: 3
     failed: 1
     interrupted: 0
-    consecutive_successful: 2
-    required_consecutive_successful: 3
   cases:
     total: 34
     replayed: 136
@@ -77,8 +75,8 @@ progress:
     incomplete: 0
   apis:
     total: 5
-    verified: 3
-    pending: 2
+    verified: 5
+    pending: 0
 latest_run:
   number: 4
   status: successful
@@ -92,19 +90,14 @@ latest_run:
     passed: 5
     failed: 0
     incomplete: 0
-  consecutive_successful: 2
   highlights: {}
 apis:
   GET /api/widgets/*:
     cases: 8
-    status: pending
-    consecutive_successful: 2
-    required_consecutive_successful: 3
+    status: verified
   POST /api/widgets:
     cases: 4
     status: verified
-    consecutive_successful: 3
-    required_consecutive_successful: 3
 ```
 
 `progress.cases` is cumulative across full rounds except `total`, which is the
@@ -135,7 +128,6 @@ replay_policy: config/replay.yaml
 recorder_config: config/recorder.toml
 recording_rule: record-api
 local_root: local
-required_consecutive_successful_runs: 3
 ```
 
 `recorder_config` and `recording_rule` are optional only as a pair. Do not put a
@@ -154,7 +146,6 @@ Focused attempts support migration diagnosis and repair. They never update:
 - the run-key `state.yaml` cumulative full-round counters;
 - `.migration/e2e-progress.yaml`;
 - full-round `.active` or `latest`;
-- global or per-API consecutive-success counts;
 - verified API excludes.
 
 A focused pass is not completion proof because later shared changes may
@@ -168,31 +159,26 @@ only after terminal evidence atomically replaces the previous global `latest`.
 Readers see either the old complete snapshot or the new complete snapshot,
 never a mix of API results from different rounds.
 
-The run-key `state.yaml` stores cumulative full-round counts and streaks.
+The run-key `state.yaml` stores cumulative full-round counts.
 Global `latest/state.yaml` stores only the most recent full round and its exact
 case/API evidence. `.migration/local/current.yaml` points to that terminal
 state.
 
 If the full round fails, use focused `run-api` for diagnosis and repair, then
 start a new full round from the beginning. Never patch a failed `.active`
-snapshot into success. If it succeeds but progress remains `in_progress`, rerun
-the unchanged full round until the configured consecutive-success requirement
-is met.
+snapshot into success. One successful full round with every API and case
+passing and finalized, complete, clean evidence sets progress to `complete`.
 
-## Consecutive Success
+## Completion
 
-Only terminal full rounds count:
+Only a terminal full round can complete progress:
 
-- every API and every case passing with finalized, complete, clean evidence
-  increments the global streak;
-- a failed, incomplete, or interrupted full round resets the global streak;
-- each API increments only if all of its cases pass in that round;
-- 29 passing cases out of 30 reset that API streak to zero;
-- interruption resets every API streak;
+- every API and every case must pass;
+- canonical replay evidence must be finalized, complete, and clean;
+- a failed, incomplete, or interrupted full round reports
+  `status: needs_attention`;
+- a successful API is `verified` only with complete, clean global evidence;
 - the same terminal sequence is applied idempotently during recovery.
-
-The required count is stable project configuration. Changing the case inventory
-or source revision invalidates the prior baseline and resets streaks.
 
 ## Recovery
 
@@ -204,7 +190,7 @@ traffic-e2e-run abort   --target-root <target> --case-source <source>
 traffic-e2e-run recover --target-root <target> --case-source <source>
 ```
 
-`abort` publishes an interrupted full round so streak reset is explicit.
+`abort` publishes an interrupted full round so the failure is explicit.
 `recover` restores an interrupted atomic publication or aborts a surviving
 global `.active`. Focused `.active` evidence remains isolated and cannot become
 the global `latest`.

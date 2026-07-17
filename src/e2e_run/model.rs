@@ -21,16 +21,16 @@ pub(super) struct ProjectConfig {
     pub local_root: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording_rule: Option<String>,
-    #[serde(default = "default_required_successful_runs")]
-    pub required_consecutive_successful_runs: u32,
+    #[serde(
+        default,
+        rename = "required_consecutive_successful_runs",
+        skip_serializing
+    )]
+    pub _legacy_required_consecutive_successful_runs: Option<u32>,
 }
 
 fn default_local_root() -> PathBuf {
     PathBuf::from("local")
-}
-
-fn default_required_successful_runs() -> u32 {
-    3
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +39,6 @@ pub(super) struct ResolvedProjectConfig {
     pub replay_policy: PathBuf,
     pub recorder_config: Option<PathBuf>,
     pub recording_rule: Option<String>,
-    pub required_consecutive_successful_runs: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -126,7 +125,6 @@ pub(super) struct ActiveRunState {
     pub case_inventory_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recording_rule: Option<String>,
-    pub required_consecutive_successful_runs: u32,
     pub replay_session: PathBuf,
     pub replay_report: PathBuf,
     pub aggregate_report: PathBuf,
@@ -152,7 +150,6 @@ impl ActiveRunState {
         sequence: u64,
         inventory: &CaseGroupInventory,
         recording_rule: Option<String>,
-        required_consecutive_successful_runs: u32,
         active_dir: &std::path::Path,
     ) -> Self {
         let cases = inventory
@@ -181,7 +178,6 @@ impl ActiveRunState {
             source_revision: inventory.source_revision.clone(),
             case_inventory_id: inventory.case_inventory_id.clone(),
             recording_rule,
-            required_consecutive_successful_runs,
             replay_session: active_dir.join("tmp/session.json"),
             replay_report: reports.join("replay-report.json"),
             aggregate_report: reports.join("aggregate.json"),
@@ -203,8 +199,6 @@ impl ActiveRunState {
 pub(super) struct ApiProgress {
     pub cases: u32,
     pub status: String,
-    pub consecutive_successful: u32,
-    pub required_consecutive_successful: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -220,8 +214,6 @@ pub(super) struct RunIndex {
     pub successful: u64,
     pub failed: u64,
     pub interrupted: u64,
-    pub consecutive_successful: u32,
-    pub required_consecutive_successful: u32,
     pub replayed_cases: u64,
     pub passed_cases: u64,
     pub failed_cases: u64,
@@ -235,11 +227,7 @@ pub(super) struct RunIndex {
 }
 
 impl RunIndex {
-    pub(super) fn empty(
-        run_key: String,
-        case_source: PathBuf,
-        required_consecutive_successful: u32,
-    ) -> Self {
+    pub(super) fn empty(run_key: String, case_source: PathBuf) -> Self {
         Self {
             version: STATE_VERSION,
             run_key,
@@ -250,8 +238,6 @@ impl RunIndex {
             successful: 0,
             failed: 0,
             interrupted: 0,
-            consecutive_successful: 0,
-            required_consecutive_successful,
             replayed_cases: 0,
             passed_cases: 0,
             failed_cases: 0,

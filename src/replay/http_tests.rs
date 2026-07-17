@@ -274,6 +274,7 @@ async fn searches_past_same_target_bootstrap_exchange_for_active_case_match() {
         1
     );
     assert!(state.unused_http_exchanges(ReplaySource::Case).is_empty());
+    assert!(!super::super::report_is_dirty(&state.snapshot_report()));
     task.abort();
 }
 

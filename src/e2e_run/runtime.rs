@@ -9,7 +9,7 @@ use tokio::process::{Child, Command};
 
 use super::model::{ActiveRunState, ResolvedProjectConfig, RunLayout};
 use super::store;
-use super::support::wait_for_pid_exit;
+use super::support::{allocate_control_socket, wait_for_pid_exit};
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{ReplayControlConfig, run_replay_control};
 
@@ -51,6 +51,8 @@ pub(super) fn spawn_replay(
         .arg(&state.replay_report)
         .arg("--session")
         .arg(&state.replay_session)
+        .arg("--control-socket")
+        .arg(allocate_control_socket())
         .arg("--policy")
         .arg(&config.replay_policy);
     for case_id in inventory

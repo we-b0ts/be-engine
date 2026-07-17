@@ -28,7 +28,6 @@ replay_policy: config/replay.yaml
 recorder_config: config/recorder.toml
 recording_rule: record-api
 local_root: local
-required_consecutive_successful_runs: 3
 ```
 
 The target repository MUST ignore `.migration/local/` before initialization.
@@ -72,7 +71,7 @@ finalizes once. It publishes only the API's focused `latest` snapshot.
 Focused attempts are diagnostic migration work. They MUST NOT:
 
 - update `e2e-progress.yaml`;
-- increment or reset full-round or API consecutive-success counts;
+- update full-round or API progress;
 - run verified-excludes ensure;
 - replace the full-round `latest`.
 
@@ -97,24 +96,17 @@ per-API verified-excludes ensure, progress update, and atomic publication.
 
 Do not repair code inside a full round. If it fails, use focused `run-api` to
 diagnose and fix, then start a new full round from the beginning.
-After a successful round, repeat the unchanged full round until
-`e2e-progress.yaml` reaches `status: complete`.
+One successful full round sets `e2e-progress.yaml` to `status: complete`.
 
-## Consecutive Success
+## Completion
 
-Only a terminal full round changes consecutive-success state.
-
-- Global consecutive success increments only when every API and every case
-  passes and canonical evidence is finalized, complete, and clean.
-- One failed, incomplete, or interrupted full round resets global consecutive
-  success to zero.
-- An API increments only when every case in that API passes in the completed
-  full round. For 30 cases, 29 passes reset that API to zero; the 29 passing
-  cases cannot contribute.
-- An interrupted round resets every API streak to zero.
+- One terminal full round completes when every API and every case passes and
+  canonical evidence is finalized, complete, and clean.
+- A failed, incomplete, or interrupted full round reports
+  `status: needs_attention`.
+- Per-API status is `verified` only when that API passes with complete, clean
+  global replay evidence.
 - Re-publishing the same terminal sequence is idempotent.
-- Completion requires the configured global and every API streak; one clean
-  round updates progress but does not bypass a larger configured requirement.
 
 ## Generated State
 

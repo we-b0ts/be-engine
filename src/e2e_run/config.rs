@@ -20,10 +20,6 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
     ensure!(
-        options.required_consecutive_successful_runs > 0,
-        "required_consecutive_successful_runs must be greater than zero"
-    );
-    ensure!(
         options.recorder_config.is_some() == options.recording_rule.is_some(),
         "recorder_config and recording_rule must be provided together"
     );
@@ -84,7 +80,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         recorder_config: options.recorder_config,
         local_root: local_root_setting,
         recording_rule: options.recording_rule,
-        required_consecutive_successful_runs: options.required_consecutive_successful_runs,
+        _legacy_required_consecutive_successful_runs: None,
     };
     store::write_yaml(&config_path, &project_config)?;
     let persisted = load_project_config(&config_path)?;
@@ -92,7 +88,6 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     Ok(E2eRunInitResult {
         config: config_path,
         local_root,
-        required_consecutive_successful_runs: persisted.required_consecutive_successful_runs,
         recorder_feedback: persisted.recorder_config.is_some(),
         replaced,
     })
@@ -128,7 +123,6 @@ pub(super) fn resolve_layout(
             .as_deref()
             .map(|path| resolve_under(&target_root, path)),
         recording_rule: config.recording_rule,
-        required_consecutive_successful_runs: config.required_consecutive_successful_runs,
     };
     let layout = RunLayout {
         target_root,
@@ -198,10 +192,6 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
     ensure!(
         !config.local_root.as_os_str().is_empty(),
         "local_root must not be empty"
-    );
-    ensure!(
-        config.required_consecutive_successful_runs > 0,
-        "required_consecutive_successful_runs must be greater than zero"
     );
     ensure!(
         config.recorder_config.is_some() == config.recording_rule.is_some(),
@@ -294,7 +284,6 @@ mod tests {
             replay_policy: PathBuf::from("config/replay.yaml"),
             recorder_config: None,
             recording_rule: None,
-            required_consecutive_successful_runs: 3,
             force: false,
         }
     }
@@ -313,7 +302,8 @@ mod tests {
         assert_eq!(config.project_cli, PathBuf::from("scripts/project-cli"));
         assert_eq!(config.replay_policy, PathBuf::from("config/replay.yaml"));
         assert_eq!(config.local_root, PathBuf::from(DEFAULT_LOCAL_ROOT));
-        assert_eq!(config.required_consecutive_successful_runs, 3);
+        let yaml = fs::read_to_string(&result.config).unwrap();
+        assert!(!yaml.contains("required_consecutive_successful_runs"));
     }
 
     #[test]
@@ -326,10 +316,29 @@ mod tests {
         assert!(error.to_string().contains("use --force"));
         let mut replacement = options(target.path());
         replacement.force = true;
-        replacement.required_consecutive_successful_runs = 4;
         let result = initialize(replacement).unwrap();
         assert!(result.replaced);
-        assert_eq!(result.required_consecutive_successful_runs, 4);
+    }
+
+    #[test]
+    fn accepts_legacy_successful_run_setting_without_persisting_it() {
+        let target = target();
+        let mut generated = options(target.path());
+        generated.force = false;
+        let result = initialize(generated).unwrap();
+        let mut yaml = fs::read_to_string(&result.config).unwrap();
+        yaml.push_str("required_consecutive_successful_runs: 3\n");
+        fs::write(&result.config, yaml).unwrap();
+        let cases = target.path().join("cases/run");
+        fs::create_dir_all(&cases).unwrap();
+
+        resolve_layout(target.path(), &cases, None).unwrap();
+
+        let mut replacement = options(target.path());
+        replacement.force = true;
+        initialize(replacement).unwrap();
+        let yaml = fs::read_to_string(&result.config).unwrap();
+        assert!(!yaml.contains("required_consecutive_successful_runs"));
     }
 
     #[test]

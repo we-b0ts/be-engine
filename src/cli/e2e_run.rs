@@ -42,9 +42,6 @@ struct InitArgs {
     /// Managed recording rule; requires --recorder-config.
     #[arg(long, requires = "recorder_config")]
     recording_rule: Option<String>,
-    /// Successful unchanged full rounds required for completion.
-    #[arg(long, default_value_t = 3)]
-    required_consecutive_successful_runs: u32,
     /// Replace an existing generated .migration/e2e.yaml.
     #[arg(long)]
     force: bool,
@@ -92,7 +89,6 @@ pub(super) async fn run(args: E2eRunArgs) -> Result<()> {
             replay_policy: args.replay_policy,
             recorder_config: args.recorder_config,
             recording_rule: args.recording_rule,
-            required_consecutive_successful_runs: args.required_consecutive_successful_runs,
             force: args.force,
         })?),
         E2eRunCommand::Prepare(args) => {

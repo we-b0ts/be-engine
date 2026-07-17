@@ -344,7 +344,6 @@ replay_policy: config/replay.yaml
 recorder_config: config/recorder.toml
 recording_rule: record-api
 local_root: local
-required_consecutive_successful_runs: 3
 ```
 
 The recorder flags are optional only as a pair. Existing configuration is not
@@ -373,7 +372,7 @@ traffic-e2e-run run-api \
 ```
 
 Focused attempts persist only per-API diagnostic evidence. They do not change
-the full-round report, consecutive-success counts, or verified excludes.
+the full-round report, progress, or verified excludes.
 
 After every published case is prepared exactly once and focused migration is
 ready, run the complete regression round:
@@ -390,12 +389,12 @@ aggregates once, runs per-API verified-exclude ensure, atomically publishes
 `.migration/local/<run-key>/latest/`, and updates the Git-eligible
 `.migration/e2e-progress.yaml`.
 
-Only a full round changes consecutive success. Every case must pass; a 29/30
-API result resets that API streak, and any failed or interrupted full round
-resets the global streak. Repeat unchanged successful full rounds until
-`e2e-progress.yaml` reaches `status: complete`. Use `status`, `abort`, and
-`recover` for interrupted global rounds. Generated local JSON/YAML is tool-owned
-and must not be edited by AI or by target scripts.
+One terminal full round reaches `status: complete` when every case and API
+passes and canonical replay evidence is finalized, complete, and clean. A
+failed or interrupted round remains `needs_attention`; after focused repair,
+start a new full round from the beginning. Use `status`, `abort`, and `recover`
+for interrupted global rounds. Generated local JSON/YAML is tool-owned and must
+not be edited by AI or by target scripts.
 
 When using setup scripts directly, always pair `up` with `down`:
 

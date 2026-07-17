@@ -74,7 +74,6 @@ pub(super) fn load_or_create_index(
     layout: &RunLayout,
     run_key: &str,
     case_source: &Path,
-    required: u32,
 ) -> Result<RunIndex> {
     if layout.index_path.is_file() {
         let index: RunIndex = read_yaml(&layout.index_path)?;
@@ -96,7 +95,6 @@ pub(super) fn load_or_create_index(
     Ok(RunIndex::empty(
         run_key.to_string(),
         case_source.to_path_buf(),
-        required,
     ))
 }
 
@@ -353,7 +351,6 @@ mod tests {
                 groups: Vec::new(),
             },
             None,
-            3,
             active_dir,
         );
         state.status = status;

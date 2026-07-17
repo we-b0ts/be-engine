@@ -639,7 +639,6 @@ impl MysqlEventCounts {
         self.unmatched_queries > 0
             || self.unsupported_commands > 0
             || self.unused_case_exchanges > 0
-            || self.unused_bootstrap_exchanges > 0
     }
 }
 
@@ -656,7 +655,6 @@ impl HttpEventCounts {
         self.unmatched_requests > 0
             || self.unsupported_exchanges > 0
             || self.unused_case_exchanges > 0
-            || self.unused_bootstrap_exchanges > 0
     }
 }
 
@@ -673,11 +671,7 @@ impl CommandProtocolCounts {
     }
 
     fn is_dirty(&self) -> bool {
-        self.unmatched > 0
-            || self.unsupported > 0
-            || self.unsafe_events > 0
-            || self.unused_case > 0
-            || self.unused_bootstrap > 0
+        self.unmatched > 0 || self.unsupported > 0 || self.unsafe_events > 0 || self.unused_case > 0
     }
 }
 

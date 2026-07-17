@@ -35,8 +35,6 @@ struct RunCounts {
     successful: u64,
     failed: u64,
     interrupted: u64,
-    consecutive_successful: u32,
-    required_consecutive_successful: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,7 +59,6 @@ struct LatestRun {
     status: RunStatus,
     cases: LatestCaseCounts,
     apis: LatestApiCounts,
-    consecutive_successful: u32,
     highlights: Highlights,
 }
 
@@ -101,24 +98,11 @@ struct ApiHighlight {
 struct ProgressApi {
     cases: u32,
     status: String,
-    consecutive_successful: u32,
-    required_consecutive_successful: u32,
 }
 
 pub(super) fn update_index(index: &mut RunIndex, state: &ActiveRunState) {
     if index.latest_sequence == Some(state.sequence) {
         return;
-    }
-    let baseline_changed = (!index.source_revision.is_empty()
-        && index.source_revision != state.source_revision)
-        || (!index.case_inventory_id.is_empty()
-            && index.case_inventory_id != state.case_inventory_id);
-    if baseline_changed {
-        index.consecutive_successful = 0;
-        for api in index.apis.values_mut() {
-            api.consecutive_successful = 0;
-            api.status = "pending".to_string();
-        }
     }
     index.source_revision = state.source_revision.clone();
     index.case_inventory_id = state.case_inventory_id.clone();
@@ -128,15 +112,12 @@ pub(super) fn update_index(index: &mut RunIndex, state: &ActiveRunState) {
     match state.status {
         RunStatus::Successful => {
             index.successful += 1;
-            index.consecutive_successful += 1;
         }
         RunStatus::Failed => {
             index.failed += 1;
-            index.consecutive_successful = 0;
         }
         RunStatus::Interrupted => {
             index.interrupted += 1;
-            index.consecutive_successful = 0;
         }
         RunStatus::Running | RunStatus::Finalizing => {}
     }
@@ -171,18 +152,10 @@ pub(super) fn update_index(index: &mut RunIndex, state: &ActiveRunState) {
             .or_insert(ApiProgress {
                 cases: api.total,
                 status: "pending".to_string(),
-                consecutive_successful: 0,
-                required_consecutive_successful: index.required_consecutive_successful,
             });
         progress.cases = api.total;
-        progress.required_consecutive_successful = index.required_consecutive_successful;
-        if state.status != RunStatus::Interrupted && global_evidence_clean && api.successful {
-            progress.consecutive_successful += 1;
-        } else {
-            progress.consecutive_successful = 0;
-        }
         progress.status =
-            if progress.consecutive_successful >= progress.required_consecutive_successful {
+            if state.status != RunStatus::Interrupted && global_evidence_clean && api.successful {
                 "verified"
             } else if !api.successful {
                 "needs_attention"
@@ -210,8 +183,7 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
         .values()
         .filter(|api| api.status == "verified")
         .count() as u32;
-    let complete = verified == state.apis.len() as u32
-        && index.consecutive_successful >= index.required_consecutive_successful;
+    let complete = state.status == RunStatus::Successful && verified == state.apis.len() as u32;
     let status = if complete {
         "complete"
     } else if state.status == RunStatus::Successful {
@@ -236,8 +208,6 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
                 successful: index.successful,
                 failed: index.failed,
                 interrupted: index.interrupted,
-                consecutive_successful: index.consecutive_successful,
-                required_consecutive_successful: index.required_consecutive_successful,
             },
             cases: CaseCounts {
                 total: total_cases,
@@ -267,7 +237,6 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
                 failed: failed_apis,
                 incomplete: incomplete_apis,
             },
-            consecutive_successful: index.consecutive_successful,
             highlights: highlights(&state.apis),
         },
         apis: index
@@ -279,8 +248,6 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
                     ProgressApi {
                         cases: api.cases,
                         status: api.status.clone(),
-                        consecutive_successful: api.consecutive_successful,
-                        required_consecutive_successful: api.required_consecutive_successful,
                     },
                 )
             })
@@ -374,7 +341,6 @@ mod tests {
             source_revision: "source".to_string(),
             case_inventory_id: "inventory".to_string(),
             recording_rule: Some("record-api".to_string()),
-            required_consecutive_successful_runs: 3,
             replay_session: PathBuf::from("/session"),
             replay_report: PathBuf::from("/report"),
             aggregate_report: PathBuf::from("/aggregate"),
@@ -405,20 +371,16 @@ mod tests {
     }
 
     #[test]
-    fn partial_api_success_resets_its_run_streak() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"), 3);
-        let passed = state(30, 0, RunStatus::Successful);
-        update_index(&mut index, &passed);
-        let mut passed_again = passed.clone();
-        passed_again.sequence = 2;
-        update_index(&mut index, &passed_again);
-        assert_eq!(index.apis["GET /api/orders/*"].consecutive_successful, 2);
+    fn one_clean_successful_round_completes_progress() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let completed = state(30, 0, RunStatus::Successful);
 
-        let mut failed = state(29, 1, RunStatus::Failed);
-        failed.sequence = 3;
-        update_index(&mut index, &failed);
-        assert_eq!(index.consecutive_successful, 0);
-        assert_eq!(index.apis["GET /api/orders/*"].consecutive_successful, 0);
+        update_index(&mut index, &completed);
+        let progress = build_progress(&index, &completed);
+
+        assert_eq!(progress.status, "complete");
+        assert_eq!(index.apis["GET /api/orders/*"].status, "verified");
+        assert_eq!(index.successful, 1);
     }
 
     #[test]
@@ -447,34 +409,32 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_run_resets_api_and_global_streaks() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"), 3);
-        let first = state(30, 0, RunStatus::Successful);
-        update_index(&mut index, &first);
-        assert_eq!(index.consecutive_successful, 1);
-        assert_eq!(index.apis["GET /api/orders/*"].consecutive_successful, 1);
+    fn interrupted_run_requires_attention_without_verifying_api() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let interrupted = state(30, 0, RunStatus::Interrupted);
 
-        let mut interrupted = state(30, 0, RunStatus::Interrupted);
-        interrupted.sequence = 2;
         update_index(&mut index, &interrupted);
-        assert_eq!(index.consecutive_successful, 0);
-        assert_eq!(index.apis["GET /api/orders/*"].consecutive_successful, 0);
+        let progress = build_progress(&index, &interrupted);
+
+        assert_eq!(progress.status, "needs_attention");
+        assert_eq!(index.apis["GET /api/orders/*"].status, "pending");
+        assert_eq!(index.interrupted, 1);
     }
 
     #[test]
     fn publishing_same_sequence_is_idempotent() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"), 3);
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
         let completed = state(30, 0, RunStatus::Successful);
         update_index(&mut index, &completed);
         update_index(&mut index, &completed);
         assert_eq!(index.executions, 1);
         assert_eq!(index.replayed_cases, 30);
-        assert_eq!(index.consecutive_successful, 1);
+        assert_eq!(index.successful, 1);
     }
 
     #[test]
-    fn one_api_can_advance_when_another_has_only_assertion_failures() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"), 3);
+    fn clean_api_is_verified_while_failed_api_needs_attention() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
         let mut round = state(30, 0, RunStatus::Failed);
         round.apis.push(ApiExecution {
             api_key: "POST /api/payments".to_string(),
@@ -491,14 +451,15 @@ mod tests {
             report_dir: PathBuf::from("apis/api-0002"),
         });
         update_index(&mut index, &round);
-        assert_eq!(index.consecutive_successful, 0);
-        assert_eq!(index.apis["GET /api/orders/*"].consecutive_successful, 1);
-        assert_eq!(index.apis["POST /api/payments"].consecutive_successful, 0);
+        let progress = build_progress(&index, &round);
+        assert_eq!(progress.status, "needs_attention");
+        assert_eq!(index.apis["GET /api/orders/*"].status, "verified");
+        assert_eq!(index.apis["POST /api/payments"].status, "needs_attention");
     }
 
     #[test]
     fn human_progress_omits_protocol_evidence() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"), 3);
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
         let completed = state(30, 0, RunStatus::Successful);
         update_index(&mut index, &completed);
         let yaml = serde_yaml::to_string(&build_progress(&index, &completed)).unwrap();
@@ -508,5 +469,6 @@ mod tests {
         assert!(!yaml.contains("session"));
         assert!(!yaml.contains("protocol"));
         assert!(!yaml.contains("/cases"));
+        assert!(!yaml.contains("consecutive"));
     }
 }

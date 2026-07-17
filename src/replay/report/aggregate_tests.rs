@@ -106,6 +106,34 @@ fn marks_pending_and_unused_evidence_in_summary() {
 }
 
 #[test]
+fn retains_unused_bootstrap_as_diagnostic_without_marking_dirty() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v4(
+        &source.join("api"),
+        &[("case-a", "ended")],
+        "00000000-0000-4000-8000-000000000088",
+        true,
+    );
+    report["unused_bootstrap_exchanges"] = json!([{}]);
+    report["unused_bootstrap_http_exchanges"] = json!([{}]);
+    report["redis"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
+    report["memcached"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
+    report["kafka"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
+    write_report(&source, "api", report);
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(aggregate.is_complete());
+    assert!(!aggregate.is_dirty());
+    assert_eq!(aggregate.counts.events.mysql.unused_bootstrap_exchanges, 1);
+    assert_eq!(aggregate.counts.events.http.unused_bootstrap_exchanges, 1);
+    assert_eq!(aggregate.counts.events.redis.unused_bootstrap, 1);
+    assert_eq!(aggregate.counts.events.memcached.unused_bootstrap, 1);
+    assert_eq!(aggregate.counts.events.kafka.unused_bootstrap, 1);
+}
+
+#[test]
 fn marks_unused_applicable_replay_policy_rule_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
