@@ -6,11 +6,15 @@ not canonical replay evidence.
 
 ## Resolve The Documents
 
-Inspect `AGENTS.md` and reuse its linked migration-notes and migration-changelog
-paths. When no equivalent exists, use:
+Before the first implementation or replay attempt, inspect `AGENTS.md` and
+reuse its declared migration-notes and migration-changelog paths. When no
+equivalent exists, use:
 
 - `docs/migration-notes.md`
 - `docs/migration-changelog.md`
+
+Create any missing document at that point with only its title and a short
+purpose statement. Do not reconstruct deleted per-API, per-case, or run history.
 
 If `AGENTS.md` exists, keep its factual repository map linked to both documents
 and state that notes are read before migration or replay. Do not create
