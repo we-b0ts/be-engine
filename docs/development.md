@@ -56,6 +56,17 @@ case is created. After ready, only one matched case can be active at a time;
 overlapping matching requests are also sent to fallback so dependencies are not
 shared across cases.
 
+After an upstream HTTP response completes, Recorder keeps the case active until
+captured dependencies are idle for
+`recording.case_dependency_quiet_period_ms`. This captures synchronous
+server-side after-hooks that start dependency requests only after writing the
+response. The quiet timer restarts when dependency activity begins or ends, and
+in-flight MySQL queries retain their original case ownership through the
+semantic exchange. If the case does not become quiet within
+`recording.case_dependency_drain_timeout_ms`, Recorder fails the case instead
+of publishing incomplete dependency evidence. Matching requests continue to
+use the fallback upstream while the previous case drains.
+
 ### Rewriting HTTP Responses
 
 HTTP response rewriting is an opt-in recording feature for responses that

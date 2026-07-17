@@ -11,6 +11,8 @@ use crate::mysql::operation::MysqlWriteOperation;
 pub struct RecordingConfig {
     pub output_dir: PathBuf,
     pub max_body_bytes: usize,
+    pub case_dependency_quiet_period_ms: u64,
+    pub case_dependency_drain_timeout_ms: u64,
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
     pub access_rules: Vec<RecordingAccessRuleConfig>,
@@ -65,6 +67,14 @@ impl RecordingAccessPolicy {
 
 impl RecordingConfig {
     pub(super) fn validate(&self) -> Result<()> {
+        if self.case_dependency_quiet_period_ms == 0 {
+            bail!("recording.case_dependency_quiet_period_ms must be greater than zero");
+        }
+        if self.case_dependency_drain_timeout_ms < self.case_dependency_quiet_period_ms {
+            bail!(
+                "recording.case_dependency_drain_timeout_ms must be greater than or equal to case_dependency_quiet_period_ms"
+            );
+        }
         let mut names = HashSet::new();
         for rule in &self.access_rules {
             let name = rule.name();
@@ -140,6 +150,8 @@ impl Default for RecordingConfig {
         Self {
             output_dir: PathBuf::from("./recordings"),
             max_body_bytes: 1024 * 1024,
+            case_dependency_quiet_period_ms: 100,
+            case_dependency_drain_timeout_ms: 5_000,
             redact_headers: vec![
                 "authorization".to_string(),
                 "cookie".to_string(),
@@ -181,6 +193,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn validates_case_dependency_drain_timing() {
+        let mut config = AppConfig::default();
+        config.recording.case_dependency_quiet_period_ms = 0;
+        assert!(config.validate().is_err());
+
+        config.recording.case_dependency_quiet_period_ms = 100;
+        config.recording.case_dependency_drain_timeout_ms = 99;
+        assert!(config.validate().is_err());
+
+        config.recording.case_dependency_drain_timeout_ms = 100;
+        config.validate().unwrap();
     }
 
     #[test]

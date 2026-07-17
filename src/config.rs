@@ -371,6 +371,8 @@ mod tests {
         assert!(!config.mysql.enabled);
         assert!(!config.mysql.record_raw_packets);
         assert_eq!(config.recording.max_body_bytes, 1024 * 1024);
+        assert_eq!(config.recording.case_dependency_quiet_period_ms, 100);
+        assert_eq!(config.recording.case_dependency_drain_timeout_ms, 5_000);
         assert_eq!(
             config.recording.access_policy,
             RecordingAccessPolicy::Unrestricted
