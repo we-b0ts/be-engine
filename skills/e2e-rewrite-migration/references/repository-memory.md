@@ -21,8 +21,9 @@ and state that notes are read before migration or replay. Do not create
 Read the notes before the first implementation or replay attempt and again
 before retrying a familiar failure.
 
-After a recurring implementation or replay problem is fixed and the fix passes
-the applicable verification, upsert one concise lesson. Update an existing
+Upsert a lesson only after its fix passes verification and the lesson is useful
+across multiple APIs, cases, or migration scopes. Repetition within one API,
+case, run, or otherwise narrow scenario does not qualify. Update an existing
 lesson instead of appending a duplicate. Use:
 
 ```markdown
@@ -33,11 +34,9 @@ lesson instead of appending a duplicate. Use:
 - Resolved by: <verified diagnostic or fix>
 ```
 
-An entry is eligible only when the problem is recurring and
-repository-specific, the fix is complete, and the applicable verification
-passes. Otherwise, do not update the notes. Do not copy protocol traces, raw
-evidence, absolute machine paths, case or session ids, run counts, transient
-error logs, secrets, or detailed repair history.
+Keep the document short and repository-specific. Do not copy protocol traces,
+raw evidence, absolute machine paths, case or session ids, run counts,
+transient error logs, secrets, or detailed repair history.
 
 ## Migration Changelog
 

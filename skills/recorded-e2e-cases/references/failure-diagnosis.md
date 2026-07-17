@@ -19,9 +19,10 @@ evidence is complete and replay is known to be hit.
 ## Repository Migration Lesson
 
 Before retrying, search the migration notes linked from target `AGENTS.md` for
-the same symptom or root cause. During migration, after a recurring replay
-problem is fixed and the fix passes the applicable verification, upsert a
-concise lesson:
+the same symptom or root cause. During migration, upsert a concise lesson only
+after the fix passes verification and the lesson applies across multiple APIs,
+cases, or migration scopes. Repetition within one API, case, run, or otherwise
+narrow scenario does not qualify:
 
 ```markdown
 ## <stable problem title>

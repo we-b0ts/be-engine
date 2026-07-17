@@ -87,8 +87,9 @@ before implementation. Source tests may supplement but never replace recordings.
 6. Use `traffic-e2e-run run-api` for the selected API's migrate/fix loop. Fix
    product code only after replay evidence proves a real behavior defect.
    Focused attempts do not update streaks, global progress, or verified
-   excludes. After a recurring problem is fixed and verified, upsert the
-   concise repository migration lesson required by `repository-memory.md`.
+   excludes. After a fixed and verified problem meets the cross-scope reuse
+   rule, upsert the concise repository migration lesson required by
+   `repository-memory.md`.
 7. After the group first passes, perform structural convergence and migration
    semantics review, then rerun its focused group. After every published case is
    prepared and migrated, use `traffic-e2e-run run` for full regression rounds
@@ -112,7 +113,7 @@ Continue the implementation/replay loop while each cycle adds evidence or fixes
 a distinct evidenced defect. If the same root cause repeats for three
 consecutive cycles without progress, stop that group as `blocked` or
 `incomplete`. A final verification after the last behavior-affecting change is
-mandatory and is never counted as a retry. Apply the resolved recurring-problem
+mandatory and is never counted as a retry. Apply the resolved cross-scope
 migration-notes rule to implementation, build, startup, test, and replay
 failures.
 
@@ -126,9 +127,8 @@ MUST NOT claim a migration complete or delivered unless all items hold:
    Missing linkage is not a blocker; an unresolved conflicting or weakening
    instruction is `blocked_repository_contract`. The final factual repository
    map matches the implemented tree for the current scope. The migration-notes
-   document was read, eligible resolved recurring problems were upserted
-   without raw evidence, and the delivered increment has one concise changelog
-   entry.
+   document was read, eligible cross-scope lessons were upserted without raw
+   evidence, and the delivered increment has one concise changelog entry.
 2. The integration branch is resolved from user or repository evidence, the
    intended work is isolated on a focused feature branch, and unrelated changes
    are preserved.
@@ -168,7 +168,7 @@ MUST NOT claim a migration complete or delivered unless all items hold:
 - missing required schema, metrics, side effects, tests, convergence, or
   semantics evidence;
 - unresolved target-instruction conflict or stale current-scope `AGENTS.md` map;
-- an uncaptured resolved recurring migration problem or missing
+- an uncaptured eligible cross-scope migration lesson or missing
   delivered-increment changelog entry;
 - final behavior-affecting change not replayed and rechecked;
 - missing `.migration/local/` ignore rule, or any tracked or staged local

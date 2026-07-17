@@ -79,8 +79,8 @@ full-round progress, streaks, or verified excludes.
 Continue while each cycle provides new evidence or fixes a distinct evidenced
 defect. If the same root cause repeats for three consecutive cycles without new
 evidence or meaningful progress, stop the group as `blocked` or `incomplete`.
-After a recurring problem is fixed and verified, upsert the concise
-migration-notes lesson from `repository-memory.md`.
+After a fixed and verified problem meets the cross-scope reuse rule, upsert the
+concise migration-notes lesson from `repository-memory.md`.
 Always rerun the focused API after the last behavior, policy, assertion, wiring,
 or structural change; final verification is not a retry.
 

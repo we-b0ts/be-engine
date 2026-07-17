@@ -94,11 +94,13 @@ If the same root cause repeats for three consecutive cycles without new
 evidence or meaningful progress, stop as `blocked` or `incomplete`. The final
 verification is mandatory and never counted as a retry.
 
-During migration, after a recurring replay problem is fixed and the fix passes
-the applicable verification, upsert one concise repository migration lesson.
+During migration, upsert a concise repository lesson only after the fix passes
+verification and the lesson applies across multiple APIs, cases, or migration
+scopes. Repetition within one API, case, run, or otherwise narrow scenario does
+not qualify.
 Record only a recognizable trigger, the action not to repeat, and the verified
-resolution. Update an existing lesson instead of duplicating it. Leave
-raw replay evidence and generated state out of prose.
+resolution. Update an existing lesson instead of duplicating it. Leave raw
+replay evidence and generated state out of prose.
 
 ## Non-Negotiable Completion Gate
 

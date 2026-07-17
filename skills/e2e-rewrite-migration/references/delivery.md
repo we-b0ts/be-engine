@@ -45,8 +45,8 @@ push, or PR creation.
 2. verify `git ls-files .migration/local` and the staged diff contain no local
    migration artifact;
 3. commit only intended migration, stable `.migration/e2e.yaml` project
-   metadata changes, applicable resolved recurring-problem notes, and one
-   concise changelog entry for this delivered increment;
+   metadata changes, applicable verified cross-scope lessons, and one concise
+   changelog entry for this delivered increment;
 4. require no uncommitted intended-scope change after the commit;
 5. push the feature branch;
 6. open a PR to the resolved integration branch;
