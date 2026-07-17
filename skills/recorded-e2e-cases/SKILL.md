@@ -54,9 +54,10 @@ fakes, in-process mocks, or recording-backed target implementations.
    `.replay`, `.partial`, and `.truncated` artifacts. Require canonical request
    and expected-response files and preserve published recordings exactly.
 2. Inspect the target recorded-E2E entrypoint, normal startup, config, genuine
-   dependency wiring, and existing test convention. Require the case source as
-   an explicit input. Do not build one simultaneous implementation scope for a
-   whole collection.
+   dependency wiring, existing test convention, and migration notes linked from
+   `AGENTS.md`. Require the case source as an explicit input. Consult any
+   matching known lesson before the first replay or retry. Do not build one
+   simultaneous implementation scope for a whole collection.
 3. Create or reuse target `config/replay.yaml`, require
    `expected_response: assertions_only`, validate it, and pass it explicitly to
    every replay. Audit target code and wiring for forbidden expected-response,
@@ -92,6 +93,12 @@ fakes, in-process mocks, or recording-backed target implementations.
 If the same root cause repeats for three consecutive cycles without new
 evidence or meaningful progress, stop as `blocked` or `incomplete`. The final
 verification is mandatory and never counted as a retry.
+
+During migration, after a recurring replay problem is fixed and the fix passes
+the applicable verification, upsert one concise repository migration lesson.
+Record only a recognizable trigger, the action not to repeat, and the verified
+resolution. Update an existing lesson instead of duplicating it. Leave
+raw replay evidence and generated state out of prose.
 
 ## Non-Negotiable Completion Gate
 
@@ -134,6 +141,9 @@ items hold:
 9. Target scripts and AI-authored facades remain orchestration helpers. Their
    exit status, summaries, hand-maintained counts, or ledgers do not replace
    canonical grouping, replay, aggregate, pattern, or exclude artifacts.
+
+Repository migration notes are prevention memory only. Their presence or
+wording never substitutes for any completion artifact above.
 
 If any item is missing, report `incomplete` or `blocked` with the exact missing
 artifact or action. Never turn a planned diff, stale report, partial case list,

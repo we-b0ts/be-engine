@@ -50,6 +50,9 @@ It intentionally excludes protocol evidence, connections, policies, sessions,
 aggregates, root causes, and repair suggestions. AI reads local evidence when
 diagnosis is needed.
 
+Details for unresolved or unfixable problems remain in runner-generated reports
+and evidence under `.migration/local/`.
+
 The generated shape is:
 
 ```yaml

@@ -56,15 +56,18 @@ before implementation. Source tests may supplement but never replace recordings.
   grouping and again after the selected group first passes.
 - Read [e2e-run-state.md](references/e2e-run-state.md) for the current run index
   and per-run evidence state.
+- Read [repository-memory.md](references/repository-memory.md) before the first
+  implementation or replay attempt and again before delivery.
 - Read [logging.md](references/logging.md) only when runnable-service diagnostics
   are absent or changed by the current migration.
 
 ## Workflow
 
 1. Inspect target instructions and conventions, the supplied recordings, source
-   route registrations or job wiring, normal startup, and Git state. Before
-   generating migration state, require `.migration/local/` in the target root
-   `.gitignore` and verify it with `git check-ignore`.
+   route registrations or job wiring, normal startup, Git state, and declared
+   repository migration notes. Before generating migration state, require
+   `.migration/local/` in the target root `.gitignore` and verify it with
+   `git check-ignore`.
 2. Use `traffic-e2e-run prepare` through `recorded-e2e-cases` to select exactly
    one canonical API/function group. If no API is named, begin with one complete
    low-risk GET group. Resolve dynamic patterns before implementation.
@@ -84,7 +87,8 @@ before implementation. Source tests may supplement but never replace recordings.
 6. Use `traffic-e2e-run run-api` for the selected API's migrate/fix loop. Fix
    product code only after replay evidence proves a real behavior defect.
    Focused attempts do not update streaks, global progress, or verified
-   excludes.
+   excludes. After a recurring problem is fixed and verified, upsert the
+   concise repository migration lesson required by `repository-memory.md`.
 7. After the group first passes, perform structural convergence and migration
    semantics review, then rerun its focused group. After every published case is
    prepared and migrated, use `traffic-e2e-run run` for full regression rounds
@@ -92,10 +96,13 @@ before implementation. Source tests may supplement but never replace recordings.
    round returns to focused repair and must then restart from the beginning.
    Run normal-startup smoke and target-required quality checks from the final
    tree.
-8. Update only factual `AGENTS.md` map entries made inaccurate or materially
-   incomplete by the current change. Do not create the file or change repository
-   policy or completion gates without explicit user authorization.
-9. Commit only intended changes, push the feature branch, create a PR to the
+8. Maintain the concise repository migration notes and changelog defined by
+   `repository-memory.md`. Update only factual `AGENTS.md` map links made
+   inaccurate or materially incomplete by the current change. Do not create the
+   file or change repository policy or completion gates without explicit user
+   authorization.
+9. Commit only intended changes, including one concise changelog entry for the
+   delivered migration increment, push the feature branch, create a PR to the
    resolved integration branch, verify the remote state, and update the run
    index with canonical artifact paths and identifiers. Exclude all files under
    `.migration/local/` from staging and delivery. Do not skip incremental
@@ -105,7 +112,9 @@ Continue the implementation/replay loop while each cycle adds evidence or fixes
 a distinct evidenced defect. If the same root cause repeats for three
 consecutive cycles without progress, stop that group as `blocked` or
 `incomplete`. A final verification after the last behavior-affecting change is
-mandatory and is never counted as a retry.
+mandatory and is never counted as a retry. Apply the resolved recurring-problem
+migration-notes rule to implementation, build, startup, test, and replay
+failures.
 
 ## Non-Negotiable Completion Gate
 
@@ -116,7 +125,10 @@ MUST NOT claim a migration complete or delivered unless all items hold:
    skills, or `repository_contract_status: skill_managed` when they do not.
    Missing linkage is not a blocker; an unresolved conflicting or weakening
    instruction is `blocked_repository_contract`. The final factual repository
-   map matches the implemented tree for the current scope.
+   map matches the implemented tree for the current scope. The migration-notes
+   document was read, eligible resolved recurring problems were upserted
+   without raw evidence, and the delivered increment has one concise changelog
+   entry.
 2. The integration branch is resolved from user or repository evidence, the
    intended work is isolated on a focused feature branch, and unrelated changes
    are preserved.
@@ -156,6 +168,8 @@ MUST NOT claim a migration complete or delivered unless all items hold:
 - missing required schema, metrics, side effects, tests, convergence, or
   semantics evidence;
 - unresolved target-instruction conflict or stale current-scope `AGENTS.md` map;
+- an uncaptured resolved recurring migration problem or missing
+  delivered-increment changelog entry;
 - final behavior-affecting change not replayed and rechecked;
 - missing `.migration/local/` ignore rule, or any tracked or staged local
   migration artifact;

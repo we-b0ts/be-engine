@@ -23,6 +23,11 @@ Verify changed links against the final tree. Do not create `AGENTS.md`, change
 policy, or alter its completion-gate declaration without an explicit user
 request naming that policy change.
 
+When migration notes and a migration changelog exist or are created, keep their
+paths in this factual map. Mark the notes as required reading before migration
+or replay and the changelog as one concise entry per delivered increment. See
+[repository-memory.md](repository-memory.md) for content boundaries.
+
 ## Real Runtime And Replay Boundary
 
 Implement a normal startup path that uses the target's genuine dependency

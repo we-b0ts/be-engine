@@ -16,6 +16,26 @@ Classify failures in this order:
 Prefer dependency and environment explanations until the recorded dependency
 evidence is complete and replay is known to be hit.
 
+## Repository Migration Lesson
+
+Before retrying, search the migration notes linked from target `AGENTS.md` for
+the same symptom or root cause. During migration, after a recurring replay
+problem is fixed and the fix passes the applicable verification, upsert a
+concise lesson:
+
+```markdown
+## <stable problem title>
+
+- Trigger: <recognizable symptom or context>
+- Avoid: <ineffective action that must not be repeated>
+- Resolved by: <verified diagnostic or fix>
+```
+
+Update an existing lesson rather than adding a duplicate. Keep only durable,
+repository-specific prevention knowledge. Do not include protocol traces,
+absolute machine paths, case or session ids, run counts, secrets, raw logs, or
+generated replay state. The lesson does not prove success or completion.
+
 ## Incomplete Recording Signals
 
 Stop and report a missing-dependency list when any required behavior lacks

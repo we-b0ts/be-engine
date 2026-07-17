@@ -12,6 +12,8 @@ state. Treat the source implementation as behavior evidence, not text to copy.
 Read the target-language reference, such as [rust.md](rust.md), only for the
 selected language. Read [target-runtime.md](target-runtime.md) before changing
 startup, dependency wiring, configuration, commands, logging, or `AGENTS.md`.
+Read [repository-memory.md](repository-memory.md) and the resolved target
+migration notes before implementation or replay.
 
 ## 2. Prepare One Canonical Group
 
@@ -77,6 +79,8 @@ full-round progress, streaks, or verified excludes.
 Continue while each cycle provides new evidence or fixes a distinct evidenced
 defect. If the same root cause repeats for three consecutive cycles without new
 evidence or meaningful progress, stop the group as `blocked` or `incomplete`.
+After a recurring problem is fixed and verified, upsert the concise
+migration-notes lesson from `repository-memory.md`.
 Always rerun the focused API after the last behavior, policy, assertion, wiring,
 or structural change; final verification is not a retry.
 
@@ -111,9 +115,11 @@ focused API and then a new full round.
 ## 8. Deliver
 
 After producing useful focused changes and running the applicable target checks,
-follow [delivery.md](delivery.md) to create a focused commit, push the feature
-branch, and open and verify the PR to the resolved integration branch. Do this
-even when recorded E2E leaves the migration `incomplete` or `blocked`.
+append the single concise changelog entry required by
+[repository-memory.md](repository-memory.md), then follow
+[delivery.md](delivery.md) to create a focused commit, push the feature branch,
+and open and verify the PR to the resolved integration branch. Do this even
+when recorded E2E leaves the migration `incomplete` or `blocked`.
 
 An unavailable canonical artifact, unresolved semantics gap, or unverified
 final change still keeps the migration `incomplete` or `blocked`; the PR records
