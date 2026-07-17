@@ -45,6 +45,7 @@ pub use case_group::{
     ensure_case_group,
 };
 pub use config::{
+    AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
     CasePathPatternReport, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
     HttpGatewayRuleConfig, HttpResponseRewriteConfig, HttpResponseRewritePluginConfig,
@@ -54,7 +55,7 @@ pub use config::{
     UdpGatewayConfig, VerifiedApiExclude, VerifiedApiExcludeEnsureReport,
     VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback, VerifiedApiExcludePlan,
     VerifiedApiExcludeReport, VerifiedApiExcludesConfig, ensure_verified_api_exclude,
-    plan_case_path_pattern_feedback, plan_verified_api_exclude,
+    plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback, plan_verified_api_exclude,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
@@ -76,9 +77,9 @@ pub use recorder::{
 };
 pub use replay::{
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,
-    ReplayConfig, ReplayControlConfig, ReplayPolicyValidationReport, aggregate_replay_reports,
-    aggregate_replay_reports_with_options, run_mysql_replay, run_mysql_replay_control, run_replay,
-    run_replay_control, validate_replay_policy,
+    ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayPolicyValidationReport,
+    aggregate_replay_reports, aggregate_replay_reports_with_options, run_mysql_replay,
+    run_mysql_replay_control, run_replay, run_replay_control, validate_replay_policy,
 };
 pub use tls::MitmCa;
 

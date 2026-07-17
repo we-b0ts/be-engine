@@ -4,19 +4,17 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 use traffic_recorder_proxy::{
-    AppConfig, AppState, CaseGroupOptions, CasePathPatternAuthority, CasePathPatternFeedback,
-    CasePathPatternReport, ReplayAggregateOptions, ReplayConfig, ReplayControlConfig,
-    VerifiedApiExcludeEnsureReport, VerifiedApiExcludeFeedback, VerifiedApiExcludeReport,
-    aggregate_replay_reports_with_options, ensure_case_group, ensure_verified_api_exclude,
-    plan_case_path_pattern_feedback, plan_verified_api_exclude, run_replay, run_replay_control,
-    validate_replay_policy,
+    AppConfig, AppState, CaseGroupOptions, ReplayAggregateOptions, ReplayAllowedUnusedHttpConfig,
+    ReplayConfig, ReplayControlConfig, aggregate_replay_reports_with_options, ensure_case_group,
+    run_replay, run_replay_control, validate_replay_policy,
 };
 use uuid::Uuid;
 
 mod e2e_run;
+mod recorder_config;
 
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
@@ -41,7 +39,7 @@ enum Command {
     ReplayControl(ReplayControlArgs),
     ReplayAggregate(ReplayAggregateArgs),
     ReplayPolicy(ReplayPolicyArgs),
-    RecorderConfig(RecorderConfigArgs),
+    RecorderConfig(recorder_config::RecorderConfigArgs),
 }
 
 #[derive(Debug, Args)]
@@ -103,6 +101,10 @@ struct ReplayArgs {
     policy: Option<PathBuf>,
     #[arg(long = "http-ignore-query-param")]
     http_ignore_query_params: Vec<String>,
+    #[arg(long, requires = "recording_rule")]
+    recorder_config: Option<PathBuf>,
+    #[arg(long, requires = "recorder_config")]
+    recording_rule: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -171,104 +173,6 @@ enum ReplayControlCommand {
     Stop,
 }
 
-#[derive(Debug, Args)]
-struct RecorderConfigArgs {
-    #[command(subcommand)]
-    command: RecorderConfigCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum RecorderConfigCommand {
-    CasePathPatterns(CasePathPatternsArgs),
-    VerifiedExcludes(VerifiedExcludesArgs),
-}
-
-#[derive(Debug, Args)]
-struct CasePathPatternsArgs {
-    #[command(subcommand)]
-    command: CasePathPatternsCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum CasePathPatternsCommand {
-    Plan(PatternFeedbackArgs),
-    Apply(ApplyPatternFeedbackArgs),
-}
-
-#[derive(Debug, Args)]
-struct VerifiedExcludesArgs {
-    #[command(subcommand)]
-    command: VerifiedExcludesCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum VerifiedExcludesCommand {
-    Plan(VerifiedExcludeArgs),
-    Apply(VerifiedExcludeArgs),
-    Ensure(VerifiedExcludeArgs),
-}
-
-#[derive(Debug, Args)]
-struct VerifiedExcludeArgs {
-    #[arg(long)]
-    rule: String,
-    #[arg(long)]
-    method: String,
-    #[arg(long)]
-    pattern: String,
-    #[arg(long)]
-    aggregate_report: PathBuf,
-    #[arg(long)]
-    assertion_report: PathBuf,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
-    format: OutputFormat,
-}
-
-#[derive(Debug, Args)]
-struct PatternFeedbackArgs {
-    #[arg(long)]
-    rule: String,
-    #[arg(long)]
-    source_revision: String,
-    #[arg(long)]
-    case_source: String,
-    #[arg(long, value_enum, default_value_t = AuthorityArg::Focused)]
-    authority: AuthorityArg,
-    #[arg(long = "pattern")]
-    patterns: Vec<String>,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
-    format: OutputFormat,
-}
-
-#[derive(Debug, Args)]
-struct ApplyPatternFeedbackArgs {
-    #[command(flatten)]
-    feedback: PatternFeedbackArgs,
-    #[arg(long)]
-    allow_delete: bool,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum AuthorityArg {
-    Focused,
-    Authoritative,
-}
-
-impl From<AuthorityArg> for CasePathPatternAuthority {
-    fn from(authority: AuthorityArg) -> Self {
-        match authority {
-            AuthorityArg::Focused => Self::Focused,
-            AuthorityArg::Authoritative => Self::Authoritative,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum OutputFormat {
-    Human,
-    Json,
-}
-
 pub(crate) async fn run() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     tracing_subscriber::fmt()
@@ -283,7 +187,7 @@ pub(crate) async fn run() -> Result<()> {
         Some(Command::ReplayControl(args)) => run_replay_control_command(args).await,
         Some(Command::ReplayAggregate(args)) => run_replay_aggregate_command(args),
         Some(Command::ReplayPolicy(args)) => run_replay_policy_command(args),
-        Some(Command::RecorderConfig(args)) => run_recorder_config(cli.config, args),
+        Some(Command::RecorderConfig(args)) => recorder_config::run(cli.config, args),
         None => run_recorder(cli.config).await,
     }
 }
@@ -351,6 +255,7 @@ fn run_replay_aggregate_command(args: ReplayAggregateArgs) -> Result<()> {
 }
 
 async fn run_replay_command(args: ReplayArgs) -> Result<()> {
+    let allowed_unused_http = load_allowed_unused_http(args.recorder_config, args.recording_rule)?;
     run_replay(ReplayConfig {
         case_dir: args.case,
         selected_case_ids: args.case_ids,
@@ -364,162 +269,47 @@ async fn run_replay_command(args: ReplayArgs) -> Result<()> {
         ca_key_path: args.ca_key,
         policy_path: args.policy,
         http_ignore_query_params: args.http_ignore_query_params,
+        allowed_unused_http,
     })
     .await
+}
+
+fn load_allowed_unused_http(
+    recorder_config: Option<PathBuf>,
+    recording_rule: Option<String>,
+) -> Result<Option<ReplayAllowedUnusedHttpConfig>> {
+    let (Some(config_path), Some(recording_rule)) = (recorder_config, recording_rule) else {
+        return Ok(None);
+    };
+    let config_path = config_path.canonicalize()?;
+    let config = AppConfig::load(&config_path)?;
+    let matches = config
+        .http_gateway
+        .rules
+        .iter()
+        .filter(|rule| rule.name.as_deref() == Some(recording_rule.as_str()))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        matches.len() == 1,
+        "expected exactly one [[http_gateway.rules]] entry named {:?}, found {}",
+        recording_rule,
+        matches.len()
+    );
+    Ok(Some(ReplayAllowedUnusedHttpConfig {
+        config_path,
+        recording_rule,
+        hosts: matches[0]
+            .allowed_unused_http_hosts
+            .iter()
+            .cloned()
+            .collect(),
+    }))
 }
 
 async fn run_replay_control_command(args: ReplayControlArgs) -> Result<()> {
     let response = run_replay_control(replay_control_config(args)?).await?;
     serde_json::to_writer_pretty(io::stdout(), &response)?;
     println!();
-    Ok(())
-}
-
-fn run_recorder_config(config: PathBuf, args: RecorderConfigArgs) -> Result<()> {
-    match args.command {
-        RecorderConfigCommand::CasePathPatterns(args) => match args.command {
-            CasePathPatternsCommand::Plan(args) => {
-                let format = args.format;
-                let plan = plan_case_path_pattern_feedback(feedback(config, args))?;
-                print_pattern_report(plan.report(), format)
-            }
-            CasePathPatternsCommand::Apply(args) => {
-                let format = args.feedback.format;
-                let plan = plan_case_path_pattern_feedback(feedback(config, args.feedback))?;
-                let report = plan.apply(args.allow_delete)?;
-                print_pattern_report(&report, format)
-            }
-        },
-        RecorderConfigCommand::VerifiedExcludes(args) => match args.command {
-            VerifiedExcludesCommand::Plan(args) => {
-                let format = args.format;
-                let plan = plan_verified_api_exclude(verified_exclude_feedback(config, args))?;
-                print_verified_exclude_report(plan.report(), format)
-            }
-            VerifiedExcludesCommand::Apply(args) => {
-                let format = args.format;
-                let plan = plan_verified_api_exclude(verified_exclude_feedback(config, args))?;
-                let report = plan.apply()?;
-                print_verified_exclude_report(&report, format)
-            }
-            VerifiedExcludesCommand::Ensure(args) => {
-                let format = args.format;
-                let report = ensure_verified_api_exclude(verified_exclude_feedback(config, args))?;
-                print_verified_exclude_ensure_report(&report, format)
-            }
-        },
-    }
-}
-
-fn verified_exclude_feedback(
-    config_path: PathBuf,
-    args: VerifiedExcludeArgs,
-) -> VerifiedApiExcludeFeedback {
-    VerifiedApiExcludeFeedback {
-        config_path,
-        rule_name: args.rule,
-        method: args.method,
-        path_pattern: args.pattern,
-        aggregate_report: args.aggregate_report,
-        assertion_report: args.assertion_report,
-    }
-}
-
-fn feedback(config_path: PathBuf, args: PatternFeedbackArgs) -> CasePathPatternFeedback {
-    CasePathPatternFeedback {
-        config_path,
-        rule_name: args.rule,
-        source_revision: args.source_revision,
-        case_source: args.case_source,
-        authority: args.authority.into(),
-        patterns: args.patterns,
-    }
-}
-
-fn print_pattern_report(report: &CasePathPatternReport, format: OutputFormat) -> Result<()> {
-    match format {
-        OutputFormat::Json => {
-            serde_json::to_writer_pretty(io::stdout(), report)?;
-            println!();
-        }
-        OutputFormat::Human => {
-            println!("config: {}", report.config.display());
-            println!("rule: {}", report.rule);
-            println!("authority: {}", report.authority);
-            println!("no_candidates: {}", report.no_candidates);
-            println!("changed: {}", report.changed);
-            println!("applied: {}", report.applied);
-            println!("added: {}", report.added.len());
-            println!("removed: {}", report.removed.len());
-            if !report.diff.is_empty() {
-                print!("{}", report.diff);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn print_verified_exclude_report(
-    report: &VerifiedApiExcludeReport,
-    format: OutputFormat,
-) -> Result<()> {
-    match format {
-        OutputFormat::Json => {
-            serde_json::to_writer_pretty(io::stdout(), report)?;
-            println!();
-        }
-        OutputFormat::Human => {
-            println!("config: {}", report.config.display());
-            println!("api: {} {}", report.method, report.path_pattern);
-            println!("rule: {}", report.rule);
-            println!("threshold: {}", report.threshold);
-            println!(
-                "consecutive_successes: {}",
-                report.consecutive_success_case_ids.len()
-            );
-            println!("eligible: {}", report.eligible);
-            println!("changed: {}", report.changed);
-            println!("applied: {}", report.applied);
-            if !report.blockers.is_empty() {
-                println!("blockers: {}", report.blockers.join(", "));
-            }
-            if !report.diff.is_empty() {
-                print!("{}", report.diff);
-            }
-        }
-    }
-    Ok(())
-}
-
-fn print_verified_exclude_ensure_report(
-    report: &VerifiedApiExcludeEnsureReport,
-    format: OutputFormat,
-) -> Result<()> {
-    match format {
-        OutputFormat::Json => {
-            serde_json::to_writer_pretty(io::stdout(), report)?;
-            println!();
-        }
-        OutputFormat::Human => {
-            println!("status: {}", report.status);
-            println!("config: {}", report.plan.config.display());
-            println!("api: {} {}", report.plan.method, report.plan.path_pattern);
-            println!("rule: {}", report.plan.rule);
-            println!("threshold: {}", report.plan.threshold);
-            println!(
-                "consecutive_successes: {}",
-                report.plan.consecutive_success_case_ids.len()
-            );
-            println!("initial_changed: {}", report.plan.changed);
-            println!("apply_performed: {}", report.apply.is_some());
-            if let Some(verification) = &report.verification {
-                println!("verification_changed: {}", verification.changed);
-            }
-            if !report.plan.diff.is_empty() {
-                print!("{}", report.plan.diff);
-            }
-        }
-    }
     Ok(())
 }
 

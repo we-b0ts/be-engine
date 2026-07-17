@@ -414,11 +414,21 @@ impl ReplayState {
     pub(super) fn unused_http_exchanges(
         &self,
         source: ReplaySource,
+        allowed: bool,
     ) -> Vec<RecordedHttpExchangeSummary> {
         self.http_exchanges
             .iter()
             .enumerate()
-            .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
+            .filter(|(_, exchange)| {
+                if exchange.source != source || exchange.consumed {
+                    return false;
+                }
+                let is_allowed = source == ReplaySource::Case
+                    && self.allowed_unused_http.as_ref().is_some_and(|config| {
+                        config.hosts.contains(&exchange.identity.target.host)
+                    });
+                is_allowed == allowed
+            })
             .map(|(index, exchange)| RecordedHttpExchangeSummary {
                 index,
                 case_id: exchange.case_id.clone(),

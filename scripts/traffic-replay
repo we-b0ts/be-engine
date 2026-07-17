@@ -42,6 +42,8 @@ Options:
   --fake-cidr CIDR         Fake IP CIDR. Default: 198.18.0.0/15.
   --upstream-dns ADDR      DNS upstream excluded from capture. Default: 10.10.10.10:53.
   --policy PATH            Source-controlled replay dynamic-value policy YAML.
+  --recorder-config PATH   Recorder config containing allowed unused HTTP hosts.
+  --recording-rule NAME    Named HTTP gateway rule; requires --recorder-config.
   --print-intercept-user   Print the recorder-owned fixed interception user and exit.
   --proxy-bin PATH         Explicit traffic-recorder-proxy binary override.
 
@@ -82,6 +84,9 @@ PROXY_BIN_OVERRIDE=""
 POLICY_PATH=""
 POLICY_BASE="$CALLER_CWD"
 POLICY_SET=0
+RECORDER_CONFIG_PATH=""
+RECORDER_CONFIG_BASE="$CALLER_CWD"
+RECORDING_RULE=""
 APP_ARGS=()
 
 need_value() {
@@ -169,6 +174,17 @@ while [ "$#" -gt 0 ]; do
       POLICY_PATH="$2"
       POLICY_BASE="$CALLER_CWD"
       POLICY_SET=1
+      shift 2
+      ;;
+    --recorder-config)
+      need_value "$1" "${2:-}"
+      RECORDER_CONFIG_PATH="$2"
+      RECORDER_CONFIG_BASE="$CALLER_CWD"
+      shift 2
+      ;;
+    --recording-rule)
+      need_value "$1" "${2:-}"
+      RECORDING_RULE="$2"
       shift 2
       ;;
     --owner-uid|--uid-owner|--user|--all-users)
@@ -337,6 +353,18 @@ if [ -n "$POLICY_PATH" ]; then
     exit 1
   fi
 fi
+if [ -n "$RECORDER_CONFIG_PATH" ]; then
+  RECORDER_CONFIG_PATH="$(resolve_path "$RECORDER_CONFIG_PATH" "$RECORDER_CONFIG_BASE")"
+  if [ ! -f "$RECORDER_CONFIG_PATH" ]; then
+    echo "recorder config not found: $RECORDER_CONFIG_PATH" >&2
+    exit 1
+  fi
+fi
+if { [ -n "$RECORDER_CONFIG_PATH" ] && [ -z "$RECORDING_RULE" ]; } ||
+  { [ -z "$RECORDER_CONFIG_PATH" ] && [ -n "$RECORDING_RULE" ]; }; then
+  echo "--recorder-config and --recording-rule must be provided together" >&2
+  exit 2
+fi
 
 if [ -z "$REPORT_PATH" ]; then
   mkdir -p "$CASE_DIR/.replay/sessions"
@@ -469,6 +497,9 @@ fi
 args=(replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LISTEN" --fake-cidr "$FAKE_CIDR" --report "$REPORT_PATH" --session "$SESSION_PATH" --control-socket "$CONTROL_SOCKET_PATH")
 if [ -n "$POLICY_PATH" ]; then
   args+=(--policy "$POLICY_PATH")
+fi
+if [ -n "$RECORDER_CONFIG_PATH" ]; then
+  args+=(--recorder-config "$RECORDER_CONFIG_PATH" --recording-rule "$RECORDING_RULE")
 fi
 for case_id in "${CASE_IDS[@]}"; do
   args+=(--case-id "$case_id")

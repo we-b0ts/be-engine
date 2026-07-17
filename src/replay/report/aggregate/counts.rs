@@ -51,6 +51,11 @@ pub(super) fn read(report: &Value, version: u64, path: &Path) -> Result<ReplayEv
             unmatched_requests: required_len(report, "unmatched_http_requests", path)?,
             unsupported_exchanges: required_len(report, "unsupported_http_exchanges", path)?,
             unused_case_exchanges: required_len(report, "unused_case_http_exchanges", path)?,
+            allowed_unused_case_exchanges: optional_len(
+                report,
+                "allowed_unused_case_http_exchanges",
+                path,
+            )?,
             unused_bootstrap_exchanges: required_len(
                 report,
                 "unused_bootstrap_http_exchanges",

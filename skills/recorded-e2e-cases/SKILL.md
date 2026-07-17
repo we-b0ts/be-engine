@@ -80,9 +80,14 @@ fakes, in-process mocks, or recording-backed target implementations.
 7. Compare JSON responses structurally; use exact bytes only for non-JSON or an
    explicit exact-byte mode. Treat recorder reports and summaries as dependency
    coverage evidence. Unmatched, case-owned unused, unsupported, unsafe, or
-   missing required side effects keep the group incomplete. Unused bootstrap
-   traffic is retained as a non-blocking startup diagnostic because traffic
-   observed before readiness is outside the selected E2E contract.
+   missing required side effects keep the group incomplete. A source-verified
+   API-independent process-level HTTP host may be added through recorder-config
+   plan/apply during focused diagnosis; its unconsumed recorded exchanges remain
+   explicit non-blocking diagnostics, while unmatched target calls remain
+   dirty. The host applies to every case in the named recording rule and is not
+   attributed to active APIs. Unused bootstrap traffic is retained as a
+   non-blocking startup diagnostic because traffic observed before readiness is
+   outside the selected E2E contract.
 8. After every published case is grouped and every migrated API passes its
    focused loop, call `traffic-e2e-run run` for one full round. The runner MUST
    start replay once, load bootstrap and the exact full case set once, execute

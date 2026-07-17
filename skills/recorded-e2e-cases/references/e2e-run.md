@@ -39,6 +39,10 @@ Existing configuration is preserved unless `--force` is explicit.
 Every other runner command validates that the generated config exists, has all
 required fields, and still names an existing integration branch before reading
 or changing migration state.
+When `recorder_config` and `recording_rule` are configured, every focused and
+full replay automatically passes both to replay. Replay loads the named rule's
+`allowed_unused_http_hosts` once at startup; AI does not reimplement runtime
+filtering.
 
 ## Prepare An API
 
@@ -85,6 +89,33 @@ Focused attempts are diagnostic migration work. They MUST NOT:
 Fix an evidenced defect and rerun the same API. Preparing and migrating another
 API does not make an earlier focused pass current after shared behavior changes;
 the final full round is the regression gate.
+
+When the only remaining dirty evidence is a recorded HTTP exchange that the
+target did not emit, inspect source before changing configuration. If the
+entire dependency host is owned by an API-independent process-level task and
+the focused API's response assertions and all other dependency evidence pass,
+run:
+
+```bash
+traffic-recorder-config allowed-unused-http-hosts plan \
+  --config <recorder-config> \
+  --rule <recording-rule> \
+  --host <dependency-host> \
+  --format json
+
+traffic-recorder-config allowed-unused-http-hosts apply \
+  --config <recorder-config> \
+  --rule <recording-rule> \
+  --host <dependency-host> \
+  --format json
+```
+
+The host applies to every case in the named recording rule; do not attribute it
+to, enumerate, or merge active APIs. The AI supplies the source-verified host,
+while plan/apply owns add-only config mutation. Restart the affected focused
+run because replay reads the rule once at startup. Do not apply new recorder
+feedback during a full round; return to focused diagnosis and restart the full
+round afterward.
 
 ## Full Round
 

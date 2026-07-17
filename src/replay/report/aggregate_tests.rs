@@ -134,6 +134,31 @@ fn retains_unused_bootstrap_as_diagnostic_without_marking_dirty() {
 }
 
 #[test]
+fn retains_allowed_unused_case_http_as_diagnostic_without_marking_dirty() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v4(
+        &source.join("api"),
+        &[("case-a", "ended")],
+        "00000000-0000-4000-8000-000000000089",
+        true,
+    );
+    report["allowed_unused_case_http_exchanges"] = json!([{
+        "target": {"host": "cs.aliyuncs.com", "port": 443}
+    }]);
+    write_report(&source, "api", report);
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(aggregate.is_complete());
+    assert!(!aggregate.is_dirty());
+    assert_eq!(
+        aggregate.counts.events.http.allowed_unused_case_exchanges,
+        1
+    );
+}
+
+#[test]
 fn marks_unused_applicable_replay_policy_rule_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");

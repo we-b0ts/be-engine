@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -55,6 +56,7 @@ pub(super) fn spawn_replay(
         .arg(allocate_control_socket())
         .arg("--policy")
         .arg(&config.replay_policy);
+    command.args(recorder_config_args(config));
     for case_id in inventory
         .groups
         .iter()
@@ -75,6 +77,21 @@ pub(super) fn spawn_replay(
     command
         .spawn()
         .with_context(|| format!("failed to start {}", replay_command.display()))
+}
+
+fn recorder_config_args(config: &ResolvedProjectConfig) -> Vec<OsString> {
+    let (Some(recorder_config), Some(recording_rule)) = (
+        config.recorder_config.as_ref(),
+        config.recording_rule.as_ref(),
+    ) else {
+        return Vec::new();
+    };
+    vec![
+        OsString::from("--recorder-config"),
+        recorder_config.as_os_str().to_owned(),
+        OsString::from("--recording-rule"),
+        OsString::from(recording_rule),
+    ]
 }
 
 pub(super) async fn run_project(
@@ -220,4 +237,29 @@ pub(super) async fn best_effort_stop(
         wait_for_pid_exit(pid).await;
     }
     state.replay_pid = None;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn standard_runner_passes_recorder_config_and_rule_to_replay() {
+        let config = ResolvedProjectConfig {
+            project_cli: PathBuf::from("/target/scripts/project"),
+            replay_policy: PathBuf::from("/target/config/replay.yaml"),
+            recorder_config: Some(PathBuf::from("/target/config/recorder.toml")),
+            recording_rule: Some("pluto".to_string()),
+        };
+
+        assert_eq!(
+            recorder_config_args(&config),
+            vec![
+                OsString::from("--recorder-config"),
+                OsString::from("/target/config/recorder.toml"),
+                OsString::from("--recording-rule"),
+                OsString::from("pluto"),
+            ]
+        );
+    }
 }

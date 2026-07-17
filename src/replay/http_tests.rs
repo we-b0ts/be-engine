@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use hyper::client::conn::http1;
@@ -8,7 +9,7 @@ use tokio::net::TcpListener;
 use tokio_rustls::TlsConnector;
 
 use super::*;
-use crate::replay::{MysqlReplayConfig, ReplayRuntime};
+use crate::replay::{MysqlReplayConfig, ReplayAllowedUnusedHttpConfig, ReplayRuntime};
 
 #[test]
 fn ignored_query_values_are_still_required_on_both_requests() {
@@ -101,7 +102,11 @@ async fn replays_http_exchange_with_stable_query_matching() {
     let state = runtime.state.lock().await;
     assert_eq!(state.http_events.matched.len(), 1);
     assert!(state.http_events.unmatched.is_empty());
-    assert!(state.unused_http_exchanges(ReplaySource::Case).is_empty());
+    assert!(
+        state
+            .unused_http_exchanges(ReplaySource::Case, false)
+            .is_empty()
+    );
     task.abort();
 }
 
@@ -164,7 +169,7 @@ rules:
         "/?Action=DescribeInstances&SignatureNonce=22222222222242228222222222222222&Timestamp={timestamp}&Signature=new"
     );
     let (addr, runtime, task) =
-        spawn_http_replay_with_policy(&case_dir, Vec::new(), Some(policy_path)).await;
+        spawn_http_replay_with_policy(&case_dir, Vec::new(), Some(policy_path), None).await;
 
     let stream = TcpStream::connect(addr).await.unwrap();
     let response = send_request(
@@ -270,10 +275,16 @@ async fn searches_past_same_target_bootstrap_exchange_for_active_case_match() {
     assert_eq!(state.http_events.matched[0].source, ReplaySource::Case);
     assert!(state.http_events.unmatched.is_empty());
     assert_eq!(
-        state.unused_http_exchanges(ReplaySource::Bootstrap).len(),
+        state
+            .unused_http_exchanges(ReplaySource::Bootstrap, false)
+            .len(),
         1
     );
-    assert!(state.unused_http_exchanges(ReplaySource::Case).is_empty());
+    assert!(
+        state
+            .unused_http_exchanges(ReplaySource::Case, false)
+            .is_empty()
+    );
     assert!(!super::super::report_is_dirty(&state.snapshot_report()));
     task.abort();
 }
@@ -305,6 +316,55 @@ async fn unmatched_http_request_is_dirty_and_does_not_consume_exchange() {
     task.abort();
 }
 
+#[tokio::test]
+async fn allowed_unused_http_host_is_diagnostic_but_unmatched_requests_stay_dirty() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-allowed-unused");
+    write_http_case(
+        &case_dir,
+        "fake_ip_http",
+        "background.example.test",
+        "/periodic/one",
+        "",
+        "ok",
+    )
+    .await;
+    let allowed = ReplayAllowedUnusedHttpConfig {
+        config_path: temp.path().join("recorder.toml"),
+        recording_rule: "record-api".to_string(),
+        hosts: BTreeSet::from(["background.example.test".to_string()]),
+    };
+    let (addr, runtime, task) =
+        spawn_http_replay_with_policy(&case_dir, Vec::new(), None, Some(allowed)).await;
+
+    {
+        let state = runtime.state.lock().await;
+        let report = state.snapshot_report();
+        assert!(report.unused_case_http_exchanges.is_empty());
+        assert_eq!(report.allowed_unused_case_http_exchanges.len(), 1);
+        assert!(!super::super::report_is_dirty(&report));
+        let config = report.allowed_unused_http.unwrap();
+        assert_eq!(config.recording_rule, "record-api");
+        assert_eq!(config.hosts, vec!["background.example.test"]);
+    }
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(
+        TokioIo::new(stream),
+        "background.example.test",
+        "/periodic/two",
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+    let state = runtime.state.lock().await;
+    let report = state.snapshot_report();
+    assert_eq!(report.unmatched_http_requests.len(), 1);
+    assert!(super::super::report_is_dirty(&report));
+    task.abort();
+}
+
 async fn spawn_http_replay(
     case_dir: &Path,
     ignored_query_params: Vec<String>,
@@ -313,13 +373,14 @@ async fn spawn_http_replay(
     Arc<ReplayRuntime>,
     tokio::task::JoinHandle<()>,
 ) {
-    spawn_http_replay_with_policy(case_dir, ignored_query_params, None).await
+    spawn_http_replay_with_policy(case_dir, ignored_query_params, None, None).await
 }
 
 async fn spawn_http_replay_with_policy(
     case_dir: &Path,
     ignored_query_params: Vec<String>,
     policy_path: Option<PathBuf>,
+    allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
 ) -> (
     std::net::SocketAddr,
     Arc<ReplayRuntime>,
@@ -342,6 +403,7 @@ async fn spawn_http_replay_with_policy(
                 ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
                 policy_path,
                 http_ignore_query_params: ignored_query_params,
+                allowed_unused_http,
             },
             "127.0.0.1:0".parse().unwrap(),
             addr,

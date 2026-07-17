@@ -1,18 +1,19 @@
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 use std::fs;
-use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 
+use super::HttpGatewayRuleConfig;
 use super::edit::write_atomic;
-use super::{AppConfig, HttpGatewayRuleConfig};
+use super::rule_document::{
+    assignment_count, find_managed_block, find_rule, managed_block_diff, newline,
+    parse_and_validate, rule_range,
+};
 
 const BEGIN_MARKER: &str = "# BEGIN AI-MANAGED CASE PATH PATTERNS";
 const END_MARKER: &str = "# END AI-MANAGED CASE PATH PATTERNS";
-const RULE_HEADER: &str = "[[http_gateway.rules]]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -132,8 +133,19 @@ pub fn plan_case_path_pattern_feedback(
     })?;
     let config = parse_and_validate(&original, &feedback.config_path)?;
     let (rule_index, rule) = find_rule(&config, &feedback.rule_name)?;
-    let block = find_managed_block(&original, rule_index, config.http_gateway.rules.len())?;
-    ensure_block_owns_patterns(&original[block.clone()])?;
+    let rule_range = rule_range(&original, rule_index, config.http_gateway.rules.len())?;
+    let block = find_managed_block(
+        &original,
+        &rule_range,
+        BEGIN_MARKER,
+        END_MARKER,
+        "case_path_patterns",
+    )?
+    .context("selected rule must contain an explicit AI-managed case_path_patterns block")?;
+    ensure!(
+        assignment_count(&original[block.clone()], "case_path_patterns") == 1,
+        "AI-managed block must contain exactly one case_path_patterns assignment"
+    );
 
     let requested = feedback
         .patterns
@@ -173,11 +185,7 @@ pub fn plan_case_path_pattern_feedback(
         CasePathPatternAuthority::Authoritative => requested,
     };
 
-    let newline = if original.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
+    let newline = newline(&original);
     let old_block = &original[block.clone()];
     let new_block = render_managed_block(
         &after,
@@ -247,31 +255,6 @@ fn validate_single_line(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn parse_and_validate(raw: &str, path: &Path) -> Result<AppConfig> {
-    let config = toml::from_str::<AppConfig>(raw)
-        .with_context(|| format!("failed to parse recorder config {}", path.display()))?;
-    config
-        .validate()
-        .with_context(|| format!("invalid recorder config {}", path.display()))?;
-    Ok(config)
-}
-
-fn find_rule<'a>(config: &'a AppConfig, name: &str) -> Result<(usize, &'a HttpGatewayRuleConfig)> {
-    let matches = config
-        .http_gateway
-        .rules
-        .iter()
-        .enumerate()
-        .filter(|(_, rule)| rule.name.as_deref() == Some(name))
-        .collect::<Vec<_>>();
-    ensure!(
-        matches.len() == 1,
-        "expected exactly one [[http_gateway.rules]] entry named {name:?}, found {}",
-        matches.len()
-    );
-    Ok(matches[0])
-}
-
 fn validate_feedback_pattern(pattern: &str, rule: &HttpGatewayRuleConfig) -> Result<String> {
     ensure!(
         pattern.starts_with('/'),
@@ -322,105 +305,6 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
     path == normalized || path.starts_with(&format!("{normalized}/"))
 }
 
-fn find_managed_block(raw: &str, rule_index: usize, rule_count: usize) -> Result<Range<usize>> {
-    let rule_ranges = http_rule_ranges(raw);
-    ensure!(
-        rule_ranges.len() == rule_count,
-        "could not associate parsed HTTP gateway rules with their source ranges"
-    );
-    let rule_range = &rule_ranges[rule_index];
-    let blocks = managed_blocks(raw)?;
-    let matches = blocks
-        .into_iter()
-        .filter(|block| block.start >= rule_range.start && block.end <= rule_range.end)
-        .collect::<Vec<_>>();
-    ensure!(
-        matches.len() == 1,
-        "selected rule must contain exactly one explicit AI-managed case_path_patterns block, found {}",
-        matches.len()
-    );
-    Ok(matches[0].clone())
-}
-
-fn http_rule_ranges(raw: &str) -> Vec<Range<usize>> {
-    let lines = source_lines(raw);
-    let mut ranges = Vec::new();
-    for (line_index, line) in lines.iter().enumerate() {
-        if raw[line.clone()].trim() != RULE_HEADER {
-            continue;
-        }
-        let end = lines
-            .iter()
-            .skip(line_index + 1)
-            .find(|candidate| raw[(*candidate).clone()].trim().starts_with('['))
-            .map_or(raw.len(), |candidate| candidate.start);
-        ranges.push(line.start..end);
-    }
-    ranges
-}
-
-fn managed_blocks(raw: &str) -> Result<Vec<Range<usize>>> {
-    let mut open = None;
-    let mut blocks = Vec::new();
-    for line in source_lines(raw) {
-        match raw[line.clone()].trim() {
-            BEGIN_MARKER => {
-                ensure!(
-                    open.is_none(),
-                    "nested AI-managed pattern blocks are invalid"
-                );
-                open = Some(line.start);
-            }
-            END_MARKER => {
-                let start = open
-                    .take()
-                    .context("AI-managed pattern end marker has no begin marker")?;
-                blocks.push(start..line.end);
-            }
-            _ => {}
-        }
-    }
-    ensure!(
-        open.is_none(),
-        "AI-managed pattern block is missing its end marker"
-    );
-    Ok(blocks)
-}
-
-fn source_lines(raw: &str) -> Vec<Range<usize>> {
-    let mut start = 0;
-    let mut lines = Vec::new();
-    for segment in raw.split_inclusive('\n') {
-        let end = start + segment.len();
-        lines.push(start..end);
-        start = end;
-    }
-    if raw.is_empty() {
-        Vec::new()
-    } else if start < raw.len() {
-        lines.push(start..raw.len());
-        lines
-    } else {
-        lines
-    }
-}
-
-fn ensure_block_owns_patterns(block: &str) -> Result<()> {
-    let assignments = block
-        .lines()
-        .filter(|line| {
-            line.trim()
-                .strip_prefix("case_path_patterns")
-                .is_some_and(|rest| rest.trim_start().starts_with('='))
-        })
-        .count();
-    ensure!(
-        assignments == 1,
-        "AI-managed block must contain exactly one case_path_patterns assignment"
-    );
-    Ok(())
-}
-
 fn render_managed_block(
     patterns: &BTreeSet<String>,
     source_revision: &str,
@@ -451,29 +335,6 @@ fn render_managed_block(
 fn writeln_with(output: &mut String, line: &str, newline: &str) {
     output.push_str(line);
     output.push_str(newline);
-}
-
-fn managed_block_diff(
-    path: &Path,
-    original: &str,
-    block_start: usize,
-    old_block: &str,
-    new_block: &str,
-) -> String {
-    let start_line = original[..block_start].lines().count() + 1;
-    let old_count = old_block.lines().count();
-    let new_count = new_block.lines().count();
-    let mut diff = format!(
-        "--- {0}\n+++ {0}\n@@ -{start_line},{old_count} +{start_line},{new_count} @@\n",
-        path.display()
-    );
-    for line in old_block.lines() {
-        let _ = writeln!(diff, "-{line}");
-    }
-    for line in new_block.lines() {
-        let _ = writeln!(diff, "+{line}");
-    }
-    diff
 }
 
 #[cfg(test)]

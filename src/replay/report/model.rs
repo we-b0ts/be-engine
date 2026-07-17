@@ -37,12 +37,16 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) unsupported_http_exchanges: Vec<http::HttpRequestReport>,
     pub(in crate::replay) unused_bootstrap_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
     pub(in crate::replay) unused_case_http_exchanges: Vec<http::RecordedHttpExchangeSummary>,
+    pub(in crate::replay) allowed_unused_case_http_exchanges:
+        Vec<http::RecordedHttpExchangeSummary>,
     #[serde(flatten)]
     pub(in crate::replay) protocols: ProtocolsReport,
     pub(in crate::replay) ca_cert_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) replay_policy: Option<ReplayPolicyReport>,
     pub(in crate::replay) http_ignored_query_params: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) allowed_unused_http: Option<ReplayAllowedUnusedHttpReport>,
 }
 
 impl ReplayReport {
@@ -99,6 +103,13 @@ impl ReplayReport {
             || self.protocols.memcached.case_is_dirty(case_id)
             || self.protocols.kafka.case_is_dirty(case_id)
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(in crate::replay) struct ReplayAllowedUnusedHttpReport {
+    pub(in crate::replay) config: String,
+    pub(in crate::replay) recording_rule: String,
+    pub(in crate::replay) hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]

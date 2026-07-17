@@ -151,6 +151,50 @@ traffic-replay --policy ../target/config/replay.yaml path/to/case-dir
 See [replay-policy.md](replay-policy.md) for the v1 schema, assertion-only
 `expected-response.json` contract, rule scoping, and dirty-evidence behavior.
 
+Recorder-owned host exceptions for API-independent process-level tasks remain
+in the target repository's `recorder.toml`, not `replay.yaml`. Preview and
+apply an add-only host after source inspection proves that all traffic to that
+host belongs to a task that is unrelated to API handlers:
+
+```bash
+traffic-recorder-config allowed-unused-http-hosts plan \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --host cs.aliyuncs.com \
+  --format json
+
+traffic-recorder-config allowed-unused-http-hosts apply \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --host cs.aliyuncs.com \
+  --format json
+```
+
+The tool bootstraps and then owns an
+`AI-MANAGED ALLOWED UNUSED HTTP HOSTS` block inside the selected named
+`[[http_gateway.rules]]` entry. Plans are add-only, sorted, deduplicated, and
+safe against concurrent config changes. One host applies to every case selected
+by that recording rule, independent of which active API window happened to
+capture the process-level task.
+
+Pass the config and rule together for direct replay:
+
+```bash
+traffic-replay \
+  --policy ../target/config/replay.yaml \
+  --recorder-config ../target/config/recorder.toml \
+  --recording-rule record-api \
+  path/to/case-dir
+```
+
+Replay reads the rule once at startup. A case-owned recorded HTTP exchange for
+an allowed host that remains unconsumed is moved from
+`unused_case_http_exchanges` to
+`allowed_unused_case_http_exchanges`, which is retained as a non-blocking
+diagnostic. A target request that is unmatched or unsupported remains dirty,
+including requests sent to an allowed host. Restart replay after applying a
+new host; running sessions do not hot-reload recorder configuration.
+
 `traffic-replay` also uses the fixed `trp-record` owner filter. Run the
 dependency-producing target process as that user. Build steps, replay itself,
 and replay-control commands may remain under the developer account. If the

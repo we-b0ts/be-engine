@@ -113,6 +113,7 @@ pub struct HttpEventCounts {
     pub unmatched_requests: usize,
     pub unsupported_exchanges: usize,
     pub unused_case_exchanges: usize,
+    pub allowed_unused_case_exchanges: usize,
     pub unused_bootstrap_exchanges: usize,
 }
 
@@ -648,6 +649,7 @@ impl HttpEventCounts {
         self.unmatched_requests += other.unmatched_requests;
         self.unsupported_exchanges += other.unsupported_exchanges;
         self.unused_case_exchanges += other.unused_case_exchanges;
+        self.allowed_unused_case_exchanges += other.allowed_unused_case_exchanges;
         self.unused_bootstrap_exchanges += other.unused_bootstrap_exchanges;
     }
 

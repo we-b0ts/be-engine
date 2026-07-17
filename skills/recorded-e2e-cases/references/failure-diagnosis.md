@@ -60,6 +60,16 @@ evidence:
 Do not infer missing rows, messages, cache entries, or third-party responses
 from `expected-response.json` alone.
 
+For repeated unused HTTP exchanges, group observations by normalized host only
+for diagnosis. A host may be proposed for
+`allowed_unused_http_hosts` when source proves all traffic to it belongs to an
+API-independent process-level task, the target emitted no matching request,
+and the focused API's response assertions and all other dependencies pass.
+Active-case timing is not API ownership evidence for an asynchronous task.
+Plan/apply the host once for the named recording rule and restart focused
+replay. Never include raw query values, credentials, headers, or bodies in the
+plan or diagnosis.
+
 ## Replay Failure Signals
 
 Fix replay setup before product code when:
