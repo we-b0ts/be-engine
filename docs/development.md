@@ -321,8 +321,21 @@ failures, not product behavior evidence.
 
 ## Migration E2E Runner
 
-Use `scripts/traffic-e2e-run` as the high-level migration replay facade. The
-target repository supplies `.migration/e2e.yaml`:
+Use `scripts/traffic-e2e-run` as the high-level migration replay facade.
+Initialize the target repository once:
+
+```bash
+traffic-e2e-run init \
+  --target-root ../target \
+  --project-cli scripts/<project>-cli \
+  --replay-policy config/replay.yaml \
+  --recorder-config config/recorder.toml \
+  --recording-rule record-api
+```
+
+The command requires confirmed `project_cli` and `replay_policy` paths,
+validates them, checks that `.migration/local/` is ignored, and generates
+`.migration/e2e.yaml`:
 
 ```yaml
 version: 2
@@ -334,8 +347,10 @@ local_root: local
 required_consecutive_successful_runs: 3
 ```
 
-The target must ignore `.migration/local/`. Prepare each API only after
-confirming whether its source URI is static or dynamic:
+The recorder flags are optional only as a pair. Existing configuration is not
+overwritten unless `--force` is explicit. If the file is missing, every other
+runner command points back to `init`; do not hand-write it. Prepare each API
+only after confirming whether its source URI is static or dynamic:
 
 ```bash
 traffic-e2e-run prepare \

@@ -1,3 +1,4 @@
+mod config;
 mod execute;
 mod final_evidence;
 mod model;
@@ -20,6 +21,26 @@ pub use execute::{
     E2eApiRunResult, E2eRunResult, abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round,
 };
 use model::RunStatus;
+
+#[derive(Debug, Clone)]
+pub struct E2eRunInitOptions {
+    pub target_root: PathBuf,
+    pub project_cli: PathBuf,
+    pub replay_policy: PathBuf,
+    pub recorder_config: Option<PathBuf>,
+    pub recording_rule: Option<String>,
+    pub required_consecutive_successful_runs: u32,
+    pub force: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct E2eRunInitResult {
+    pub config: PathBuf,
+    pub local_root: PathBuf,
+    pub required_consecutive_successful_runs: u32,
+    pub recorder_feedback: bool,
+    pub replaced: bool,
+}
 
 #[derive(Debug, Clone)]
 pub struct E2eRunContext {
@@ -66,13 +87,17 @@ pub struct E2eFocusedApiStatus {
     pub latest_state: Option<PathBuf>,
 }
 
+pub fn initialize_e2e_run(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
+    config::initialize(options)
+}
+
 pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareResult> {
-    let (config, layout) = store::resolve_layout(
+    let (config, layout) = config::resolve_layout(
         &options.context.target_root,
         &options.context.case_source,
         options.context.run_key.as_deref(),
     )?;
-    store::require_local_ignored(&layout)?;
+    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
     ensure!(
         !layout.active_dir.exists(),
         "cannot change case grouping while an E2E run is active"
@@ -114,7 +139,7 @@ pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareRes
 }
 
 pub fn status_e2e_run(context: E2eRunContext) -> Result<E2eRunStatus> {
-    let (_, layout) = store::resolve_layout(
+    let (_, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
         context.run_key.as_deref(),

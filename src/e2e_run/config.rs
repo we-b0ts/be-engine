@@ -1,0 +1,377 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail, ensure};
+
+use super::model::{ProjectConfig, ResolvedProjectConfig, RunLayout};
+use super::{E2eRunInitOptions, E2eRunInitResult, require_executable, store};
+use crate::replay::validate_replay_policy;
+
+const CONFIG_VERSION: u32 = 2;
+const DEFAULT_LOCAL_ROOT: &str = "local";
+
+pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
+    let target_root = fs::canonicalize(&options.target_root).with_context(|| {
+        format!(
+            "failed to resolve target root {}",
+            options.target_root.display()
+        )
+    })?;
+    ensure!(target_root.is_dir(), "target root must be a directory");
+    ensure!(
+        options.required_consecutive_successful_runs > 0,
+        "required_consecutive_successful_runs must be greater than zero"
+    );
+    ensure!(
+        options.recorder_config.is_some() == options.recording_rule.is_some(),
+        "recorder_config and recording_rule must be provided together"
+    );
+    if let Some(rule) = options.recording_rule.as_deref() {
+        ensure!(!rule.trim().is_empty(), "recording_rule must not be empty");
+    }
+
+    let migration_dir = target_root.join(".migration");
+    let config_path = migration_dir.join("e2e.yaml");
+    let existing = match fs::symlink_metadata(&config_path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect {}", config_path.display()));
+        }
+    };
+    let replaced = existing.is_some();
+    if let Some(metadata) = existing {
+        ensure!(
+            options.force,
+            "{} already exists; use --force to replace it explicitly",
+            config_path.display()
+        );
+        ensure!(
+            metadata.is_file() && !metadata.file_type().is_symlink(),
+            "{} must be a regular file and not a symlink",
+            config_path.display()
+        );
+    }
+
+    let project_cli = resolve_under(&target_root, &options.project_cli);
+    require_executable(&project_cli, "project CLI")?;
+    let replay_policy = resolve_under(&target_root, &options.replay_policy);
+    ensure!(
+        replay_policy.is_file(),
+        "replay policy does not exist: {}",
+        replay_policy.display()
+    );
+    validate_replay_policy(&replay_policy).context("invalid replay policy")?;
+    if let Some(recorder_config) = options.recorder_config.as_deref() {
+        let recorder_config = resolve_under(&target_root, recorder_config);
+        ensure!(
+            recorder_config.is_file(),
+            "recorder config does not exist: {}",
+            recorder_config.display()
+        );
+    }
+
+    let local_root_setting = PathBuf::from(DEFAULT_LOCAL_ROOT);
+    let local_root = migration_dir.join(&local_root_setting);
+    require_local_ignored(&target_root, &local_root)?;
+
+    let project_config = ProjectConfig {
+        version: CONFIG_VERSION,
+        project_cli: options.project_cli,
+        replay_policy: options.replay_policy,
+        recorder_config: options.recorder_config,
+        local_root: local_root_setting,
+        recording_rule: options.recording_rule,
+        required_consecutive_successful_runs: options.required_consecutive_successful_runs,
+    };
+    store::write_yaml(&config_path, &project_config)?;
+    let persisted = load_project_config(&config_path)?;
+
+    Ok(E2eRunInitResult {
+        config: config_path,
+        local_root,
+        required_consecutive_successful_runs: persisted.required_consecutive_successful_runs,
+        recorder_feedback: persisted.recorder_config.is_some(),
+        replaced,
+    })
+}
+
+pub(super) fn resolve_layout(
+    target_root: &Path,
+    case_source: &Path,
+    explicit_run_key: Option<&str>,
+) -> Result<(ResolvedProjectConfig, RunLayout)> {
+    let target_root = fs::canonicalize(target_root)
+        .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
+    let migration_dir = target_root.join(".migration");
+    let config_path = migration_dir.join("e2e.yaml");
+    let config = load_project_config(&config_path)?;
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let local_root = resolve_under(&migration_dir, &config.local_root);
+    ensure!(
+        local_root.starts_with(&migration_dir) && local_root != migration_dir,
+        "migration local_root must be a child of .migration"
+    );
+    let run_key = match explicit_run_key {
+        Some(value) => validate_run_key(value)?,
+        None => derive_run_key(&case_source)?,
+    };
+    let run_root = local_root.join(&run_key);
+    let resolved = ResolvedProjectConfig {
+        project_cli: resolve_under(&target_root, &config.project_cli),
+        replay_policy: resolve_under(&target_root, &config.replay_policy),
+        recorder_config: config
+            .recorder_config
+            .as_deref()
+            .map(|path| resolve_under(&target_root, path)),
+        recording_rule: config.recording_rule,
+        required_consecutive_successful_runs: config.required_consecutive_successful_runs,
+    };
+    let layout = RunLayout {
+        target_root,
+        run_key,
+        case_source,
+        progress_path: migration_dir.join("e2e-progress.yaml"),
+        local_root: local_root.clone(),
+        current_path: local_root.join("current.yaml"),
+        index_path: run_root.join("state.yaml"),
+        group_index_path: run_root.join("case-groups.json"),
+        active_dir: run_root.join(".active"),
+        latest_dir: run_root.join("latest"),
+        run_root,
+    };
+    Ok((resolved, layout))
+}
+
+pub(super) fn require_local_ignored(target_root: &Path, local_root: &Path) -> Result<()> {
+    fs::create_dir_all(local_root)?;
+    let probe = local_root.join(".ignore-check");
+    let relative = probe
+        .strip_prefix(target_root)
+        .context("migration local root is outside target repository")?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .arg("check-ignore")
+        .arg("-q")
+        .arg(relative)
+        .status()
+        .context("failed to run git check-ignore")?;
+    ensure!(
+        output.success(),
+        "{} must be ignored by the target repository before running migration E2E",
+        local_root.display()
+    );
+    Ok(())
+}
+
+fn load_project_config(config_path: &Path) -> Result<ProjectConfig> {
+    if !config_path.exists() {
+        bail!(
+            "{} is missing; run `traffic-e2e-run init --target-root <target> \
+             --project-cli <path> --replay-policy <path>` with confirmed project settings",
+            config_path.display()
+        );
+    }
+    let config: ProjectConfig = store::read_yaml(config_path)?;
+    validate_project_config(&config)?;
+    Ok(config)
+}
+
+fn validate_project_config(config: &ProjectConfig) -> Result<()> {
+    ensure!(
+        config.version == CONFIG_VERSION,
+        "unsupported migration config version {}; expected {CONFIG_VERSION}",
+        config.version
+    );
+    ensure!(
+        !config.project_cli.as_os_str().is_empty(),
+        "project_cli must not be empty"
+    );
+    ensure!(
+        !config.replay_policy.as_os_str().is_empty(),
+        "replay_policy must not be empty"
+    );
+    ensure!(
+        !config.local_root.as_os_str().is_empty(),
+        "local_root must not be empty"
+    );
+    ensure!(
+        config.required_consecutive_successful_runs > 0,
+        "required_consecutive_successful_runs must be greater than zero"
+    );
+    ensure!(
+        config.recorder_config.is_some() == config.recording_rule.is_some(),
+        "recorder_config and recording_rule must be configured together"
+    );
+    if let Some(rule) = config.recording_rule.as_deref() {
+        ensure!(!rule.trim().is_empty(), "recording_rule must not be empty");
+    }
+    Ok(())
+}
+
+fn resolve_under(root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
+}
+
+fn derive_run_key(case_source: &Path) -> Result<String> {
+    let name = case_source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("case source has no UTF-8 directory name")?;
+    let parent = case_source
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|value| value.to_str());
+    let candidate = match parent {
+        Some(parent)
+            if parent.len() == 14 && parent.chars().all(|value| value.is_ascii_digit()) =>
+        {
+            format!("{parent}-{name}")
+        }
+        _ => name.to_string(),
+    };
+    validate_run_key(&candidate)
+}
+
+fn validate_run_key(value: &str) -> Result<String> {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        bail!("run key must contain only ASCII letters, digits, '.', '_', or '-'");
+    }
+    Ok(value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn target() -> TempDir {
+        let target = tempfile::tempdir().unwrap();
+        let root = target.path();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .arg(root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        fs::write(root.join(".gitignore"), ".migration/local/\n").unwrap();
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        let project_cli = root.join("scripts/project-cli");
+        fs::write(&project_cli, "#!/usr/bin/env bash\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&project_cli, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::create_dir_all(root.join("config")).unwrap();
+        fs::write(
+            root.join("config/replay.yaml"),
+            "version: 1\nexpected_response: assertions_only\nrules: []\n",
+        )
+        .unwrap();
+        target
+    }
+
+    fn options(target_root: &Path) -> E2eRunInitOptions {
+        E2eRunInitOptions {
+            target_root: target_root.to_path_buf(),
+            project_cli: PathBuf::from("scripts/project-cli"),
+            replay_policy: PathBuf::from("config/replay.yaml"),
+            recorder_config: None,
+            recording_rule: None,
+            required_consecutive_successful_runs: 3,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn initialize_generates_valid_project_config() {
+        let target = target();
+
+        let result = initialize(options(target.path())).unwrap();
+
+        assert!(!result.replaced);
+        assert!(!result.recorder_feedback);
+        assert_eq!(result.config, target.path().join(".migration/e2e.yaml"));
+        let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
+        assert_eq!(config.version, CONFIG_VERSION);
+        assert_eq!(config.project_cli, PathBuf::from("scripts/project-cli"));
+        assert_eq!(config.replay_policy, PathBuf::from("config/replay.yaml"));
+        assert_eq!(config.local_root, PathBuf::from(DEFAULT_LOCAL_ROOT));
+        assert_eq!(config.required_consecutive_successful_runs, 3);
+    }
+
+    #[test]
+    fn initialize_refuses_overwrite_without_force() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+
+        let error = initialize(options(target.path())).unwrap_err();
+
+        assert!(error.to_string().contains("use --force"));
+        let mut replacement = options(target.path());
+        replacement.force = true;
+        replacement.required_consecutive_successful_runs = 4;
+        let result = initialize(replacement).unwrap();
+        assert!(result.replaced);
+        assert_eq!(result.required_consecutive_successful_runs, 4);
+    }
+
+    #[test]
+    fn initialize_requires_recorder_fields_as_a_pair() {
+        let target = target();
+        let mut options = options(target.path());
+        options.recording_rule = Some("record-api".to_string());
+
+        let error = initialize(options).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("recorder_config and recording_rule must be provided together")
+        );
+    }
+
+    #[test]
+    fn initialize_requires_local_state_to_be_ignored() {
+        let target = target();
+        fs::write(target.path().join(".gitignore"), "").unwrap();
+
+        let error = initialize(options(target.path())).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("must be ignored by the target repository")
+        );
+        assert!(!target.path().join(".migration/e2e.yaml").exists());
+    }
+
+    #[test]
+    fn missing_config_points_to_init_command() {
+        let target = target();
+        let cases = target.path().join("cases/run");
+        fs::create_dir_all(&cases).unwrap();
+
+        let error = resolve_layout(target.path(), &cases, None).unwrap_err();
+
+        assert!(error.to_string().contains("traffic-e2e-run init"));
+        assert!(error.to_string().contains("--project-cli"));
+        assert!(error.to_string().contains("--replay-policy"));
+    }
+}

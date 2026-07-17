@@ -1,4 +1,4 @@
 interface:
   display_name: "Recorded E2E Cases"
   short_description: "Replay cases and maintain recorder feedback"
-  default_prompt: "Use $recorded-e2e-cases to prepare pattern-aware canonical API groups, iterate with focused traffic-e2e-run run-api evidence, and repeat clean full traffic-e2e-run rounds until generated progress is complete."
+  default_prompt: "Use $recorded-e2e-cases to initialize required target replay settings, prepare pattern-aware canonical API groups, iterate with focused traffic-e2e-run run-api evidence, and repeat clean full traffic-e2e-run rounds until generated progress is complete."

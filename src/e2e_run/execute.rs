@@ -5,6 +5,7 @@ use chrono::Utc;
 use serde::Serialize;
 use tokio::process::Child;
 
+use super::config;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout, RunStatus};
 use super::progress::{build_progress, update_index};
@@ -86,12 +87,12 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
 }
 
 pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
-    let (config, layout) = store::resolve_layout(
+    let (config, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    store::require_local_ignored(&layout)?;
+    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
     ensure!(
         layout.active_dir.is_dir(),
         "there is no active E2E run to abort"
@@ -218,12 +219,12 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
 }
 
 pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
-    let (config, layout) = store::resolve_layout(
+    let (config, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    store::require_local_ignored(&layout)?;
+    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
     std::fs::create_dir_all(&layout.run_root)?;
     store::recover_publication(&layout)?;
     if layout.active_dir.is_dir() {
@@ -249,12 +250,12 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
 }
 
 fn resolve_for_execution(context: &E2eRunContext) -> Result<(ResolvedProjectConfig, RunLayout)> {
-    let (config, layout) = store::resolve_layout(
+    let (config, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    store::require_local_ignored(&layout)?;
+    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
     require_executable(&config.project_cli, "project CLI")?;
     ensure!(
         config.replay_policy.is_file(),

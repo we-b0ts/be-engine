@@ -19,6 +19,11 @@ Use `recorded-e2e-cases` as the sole authority for case discovery, source-route
 association, grouping, replay, assertions, dependency coverage, recorder
 feedback, and its completion gate.
 
+If `.migration/e2e.yaml` is missing, call `traffic-e2e-run init` with the
+confirmed project CLI and replay policy before preparing a group. Ask the user
+for either project-specific value when repository evidence is insufficient;
+never hand-write or guess the configuration.
+
 For a collection or multi-API source, select one unprocessed directory and use
 its first published case only to discover a candidate route. Confirm whether it
 is static or dynamic, then call `traffic-e2e-run prepare`; a dynamic route

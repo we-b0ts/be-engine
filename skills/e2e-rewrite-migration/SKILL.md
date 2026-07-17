@@ -24,8 +24,10 @@ dependency coverage, response assertions, replay policy, aggregate reports,
 route-pattern feedback, verified excludes, and their completion artifacts. Do
 not duplicate or weaken that contract here or in the target repository.
 
-Keep stable project metadata in `.migration/e2e.yaml`. Put detailed generated
-evidence under the Git-ignored `.migration/local/` layout and keep the concise
+Generate stable project metadata in `.migration/e2e.yaml` with
+`traffic-e2e-run init`; if the required project CLI or replay policy cannot be
+confirmed, ask the user instead of guessing. Put detailed generated evidence
+under the Git-ignored `.migration/local/` layout and keep the concise
 runner-generated human report in `.migration/e2e-progress.yaml`, as defined by
 [e2e-run-state.md](references/e2e-run-state.md). MUST NOT stage, commit, or
 force-add `.migration/local/`; ignoring it never waives evidence.

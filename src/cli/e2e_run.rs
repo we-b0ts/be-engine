@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use anyhow::{Result, ensure};
 use clap::{Args, Subcommand};
 use traffic_recorder_proxy::{
-    E2eRunContext, E2eRunPrepareOptions, abort_e2e_run, prepare_e2e_run, recover_e2e_run,
-    run_e2e_api, run_e2e_round, status_e2e_run,
+    E2eRunContext, E2eRunInitOptions, E2eRunPrepareOptions, abort_e2e_run, initialize_e2e_run,
+    prepare_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round, status_e2e_run,
 };
 
 #[derive(Debug, Args)]
@@ -15,12 +15,39 @@ pub(super) struct E2eRunArgs {
 
 #[derive(Debug, Subcommand)]
 enum E2eRunCommand {
+    /// Generate and validate the target repository's migration configuration.
+    Init(InitArgs),
     Prepare(PrepareArgs),
     RunApi(RunApiArgs),
     Run(ContextArgs),
     Status(ContextArgs),
     Abort(ContextArgs),
     Recover(ContextArgs),
+}
+
+#[derive(Debug, Args)]
+struct InitArgs {
+    /// Target repository root.
+    #[arg(long, default_value = ".")]
+    target_root: PathBuf,
+    /// Executable target facade providing start, status, e2e, and stop.
+    #[arg(long)]
+    project_cli: PathBuf,
+    /// Replay policy with expected responses restricted to assertions.
+    #[arg(long)]
+    replay_policy: PathBuf,
+    /// Managed recorder configuration; requires --recording-rule.
+    #[arg(long, requires = "recording_rule")]
+    recorder_config: Option<PathBuf>,
+    /// Managed recording rule; requires --recorder-config.
+    #[arg(long, requires = "recorder_config")]
+    recording_rule: Option<String>,
+    /// Successful unchanged full rounds required for completion.
+    #[arg(long, default_value_t = 3)]
+    required_consecutive_successful_runs: u32,
+    /// Replace an existing generated .migration/e2e.yaml.
+    #[arg(long)]
+    force: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -59,6 +86,15 @@ struct RunApiArgs {
 
 pub(super) async fn run(args: E2eRunArgs) -> Result<()> {
     match args.command {
+        E2eRunCommand::Init(args) => print_json(&initialize_e2e_run(E2eRunInitOptions {
+            target_root: args.target_root,
+            project_cli: args.project_cli,
+            replay_policy: args.replay_policy,
+            recorder_config: args.recorder_config,
+            recording_rule: args.recording_rule,
+            required_consecutive_successful_runs: args.required_consecutive_successful_runs,
+            force: args.force,
+        })?),
         E2eRunCommand::Prepare(args) => {
             let report = prepare_e2e_run(E2eRunPrepareOptions {
                 context: context(args.context),

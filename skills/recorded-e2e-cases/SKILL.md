@@ -53,35 +53,39 @@ fakes, in-process mocks, or recording-backed target implementations.
 1. Resolve the supplied case, collection, or run. Ignore `failed`, `staging`,
    `.replay`, `.partial`, and `.truncated` artifacts. Require canonical request
    and expected-response files and preserve published recordings exactly.
-2. For each API being migrated, select one unprocessed directory, use its first
+2. Inspect the target recorded-E2E entrypoint, normal startup, config, genuine
+   dependency wiring, and existing test convention. Require the case source as
+   an explicit input. Do not build one simultaneous implementation scope for a
+   whole collection.
+3. Create or reuse target `config/replay.yaml`, require
+   `expected_response: assertions_only`, validate it, and pass it explicitly to
+   every replay. Audit target code and wiring for forbidden expected-response,
+   dependency-file, and fixture data flows before replay and before completion.
+4. If `.migration/e2e.yaml` is missing, call `traffic-e2e-run init` with the
+   confirmed target project CLI and replay policy. The command generates and
+   validates the file; do not hand-write it. If either required path cannot be
+   confirmed from the target repository, ask the user for it before replay.
+5. For each API being migrated, select one unprocessed directory, use its first
    case only to discover the candidate source route, then call
    `traffic-e2e-run prepare`. Supply the confirmed source route and, for a
    dynamic route, its safe whole-segment pattern. Use only the canonical group
    and exact case ids returned by the runner.
-3. Inspect the target recorded-E2E entrypoint, normal startup, config, genuine
-   dependency wiring, and existing test convention. Require the case source as
-   an explicit input. Do not build one simultaneous implementation scope for a
-   whole collection.
-4. Create or reuse target `config/replay.yaml`, require
-   `expected_response: assertions_only`, validate it, and pass it explicitly to
-   every replay. Audit target code and wiring for forbidden expected-response,
-   dependency-file, and fixture data flows before replay and before completion.
-5. During migration, call `traffic-e2e-run run-api --api '<METHOD pattern>'`.
+6. During migration, call `traffic-e2e-run run-api --api '<METHOD pattern>'`.
    Fix the focused API and rerun it until its complete group passes. Focused
    attempts persist evidence but MUST NOT update full-round counts, consecutive
    success, `e2e-progress.yaml`, verified excludes, or the global `latest`.
-6. Compare JSON responses structurally; use exact bytes only for non-JSON or an
+7. Compare JSON responses structurally; use exact bytes only for non-JSON or an
    explicit exact-byte mode. Treat recorder reports and summaries as dependency
    coverage evidence. Unmatched, unused, unsupported, unsafe, or missing
    required side effects keep the group incomplete.
-7. After every published case is grouped and every migrated API passes its
+8. After every published case is grouped and every migrated API passes its
    focused loop, call `traffic-e2e-run run` for one full round. The runner MUST
    start replay once, load bootstrap and the exact full case set once, execute
    cases sequentially, finalize once, aggregate once, then run per-API
    verified-excludes ensure and publish progress. Do not modify target behavior
    during a full round. Repeat unchanged successful full rounds until the
    generated progress reaches its configured consecutive-success requirement.
-8. If a full round fails, diagnose the affected API, return to `run-api`, fix
+9. If a full round fails, diagnose the affected API, return to `run-api`, fix
    it, and restart the full round from the beginning. Only an unmodified full
    round may change consecutive-success counts.
 

@@ -111,12 +111,22 @@ round its `highlights` contains only `most_failed_cases` and
 
 ## Stable Configuration
 
-Keep `.migration/e2e.yaml` source-controlled:
+Generate the source-controlled `.migration/e2e.yaml` with
+`traffic-e2e-run init`:
+
+```bash
+traffic-e2e-run init \
+  --target-root <target> \
+  --project-cli scripts/<project>-cli \
+  --replay-policy config/replay.yaml \
+  --recorder-config config/recorder.toml \
+  --recording-rule record-api
+```
+
+The resulting file is:
 
 ```yaml
 version: 2
-source_repo: ../source
-target_language: rust
 project_cli: scripts/<project>-cli
 replay_policy: config/replay.yaml
 recorder_config: config/recorder.toml
@@ -127,7 +137,8 @@ required_consecutive_successful_runs: 3
 
 `recorder_config` and `recording_rule` are optional only as a pair. Do not put a
 current run id, case count, API list, status, session, report result, blocker,
-PID, address, or temporary path in this file.
+PID, address, or temporary path in this file. If required project paths cannot
+be confirmed, ask the user; do not hand-edit the file.
 
 ## Focused API State
 

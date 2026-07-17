@@ -9,16 +9,17 @@ use crate::case_group::CaseGroupInventory;
 pub(super) const STATE_VERSION: u32 = 1;
 pub(super) const ASSERTION_REPORT_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct ProjectConfig {
     pub version: u32,
     pub project_cli: PathBuf,
     pub replay_policy: PathBuf,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recorder_config: Option<PathBuf>,
     #[serde(default = "default_local_root")]
     pub local_root: PathBuf,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording_rule: Option<String>,
     #[serde(default = "default_required_successful_runs")]
     pub required_consecutive_successful_runs: u32,

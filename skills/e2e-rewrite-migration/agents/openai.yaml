@@ -1,4 +1,4 @@
 interface:
   display_name: "E2E Rewrite Migration"
   short_description: "Rewrite services with recorded E2E guardrails"
-  default_prompt: "Use $e2e-rewrite-migration to rewrite one prepared API at a time with focused run-api repair loops, then repeat unchanged full rounds until generated progress is complete before delivery."
+  default_prompt: "Use $e2e-rewrite-migration to initialize target replay settings, rewrite one prepared API at a time with focused run-api repair loops, then repeat unchanged full rounds until generated progress is complete before delivery."
