@@ -13,25 +13,26 @@ recordings.
    HTTP method and URI path without the query component against source route
    registrations. Route discovery is allowed here; do not inspect business
    implementation details or modify product code yet.
-3. When the source route is exact and static, run `traffic-case-group ensure`
-   without `--pattern`. It MUST inspect every published case in the directory,
-   require every method and path to resolve to that same source route, return
-   the current directory as `group_dir`, and record `already_canonical` with its
-   exact case ids. A mixed-route directory is `blocked_grouping`.
+3. When the source route is exact and static, run `traffic-e2e-run prepare`
+   without `--pattern`. Its canonical grouping operation MUST inspect every
+   published case in the directory, require every method and path to resolve to
+   that same source route, return the current directory as `group_dir`, and
+   record `already_canonical` with its exact case ids. A mixed-route directory
+   is `blocked_grouping`.
 4. When the source route is dynamic, derive the candidate recorder pattern by
    following [route-pattern-feedback.md](route-pattern-feedback.md), then run
-   `traffic-case-group ensure` from `PATH`. Supply the original case source,
-   current directory, method, confirmed source route or pattern, target managed
-   recorder config when available, and a persisted JSON output path. Use only
-   the returned group directory or manifest and exact case ids.
-5. Mark every returned member directory processed. A later call for any member
+   `traffic-e2e-run prepare` with the original case source, current directory,
+   method, confirmed source route, pattern, and source revision. The runner
+   supplies managed recorder config and the persisted index path. Use only the
+   returned group directory or manifest and exact case ids.
+5. Mark every returned member directory processed. A later prepare for any member
    MUST return the same group with `already_grouped`; process the group exactly
    once. Never infer grouping state from a directory name or hand-written
    marker.
-6. Inspect the selected group's handler, service, model, dependencies, and
-   target implementation only after grouping reaches a valid terminal result.
-   Finish the group's focused replay or record an explicit group blocker before
-   selecting another unprocessed directory.
+6. Inspect and migrate the selected group only after grouping reaches a valid
+   terminal result. Focused migration may proceed before every other API is
+   grouped, but the full round is blocked until every published case is covered
+   exactly once.
 
 The first case is a route-discovery sample, not evidence that the whole
 directory is homogeneous. The exact selected case ids come from the complete
@@ -39,37 +40,34 @@ group validation.
 
 ## Required Invocation
 
-Use one persisted output index for the whole original case source and source
-revision. The output MUST live outside the canonical case source. Run the exact
-static form as follows:
+Use one runner-owned persisted index for the whole original case source and
+source revision. For a standard migration, run the static form:
 
 ```bash
-traffic-case-group ensure \
+traffic-e2e-run prepare \
+  --target-root <target-repository> \
   --case-source <original-case-source> \
   --case-dir <current-canonical-directory> \
   --method <METHOD> \
   --source-route '<confirmed-static-source-route>' \
-  --source-revision '<source-revision>' \
-  --output <target-run-report-directory>/case-groups.json
+  --source-revision '<source-revision>'
 ```
 
-For a dynamic source route, add all three target-feedback arguments when the
-managed target config exists:
+For a dynamic source route, add the confirmed pattern:
 
 ```bash
-traffic-case-group ensure \
+traffic-e2e-run prepare \
+  --target-root <target-repository> \
   --case-source <original-case-source> \
   --case-dir <current-canonical-directory> \
   --method <METHOD> \
   --source-route '<confirmed-dynamic-source-route>' \
   --pattern '<safe-segment-wildcard-pattern>' \
-  --source-revision '<source-revision>' \
-  --output <target-run-report-directory>/case-groups.json \
-  --recorder-config <target-recorder-config> \
-  --rule <target-recorder-rule>
+  --source-revision '<source-revision>'
 ```
 
-`--recorder-config` and `--rule` MUST appear together. Omit both only when the
+The runner reads `recorder_config` and `recording_rule` from
+`.migration/e2e.yaml`; they MUST appear together. Omit both only when the
 managed target config is unavailable, and retain the returned
 `not_applicable_missing_managed_config` outcome. The command applies focused,
 add-only pattern feedback when both are present. This early apply does not waive
@@ -95,7 +93,9 @@ overlapping groups, missing cases, duplicate case ids, stale group inventory,
 or a changed source revision as `blocked_grouping`. Do not replace the command
 with an AI-authored target script or a hand-maintained case list.
 
-Dynamic groups are manifest-backed: `group_dir` may be absent, in which case
+`traffic-e2e-run prepare` delegates to `traffic-case-group ensure`; direct
+low-level invocation is for diagnostics, not the normal AI workflow. Dynamic
+groups are manifest-backed: `group_dir` may be absent, in which case
 the returned manifest and exact case ids are the only valid replay selection.
 Do not invent a directory path. `traffic-case-group` may orchestrate the managed
 pattern plan and safe apply, but its result does not replace the final

@@ -1,0 +1,538 @@
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail, ensure};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use uuid::Uuid;
+
+use super::model::{
+    ActiveRunState, CurrentPointer, ProjectConfig, ResolvedProjectConfig, RunIndex, RunLayout,
+    STATE_VERSION,
+};
+
+const CONFIG_VERSION: u32 = 2;
+
+pub(super) fn resolve_layout(
+    target_root: &Path,
+    case_source: &Path,
+    explicit_run_key: Option<&str>,
+) -> Result<(ResolvedProjectConfig, RunLayout)> {
+    let target_root = fs::canonicalize(target_root)
+        .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let migration_dir = target_root.join(".migration");
+    let config_path = migration_dir.join("e2e.yaml");
+    let config: ProjectConfig = read_yaml(&config_path)?;
+    ensure!(
+        config.version == CONFIG_VERSION,
+        "unsupported migration config version {}; expected {CONFIG_VERSION}",
+        config.version
+    );
+    ensure!(
+        config.required_consecutive_successful_runs > 0,
+        "required_consecutive_successful_runs must be greater than zero"
+    );
+    ensure!(
+        config.recorder_config.is_some() == config.recording_rule.is_some(),
+        "recorder_config and recording_rule must be configured together"
+    );
+    let local_root = resolve_under(&migration_dir, &config.local_root);
+    ensure!(
+        local_root.starts_with(&migration_dir),
+        "migration local_root must stay under .migration"
+    );
+    let run_key = match explicit_run_key {
+        Some(value) => validate_run_key(value)?,
+        None => derive_run_key(&case_source)?,
+    };
+    let run_root = local_root.join(&run_key);
+    let resolved = ResolvedProjectConfig {
+        project_cli: resolve_under(&target_root, &config.project_cli),
+        replay_policy: resolve_under(&target_root, &config.replay_policy),
+        recorder_config: config
+            .recorder_config
+            .as_deref()
+            .map(|path| resolve_under(&target_root, path)),
+        recording_rule: config.recording_rule,
+        required_consecutive_successful_runs: config.required_consecutive_successful_runs,
+    };
+    let layout = RunLayout {
+        target_root,
+        run_key,
+        case_source,
+        progress_path: migration_dir.join("e2e-progress.yaml"),
+        local_root: local_root.clone(),
+        current_path: local_root.join("current.yaml"),
+        index_path: run_root.join("state.yaml"),
+        group_index_path: run_root.join("case-groups.json"),
+        active_dir: run_root.join(".active"),
+        latest_dir: run_root.join("latest"),
+        run_root,
+    };
+    Ok((resolved, layout))
+}
+
+pub(super) fn require_local_ignored(layout: &RunLayout) -> Result<()> {
+    fs::create_dir_all(&layout.local_root)?;
+    let probe = layout.local_root.join(".ignore-check");
+    let relative = probe
+        .strip_prefix(&layout.target_root)
+        .context("migration local root is outside target repository")?;
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&layout.target_root)
+        .arg("check-ignore")
+        .arg("-q")
+        .arg(relative)
+        .status()
+        .context("failed to run git check-ignore")?;
+    ensure!(
+        output.success(),
+        "{} must be ignored by the target repository",
+        layout.local_root.display()
+    );
+    Ok(())
+}
+
+pub(super) fn begin_active(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
+    let parent = layout
+        .active_dir
+        .parent()
+        .context("active E2E run directory has no parent")?;
+    fs::create_dir_all(parent)?;
+    match fs::create_dir(&layout.active_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            bail!(
+                "an active E2E run already exists at {}; use status, abort, or recover",
+                layout.active_dir.display()
+            );
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to create active E2E run {}",
+                    layout.active_dir.display()
+                )
+            });
+        }
+    }
+    fs::create_dir_all(layout.active_dir.join("reports"))?;
+    fs::create_dir_all(layout.active_dir.join("apis"))?;
+    fs::create_dir_all(layout.active_dir.join("tmp"))?;
+    write_yaml(&layout.active_dir.join("state.yaml"), state)
+}
+
+pub(super) fn focused_active_directories(layout: &RunLayout) -> Result<Vec<PathBuf>> {
+    let focused_root = layout.run_root.join("focused");
+    if !focused_root.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut active = Vec::new();
+    for entry in fs::read_dir(&focused_root)
+        .with_context(|| format!("failed to scan {}", focused_root.display()))?
+    {
+        let entry = entry
+            .with_context(|| format!("failed to read entry under {}", focused_root.display()))?;
+        let candidate = entry.path().join(".active");
+        if candidate.is_dir() {
+            active.push(candidate);
+        }
+    }
+    active.sort();
+    Ok(active)
+}
+
+pub(super) fn write_active(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
+    ensure!(
+        layout.active_dir.is_dir(),
+        "active E2E run directory is missing"
+    );
+    write_yaml(&layout.active_dir.join("state.yaml"), state)
+}
+
+pub(super) fn read_active(layout: &RunLayout) -> Result<ActiveRunState> {
+    read_yaml(&layout.active_dir.join("state.yaml"))
+}
+
+pub(super) fn load_or_create_index(
+    layout: &RunLayout,
+    run_key: &str,
+    case_source: &Path,
+    required: u32,
+) -> Result<RunIndex> {
+    if layout.index_path.is_file() {
+        let index: RunIndex = read_yaml(&layout.index_path)?;
+        ensure!(
+            index.version == STATE_VERSION,
+            "unsupported E2E run index version {}",
+            index.version
+        );
+        ensure!(
+            index.run_key == run_key,
+            "E2E run index belongs to another run"
+        );
+        ensure!(
+            index.case_source == case_source,
+            "E2E run index belongs to another case source"
+        );
+        return Ok(index);
+    }
+    Ok(RunIndex::empty(
+        run_key.to_string(),
+        case_source.to_path_buf(),
+        required,
+    ))
+}
+
+pub(super) fn publish_terminal(
+    layout: &RunLayout,
+    state: &ActiveRunState,
+    index: &RunIndex,
+) -> Result<()> {
+    ensure!(
+        state.status.is_terminal(),
+        "cannot publish a non-terminal run"
+    );
+    let published_state =
+        state_for_published_directory(state, &layout.active_dir, &layout.latest_dir)?;
+    write_active(layout, &published_state)?;
+    write_yaml(&layout.index_path, index)?;
+
+    let previous = layout
+        .run_root
+        .join(format!(".previous-{}", Uuid::new_v4()));
+    if layout.latest_dir.exists() {
+        fs::rename(&layout.latest_dir, &previous).with_context(|| {
+            format!(
+                "failed to preserve previous latest run {}",
+                layout.latest_dir.display()
+            )
+        })?;
+    }
+    if let Err(error) = fs::rename(&layout.active_dir, &layout.latest_dir) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, &layout.latest_dir);
+        }
+        return Err(error).context("failed to publish active E2E run as latest");
+    }
+    if previous.exists() {
+        fs::remove_dir_all(&previous).with_context(|| {
+            format!(
+                "failed to remove previous latest run {}",
+                previous.display()
+            )
+        })?;
+    }
+
+    write_current(layout, &published_state)
+}
+
+pub(super) fn publish_snapshot(
+    active_dir: &Path,
+    latest_dir: &Path,
+    state: &ActiveRunState,
+) -> Result<()> {
+    ensure!(
+        state.status.is_terminal(),
+        "cannot publish a non-terminal run"
+    );
+    let published_state = state_for_published_directory(state, active_dir, latest_dir)?;
+    write_yaml(&active_dir.join("state.yaml"), &published_state)?;
+    let parent = latest_dir
+        .parent()
+        .context("latest directory has no parent")?;
+    let previous = parent.join(format!(".previous-{}", Uuid::new_v4()));
+    if latest_dir.exists() {
+        fs::rename(latest_dir, &previous)
+            .with_context(|| format!("failed to preserve {}", latest_dir.display()))?;
+    }
+    if let Err(error) = fs::rename(active_dir, latest_dir) {
+        if previous.exists() {
+            let _ = fs::rename(&previous, latest_dir);
+        }
+        return Err(error).context("failed to publish active snapshot");
+    }
+    if previous.exists() {
+        fs::remove_dir_all(&previous)
+            .with_context(|| format!("failed to remove {}", previous.display()))?;
+    }
+    Ok(())
+}
+
+fn state_for_published_directory(
+    state: &ActiveRunState,
+    active_dir: &Path,
+    latest_dir: &Path,
+) -> Result<ActiveRunState> {
+    let mut published = state.clone();
+    retarget_path(&mut published.replay_session, active_dir, latest_dir)?;
+    retarget_path(&mut published.replay_report, active_dir, latest_dir)?;
+    retarget_path(&mut published.aggregate_report, active_dir, latest_dir)?;
+    retarget_path(&mut published.assertions_report, active_dir, latest_dir)?;
+    for api in &mut published.apis {
+        retarget_path(&mut api.report_dir, active_dir, latest_dir)?;
+    }
+    Ok(published)
+}
+
+fn retarget_path(path: &mut PathBuf, active_dir: &Path, latest_dir: &Path) -> Result<()> {
+    if path.starts_with(active_dir) {
+        let relative = path
+            .strip_prefix(active_dir)
+            .context("published state path escaped the active directory")?;
+        *path = latest_dir.join(relative);
+    }
+    Ok(())
+}
+
+pub(super) fn recover_publication(layout: &RunLayout) -> Result<()> {
+    let mut previous = fs::read_dir(&layout.run_root)
+        .with_context(|| format!("failed to scan {}", layout.run_root.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(".previous-"))
+        })
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    previous.sort();
+    if layout.latest_dir.exists() {
+        for stale in previous {
+            fs::remove_dir_all(&stale)
+                .with_context(|| format!("failed to remove stale {}", stale.display()))?;
+        }
+    } else {
+        ensure!(
+            previous.len() <= 1,
+            "multiple interrupted publication snapshots require manual inspection"
+        );
+        if let Some(snapshot) = previous.pop() {
+            fs::rename(&snapshot, &layout.latest_dir).with_context(|| {
+                format!(
+                    "failed to restore {} as {}",
+                    snapshot.display(),
+                    layout.latest_dir.display()
+                )
+            })?;
+        }
+    }
+    let latest_state = layout.latest_dir.join("state.yaml");
+    if latest_state.is_file() {
+        let state: ActiveRunState = read_yaml(&latest_state)?;
+        write_current(layout, &state)?;
+    }
+    Ok(())
+}
+
+fn write_current(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
+    let relative_state = layout
+        .latest_dir
+        .join("state.yaml")
+        .strip_prefix(&layout.local_root)
+        .context("latest state is outside migration local root")?
+        .to_path_buf();
+    write_yaml(
+        &layout.current_path,
+        &CurrentPointer {
+            version: STATE_VERSION,
+            current_run: state.run_key.clone(),
+            current_run_state: relative_state,
+            status: state.status,
+        },
+    )
+}
+
+pub(super) fn write_yaml<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let mut payload = serde_yaml::to_string(value)?.into_bytes();
+    if !payload.ends_with(b"\n") {
+        payload.push(b'\n');
+    }
+    atomic_write(path, &payload)
+}
+
+pub(super) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+    let mut payload = serde_json::to_vec_pretty(value)?;
+    payload.push(b'\n');
+    atomic_write(path, &payload)
+}
+
+pub(super) fn read_yaml<T: DeserializeOwned>(path: &Path) -> Result<T> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {}", path.display()))?;
+    ensure!(
+        metadata.is_file(),
+        "{} must be a regular file",
+        path.display()
+    );
+    ensure!(
+        !metadata.file_type().is_symlink(),
+        "refusing to read symlink {}",
+        path.display()
+    );
+    let payload = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_yaml::from_slice(&payload)
+        .with_context(|| format!("failed to parse YAML {}", path.display()))
+}
+
+fn atomic_write(path: &Path, payload: &[u8]) -> Result<()> {
+    let parent = path.parent().context("output path has no parent")?;
+    fs::create_dir_all(parent)?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("output filename is not valid UTF-8")?;
+    let mut temporary = None;
+    for attempt in 0..100 {
+        let candidate = parent.join(format!(
+            ".{file_name}.tmp.{}.{}",
+            std::process::id(),
+            attempt
+        ));
+        match OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&candidate)
+        {
+            Ok(file) => {
+                temporary = Some((candidate, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error).context("failed to create temporary state file"),
+        }
+    }
+    let (temporary, mut file) = temporary.context("failed to reserve temporary state file")?;
+    let result = (|| -> Result<()> {
+        file.write_all(payload)?;
+        file.sync_all()?;
+        drop(file);
+        fs::rename(&temporary, path)
+            .with_context(|| format!("failed to publish {}", path.display()))?;
+        File::open(parent)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn resolve_under(root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        root.join(path)
+    }
+}
+
+fn derive_run_key(case_source: &Path) -> Result<String> {
+    let name = case_source
+        .file_name()
+        .and_then(|value| value.to_str())
+        .context("case source has no UTF-8 directory name")?;
+    let parent = case_source
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|value| value.to_str());
+    let candidate = match parent {
+        Some(parent)
+            if parent.len() == 14 && parent.chars().all(|value| value.is_ascii_digit()) =>
+        {
+            format!("{parent}-{name}")
+        }
+        _ => name.to_string(),
+    };
+    validate_run_key(&candidate)
+}
+
+fn validate_run_key(value: &str) -> Result<String> {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "._-".contains(character))
+    {
+        bail!("run key must contain only ASCII letters, digits, '.', '_', or '-'");
+    }
+    Ok(value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::case_group::CaseGroupInventory;
+
+    fn state(active_dir: &Path, status: super::super::model::RunStatus) -> ActiveRunState {
+        let mut state = ActiveRunState::new(
+            "run".to_string(),
+            2,
+            &CaseGroupInventory {
+                case_source: PathBuf::from("/cases"),
+                source_revision: "source".to_string(),
+                case_inventory_id: "inventory".to_string(),
+                groups: Vec::new(),
+            },
+            None,
+            3,
+            active_dir,
+        );
+        state.status = status;
+        state.finished_at = status.is_terminal().then(chrono::Utc::now);
+        state
+    }
+
+    #[test]
+    fn active_snapshot_does_not_replace_latest_before_terminal_publish() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("focused");
+        let active = root.join(".active");
+        let latest = root.join("latest");
+        fs::create_dir_all(&latest).unwrap();
+        fs::write(latest.join("old"), "old").unwrap();
+        let running = state(&active, super::super::model::RunStatus::Running);
+        fs::create_dir_all(&active).unwrap();
+        write_yaml(&active.join("state.yaml"), &running).unwrap();
+
+        assert!(latest.join("old").is_file());
+        assert!(publish_snapshot(&active, &latest, &running).is_err());
+        assert!(latest.join("old").is_file());
+    }
+
+    #[test]
+    fn terminal_snapshot_atomically_replaces_latest() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("focused");
+        let active = root.join(".active");
+        let latest = root.join("latest");
+        fs::create_dir_all(&latest).unwrap();
+        fs::write(latest.join("old"), "old").unwrap();
+        fs::create_dir_all(&active).unwrap();
+        let terminal = state(&active, super::super::model::RunStatus::Successful);
+        write_yaml(&active.join("state.yaml"), &terminal).unwrap();
+
+        publish_snapshot(&active, &latest, &terminal).unwrap();
+
+        assert!(!active.exists());
+        assert!(!latest.join("old").exists());
+        let published: ActiveRunState = read_yaml(&latest.join("state.yaml")).unwrap();
+        assert_eq!(published.sequence, 2);
+        assert_eq!(published.status, super::super::model::RunStatus::Successful);
+        assert_eq!(published.replay_session, latest.join("tmp/session.json"));
+        assert_eq!(
+            published.aggregate_report,
+            latest.join("reports/aggregate.json")
+        );
+        assert_eq!(
+            published.assertions_report,
+            latest.join("reports/assertions.json")
+        );
+    }
+}

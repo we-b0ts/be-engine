@@ -310,3 +310,32 @@ fn group_index_cannot_be_written_inside_case_source() {
             .contains("outside the canonical case source")
     );
 }
+
+#[test]
+fn complete_inventory_requires_every_published_case_grouped_once() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("cases");
+    let list = source.join("list");
+    let create = source.join("create");
+    write_case(&source, "list", "case-list", "GET", "/api/widgets");
+    write_case(&source, "create", "case-create", "POST", "/api/widgets");
+    let output = temporary.path().join("case-groups.json");
+
+    ensure_case_group(options(&source, &list, &output, "/api/widgets", None)).unwrap();
+    let error = load_complete_case_group_inventory(&output, &source).unwrap_err();
+    assert!(error.to_string().contains("does not cover published cases"));
+
+    let mut create_options = options(&source, &create, &output, "/api/widgets", None);
+    create_options.method = "post".to_string();
+    ensure_case_group(create_options).unwrap();
+    let inventory = load_complete_case_group_inventory(&output, &source).unwrap();
+    assert_eq!(inventory.groups.len(), 2);
+    assert_eq!(
+        inventory
+            .groups
+            .iter()
+            .map(|group| group.cases.len())
+            .sum::<usize>(),
+        2
+    );
+}

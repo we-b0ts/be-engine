@@ -13,8 +13,8 @@ const INDEX_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct CaseGroupIndex {
-    version: u32,
-    case_source: PathBuf,
+    pub(super) version: u32,
+    pub(super) case_source: PathBuf,
     pub(super) source_revision: String,
     pub(super) groups: Vec<CaseGroupRecord>,
 }
@@ -166,6 +166,31 @@ pub(super) fn validate_index(index: &CaseGroupIndex, cases: &[PublishedCase]) ->
         }
     }
     Ok(())
+}
+
+pub(super) fn validate_loaded_index(
+    index: &CaseGroupIndex,
+    output: &Path,
+    case_source: &Path,
+    cases: &[PublishedCase],
+) -> Result<()> {
+    ensure!(
+        index.version == INDEX_VERSION,
+        "unsupported group index version {}",
+        index.version
+    );
+    ensure!(
+        index.case_source == case_source,
+        "group index belongs to a different case source"
+    );
+    for group in &index.groups {
+        ensure!(
+            group.manifest == output && group.report_path == output,
+            "group {} references a different manifest or report path",
+            group.group_id
+        );
+    }
+    validate_index(index, cases)
 }
 
 pub(super) fn reject_membership_overlap(

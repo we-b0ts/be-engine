@@ -16,6 +16,8 @@ use traffic_recorder_proxy::{
 };
 use uuid::Uuid;
 
+mod e2e_run;
+
 #[derive(Debug, Parser)]
 #[command(author, version, about)]
 struct Cli {
@@ -34,6 +36,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     CaseGroup(CaseGroupArgs),
+    E2eRun(e2e_run::E2eRunArgs),
     Replay(ReplayArgs),
     ReplayControl(ReplayControlArgs),
     ReplayAggregate(ReplayAggregateArgs),
@@ -275,6 +278,7 @@ pub(crate) async fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::CaseGroup(args)) => run_case_group(args),
+        Some(Command::E2eRun(args)) => e2e_run::run(args).await,
         Some(Command::Replay(args)) => run_replay_command(args).await,
         Some(Command::ReplayControl(args)) => run_replay_control_command(args).await,
         Some(Command::ReplayAggregate(args)) => run_replay_aggregate_command(args),

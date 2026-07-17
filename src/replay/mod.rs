@@ -75,7 +75,7 @@ pub type MysqlReplayControlConfig = ReplayControlConfig;
 
 pub use policy::{ReplayPolicyValidationReport, validate_replay_policy};
 pub use report::aggregate::{
-    ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
+    ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,
 };
 

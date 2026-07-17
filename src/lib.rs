@@ -3,6 +3,7 @@ mod active_case;
 mod case_group;
 mod config;
 mod dns_mock;
+mod e2e_run;
 mod gateway;
 mod http;
 mod kafka;
@@ -56,6 +57,11 @@ pub use config::{
     plan_case_path_pattern_feedback, plan_verified_api_exclude,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
+pub use e2e_run::{
+    E2eApiRunResult, E2eFocusedApiStatus, E2eRunContext, E2eRunPrepareOptions, E2eRunPrepareResult,
+    E2eRunResult, E2eRunStatus, abort_e2e_run, prepare_e2e_run, recover_e2e_run, run_e2e_api,
+    run_e2e_round, status_e2e_run,
+};
 pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
     AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,

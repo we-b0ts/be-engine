@@ -134,6 +134,7 @@ ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
 ln -sf "$PWD/scripts/traffic-replay-aggregate" "$HOME/.local/bin/traffic-replay-aggregate"
 ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
 ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
+ln -sf "$PWD/scripts/traffic-e2e-run" "$HOME/.local/bin/traffic-e2e-run"
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
@@ -317,6 +318,69 @@ assertion report schema, exact case-set gate, and runtime behavior.
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup
 failures, not product behavior evidence.
+
+## Migration E2E Runner
+
+Use `scripts/traffic-e2e-run` as the high-level migration replay facade. The
+target repository supplies `.migration/e2e.yaml`:
+
+```yaml
+version: 2
+project_cli: scripts/<project>-cli
+replay_policy: config/replay.yaml
+recorder_config: config/recorder.toml
+recording_rule: record-api
+local_root: local
+required_consecutive_successful_runs: 3
+```
+
+The target must ignore `.migration/local/`. Prepare each API only after
+confirming whether its source URI is static or dynamic:
+
+```bash
+traffic-e2e-run prepare \
+  --target-root ../target \
+  --case-source recordings/<run>/<rule> \
+  --case-dir recordings/<run>/<rule>/<group> \
+  --method GET \
+  --source-route '/api/widgets/:id' \
+  --pattern '/api/widgets/*' \
+  --source-revision <revision>
+```
+
+Use the returned group id for the focused migration loop:
+
+```bash
+traffic-e2e-run run-api \
+  --target-root ../target \
+  --case-source recordings/<run>/<rule> \
+  --api 'GET /api/widgets/*'
+```
+
+Focused attempts persist only per-API diagnostic evidence. They do not change
+the full-round report, consecutive-success counts, or verified excludes.
+
+After every published case is prepared exactly once and focused migration is
+ready, run the complete regression round:
+
+```bash
+traffic-e2e-run run \
+  --target-root ../target \
+  --case-source recordings/<run>/<rule>
+```
+
+The full command starts replay once, loads bootstrap and all selected cases
+once, starts the target once, executes cases sequentially, finalizes and
+aggregates once, runs per-API verified-exclude ensure, atomically publishes
+`.migration/local/<run-key>/latest/`, and updates the Git-eligible
+`.migration/e2e-progress.yaml`.
+
+Only a full round changes consecutive success. Every case must pass; a 29/30
+API result resets that API streak, and any failed or interrupted full round
+resets the global streak. Repeat unchanged successful full rounds until
+`e2e-progress.yaml` reaches `status: complete`. Use `status`, `abort`, and
+`recover` for interrupted global rounds. Generated local JSON/YAML is tool-owned
+and must not be edited by AI or by target scripts.
 
 When using setup scripts directly, always pair `up` with `down`:
 
