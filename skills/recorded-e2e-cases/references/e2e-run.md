@@ -13,22 +13,22 @@ traffic-e2e-run init \
   --target-root <target> \
   --project-cli scripts/<project>-cli \
   --replay-policy config/replay.yaml \
-  --integration-branch <confirmed-base-branch> \
+  --pr-base <confirmed-base-branch> \
   --recorder-config config/recorder.toml \
   --recording-rule record-api
 ```
 
-`project_cli`, `replay_policy`, and `integration_branch` are required project
+`project_cli`, `replay_policy`, and `pr_base` are required project
 facts. If they cannot be confirmed from the target repository, ask the user;
-do not guess or hand-write the YAML. The integration branch must resolve as a
+do not guess or hand-write the YAML. The PR base must resolve as a
 local branch or an `origin` remote-tracking branch. The recorder flags are
 optional only as a pair. The command generates:
 
 ```yaml
-version: 3
+version: 4
 project_cli: scripts/<project>-cli
 replay_policy: config/replay.yaml
-integration_branch: <confirmed-base-branch>
+pr_base: <confirmed-base-branch>
 recorder_config: config/recorder.toml
 recording_rule: record-api
 local_root: local
@@ -37,8 +37,10 @@ local_root: local
 The target repository MUST ignore `.migration/local/` before initialization.
 Existing configuration is preserved unless `--force` is explicit.
 Every other runner command validates that the generated config exists, has all
-required fields, and still names an existing integration branch before reading
+required fields, and still names an existing PR base before reading
 or changing migration state.
+`pr_base` is only the pull-request target. `prepare`, `run-api`, and `run`
+require a named feature branch different from `pr_base`.
 When `recorder_config` and `recording_rule` are configured, every focused and
 full replay automatically passes both to replay. Replay loads the named rule's
 `allowed_unused_http_hosts` once at startup; AI does not reimplement runtime

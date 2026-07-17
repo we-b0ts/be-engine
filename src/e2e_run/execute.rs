@@ -5,7 +5,6 @@ use chrono::Utc;
 use serde::Serialize;
 use tokio::process::Child;
 
-use super::config;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout, RunStatus};
 use super::progress::{build_progress, update_index};
@@ -16,6 +15,7 @@ use super::runtime::{
 use super::store;
 use super::support::{allocate_replay_report, api_directory, process_exists, status_label};
 use super::{E2eRunContext, require_executable};
+use super::{branch, config};
 use crate::case_group::{
     CaseGroupInventory, load_case_group_inventory, load_complete_case_group_inventory,
 };
@@ -235,6 +235,7 @@ fn resolve_for_execution(context: &E2eRunContext) -> Result<(ResolvedProjectConf
         &context.case_source,
         context.run_key.as_deref(),
     )?;
+    branch::require_work_branch(&layout.target_root, &config.pr_base)?;
     config::require_local_ignored(&layout.target_root, &layout.local_root)?;
     require_executable(&config.project_cli, "project CLI")?;
     ensure!(

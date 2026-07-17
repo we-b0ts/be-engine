@@ -1,3 +1,4 @@
+mod branch;
 mod config;
 mod execute;
 mod final_evidence;
@@ -27,7 +28,7 @@ pub struct E2eRunInitOptions {
     pub target_root: PathBuf,
     pub project_cli: PathBuf,
     pub replay_policy: PathBuf,
-    pub integration_branch: String,
+    pub pr_base: String,
     pub recorder_config: Option<PathBuf>,
     pub recording_rule: Option<String>,
     pub force: bool,
@@ -37,7 +38,7 @@ pub struct E2eRunInitOptions {
 pub struct E2eRunInitResult {
     pub config: PathBuf,
     pub local_root: PathBuf,
-    pub integration_branch: String,
+    pub pr_base: String,
     pub recorder_feedback: bool,
     pub replaced: bool,
 }
@@ -97,6 +98,7 @@ pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareRes
         &options.context.case_source,
         options.context.run_key.as_deref(),
     )?;
+    branch::require_work_branch(&layout.target_root, &config.pr_base)?;
     config::require_local_ignored(&layout.target_root, &layout.local_root)?;
     ensure!(
         !layout.active_dir.exists(),

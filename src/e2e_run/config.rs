@@ -1,14 +1,14 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use anyhow::{Context, Result, bail, ensure};
 
 use super::model::{ProjectConfig, ResolvedProjectConfig, RunLayout};
-use super::{E2eRunInitOptions, E2eRunInitResult, require_executable, store};
+use super::{E2eRunInitOptions, E2eRunInitResult, branch, require_executable, store};
 use crate::replay::validate_replay_policy;
 
-const CONFIG_VERSION: u32 = 3;
+const CONFIG_VERSION: u32 = 4;
 const DEFAULT_LOCAL_ROOT: &str = "local";
 
 pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
@@ -19,7 +19,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         )
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
-    validate_integration_branch(&target_root, &options.integration_branch)?;
+    branch::validate_pr_base(&target_root, &options.pr_base)?;
     ensure!(
         options.recorder_config.is_some() == options.recording_rule.is_some(),
         "recorder_config and recording_rule must be provided together"
@@ -78,7 +78,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         version: CONFIG_VERSION,
         project_cli: options.project_cli,
         replay_policy: options.replay_policy,
-        integration_branch: options.integration_branch,
+        pr_base: options.pr_base,
         recorder_config: options.recorder_config,
         local_root: local_root_setting,
         recording_rule: options.recording_rule,
@@ -90,7 +90,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     Ok(E2eRunInitResult {
         config: config_path,
         local_root,
-        integration_branch: persisted.integration_branch,
+        pr_base: persisted.pr_base,
         recorder_feedback: persisted.recorder_config.is_some(),
         replaced,
     })
@@ -121,6 +121,7 @@ pub(super) fn resolve_layout(
     let resolved = ResolvedProjectConfig {
         project_cli: resolve_under(&target_root, &config.project_cli),
         replay_policy: resolve_under(&target_root, &config.replay_policy),
+        pr_base: config.pr_base,
         recorder_config: config
             .recorder_config
             .as_deref()
@@ -170,7 +171,7 @@ fn load_project_config(target_root: &Path, config_path: &Path) -> Result<Project
         bail!(
             "{} is missing; run `traffic-e2e-run init --target-root <target> \
              --project-cli <path> --replay-policy <path> \
-             --integration-branch <branch>` with confirmed project settings",
+             --pr-base <branch>` with confirmed project settings",
             config_path.display()
         );
     }
@@ -188,7 +189,7 @@ fn load_project_config(target_root: &Path, config_path: &Path) -> Result<Project
             config_path.display()
         )
     })?;
-    validate_integration_branch(target_root, &config.integration_branch)?;
+    branch::validate_pr_base(target_root, &config.pr_base)?;
     Ok(config)
 }
 
@@ -207,8 +208,8 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "replay_policy must not be empty"
     );
     ensure!(
-        !config.integration_branch.trim().is_empty(),
-        "integration_branch must not be empty"
+        !config.pr_base.trim().is_empty(),
+        "pr_base must not be empty"
     );
     ensure!(
         !config.local_root.as_os_str().is_empty(),
@@ -222,52 +223,6 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         ensure!(!rule.trim().is_empty(), "recording_rule must not be empty");
     }
     Ok(())
-}
-
-fn validate_integration_branch(target_root: &Path, branch: &str) -> Result<()> {
-    ensure!(
-        branch == branch.trim() && !branch.is_empty(),
-        "integration_branch must be a non-empty branch name without surrounding whitespace"
-    );
-    let valid = Command::new("git")
-        .arg("-C")
-        .arg(target_root)
-        .arg("check-ref-format")
-        .arg("--branch")
-        .arg(branch)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .context("failed to validate integration_branch with git")?;
-    ensure!(
-        valid.success(),
-        "integration_branch is not a valid Git branch name: {branch}"
-    );
-    let local = git_ref_exists(target_root, &format!("refs/heads/{branch}^{{commit}}"))?;
-    let remote = git_ref_exists(
-        target_root,
-        &format!("refs/remotes/origin/{branch}^{{commit}}"),
-    )?;
-    ensure!(
-        local || remote,
-        "integration_branch {branch:?} does not exist as a local branch or origin remote-tracking branch"
-    );
-    Ok(())
-}
-
-fn git_ref_exists(target_root: &Path, reference: &str) -> Result<bool> {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(target_root)
-        .arg("rev-parse")
-        .arg("--verify")
-        .arg("--quiet")
-        .arg(reference)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to resolve Git reference {reference}"))?;
-    Ok(status.success())
 }
 
 fn resolve_under(root: &Path, path: &Path) -> PathBuf {
@@ -311,6 +266,8 @@ fn validate_run_key(value: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::process::Stdio;
+
     use tempfile::TempDir;
 
     use super::*;
@@ -385,7 +342,7 @@ mod tests {
             target_root: target_root.to_path_buf(),
             project_cli: PathBuf::from("scripts/project-cli"),
             replay_policy: PathBuf::from("config/replay.yaml"),
-            integration_branch: "integration".to_string(),
+            pr_base: "integration".to_string(),
             recorder_config: None,
             recording_rule: None,
             force: false,
@@ -405,8 +362,8 @@ mod tests {
         assert_eq!(config.version, CONFIG_VERSION);
         assert_eq!(config.project_cli, PathBuf::from("scripts/project-cli"));
         assert_eq!(config.replay_policy, PathBuf::from("config/replay.yaml"));
-        assert_eq!(config.integration_branch, "integration");
-        assert_eq!(result.integration_branch, "integration");
+        assert_eq!(config.pr_base, "integration");
+        assert_eq!(result.pr_base, "integration");
         assert_eq!(config.local_root, PathBuf::from(DEFAULT_LOCAL_ROOT));
         let yaml = fs::read_to_string(&result.config).unwrap();
         assert!(!yaml.contains("required_consecutive_successful_runs"));
@@ -463,10 +420,10 @@ mod tests {
     }
 
     #[test]
-    fn initialize_requires_existing_integration_branch() {
+    fn initialize_requires_existing_pr_base() {
         let target = target();
         let mut options = options(target.path());
-        options.integration_branch = "missing-base".to_string();
+        options.pr_base = "missing-base".to_string();
 
         let error = initialize(options).unwrap_err();
 
@@ -479,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn every_config_load_revalidates_integration_branch() {
+    fn every_config_load_revalidates_pr_base() {
         let target = target();
         initialize(options(target.path())).unwrap();
         let cases = target.path().join("cases/run");
@@ -497,7 +454,7 @@ mod tests {
 
         let error = resolve_layout(target.path(), &cases, None).unwrap_err();
 
-        assert!(error.to_string().contains("integration_branch"));
+        assert!(error.to_string().contains("pr_base"));
         assert!(error.to_string().contains("does not exist"));
     }
 
@@ -548,6 +505,6 @@ mod tests {
         assert!(error.to_string().contains("traffic-e2e-run init"));
         assert!(error.to_string().contains("--project-cli"));
         assert!(error.to_string().contains("--replay-policy"));
-        assert!(error.to_string().contains("--integration-branch"));
+        assert!(error.to_string().contains("--pr-base"));
     }
 }

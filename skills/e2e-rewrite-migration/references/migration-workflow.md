@@ -22,11 +22,11 @@ association, grouping, replay, assertions, dependency coverage, recorder
 feedback, and its completion gate.
 
 If `.migration/e2e.yaml` is missing, call `traffic-e2e-run init` with the
-confirmed project CLI, replay policy, and integration branch before preparing a
+confirmed project CLI, replay policy, and PR base before preparing a
 group. Ask the user for any project-specific value when repository evidence is
 insufficient; never guess, hand-write, or silently inherit another project's
 paths or PR base. Every runner command must reject a missing or incomplete
-config or an integration branch that no longer resolves.
+config or a PR base that no longer resolves.
 
 For a collection or multi-API source, select one unprocessed directory and use
 its first published case only to discover a candidate route. Confirm whether it
@@ -40,10 +40,8 @@ silently default to a developer-machine recording path.
 
 ## 3. Establish Delivery State
 
-Read [delivery.md](delivery.md). Resolve the integration branch from user or
-target-repository evidence, protect existing work, and create a focused feature
-branch when safe. Do not assume a universal base branch or automatically stash
-and switch a dirty worktree.
+Read [delivery.md](delivery.md). Resolve `pr_base`, protect existing work, and
+create a focused feature branch when safe. Do not work on `pr_base`.
 
 `traffic-e2e-run` creates current pointers and generated evidence according to
 [e2e-run-state.md](e2e-run-state.md). AI never writes or repairs those files
@@ -120,7 +118,7 @@ After producing useful focused changes and running the applicable target checks,
 append the single concise changelog entry required by
 [repository-memory.md](repository-memory.md), then follow
 [delivery.md](delivery.md) to create a focused commit, push the feature branch,
-and open and verify the PR to the resolved integration branch. Do this even
+and open and verify the PR to `pr_base`. Do this even
 when recorded E2E leaves the migration `incomplete` or `blocked`.
 
 An unavailable canonical artifact, unresolved semantics gap, or unverified

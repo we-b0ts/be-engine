@@ -26,8 +26,8 @@ not duplicate or weaken that contract here or in the target repository.
 
 Generate stable project metadata in `.migration/e2e.yaml` with
 `traffic-e2e-run init`; if the required project CLI, replay policy, or
-integration branch cannot be confirmed, ask the user instead of guessing. The
-generated config must be complete and its integration branch resolvable before
+PR base cannot be confirmed, ask the user instead of guessing. The
+generated config must be complete and its PR base resolvable before
 prepare or replay. Put detailed generated evidence under the Git-ignored
 `.migration/local/` layout and keep the concise runner-generated human report
 in `.migration/e2e-progress.yaml`, as defined by
@@ -69,15 +69,14 @@ before implementation. Source tests may supplement but never replace recordings.
    route registrations or job wiring, normal startup, Git state, and declared
    repository migration notes. Before generating migration state, require
    `.migration/local/` in the target root `.gitignore` and verify it with
-   `git check-ignore`. Resolve the integration branch and pass it to
+   `git check-ignore`. Resolve the PR base and pass it to
    `traffic-e2e-run init`; do not begin prepare or replay with missing or
    incomplete stable project configuration.
 2. Use `traffic-e2e-run prepare` through `recorded-e2e-cases` to select exactly
    one canonical API/function group. If no API is named, begin with one complete
    low-risk GET group. Resolve dynamic patterns before implementation.
-3. Resolve the PR base from user or repository evidence and create a focused
-   feature branch when worktree state permits. Never assume a universal base
-   branch or automatically stash and switch a dirty worktree.
+3. Resolve `pr_base` from user or repository evidence. It is only the PR
+   target. Perform migration work on a named feature branch.
 4. Inspect only the selected source capability. Implement idiomatic target
    behavior with normal startup and the same genuine dependency interfaces,
    production adapters, and protocol clients used during recorded E2E.
@@ -109,7 +108,7 @@ before implementation. Source tests may supplement but never replace recordings.
    authorization.
 9. Commit only intended changes, including one concise changelog entry for the
    delivered migration increment, push the feature branch, create a PR to the
-   resolved integration branch, verify the remote state, and update the run
+   configured `pr_base`, verify the remote state, and update the run
    index with canonical artifact paths and identifiers. Exclude all files under
    `.migration/local/` from staging and delivery. Do not skip incremental
    delivery solely because the migration remains `incomplete` or `blocked`.
@@ -134,10 +133,9 @@ MUST NOT claim a migration complete or delivered unless all items hold:
    map matches the implemented tree for the current scope. The migration-notes
    document was read, eligible cross-scope lessons were upserted without raw
    evidence, and the delivered increment has one concise changelog entry.
-2. The integration branch is resolved from user or repository evidence, the
-   generated `.migration/e2e.yaml` records that exact branch, every runner
-   command verifies it still exists, the intended work is isolated on a focused
-   feature branch, and unrelated changes are preserved.
+2. `.migration/e2e.yaml` records the confirmed `pr_base`. Migration writes run
+   on a named feature branch different from it, with unrelated changes
+   preserved.
 3. `recorded-e2e-cases` returned valid non-overlapping canonical groups
    containing every full-round case exactly once, and published recordings
    remain unchanged.
@@ -159,7 +157,7 @@ MUST NOT claim a migration complete or delivered unless all items hold:
    Normal-startup smoke and all target-required quality checks pass against the
    same final tree. Any later behavior, wiring, policy, assertion, or structural
    change invalidates earlier replay evidence.
-8. A focused commit is pushed and a PR to the resolved integration branch is
+8. A focused commit is pushed and a PR to `pr_base` is
    independently verified. The per-run state records, but does not manufacture,
    the exact evidence and delivery identifiers. `.migration/local/` is ignored
    and contains no tracked or staged file.
@@ -180,7 +178,7 @@ MUST NOT claim a migration complete or delivered unless all items hold:
 - final behavior-affecting change not replayed and rechecked;
 - missing `.migration/local/` ignore rule, or any tracked or staged local
   migration artifact;
-- unresolved integration branch, focused commit, push, or PR.
+- unresolved PR base, focused commit, push, or PR.
 
 ## Output
 

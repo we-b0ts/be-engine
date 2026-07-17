@@ -248,6 +248,7 @@ mod tests {
         let config = ResolvedProjectConfig {
             project_cli: PathBuf::from("/target/scripts/project"),
             replay_policy: PathBuf::from("/target/config/replay.yaml"),
+            pr_base: "integration".to_string(),
             recorder_config: Some(PathBuf::from("/target/config/recorder.toml")),
             recording_rule: Some("pluto".to_string()),
         };

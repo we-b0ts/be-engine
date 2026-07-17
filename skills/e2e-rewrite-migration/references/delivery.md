@@ -3,20 +3,23 @@
 Read this reference when choosing the migration branch and again when delivering
 the verified change.
 
-## Resolve The Integration Branch
+## Resolve The PR Base
 
 Resolve the PR base in this order:
 
 1. the user's explicit instruction;
-2. the generated and validated `.migration/e2e.yaml` `integration_branch`;
+2. the generated and validated `.migration/e2e.yaml` `pr_base`;
 3. target `AGENTS.md` or linked repository documentation;
 4. the hosting repository's default branch when it is clearly the intended
    integration target.
 
 If these sources disagree or no intended base can be established, stop and ask.
-Never assume a universal integration branch name for a generic target.
+Never assume a universal PR base for a generic target.
 `traffic-e2e-run init` must validate and persist the resolved branch before
 prepare or replay; every later runner command revalidates it.
+
+`pr_base` is only the pull-request target. Never commit, merge, rebase, or
+cherry-pick migration work into it. Work on a focused feature branch.
 
 ## Protect Existing Work
 
@@ -31,7 +34,7 @@ otherwise.
 - Create a focused feature branch from the resolved base when repository state
   permits it. Follow the target naming convention; otherwise use a concise
   `codex/` scope name.
-- Do not commit a completed migration directly to the resolved base branch.
+- Do not run migration write commands on `pr_base` or detached HEAD.
 - Keep `.migration/local/` ignored. Never stage, commit, or force-add its run
   state, reports, logs, sessions, PIDs, or temporary files.
 
@@ -50,11 +53,11 @@ push, or PR creation.
    changelog entry for this delivered increment;
 4. require no uncommitted intended-scope change after the commit;
 5. push the feature branch;
-6. open a PR to the resolved integration branch;
+6. open a PR to `pr_base`;
 7. independently verify the remote branch, commit SHA, PR URL, and PR base.
 
-A local branch, local commit, push without a PR, or prose saying a PR is planned
-is not delivery. Missing credentials, remote access, or PR authority is
+Delivery requires the focused commit on the remote feature branch and a
+verified PR whose base equals `pr_base`. Missing credentials, remote access, or PR authority is
 `blocked_delivery`; retain the useful local state and report the exact blocker.
 An incremental PR does not make incomplete or blocked replay evidence complete;
 report every unresolved blocker accurately.
