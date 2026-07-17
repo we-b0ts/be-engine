@@ -148,7 +148,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
 }
 
 #[tokio::test]
-async fn allowed_mysql_log_insert_keeps_gateway_case_published() {
+async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -186,10 +186,10 @@ async fn allowed_mysql_log_insert_keeps_gateway_case_published() {
         let sql = b"INSERT INTO request_log(message) VALUES ('gateway-get')";
         let mut query = vec![0x03];
         query.extend_from_slice(sql);
+        write_http_response(&mut stream, r#"{"ok":true}"#).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
         write_mysql_packet(&mut mysql, 0, &query).await;
         assert_eq!(read_mysql_packet(&mut mysql).await.unwrap().1[0], 0x00);
-
-        write_http_response(&mut stream, r#"{"ok":true}"#).await;
     });
 
     let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -25,11 +25,13 @@ use crate::recorder::{
     capture_body_with_original_len,
 };
 
+mod ownership;
 mod response;
 mod semantic;
 #[cfg(test)]
 mod tests;
 
+use ownership::{QueryDependencyOwnerships, record_event, record_query_completion};
 use response::MysqlResponseTracker;
 use semantic::{MysqlExchangeContext, MysqlSemanticTracker};
 
@@ -248,6 +250,7 @@ pub(crate) async fn handle_connected_mysql(
             database: login.database.clone(),
         },
     )));
+    let dependency_ownerships = QueryDependencyOwnerships::default();
     let (mut client_read, client_write) = client.into_split();
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
@@ -260,6 +263,7 @@ pub(crate) async fn handle_connected_mysql(
     let c2s_connection_id = connection_id;
     let c2s_response_tracker = response_tracker.clone();
     let c2s_semantic_tracker = semantic_tracker.clone();
+    let c2s_dependency_ownerships = dependency_ownerships.clone();
     let c2s_client_write = client_write.clone();
     let c2s_route_name = route_name.clone();
     let c2s_target_host = target_host.clone();
@@ -279,6 +283,9 @@ pub(crate) async fn handle_connected_mysql(
             if c2s_authenticated.load(Ordering::SeqCst)
                 && let Some(command) = parse_client_command(&packet)
             {
+                let dependency_ownership = c2s_state.capture_dependency_targets(
+                    c2s_client_process.as_ref().map(|process| process.pid),
+                );
                 let (prepared_sql, current_database) = {
                     let tracker = c2s_semantic_tracker.lock().await;
                     let prepared_sql = if command.command_name == "COM_STMT_EXECUTE" {
@@ -322,6 +329,7 @@ pub(crate) async fn handle_connected_mysql(
                                 .to_wire_bytes(),
                         )
                         .await?;
+                    drop(dependency_ownership);
                     continue;
                 }
                 if let Some(rule) = access.matched_rule {
@@ -340,6 +348,7 @@ pub(crate) async fn handle_connected_mysql(
                         .await;
                 }
                 let sequence = c2s_query_sequence.fetch_add(1, Ordering::SeqCst) + 1;
+                c2s_dependency_ownerships.insert(sequence, dependency_ownership);
                 let flushed_response = {
                     let mut tracker = c2s_response_tracker.lock().await;
                     tracker.start_query(
@@ -361,35 +370,29 @@ pub(crate) async fn handle_connected_mysql(
                         c2s_client_process.clone(),
                     )
                 };
-                if let Some(response) = flushed_response {
-                    record_event_and_case_dependency(
-                        &c2s_state,
-                        RecorderEvent::MysqlResponse(response),
-                    )
-                    .await?;
-                }
-                if let Some(exchange) = flushed_exchange {
-                    record_event_and_case_dependency(
-                        &c2s_state,
-                        RecorderEvent::MysqlExchange(exchange),
-                    )
-                    .await?;
-                }
-                record_event_and_case_dependency(
+                record_query_completion(
                     &c2s_state,
-                    RecorderEvent::MysqlQuery(MysqlQueryEvent {
-                        id: Uuid::new_v4(),
-                        connection_id: c2s_connection_id,
-                        sequence,
-                        timestamp: Utc::now(),
-                        client_addr: c2s_client_addr.clone(),
-                        client_process: c2s_client_process.clone(),
-                        command: command.command_name,
-                        query: command.query,
-                        payload_len: packet.payload.len(),
-                    }),
+                    &c2s_dependency_ownerships,
+                    flushed_response,
+                    flushed_exchange,
                 )
                 .await?;
+                let query_event = RecorderEvent::MysqlQuery(MysqlQueryEvent {
+                    id: Uuid::new_v4(),
+                    connection_id: c2s_connection_id,
+                    sequence,
+                    timestamp: Utc::now(),
+                    client_addr: c2s_client_addr.clone(),
+                    client_process: c2s_client_process.clone(),
+                    command: command.command_name,
+                    query: command.query,
+                    payload_len: packet.payload.len(),
+                });
+                let ownership = c2s_dependency_ownerships.get(sequence);
+                if let Err(err) = record_event(&c2s_state, query_event, ownership.as_ref()).await {
+                    c2s_dependency_ownerships.take(sequence);
+                    return Err(err);
+                }
             }
             upstream_write.write_all(&packet.to_wire_bytes()).await?;
         }
@@ -401,6 +404,7 @@ pub(crate) async fn handle_connected_mysql(
     let s2c_authenticated = authenticated.clone();
     let s2c_response_tracker = response_tracker.clone();
     let s2c_semantic_tracker = semantic_tracker.clone();
+    let s2c_dependency_ownerships = dependency_ownerships.clone();
     let s2c_client_write = client_write.clone();
     let server_to_client = tokio::spawn(async move {
         let mut bytes = 0_u64;
@@ -428,18 +432,13 @@ pub(crate) async fn handle_connected_mysql(
                         let mut tracker = s2c_semantic_tracker.lock().await;
                         tracker.finish_from_response(&response)
                     };
-                    record_event_and_case_dependency(
+                    record_query_completion(
                         &s2c_state,
-                        RecorderEvent::MysqlResponse(response),
+                        &s2c_dependency_ownerships,
+                        Some(response),
+                        exchange,
                     )
                     .await?;
-                    if let Some(exchange) = exchange {
-                        record_event_and_case_dependency(
-                            &s2c_state,
-                            RecorderEvent::MysqlExchange(exchange),
-                        )
-                        .await?;
-                    }
                 }
             }
             s2c_client_write
@@ -457,24 +456,24 @@ pub(crate) async fn handle_connected_mysql(
                 let mut tracker = s2c_semantic_tracker.lock().await;
                 tracker.finish_from_response(&response)
             };
-            record_event_and_case_dependency(&s2c_state, RecorderEvent::MysqlResponse(response))
-                .await?;
-            if let Some(exchange) = exchange {
-                record_event_and_case_dependency(
-                    &s2c_state,
-                    RecorderEvent::MysqlExchange(exchange),
-                )
-                .await?;
-            }
+            record_query_completion(
+                &s2c_state,
+                &s2c_dependency_ownerships,
+                Some(response),
+                exchange,
+            )
+            .await?;
         } else {
             let exchange = {
                 let mut tracker = s2c_semantic_tracker.lock().await;
                 tracker.finish_active("incomplete", None, None, None)
             };
             if let Some(exchange) = exchange {
-                record_event_and_case_dependency(
+                record_query_completion(
                     &s2c_state,
-                    RecorderEvent::MysqlExchange(exchange),
+                    &s2c_dependency_ownerships,
+                    None,
+                    Some(exchange),
                 )
                 .await?;
             }
@@ -586,7 +585,6 @@ fn mysql_target_from_addr(addr: &str) -> (Option<String>, Option<u16>, Option<St
 }
 
 async fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) -> Result<()> {
-    state.recorder().record(event.clone()).await?;
-    state.record_dependency_if_relevant(&event).await;
-    Ok(())
+    let targets = state.capture_dependency_targets(event.client_pid());
+    record_event(state, event, Some(&targets)).await
 }
