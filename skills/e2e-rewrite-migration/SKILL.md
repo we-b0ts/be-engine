@@ -24,10 +24,15 @@ dependency coverage, response assertions, replay policy, aggregate reports,
 route-pattern feedback, verified excludes, and their completion artifacts. Do
 not duplicate or weaken that contract here or in the target repository.
 
-Keep stable project metadata in `.migration/e2e.yaml`. Put every mutable or
-generated migration artifact under the Git-ignored `.migration/local/` layout
-defined by [e2e-run-state.md](references/e2e-run-state.md). MUST NOT stage,
-commit, or force-add `.migration/local/`; ignoring it never waives evidence.
+Generate stable project metadata in `.migration/e2e.yaml` with
+`traffic-e2e-run init`; if the required project CLI, replay policy, or
+PR base cannot be confirmed, ask the user instead of guessing. The
+generated config must be complete and its PR base resolvable before
+prepare or replay. Put detailed generated evidence under the Git-ignored
+`.migration/local/` layout and keep the concise runner-generated human report
+in `.migration/e2e-progress.yaml`, as defined by
+[e2e-run-state.md](references/e2e-run-state.md). MUST NOT stage, commit, or
+force-add `.migration/local/`; ignoring it never waives evidence.
 
 ## Required Inputs
 
@@ -53,21 +58,25 @@ before implementation. Source tests may supplement but never replace recordings.
   grouping and again after the selected group first passes.
 - Read [e2e-run-state.md](references/e2e-run-state.md) for the current run index
   and per-run evidence state.
+- Read [repository-memory.md](references/repository-memory.md) before the first
+  implementation or replay attempt and again before delivery.
 - Read [logging.md](references/logging.md) only when runnable-service diagnostics
   are absent or changed by the current migration.
 
 ## Workflow
 
 1. Inspect target instructions and conventions, the supplied recordings, source
-   route registrations or job wiring, normal startup, and Git state. Before
-   generating migration state, require `.migration/local/` in the target root
-   `.gitignore` and verify it with `git check-ignore`.
-2. Use `recorded-e2e-cases` to select exactly one canonical API/function group.
-   If no API is named, begin with one complete low-risk GET group. Do not analyze
-   every business implementation or build one simultaneous migration scope.
-3. Resolve the PR base from user or repository evidence and create a focused
-   feature branch when worktree state permits. Never assume a universal base
-   branch or automatically stash and switch a dirty worktree.
+   route registrations or job wiring, normal startup, Git state, and declared
+   repository migration notes. Before generating migration state, require
+   `.migration/local/` in the target root `.gitignore` and verify it with
+   `git check-ignore`. Resolve the PR base and pass it to
+   `traffic-e2e-run init`; do not begin prepare or replay with missing or
+   incomplete stable project configuration.
+2. Use `traffic-e2e-run prepare` through `recorded-e2e-cases` to select exactly
+   one canonical API/function group. If no API is named, begin with one complete
+   low-risk GET group. Resolve dynamic patterns before implementation.
+3. Resolve `pr_base` from user or repository evidence. It is only the PR
+   target. Perform migration work on a named feature branch.
 4. Inspect only the selected source capability. Implement idiomatic target
    behavior with normal startup and the same genuine dependency interfaces,
    production adapters, and protocol clients used during recorded E2E.
@@ -78,18 +87,28 @@ before implementation. Source tests may supplement but never replace recordings.
    `expected-response.json` to produce actual behavior. The expected response is
    assertion-only; recorded dependency data is supplied only by recorder-owned
    replay.
-6. Run the entire selected group through `recorded-e2e-cases`. Fix product code
-   only after replay evidence proves a real behavior defect. Finish or
-   explicitly block the current group, including its applicable immediate
-   verified-excludes result, before selecting another.
+6. Use `traffic-e2e-run run-api` for the selected API's migrate/fix loop. Fix
+   product code only after replay evidence proves a real behavior defect.
+   Focused attempts do not update global progress or verified excludes. After a
+   fixed and verified problem meets the cross-scope reuse
+   rule, upsert the concise repository migration lesson required by
+   `repository-memory.md`.
 7. After the group first passes, perform structural convergence and migration
-   semantics review, then rerun the entire selected group. Run normal-startup
-   smoke and target-required quality checks from the final tree.
-8. Update only factual `AGENTS.md` map entries made inaccurate or materially
-   incomplete by the current change. Do not create the file or change repository
-   policy or completion gates without explicit user authorization.
-9. Commit only intended changes, push the feature branch, create a PR to the
-   resolved integration branch, verify the remote state, and update the run
+   semantics review, then rerun its focused group. After every published case is
+   prepared and migrated, use `traffic-e2e-run run` for one full regression
+   round. One successful round with finalized, complete, clean evidence
+   completes progress. A failed full round returns to focused repair and must
+   then restart from the beginning.
+   Run normal-startup smoke and target-required quality checks from the final
+   tree.
+8. Maintain the concise repository migration notes and changelog defined by
+   `repository-memory.md`. Update only factual `AGENTS.md` map links made
+   inaccurate or materially incomplete by the current change. Do not create the
+   file or change repository policy or completion gates without explicit user
+   authorization.
+9. Commit only intended changes, including one concise changelog entry for the
+   delivered migration increment, push the feature branch, create a PR to the
+   configured `pr_base`, verify the remote state, and update the run
    index with canonical artifact paths and identifiers. Exclude all files under
    `.migration/local/` from staging and delivery. Do not skip incremental
    delivery solely because the migration remains `incomplete` or `blocked`.
@@ -98,7 +117,9 @@ Continue the implementation/replay loop while each cycle adds evidence or fixes
 a distinct evidenced defect. If the same root cause repeats for three
 consecutive cycles without progress, stop that group as `blocked` or
 `incomplete`. A final verification after the last behavior-affecting change is
-mandatory and is never counted as a retry.
+mandatory and is never counted as a retry. Apply the resolved cross-scope
+migration-notes rule to implementation, build, startup, test, and replay
+failures.
 
 ## Non-Negotiable Completion Gate
 
@@ -109,12 +130,15 @@ MUST NOT claim a migration complete or delivered unless all items hold:
    skills, or `repository_contract_status: skill_managed` when they do not.
    Missing linkage is not a blocker; an unresolved conflicting or weakening
    instruction is `blocked_repository_contract`. The final factual repository
-   map matches the implemented tree for the current scope.
-2. The integration branch is resolved from user or repository evidence, the
-   intended work is isolated on a focused feature branch, and unrelated changes
-   are preserved.
-3. `recorded-e2e-cases` returned one valid canonical group containing every
-   selected case exactly once, and published recordings remain unchanged.
+   map matches the implemented tree for the current scope. The migration-notes
+   document was read, eligible cross-scope lessons were upserted without raw
+   evidence, and the delivered increment has one concise changelog entry.
+2. `.migration/e2e.yaml` records the confirmed `pr_base`. Migration writes run
+   on a named feature branch different from it, with unrelated changes
+   preserved.
+3. `recorded-e2e-cases` returned valid non-overlapping canonical groups
+   containing every full-round case exactly once, and published recordings
+   remain unchanged.
 4. Normal runtime and recorded E2E use genuine dependency paths. No target-side
    recording-backed, fixture-backed, fake, or in-process dependency
    implementation reads recorder dependency data or constructs actual results
@@ -123,15 +147,17 @@ MUST NOT claim a migration complete or delivered unless all items hold:
    applicable, meaningful local tests, architecture review, structural
    convergence, and semantics review are complete. Any explicit blocker keeps
    the migration incomplete.
-6. The full `recorded-e2e-cases` completion gate is satisfied from its canonical
-   final-state artifacts. A target facade or ledger cannot substitute for any
-   recorder-owned evidence.
+6. The full `recorded-e2e-cases` completion gate is satisfied by one terminal
+   full round with finalized, complete, clean evidence and
+   `e2e-progress.yaml` at `status: complete`. Focused API passes, a target
+   facade, or a hand-maintained ledger cannot substitute for canonical
+   final-state artifacts.
 7. The standard project facade exposes working `start`, `stop`, `status`,
    `test`, `e2e --case-dir`, and `check` commands for the runnable target.
    Normal-startup smoke and all target-required quality checks pass against the
    same final tree. Any later behavior, wiring, policy, assertion, or structural
    change invalidates earlier replay evidence.
-8. A focused commit is pushed and a PR to the resolved integration branch is
+8. A focused commit is pushed and a PR to `pr_base` is
    independently verified. The per-run state records, but does not manufacture,
    the exact evidence and delivery identifiers. `.migration/local/` is ignored
    and contains no tracked or staged file.
@@ -147,10 +173,12 @@ MUST NOT claim a migration complete or delivered unless all items hold:
 - missing required schema, metrics, side effects, tests, convergence, or
   semantics evidence;
 - unresolved target-instruction conflict or stale current-scope `AGENTS.md` map;
+- an uncaptured eligible cross-scope migration lesson or missing
+  delivered-increment changelog entry;
 - final behavior-affecting change not replayed and rechecked;
 - missing `.migration/local/` ignore rule, or any tracked or staged local
   migration artifact;
-- unresolved integration branch, focused commit, push, or PR.
+- unresolved PR base, focused commit, push, or PR.
 
 ## Output
 

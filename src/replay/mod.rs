@@ -60,6 +60,14 @@ pub struct ReplayConfig {
     pub ca_key_path: Option<PathBuf>,
     pub policy_path: Option<PathBuf>,
     pub http_ignore_query_params: Vec<String>,
+    pub allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReplayAllowedUnusedHttpConfig {
+    pub config_path: PathBuf,
+    pub recording_rule: String,
+    pub hosts: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,7 +83,7 @@ pub type MysqlReplayControlConfig = ReplayControlConfig;
 
 pub use policy::{ReplayPolicyValidationReport, validate_replay_policy};
 pub use report::aggregate::{
-    ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
+    ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,
 };
 
@@ -245,6 +253,7 @@ impl ReplayRuntime {
             ca_cert_path,
             replay_policy,
             http_ignore_query_params,
+            allowed_unused_http: config.allowed_unused_http,
         };
         let report_writer = ReplayReportWriter::new(config.report_path.clone());
         Ok(Self {
@@ -337,10 +346,14 @@ struct ReplayState {
     ca_cert_path: PathBuf,
     replay_policy: Option<ReplayPolicyRuntime>,
     http_ignore_query_params: Vec<String>,
+    allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
 }
 
 impl ReplayState {
     fn snapshot_report(&self) -> ReplayReport {
+        let unused_case_http_exchanges = self.unused_http_exchanges(ReplaySource::Case, false);
+        let allowed_unused_case_http_exchanges =
+            self.unused_http_exchanges(ReplaySource::Case, true);
         ReplayReport {
             version: 5,
             session_id: self.session_id.to_string(),
@@ -381,8 +394,10 @@ impl ReplayState {
             matched_http_exchanges: self.http_events.matched.clone(),
             unmatched_http_requests: self.http_events.unmatched.clone(),
             unsupported_http_exchanges: self.http_events.unsupported.clone(),
-            unused_bootstrap_http_exchanges: self.unused_http_exchanges(ReplaySource::Bootstrap),
-            unused_case_http_exchanges: self.unused_http_exchanges(ReplaySource::Case),
+            unused_bootstrap_http_exchanges: self
+                .unused_http_exchanges(ReplaySource::Bootstrap, false),
+            unused_case_http_exchanges,
+            allowed_unused_case_http_exchanges,
             protocols: ProtocolsReport {
                 redis: self.redis.snapshot(),
                 memcached: self.memcached.snapshot(),
@@ -391,6 +406,13 @@ impl ReplayState {
             ca_cert_path: self.ca_cert_path.display().to_string(),
             replay_policy: self.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
             http_ignored_query_params: self.http_ignore_query_params.clone(),
+            allowed_unused_http: self.allowed_unused_http.as_ref().map(|config| {
+                ReplayAllowedUnusedHttpReport {
+                    config: config.config_path.display().to_string(),
+                    recording_rule: config.recording_rule.clone(),
+                    hosts: config.hosts.iter().cloned().collect(),
+                }
+            }),
         }
     }
 

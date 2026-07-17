@@ -1,9 +1,8 @@
 # Replay-Verified API Excludes
 
-Use this gate immediately after one canonical API group finishes its final
-replay and target response assertions. Persist its result before selecting the
-next group; do not defer per-group ensure calls to the end of a multi-group
-migration.
+Use this gate only after a full E2E round has finalized and its global aggregate
+and response assertions exist. `traffic-e2e-run run` invokes it once per API
+from the same terminal round. Focused `run-api` attempts MUST NOT invoke it.
 
 ## Ownership
 
@@ -24,7 +23,8 @@ owns dynamic dependency matching only.
 
 ## Required Evidence
 
-Create a target-owned JSON assertion report from the final assertion path:
+The runner creates a target-local JSON assertion report from the final
+assertion path:
 
 ```json
 {
@@ -50,7 +50,8 @@ present, so selected-case omission cannot satisfy N.
 
 ## Gate
 
-Always persist the JSON ensure report after both evidence artifacts exist:
+The standard runner persists the JSON ensure report after both evidence views
+exist. The equivalent low-level diagnostic command is:
 
 ```bash
 traffic-recorder-config verified-excludes ensure \

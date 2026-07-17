@@ -30,13 +30,22 @@ source code or harmless protocol formatting does not by itself imply a mismatch.
 Classify ambiguous dependencies only from source ownership, bootstrap timing,
 recorder metadata, or replay evidence. Required side effects remain required.
 Replay-policy version one cannot waive unused case exchanges as background
-noise; re-record or keep the case incomplete instead of inventing an exception.
+noise. The only supported exception is an exact host in the selected named
+recording rule's `allowed_unused_http_hosts`, added through recorder-config
+plan/apply after source inspection proves the entire host belongs to an
+API-independent process-level task. The exception applies only to an
+unconsumed recorded case HTTP exchange; unmatched or unsupported target calls
+remain dirty. Without that evidence and explicit configuration, re-record or
+keep the case incomplete instead of inventing an exception.
 
 ## Coverage
 
 Completion requires no unexplained unmatched target calls, unused case
 exchanges, unsupported or unsafe dependency operations, or missing required
-side effects. HTTP response compatibility alone is insufficient.
+side effects. `allowed_unused_case_http_exchanges` are acceptable only when the
+report also records the source-controlled recorder config, named recording
+rule, and exact configured host. HTTP response compatibility alone is
+insufficient.
 
 Use `dependencies-summary.json`, when present, as a human and agent checklist;
 do not make target project code parse it to decide behavior or manufacture

@@ -5,12 +5,18 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+mod allowed_unused_http;
 mod edit;
 mod feedback;
 mod http_response_rewrite;
 mod recording;
+mod rule_document;
 mod verified_excludes;
 
+pub use allowed_unused_http::{
+    AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
+    plan_allowed_unused_http_hosts,
+};
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
     plan_case_path_pattern_feedback,
@@ -138,6 +144,7 @@ pub struct HttpGatewayRuleConfig {
     pub path_prefixes: Vec<String>,
     pub headers: BTreeMap<String, String>,
     pub case_path_patterns: Vec<String>,
+    pub allowed_unused_http_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -181,6 +188,7 @@ impl AppConfig {
     pub fn validate(&self) -> Result<()> {
         self.recording.validate()?;
         self.http_response_rewrite.validate()?;
+        allowed_unused_http::validate_config(&self.http_gateway)?;
         self.http_gateway
             .verified_excludes
             .validate(&self.http_gateway.rules)?;
@@ -461,6 +469,7 @@ mod tests {
             methods = ["GET", "POST"]
             path_prefixes = ["/api/"]
             case_path_patterns = ["/api/users/*/xxx"]
+            allowed_unused_http_hosts = ["cs.aliyuncs.com"]
             headers = { "x-record" = "yes" }
 
             [[http_gateway.exclude_rules]]
@@ -499,6 +508,10 @@ mod tests {
         assert_eq!(
             config.http_gateway.rules[0].case_path_patterns,
             vec!["/api/users/*/xxx".to_string()]
+        );
+        assert_eq!(
+            config.http_gateway.rules[0].allowed_unused_http_hosts,
+            vec!["cs.aliyuncs.com".to_string()]
         );
         assert_eq!(
             config.http_gateway.rules[0].headers["x-record"],

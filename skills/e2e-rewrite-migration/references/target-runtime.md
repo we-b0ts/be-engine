@@ -23,6 +23,11 @@ Verify changed links against the final tree. Do not create `AGENTS.md`, change
 policy, or alter its completion-gate declaration without an explicit user
 request naming that policy change.
 
+When migration notes and a migration changelog exist or are created, keep their
+paths in this factual map. Mark the notes as required reading before migration
+or replay and the changelog as one concise entry per delivered increment. See
+[repository-memory.md](repository-memory.md) for content boundaries.
+
 ## Real Runtime And Replay Boundary
 
 Implement a normal startup path that uses the target's genuine dependency
@@ -55,8 +60,8 @@ The facade MUST provide these stable commands:
 - `status`: report running state plus useful pid, port, health, or diagnostic
   location and return a non-zero status when the target is not running;
 - `test`: run ordinary target unit and component tests without recorded E2E;
-- `e2e --case-dir <path>`: require an explicit case source and run the target's
-  recorded-E2E orchestration;
+- `e2e --case-dir <path>`: execute the one currently active case through the
+  target's genuine runtime path and perform only the final response assertion;
 - `check`: run the target's submission-quality format, lint, static analysis,
   and test gates.
 
@@ -68,16 +73,16 @@ Keep the facade thin. It MUST:
 
 - delegate to repository-native commands and propagate their exit status;
 - keep `start`, `test`, and `check` independent of recorded case files;
-- make `e2e` pass the explicit case source and source-controlled replay policy
-  to recorder-owned commands;
+- make `e2e` require the exact case directory supplied by `traffic-e2e-run` and
+  propagate its assertion exit status;
 - clean up processes it starts without killing unrelated processes;
 - remain source-controlled and portable within the target repository.
 
-It MUST NOT parse recorder reports to manufacture completion, reimplement
-grouping or verified-exclude eligibility, select an interception UID or user,
+It MUST NOT start or finalize replay, call begin/end, aggregate reports, update
+progress, run verified-exclude eligibility, select an interception UID or user,
 read dependency recordings to produce results, or use the expected response
-outside final assertions. Its exit code is orchestration output, never
-canonical replay evidence.
+outside final assertions. Its exit code is assertion output, never canonical
+replay evidence.
 
 Record the exact facade path in the project migration index and keep it in the
 factual `AGENTS.md` repository map when that map exists. For runnable services,

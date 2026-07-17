@@ -6,7 +6,7 @@ remains manually triggered and does not require source-repo scanning.
 
 For a collection or run with multiple canonical input directories, read
 [case-grouping.md](case-grouping.md) first. Route registration analysis may
-produce the candidate used by `traffic-case-group ensure` before business-code
+produce the candidate used by `traffic-e2e-run prepare` before business-code
 analysis begins. A grouping result never waives the final managed pattern
 plan/apply/replan gate below.
 

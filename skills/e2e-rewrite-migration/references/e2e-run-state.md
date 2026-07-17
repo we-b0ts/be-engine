@@ -1,144 +1,203 @@
 # E2E Run State
 
-Separate stable project configuration from local migration execution state. Use
-one local state directory per recording run so current evidence cannot be
-confused with historical batches or accidentally committed.
+Keep stable project configuration, Git-eligible human progress, local focused
+attempts, and full-round canonical evidence separate.
 
 ## Layout
 
 ```text
 .migration/
 ├── e2e.yaml
+├── e2e-progress.yaml
 └── local/
     ├── current.yaml
     └── <run-key>/
         ├── state.yaml
-        ├── reports/
-        │   ├── <run-key>.json
-        │   ├── <run-key>-assertions.json
-        │   └── <run-key>-verified-exclude.json
-        ├── logs/
-        └── tmp/
+        ├── case-groups.json
+        ├── focused/
+        │   └── <api-key-hash>/
+        │       ├── .active/
+        │       └── latest/
+        ├── .active/
+        └── latest/
+            ├── state.yaml
+            ├── reports/
+            ├── apis/
+            └── tmp/
 ```
 
-Derive `<run-key>` from the recording run id plus collection name. For example,
-`recordings/20260714041519/pluto` becomes `20260714041519-pluto`. Replaying the
-same recording source updates the same run state; do not create a new history
-entry merely because the command ran again.
+Derive `<run-key>` from the recording run id plus collection name when
+available. Replaying the same case source updates the same run key. Focused API
+attempts and full rounds are attempts within that run key, not new historical
+run keys.
 
 ## Git Boundary
 
-Keep only stable project configuration in `.migration/e2e.yaml`. Put every
-mutable or generated migration artifact under `.migration/local/`, including
-current-run pointers, per-run state, aggregate and assertion reports, grouping
-and route-pattern reports, verified-exclude reports, blocker diagnostics, logs,
-PIDs, addresses, sessions, and temporary files.
-
-Before writing local state, require the target repository's root `.gitignore`
-to contain this exact directory rule:
+The target root `.gitignore` MUST contain:
 
 ```gitignore
 .migration/local/
 ```
 
-Verify a representative path with `git check-ignore`. MUST NOT stage, commit,
-or force-add anything under `.migration/local/`. Ignoring local artifacts does
-not waive any evidence or completion gate: required files must still exist and
-remain internally consistent for verification. When repository or CI artifact
-storage is available, publish required evidence there and record its stable URI
-and fingerprint in the local state; do not copy generated reports into source
-control merely to retain them.
+Verify it with `git check-ignore` before runner state is created. Never stage or
+force-add `local/`. The runner writes all JSON/YAML evidence under `local/`;
+AI MUST NOT create, edit, merge, repair, or copy these files by hand.
 
-## Stable Project Configuration
+`e2e-progress.yaml` is different: it is a concise runner-generated report for
+humans and is expected to be committed. It contains counts, status, latest
+full-round summaries, failure highlights, and per-API progress. It intentionally
+excludes protocol evidence, connections, policies, sessions, aggregates, root
+causes, and repair suggestions. AI reads local evidence when diagnosis is
+needed.
 
-Keep `.migration/e2e.yaml` small and source-control eligible. Store only stable
-project metadata and paths that apply across runs:
+Details for unresolved or unfixable problems remain in runner-generated reports
+and evidence under `.migration/local/`.
+
+The generated shape is:
 
 ```yaml
-version: 2
-source_repo: ../source
-target_language: rust
+version: 1
+updated_at: "2026-07-17T08:00:00Z"
+status: complete
+run:
+  key: 20260717080000-record-api
+progress:
+  runs:
+    total: 4
+    successful: 3
+    failed: 1
+    interrupted: 0
+  cases:
+    total: 34
+    replayed: 136
+    passed: 132
+    failed: 4
+    incomplete: 0
+  apis:
+    total: 5
+    verified: 5
+    pending: 0
+latest_run:
+  number: 4
+  status: successful
+  cases:
+    total: 34
+    passed: 34
+    failed: 0
+    incomplete: 0
+  apis:
+    total: 5
+    passed: 5
+    failed: 0
+    incomplete: 0
+  highlights: {}
+apis:
+  GET /api/widgets/*:
+    cases: 8
+    status: verified
+  POST /api/widgets:
+    cases: 4
+    status: verified
+```
+
+`progress.cases` is cumulative across full rounds except `total`, which is the
+current published inventory. `latest_run` never expands every API; on a failed
+round its `highlights` contains only `most_failed_cases` and
+`highest_failure_rate`.
+
+## Stable Configuration
+
+Generate the source-controlled `.migration/e2e.yaml` with
+`traffic-e2e-run init`:
+
+```bash
+traffic-e2e-run init \
+  --target-root <target> \
+  --project-cli scripts/<project>-cli \
+  --replay-policy config/replay.yaml \
+  --pr-base <confirmed-base-branch> \
+  --recorder-config config/recorder.toml \
+  --recording-rule record-api
+```
+
+The resulting file is:
+
+```yaml
+version: 4
 project_cli: scripts/<project>-cli
-recorder_config: config/recorder.toml
 replay_policy: config/replay.yaml
+pr_base: <confirmed-base-branch>
+recorder_config: config/recorder.toml
+recording_rule: record-api
 local_root: local
 ```
 
-Git base conventions, the exact command facade, recorder config, replay policy,
-and documentation paths may remain here when they are project-wide. Do not put
-the current run id, current status, case counts, session ids, report results,
-blockers, absolute recording paths, logs, PIDs, or temporary paths in this file.
+`project_cli`, `replay_policy`, and `pr_base` are required. `init`
+validates that the PR base exists locally or as an `origin`
+remote-tracking branch. `recorder_config` and `recording_rule` are optional only
+as a pair. Every runner command rejects a missing, incomplete, obsolete, or
+unresolvable project config before using migration state. `prepare`, `run-api`,
+and `run` require a named feature branch different from `pr_base`. Do not put a current
+run id, case count, API list, status, session, report result, blocker, PID,
+address, or temporary path in this file. If required project facts cannot be
+confirmed, ask the user; do not hand-edit the file.
 
-## Current Pointer
+## Focused API State
 
-Store current execution pointers under `.migration/local/current.yaml`:
+`traffic-e2e-run run-api` creates the selected API's `.active`, runs its entire
+canonical case group, then atomically replaces that API's `latest`. A rerun
+keeps only the latest complete focused snapshot.
 
-```yaml
-version: 2
-current_run: 20260714041519-pluto
-current_run_state: 20260714041519-pluto/state.yaml
-current_aggregate_report: 20260714041519-pluto/reports/20260714041519-pluto.json
-status: partial_evidence
+Focused attempts support migration diagnosis and repair. They never update:
+
+- the run-key `state.yaml` cumulative full-round counters;
+- `.migration/e2e-progress.yaml`;
+- full-round `.active` or `latest`;
+- verified API excludes.
+
+A focused pass is not completion proof because later shared changes may
+invalidate it.
+
+## Full-Round State
+
+`traffic-e2e-run run` requires complete, non-overlapping grouping for every
+published case. It creates the run-key `.active`, executes one full round, and
+only after terminal evidence atomically replaces the previous global `latest`.
+Readers see either the old complete snapshot or the new complete snapshot,
+never a mix of API results from different rounds.
+
+The run-key `state.yaml` stores cumulative full-round counts.
+Global `latest/state.yaml` stores only the most recent full round and its exact
+case/API evidence. `.migration/local/current.yaml` points to that terminal
+state.
+
+If the full round fails, use focused `run-api` for diagnosis and repair, then
+start a new full round from the beginning. Never patch a failed `.active`
+snapshot into success. One successful full round with every API and case
+passing and finalized, complete, clean evidence sets progress to `complete`.
+
+## Completion
+
+Only a terminal full round can complete progress:
+
+- every API and every case must pass;
+- canonical replay evidence must be finalized, complete, and clean;
+- a failed, incomplete, or interrupted full round reports
+  `status: needs_attention`;
+- a successful API is `verified` only with complete, clean global evidence;
+- the same terminal sequence is applied idempotently during recovery.
+
+## Recovery
+
+Use runner commands, never filesystem surgery:
+
+```bash
+traffic-e2e-run status  --target-root <target> --case-source <source>
+traffic-e2e-run abort   --target-root <target> --case-source <source>
+traffic-e2e-run recover --target-root <target> --case-source <source>
 ```
 
-Resolve these paths relative to `.migration/local/`. This file is local working
-state and MUST NOT be treated as canonical proof.
-
-## Per-Run State
-
-Store recording-specific evidence under
-`.migration/local/<run-key>/state.yaml`:
-
-- exact `case_source` and source revision when available
-- selected scope plus ordered API groups with method, source route, grouping
-  status/report/manifest, member directories, exact case ids, and terminal state
-- rewrite input and PR E2E case sources
-- exact E2E command
-- canonical `config/replay.yaml` path, content fingerprint, validation result,
-  applicable-rule usage, and unused applicable rules
-- direct audit result proving `expected-response.json` is read only by final
-  assertion comparison and never constructs actual behavior
-- final replay session ids, report paths, and results
-- aggregate status, report path, and published/reported/unreported counts
-- case-path-pattern status and persisted plan, apply, and final verification
-  JSON report paths when applicable
-- verified-exclude threshold, trailing success count, assertion report,
-  recorder-owned ensure-report path, and terminal status
-- target test result, startup result, and quality commands
-- work branch, focused commit SHA, PR target, and PR URL
-- missing evidence and blocker classifications
-- recorder and route-pattern feedback
-- schema, metrics, dynamic-value, architecture, and semantics review statuses
-- external artifact URIs and fingerprints when artifact storage is available
-
-Keep raw replay reports in the recording tree. If the case source contains a
-collection/run, multiple selected cases, or multiple standard replay reports or
-sessions, call `traffic-replay-aggregate` with the exact completion case source
-root, repeated exact `--case-id` and `--session-id` values, and both
-`--fail-on-incomplete` and `--fail-on-dirty`; write the output under
-`.migration/local/<run-key>/reports/`. Only a single published case replayed in
-one finalized session/report may use
-`not_applicable_single_case_single_session`. Write target-owned assertion,
-grouping, route-pattern, verified-exclude, and blocker reports under the same
-run-specific `reports/` directory. The target repository owns E2E orchestration
-and business assertion results; it must not reimplement recorder report parsing
-or counting.
-
-Use only these route-pattern terminal states: `applied`,
-`confirmed_no_change`, `not_applicable_missing_source_repo`,
-`not_applicable_missing_managed_config`, or `blocked`. Use only these
-verified-exclude terminal states: `applied`, `already_present`,
-`below_threshold`, `not_applicable_missing_verified_excludes_config`, or
-`blocked`. Use delivery state `pr_created` only after the pushed branch and PR
-target are independently verified. Local state records canonical evidence paths
-and identifiers; it is never proof by itself.
-
-## Consistency
-
-Require `.migration/local/current.yaml`, the per-run state, E2E command,
-aggregate `case_source`, group inventory, and raw report roots to describe the
-same recording source and exact case-id set. Require each selected case to occur
-in exactly one group and the published recording tree to remain unchanged.
-Treat a mismatch as an incomplete migration report. Historical local run state
-is immutable except when the same recording source is deliberately replayed
-again.
+`abort` publishes an interrupted full round so the failure is explicit.
+`recover` restores an interrupted atomic publication or aborts a surviving
+global `.active`. Focused `.active` evidence remains isolated and cannot become
+the global `latest`.

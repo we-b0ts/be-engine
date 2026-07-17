@@ -8,8 +8,8 @@ constrained Kafka traffic to JSONL files.
 
 The primary crate is in `src/` and builds the `traffic-recorder-proxy` binary.
 Recorder configuration starts from `config/recorder.example.toml`. Local command
-facades live in `scripts/`, especially `traffic-record`, `traffic-replay`, and
-`traffic-recorder-config`.
+facades live in `scripts/`, especially `traffic-record`, `traffic-replay`,
+`traffic-e2e-run`, and `traffic-recorder-config`.
 
 ## Read First
 

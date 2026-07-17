@@ -8,10 +8,11 @@ Inspect the target E2E entrypoint, startup, config, and dependency endpoints.
 Reuse its existing framework and add only the smallest missing recorded-E2E
 orchestration.
 
-When the target uses `e2e-rewrite-migration`, invoke recorded E2E through its
-standard `scripts/<project>-cli e2e --case-dir <path>` facade. The facade may
-delegate to Cargo, Make, Go, npm, or another native test command, but it must
-preserve the recorder-owned lifecycle and explicit case-source contract below.
+When the target uses `e2e-rewrite-migration`, invoke recorded E2E through
+`traffic-e2e-run run-api` or `traffic-e2e-run run`. The runner calls the target's
+standard `scripts/<project>-cli e2e --case-dir <path>` once per active case.
+That facade executes the request and final assertion; it does not own replay
+startup, begin/end, aggregate, progress, or verified-exclude operations.
 
 Clear inherited HTTP proxy variables only inside the recorded-E2E invocation so
 dependency traffic can reach DNS and fake-IP interception. Do not change the
@@ -23,7 +24,8 @@ older batch.
 
 ## Recorder Commands
 
-Use recorder-owned commands from `PATH`:
+The normal AI-facing command is `traffic-e2e-run`. It owns these recorder
+commands internally:
 
 - `traffic-replay` for the replay session;
 - `traffic-replay-target` for a prebuilt in-process target command;
@@ -31,9 +33,10 @@ Use recorder-owned commands from `PATH`:
 - `traffic-replay-cli` for readiness, case lifecycle, finalization, and cleanup;
 - `traffic-replay-aggregate` for final multi-case or multi-session coverage.
 
-Do not generate replacements inside the target project or hardcode the recorder
-repository or skill path. A target facade may orchestrate these commands but is
-never completion evidence.
+Do not call the low-level commands to assemble a parallel lifecycle during a
+standard migration. They remain available for human diagnostics and recorder
+development. Do not generate replacements inside the target project or
+hardcode the recorder repository or skill path.
 
 If the installed recorder or replay tools are incompatible with the published
 cases or required replay configuration, stop and report the exact
@@ -62,18 +65,19 @@ listeners; it is not an isolation bypass.
 
 ## Required Sequence
 
-For the exact selected case source and case ids:
+For each focused API attempt or full round, the runner performs:
 
-1. validate the explicit source-controlled replay policy;
+1. validate canonical grouping and the explicit source-controlled replay policy;
 2. start `traffic-replay` with the policy and exact case selection;
 3. call `traffic-replay-cli wait-ready` and stop on any readiness failure;
-4. retain pre-request evidence of the dependency-producing target process user;
+4. start the normal target once and confirm its status;
 5. call `traffic-replay-cli begin <case-id>`;
-6. execute the target request or job through its genuine dependency path;
-7. run the target's final response assertion;
+6. call the target facade for that exact case, exercising genuine dependencies
+   and performing the final response assertion;
 8. call `traffic-replay-cli end <case-id> --fail-on-dirty`;
 9. repeat begin through end for every exact selected case;
-10. call `traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete`.
+10. stop the target once and call
+    `traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete`.
 
 Require the final version-five report to contain the exact selected case ids,
 session id, `finalized: true`, and `finalized_at`. Successful finalization
@@ -81,19 +85,20 @@ atomically publishes the report and stops replay. A validation or report-write
 failure leaves the session incomplete; retain diagnostics and use the canonical
 stop command only for cleanup.
 
-For an in-process E2E, one staged target invocation handles one active case. The
-fixed-user process MUST NOT own the control socket or call lifecycle commands.
+One target-facade invocation handles one active case. The target MUST NOT own
+the control socket or call lifecycle commands.
 
 ## Aggregate
 
-After all selected sessions finalize, read
+After the selected session finalizes, the full runner reads
 [aggregate-report.md](aggregate-report.md) and run
 `traffic-replay-aggregate` for every collection or run source, multi-case
 selection, or source replayed through multiple reports or sessions. Pass the
 exact repeated case and session ids and both fail-on-incomplete and
 fail-on-dirty gates.
 
-Only one published case replayed in exactly one finalized session may record
+Focused attempts retain their own aggregate for diagnosis but never update
+global progress or excludes. Only one published case replayed in exactly one finalized session may record
 `not_applicable_single_case_single_session`. Never enumerate report paths,
 manually total counters, merge overlapping attempts without exact session
 selection, or substitute target test output for recorder evidence.

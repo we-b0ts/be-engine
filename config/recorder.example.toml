@@ -111,6 +111,13 @@ headers = {}
 name = "record-api"
 methods = []
 path_prefixes = ["/api"]
+# Host-wide exceptions are add-only recorder feedback. Add one only after
+# source inspection proves the host belongs to an API-independent process-level
+# task. Replay still treats unmatched target calls as dirty.
+# BEGIN AI-MANAGED ALLOWED UNUSED HTTP HOSTS
+allowed_unused_http_hosts = [
+]
+# END AI-MANAGED ALLOWED UNUSED HTTP HOSTS
 # Keep project-specific patterns in the destination repository's recorder
 # config. The recorded-E2E replay workflow can add safe patterns after it
 # associates actual case URIs with source routes.

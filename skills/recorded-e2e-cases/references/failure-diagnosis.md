@@ -16,6 +16,27 @@ Classify failures in this order:
 Prefer dependency and environment explanations until the recorded dependency
 evidence is complete and replay is known to be hit.
 
+## Repository Migration Lesson
+
+Before retrying, search the migration notes linked from target `AGENTS.md` for
+the same symptom or root cause. During migration, upsert a concise lesson only
+after the fix passes verification and the lesson applies across multiple APIs,
+cases, or migration scopes. Repetition within one API, case, run, or otherwise
+narrow scenario does not qualify:
+
+```markdown
+## <stable problem title>
+
+- Trigger: <recognizable symptom or context>
+- Avoid: <ineffective action that must not be repeated>
+- Resolved by: <verified diagnostic or fix>
+```
+
+Update an existing lesson rather than adding a duplicate. Keep only durable,
+repository-specific prevention knowledge. Do not include protocol traces,
+absolute machine paths, case or session ids, run counts, secrets, raw logs, or
+generated replay state. The lesson does not prove success or completion.
+
 ## Incomplete Recording Signals
 
 Stop and report a missing-dependency list when any required behavior lacks
@@ -38,6 +59,16 @@ evidence:
 
 Do not infer missing rows, messages, cache entries, or third-party responses
 from `expected-response.json` alone.
+
+For repeated unused HTTP exchanges, group observations by normalized host only
+for diagnosis. A host may be proposed for
+`allowed_unused_http_hosts` when source proves all traffic to it belongs to an
+API-independent process-level task, the target emitted no matching request,
+and the focused API's response assertions and all other dependencies pass.
+Active-case timing is not API ownership evidence for an asynchronous task.
+Plan/apply the host once for the named recording rule and restart focused
+replay. Never include raw query values, credentials, headers, or bodies in the
+plan or diagnosis.
 
 ## Replay Failure Signals
 

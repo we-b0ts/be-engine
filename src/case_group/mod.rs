@@ -1,7 +1,7 @@
 mod discovery;
 mod index;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -16,7 +16,7 @@ use self::discovery::{
 };
 use self::index::{
     CaseGroupRecord, load_or_create_index, prepare_output_path, reject_membership_overlap,
-    reject_route_overlap, validate_index, write_index,
+    reject_route_overlap, validate_index, validate_loaded_index, write_index,
 };
 
 #[derive(Debug, Clone)]
@@ -77,6 +77,31 @@ pub struct CaseGroupEnsureResult {
     pub source_revision: String,
     pub case_inventory_id: String,
     pub report_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CanonicalCase {
+    pub case_id: String,
+    pub case_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CanonicalCaseGroup {
+    pub group_id: String,
+    pub method: String,
+    pub source_route: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    pub case_inventory_id: String,
+    pub cases: Vec<CanonicalCase>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CaseGroupInventory {
+    pub case_source: PathBuf,
+    pub source_revision: String,
+    pub case_inventory_id: String,
+    pub groups: Vec<CanonicalCaseGroup>,
 }
 
 pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureResult> {
@@ -208,6 +233,91 @@ pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureRes
         status,
         &index.source_revision,
     ))
+}
+
+pub fn load_complete_case_group_inventory(
+    output: &Path,
+    case_source: &Path,
+) -> Result<CaseGroupInventory> {
+    load_case_group_inventory_impl(output, case_source, true)
+}
+
+pub fn load_case_group_inventory(output: &Path, case_source: &Path) -> Result<CaseGroupInventory> {
+    load_case_group_inventory_impl(output, case_source, false)
+}
+
+fn load_case_group_inventory_impl(
+    output: &Path,
+    case_source: &Path,
+    require_complete: bool,
+) -> Result<CaseGroupInventory> {
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let cases = discover_published_cases(&case_source)?;
+    ensure!(!cases.is_empty(), "case source contains no published cases");
+    reject_duplicate_case_ids(&cases)?;
+
+    let output = fs::canonicalize(output)
+        .with_context(|| format!("failed to resolve group index {}", output.display()))?;
+    let payload = fs::read(&output)
+        .with_context(|| format!("failed to read group index {}", output.display()))?;
+    let index: index::CaseGroupIndex = serde_json::from_slice(&payload)
+        .with_context(|| format!("failed to parse group index {}", output.display()))?;
+    validate_loaded_index(&index, &output, &case_source, &cases)?;
+
+    let cases_by_id = cases
+        .iter()
+        .map(|case| (case.id.as_str(), case))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected_ids = BTreeSet::new();
+    let mut groups = Vec::with_capacity(index.groups.len());
+    for group in &index.groups {
+        let mut selected_cases = Vec::with_capacity(group.case_ids.len());
+        for case_id in &group.case_ids {
+            let case = cases_by_id.get(case_id.as_str()).with_context(|| {
+                format!("group {} references missing case {case_id}", group.group_id)
+            })?;
+            ensure!(
+                selected_ids.insert(case_id.clone()),
+                "case id {case_id} belongs to overlapping groups"
+            );
+            selected_cases.push(CanonicalCase {
+                case_id: case_id.clone(),
+                case_dir: case.dir.clone(),
+            });
+        }
+        groups.push(CanonicalCaseGroup {
+            group_id: group.group_id.clone(),
+            method: group.method.clone(),
+            source_route: group.source_route.clone(),
+            pattern: group.pattern.clone(),
+            case_inventory_id: group.case_inventory_id.clone(),
+            cases: selected_cases,
+        });
+    }
+
+    let published_ids = cases
+        .iter()
+        .map(|case| case.id.clone())
+        .collect::<BTreeSet<_>>();
+    let ungrouped = published_ids
+        .difference(&selected_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    if require_complete {
+        ensure!(
+            ungrouped.is_empty(),
+            "case group index does not cover published cases: {}",
+            ungrouped.join(", ")
+        );
+    }
+
+    Ok(CaseGroupInventory {
+        case_source,
+        source_revision: index.source_revision,
+        case_inventory_id: inventory_id(&cases),
+        groups,
+    })
 }
 
 fn validate_options(options: &CaseGroupOptions) -> Result<()> {

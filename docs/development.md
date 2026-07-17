@@ -134,6 +134,7 @@ ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
 ln -sf "$PWD/scripts/traffic-replay-aggregate" "$HOME/.local/bin/traffic-replay-aggregate"
 ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
 ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
+ln -sf "$PWD/scripts/traffic-e2e-run" "$HOME/.local/bin/traffic-e2e-run"
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir
 ```
@@ -149,6 +150,50 @@ traffic-replay --policy ../target/config/replay.yaml path/to/case-dir
 
 See [replay-policy.md](replay-policy.md) for the v1 schema, assertion-only
 `expected-response.json` contract, rule scoping, and dirty-evidence behavior.
+
+Recorder-owned host exceptions for API-independent process-level tasks remain
+in the target repository's `recorder.toml`, not `replay.yaml`. Preview and
+apply an add-only host after source inspection proves that all traffic to that
+host belongs to a task that is unrelated to API handlers:
+
+```bash
+traffic-recorder-config allowed-unused-http-hosts plan \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --host cs.aliyuncs.com \
+  --format json
+
+traffic-recorder-config allowed-unused-http-hosts apply \
+  --config ../target/config/recorder.toml \
+  --rule record-api \
+  --host cs.aliyuncs.com \
+  --format json
+```
+
+The tool bootstraps and then owns an
+`AI-MANAGED ALLOWED UNUSED HTTP HOSTS` block inside the selected named
+`[[http_gateway.rules]]` entry. Plans are add-only, sorted, deduplicated, and
+safe against concurrent config changes. One host applies to every case selected
+by that recording rule, independent of which active API window happened to
+capture the process-level task.
+
+Pass the config and rule together for direct replay:
+
+```bash
+traffic-replay \
+  --policy ../target/config/replay.yaml \
+  --recorder-config ../target/config/recorder.toml \
+  --recording-rule record-api \
+  path/to/case-dir
+```
+
+Replay reads the rule once at startup. A case-owned recorded HTTP exchange for
+an allowed host that remains unconsumed is moved from
+`unused_case_http_exchanges` to
+`allowed_unused_case_http_exchanges`, which is retained as a non-blocking
+diagnostic. A target request that is unmatched or unsupported remains dirty,
+including requests sent to an allowed host. Restart replay after applying a
+new host; running sessions do not hot-reload recorder configuration.
 
 `traffic-replay` also uses the fixed `trp-record` owner filter. Run the
 dependency-producing target process as that user. Build steps, replay itself,
@@ -317,6 +362,89 @@ assertion report schema, exact case-set gate, and runtime behavior.
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup
 failures, not product behavior evidence.
+
+## Migration E2E Runner
+
+Use `scripts/traffic-e2e-run` as the high-level migration replay facade.
+Initialize the target repository once:
+
+```bash
+traffic-e2e-run init \
+  --target-root ../target \
+  --project-cli scripts/<project>-cli \
+  --replay-policy config/replay.yaml \
+  --pr-base <confirmed-base-branch> \
+  --recorder-config config/recorder.toml \
+  --recording-rule record-api
+```
+
+The command requires confirmed `project_cli`, `replay_policy`, and
+`pr_base` values, validates that the branch exists locally or as an
+`origin` remote-tracking branch, checks that `.migration/local/` is ignored,
+and generates `.migration/e2e.yaml`:
+
+```yaml
+version: 4
+project_cli: scripts/<project>-cli
+replay_policy: config/replay.yaml
+pr_base: <confirmed-base-branch>
+recorder_config: config/recorder.toml
+recording_rule: record-api
+local_root: local
+```
+
+The recorder flags are optional only as a pair. Existing configuration is not
+overwritten unless `--force` is explicit. If the file is missing, every other
+runner command points back to `init`; if any required field is missing or the
+configured PR base no longer resolves, every command fails before using
+migration state. `prepare`, `run-api`, and `run` require a named feature branch
+different from `pr_base`. Do not hand-write it. Prepare each API only after
+confirming whether its source URI is static or dynamic:
+
+```bash
+traffic-e2e-run prepare \
+  --target-root ../target \
+  --case-source recordings/<run>/<rule> \
+  --case-dir recordings/<run>/<rule>/<group> \
+  --method GET \
+  --source-route '/api/widgets/:id' \
+  --pattern '/api/widgets/*' \
+  --source-revision <revision>
+```
+
+Use the returned group id for the focused migration loop:
+
+```bash
+traffic-e2e-run run-api \
+  --target-root ../target \
+  --case-source recordings/<run>/<rule> \
+  --api 'GET /api/widgets/*'
+```
+
+Focused attempts persist only per-API diagnostic evidence. They do not change
+the full-round report, progress, or verified excludes.
+
+After every published case is prepared exactly once and focused migration is
+ready, run the complete regression round:
+
+```bash
+traffic-e2e-run run \
+  --target-root ../target \
+  --case-source recordings/<run>/<rule>
+```
+
+The full command starts replay once, loads bootstrap and all selected cases
+once, starts the target once, executes cases sequentially, finalizes and
+aggregates once, runs per-API verified-exclude ensure, atomically publishes
+`.migration/local/<run-key>/latest/`, and updates the Git-eligible
+`.migration/e2e-progress.yaml`.
+
+One terminal full round reaches `status: complete` when every case and API
+passes and canonical replay evidence is finalized, complete, and clean. A
+failed or interrupted round remains `needs_attention`; after focused repair,
+start a new full round from the beginning. Use `status`, `abort`, and `recover`
+for interrupted global rounds. Generated local JSON/YAML is tool-owned and must
+not be edited by AI or by target scripts.
 
 When using setup scripts directly, always pair `up` with `down`:
 

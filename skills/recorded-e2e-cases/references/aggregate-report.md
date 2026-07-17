@@ -57,13 +57,17 @@ proof that the target project's response assertion passed.
 
 The aggregate sums the recorder-owned MySQL, HTTP, Redis, Memcached, and Kafka
 matched, unmatched, unsupported, unsafe, unused-case, and unused-bootstrap
-counters. `dirty` follows the raw recorder report semantics. Target-specific
-noise policies or test-runner results remain outside this report and must not
-be silently folded into its numbers.
+counters. Unused bootstrap counters are retained as startup diagnostics but do
+not make a report dirty: traffic observed before readiness is outside the
+selected E2E contract and may legitimately be absent from a partial migration.
+Unmatched, unsupported, unsafe, and unused case-owned evidence still makes the
+report dirty. Target-specific noise policies or test-runner results remain
+outside this report and must not be silently folded into its numbers.
 
 Version five replay reports retain only a bounded prefix of successful event
 details. The aggregate MUST use their explicit success counters, not the
-retained array lengths. Dirty and unused arrays remain complete evidence.
+retained array lengths. Dirty and unused arrays remain complete evidence,
+including non-blocking unused-bootstrap diagnostics.
 
 Completion runs MUST use both `--fail-on-incomplete` and `--fail-on-dirty`.
 The output is written before either gate returns a non-zero exit status so the
