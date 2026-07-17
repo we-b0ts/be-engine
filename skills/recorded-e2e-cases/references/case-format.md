@@ -164,7 +164,8 @@ Case dependency records also include `case_dependency_matched_by`:
 
 Case dependency records compact `client_process` to the process id. The global
 `traffic.jsonl` may contain full process details, but normal replay should rely
-on the case-local dependency files.
+on recorder-owned consumption of the case-local dependency files. Target code,
+tests, commands, and config must never consume them as fixtures.
 
 `dependencies-debug.jsonl` contains raw/protocol records such as `mysql_query`,
 `mysql_response`, and `mysql_packet`. Keep these out of normal E2E assertions
@@ -175,8 +176,9 @@ type codes, and flags belong in debug records, not normal semantic replay data.
 `dependencies.jsonl`. It is not the source of dependency data. Use it to see
 which protocols, CRUD operations, tables, hosts, side effects, and errors the
 case recorded, and to verify that replay covered the behavior that matters for
-the case. If it is absent, derive the same working summary from
-`dependencies.jsonl`.
+the case. If it is absent, rely on recorder replay reports and inspect the
+semantic file only for recorder diagnosis; do not derive a target-project
+fixture or behavior source.
 
 Summary rules:
 
@@ -186,8 +188,9 @@ Summary rules:
   failures are semantic dependencies and should appear in `dependencies.jsonl`
   and the summary.
 - Dependency coverage should compare response-driving, auth/session, and
-  required side-effect behavior. Unrelated/background traffic may be listed but
-  should not fail replay when it is safely ignored with evidence.
+  required side-effect behavior. Unrelated/background classification is useful
+  recorder feedback, but replay-policy version one cannot waive dirty case
+  exchanges; re-record or keep the case incomplete.
 
 First-version summary fields:
 
@@ -213,8 +216,9 @@ First-version summary fields:
   bytes, forwarding counts, and errors.
 - `proxy_errors`: protocol and target error counts.
 
-The summary is an index for coverage and triage. Use `dependencies.jsonl` as the
-source of replay payloads and exact dependency behavior.
+The summary is an index for coverage and triage. Recorder-owned replay alone
+uses `dependencies.jsonl` as the source of replay payloads and exact dependency
+behavior.
 
 `bootstrap-dependencies.jsonl` is a run-level replay dependency file for
 startup/bootstrap traffic captured before the first case starts. It is shared
