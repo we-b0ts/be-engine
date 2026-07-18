@@ -108,73 +108,78 @@ impl ReplayState {
     ) -> Option<MatchedExchange> {
         let normalized_sql = sql.map(normalize_sql);
         let active_case_id = self.active_case_id.clone();
-        for index in 0..self.mysql.exchanges.len() {
-            let exchange = &self.mysql.exchanges[index];
-            if exchange.consumed || exchange.record.command != command {
-                continue;
-            }
-            if !active_case_matches(active_case_id.as_deref(), exchange) {
-                continue;
-            }
-            if !identity_matches_exchange(identity, &exchange.identity) {
-                continue;
-            }
-            let Some(recorded_sql) = exchange.record.sql.as_deref().map(normalize_sql) else {
-                continue;
-            };
-            let policy_decision = if let Some(policy) = &self.replay_policy {
-                let context = MysqlPolicyContext {
-                    case_id: active_case_id.as_deref(),
-                    identity,
-                    command,
-                    recorded_sql: exchange.record.sql.as_deref(),
-                    sql,
-                    recorded: exchange.record.params.as_deref(),
-                    actual: params,
-                };
-                if Some(recorded_sql) != normalized_sql
-                    && !policy.allows_mysql_sql_difference(&context)
+        for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
+            for index in 0..self.mysql.exchanges.len() {
+                let exchange = &self.mysql.exchanges[index];
+                if exchange.source != source
+                    || exchange.consumed
+                    || exchange.record.command != command
                 {
                     continue;
                 }
-                match policy.preview_mysql(&context, Utc::now()) {
-                    Ok(decision) => decision,
-                    Err(_) => continue,
+                if !active_case_matches(active_case_id.as_deref(), exchange) {
+                    continue;
                 }
-            } else if Some(recorded_sql) != normalized_sql {
-                continue;
-            } else if params_match(exchange.record.params.as_deref(), params) {
-                PolicyDecision::default()
-            } else {
-                continue;
-            };
-            let exchange = self.mysql.exchanges[index].clone();
-            self.mysql.exchanges[index].consumed = true;
-            if let Some(policy) = &mut self.replay_policy {
-                policy.commit(active_case_id.as_deref(), policy_decision);
+                if !identity_matches_exchange(identity, &exchange.identity) {
+                    continue;
+                }
+                let Some(recorded_sql) = exchange.record.sql.as_deref().map(normalize_sql) else {
+                    continue;
+                };
+                let policy_decision = if let Some(policy) = &self.replay_policy {
+                    let context = MysqlPolicyContext {
+                        case_id: active_case_id.as_deref(),
+                        identity,
+                        command,
+                        recorded_sql: exchange.record.sql.as_deref(),
+                        sql,
+                        recorded: exchange.record.params.as_deref(),
+                        actual: params,
+                    };
+                    if Some(recorded_sql) != normalized_sql
+                        && !policy.allows_mysql_sql_difference(&context)
+                    {
+                        continue;
+                    }
+                    match policy.preview_mysql(&context, Utc::now()) {
+                        Ok(decision) => decision,
+                        Err(_) => continue,
+                    }
+                } else if Some(recorded_sql) != normalized_sql {
+                    continue;
+                } else if params_match(exchange.record.params.as_deref(), params) {
+                    PolicyDecision::default()
+                } else {
+                    continue;
+                };
+                let exchange = self.mysql.exchanges[index].clone();
+                self.mysql.exchanges[index].consumed = true;
+                if let Some(policy) = &mut self.replay_policy {
+                    policy.commit(active_case_id.as_deref(), policy_decision);
+                }
+                let matched = MatchedQueryReport {
+                    case_id: exchange.case_id.clone(),
+                    target: Some(exchange.identity.target.clone()),
+                    database: exchange.identity.database.clone(),
+                    username: exchange.identity.username.clone(),
+                    source: exchange.source,
+                    index,
+                    command: command.to_string(),
+                    sql: sql.map(ToOwned::to_owned),
+                    params: params.map(ToOwned::to_owned),
+                    status: exchange.record.response.status.clone(),
+                };
+                push_success_detail(
+                    &mut self.mysql.events.matched_query_count,
+                    &mut self.mysql.events.matched_queries,
+                    matched,
+                );
+                return Some(MatchedExchange {
+                    source: exchange.source,
+                    index,
+                    record: exchange.record.clone(),
+                });
             }
-            let matched = MatchedQueryReport {
-                case_id: exchange.case_id.clone(),
-                target: Some(exchange.identity.target.clone()),
-                database: exchange.identity.database.clone(),
-                username: exchange.identity.username.clone(),
-                source: exchange.source,
-                index,
-                command: command.to_string(),
-                sql: sql.map(ToOwned::to_owned),
-                params: params.map(ToOwned::to_owned),
-                status: exchange.record.response.status.clone(),
-            };
-            push_success_detail(
-                &mut self.mysql.events.matched_query_count,
-                &mut self.mysql.events.matched_queries,
-                matched,
-            );
-            return Some(MatchedExchange {
-                source: exchange.source,
-                index,
-                record: exchange.record.clone(),
-            });
         }
         None
     }
@@ -187,22 +192,27 @@ impl ReplayState {
     ) -> Option<(ReplaySource, usize)> {
         let normalized_sql = sql.map(normalize_sql);
         let active_case_id = self.active_case_id.clone();
-        for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
-            if exchange.consumed || exchange.record.command != command {
-                continue;
+        for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
+            for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
+                if exchange.source != source
+                    || exchange.consumed
+                    || exchange.record.command != command
+                {
+                    continue;
+                }
+                if !active_case_matches(active_case_id.as_deref(), exchange) {
+                    continue;
+                }
+                if !identity_matches_exchange(identity, &exchange.identity) {
+                    continue;
+                }
+                let recorded_sql = exchange.record.sql.as_deref().map(normalize_sql);
+                if recorded_sql != normalized_sql {
+                    continue;
+                }
+                exchange.consumed = true;
+                return Some((exchange.source, index));
             }
-            if !active_case_matches(active_case_id.as_deref(), exchange) {
-                continue;
-            }
-            if !identity_matches_exchange(identity, &exchange.identity) {
-                continue;
-            }
-            let recorded_sql = exchange.record.sql.as_deref().map(normalize_sql);
-            if recorded_sql != normalized_sql {
-                continue;
-            }
-            exchange.consumed = true;
-            return Some((exchange.source, index));
         }
         None
     }
@@ -213,30 +223,32 @@ impl ReplayState {
         sql: &str,
     ) -> StatementMetadata {
         let normalized_sql = normalize_sql(sql);
-        for exchange in &self.mysql.exchanges {
-            if exchange.record.command != "COM_STMT_EXECUTE" {
-                continue;
-            }
-            if !self.active_case_matches(exchange) {
-                continue;
-            }
-            if !identity_matches_exchange(identity, &exchange.identity) {
-                continue;
-            }
-            if exchange
-                .record
-                .sql
-                .as_deref()
-                .is_some_and(|recorded_sql| normalize_sql(recorded_sql) == normalized_sql)
-            {
-                return StatementMetadata {
-                    param_count: exchange
-                        .record
-                        .params
-                        .as_ref()
-                        .map_or_else(|| count_sql_placeholders(sql), Vec::len),
-                    columns: exchange.record.response.columns.clone(),
-                };
+        for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
+            for exchange in &self.mysql.exchanges {
+                if exchange.source != source || exchange.record.command != "COM_STMT_EXECUTE" {
+                    continue;
+                }
+                if !self.active_case_matches(exchange) {
+                    continue;
+                }
+                if !identity_matches_exchange(identity, &exchange.identity) {
+                    continue;
+                }
+                if exchange
+                    .record
+                    .sql
+                    .as_deref()
+                    .is_some_and(|recorded_sql| normalize_sql(recorded_sql) == normalized_sql)
+                {
+                    return StatementMetadata {
+                        param_count: exchange
+                            .record
+                            .params
+                            .as_ref()
+                            .map_or_else(|| count_sql_placeholders(sql), Vec::len),
+                        columns: exchange.record.response.columns.clone(),
+                    };
+                }
             }
         }
         StatementMetadata {

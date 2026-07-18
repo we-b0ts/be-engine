@@ -78,7 +78,7 @@ pub(crate) fn analyze_command(
         "COM_STMT_EXECUTE" => prepared_sql
             .map(analyze_sql)
             .unwrap_or_else(|| MysqlAccessAnalysis::from_class(OperationClass::Unknown)),
-        "COM_STMT_PREPARE" | "COM_INIT_DB" | "COM_PING" | "COM_QUIT" => {
+        "COM_STMT_PREPARE" | "COM_STMT_CLOSE" | "COM_INIT_DB" | "COM_PING" | "COM_QUIT" => {
             MysqlAccessAnalysis::from_class(OperationClass::Session)
         }
         _ => MysqlAccessAnalysis::from_class(OperationClass::Unknown),

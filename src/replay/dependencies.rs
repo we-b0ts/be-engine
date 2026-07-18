@@ -122,6 +122,9 @@ pub(super) async fn load_dependency_file(
         if exchange.command == "COM_STMT_PREPARE" && exchange.response.status == "stmt_prepare" {
             continue;
         }
+        if crate::mysql::wire::is_no_response_command(&exchange.command) {
+            continue;
+        }
         let identity = identity_from_exchange(&exchange)
             .or_else(|| {
                 exchange

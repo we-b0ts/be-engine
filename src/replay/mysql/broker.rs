@@ -109,6 +109,28 @@ pub(in crate::replay) async fn handle_connection(
             "COM_STMT_EXECUTE" => {
                 handle_stmt_execute(&mut stream, state.clone(), &mut session, &packet).await?;
             }
+            "COM_STMT_CLOSE" => {
+                let statement_id = read_u32_le(&packet.payload, 1);
+                let mut state = state.lock().await;
+                let identity = session.identity();
+                if let Some(statement_id) = statement_id {
+                    session.statements.remove(&statement_id);
+                    state.record_builtin(
+                        &identity,
+                        "COM_STMT_CLOSE",
+                        None,
+                        "prepared statement closed without a server response",
+                    );
+                } else {
+                    state.record_unsupported(
+                        &identity,
+                        "COM_STMT_CLOSE",
+                        None,
+                        None,
+                        "COM_STMT_CLOSE packet missing statement id",
+                    );
+                }
+            }
             other => {
                 {
                     let mut state = state.lock().await;

@@ -340,6 +340,183 @@ async fn allowed_insert_reaches_upstream_and_records_exchange_and_audit() {
     handler.abort();
 }
 
+#[tokio::test]
+async fn stmt_close_is_forwarded_without_recording_an_incomplete_exchange() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    let state = AppState::new(config).await.unwrap();
+
+    let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client_addr = client_listener.local_addr().unwrap();
+    let client = tokio::spawn(TcpStream::connect(client_addr));
+    let (proxy_client, _) = client_listener.accept().await.unwrap();
+    let mut client = client.await.unwrap().unwrap();
+
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream_listener.local_addr().unwrap();
+    let proxy_upstream = tokio::spawn(TcpStream::connect(upstream_addr));
+    let (mut upstream, _) = upstream_listener.accept().await.unwrap();
+    let proxy_upstream = proxy_upstream.await.unwrap().unwrap();
+
+    let handler = tokio::spawn(handle_connected_mysql(
+        proxy_client,
+        proxy_upstream,
+        state.clone(),
+        MysqlConnectionContext {
+            route_name: Some("test".to_string()),
+            listen_addr: client_addr.to_string(),
+            client_addr: None,
+            client_process: None,
+            target_host: Some("mysql.test".to_string()),
+            target_port: Some(3306),
+            target_addr: Some("mysql.test:3306".to_string()),
+            upstream_addr: upstream_addr.to_string(),
+        },
+    ));
+
+    upstream
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 0,
+                payload: vec![0x0a],
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(read_packet(&mut client).await.unwrap().is_some());
+
+    client
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 1,
+                payload: login_payload("pluto"),
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(read_packet(&mut upstream).await.unwrap().is_some());
+    upstream
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 2,
+                payload: vec![0x00],
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(read_packet(&mut client).await.unwrap().is_some());
+
+    client
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 0,
+                payload: [vec![0x16], b"SELECT 1".to_vec()].concat(),
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    let prepare = read_packet(&mut upstream).await.unwrap().unwrap();
+    assert_eq!(prepare.payload[0], 0x16);
+    let mut prepare_ok = vec![0x00];
+    prepare_ok.extend_from_slice(&7_u32.to_le_bytes());
+    prepare_ok.extend_from_slice(&0_u16.to_le_bytes());
+    prepare_ok.extend_from_slice(&0_u16.to_le_bytes());
+    prepare_ok.push(0);
+    prepare_ok.extend_from_slice(&0_u16.to_le_bytes());
+    upstream
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 1,
+                payload: prepare_ok,
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read_packet(&mut client).await.unwrap().unwrap().payload[0],
+        0x00
+    );
+
+    client
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 0,
+                payload: [vec![0x19], 7_u32.to_le_bytes().to_vec()].concat(),
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    let close = read_packet(&mut upstream).await.unwrap().unwrap();
+    assert_eq!(
+        close.payload,
+        [vec![0x19], 7_u32.to_le_bytes().to_vec()].concat()
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), read_packet(&mut client))
+            .await
+            .is_err()
+    );
+
+    client
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 0,
+                payload: vec![0x0e],
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read_packet(&mut upstream).await.unwrap().unwrap().payload,
+        vec![0x0e]
+    );
+    upstream
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 1,
+                payload: vec![0x00],
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        read_packet(&mut client).await.unwrap().unwrap().payload[0],
+        0x00
+    );
+
+    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    let events = traffic
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert!(events.iter().any(|event| {
+        event["event_type"] == "mysql_query" && event["command"] == "COM_STMT_CLOSE"
+    }));
+    assert!(!events.iter().any(|event| {
+        event["event_type"] == "mysql_exchange" && event["command"] == "COM_STMT_CLOSE"
+    }));
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["command"] == "COM_UNKNOWN_0x19")
+    );
+    handler.abort();
+}
+
 fn login_payload(database: &str) -> Vec<u8> {
     let mut payload = vec![0_u8; 32];
     payload[0..4].copy_from_slice(&crate::mysql::wire::CLIENT_CONNECT_WITH_DB.to_le_bytes());
