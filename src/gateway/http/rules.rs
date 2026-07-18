@@ -2,7 +2,7 @@ use hyper::header::HOST;
 use hyper::{HeaderMap, Method, Uri};
 
 use crate::config::{HttpGatewayRuleConfig, VerifiedApiExcludesConfig};
-use crate::path_pattern::{matches_path_pattern, matches_segment_pattern, segments};
+use crate::path_pattern::{matches_path_pattern, segments};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Match {
@@ -42,7 +42,7 @@ pub(super) fn evaluate_request(
 
     if let Some(api) = verified_excludes.apis.iter().find(|api| {
         api.method == method.as_str()
-            && matches_segment_pattern(&api.path_pattern, uri.path())
+            && matches_path_pattern(&api.path_pattern, uri.path())
             && rules.iter().any(|rule| {
                 rule.name.as_deref() == Some(api.rule.as_str())
                     && rule_matches(rule, method, uri, headers)
@@ -329,6 +329,57 @@ mod tests {
             ),
             RuleDecision::Unmatched
         );
+    }
+
+    #[test]
+    fn verified_api_exclude_supports_trailing_catch_all_pattern() {
+        let verified_excludes = VerifiedApiExcludesConfig {
+            consecutive_successes: 3,
+            apis: vec![crate::config::VerifiedApiExclude {
+                rule: "record-api".to_string(),
+                method: "GET".to_string(),
+                path_pattern: "/api/namespaces/**".to_string(),
+            }],
+        };
+        let rules = vec![HttpGatewayRuleConfig {
+            name: Some("record-api".to_string()),
+            methods: vec!["GET".to_string()],
+            path_prefixes: vec!["/api".to_string()],
+            ..Default::default()
+        }];
+        let nested = Request::builder()
+            .method("GET")
+            .uri("/api/namespaces/default/pods/nginx")
+            .body(())
+            .unwrap();
+        let prefix_only = Request::builder()
+            .method("GET")
+            .uri("/api/namespaces")
+            .body(())
+            .unwrap();
+
+        assert!(matches!(
+            evaluate_request(
+                &verified_excludes,
+                &[],
+                &rules,
+                nested.method(),
+                nested.uri(),
+                nested.headers(),
+            ),
+            RuleDecision::Excluded { .. }
+        ));
+        assert!(matches!(
+            evaluate_request(
+                &verified_excludes,
+                &[],
+                &rules,
+                prefix_only.method(),
+                prefix_only.uri(),
+                prefix_only.headers(),
+            ),
+            RuleDecision::Matched(_)
+        ));
     }
 
     #[test]

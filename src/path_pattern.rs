@@ -33,10 +33,6 @@ pub(crate) fn matches_path_pattern(pattern: &str, path: &str) -> bool {
             .all(|(actual, expected)| *expected == "*" || actual == expected)
 }
 
-pub(crate) fn matches_segment_pattern(pattern: &str, path: &str) -> bool {
-    !segments(pattern).contains(&"**") && matches_path_pattern(pattern, path)
-}
-
 pub(crate) fn path_patterns_overlap(left: &str, right: &str) -> bool {
     let Some((left_segments, left_catch_all)) = parsed_pattern(left) else {
         return false;
@@ -100,20 +96,14 @@ mod tests {
 
     #[test]
     fn segment_wildcard_consumes_exactly_one_segment() {
-        assert!(matches_segment_pattern("/api/users/*", "/api/users/alice"));
-        assert!(!matches_segment_pattern(
+        assert!(matches_path_pattern("/api/users/*", "/api/users/alice"));
+        assert!(!matches_path_pattern(
             "/api/users/*",
             "/api/users/alice/details"
         ));
-        assert!(!matches_segment_pattern("/api/users/*", "/api/users"));
-        assert!(!matches_segment_pattern(
-            "/api/users/*",
-            "/api/users/alice/"
-        ));
-        assert!(!matches_segment_pattern(
-            "/api/users/*",
-            "/api//users/alice"
-        ));
+        assert!(!matches_path_pattern("/api/users/*", "/api/users"));
+        assert!(!matches_path_pattern("/api/users/*", "/api/users/alice/"));
+        assert!(!matches_path_pattern("/api/users/*", "/api//users/alice"));
     }
 
     #[test]
@@ -131,10 +121,6 @@ mod tests {
             "/api/namespaces"
         ));
         assert!(!matches_path_pattern("/api/**/pods", "/api/default/pods"));
-        assert!(!matches_segment_pattern(
-            "/api/namespaces/**",
-            "/api/namespaces/default/pods"
-        ));
     }
 
     #[test]

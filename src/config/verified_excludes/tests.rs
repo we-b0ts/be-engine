@@ -49,6 +49,35 @@ fn plans_and_applies_exclude_after_threshold_successes() {
 }
 
 #[test]
+fn accepts_only_a_trailing_verified_exclude_catch_all() {
+    assert!(validate_path_pattern("/api/users").is_ok());
+    assert!(validate_path_pattern("/api/users/*").is_ok());
+    assert!(validate_path_pattern("/api/namespaces/**").is_ok());
+
+    let embedded = validate_path_pattern("/api/user-*").unwrap_err();
+    assert!(embedded.to_string().contains("whole path segment"));
+
+    let non_trailing = validate_path_pattern("/api/**/pods").unwrap_err();
+    assert!(non_trailing.to_string().contains("final path segment"));
+}
+
+#[test]
+fn ensure_applies_a_trailing_catch_all_exclude() {
+    let fixture = fixture(&[true, true, true], true, false);
+
+    let report = ensure_verified_api_exclude(fixture.feedback_for("/api/users/**")).unwrap();
+
+    assert_eq!(report.status, VerifiedApiExcludeEnsureStatus::Applied);
+    assert_eq!(report.plan.matching_case_ids.len(), 3);
+    assert_eq!(report.plan.path_pattern, "/api/users/**");
+    let config = AppConfig::load(&fixture.config_path).unwrap();
+    assert_eq!(
+        config.http_gateway.verified_excludes.apis[0].path_pattern,
+        "/api/users/**"
+    );
+}
+
+#[test]
 fn failed_latest_assertion_resets_consecutive_success_count() {
     let fixture = fixture(&[true, true, false], true, false);
     let plan = plan_verified_api_exclude(fixture.feedback()).unwrap();
@@ -190,11 +219,15 @@ struct Fixture {
 
 impl Fixture {
     fn feedback(&self) -> VerifiedApiExcludeFeedback {
+        self.feedback_for("/api/users/*")
+    }
+
+    fn feedback_for(&self, path_pattern: &str) -> VerifiedApiExcludeFeedback {
         VerifiedApiExcludeFeedback {
             config_path: self.config_path.clone(),
             rule_name: "record-api".to_string(),
             method: "GET".to_string(),
-            path_pattern: "/api/users/*".to_string(),
+            path_pattern: path_pattern.to_string(),
             aggregate_report: self.aggregate_path.clone(),
             assertion_report: self.assertion_path.clone(),
         }

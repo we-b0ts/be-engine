@@ -8,7 +8,7 @@ use hyper::Uri;
 use serde::Deserialize;
 
 use super::VerifiedApiExclude;
-use crate::path_pattern::matches_segment_pattern;
+use crate::path_pattern::matches_path_pattern;
 
 const AGGREGATE_VERSION: u8 = 1;
 const ASSERTION_REPORT_VERSION: u8 = 1;
@@ -221,7 +221,7 @@ fn matching_cases(case_source: &Path, candidate: &VerifiedApiExclude) -> Result<
                 });
             if request.matched_rule.as_deref() == Some(candidate.rule.as_str())
                 && request.method == candidate.method
-                && matches_segment_pattern(&candidate.path_pattern, &path)
+                && matches_path_pattern(&candidate.path_pattern, &path)
             {
                 let case_id = directory
                     .file_name()

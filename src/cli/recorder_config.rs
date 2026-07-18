@@ -76,7 +76,10 @@ struct VerifiedExcludeArgs {
     rule: String,
     #[arg(long)]
     method: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Exact path or recorder path pattern: '*' matches one segment; trailing '**' matches one or more remaining segments"
+    )]
     pattern: String,
     #[arg(long)]
     aggregate_report: PathBuf,

@@ -218,6 +218,8 @@ exclusions. After the configured number of consecutive clean cases also pass
 the target response assertions, run the managed `verified-excludes ensure`
 command. It decides the threshold outcome, applies an eligible exact
 `rule + method + path_pattern`, and verifies convergence without AI judgment.
+The path pattern may be exact, use whole-segment `*`, or end in a `**`
+catch-all matching one or more remaining segments.
 On the next recorder start, matching traffic goes to `fallback_upstream`
 without creating a case.
 See [Verified API Excludes](docs/verified-api-excludes.md).

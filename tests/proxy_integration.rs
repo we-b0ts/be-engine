@@ -213,7 +213,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
         apis: vec![VerifiedApiExclude {
             rule: "record-path".to_string(),
             method: "GET".to_string(),
-            path_pattern: "/record/verified/*".to_string(),
+            path_pattern: "/record/verified/**".to_string(),
         }],
     };
     config.mysql.enabled = false;
@@ -229,7 +229,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     assert!(matched_response.contains("matched"));
     let excluded_response = raw_http_get(gateway_addr, "/record/private").await;
     assert!(excluded_response.contains("fallback"));
-    let verified_response = raw_http_get(gateway_addr, "/record/verified/123").await;
+    let verified_response = raw_http_get(gateway_addr, "/record/verified/default/pods/nginx").await;
     assert!(verified_response.contains("fallback"));
     let fallback_response = raw_http_get(gateway_addr, "/recording/two").await;
     assert!(fallback_response.contains("fallback"));
@@ -244,7 +244,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
     assert!(jsonl.contains("/record"));
     assert!(!jsonl.contains("/record/private"));
-    assert!(!jsonl.contains("/record/verified/123"));
+    assert!(!jsonl.contains("/record/verified/default/pods/nginx"));
     assert!(!jsonl.contains("/recording/two"));
 }
 
