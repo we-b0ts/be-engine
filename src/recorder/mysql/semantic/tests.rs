@@ -281,6 +281,42 @@ fn parses_prepare_and_execute_binary_resultset() {
     );
 }
 
+#[test]
+fn stmt_close_clears_prepared_statement_without_creating_exchange() {
+    let mut tracker = MysqlSemanticTracker::new(1024, test_context());
+    let prepare = MysqlPacket {
+        sequence_id: 0,
+        payload: [vec![0x16], b"select name from user".to_vec()].concat(),
+    };
+    let command = parse_client_command(&prepare).unwrap();
+    tracker.start_query(Uuid::nil(), 1, &command, &prepare, None, None);
+    tracker.observe_packet(&MysqlPacket {
+        sequence_id: 1,
+        payload: prepare_ok(9, 0, 0),
+    });
+    tracker
+        .finish_active("stmt_prepare", None, None, Some(1))
+        .expect("prepare exchange");
+    assert!(tracker.statements.contains_key(&9));
+
+    let close = MysqlPacket {
+        sequence_id: 0,
+        payload: [vec![0x19], 9_u32.to_le_bytes().to_vec()].concat(),
+    };
+    let command = parse_client_command(&close).unwrap();
+    assert!(
+        tracker
+            .observe_no_response_command(&command, &close)
+            .is_none()
+    );
+    assert!(!tracker.statements.contains_key(&9));
+    assert!(
+        tracker
+            .finish_active("incomplete", None, None, None)
+            .is_none()
+    );
+}
+
 fn prepare_ok(statement_id: u32, num_columns: u16, num_params: u16) -> Vec<u8> {
     let mut payload = vec![0x00];
     payload.extend_from_slice(&statement_id.to_le_bytes());

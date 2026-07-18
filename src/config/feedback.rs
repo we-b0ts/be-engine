@@ -276,14 +276,23 @@ fn validate_feedback_pattern(pattern: &str, rule: &HttpGatewayRuleConfig) -> Res
         "pattern must use canonical path separators with no trailing slash: {pattern}"
     );
     ensure!(
-        segments.contains(&"*"),
-        "feedback pattern must contain at least one '*' that consumes a whole path segment: {pattern}"
+        segments
+            .iter()
+            .any(|segment| *segment == "*" || *segment == "**"),
+        "feedback pattern must contain at least one '*' or '**' wildcard occupying a whole path segment: {pattern}"
     );
     ensure!(
         segments
             .iter()
-            .all(|segment| !segment.contains('*') || *segment == "*"),
-        "wildcards must consume exactly one whole path segment: {pattern}"
+            .all(|segment| !segment.contains('*') || *segment == "*" || *segment == "**"),
+        "wildcards must occupy a whole path segment: {pattern}"
+    );
+    ensure!(
+        segments
+            .iter()
+            .enumerate()
+            .all(|(index, segment)| *segment != "**" || index == segments.len() - 1),
+        "'**' catch-all must be the final path segment: {pattern}"
     );
 
     if !rule.path_prefixes.is_empty() {

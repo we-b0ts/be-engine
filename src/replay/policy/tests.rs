@@ -52,6 +52,7 @@ fn binds_and_references_runtime_mysql_uuid() {
     let fixture = policy_fixture(mysql_policy());
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
     let identity = mysql_identity();
+    observe_mysql_policy_exchanges(&mut runtime, &identity);
     let now = Utc.with_ymd_and_hms(2026, 7, 15, 4, 30, 0).unwrap();
     let recorded_insert = values(&[
         json!("11111111-1111-4111-8111-111111111111"),
@@ -106,6 +107,7 @@ fn rejects_changed_reference_and_out_of_window_time() {
     let fixture = policy_fixture(mysql_policy());
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
     let identity = mysql_identity();
+    observe_mysql_policy_exchanges(&mut runtime, &identity);
     let now = Utc.with_ymd_and_hms(2026, 7, 15, 4, 30, 0).unwrap();
     let recorded_insert = values(&[
         json!("11111111-1111-4111-8111-111111111111"),
@@ -203,7 +205,16 @@ fn rejects_changed_reference_and_out_of_window_time() {
 #[test]
 fn validates_scoped_http_query_fields() {
     let fixture = policy_fixture(http_policy());
-    let runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+    let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+    runtime.observe_recorded_http_exchange(
+        Some(CASE_ID),
+        &TargetKey {
+            host: "ecs.aliyuncs.com".to_string(),
+            port: 443,
+        },
+        "GET",
+        "/?Action=DescribeInstances&SignatureNonce=recorded",
+    );
     let decision = runtime
         .preview_http(
             &HttpPolicyContext {
@@ -230,6 +241,77 @@ fn validates_scoped_http_query_fields() {
             .to_string()
             .contains("both replay-policy fields and global ignores")
     );
+}
+
+#[test]
+fn unscoped_rules_are_applicable_only_with_matching_recorded_dependencies() {
+    let fixture = policy_fixture(mysql_policy());
+    let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+    let identity = mysql_identity();
+
+    assert!(runtime.report().rules.iter().all(|rule| !rule.applicable));
+    runtime.observe_recorded_mysql_exchange(
+        None,
+        &identity,
+        "COM_STMT_EXECUTE",
+        Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
+    );
+    assert!(runtime.report().rules.iter().all(|rule| !rule.applicable));
+    runtime.observe_recorded_mysql_exchange(
+        Some(CASE_ID),
+        &identity,
+        "COM_STMT_EXECUTE",
+        Some("SELECT 1"),
+    );
+    assert!(runtime.report().rules.iter().all(|rule| !rule.applicable));
+
+    runtime.observe_recorded_mysql_exchange(
+        Some(CASE_ID),
+        &identity,
+        "COM_STMT_EXECUTE",
+        Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
+    );
+    let report = runtime.report();
+    assert!(report.rules[0].applicable);
+    assert!(!report.rules[1].applicable);
+    assert_eq!(report.unused_applicable_rule_ids, vec!["audit-insert"]);
+}
+
+#[test]
+fn scoped_and_unscoped_rules_compose_on_disjoint_mysql_params() {
+    let fixture = policy_fixture(composed_mysql_policy());
+    let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+    let identity = mysql_identity();
+    let sql = "UPDATE request_log_202607 SET elapsed=?, response_data=? WHERE uuid=?";
+    runtime.observe_recorded_mysql_exchange(
+        Some(CASE_ID),
+        &identity,
+        "COM_STMT_EXECUTE",
+        Some(sql),
+    );
+    let recorded = values(&[json!(10), json!("old"), json!("request-id")]);
+    let actual = values(&[json!(20), json!("new"), json!("request-id")]);
+
+    let decision = runtime
+        .preview_mysql(
+            &MysqlPolicyContext {
+                case_id: Some(CASE_ID),
+                identity: &identity,
+                command: "COM_STMT_EXECUTE",
+                recorded_sql: Some(sql),
+                sql: Some(sql),
+                recorded: Some(&recorded),
+                actual: Some(&actual),
+            },
+            Utc::now(),
+        )
+        .unwrap();
+    runtime.commit(Some(CASE_ID), decision);
+
+    let report = runtime.report();
+    assert_eq!(report.rules[0].matches, 1);
+    assert_eq!(report.rules[1].matches, 1);
+    assert!(report.unused_applicable_rule_ids.is_empty());
 }
 
 struct PolicyFixture {
@@ -284,9 +366,6 @@ version: 1
 expected_response: assertions_only
 rules:
   - id: audit-insert
-    case:
-      method: GET
-      path: /api/resource/token
     protocol: mysql
     target:
       host: audit.example.test
@@ -307,9 +386,6 @@ rules:
             format: "%Y-%m-%d %H:%M:%S"
             timezone: "+08:00"
   - id: audit-update
-    case:
-      method: GET
-      path: /api/resource/token
     protocol: mysql
     target:
       host: audit.example.test
@@ -331,9 +407,6 @@ version: 1
 expected_response: assertions_only
 rules:
   - id: aliyun-signature
-    case:
-      method: GET
-      path: /api/resource/token
     protocol: http
     target:
       host: ecs.aliyuncs.com
@@ -351,6 +424,61 @@ rules:
             relative_to: replay_now
             tolerance: 2s
 "#
+}
+
+fn composed_mysql_policy() -> &'static str {
+    r#"
+version: 1
+expected_response: assertions_only
+rules:
+  - id: audit-update
+    protocol: mysql
+    target:
+      host: audit.example.test
+      port: 3306
+    mysql:
+      command: COM_STMT_EXECUTE
+      sql: "UPDATE request_log_* SET * WHERE uuid=?"
+      database: pluto_audit
+      username: audit_user
+      params:
+        0:
+          bind: audit_elapsed
+  - id: resource-token-audit-response
+    case:
+      method: GET
+      path: /api/resource/token
+    protocol: mysql
+    target:
+      host: audit.example.test
+      port: 3306
+    mysql:
+      command: COM_STMT_EXECUTE
+      sql: "UPDATE request_log_* SET * WHERE uuid=?"
+      database: pluto_audit
+      username: audit_user
+      params:
+        1:
+          validate: non_empty
+"#
+}
+
+fn observe_mysql_policy_exchanges(
+    runtime: &mut ReplayPolicyRuntime,
+    identity: &ReplaySessionIdentity,
+) {
+    runtime.observe_recorded_mysql_exchange(
+        Some(CASE_ID),
+        identity,
+        "COM_STMT_EXECUTE",
+        Some("INSERT INTO request_log_202606 (uuid, request_time) VALUES (?, ?)"),
+    );
+    runtime.observe_recorded_mysql_exchange(
+        Some(CASE_ID),
+        identity,
+        "COM_STMT_EXECUTE",
+        Some("UPDATE request_log_202607 SET response_status=200 WHERE uuid=?"),
+    );
 }
 
 fn mysql_identity() -> ReplaySessionIdentity {

@@ -84,6 +84,18 @@ path = "/"
 success_status = 200
 interval_ms = 1000
 
+# Limit successfully published cases independently for each resolved case
+# pattern in the current recorder run. Once a pattern reaches its limit,
+# later matching requests go directly to fallback_upstream without creating a
+# case. Static paths use their exact URI path as the pattern.
+[http_gateway.case_limits]
+default = 100
+
+# Dynamic overrides must exactly match an entry in case_path_patterns below.
+[http_gateway.case_limits.overrides]
+# "/api/example/*" = 20
+# "/api/namespaces/**" = 50
+
 # APIs with enough consecutive clean replay + response-assertion successes can
 # be added here by `traffic-recorder-config verified-excludes ensure`. The
 # command, not AI logic, owns the threshold decision, apply, and verification.
@@ -121,9 +133,12 @@ allowed_unused_http_hosts = [
 # Keep project-specific patterns in the destination repository's recorder
 # config. The recorded-E2E replay workflow can add safe patterns after it
 # associates actual case URIs with source routes.
+# '*' matches one non-empty path segment; a final '**' matches one or more
+# remaining path segments.
 # BEGIN AI-MANAGED CASE PATH PATTERNS
 # source_revision = ""
 case_path_patterns = [
+  # "/api/example/*",
 ]
 # END AI-MANAGED CASE PATH PATTERNS
 headers = {}

@@ -349,26 +349,35 @@ pub(crate) async fn handle_connected_mysql(
                 }
                 let sequence = c2s_query_sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 c2s_dependency_ownerships.insert(sequence, dependency_ownership);
+                let expects_server_response = command.expects_server_response();
                 let flushed_response = {
                     let mut tracker = c2s_response_tracker.lock().await;
-                    tracker.start_query(
-                        c2s_connection_id,
-                        sequence,
-                        command.command_name.clone(),
-                        c2s_client_addr.clone(),
-                        c2s_client_process.clone(),
-                    )
+                    if expects_server_response {
+                        tracker.start_query(
+                            c2s_connection_id,
+                            sequence,
+                            command.command_name.clone(),
+                            c2s_client_addr.clone(),
+                            c2s_client_process.clone(),
+                        )
+                    } else {
+                        tracker.finish_active("incomplete")
+                    }
                 };
                 let flushed_exchange = {
                     let mut tracker = c2s_semantic_tracker.lock().await;
-                    tracker.start_query(
-                        c2s_connection_id,
-                        sequence,
-                        &command,
-                        &packet,
-                        c2s_client_addr.clone(),
-                        c2s_client_process.clone(),
-                    )
+                    if expects_server_response {
+                        tracker.start_query(
+                            c2s_connection_id,
+                            sequence,
+                            &command,
+                            &packet,
+                            c2s_client_addr.clone(),
+                            c2s_client_process.clone(),
+                        )
+                    } else {
+                        tracker.observe_no_response_command(&command, &packet)
+                    }
                 };
                 record_query_completion(
                     &c2s_state,
@@ -392,6 +401,9 @@ pub(crate) async fn handle_connected_mysql(
                 if let Err(err) = record_event(&c2s_state, query_event, ownership.as_ref()).await {
                     c2s_dependency_ownerships.take(sequence);
                     return Err(err);
+                }
+                if !expects_server_response {
+                    c2s_dependency_ownerships.take(sequence);
                 }
             }
             upstream_write.write_all(&packet.to_wire_bytes()).await?;

@@ -58,7 +58,7 @@ traffic-recorder-config verified-excludes ensure \
   --config config/recorder.toml \
   --rule <recording-rule> \
   --method <METHOD> \
-  --pattern '<exact-path-or-segment-pattern>' \
+  --pattern '<exact-or-recorder-path-pattern>' \
   --aggregate-report <aggregate.json> \
   --assertion-report <assertions.json> \
   --format json
@@ -79,7 +79,10 @@ shell, or target-language code. `ensure` owns plan, threshold decision, atomic
 apply, and final convergence verification. Keep `plan` and `apply` only for
 human diagnostics.
 
-An applied entry is keyed by recording rule, method, and exact or
-whole-segment-`*` path pattern. It takes effect after the recorder reloads the
-updated config; matching requests use `fallback_upstream` and create no case.
-Version one is add-only and never deletes exclusions automatically.
+An applied entry is keyed by recording rule, method, and path pattern. Exact
+paths, whole-segment `*`, and a final `**` catch-all are supported with the same
+semantics as canonical API groups: `*` matches one non-empty segment and a final
+`**` matches one or more remaining segments. It takes effect after the recorder
+reloads the updated config; matching requests use `fallback_upstream` and
+create no case. The managed operation is add-only and never deletes exclusions
+automatically.

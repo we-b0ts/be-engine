@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use hyper::Uri;
 use url::form_urlencoded;
 
-pub(super) fn uri_path(value: &str) -> String {
+pub(in crate::replay) fn uri_path(value: &str) -> String {
     value
         .parse::<Uri>()
         .ok()

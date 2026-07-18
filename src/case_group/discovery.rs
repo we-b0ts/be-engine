@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
+use crate::path_pattern::matches_path_pattern;
+
 use super::{normalize_route, validate_single_line};
 
 const IGNORED_DIRECTORIES: &[&str] = &["failed", "staging", ".replay", ".partial", ".truncated"];
@@ -184,7 +186,7 @@ pub(super) fn select_group_cases(
     let selected = if let Some(pattern) = pattern {
         cases
             .iter()
-            .filter(|case| case.method == method && pattern_matches(pattern, &case.path))
+            .filter(|case| case.method == method && matches_path_pattern(pattern, &case.path))
             .cloned()
             .collect::<Vec<_>>()
     } else {
@@ -212,7 +214,7 @@ pub(super) fn select_group_cases(
         for case in all_member_cases {
             let matches = case.method == method
                 && pattern.map_or(case.path == source_route, |value| {
-                    pattern_matches(value, &case.path)
+                    matches_path_pattern(value, &case.path)
                 });
             ensure!(
                 matches,
@@ -227,16 +229,6 @@ pub(super) fn select_group_cases(
     let mut selected = selected;
     selected.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(selected)
-}
-
-fn pattern_matches(pattern: &str, path: &str) -> bool {
-    let pattern = pattern.split('/').collect::<Vec<_>>();
-    let path = path.split('/').collect::<Vec<_>>();
-    pattern.len() == path.len()
-        && pattern
-            .iter()
-            .zip(path)
-            .all(|(expected, actual)| *expected == "*" || *expected == actual)
 }
 
 pub(super) fn inventory_id(cases: &[PublishedCase]) -> String {

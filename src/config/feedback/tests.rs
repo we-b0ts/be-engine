@@ -149,6 +149,23 @@ fn rejects_non_segment_wildcard_and_pattern_outside_rule() {
 }
 
 #[test]
+fn accepts_only_a_trailing_catch_all() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("recorder.toml");
+    fs::write(&path, CONFIG).unwrap();
+
+    let mut catch_all = feedback(&path, CasePathPatternAuthority::Focused);
+    catch_all.patterns = vec!["/api/k8s/v1/namespaces/**".to_string()];
+    let plan = plan_case_path_pattern_feedback(catch_all).unwrap();
+    assert_eq!(plan.report().added, vec!["/api/k8s/v1/namespaces/**"]);
+
+    let mut non_trailing = feedback(&path, CasePathPatternAuthority::Focused);
+    non_trailing.patterns = vec!["/api/namespaces/**/pods".to_string()];
+    let error = plan_case_path_pattern_feedback(non_trailing).unwrap_err();
+    assert!(error.to_string().contains("final path segment"));
+}
+
+#[test]
 fn apply_detects_changes_after_plan() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("recorder.toml");

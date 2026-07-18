@@ -2,12 +2,18 @@ use hyper::header::HOST;
 use hyper::{HeaderMap, Method, Uri};
 
 use crate::config::{HttpGatewayRuleConfig, VerifiedApiExcludesConfig};
-use crate::path_pattern::{matches_segment_pattern, segments};
+use crate::path_pattern::{matches_path_pattern, segments};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Match {
     pub(super) name: String,
     pub(super) case_path_patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CaseGroup {
+    pub(super) pattern: String,
+    pub(super) directory: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +42,7 @@ pub(super) fn evaluate_request(
 
     if let Some(api) = verified_excludes.apis.iter().find(|api| {
         api.method == method.as_str()
-            && matches_segment_pattern(&api.path_pattern, uri.path())
+            && matches_path_pattern(&api.path_pattern, uri.path())
             && rules.iter().any(|rule| {
                 rule.name.as_deref() == Some(api.rule.as_str())
                     && rule_matches(rule, method, uri, headers)
@@ -64,15 +70,18 @@ pub(super) fn evaluate_request(
         .map_or(RuleDecision::Unmatched, RuleDecision::Matched)
 }
 
-pub(super) fn case_uri_group(uri: &Uri, patterns: &[String]) -> String {
+pub(super) fn resolve_case_group(uri: &Uri, patterns: &[String]) -> CaseGroup {
     let path = uri.path();
-    let group_path = patterns
+    let pattern = patterns
         .iter()
-        .find(|pattern| matches_segment_pattern(pattern, path))
-        .map(String::as_str)
-        .unwrap_or(path);
+        .find(|pattern| matches_path_pattern(pattern, path))
+        .cloned()
+        .unwrap_or_else(|| path.to_string());
 
-    case_group_from_path(group_path)
+    CaseGroup {
+        directory: case_group_from_path(&pattern),
+        pattern,
+    }
 }
 
 pub(super) fn request_authority(uri: &Uri, headers: &HeaderMap) -> Option<String> {
@@ -138,12 +147,10 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
 fn case_group_from_path(path: &str) -> String {
     let group = segments(path)
         .into_iter()
-        .map(|segment| {
-            if segment == "*" {
-                "wildcard".to_string()
-            } else {
-                segment.to_string()
-            }
+        .map(|segment| match segment {
+            "*" => "wildcard".to_string(),
+            "**" => "catchall".to_string(),
+            _ => segment.to_string(),
         })
         .collect::<Vec<_>>()
         .join("-");
@@ -325,16 +332,73 @@ mod tests {
     }
 
     #[test]
+    fn verified_api_exclude_supports_trailing_catch_all_pattern() {
+        let verified_excludes = VerifiedApiExcludesConfig {
+            consecutive_successes: 3,
+            apis: vec![crate::config::VerifiedApiExclude {
+                rule: "record-api".to_string(),
+                method: "GET".to_string(),
+                path_pattern: "/api/namespaces/**".to_string(),
+            }],
+        };
+        let rules = vec![HttpGatewayRuleConfig {
+            name: Some("record-api".to_string()),
+            methods: vec!["GET".to_string()],
+            path_prefixes: vec!["/api".to_string()],
+            ..Default::default()
+        }];
+        let nested = Request::builder()
+            .method("GET")
+            .uri("/api/namespaces/default/pods/nginx")
+            .body(())
+            .unwrap();
+        let prefix_only = Request::builder()
+            .method("GET")
+            .uri("/api/namespaces")
+            .body(())
+            .unwrap();
+
+        assert!(matches!(
+            evaluate_request(
+                &verified_excludes,
+                &[],
+                &rules,
+                nested.method(),
+                nested.uri(),
+                nested.headers(),
+            ),
+            RuleDecision::Excluded { .. }
+        ));
+        assert!(matches!(
+            evaluate_request(
+                &verified_excludes,
+                &[],
+                &rules,
+                prefix_only.method(),
+                prefix_only.uri(),
+                prefix_only.headers(),
+            ),
+            RuleDecision::Matched(_)
+        ));
+    }
+
+    #[test]
     fn builds_case_group_from_full_path() {
         assert_eq!(
-            case_uri_group(&"/api/users/list?x=1".parse().unwrap(), &[]),
-            "api-users-list"
+            resolve_case_group(&"/api/users/list?x=1".parse().unwrap(), &[]),
+            CaseGroup {
+                pattern: "/api/users/list".to_string(),
+                directory: "api-users-list".to_string(),
+            }
         );
         assert_eq!(
-            case_uri_group(&"/api/users/123/xxx".parse().unwrap(), &[]),
+            resolve_case_group(&"/api/users/123/xxx".parse().unwrap(), &[]).directory,
             "api-users-123-xxx"
         );
-        assert_eq!(case_uri_group(&"/".parse().unwrap(), &[]), "root");
+        assert_eq!(
+            resolve_case_group(&"/".parse().unwrap(), &[]).directory,
+            "root"
+        );
     }
 
     #[test]
@@ -342,16 +406,39 @@ mod tests {
         let patterns = vec!["/api/users/*/xxx".to_string()];
 
         assert_eq!(
-            case_uri_group(&"/api/users/alice/xxx?x=1".parse().unwrap(), &patterns),
+            resolve_case_group(&"/api/users/alice/xxx?x=1".parse().unwrap(), &patterns),
+            CaseGroup {
+                pattern: "/api/users/*/xxx".to_string(),
+                directory: "api-users-wildcard-xxx".to_string(),
+            }
+        );
+        assert_eq!(
+            resolve_case_group(&"/api/users/bob/xxx".parse().unwrap(), &patterns).directory,
             "api-users-wildcard-xxx"
         );
         assert_eq!(
-            case_uri_group(&"/api/users/bob/xxx".parse().unwrap(), &patterns),
-            "api-users-wildcard-xxx"
-        );
-        assert_eq!(
-            case_uri_group(&"/api/users/bob/other".parse().unwrap(), &patterns),
+            resolve_case_group(&"/api/users/bob/other".parse().unwrap(), &patterns).directory,
             "api-users-bob-other"
+        );
+    }
+
+    #[test]
+    fn builds_case_group_from_trailing_catch_all_pattern() {
+        let patterns = vec!["/api/namespaces/**".to_string()];
+
+        assert_eq!(
+            resolve_case_group(
+                &"/api/namespaces/default/pods/nginx".parse().unwrap(),
+                &patterns
+            ),
+            CaseGroup {
+                pattern: "/api/namespaces/**".to_string(),
+                directory: "api-namespaces-catchall".to_string(),
+            }
+        );
+        assert_eq!(
+            resolve_case_group(&"/api/namespaces".parse().unwrap(), &patterns).directory,
+            "api-namespaces"
         );
     }
 }

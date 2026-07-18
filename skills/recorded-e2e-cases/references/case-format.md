@@ -30,8 +30,10 @@ replay fixtures.
 
 `uri-group` is usually built from the full request URI path joined by hyphens,
 for example `/api/users/list` becomes `api-users-list`. When the recorder rule
-defines segment-wildcard `case_path_patterns`, the matching pattern defines the
-group instead: `/api/users/123/xxx` with `/api/users/*/xxx` becomes
+defines `case_path_patterns`, the matching pattern defines the group instead.
+`*` matches exactly one non-empty path segment; a final `**` is a catch-all
+matching one or more remaining path segments. For example,
+`/api/users/123/xxx` with `/api/users/*/xxx` becomes
 `api-users-wildcard-xxx`.
 
 A path ending at `recordings/<run-id>/<rule>/<uri-group>` is a case collection,

@@ -4,12 +4,13 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_recorder_proxy::{
     AppConfig, AppState, CaseGroupOptions, ReplayAggregateOptions, ReplayAllowedUnusedHttpConfig,
-    ReplayConfig, ReplayControlConfig, aggregate_replay_reports_with_options, ensure_case_group,
-    run_replay, run_replay_control, validate_replay_policy,
+    ReplayConfig, ReplayControlConfig, ResponseRuleFeedback, ResponseRuleKind,
+    aggregate_replay_reports_with_options, ensure_case_group, plan_response_rule, run_replay,
+    run_replay_control, validate_replay_policy,
 };
 use uuid::Uuid;
 
@@ -63,7 +64,10 @@ struct CaseGroupEnsureArgs {
     method: String,
     #[arg(long)]
     source_route: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Recorder path pattern: '*' matches one segment; trailing '**' matches one or more remaining segments"
+    )]
     pattern: Option<String>,
     #[arg(long)]
     source_revision: String,
@@ -143,6 +147,47 @@ enum ReplayPolicyCommand {
         #[arg(long)]
         policy: PathBuf,
     },
+    ResponseRule {
+        #[command(subcommand)]
+        command: ResponseRuleCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ResponseRuleCommand {
+    Plan(ResponseRuleArgs),
+    Apply(ResponseRuleArgs),
+}
+
+#[derive(Debug, Args)]
+struct ResponseRuleArgs {
+    #[arg(long)]
+    policy: PathBuf,
+    #[arg(long, value_enum)]
+    kind: ResponseRuleKindArg,
+    #[arg(long)]
+    api: String,
+    #[arg(long = "json-pointer", required = true)]
+    json_pointers: Vec<String>,
+    #[arg(long)]
+    assertion_report: PathBuf,
+    #[arg(long)]
+    aggregate_report: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ResponseRuleKindArg {
+    Dynamic,
+    Unordered,
+}
+
+impl From<ResponseRuleKindArg> for ResponseRuleKind {
+    fn from(value: ResponseRuleKindArg) -> Self {
+        match value {
+            ResponseRuleKindArg::Dynamic => Self::Dynamic,
+            ResponseRuleKindArg::Unordered => Self::Unordered,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -197,6 +242,27 @@ fn run_replay_policy_command(args: ReplayPolicyArgs) -> Result<()> {
         ReplayPolicyCommand::Validate { policy } => {
             let report = validate_replay_policy(&policy)?;
             serde_json::to_writer_pretty(io::stdout(), &report)?;
+            println!();
+            Ok(())
+        }
+        ReplayPolicyCommand::ResponseRule { command } => {
+            let (args, apply) = match command {
+                ResponseRuleCommand::Plan(args) => (args, false),
+                ResponseRuleCommand::Apply(args) => (args, true),
+            };
+            let plan = plan_response_rule(ResponseRuleFeedback {
+                policy_path: args.policy,
+                kind: args.kind.into(),
+                api: args.api,
+                json_pointers: args.json_pointers,
+                assertion_report: args.assertion_report,
+                aggregate_report: args.aggregate_report,
+            })?;
+            if apply {
+                serde_json::to_writer_pretty(io::stdout(), &plan.apply()?)?;
+            } else {
+                serde_json::to_writer_pretty(io::stdout(), plan.report())?;
+            }
             println!();
             Ok(())
         }

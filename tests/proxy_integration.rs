@@ -213,7 +213,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
         apis: vec![VerifiedApiExclude {
             rule: "record-path".to_string(),
             method: "GET".to_string(),
-            path_pattern: "/record/verified/*".to_string(),
+            path_pattern: "/record/verified/**".to_string(),
         }],
     };
     config.mysql.enabled = false;
@@ -229,7 +229,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     assert!(matched_response.contains("matched"));
     let excluded_response = raw_http_get(gateway_addr, "/record/private").await;
     assert!(excluded_response.contains("fallback"));
-    let verified_response = raw_http_get(gateway_addr, "/record/verified/123").await;
+    let verified_response = raw_http_get(gateway_addr, "/record/verified/default/pods/nginx").await;
     assert!(verified_response.contains("fallback"));
     let fallback_response = raw_http_get(gateway_addr, "/recording/two").await;
     assert!(fallback_response.contains("fallback"));
@@ -244,7 +244,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
     assert!(jsonl.contains("/record"));
     assert!(!jsonl.contains("/record/private"));
-    assert!(!jsonl.contains("/record/verified/123"));
+    assert!(!jsonl.contains("/record/verified/default/pods/nginx"));
     assert!(!jsonl.contains("/recording/two"));
 }
 
@@ -352,6 +352,91 @@ async fn http_gateway_allows_only_one_active_matched_case() {
         .collect::<Vec<_>>();
     assert_eq!(case_dirs.len(), 1);
     assert!(case_dirs[0].join("request.json").exists());
+}
+
+#[tokio::test]
+async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let matched_upstream = spawn_http_response_upstream("matched", 3).await;
+    let fallback_upstream = spawn_http_response_upstream("fallback", 2).await;
+    let gateway_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http.listen = free_addr();
+    config.http_gateway.enabled = true;
+    config.http_gateway.listen = gateway_addr;
+    config.http_gateway.matched_upstream = format!("http://{matched_upstream}");
+    config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
+    config.http_gateway.case_limits.default = 1;
+    config
+        .http_gateway
+        .case_limits
+        .overrides
+        .insert("/record/override/*".to_string(), 2);
+    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+        name: Some("record-path".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/".to_string()],
+        case_path_patterns: vec![
+            "/record/default/*".to_string(),
+            "/record/override/*".to_string(),
+        ],
+        ..Default::default()
+    }];
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    assert!(
+        raw_http_get(gateway_addr, "/record/default/one")
+            .await
+            .contains("matched")
+    );
+    assert!(
+        raw_http_get(gateway_addr, "/record/default/two")
+            .await
+            .contains("fallback")
+    );
+    assert!(
+        raw_http_get(gateway_addr, "/record/override/one")
+            .await
+            .contains("matched")
+    );
+    assert!(
+        raw_http_get(gateway_addr, "/record/override/two")
+            .await
+            .contains("matched")
+    );
+    assert!(
+        raw_http_get(gateway_addr, "/record/override/three")
+            .await
+            .contains("fallback")
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    handle.abort();
+
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let rule_dir = run_dir.join("record-path");
+    assert_eq!(
+        std::fs::read_dir(rule_dir.join("record-default-wildcard"))
+            .unwrap()
+            .count(),
+        1
+    );
+    assert_eq!(
+        std::fs::read_dir(rule_dir.join("record-override-wildcard"))
+            .unwrap()
+            .count(),
+        2
+    );
 }
 
 #[tokio::test]

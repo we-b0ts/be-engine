@@ -6,6 +6,8 @@ use std::path::{Component, Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+use crate::path_pattern::path_patterns_overlap;
+
 use super::discovery::{PublishedCase, inventory_id, select_group_cases};
 use super::{CaseGroupStatus, PatternOutcome};
 
@@ -250,14 +252,7 @@ fn route_specs_overlap(
 }
 
 fn route_keys_overlap(left: &str, right: &str) -> bool {
-    let left = left.split('/').collect::<Vec<_>>();
-    let right = right.split('/').collect::<Vec<_>>();
-    left.len() == right.len()
-        && left
-            .iter()
-            .copied()
-            .zip(right)
-            .all(|(left, right)| left == right || left == "*" || right == "*")
+    path_patterns_overlap(left, right)
 }
 
 pub(super) fn prepare_output_path(output: &Path, case_source: &Path) -> Result<PathBuf> {

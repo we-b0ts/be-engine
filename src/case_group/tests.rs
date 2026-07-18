@@ -130,6 +130,42 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
 }
 
 #[test]
+fn catch_all_group_collects_cases_at_different_remaining_depths() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("cases");
+    let pod = source.join("get-pod");
+    let service = source.join("get-service");
+    write_case(
+        &source,
+        "get-pod",
+        "case-pod",
+        "GET",
+        "/api/k8s/v1/namespaces/default/pods/nginx",
+    );
+    write_case(
+        &source,
+        "get-service",
+        "case-service",
+        "GET",
+        "/api/k8s/v1/namespaces/default/services",
+    );
+
+    let result = ensure_case_group(options(
+        &source,
+        &pod,
+        &temporary.path().join("case-groups.json"),
+        "/api/k8s/v1/namespaces/*",
+        Some("/api/k8s/v1/namespaces/**"),
+    ))
+    .unwrap();
+
+    assert_eq!(result.status, CaseGroupStatus::Created);
+    assert_eq!(result.case_ids, vec!["case-pod", "case-service"]);
+    assert_eq!(result.member_dirs, vec![pod, service]);
+    assert_eq!(result.pattern.as_deref(), Some("/api/k8s/v1/namespaces/**"));
+}
+
+#[test]
 fn static_route_uses_the_existing_directory_as_the_group() {
     let temporary = tempdir().unwrap();
     let source = temporary.path().join("cases");
@@ -228,6 +264,19 @@ fn pattern_must_follow_the_dynamic_segments_in_the_source_route() {
         error
             .to_string()
             .contains("does not match dynamic source route")
+    );
+}
+
+#[test]
+fn catch_all_must_be_final_and_replace_a_dynamic_source_segment() {
+    assert!(validate_pattern("/api/namespaces/**").is_ok());
+    assert!(validate_pattern("/api/**/pods").is_err());
+    assert!(
+        validate_pattern_against_source_route("/api/namespaces/**", "/api/namespaces/*").is_ok()
+    );
+    assert!(
+        validate_pattern_against_source_route("/api/namespaces/**", "/api/namespaces/list")
+            .is_err()
     );
 }
 

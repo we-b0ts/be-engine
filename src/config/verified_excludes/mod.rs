@@ -109,8 +109,15 @@ pub(super) fn validate_path_pattern(pattern: &str) -> Result<()> {
     ensure!(
         segments
             .iter()
-            .all(|segment| !segment.contains('*') || *segment == "*"),
-        "verified exclude wildcards must consume exactly one whole path segment: {pattern}"
+            .all(|segment| !segment.contains('*') || *segment == "*" || *segment == "**"),
+        "verified exclude wildcards must occupy a whole path segment: {pattern}"
+    );
+    ensure!(
+        segments
+            .iter()
+            .enumerate()
+            .all(|(index, segment)| *segment != "**" || index == segments.len() - 1),
+        "verified exclude '**' catch-all must be the final path segment: {pattern}"
     );
     Ok(())
 }

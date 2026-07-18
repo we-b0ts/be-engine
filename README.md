@@ -218,6 +218,8 @@ exclusions. After the configured number of consecutive clean cases also pass
 the target response assertions, run the managed `verified-excludes ensure`
 command. It decides the threshold outcome, applies an eligible exact
 `rule + method + path_pattern`, and verifies convergence without AI judgment.
+The path pattern may be exact, use whole-segment `*`, or end in a `**`
+catch-all matching one or more remaining segments.
 On the next recorder start, matching traffic goes to `fallback_upstream`
 without creating a case.
 See [Verified API Excludes](docs/verified-api-excludes.md).
@@ -249,8 +251,9 @@ that run after the case is complete and valid:
 ```
 
 `uri-group` is built from the full request URI path joined by hyphens, so
-`/api/users/list` is recorded under `api-users-list`. To group dynamic path
-segments together, configure segment-wildcard `case_path_patterns`. For
+`/api/users/list` is recorded under `api-users-list`. To group dynamic paths,
+configure `case_path_patterns`. `*` matches exactly one non-empty path segment.
+A final `**` is a catch-all matching one or more remaining path segments. For
 example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
 `api-users-wildcard-xxx` when the rule has
 `case_path_patterns = ["/api/users/*/xxx"]`.

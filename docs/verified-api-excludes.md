@@ -25,7 +25,8 @@ recorder run captures.
 For one exact `rule + method + path_pattern`, the recorder-owned command
 requires two artifacts covering the same complete case set:
 
-- a version-one `traffic-replay-aggregate` report that is complete and clean;
+- a `traffic-replay-aggregate` report with `version: 1` that is complete and
+  clean;
   every included replay report must carry validated `assertions_only` replay
   policy evidence with no unused applicable rule;
 - a target-owned response assertion report in this format:
@@ -82,12 +83,13 @@ apply.
 
 The command only adds entries inside the explicit managed block, validates the
 entire TOML, rejects config or evidence artifacts changed after planning, and
-replaces the config atomically. It does not modify recordings. Exact paths and
-whole-segment `*` patterns are supported. The entry also references its
-original recording rule, so that rule's host, header, and path-prefix scope
-still applies.
+replaces the config atomically. It does not modify recordings. Exact paths,
+whole-segment `*`, and a final `**` catch-all are supported. `*` matches one
+non-empty segment; a final `**` matches one or more remaining segments. The
+entry also references its original recording rule, so that rule's host, header,
+and path-prefix scope still applies.
 
 An applied entry takes effect when the recorder next loads the updated config.
 Matching requests are forwarded to `fallback_upstream` and do not create new
 cases. Removing or temporarily disabling an exclusion is a separate reviewed
-operation; version one never deletes entries automatically.
+operation; the managed operation never deletes entries automatically.

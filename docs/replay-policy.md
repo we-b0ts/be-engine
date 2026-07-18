@@ -1,4 +1,4 @@
-# Replay Dynamic-Value Policy
+# Replay And Assertion Policy
 
 Each target repository owns one source-controlled `config/replay.yaml`. Pass it
 explicitly to every recorded replay:
@@ -23,6 +23,17 @@ expected_response: assertions_only
 rules: []
 ```
 
+Version two enables runner-owned response assertions:
+
+```yaml
+version: 2
+expected_response: assertions_only
+rules: []
+response_rules:
+  dynamic: {}
+  unordered: {}
+```
+
 `expected-response.json` is an assertion oracle only. Target product code,
 dependency mocks, E2E setup, and replay policy generation must not read its
 status, headers, or body to create the actual response, dependency result,
@@ -34,14 +45,22 @@ case-id exceptions in the policy. Use selectors and semantic validation only.
 
 ## Rule Scope
 
-Every rule must select the inbound case API by method and path, then select one
-dependency by protocol and a narrow dependency identity. HTTP rules require a
-target host, dependency method and dependency path. MySQL rules require a SQL
-pattern plus at least one target host, database, or username.
+Dependency rules select one operation by protocol and a narrow dependency
+identity. HTTP rules require a target host, dependency method and dependency
+path. MySQL rules require a SQL pattern plus at least one target host, database,
+or username. Reuse one unscoped rule for the same dependency operation instead
+of copying it for every inbound API.
 
-Case and HTTP paths use segment-aware patterns: `*` stays inside one segment
-and `**` crosses segments. SQL patterns are normalized for whitespace, case,
-and backticks; `*` and `?` are wildcards.
+`case` is optional. Add it only when the same dependency operation has
+different dynamic-field semantics in different request contexts and a narrower
+dependency selector cannot distinguish them. Bindings remain isolated by
+active case for both scoped and unscoped rules.
+
+Case paths, when present, and HTTP dependency paths use segment-aware patterns:
+`*` stays inside one segment and `**` crosses segments. SQL patterns are
+normalized for whitespace, case, and backticks; `*` and `?` are wildcards.
+Multiple rules may match one dependency only when they select disjoint dynamic
+fields.
 
 ## Dynamic Fields
 
@@ -62,9 +81,6 @@ version: 1
 expected_response: assertions_only
 rules:
   - id: audit-insert
-    case:
-      method: GET
-      path: /api/resources/*
     protocol: mysql
     target:
       host: audit.example.test
@@ -86,9 +102,6 @@ rules:
             timezone: "+08:00"
 
   - id: audit-update
-    case:
-      method: GET
-      path: /api/resources/*
     protocol: mysql
     target:
       host: audit.example.test
@@ -101,6 +114,24 @@ rules:
       params:
         1:
           ref: audit_id
+
+  # Optional context-specific field composed with the unscoped update rule.
+  - id: resource-token-audit-response
+    case:
+      method: GET
+      path: /api/resource/token
+    protocol: mysql
+    target:
+      host: audit.example.test
+      port: 3306
+    mysql:
+      command: COM_STMT_EXECUTE
+      database: audit
+      username: audit_writer
+      sql: "UPDATE request_log_* SET response_status=? WHERE uuid=?"
+      params:
+        0:
+          validate: non_empty
 ```
 
 Durations accept integer `ms`, `s`, `m`, `h`, and `d` units. A time value may
@@ -113,14 +144,90 @@ Replay reports include the canonical policy path, content fingerprint,
 `assertions_only` declaration, rule applicability, match counts, field
 operation counts, and unused applicable rules. An applicable rule with zero
 matches is dirty evidence and fails `end`, `finalize --fail-on-dirty`, and
-aggregate dirty checks. Rules outside the selected case API are reported as
-non-applicable and do not make focused replay dirty.
+aggregate dirty checks. A rule is applicable only when a selected case-owned
+recorded dependency exchange matches its stable dependency selectors and its
+optional `case` selector. Selecting an inbound API alone and matching bootstrap
+evidence do not make a dependency rule applicable.
 
 A query field cannot be both policy-managed and passed through the global
 `--http-ignore-query-param` option. Replay rejects that configuration at
 startup.
 
-Version one does not apply JSONPath rules inside response bodies or MySQL JSON
-strings. It also does not pass bindings into the target runner's HTTP response
-assertion process. Keep such cases incomplete instead of reading
-`expected-response.json` to inject a recorded value.
+Version two supports exact scalar JSON response locations whose runtime value
+is intentionally non-deterministic:
+
+```yaml
+response_rules:
+  dynamic:
+    "GET /api/resource/token":
+      - /content
+```
+
+The field must exist in both responses and keep the same scalar JSON kind.
+Only literal equality is skipped; status, structure, other fields, and non-JSON
+bodies stay exact. The comparator does not decide whether the value is a UUID,
+random token, timestamp, or another generated value. Verify those semantics in
+source review, unit tests, or real-traffic integration tests.
+
+Use evidence-backed plan/apply after diagnosing the source and target:
+
+```bash
+traffic-replay-policy response-rule plan \
+  --policy config/replay.yaml \
+  --kind dynamic \
+  --api 'GET /api/resource/token' \
+  --json-pointer /content \
+  --assertion-report .migration/local/.../assertions.json \
+  --aggregate-report .migration/local/.../aggregate.json
+
+traffic-replay-policy response-rule apply \
+  --policy config/replay.yaml \
+  --kind dynamic \
+  --api 'GET /api/resource/token' \
+  --json-pointer /content \
+  --assertion-report .migration/local/.../assertions.json \
+  --aggregate-report .migration/local/.../aggregate.json
+```
+
+Version two also supports arrays whose product contract does not assign meaning
+to element order:
+
+```yaml
+response_rules:
+  unordered:
+    "GET /api/config/ansible_facts":
+      - /general/sudo_users
+```
+
+Both selected values must be arrays. They are compared as multisets: length,
+elements, and duplicate counts must match, while only their outer order is
+ignored. Nested JSON values remain exact, as do every undeclared response
+location. Dynamic and unordered rules cannot overlap the same JSON subtree.
+
+An exact reorder-only mismatch produces an `unordered_candidates` diagnostic.
+After source and target review proves the array is semantically unordered, use
+the same evidence-backed workflow:
+
+```bash
+traffic-replay-policy response-rule plan \
+  --policy config/replay.yaml \
+  --kind unordered \
+  --api 'GET /api/config/ansible_facts' \
+  --json-pointer /general/sudo_users \
+  --assertion-report .migration/local/.../assertions.json \
+  --aggregate-report .migration/local/.../aggregate.json
+
+traffic-replay-policy response-rule apply \
+  --policy config/replay.yaml \
+  --kind unordered \
+  --api 'GET /api/config/ansible_facts' \
+  --json-pointer /general/sudo_users \
+  --assertion-report .migration/local/.../assertions.json \
+  --aggregate-report .migration/local/.../aggregate.json
+```
+
+Planning accepts only the difference kind selected by `--kind`, runner-owned
+assertions using the current policy fingerprint, exact focused-case coverage,
+and complete, clean aggregate evidence. Apply is additive, sorted, atomic, and
+rejects a policy changed after planning. Revalidate and rerun the entire
+affected API group after every policy change.

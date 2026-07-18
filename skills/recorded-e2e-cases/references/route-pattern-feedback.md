@@ -32,8 +32,8 @@ method first, then classify the path:
 | Result | Feedback |
 | --- | --- |
 | Exact static route | `exact_static`; do not generate a pattern |
-| One single-segment dynamic template | Continue to pattern safety checks |
-| Optional, constrained, regex, or catch-all template | `unsupported`; do not generate |
+| One single-segment dynamic or confirmed catch-all template | Continue to pattern safety checks |
+| Optional, constrained, or regex template | `unsupported`; do not generate |
 | More than one template | `ambiguous`; do not guess |
 | No template | `unmatched`; report source revision, prefix, or deleted-route mismatch |
 
@@ -43,8 +43,10 @@ template is established. Do not infer API identity from `uri-group`.
 
 ## Pattern Safety
 
-Convert every supported dynamic path segment to one recorder `*`. Generate a
-pattern only when all dynamic segments consume exactly one path segment.
+Recorder `*` matches exactly one non-empty path segment. A final recorder `**`
+is a catch-all matching one or more remaining path segments. `**` must occupy a
+complete segment and may appear only at the end. Determine the source route's
+parameter semantics before selecting either recorder wildcard.
 
 Before accepting it:
 
@@ -70,6 +72,11 @@ case_path_patterns = [
 # END AI-MANAGED CASE PATH PATTERNS
 ```
 
+- Recording limits are target-owned and independent from route feedback.
+  `http_gateway.case_limits.default` applies per resolved case pattern, while
+  exact keys under `http_gateway.case_limits.overrides` may set different
+  limits. Do not add or raise these limits merely to make replay discovery
+  record more cases. Pattern feedback must preserve existing limit settings.
 - Require `traffic-recorder-config` from `PATH`. Never edit the target TOML
   directly and never create the config or managed markers on the target's
   behalf. If the command is unavailable or rejects an existing managed block,

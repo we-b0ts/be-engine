@@ -37,7 +37,7 @@ fakes, in-process mocks, or recording-backed target implementations.
 - Read [dependency-replay.md](references/dependency-replay.md) when wiring or
   diagnosing dependency behavior.
 - Read [replay-policy.md](references/replay-policy.md) before creating, changing,
-  or validating dynamic rules.
+  or validating replay-policy rules.
 - Read [replay-lifecycle.md](references/replay-lifecycle.md) for every replay.
 - Read [e2e-run.md](references/e2e-run.md) when the target uses the standard
   migration runner, focused API iteration, full-round progress, or recovery.
@@ -72,23 +72,38 @@ fakes, in-process mocks, or recording-backed target implementations.
 5. For each API being migrated, select one unprocessed directory, use its first
    case only to discover the candidate source route, then call
    `traffic-e2e-run prepare`. Supply the confirmed source route and, for a
-   dynamic route, its safe whole-segment pattern. Use only the canonical group
-   and exact case ids returned by the runner.
+   dynamic route, its safe recorder path pattern. Recorder patterns use `*` for
+   exactly one non-empty path segment and a final `**` for a catch-all matching
+   one or more remaining path segments. Use only the canonical group and exact
+   case ids returned by the runner.
 6. During migration, call `traffic-e2e-run run-api --api '<METHOD pattern>'`.
    Fix the focused API and rerun it until its complete group passes. Focused
    attempts persist evidence but MUST NOT update full-round counts,
    `e2e-progress.yaml`, verified excludes, or the global `latest`.
 7. Compare JSON responses structurally; use exact bytes only for non-JSON or an
-   explicit exact-byte mode. Treat recorder reports and summaries as dependency
-   coverage evidence. Unmatched, case-owned unused, unsupported, unsafe, or
-   missing required side effects keep the group incomplete. A source-verified
-   API-independent process-level HTTP host may be added through recorder-config
-   plan/apply during focused diagnosis; its unconsumed recorded exchanges remain
-   explicit non-blocking diagnostics, while unmatched target calls remain
-   dirty. The host applies to every case in the named recording rule and is not
-   attributed to active APIs. Unused bootstrap traffic is retained as a
-   non-blocking startup diagnostic because traffic observed before readiness is
-   outside the selected E2E contract.
+   explicit exact-byte mode. When a response assertion fails, inspect the
+   structured difference and compare source and target behavior before changing
+   assertion policy. Fix target code, dependency wiring, or response construction
+   when it does not match the source contract. If the difference is intentionally
+   produced at runtime, such as a generated value, timestamp, ordering difference,
+   or environment-derived value, check for a supported narrowly scoped
+   replay-policy strategy and use its plan/apply workflow. If no supported
+   strategy exists, keep the case incomplete; never weaken an assertion merely
+   because values differ. Before adding a dependency rule, search for an
+   existing rule with the same dependency identity. Reuse an unscoped
+   operation-level rule by default and do not copy it per inbound API. Add an
+   optional `case` selector only when the same dependency operation has
+   different dynamic-field semantics across request contexts and no narrower
+   dependency selector can distinguish them. Treat recorder reports and
+   summaries as dependency coverage evidence. Unmatched, case-owned unused,
+   unsupported, unsafe, or missing required side effects keep the group
+   incomplete. A source-verified API-independent process-level HTTP host may be
+   added through recorder-config plan/apply during focused diagnosis; its
+   unconsumed recorded exchanges remain explicit non-blocking diagnostics,
+   while unmatched target calls remain dirty. The host applies to every case in
+   the named recording rule and is not attributed to active APIs. Unused
+   bootstrap traffic is retained as a non-blocking startup diagnostic because
+   traffic observed before readiness is outside the selected E2E contract.
 8. After every published case is grouped and every migrated API passes its
    focused loop, call `traffic-e2e-run run` for one full round. The runner MUST
    start replay once, load bootstrap and the exact full case set once, execute
@@ -165,9 +180,11 @@ or zero exit code into completion evidence.
 Do not invent rows, downstream responses, cache values, queue messages,
 dependency params, or side effects. Stop when a valid published case, semantic
 dependency evidence, clean replay, or supported policy operation is missing.
-Never add a response ignore without explicit user authorization. Tie recorder
-feedback to exact artifact evidence such as missing fields, parse warnings,
-truncation, unsupported protocol behavior, or ambiguous correlation.
+Never add or broaden a response rule merely because values differ. Require
+source and target evidence that the difference is intentional, then use only a
+supported narrowly scoped plan/apply operation. Tie recorder feedback to exact
+artifact evidence such as missing fields, parse warnings, truncation,
+unsupported protocol behavior, or ambiguous correlation.
 
 An unmatched or ambiguous source route blocks automatic grouping or pattern
 feedback, not unrelated replay work, unless route association is required to

@@ -76,7 +76,10 @@ struct VerifiedExcludeArgs {
     rule: String,
     #[arg(long)]
     method: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Exact path or recorder path pattern: '*' matches one segment; trailing '**' matches one or more remaining segments"
+    )]
     pattern: String,
     #[arg(long)]
     aggregate_report: PathBuf,
@@ -96,7 +99,10 @@ struct PatternFeedbackArgs {
     case_source: String,
     #[arg(long, value_enum, default_value_t = AuthorityArg::Focused)]
     authority: AuthorityArg,
-    #[arg(long = "pattern")]
+    #[arg(
+        long = "pattern",
+        help = "Recorder path pattern: '*' matches one segment; trailing '**' matches one or more remaining segments"
+    )]
     patterns: Vec<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     format: OutputFormat,

@@ -3,6 +3,8 @@ mod matcher;
 mod model;
 mod response;
 mod session;
+#[cfg(test)]
+mod tests;
 mod values;
 
 pub(super) use broker::handle_connection;

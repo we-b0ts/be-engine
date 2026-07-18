@@ -61,7 +61,7 @@ traffic-e2e-run prepare \
   --source-revision '<source-revision>'
 ```
 
-For a dynamic route, also pass `--pattern '<whole-segment-pattern>'`. Prepare
+For a dynamic route, also pass `--pattern '<safe-recorder-path-pattern>'`. Prepare
 delegates to canonical grouping and managed pattern feedback. It rejects stale
 inventories, overlaps, mixed routes, and unsafe patterns. Never infer the API
 key from directory names; use the returned `group.group_id`.
@@ -80,6 +80,35 @@ traffic-e2e-run run-api \
 One focused attempt starts replay once for that API's cases, loads applicable
 bootstrap once, starts the target once, executes every case sequentially, and
 finalizes once. It publishes only the API's focused `latest` snapshot.
+
+With replay-policy version two, the runner invokes the target facade as:
+
+```bash
+scripts/<project>-cli e2e \
+  --case-dir <case-dir> \
+  --actual-response <runner-owned-output>
+```
+
+The command reads only the recorded request, sends it through normal target
+startup, and writes:
+
+```json
+{
+  "version": 1,
+  "status": 200,
+  "body": {
+    "encoding": "utf8",
+    "data": "{\"content\":\"actual-value\"}",
+    "truncated": false
+  }
+}
+```
+
+Command success means the actual response was captured, not that it matched.
+The runner reads expected and actual artifacts, applies the response policy,
+and persists field-level differences, diagnostic candidates, applied rules,
+unused applicable rules, and policy fingerprints. Version-one policies retain
+the legacy target-owned assertion contract for existing repositories.
 
 Focused attempts are diagnostic migration work. They MUST NOT:
 

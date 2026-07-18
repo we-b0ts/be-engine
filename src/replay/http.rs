@@ -23,8 +23,9 @@ use tokio_rustls::TlsAcceptor;
 use url::form_urlencoded;
 
 use super::{
-    HttpPolicyContext, MitmCa, PolicyDecision, ReplayProtocol, ReplayReportWriter, ReplaySource,
-    ReplayState, ReplayTarget, TargetKey, push_success_detail, register_replay_target,
+    HttpPolicyContext, MitmCa, PolicyDecision, ReplayPolicyRuntime, ReplayProtocol,
+    ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey, push_success_detail,
+    register_replay_target,
 };
 
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
@@ -151,6 +152,23 @@ pub(super) fn register_http_exchange(
         consumed: false,
     });
     Ok(())
+}
+
+pub(super) fn observe_recorded_policy_exchanges(
+    policy: &mut ReplayPolicyRuntime,
+    exchanges: &[ReplayHttpExchange],
+) {
+    for exchange in exchanges
+        .iter()
+        .filter(|exchange| exchange.source == ReplaySource::Case)
+    {
+        policy.observe_recorded_http_exchange(
+            exchange.case_id.as_deref(),
+            &exchange.identity.target,
+            &exchange.record.method,
+            &exchange.record.uri,
+        );
+    }
 }
 
 fn identity_from_record(record: &RecordedHttpExchange) -> Result<HttpDependencyIdentity> {

@@ -118,6 +118,8 @@ pub(super) fn resolve_layout(
         None => derive_run_key(&case_source)?,
     };
     let run_root = local_root.join(&run_key);
+    let policy = validate_replay_policy(&resolve_under(&target_root, &config.replay_policy))
+        .context("invalid replay policy")?;
     let resolved = ResolvedProjectConfig {
         project_cli: resolve_under(&target_root, &config.project_cli),
         replay_policy: resolve_under(&target_root, &config.replay_policy),
@@ -127,6 +129,7 @@ pub(super) fn resolve_layout(
             .as_deref()
             .map(|path| resolve_under(&target_root, path)),
         recording_rule: config.recording_rule,
+        runner_owned_response_assertions: policy.runner_owned_response_assertions,
     };
     let layout = RunLayout {
         target_root,

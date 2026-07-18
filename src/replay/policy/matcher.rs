@@ -119,17 +119,6 @@ impl ReplayPolicyRuntime {
                 },
             );
         }
-        let applicable_rule_ids = loaded
-            .document
-            .rules
-            .iter()
-            .filter(|rule| {
-                case_identities
-                    .values()
-                    .any(|case| rule_matches_case(rule, case))
-            })
-            .map(|rule| rule.id.clone())
-            .collect::<BTreeSet<_>>();
         let usage = loaded
             .document
             .rules
@@ -139,10 +128,58 @@ impl ReplayPolicyRuntime {
         Ok(Self {
             loaded,
             cases: case_identities,
-            applicable_rule_ids,
+            applicable_rule_ids: BTreeSet::new(),
             usage,
             bindings: BTreeMap::new(),
         })
+    }
+
+    pub(in crate::replay) fn observe_recorded_mysql_exchange(
+        &mut self,
+        case_id: Option<&str>,
+        identity: &ReplaySessionIdentity,
+        command: &str,
+        sql: Option<&str>,
+    ) {
+        let Some(case) = case_id.and_then(|case_id| self.cases.get(case_id)) else {
+            return;
+        };
+        self.applicable_rule_ids.extend(
+            self.loaded
+                .document
+                .rules
+                .iter()
+                .filter(|rule| {
+                    rule.protocol == PolicyProtocol::Mysql
+                        && rule_matches_case(rule, case)
+                        && rule_matches_mysql(rule, identity, command, sql)
+                })
+                .map(|rule| rule.id.clone()),
+        );
+    }
+
+    pub(in crate::replay) fn observe_recorded_http_exchange(
+        &mut self,
+        case_id: Option<&str>,
+        target: &TargetKey,
+        method: &str,
+        uri: &str,
+    ) {
+        let Some(case) = case_id.and_then(|case_id| self.cases.get(case_id)) else {
+            return;
+        };
+        self.applicable_rule_ids.extend(
+            self.loaded
+                .document
+                .rules
+                .iter()
+                .filter(|rule| {
+                    rule.protocol == PolicyProtocol::Http
+                        && rule_matches_case(rule, case)
+                        && rule_matches_http(rule, target, method, uri)
+                })
+                .map(|rule| rule.id.clone()),
+        );
     }
 
     pub(in crate::replay) fn reject_http_ignore_overlap(&self, ignored: &[String]) -> Result<()> {
@@ -295,7 +332,6 @@ impl ReplayPolicyRuntime {
                 "replay policy has no request metadata for case {case_id}"
             ));
         };
-        let actual_path = uri_path(context.actual_uri);
         let matching_rules = self
             .loaded
             .document
@@ -304,11 +340,7 @@ impl ReplayPolicyRuntime {
             .filter(|rule| {
                 rule.protocol == PolicyProtocol::Http
                     && rule_matches_case(rule, case)
-                    && rule_matches_target(rule, Some(context.target))
-                    && rule.http.as_ref().is_some_and(|http| {
-                        http.method.eq_ignore_ascii_case(context.method)
-                            && path_pattern_matches(&http.path, &actual_path)
-                    })
+                    && rule_matches_http(rule, context.target, context.method, context.actual_uri)
             })
             .collect::<Vec<_>>();
         if matching_rules.is_empty() {
@@ -482,8 +514,10 @@ fn exact_mysql_params(
 }
 
 fn rule_matches_case(rule: &ReplayPolicyRule, case: &CaseIdentity) -> bool {
-    rule.case_selector.method.eq_ignore_ascii_case(&case.method)
-        && path_pattern_matches(&rule.case_selector.path, &case.path)
+    rule.case_selector.as_ref().is_none_or(|selector| {
+        selector.method.eq_ignore_ascii_case(&case.method)
+            && path_pattern_matches(&selector.path, &case.path)
+    })
 }
 
 fn rule_matches_mysql(
@@ -519,6 +553,14 @@ fn rule_matches_mysql_sql_pattern(rule: &ReplayPolicyRule, sql: Option<&str>) ->
         return false;
     };
     text_pattern_matches(&normalize_sql(&mysql.sql), &normalize_sql(sql))
+}
+
+fn rule_matches_http(rule: &ReplayPolicyRule, target: &TargetKey, method: &str, uri: &str) -> bool {
+    rule_matches_target(rule, Some(target))
+        && rule.http.as_ref().is_some_and(|http| {
+            http.method.eq_ignore_ascii_case(method)
+                && path_pattern_matches(&http.path, &uri_path(uri))
+        })
 }
 
 fn rule_matches_target(rule: &ReplayPolicyRule, actual: Option<&TargetKey>) -> bool {

@@ -149,6 +149,20 @@ impl MysqlSemanticTracker {
         previous
     }
 
+    pub(crate) fn observe_no_response_command(
+        &mut self,
+        command: &ClientCommand,
+        packet: &MysqlPacket,
+    ) -> Option<MysqlExchangeEvent> {
+        let previous = self.finish_active("incomplete", None, None, None);
+        if command.command_name == "COM_STMT_CLOSE"
+            && let Some(statement_id) = read_u32_le(&packet.payload, 1)
+        {
+            self.statements.remove(&statement_id);
+        }
+        previous
+    }
+
     pub(crate) fn observe_packet(&mut self, packet: &MysqlPacket) {
         if let Some(active) = &mut self.active {
             active.packets.push(packet.clone());

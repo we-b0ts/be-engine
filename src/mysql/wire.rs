@@ -27,6 +27,19 @@ pub struct ClientCommand {
     pub query: Option<String>,
 }
 
+impl ClientCommand {
+    pub fn expects_server_response(&self) -> bool {
+        !is_no_response_command(&self.command_name)
+    }
+}
+
+pub fn is_no_response_command(command_name: &str) -> bool {
+    matches!(
+        command_name,
+        "COM_QUIT" | "COM_STMT_CLOSE" | "COM_UNKNOWN_0x19"
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerPacketInfo {
     pub kind: String,
@@ -151,6 +164,10 @@ pub fn parse_client_command(packet: &MysqlPacket) -> Option<ClientCommand> {
         },
         0x17 => ClientCommand {
             command_name: "COM_STMT_EXECUTE".to_string(),
+            query: None,
+        },
+        0x19 => ClientCommand {
+            command_name: "COM_STMT_CLOSE".to_string(),
             query: None,
         },
         other => ClientCommand {
@@ -289,6 +306,19 @@ mod tests {
         let command = parse_client_command(&packet).unwrap();
         assert_eq!(command.command_name, "COM_QUERY");
         assert_eq!(command.query.as_deref(), Some("select 1"));
+        assert!(command.expects_server_response());
+    }
+
+    #[test]
+    fn parses_stmt_close_as_no_response_command() {
+        let packet = MysqlPacket {
+            sequence_id: 0,
+            payload: [vec![0x19], 42_u32.to_le_bytes().to_vec()].concat(),
+        };
+        let command = parse_client_command(&packet).unwrap();
+        assert_eq!(command.command_name, "COM_STMT_CLOSE");
+        assert_eq!(command.query, None);
+        assert!(!command.expects_server_response());
     }
 
     #[test]

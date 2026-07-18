@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::case_group::CaseGroupInventory;
+use crate::replay::ResponseAssertionCaseReport;
 
 pub(super) const STATE_VERSION: u32 = 1;
 pub(super) const ASSERTION_REPORT_VERSION: u32 = 1;
@@ -41,6 +42,7 @@ pub(super) struct ResolvedProjectConfig {
     pub pr_base: String,
     pub recorder_config: Option<PathBuf>,
     pub recording_rule: Option<String>,
+    pub runner_owned_response_assertions: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +96,8 @@ pub(super) struct CaseExecution {
     pub assertion_passed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay_clean: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_assertion: Option<ResponseAssertionCaseReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -165,6 +169,7 @@ impl ActiveRunState {
                     status: CaseStatus::Pending,
                     assertion_passed: None,
                     replay_clean: None,
+                    response_assertion: None,
                 })
             })
             .collect();
@@ -255,6 +260,8 @@ impl RunIndex {
 pub(super) struct AssertionCase {
     pub case_id: String,
     pub passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<ResponseAssertionCaseReport>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -262,15 +269,35 @@ pub(super) struct AssertionReport {
     pub version: u32,
     pub case_source: String,
     pub expected_response: String,
+    pub assertion_mode: String,
+    pub source_revision: String,
+    pub case_inventory_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub policy_fingerprint: Option<String>,
     pub cases: Vec<AssertionCase>,
 }
 
 impl AssertionReport {
-    pub(super) fn new(case_source: &std::path::Path) -> Self {
+    pub(super) fn new(state: &ActiveRunState, runner_owned: bool) -> Self {
+        let policy = state
+            .cases
+            .iter()
+            .find_map(|case| case.response_assertion.as_ref());
         Self {
             version: ASSERTION_REPORT_VERSION,
-            case_source: case_source.display().to_string(),
+            case_source: state.case_source.display().to_string(),
             expected_response: "assertions_only".to_string(),
+            assertion_mode: if runner_owned {
+                "runner_owned".to_string()
+            } else {
+                "target_owned_legacy".to_string()
+            },
+            source_revision: state.source_revision.clone(),
+            case_inventory_id: state.case_inventory_id.clone(),
+            policy_path: policy.map(|report| report.policy_path.clone()),
+            policy_fingerprint: policy.map(|report| report.policy_fingerprint.clone()),
             cases: Vec::new(),
         }
     }

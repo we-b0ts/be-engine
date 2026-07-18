@@ -320,6 +320,7 @@ mod tests {
                 status: CaseStatus::Passed,
                 assertion_passed: Some(true),
                 replay_clean: Some(true),
+                response_assertion: None,
             })
             .chain((0..api_failed).map(|index| CaseExecution {
                 case_id: format!("failed-{index}"),
@@ -328,6 +329,7 @@ mod tests {
                 status: CaseStatus::Failed,
                 assertion_passed: Some(false),
                 replay_clean: Some(true),
+                response_assertion: None,
             }))
             .collect::<Vec<_>>();
         ActiveRunState {

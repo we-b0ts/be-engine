@@ -19,7 +19,7 @@ use super::{branch, config};
 use crate::case_group::{
     CaseGroupInventory, load_case_group_inventory, load_complete_case_group_inventory,
 };
-use crate::replay::validate_replay_policy;
+use crate::replay::{ResponseAssertionOptions, assert_recorded_response, validate_replay_policy};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct E2eRunResult {
@@ -399,16 +399,68 @@ async fn execute_case(
         .join("reports")
         .join(format!("case-{:04}.json", position + 1));
     let case_arg = case_dir.display().to_string();
-    let assertion = run_project(
-        config,
-        layout,
-        &["e2e", "--case-dir", case_arg.as_str()],
-        &log_path,
-    )
-    .await;
-    let assertion_passed = assertion.as_ref().is_ok_and(|result| result.success);
+    let actual_response = layout
+        .active_dir
+        .join("reports")
+        .join(format!("actual-response-{:04}.json", position + 1));
+    let actual_arg = actual_response.display().to_string();
+    let args = if config.runner_owned_response_assertions {
+        vec![
+            "e2e",
+            "--case-dir",
+            case_arg.as_str(),
+            "--actual-response",
+            actual_arg.as_str(),
+        ]
+    } else {
+        vec!["e2e", "--case-dir", case_arg.as_str()]
+    };
+    let assertion_command = run_project(config, layout, &args, &log_path).await;
+    let response_assertion = if config.runner_owned_response_assertions
+        && assertion_command
+            .as_ref()
+            .is_ok_and(|result| result.success)
+    {
+        let expected_response = if case_dir.join("expected-response.json").is_file() {
+            case_dir.join("expected-response.json")
+        } else {
+            case_dir.join("expected_response.json")
+        };
+        assert_recorded_response(ResponseAssertionOptions {
+            case_id: case_id.to_string(),
+            request: case_dir.join("request.json"),
+            expected_response,
+            actual_response,
+            policy: config.replay_policy.clone(),
+        })
+        .map_err(|error| anyhow::anyhow!("runner-owned response assertion failed: {error:#}"))
+    } else if config.runner_owned_response_assertions {
+        Err(anyhow::anyhow!(
+            "project CLI did not produce a successful actual response"
+        ))
+    } else {
+        Err(anyhow::anyhow!(
+            "legacy target-owned assertion has no response report"
+        ))
+    };
+    let assertion_passed = if config.runner_owned_response_assertions {
+        response_assertion
+            .as_ref()
+            .is_ok_and(|report| report.passed)
+    } else {
+        assertion_command
+            .as_ref()
+            .is_ok_and(|result| result.success)
+    };
+    match response_assertion {
+        Ok(report) => state.cases[case_index].response_assertion = Some(report),
+        Err(error) if config.runner_owned_response_assertions => state.errors.push(format!(
+            "case {case_id} response assertion could not be evaluated: {error:#}"
+        )),
+        Err(_) => {}
+    }
     state.cases[case_index].assertion_passed = Some(assertion_passed);
-    if let Err(error) = assertion {
+    if let Err(error) = assertion_command {
         state.errors.push(format!(
             "case {case_id} assertion command failed: {error:#}"
         ));
