@@ -136,6 +136,7 @@ fn invalid_case_reason(
         return Some(("expected_response_body_decode_error", error.clone()));
     }
     if response_is_json(response)
+        && !body_is_empty(body)
         && body.encoding == "utf8"
         && let Err(err) = serde_json::from_str::<serde_json::Value>(&body.data)
     {
@@ -147,6 +148,10 @@ fn invalid_case_reason(
     None
 }
 
+fn body_is_empty(body: &CaseBodyCapture) -> bool {
+    body.original_len == 0 && body.stored_len == 0 && body.data.is_empty()
+}
+
 fn response_is_json(response: &CaseResponseRecord) -> bool {
     response
         .headers
@@ -155,4 +160,81 @@ fn response_is_json(response: &CaseResponseRecord) -> bool {
         .into_iter()
         .flat_map(|values| values.iter())
         .any(|value| value.to_ascii_lowercase().contains("json"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recorder::capture_case_body;
+    use uuid::Uuid;
+
+    fn request() -> CaseRequestRecord {
+        CaseRequestRecord {
+            timestamp: Utc::now(),
+            client_addr: None,
+            method: "GET".to_string(),
+            uri: "/api/resource/getprivkey/127.0.0.1".to_string(),
+            authority: Some("example.com".to_string()),
+            matched_rule: Some("api".to_string()),
+            upstream: "http://127.0.0.1:7171".to_string(),
+            headers: HeaderMapSnapshot::new(),
+            body: capture_case_body(b"", 1024, None),
+        }
+    }
+
+    fn json_response(body: &[u8]) -> CaseResponseRecord {
+        let mut headers = HeaderMapSnapshot::new();
+        headers.insert(
+            "content-type".to_string(),
+            vec!["application/json; charset=utf-8".to_string()],
+        );
+        headers.insert("content-length".to_string(), vec![body.len().to_string()]);
+        CaseResponseRecord {
+            timestamp: Utc::now(),
+            matched_rule: Some("api".to_string()),
+            upstream: "http://127.0.0.1:7171".to_string(),
+            status: Some(200),
+            headers: Some(headers),
+            body: Some(capture_case_body(body, 1024, None)),
+            duration_ms: 1,
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn publishes_complete_empty_json_response() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: Some("api-resource-getprivkey-wildcard".to_string()),
+        };
+
+        finalize_http_case(&recorder, &case, request(), json_response(b""), None)
+            .await
+            .unwrap();
+
+        let published = recorder.case_dir(&case);
+        assert!(published.join("request.json").is_file());
+        assert!(published.join("expected-response.json").is_file());
+        assert!(published.join("dependencies-summary.json").is_file());
+        assert!(!recorder.case_failed_dir(&case).exists());
+        let expected: serde_json::Value = serde_json::from_slice(
+            &tokio::fs::read(published.join("expected-response.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(expected["body"]["original_len"], 0);
+        assert_eq!(expected["body"]["stored_len"], 0);
+        assert_eq!(expected["body"]["data"], "");
+    }
+
+    #[test]
+    fn rejects_nonempty_invalid_json_response() {
+        let reason = invalid_case_reason(&request(), &json_response(b"not-json")).unwrap();
+
+        assert_eq!(reason.0, "expected_response_json_invalid");
+    }
 }

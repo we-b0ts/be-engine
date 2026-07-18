@@ -11,6 +11,18 @@ fn write_case(
     expected_content: serde_json::Value,
     actual_content: serde_json::Value,
 ) -> (tempfile::TempDir, ResponseAssertionOptions) {
+    write_raw_case(
+        response_rules,
+        &json!({"content": expected_content}).to_string(),
+        &json!({"content": actual_content}).to_string(),
+    )
+}
+
+fn write_raw_case(
+    response_rules: &str,
+    expected_body: &str,
+    actual_body: &str,
+) -> (tempfile::TempDir, ResponseAssertionOptions) {
     let temp = tempdir().unwrap();
     let request = temp.path().join("request.json");
     let expected = temp.path().join("expected-response.json");
@@ -31,7 +43,7 @@ fn write_case(
             "status": 200,
             "body": {
                 "encoding": "utf8",
-                "data": json!({"content": expected_content}).to_string(),
+                "data": expected_body,
                 "truncated": false
             }
         }))
@@ -45,7 +57,7 @@ fn write_case(
             "status": 200,
             "body": {
                 "encoding": "utf8",
-                "data": json!({"content": actual_content}).to_string(),
+                "data": actual_body,
                 "truncated": false
             }
         }))
@@ -65,6 +77,31 @@ fn write_case(
         policy,
     };
     (temp, options)
+}
+
+#[test]
+fn empty_bodies_compare_as_exact_bytes() {
+    let (_temp, options) = write_raw_case("", "", "");
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn empty_body_does_not_match_nonempty_body() {
+    let (_temp, options) = write_raw_case("", "", "{}");
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    assert_eq!(
+        report.differences[0].kind,
+        ResponseDifferenceKind::ExactBodyMismatch
+    );
 }
 
 #[test]

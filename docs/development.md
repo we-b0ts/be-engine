@@ -570,6 +570,11 @@ truncated request or expected response body is kept under `<run-id>/failed`
 with `recording-error.json` instead of being published. On clean shutdown,
 recording exits with an error if the run contains failed cases.
 
+A complete zero-length response body is publishable even when its
+`Content-Type` advertises JSON. Recorder preserves the empty body and replay
+assertions compare it as exact bytes. Non-empty bodies advertised as JSON must
+still contain valid JSON.
+
 Use `dependencies.jsonl` for replay-oriented semantic data. Use
 `dependencies-debug.jsonl` only for protocol-level debugging. UDP datagrams,
 including push-metrics side effects, are recorded as semantic dependencies when
