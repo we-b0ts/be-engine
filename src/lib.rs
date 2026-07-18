@@ -47,15 +47,16 @@ pub use case_group::{
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
-    CasePathPatternReport, DnsMockConfig, HttpConfig, HttpGatewayConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig, HttpResponseRewriteConfig, HttpResponseRewritePluginConfig,
-    HttpResponseRewriteRuleConfig, MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy,
-    RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol,
-    TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
-    UdpGatewayConfig, VerifiedApiExclude, VerifiedApiExcludeEnsureReport,
-    VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback, VerifiedApiExcludePlan,
-    VerifiedApiExcludeReport, VerifiedApiExcludesConfig, ensure_verified_api_exclude,
-    plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback, plan_verified_api_exclude,
+    CasePathPatternReport, DnsMockConfig, HttpConfig, HttpGatewayCaseLimitsConfig,
+    HttpGatewayConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
+    HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlConfig, MysqlRouteConfig,
+    RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
+    TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
+    TcpProtocolOverrideConfig, TlsConfig, UdpGatewayConfig, VerifiedApiExclude,
+    VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
+    VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiExcludesConfig,
+    ensure_verified_api_exclude, plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback,
+    plan_verified_api_exclude,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{

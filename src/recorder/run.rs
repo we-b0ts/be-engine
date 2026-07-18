@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -26,6 +27,7 @@ struct RecorderRunReport {
 pub(crate) struct RecorderRunState {
     pub(crate) run_id: String,
     pub(crate) published_cases: usize,
+    pub(crate) published_cases_by_group: BTreeMap<(String, Option<String>), usize>,
     pub(crate) failed_cases: usize,
     pub(crate) errors: Vec<RecordingErrorSummary>,
     pub(crate) finished: bool,
@@ -101,8 +103,22 @@ impl Recorder {
         {
             let mut state = self.run_state.lock().await;
             state.published_cases += 1;
+            *state
+                .published_cases_by_group
+                .entry((case.rule_name.clone(), case.uri_group.clone()))
+                .or_default() += 1;
         }
         self.write_run_report("running").await
+    }
+
+    pub(crate) async fn published_case_count(&self, case: &CaseContext) -> usize {
+        self.run_state
+            .lock()
+            .await
+            .published_cases_by_group
+            .get(&(case.rule_name.clone(), case.uri_group.clone()))
+            .copied()
+            .unwrap_or_default()
     }
 
     pub async fn fail_case(
@@ -311,4 +327,38 @@ fn path_relative_to(path: &Path, base: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn case(group: &str) -> CaseContext {
+        CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some(group.to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn published_case_counts_are_grouped_and_ignore_failed_cases() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let first = case("api-users-wildcard");
+        let second = case("api-users-wildcard");
+        let other = case("api-projects-wildcard");
+        let failed = case("api-users-wildcard");
+
+        recorder.publish_case(&first).await.unwrap();
+        recorder.publish_case(&second).await.unwrap();
+        recorder.publish_case(&other).await.unwrap();
+        recorder
+            .fail_case(&failed, "test_failure", "expected test failure")
+            .await
+            .unwrap();
+
+        assert_eq!(recorder.published_case_count(&first).await, 2);
+        assert_eq!(recorder.published_case_count(&other).await, 1);
+    }
 }

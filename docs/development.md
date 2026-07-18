@@ -56,6 +56,27 @@ case is created. After ready, only one matched case can be active at a time;
 overlapping matching requests are also sent to fallback so dependencies are not
 shared across cases.
 
+The gateway also limits successfully published cases per resolved case pattern
+within one recorder run. The default is
+`http_gateway.case_limits.default = 100`. Static paths are counted
+independently by exact URI path; a URI matched by `case_path_patterns` is
+counted under that configured pattern. Pattern-specific limits use exact keys:
+
+```toml
+[http_gateway.case_limits]
+default = 100
+
+[http_gateway.case_limits.overrides]
+"/api/resource/token" = 25
+"/api/namespaces/**" = 50
+```
+
+Dynamic override keys must already exist in a recording rule's
+`case_path_patterns`. Once the published count reaches the effective limit,
+later matching requests are sent directly to `fallback_upstream` without
+creating a case. Failed cases do not consume the limit, and restarting Recorder
+starts a new run with fresh counts.
+
 After an upstream HTTP response completes, Recorder keeps the case active until
 captured dependencies are idle for
 `recording.case_dependency_quiet_period_ms`. This captures synchronous

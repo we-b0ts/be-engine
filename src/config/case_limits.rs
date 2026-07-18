@@ -1,0 +1,137 @@
+use std::collections::BTreeMap;
+
+use anyhow::{Result, ensure};
+use serde::{Deserialize, Serialize};
+
+use super::HttpGatewayRuleConfig;
+
+pub(crate) const DEFAULT_MAX_CASES_PER_PATTERN: usize = 100;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HttpGatewayCaseLimitsConfig {
+    pub default: usize,
+    pub overrides: BTreeMap<String, usize>,
+}
+
+impl HttpGatewayCaseLimitsConfig {
+    pub(crate) fn limit_for(&self, case_pattern: &str) -> usize {
+        self.overrides
+            .get(case_pattern)
+            .copied()
+            .unwrap_or(self.default)
+    }
+
+    pub(super) fn validate(&self, rules: &[HttpGatewayRuleConfig]) -> Result<()> {
+        for pattern in self.overrides.keys() {
+            validate_case_pattern(pattern)?;
+            if pattern.contains('*') {
+                ensure!(
+                    rules
+                        .iter()
+                        .any(|rule| rule.case_path_patterns.contains(pattern)),
+                    "http_gateway.case_limits override {pattern:?} must exactly match a configured case_path_patterns entry"
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for HttpGatewayCaseLimitsConfig {
+    fn default() -> Self {
+        Self {
+            default: DEFAULT_MAX_CASES_PER_PATTERN,
+            overrides: BTreeMap::new(),
+        }
+    }
+}
+
+fn validate_case_pattern(pattern: &str) -> Result<()> {
+    ensure!(
+        pattern.starts_with('/'),
+        "http_gateway.case_limits override must start with '/': {pattern}"
+    );
+    ensure!(
+        !pattern.contains(['?', '#', '\r', '\n']),
+        "http_gateway.case_limits override must contain only a URI path: {pattern}"
+    );
+    ensure!(
+        pattern == "/" || (!pattern.ends_with('/') && !pattern.contains("//")),
+        "http_gateway.case_limits override must use canonical separators with no trailing slash: {pattern}"
+    );
+    let segments = pattern
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    ensure!(
+        segments
+            .iter()
+            .all(|segment| !segment.contains('*') || *segment == "*" || *segment == "**"),
+        "http_gateway.case_limits wildcards must occupy a whole path segment: {pattern}"
+    );
+    ensure!(
+        segments
+            .iter()
+            .enumerate()
+            .all(|(index, segment)| *segment != "**" || index == segments.len() - 1),
+        "http_gateway.case_limits '**' catch-all must be the final path segment: {pattern}"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uses_default_and_exact_pattern_overrides() {
+        let limits = HttpGatewayCaseLimitsConfig {
+            default: 10,
+            overrides: [
+                ("/api/users/*".to_string(), 2),
+                ("/api/health".to_string(), 0),
+            ]
+            .into(),
+        };
+
+        assert_eq!(limits.limit_for("/api/users/*"), 2);
+        assert_eq!(limits.limit_for("/api/health"), 0);
+        assert_eq!(limits.limit_for("/api/projects/*"), 10);
+    }
+
+    #[test]
+    fn dynamic_override_must_be_a_configured_case_pattern() {
+        let limits = HttpGatewayCaseLimitsConfig {
+            overrides: [("/api/users/*".to_string(), 2)].into(),
+            ..Default::default()
+        };
+
+        assert!(limits.validate(&[]).is_err());
+        assert!(
+            limits
+                .validate(&[HttpGatewayRuleConfig {
+                    case_path_patterns: vec!["/api/users/*".to_string()],
+                    ..Default::default()
+                }])
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_noncanonical_override_patterns() {
+        for pattern in [
+            "api/users/*",
+            "/api/users/",
+            "/api//users",
+            "/api/user-*",
+            "/api/**/users",
+            "/api/users?active=true",
+        ] {
+            assert!(
+                validate_case_pattern(pattern).is_err(),
+                "pattern should be rejected: {pattern}"
+            );
+        }
+    }
+}

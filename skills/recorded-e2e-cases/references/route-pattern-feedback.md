@@ -72,6 +72,11 @@ case_path_patterns = [
 # END AI-MANAGED CASE PATH PATTERNS
 ```
 
+- Recording limits are target-owned and independent from route feedback.
+  `http_gateway.case_limits.default` applies per resolved case pattern, while
+  exact keys under `http_gateway.case_limits.overrides` may set different
+  limits. Do not add or raise these limits merely to make replay discovery
+  record more cases. Pattern feedback must preserve existing limit settings.
 - Require `traffic-recorder-config` from `PATH`. Never edit the target TOML
   directly and never create the config or managed markers on the target's
   behalf. If the command is unavailable or rejects an existing managed block,

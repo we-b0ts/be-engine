@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 mod allowed_unused_http;
+mod case_limits;
 pub(crate) mod edit;
 mod feedback;
 mod http_response_rewrite;
@@ -17,6 +18,7 @@ pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     plan_allowed_unused_http_hosts,
 };
+pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
     plan_case_path_pattern_feedback,
@@ -121,6 +123,7 @@ pub struct HttpGatewayConfig {
     pub fallback_upstream: String,
     pub preserve_host: bool,
     pub ready: HttpGatewayReadyConfig,
+    pub case_limits: HttpGatewayCaseLimitsConfig,
     pub verified_excludes: VerifiedApiExcludesConfig,
     pub exclude_rules: Vec<HttpGatewayRuleConfig>,
     pub rules: Vec<HttpGatewayRuleConfig>,
@@ -189,6 +192,9 @@ impl AppConfig {
         self.recording.validate()?;
         self.http_response_rewrite.validate()?;
         allowed_unused_http::validate_config(&self.http_gateway)?;
+        self.http_gateway
+            .case_limits
+            .validate(&self.http_gateway.rules)?;
         self.http_gateway
             .verified_excludes
             .validate(&self.http_gateway.rules)?;
@@ -285,6 +291,7 @@ impl Default for HttpGatewayConfig {
             fallback_upstream: "http://127.0.0.1:8082".to_string(),
             preserve_host: true,
             ready: HttpGatewayReadyConfig::default(),
+            case_limits: HttpGatewayCaseLimitsConfig::default(),
             verified_excludes: VerifiedApiExcludesConfig::default(),
             exclude_rules: Vec::new(),
             rules: Vec::new(),
@@ -378,6 +385,10 @@ mod tests {
         assert!(!config.http.enabled);
         assert!(!config.mysql.enabled);
         assert!(!config.mysql.record_raw_packets);
+        assert_eq!(
+            config.http_gateway.case_limits.default,
+            case_limits::DEFAULT_MAX_CASES_PER_PATTERN
+        );
         assert_eq!(config.recording.max_body_bytes, 1024 * 1024);
         assert_eq!(config.recording.case_dependency_quiet_period_ms, 100);
         assert_eq!(config.recording.case_dependency_drain_timeout_ms, 5_000);
