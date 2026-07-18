@@ -76,10 +76,13 @@ pub use recorder::{
     capture_body_with_original_len, capture_case_body, redact_headers,
 };
 pub use replay::{
+    DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,
     ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayPolicyValidationReport,
-    aggregate_replay_reports, aggregate_replay_reports_with_options, run_mysql_replay,
-    run_mysql_replay_control, run_replay, run_replay_control, validate_replay_policy,
+    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport,
+    aggregate_replay_reports, aggregate_replay_reports_with_options, plan_dynamic_response_rule,
+    plan_response_rule, run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
+    validate_replay_policy,
 };
 pub use tls::MitmCa;
 

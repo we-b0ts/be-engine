@@ -2,7 +2,7 @@ use hyper::header::HOST;
 use hyper::{HeaderMap, Method, Uri};
 
 use crate::config::{HttpGatewayRuleConfig, VerifiedApiExcludesConfig};
-use crate::path_pattern::{matches_segment_pattern, segments};
+use crate::path_pattern::{matches_path_pattern, matches_segment_pattern, segments};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Match {
@@ -68,7 +68,7 @@ pub(super) fn case_uri_group(uri: &Uri, patterns: &[String]) -> String {
     let path = uri.path();
     let group_path = patterns
         .iter()
-        .find(|pattern| matches_segment_pattern(pattern, path))
+        .find(|pattern| matches_path_pattern(pattern, path))
         .map(String::as_str)
         .unwrap_or(path);
 
@@ -138,12 +138,10 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
 fn case_group_from_path(path: &str) -> String {
     let group = segments(path)
         .into_iter()
-        .map(|segment| {
-            if segment == "*" {
-                "wildcard".to_string()
-            } else {
-                segment.to_string()
-            }
+        .map(|segment| match segment {
+            "*" => "wildcard".to_string(),
+            "**" => "catchall".to_string(),
+            _ => segment.to_string(),
         })
         .collect::<Vec<_>>()
         .join("-");
@@ -352,6 +350,23 @@ mod tests {
         assert_eq!(
             case_uri_group(&"/api/users/bob/other".parse().unwrap(), &patterns),
             "api-users-bob-other"
+        );
+    }
+
+    #[test]
+    fn builds_case_group_from_trailing_catch_all_pattern() {
+        let patterns = vec!["/api/namespaces/**".to_string()];
+
+        assert_eq!(
+            case_uri_group(
+                &"/api/namespaces/default/pods/nginx".parse().unwrap(),
+                &patterns
+            ),
+            "api-namespaces-catchall"
+        );
+        assert_eq!(
+            case_uri_group(&"/api/namespaces".parse().unwrap(), &patterns),
+            "api-namespaces"
         );
     }
 }

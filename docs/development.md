@@ -148,8 +148,10 @@ traffic-replay-policy validate --policy ../target/config/replay.yaml
 traffic-replay --policy ../target/config/replay.yaml path/to/case-dir
 ```
 
-See [replay-policy.md](replay-policy.md) for the v1 schema, assertion-only
-`expected-response.json` contract, rule scoping, and dirty-evidence behavior.
+See [replay-policy.md](replay-policy.md) for the policy schemas,
+assertion-only `expected-response.json` contract, dependency rule scoping,
+runner-owned dynamic and unordered response fields, and dirty-evidence
+behavior.
 
 Recorder-owned host exceptions for API-independent process-level tasks remain
 in the target repository's `recorder.toml`, not `replay.yaml`. Preview and

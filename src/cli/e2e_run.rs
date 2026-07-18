@@ -70,7 +70,10 @@ struct PrepareArgs {
     method: String,
     #[arg(long)]
     source_route: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Recorder path pattern: '*' matches one segment; trailing '**' matches one or more remaining segments"
+    )]
     pattern: Option<String>,
     #[arg(long)]
     source_revision: String,

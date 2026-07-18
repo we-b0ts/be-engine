@@ -62,7 +62,7 @@ traffic-e2e-run prepare \
   --case-dir <current-canonical-directory> \
   --method <METHOD> \
   --source-route '<confirmed-dynamic-source-route>' \
-  --pattern '<safe-segment-wildcard-pattern>' \
+  --pattern '<safe-recorder-path-pattern>' \
   --source-revision '<source-revision>'
 ```
 

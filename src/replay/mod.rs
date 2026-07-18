@@ -19,6 +19,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::MitmCa;
+mod assertion;
 #[cfg(test)]
 mod command_protocol_tests;
 mod control;
@@ -81,7 +82,14 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
-pub use policy::{ReplayPolicyValidationReport, validate_replay_policy};
+pub use assertion::{
+    ResponseAssertionCaseReport, ResponseAssertionOptions, assert_recorded_response,
+};
+pub use policy::{
+    DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
+    ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
+    ResponseRuleReport, plan_dynamic_response_rule, plan_response_rule, validate_replay_policy,
+};
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options,

@@ -113,10 +113,13 @@ Use `dependencies-debug.jsonl` to explain parser gaps, not as the primary replay
 source. Raw/base64 payloads are less reliable than semantic `mysql_exchange`
 records.
 
-## Assertion Drift
+## Response Assertion Mismatches
 
-Only classify a mismatch as assertion drift when dependency replay was used and
-the business behavior matches.
+Inspect the structured response difference and compare source and target
+behavior before changing assertion policy. Fix target code, dependency wiring,
+or response construction when it does not match the source contract. Only
+consider a replay-policy strategy after dependency replay is complete and clean
+and source evidence proves the remaining difference is intentional.
 
 For JSON responses, diagnose against parsed JSON values. Formatting, whitespace,
 and object key order are not assertion failures. Missing fields, extra fields,
@@ -131,10 +134,11 @@ Common unstable fields:
 - generated ids when the exact id is not business-relevant
 - ordering in arrays that the product contract treats as unordered
 
-Identify the exact JSONPath for an unstable body field, but do not add an
-assertion ignore anywhere without explicit user authorization. Replay-policy
-v1 cannot encode response ignores; never put one in `config/replay.yaml`.
-Prefer asserting stable semantic fields over broad ignores.
+Identify the exact JSON Pointer for a runtime-varying body field. Check whether
+the current replay-policy version supports a narrowly scoped strategy and use
+its plan/apply operation. A scalar mismatch or generated diagnostic candidate
+does not by itself justify a policy change. If no supported strategy exists,
+keep the case incomplete. Never add a broad ignore or weaken stable fields.
 
 ## Product Code Bugs
 

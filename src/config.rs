@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 mod allowed_unused_http;
-mod edit;
+pub(crate) mod edit;
 mod feedback;
 mod http_response_rewrite;
 mod recording;

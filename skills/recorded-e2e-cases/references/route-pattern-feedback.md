@@ -32,8 +32,8 @@ method first, then classify the path:
 | Result | Feedback |
 | --- | --- |
 | Exact static route | `exact_static`; do not generate a pattern |
-| One single-segment dynamic template | Continue to pattern safety checks |
-| Optional, constrained, regex, or catch-all template | `unsupported`; do not generate |
+| One single-segment dynamic or confirmed catch-all template | Continue to pattern safety checks |
+| Optional, constrained, or regex template | `unsupported`; do not generate |
 | More than one template | `ambiguous`; do not guess |
 | No template | `unmatched`; report source revision, prefix, or deleted-route mismatch |
 
@@ -43,8 +43,10 @@ template is established. Do not infer API identity from `uri-group`.
 
 ## Pattern Safety
 
-Convert every supported dynamic path segment to one recorder `*`. Generate a
-pattern only when all dynamic segments consume exactly one path segment.
+Recorder `*` matches exactly one non-empty path segment. A final recorder `**`
+is a catch-all matching one or more remaining path segments. `**` must occupy a
+complete segment and may appear only at the end. Determine the source route's
+parameter semantics before selecting either recorder wildcard.
 
 Before accepting it:
 

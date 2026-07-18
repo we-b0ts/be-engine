@@ -5,15 +5,20 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-const POLICY_VERSION: u8 = 1;
+use super::response::{ResponseRules, response_rule_ids, validate_response_rules};
 
-#[derive(Debug, Clone, Deserialize)]
+const MIN_POLICY_VERSION: u8 = 1;
+const MAX_POLICY_VERSION: u8 = 2;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ReplayPolicyDocument {
-    pub(super) version: u8,
-    pub(super) expected_response: ExpectedResponseUsage,
+pub(in crate::replay) struct ReplayPolicyDocument {
+    pub(in crate::replay) version: u8,
+    pub(in crate::replay) expected_response: ExpectedResponseUsage,
     #[serde(default)]
     pub(super) rules: Vec<ReplayPolicyRule>,
+    #[serde(default, skip_serializing_if = "ResponseRules::is_empty")]
+    pub(in crate::replay) response_rules: ResponseRules,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -29,7 +34,7 @@ pub(in crate::replay) enum PolicyProtocol {
     Http,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayPolicyRule {
     pub(super) id: String,
@@ -44,14 +49,14 @@ pub(super) struct ReplayPolicyRule {
     pub(super) http: Option<HttpSelector>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CaseSelector {
     pub(super) method: String,
     pub(super) path: String,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TargetSelector {
     #[serde(default)]
@@ -60,7 +65,7 @@ pub(super) struct TargetSelector {
     pub(super) port: Option<u16>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct MysqlSelector {
     pub(super) command: String,
@@ -72,7 +77,7 @@ pub(super) struct MysqlSelector {
     pub(super) params: BTreeMap<usize, DynamicValueRule>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct HttpSelector {
     pub(super) method: String,
@@ -80,7 +85,7 @@ pub(super) struct HttpSelector {
     pub(super) query: BTreeMap<String, DynamicValueRule>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct DynamicValueRule {
     #[serde(default)]
@@ -101,7 +106,7 @@ pub(super) enum ValueValidator {
     UuidV4,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TimeRule {
     pub(super) relative_to: TimeReference,
@@ -114,7 +119,7 @@ pub(super) struct TimeRule {
     pub(super) timezone: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum TimeReference {
     ReplayNow,
@@ -127,17 +132,20 @@ pub struct ReplayPolicyValidationReport {
     pub fingerprint: String,
     pub expected_response: ExpectedResponseUsage,
     pub rule_ids: Vec<String>,
+    pub response_rule_ids: Vec<String>,
+    pub runner_owned_response_assertions: bool,
 }
 
 #[derive(Debug)]
-pub(super) struct LoadedReplayPolicy {
-    pub(super) document: ReplayPolicyDocument,
-    pub(super) path: PathBuf,
-    pub(super) fingerprint: String,
+pub(in crate::replay) struct LoadedReplayPolicy {
+    pub(in crate::replay) document: ReplayPolicyDocument,
+    pub(in crate::replay) path: PathBuf,
+    pub(in crate::replay) fingerprint: String,
 }
 
 pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationReport> {
     let loaded = load_replay_policy(path)?;
+    let response_rule_ids = response_rule_ids(&loaded.document.response_rules);
     Ok(ReplayPolicyValidationReport {
         version: loaded.document.version,
         path: loaded.path.display().to_string(),
@@ -149,10 +157,12 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
             .into_iter()
             .map(|rule| rule.id)
             .collect(),
+        response_rule_ids,
+        runner_owned_response_assertions: loaded.document.version >= 2,
     })
 }
 
-pub(super) fn load_replay_policy(path: &Path) -> Result<LoadedReplayPolicy> {
+pub(in crate::replay) fn load_replay_policy(path: &Path) -> Result<LoadedReplayPolicy> {
     let bytes = fs::read(path)
         .with_context(|| format!("failed to read replay policy {}", path.display()))?;
     let document: ReplayPolicyDocument = serde_yaml::from_slice(&bytes)
@@ -169,12 +179,17 @@ pub(super) fn load_replay_policy(path: &Path) -> Result<LoadedReplayPolicy> {
     })
 }
 
-fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
+pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     ensure!(
-        document.version == POLICY_VERSION,
-        "unsupported replay policy version {}; expected {POLICY_VERSION}",
+        (MIN_POLICY_VERSION..=MAX_POLICY_VERSION).contains(&document.version),
+        "unsupported replay policy version {}; expected {MIN_POLICY_VERSION} or {MAX_POLICY_VERSION}",
         document.version
     );
+    ensure!(
+        document.version >= 2 || document.response_rules.is_empty(),
+        "response_rules require replay policy version 2"
+    );
+    validate_response_rules(&document.response_rules)?;
     let mut ids = BTreeSet::new();
     for rule in &document.rules {
         validate_rule(rule)?;
@@ -415,7 +430,7 @@ fn zero_duration() -> String {
     "0s".to_string()
 }
 
-fn fingerprint(bytes: &[u8]) -> String {
+pub(in crate::replay) fn fingerprint(bytes: &[u8]) -> String {
     let mut hash = 0xcbf29ce484222325_u64;
     for byte in bytes {
         hash ^= u64::from(*byte);

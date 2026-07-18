@@ -96,7 +96,10 @@ struct PatternFeedbackArgs {
     case_source: String,
     #[arg(long, value_enum, default_value_t = AuthorityArg::Focused)]
     authority: AuthorityArg,
-    #[arg(long = "pattern")]
+    #[arg(
+        long = "pattern",
+        help = "Recorder path pattern: '*' matches one segment; trailing '**' matches one or more remaining segments"
+    )]
     patterns: Vec<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     format: OutputFormat,

@@ -363,14 +363,24 @@ fn normalize_route(route: &str, label: &str) -> Result<String> {
 fn validate_pattern(pattern: &str) -> Result<String> {
     let pattern = normalize_route(pattern, "case path pattern")?;
     ensure!(
-        pattern.split('/').any(|segment| segment == "*"),
-        "dynamic case path pattern must contain at least one whole-segment '*'"
+        pattern
+            .split('/')
+            .any(|segment| segment == "*" || segment == "**"),
+        "dynamic case path pattern must contain at least one whole-segment '*' or trailing '**'"
     );
     ensure!(
         pattern
             .split('/')
-            .all(|segment| !segment.contains('*') || segment == "*"),
+            .all(|segment| !segment.contains('*') || segment == "*" || segment == "**"),
         "case path pattern wildcards must occupy a complete path segment"
+    );
+    let segments = pattern.split('/').collect::<Vec<_>>();
+    ensure!(
+        segments
+            .iter()
+            .enumerate()
+            .all(|(index, segment)| *segment != "**" || index == segments.len() - 1),
+        "case path pattern '**' catch-all must be the final path segment"
     );
     Ok(pattern)
 }
@@ -382,9 +392,14 @@ fn validate_pattern_against_source_route(pattern: &str, source_route: &str) -> R
         pattern_segments.len() == route_segments.len(),
         "case path pattern and source route must have the same segment count"
     );
-    for (pattern_segment, route_segment) in pattern_segments.into_iter().zip(route_segments) {
+    let route_segment_count = route_segments.len();
+    for (index, (pattern_segment, route_segment)) in
+        pattern_segments.into_iter().zip(route_segments).enumerate()
+    {
         let matches = if pattern_segment == "*" {
             dynamic_source_segment(route_segment)
+        } else if pattern_segment == "**" {
+            index + 1 == route_segment_count && dynamic_source_segment(route_segment)
         } else {
             pattern_segment == route_segment && !dynamic_source_segment(route_segment)
         };

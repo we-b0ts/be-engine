@@ -121,6 +121,8 @@ allowed_unused_http_hosts = [
 # Keep project-specific patterns in the destination repository's recorder
 # config. The recorded-E2E replay workflow can add safe patterns after it
 # associates actual case URIs with source routes.
+# '*' matches one non-empty path segment; a final '**' matches one or more
+# remaining path segments.
 # BEGIN AI-MANAGED CASE PATH PATTERNS
 # source_revision = ""
 case_path_patterns = [

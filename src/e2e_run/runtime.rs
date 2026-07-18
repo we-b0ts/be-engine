@@ -251,6 +251,7 @@ mod tests {
             pr_base: "integration".to_string(),
             recorder_config: Some(PathBuf::from("/target/config/recorder.toml")),
             recording_rule: Some("pluto".to_string()),
+            runner_owned_response_assertions: false,
         };
 
         assert_eq!(

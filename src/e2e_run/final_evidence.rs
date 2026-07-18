@@ -42,7 +42,11 @@ pub(super) fn build_final_evidence(
     state.aggregate_clean = !aggregate.is_dirty();
     store::write_json(&state.aggregate_report, &aggregate)?;
 
-    let assertion = assertion_report(state, state.cases.iter().map(|case| case.case_id.as_str()));
+    let assertion = assertion_report(
+        state,
+        config.runner_owned_response_assertions,
+        state.cases.iter().map(|case| case.case_id.as_str()),
+    );
     store::write_json(&state.assertions_report, &assertion)?;
     state.apis = build_api_evidence(
         config,
@@ -83,7 +87,11 @@ fn build_api_evidence(
         let api_aggregate = aggregate_view(aggregate, &case_ids)?;
         let aggregate_path = report_dir.join("aggregate.json");
         store::write_json(&aggregate_path, &api_aggregate)?;
-        let assertions = assertion_report(state, case_ids.iter().map(String::as_str));
+        let assertions = assertion_report(
+            state,
+            config.runner_owned_response_assertions,
+            case_ids.iter().map(String::as_str),
+        );
         let assertion_path = report_dir.join("assertions.json");
         store::write_json(&assertion_path, &assertions)?;
 
@@ -220,6 +228,7 @@ fn aggregate_view(
 
 fn assertion_report<'a>(
     state: &ActiveRunState,
+    runner_owned: bool,
     case_ids: impl Iterator<Item = &'a str>,
 ) -> AssertionReport {
     let cases = state
@@ -227,7 +236,7 @@ fn assertion_report<'a>(
         .iter()
         .map(|case| (case.case_id.as_str(), case))
         .collect::<BTreeMap<_, _>>();
-    let mut report = AssertionReport::new(&state.case_source);
+    let mut report = AssertionReport::new(state, runner_owned);
     report.cases = case_ids
         .map(|case_id| AssertionCase {
             case_id: case_id.to_string(),
@@ -235,6 +244,9 @@ fn assertion_report<'a>(
                 .get(case_id)
                 .and_then(|case| case.assertion_passed)
                 .unwrap_or(false),
+            response: cases
+                .get(case_id)
+                .and_then(|case| case.response_assertion.clone()),
         })
         .collect();
     report

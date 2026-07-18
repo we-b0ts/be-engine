@@ -157,19 +157,21 @@ struct AggregateCaseEvidence {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AssertionEvidence {
     version: u8,
     case_source: String,
     expected_response: String,
     cases: Vec<AssertionCaseEvidence>,
+    #[serde(flatten)]
+    _rest: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct AssertionCaseEvidence {
     case_id: String,
     passed: bool,
+    #[serde(flatten)]
+    _rest: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug)]
