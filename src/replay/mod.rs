@@ -230,12 +230,29 @@ impl ReplayRuntime {
             .into_iter()
             .map(|value| value.to_ascii_lowercase())
             .collect::<Vec<_>>();
-        let replay_policy = config
+        let mut replay_policy = config
             .policy_path
             .as_deref()
             .map(|path| ReplayPolicyRuntime::load(path, &cases))
             .transpose()?;
-        if let Some(policy) = &replay_policy {
+        if let Some(policy) = &mut replay_policy {
+            for exchange in mysql
+                .exchanges
+                .iter()
+                .filter(|exchange| exchange.source == ReplaySource::Case)
+            {
+                policy.observe_recorded_mysql_exchange(
+                    exchange.case_id.as_deref(),
+                    &ReplaySessionIdentity {
+                        target: Some(exchange.identity.target.clone()),
+                        database: exchange.identity.database.clone(),
+                        username: exchange.identity.username.clone(),
+                    },
+                    &exchange.record.command,
+                    exchange.record.sql.as_deref(),
+                );
+            }
+            http::observe_recorded_policy_exchanges(policy, &http_exchanges);
             policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
         }
 

@@ -89,16 +89,21 @@ fakes, in-process mocks, or recording-backed target implementations.
    or environment-derived value, check for a supported narrowly scoped
    replay-policy strategy and use its plan/apply workflow. If no supported
    strategy exists, keep the case incomplete; never weaken an assertion merely
-   because values differ. Treat recorder reports and summaries as dependency
-   coverage evidence. Unmatched, case-owned unused, unsupported, unsafe, or
-   missing required side effects keep the group incomplete. A source-verified
-   API-independent process-level HTTP host may be added through recorder-config
-   plan/apply during focused diagnosis; its unconsumed recorded exchanges remain
-   explicit non-blocking diagnostics, while unmatched target calls remain
-   dirty. The host applies to every case in the named recording rule and is not
-   attributed to active APIs. Unused bootstrap traffic is retained as a
-   non-blocking startup diagnostic because traffic observed before readiness is
-   outside the selected E2E contract.
+   because values differ. Before adding a dependency rule, search for an
+   existing rule with the same dependency identity. Reuse an unscoped
+   operation-level rule by default and do not copy it per inbound API. Add an
+   optional `case` selector only when the same dependency operation has
+   different dynamic-field semantics across request contexts and no narrower
+   dependency selector can distinguish them. Treat recorder reports and
+   summaries as dependency coverage evidence. Unmatched, case-owned unused,
+   unsupported, unsafe, or missing required side effects keep the group
+   incomplete. A source-verified API-independent process-level HTTP host may be
+   added through recorder-config plan/apply during focused diagnosis; its
+   unconsumed recorded exchanges remain explicit non-blocking diagnostics,
+   while unmatched target calls remain dirty. The host applies to every case in
+   the named recording rule and is not attributed to active APIs. Unused
+   bootstrap traffic is retained as a non-blocking startup diagnostic because
+   traffic observed before readiness is outside the selected E2E contract.
 8. After every published case is grouped and every migrated API passes its
    focused loop, call `traffic-e2e-run run` for one full round. The runner MUST
    start replay once, load bootstrap and the exact full case set once, execute

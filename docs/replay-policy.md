@@ -45,14 +45,22 @@ case-id exceptions in the policy. Use selectors and semantic validation only.
 
 ## Rule Scope
 
-Every rule must select the inbound case API by method and path, then select one
-dependency by protocol and a narrow dependency identity. HTTP rules require a
-target host, dependency method and dependency path. MySQL rules require a SQL
-pattern plus at least one target host, database, or username.
+Dependency rules select one operation by protocol and a narrow dependency
+identity. HTTP rules require a target host, dependency method and dependency
+path. MySQL rules require a SQL pattern plus at least one target host, database,
+or username. Reuse one unscoped rule for the same dependency operation instead
+of copying it for every inbound API.
 
-Case and HTTP paths use segment-aware patterns: `*` stays inside one segment
-and `**` crosses segments. SQL patterns are normalized for whitespace, case,
-and backticks; `*` and `?` are wildcards.
+`case` is optional. Add it only when the same dependency operation has
+different dynamic-field semantics in different request contexts and a narrower
+dependency selector cannot distinguish them. Bindings remain isolated by
+active case for both scoped and unscoped rules.
+
+Case paths, when present, and HTTP dependency paths use segment-aware patterns:
+`*` stays inside one segment and `**` crosses segments. SQL patterns are
+normalized for whitespace, case, and backticks; `*` and `?` are wildcards.
+Multiple rules may match one dependency only when they select disjoint dynamic
+fields.
 
 ## Dynamic Fields
 
@@ -73,9 +81,6 @@ version: 1
 expected_response: assertions_only
 rules:
   - id: audit-insert
-    case:
-      method: GET
-      path: /api/resources/*
     protocol: mysql
     target:
       host: audit.example.test
@@ -97,9 +102,6 @@ rules:
             timezone: "+08:00"
 
   - id: audit-update
-    case:
-      method: GET
-      path: /api/resources/*
     protocol: mysql
     target:
       host: audit.example.test
@@ -112,6 +114,24 @@ rules:
       params:
         1:
           ref: audit_id
+
+  # Optional context-specific field composed with the unscoped update rule.
+  - id: resource-token-audit-response
+    case:
+      method: GET
+      path: /api/resource/token
+    protocol: mysql
+    target:
+      host: audit.example.test
+      port: 3306
+    mysql:
+      command: COM_STMT_EXECUTE
+      database: audit
+      username: audit_writer
+      sql: "UPDATE request_log_* SET response_status=? WHERE uuid=?"
+      params:
+        0:
+          validate: non_empty
 ```
 
 Durations accept integer `ms`, `s`, `m`, `h`, and `d` units. A time value may
@@ -124,8 +144,10 @@ Replay reports include the canonical policy path, content fingerprint,
 `assertions_only` declaration, rule applicability, match counts, field
 operation counts, and unused applicable rules. An applicable rule with zero
 matches is dirty evidence and fails `end`, `finalize --fail-on-dirty`, and
-aggregate dirty checks. Rules outside the selected case API are reported as
-non-applicable and do not make focused replay dirty.
+aggregate dirty checks. A rule is applicable only when a selected case-owned
+recorded dependency exchange matches its stable dependency selectors and its
+optional `case` selector. Selecting an inbound API alone and matching bootstrap
+evidence do not make a dependency rule applicable.
 
 A query field cannot be both policy-managed and passed through the global
 `--http-ignore-query-param` option. Replay rejects that configuration at

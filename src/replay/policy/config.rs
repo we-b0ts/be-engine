@@ -38,8 +38,8 @@ pub(in crate::replay) enum PolicyProtocol {
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayPolicyRule {
     pub(super) id: String,
-    #[serde(rename = "case")]
-    pub(super) case_selector: CaseSelector,
+    #[serde(default, rename = "case", skip_serializing_if = "Option::is_none")]
+    pub(super) case_selector: Option<CaseSelector>,
     pub(super) protocol: PolicyProtocol,
     #[serde(default)]
     pub(super) target: TargetSelector,
@@ -236,16 +236,18 @@ fn dynamic_fields(rule: &ReplayPolicyRule) -> Vec<&DynamicValueRule> {
 
 fn validate_rule(rule: &ReplayPolicyRule) -> Result<()> {
     ensure_identifier(&rule.id, "rule id")?;
-    ensure!(
-        !rule.case_selector.method.trim().is_empty(),
-        "rule {:?} case.method must not be empty",
-        rule.id
-    );
-    ensure!(
-        rule.case_selector.path.starts_with('/'),
-        "rule {:?} case.path must be an absolute HTTP path pattern",
-        rule.id
-    );
+    if let Some(case) = &rule.case_selector {
+        ensure!(
+            !case.method.trim().is_empty(),
+            "rule {:?} case.method must not be empty",
+            rule.id
+        );
+        ensure!(
+            case.path.starts_with('/'),
+            "rule {:?} case.path must be an absolute HTTP path pattern",
+            rule.id
+        );
+    }
     if rule.target.port.is_some() {
         ensure!(
             rule.target.host.is_some(),

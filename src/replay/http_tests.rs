@@ -111,7 +111,7 @@ async fn replays_http_exchange_with_stable_query_matching() {
 }
 
 #[tokio::test]
-async fn replays_http_exchange_with_scoped_dynamic_query_policy() {
+async fn replays_http_exchange_with_unscoped_dynamic_query_policy() {
     let temp = tempdir().unwrap();
     let case_dir = temp.path().join("case-http-policy");
     let recorded_uri = "/?Action=DescribeInstances&SignatureNonce=11111111111141118111111111111111&Timestamp=2026-07-15T04%3A30%3A00Z&Signature=old";
@@ -141,9 +141,6 @@ version: 1
 expected_response: assertions_only
 rules:
   - id: aliyun-signature
-    case:
-      method: GET
-      path: /api/aliyun/instance/attr
     protocol: http
     target:
       host: api.example.test
@@ -183,6 +180,7 @@ rules:
 
     let state = runtime.state.lock().await;
     let policy = state.snapshot_report().replay_policy.unwrap();
+    assert!(policy.rules[0].applicable);
     assert_eq!(policy.rules[0].matches, 1);
     assert!(policy.unused_applicable_rule_ids.is_empty());
     task.abort();

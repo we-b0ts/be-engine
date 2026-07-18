@@ -47,10 +47,79 @@ not create recording-backed or fixture-backed target dependency implementations.
 ## Dependency Dynamic Rules
 
 Add a rule only after source and dependency evidence proves that a field is
-legitimately dynamic. Select the outer API, dependency identity or fingerprint,
-and exact field. Use supported bind/ref relationships, shape validation, or
-relative-time validation without copying recorded literals, secrets, absolute
-case paths, or case ids into the policy.
+legitimately dynamic. Select the dependency identity or fingerprint and exact
+field. Reuse one operation-level rule for the same dependency selector; do not
+copy it for each inbound API. Use supported bind/ref relationships, shape
+validation, or relative-time validation without copying recorded literals,
+secrets, absolute case paths, or case ids into the policy.
+
+The optional `case` selector is an exception for an evidenced ambiguity: use it
+only when the same dependency operation has different dynamic-field semantics
+in different request contexts and no narrower dependency selector can
+distinguish them. Bindings remain isolated by active case even when the rule is
+unscoped, so one bind/ref name can be reused safely across a collection.
+
+An unscoped or scoped rule is applicable only when a selected case-owned
+recorded dependency exchange matches its stable protocol and dependency
+selectors, plus `case` when present. Selecting an inbound API alone does not
+make a rule applicable, and bootstrap evidence does not make a case rule
+applicable. Multiple rules may compose on one dependency exchange only when
+they select disjoint fields; overlapping field selection is rejected.
+
+```yaml
+rules:
+  - id: request-audit-insert
+    protocol: mysql
+    target:
+      host: audit.example.test
+      port: 3306
+    mysql:
+      command: COM_STMT_EXECUTE
+      database: audit
+      username: audit_writer
+      sql: "INSERT INTO request_log_* (*) VALUES (*)"
+      params:
+        0:
+          bind: request_audit_id
+          validate: uuid_v4
+        11:
+          time:
+            relative_to: replay_now
+            tolerance: 10s
+
+  - id: request-audit-update
+    protocol: mysql
+    target:
+      host: audit.example.test
+      port: 3306
+    mysql:
+      command: COM_STMT_EXECUTE
+      database: audit
+      username: audit_writer
+      sql: "UPDATE request_log_* SET * WHERE uuid=?"
+      params:
+        0:
+          bind: request_audit_elapsed
+        3:
+          ref: request_audit_id
+
+  - id: resource-token-audit-response
+    case:
+      method: GET
+      path: /api/resource/token
+    protocol: mysql
+    target:
+      host: audit.example.test
+      port: 3306
+    mysql:
+      command: COM_STMT_EXECUTE
+      database: audit
+      username: audit_writer
+      sql: "UPDATE request_log_* SET * WHERE uuid=?"
+      params:
+        1:
+          validate: non_empty
+```
 
 Version one supports only its recorder-declared scalar fields. It does not
 support background allowlists, case-id exceptions, dependency payload fixtures,
