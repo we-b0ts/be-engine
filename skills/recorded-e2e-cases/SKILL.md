@@ -86,13 +86,19 @@ fakes, in-process mocks, or recording-backed target implementations.
    explicit exact-byte mode. When a response assertion fails, inspect the
    structured difference and compare source and target behavior before changing
    assertion policy. Fix target code, dependency wiring, or response construction
-   when it does not match the source contract. If the difference is intentionally
-   produced at runtime, such as a generated value, timestamp, ordering difference,
-   or environment-derived value, check for a supported narrowly scoped
-   replay-policy strategy and use its plan/apply workflow. If no supported
-   strategy exists, keep the case incomplete; never weaken an assertion merely
-   because values differ. Before adding a dependency rule, search for an
-   existing rule with the same dependency identity. Reuse an unscoped
+   when it does not match the source contract. A stable mismatch is not
+   automatically an environment-materialization case: preserve direct source
+   startup inputs through target config or environment, and preserve values
+   loaded from runtime dependencies through the genuine dependency path. Only
+   when source and dependency evidence prove that the difference is intentionally
+   produced by a runtime non-deterministic mechanism, such as random generation,
+   UUID, nonce, current time, or a value derived from one of them, check for a
+   supported narrowly scoped replay-policy strategy and use its plan/apply
+   workflow. For an intentional ordering difference, use only the supported
+   unordered strategy. If no supported strategy exists, keep the case incomplete;
+   never weaken an assertion merely because values differ.
+   Before adding a dependency rule, search for an existing rule with the same
+   dependency identity. Reuse an unscoped
    operation-level rule by default and do not copy it per inbound API. Add an
    optional `case` selector only when the same dependency operation has
    different dynamic-field semantics across request contexts and no narrower
@@ -141,8 +147,11 @@ items hold:
 2. The final report records the canonical replay-policy path and fingerprint,
    `expected_response: assertions_only`, rule applicability, and zero unused
    applicable rules. Direct audit proves no expected-response or recorder
-   dependency value flows into target behavior, dependency implementations,
-   fixtures, branches, caches, or side effects.
+   dependency result flows into target behavior, dependency implementations,
+   fixtures, branches, caches, or side effects. Offline materialization is
+   allowed only for a direct startup input proven by the source startup path; a
+   value loaded by a source runtime dependency cannot be replaced with a target
+   environment variable.
 3. Recorded E2E uses genuine target dependency clients. For intercepted replay,
    pre-request evidence proves the dependency-producing process runs as the
    fixed user reported by `traffic-e2e diagnose interception identity`. No

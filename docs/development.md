@@ -229,6 +229,7 @@ granting the fixed user access to the workspace or build cache:
 
 ```bash
 traffic-e2e target exec \
+  --env-file path/to/local.env \
   --copy-env APP_CONFIG=path/to/e2e.yaml \
   --copy-env REPLAY_CA=path/to/replay-ca.pem \
   --path-env CASE_DIR=path/to/readable/case-group \
@@ -239,6 +240,10 @@ traffic-e2e target exec \
 The caller must have non-interactive sudo permission for staging ownership and
 for running as the recorder's fixed user. Copied inputs are read-only to the
 target; the temporary work tree is writable and removed after execution.
+Environment files use dotenv syntax. Later files override earlier files, and
+same-named caller environment values or explicit `--env` assignments override
+file values. Reserved identity, path, shell-hook, and replay-session variables
+are rejected.
 `--path-env` does not widen source permissions and fails when the fixed user
 cannot already read the path. The
 helper clears inherited proxy and shell-hook variables, verifies the effective

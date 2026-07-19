@@ -5,6 +5,8 @@ use std::process::{Command, Output};
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
 
+use super::output::{stderr_line, stdout_line};
+
 mod dns;
 mod fake_ip;
 
@@ -94,10 +96,18 @@ pub(super) struct Guard {
     fake_ip_up: bool,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ActiveRules {
+    dns: bool,
+    fake_ip: bool,
+}
+
 impl Guard {
     pub(super) fn enable(dns: DnsConfig, fake_ip: FakeIpConfig) -> Result<Self> {
         let uid = fixed_user_uid()?;
-        eprintln!("local interception owner filter enabled: {FIXED_USER} (uid {uid})");
+        stderr_line(format_args!(
+            "local interception owner filter enabled: {FIXED_USER} (uid {uid})"
+        ));
         let mut guard = Self {
             dns,
             fake_ip,
@@ -115,17 +125,25 @@ impl Guard {
     }
 
     pub(super) fn disable(&mut self) {
-        if self.fake_ip_up {
-            if let Err(error) = self.run_root_fake_ip(RuleAction::Down) {
-                eprintln!("failed to remove fake-IP interception: {error:#}");
-            }
-            self.fake_ip_up = false;
+        let active = self.take_active_rules();
+        if active.fake_ip
+            && let Err(error) = self.run_root_fake_ip(RuleAction::Down)
+        {
+            stderr_line(format_args!(
+                "failed to remove fake-IP interception: {error:#}"
+            ));
         }
-        if self.dns_up {
-            if let Err(error) = self.run_root_dns(RuleAction::Down) {
-                eprintln!("failed to remove DNS interception: {error:#}");
-            }
-            self.dns_up = false;
+        if active.dns
+            && let Err(error) = self.run_root_dns(RuleAction::Down)
+        {
+            stderr_line(format_args!("failed to remove DNS interception: {error:#}"));
+        }
+    }
+
+    fn take_active_rules(&mut self) -> ActiveRules {
+        ActiveRules {
+            dns: std::mem::take(&mut self.dns_up),
+            fake_ip: std::mem::take(&mut self.fake_ip_up),
         }
     }
 
@@ -224,8 +242,7 @@ pub(super) fn run(args: InterceptionArgs) -> Result<()> {
             )
         }
         InterceptionCommand::Identity => {
-            println!("{FIXED_USER} {}", fixed_user_uid()?);
-            Ok(())
+            stdout_line(format_args!("{FIXED_USER} {}", fixed_user_uid()?))
         }
     }
 }
@@ -388,4 +405,41 @@ pub(super) fn system_program(name: &str) -> Result<PathBuf> {
         .map(|directory| Path::new(directory).join(name))
         .find(|path| path.is_file())
         .with_context(|| format!("required system command not found: {name}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabling_guard_clears_state_before_cleanup() {
+        let mut guard = Guard {
+            dns: DnsConfig {
+                dns_ip: "127.0.0.153".to_string(),
+                dns_port: 15353,
+                upstream_dns: vec!["10.10.10.10:53".to_string()],
+            },
+            fake_ip: FakeIpConfig {
+                fake_cidr: "198.18.0.0/15".to_string(),
+                tcp_port: 15001,
+                udp_port: 15002,
+                tcp: true,
+                udp: true,
+            },
+            dns_up: true,
+            fake_ip_up: true,
+        };
+
+        let active = guard.take_active_rules();
+
+        assert_eq!(
+            active,
+            ActiveRules {
+                dns: true,
+                fake_ip: true
+            }
+        );
+        assert!(!guard.fake_ip_up);
+        assert!(!guard.dns_up);
+    }
 }

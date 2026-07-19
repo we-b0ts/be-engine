@@ -5,6 +5,7 @@ use anyhow::{Result, ensure};
 use super::{
     DnsConfig, FIXED_USER, checked_output, checked_status, fixed_user_uid, status_success,
 };
+use crate::cli::output::{stdout, stdout_line};
 
 const CHAIN: &str = "TRP_DNS";
 
@@ -58,13 +59,13 @@ fn try_up(config: &DnsConfig) -> Result<()> {
         )?;
         add_output_rule(protocol, uid)?;
     }
-    println!(
+    stdout_line(format_args!(
         "local DNS capture enabled: *:53 -> {}:{}, excluding {}",
         config.dns_ip,
         config.dns_port,
         config.upstream_dns.join(",")
-    );
-    println!("owner scope: {FIXED_USER} (uid {uid})");
+    ))?;
+    stdout_line(format_args!("owner scope: {FIXED_USER} (uid {uid})"))?;
     Ok(())
 }
 
@@ -78,30 +79,33 @@ pub(super) fn down(config: &DnsConfig) -> Result<()> {
         checked_status("iptables", ["-t", "nat", "-F", CHAIN])?;
         checked_status("iptables", ["-t", "nat", "-X", CHAIN])?;
     }
-    println!(
+    stdout_line(format_args!(
         "local DNS capture disabled: *:53 -> {}:{}",
         config.dns_ip, config.dns_port
-    );
+    ))?;
     Ok(())
 }
 
 pub(super) fn status(config: &DnsConfig) -> Result<()> {
     let uid = fixed_user_uid()?;
-    println!(
+    stdout_line(format_args!(
         "DNS listener expected at {}:{}",
         config.dns_ip, config.dns_port
-    );
-    println!("DNS upstream exclusion: {}", config.upstream_dns.join(","));
-    println!("Owner scope: {FIXED_USER} (uid {uid})");
+    ))?;
+    stdout_line(format_args!(
+        "DNS upstream exclusion: {}",
+        config.upstream_dns.join(",")
+    ))?;
+    stdout_line(format_args!("Owner scope: {FIXED_USER} (uid {uid})"))?;
     let output = checked_output("iptables", ["-t", "nat", "-S", "OUTPUT"])?;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         if line.contains(&format!("-j {CHAIN}")) {
-            println!("{line}");
+            stdout_line(format_args!("{line}"))?;
         }
     }
     if chain_exists()? {
         let output = checked_output("iptables", ["-t", "nat", "-S", CHAIN])?;
-        print!("{}", String::from_utf8_lossy(&output.stdout));
+        stdout(format_args!("{}", String::from_utf8_lossy(&output.stdout)))?;
     }
     Ok(())
 }

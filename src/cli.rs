@@ -4,6 +4,7 @@ use tracing_subscriber::EnvFilter;
 
 mod diagnose;
 mod interception;
+mod output;
 mod record;
 mod replay;
 mod signal;
@@ -54,6 +55,7 @@ pub(crate) async fn run() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
+        .with_writer(output::TracingWriter)
         .init();
 
     match Cli::parse().command {
@@ -69,6 +71,10 @@ pub(crate) async fn run() -> Result<()> {
         Command::Abort(args) => workflow::run(workflow::WorkflowCommand::Abort(args)).await,
         Command::Diagnose(args) => diagnose::run(args).await,
     }
+}
+
+pub(crate) fn report_error(error: &anyhow::Error) {
+    output::stderr_line(format_args!("Error: {error:?}"));
 }
 
 #[cfg(test)]
