@@ -136,5 +136,5 @@ traffic-recorder-config case-path-patterns plan \
 
 Record `recorder_config`, source revision, case source, authority mode, counts
 for each decision status, correction evidence when applicable, and
-`route_pattern_feedback_status` in the target migration state when that file
+`route_pattern_feedback_status` in the target traffic E2E state when that file
 exists.

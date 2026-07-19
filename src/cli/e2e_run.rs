@@ -16,7 +16,7 @@ pub(super) struct E2eRunArgs {
 
 #[derive(Debug, Subcommand)]
 enum E2eRunCommand {
-    /// Generate and validate the target repository's migration configuration.
+    /// Generate and validate the target repository's traffic E2E configuration.
     Init(InitArgs),
     Prepare(PrepareArgs),
     RunApi(RunApiArgs),
@@ -62,7 +62,7 @@ struct InitArgs {
     /// Managed recording rule; requires --recorder-config.
     #[arg(long, requires = "recorder_config")]
     recording_rule: Option<String>,
-    /// Replace an existing generated .migration/e2e.yaml.
+    /// Replace an existing generated .traffic-e2e/e2e.yaml.
     #[arg(long)]
     force: bool,
 }

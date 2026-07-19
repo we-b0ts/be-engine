@@ -40,7 +40,7 @@ fakes, in-process mocks, or recording-backed target implementations.
   or validating replay-policy rules.
 - Read [replay-lifecycle.md](references/replay-lifecycle.md) for every replay.
 - Read [e2e-run.md](references/e2e-run.md) when the target uses the standard
-  migration runner, focused API iteration, full-round progress, or recovery.
+  traffic E2E runner, focused API iteration, full-round progress, or recovery.
 - Read [aggregate-report.md](references/aggregate-report.md) when aggregate is
   applicable.
 - Read [verified-excludes.md](references/verified-excludes.md) only after final
@@ -58,11 +58,11 @@ fakes, in-process mocks, or recording-backed target implementations.
    `AGENTS.md`. Require the case source as an explicit input. Consult any
    matching known lesson before the first replay or retry. Do not build one
    simultaneous implementation scope for a whole collection.
-3. Create or reuse target `.migration/replay.yaml`, require
+3. Create or reuse target `.traffic-e2e/replay.yaml`, require
    `expected_response: assertions_only`, validate it, and pass it explicitly to
    every replay. Audit target code and wiring for forbidden expected-response,
    dependency-file, and fixture data flows before replay and before completion.
-4. If `.migration/e2e.yaml` is missing, call `traffic-e2e-run init` with the
+4. If `.traffic-e2e/e2e.yaml` is missing, call `traffic-e2e-run init` with the
    confirmed target project CLI, replay policy, and PR base. The
    command generates and validates the file; do not hand-write it. If any
    required project fact cannot be confirmed from the target repository, ask
@@ -114,7 +114,7 @@ fakes, in-process mocks, or recording-backed target implementations.
    cases sequentially, finalize once, aggregate once, then run per-API
    verification and publish progress. Do not modify target behavior during a
    full round. Generated progress becomes `status: complete` only when every API
-   satisfies its effective thresholds configured in `.migration/e2e.yaml`.
+   satisfies its effective thresholds configured in `.traffic-e2e/e2e.yaml`.
 9. If a full round fails, diagnose the affected API, return to `run-api`, fix
    it, and restart the full round from the beginning.
 
@@ -166,7 +166,7 @@ items hold:
    thresholds, recorder ensure returns `applied` or `already_present`, with its
    required apply and verification evidence.
 8. Every published case is grouped and the runner-generated
-   `.migration/e2e-progress.yaml` reports `status: complete` only after every
+   `.traffic-e2e/e2e-progress.yaml` reports `status: complete` only after every
    API satisfies its effective configured round and case thresholds with finalized,
    complete, clean terminal focused or full-round evidence.
 9. Target scripts and AI-authored facades remain orchestration helpers. Their

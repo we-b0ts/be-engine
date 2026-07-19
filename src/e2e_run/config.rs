@@ -35,8 +35,8 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         ensure!(!rule.trim().is_empty(), "recording_rule must not be empty");
     }
 
-    let migration_dir = target_root.join(".migration");
-    let config_path = migration_dir.join("e2e.yaml");
+    let traffic_e2e_dir = target_root.join(".traffic-e2e");
+    let config_path = traffic_e2e_dir.join("e2e.yaml");
     let existing = match fs::symlink_metadata(&config_path) {
         Ok(metadata) => Some(metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -78,7 +78,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     }
 
     let local_root_setting = PathBuf::from(DEFAULT_LOCAL_ROOT);
-    let local_root = migration_dir.join(&local_root_setting);
+    let local_root = traffic_e2e_dir.join(&local_root_setting);
     require_local_ignored(&target_root, &local_root)?;
 
     let mut overrides = BTreeMap::new();
@@ -133,15 +133,15 @@ pub(super) fn resolve_layout(
 ) -> Result<(ResolvedProjectConfig, RunLayout)> {
     let target_root = fs::canonicalize(target_root)
         .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
-    let migration_dir = target_root.join(".migration");
-    let config_path = migration_dir.join("e2e.yaml");
+    let traffic_e2e_dir = target_root.join(".traffic-e2e");
+    let config_path = traffic_e2e_dir.join("e2e.yaml");
     let config = load_project_config(&target_root, &config_path)?;
     let case_source = fs::canonicalize(case_source)
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
-    let local_root = resolve_under(&migration_dir, &config.local_root);
+    let local_root = resolve_under(&traffic_e2e_dir, &config.local_root);
     ensure!(
-        local_root.starts_with(&migration_dir) && local_root != migration_dir,
-        "migration local_root must be a child of .migration"
+        local_root.starts_with(&traffic_e2e_dir) && local_root != traffic_e2e_dir,
+        "local_root must be a child of .traffic-e2e"
     );
     let run_key = match explicit_run_key {
         Some(value) => validate_run_key(value)?,
@@ -167,7 +167,7 @@ pub(super) fn resolve_layout(
         target_root,
         run_key,
         case_source,
-        progress_path: migration_dir.join("e2e-progress.yaml"),
+        progress_path: traffic_e2e_dir.join("e2e-progress.yaml"),
         local_root: local_root.clone(),
         current_path: local_root.join("current.yaml"),
         index_path: run_root.join("state.yaml"),
@@ -184,7 +184,7 @@ pub(super) fn require_local_ignored(target_root: &Path, local_root: &Path) -> Re
     let probe = local_root.join(".ignore-check");
     let relative = probe
         .strip_prefix(target_root)
-        .context("migration local root is outside target repository")?;
+        .context("traffic E2E local root is outside target repository")?;
     let output = Command::new("git")
         .arg("-C")
         .arg(target_root)
@@ -195,7 +195,7 @@ pub(super) fn require_local_ignored(target_root: &Path, local_root: &Path) -> Re
         .context("failed to run git check-ignore")?;
     ensure!(
         output.success(),
-        "{} must be ignored by the target repository before running migration E2E",
+        "{} must be ignored by the target repository before running traffic E2E",
         local_root.display()
     );
     Ok(())
@@ -231,7 +231,7 @@ fn load_project_config(target_root: &Path, config_path: &Path) -> Result<Project
 fn validate_project_config(config: &ProjectConfig) -> Result<()> {
     ensure!(
         config.version == CONFIG_VERSION,
-        "unsupported migration config version {}; expected {CONFIG_VERSION}",
+        "unsupported traffic E2E config version {}; expected {CONFIG_VERSION}",
         config.version
     );
     ensure!(
@@ -365,7 +365,7 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        fs::write(root.join(".gitignore"), ".migration/local/\n").unwrap();
+        fs::write(root.join(".gitignore"), ".traffic-e2e/local/\n").unwrap();
         fs::create_dir_all(root.join("scripts")).unwrap();
         let project_cli = root.join("scripts/project-cli");
         fs::write(&project_cli, "#!/usr/bin/env bash\nexit 0\n").unwrap();
@@ -443,7 +443,7 @@ mod tests {
 
         assert!(!result.replaced);
         assert!(!result.recorder_feedback);
-        assert_eq!(result.config, target.path().join(".migration/e2e.yaml"));
+        assert_eq!(result.config, target.path().join(".traffic-e2e/e2e.yaml"));
         let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
         assert_eq!(config.version, CONFIG_VERSION);
         assert_eq!(config.project_cli, PathBuf::from("scripts/project-cli"));
@@ -566,7 +566,7 @@ mod tests {
     fn config_rejects_zero_replay_startup_timeout() {
         let target = target();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".migration/e2e.yaml");
+        let config_path = target.path().join(".traffic-e2e/e2e.yaml");
         let yaml = fs::read_to_string(&config_path).unwrap().replace(
             "replay_startup_timeout_seconds: 60",
             "replay_startup_timeout_seconds: 0",
@@ -587,7 +587,7 @@ mod tests {
     fn config_rejects_zero_api_verification_thresholds() {
         let target = target();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".migration/e2e.yaml");
+        let config_path = target.path().join(".traffic-e2e/e2e.yaml");
         let yaml = fs::read_to_string(&config_path).unwrap().replace(
             "consecutive_successful_runs: 3",
             "consecutive_successful_runs: 0",
@@ -648,7 +648,7 @@ overrides:
     fn config_defaults_replay_startup_timeout_when_field_is_missing() {
         let target = target();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".migration/e2e.yaml");
+        let config_path = target.path().join(".traffic-e2e/e2e.yaml");
         let yaml = fs::read_to_string(&config_path)
             .unwrap()
             .lines()
@@ -671,7 +671,7 @@ overrides:
     fn config_defaults_api_verification_when_field_is_missing() {
         let target = target();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".migration/e2e.yaml");
+        let config_path = target.path().join(".traffic-e2e/e2e.yaml");
         let yaml = fs::read_to_string(&config_path).unwrap().replace(
             "api_verification:\n  consecutive_successful_runs: 3\n  successful_cases: 3\n",
             "",
@@ -705,7 +705,7 @@ overrides:
                 .to_string()
                 .contains("does not exist as a local branch or origin remote-tracking branch")
         );
-        assert!(!target.path().join(".migration/e2e.yaml").exists());
+        assert!(!target.path().join(".traffic-e2e/e2e.yaml").exists());
     }
 
     #[test]
@@ -736,7 +736,7 @@ overrides:
         let target = target();
         initialize(options(target.path())).unwrap();
         fs::write(
-            target.path().join(".migration/e2e.yaml"),
+            target.path().join(".traffic-e2e/e2e.yaml"),
             "version: 2\n\
              project_cli: scripts/project-cli\n\
              replay_policy: config/replay.yaml\n\
@@ -764,7 +764,7 @@ overrides:
                 .to_string()
                 .contains("must be ignored by the target repository")
         );
-        assert!(!target.path().join(".migration/e2e.yaml").exists());
+        assert!(!target.path().join(".traffic-e2e/e2e.yaml").exists());
     }
 
     #[test]

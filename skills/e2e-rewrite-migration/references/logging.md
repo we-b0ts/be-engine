@@ -45,7 +45,7 @@ diagnostic location, and an idempotent cleanup path. On E2E failure, point to th
 smallest relevant log or trace excerpt rather than dumping all output.
 
 Put skill-owned local logs, PIDs, discovered addresses, and temporary diagnostic
-files under `.migration/local/<run-key>/logs/` or `tmp/`. Do not relocate logs
+files under `.traffic-e2e/local/<run-key>/logs/` or `tmp/`. Do not relocate logs
 owned by an existing target logging system merely to satisfy this convention,
 and never stage or commit the local copies.
 

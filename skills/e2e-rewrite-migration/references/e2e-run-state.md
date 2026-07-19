@@ -6,7 +6,7 @@ attempts, and full-round canonical evidence separate.
 ## Layout
 
 ```text
-.migration/
+.traffic-e2e/
 ├── e2e.yaml
 ├── replay.yaml
 ├── recorder.toml
@@ -38,7 +38,7 @@ run keys.
 The target root `.gitignore` MUST contain:
 
 ```gitignore
-.migration/local/
+.traffic-e2e/local/
 ```
 
 Verify it with `git check-ignore` before runner state is created. Never stage or
@@ -53,7 +53,7 @@ policies, sessions, aggregates, root causes, and repair suggestions. AI reads
 local evidence when diagnosis is needed.
 
 Details for unresolved or unfixable problems remain in runner-generated reports
-and evidence under `.migration/local/`.
+and evidence under `.traffic-e2e/local/`.
 
 The generated shape is:
 
@@ -118,21 +118,21 @@ categories remain in runner-local evidence, not this human report.
 ## Stable Configuration
 
 Keep the source-controlled replay and recorder migration inputs at
-`.migration/replay.yaml` and `.migration/recorder.toml`.
+`.traffic-e2e/replay.yaml` and `.traffic-e2e/recorder.toml`.
 
-Generate the source-controlled `.migration/e2e.yaml` with
+Generate the source-controlled `.traffic-e2e/e2e.yaml` with
 `traffic-e2e-run init`:
 
 ```bash
 traffic-e2e-run init \
   --target-root <target> \
   --project-cli scripts/<project>-cli \
-  --replay-policy .migration/replay.yaml \
+  --replay-policy .traffic-e2e/replay.yaml \
   --api-verification-consecutive-successful-runs 3 \
   --api-verification-successful-cases 3 \
   --api-verification-override 'GET /api/widgets/*=5,200' \
   --pr-base <confirmed-base-branch> \
-  --recorder-config .migration/recorder.toml \
+  --recorder-config .traffic-e2e/recorder.toml \
   --recording-rule record-api
 ```
 
@@ -141,7 +141,7 @@ The resulting file is:
 ```yaml
 version: 4
 project_cli: scripts/<project>-cli
-replay_policy: .migration/replay.yaml
+replay_policy: .traffic-e2e/replay.yaml
 replay_startup_timeout_seconds: 60
 api_verification:
   consecutive_successful_runs: 3
@@ -151,7 +151,7 @@ api_verification:
       consecutive_successful_runs: 5
       successful_cases: 200
 pr_base: <confirmed-base-branch>
-recorder_config: .migration/recorder.toml
+recorder_config: .traffic-e2e/recorder.toml
 recording_rule: record-api
 local_root: local
 ```
@@ -167,14 +167,14 @@ that exact API. Repeat `--api-verification-override` with
 `METHOD path_pattern=successful-runs,successful-cases` when generating
 overrides. An API becomes verified only when its trailing successful API rounds
 meet its effective thresholds. The runner then synchronizes that API into
-`.migration/recorder.toml`; the recorder config stores the result, not another
+`.traffic-e2e/recorder.toml`; the recorder config stores the result, not another
 threshold.
 
 `project_cli`, `replay_policy`, and `pr_base` are required. `init`
 validates that the PR base exists locally or as an `origin`
 remote-tracking branch. `recorder_config` and `recording_rule` are optional only
 as a pair. Every runner command rejects a missing, incomplete, obsolete, or
-unresolvable project config before using migration state. `prepare`, `run-api`,
+unresolvable project config before using traffic E2E state. `prepare`, `run-api`,
 and `run` require a named feature branch different from `pr_base`. Do not put a current
 run id, case count, API list, status, session, report result, blocker, PID,
 address, or temporary path in this file. If required project facts cannot be
@@ -189,7 +189,7 @@ keeps only the latest complete focused snapshot.
 Terminal focused attempts update the run-key cumulative execution/case totals,
 the selected API's streaks, `e2e-progress.yaml`, and an eligible verified
 exclude. They never replace full-round `.active`, global `latest`, or
-`.migration/local/current.yaml`.
+`.traffic-e2e/local/current.yaml`.
 
 When every published case is grouped and every API reaches both of its
 effective thresholds, the grouped focused result is completion proof unless a
@@ -207,7 +207,7 @@ never a mix of API results from different rounds.
 The run-key `state.yaml` stores cumulative terminal focused and full-round
 counts.
 Global `latest/state.yaml` stores only the most recent full round and its exact
-case/API evidence. `.migration/local/current.yaml` points to that terminal
+case/API evidence. `.traffic-e2e/local/current.yaml` points to that terminal
 state.
 
 If the full round fails, use focused `run-api` for diagnosis and repair. Run a

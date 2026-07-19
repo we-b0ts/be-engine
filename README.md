@@ -99,9 +99,9 @@ traffic-replay path/to/recordings/<run-id>
 ```
 
 For runtime-generated UUIDs, timestamps, and signed query fields, keep a
-source-controlled `.migration/replay.yaml` in the target project and pass it with
+source-controlled `.traffic-e2e/replay.yaml` in the target project and pass it with
 `--policy`. Validate it with `traffic-replay-policy validate --policy
-.migration/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
+.traffic-e2e/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
 
 `traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
@@ -213,8 +213,8 @@ evaluated before both rule sets, so exclusion rules do not bypass
 `block_known_writes`.
 
 `[http_gateway.verified_excludes]` contains recorder-owned, replay-verified API
-exclusions. Migration verification thresholds belong in
-`.migration/e2e.yaml`: an API must satisfy both the configured number of
+exclusions. Traffic E2E verification thresholds belong in
+`.traffic-e2e/e2e.yaml`: an API must satisfy both the configured number of
 trailing successful rounds and the successful case executions covered by those
 rounds. Global defaults may be overridden for an exact
 `METHOD + path_pattern`. When an API first becomes verified,

@@ -21,7 +21,7 @@ Use `recorded-e2e-cases` as the sole authority for case discovery, source-route
 association, grouping, replay, assertions, dependency coverage, recorder
 feedback, and its completion gate.
 
-If `.migration/e2e.yaml` is missing, call `traffic-e2e-run init` with the
+If `.traffic-e2e/e2e.yaml` is missing, call `traffic-e2e-run init` with the
 confirmed project CLI, replay policy, and PR base before preparing a
 group. Ask the user for any project-specific value when repository evidence is
 insufficient; never guess, hand-write, or silently inherit another project's
@@ -47,7 +47,7 @@ create a focused feature branch when safe. Do not work on `pr_base`.
 [e2e-run-state.md](e2e-run-state.md). AI never writes or repairs those files
 itself.
 
-Before creating those files, require `.migration/local/` in the target root
+Before creating those files, require `.traffic-e2e/local/` in the target root
 `.gitignore` and verify a representative local path with `git check-ignore`.
 Keep current pointers, state, reports, logs, and temporary runtime data under
 that local root; never stage or commit them.

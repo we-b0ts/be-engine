@@ -246,7 +246,7 @@ fn write_current(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
         .latest_dir
         .join("state.yaml")
         .strip_prefix(&layout.local_root)
-        .context("latest state is outside migration local root")?
+        .context("latest state is outside traffic E2E local root")?
         .to_path_buf();
     write_yaml(
         &layout.current_path,

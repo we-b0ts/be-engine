@@ -161,12 +161,12 @@ traffic-replay --no-intercept path/to/case-dir
 ```
 
 Target-specific dynamic UUID, timestamp, and signed-query matching belongs in
-a source-controlled `.migration/replay.yaml`, not product code or recorded fixture
+a source-controlled `.traffic-e2e/replay.yaml`, not product code or recorded fixture
 overrides. Validate and load it explicitly:
 
 ```bash
-traffic-replay-policy validate --policy ../target/.migration/replay.yaml
-traffic-replay --policy ../target/.migration/replay.yaml path/to/case-dir
+traffic-replay-policy validate --policy ../target/.traffic-e2e/replay.yaml
+traffic-replay --policy ../target/.traffic-e2e/replay.yaml path/to/case-dir
 ```
 
 See [replay-policy.md](replay-policy.md) for the policy schemas,
@@ -175,20 +175,20 @@ runner-owned dynamic and unordered response fields, and dirty-evidence
 behavior.
 
 Recorder-owned host exceptions for API-independent process-level tasks remain
-in the target repository's `.migration/recorder.toml`, not
-`.migration/replay.yaml`. Preview and apply an add-only host after source
+in the target repository's `.traffic-e2e/recorder.toml`, not
+`.traffic-e2e/replay.yaml`. Preview and apply an add-only host after source
 inspection proves that all traffic to that host belongs to a task that is
 unrelated to API handlers:
 
 ```bash
 traffic-recorder-config allowed-unused-http-hosts plan \
-  --config ../target/.migration/recorder.toml \
+  --config ../target/.traffic-e2e/recorder.toml \
   --rule record-api \
   --host cs.aliyuncs.com \
   --format json
 
 traffic-recorder-config allowed-unused-http-hosts apply \
-  --config ../target/.migration/recorder.toml \
+  --config ../target/.traffic-e2e/recorder.toml \
   --rule record-api \
   --host cs.aliyuncs.com \
   --format json
@@ -205,8 +205,8 @@ Pass the config and rule together for direct replay:
 
 ```bash
 traffic-replay \
-  --policy ../target/.migration/replay.yaml \
-  --recorder-config ../target/.migration/recorder.toml \
+  --policy ../target/.traffic-e2e/replay.yaml \
+  --recorder-config ../target/.traffic-e2e/recorder.toml \
   --recording-rule record-api \
   path/to/case-dir
 ```
@@ -311,8 +311,8 @@ traffic-case-group ensure \
   --source-route '/api/users/:id' \
   --pattern '/api/users/*' \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
-  --output ../target/.migration/run-reports/<run-id>-case-groups.json \
-  --recorder-config ../target/.migration/recorder.toml \
+  --output ../target/.traffic-e2e/run-reports/<run-id>-case-groups.json \
+  --recorder-config ../target/.traffic-e2e/recorder.toml \
   --rule record-api
 ```
 
@@ -329,7 +329,7 @@ a target repository. Preview focused, add-only feedback before applying it:
 
 ```bash
 traffic-recorder-config case-path-patterns plan \
-  --config ../target/.migration/recorder.toml \
+  --config ../target/.traffic-e2e/recorder.toml \
   --rule record-api \
   --authority focused \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
@@ -337,7 +337,7 @@ traffic-recorder-config case-path-patterns plan \
   --pattern '/api/users/*/xxx'
 
 traffic-recorder-config case-path-patterns apply \
-  --config ../target/.migration/recorder.toml \
+  --config ../target/.traffic-e2e/recorder.toml \
   --rule record-api \
   --authority focused \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
@@ -359,7 +359,7 @@ only after the user requested or approved it:
 
 ```bash
 traffic-recorder-config case-path-patterns plan \
-  --config ../target/.migration/recorder.toml \
+  --config ../target/.traffic-e2e/recorder.toml \
   --rule record-api \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --case-source /path/to/cases \
@@ -367,7 +367,7 @@ traffic-recorder-config case-path-patterns plan \
   --correction-evidence 'router.go@<revision>: route is static /api/incorrect'
 
 traffic-recorder-config case-path-patterns apply \
-  --config ../target/.migration/recorder.toml \
+  --config ../target/.traffic-e2e/recorder.toml \
   --rule record-api \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --case-source /path/to/cases \
@@ -392,12 +392,12 @@ the recorder exclusion deterministically:
 
 ```bash
 traffic-recorder-config verified-excludes ensure \
-  --config ../target/.migration/recorder.toml \
+  --config ../target/.traffic-e2e/recorder.toml \
   --rule record-api \
   --method GET \
   --pattern '/api/users/*' \
-  --aggregate-report ../target/.migration/run-reports/run.json \
-  --assertion-report ../target/.migration/run-reports/assertions.json \
+  --aggregate-report ../target/.traffic-e2e/run-reports/run.json \
+  --assertion-report ../target/.traffic-e2e/run-reports/assertions.json \
   --consecutive-successful-runs 3 \
   --consecutive-successful-cases 9 \
   --required-consecutive-successful-runs 3 \
@@ -409,11 +409,11 @@ traffic-recorder-config verified-excludes ensure \
 `already_present` for an existing exact entry, or atomically applies an
 eligible entry and replans before returning `applied`. Dirty, incomplete, or
 mismatched evidence fails the command. `plan` and `apply` remain available for
-diagnostics, but migration automation must not reimplement their eligibility
+diagnostics, but traffic E2E automation must not reimplement their eligibility
 branching.
 
-Thresholds live in `.migration/e2e.yaml`; `.migration/recorder.toml` stores only
-the managed verified exclusions. Neither belongs in `.migration/replay.yaml`. See
+Thresholds live in `.traffic-e2e/e2e.yaml`; `.traffic-e2e/recorder.toml` stores only
+the managed verified exclusions. Neither belongs in `.traffic-e2e/replay.yaml`. See
 [verified-api-excludes.md](verified-api-excludes.md) for the assertion report
 schema, exact case-set gate, and runtime behavior.
 
@@ -430,24 +430,24 @@ Initialize the target repository once:
 traffic-e2e-run init \
   --target-root ../target \
   --project-cli scripts/<project>-cli \
-  --replay-policy .migration/replay.yaml \
+  --replay-policy .traffic-e2e/replay.yaml \
   --api-verification-consecutive-successful-runs 3 \
   --api-verification-successful-cases 3 \
   --api-verification-override 'GET /api/widgets/*=5,200' \
   --pr-base <confirmed-base-branch> \
-  --recorder-config .migration/recorder.toml \
+  --recorder-config .traffic-e2e/recorder.toml \
   --recording-rule record-api
 ```
 
 The command requires confirmed `project_cli`, `replay_policy`, and
 `pr_base` values, validates that the branch exists locally or as an
-`origin` remote-tracking branch, checks that `.migration/local/` is ignored,
-and generates `.migration/e2e.yaml`:
+`origin` remote-tracking branch, checks that `.traffic-e2e/local/` is ignored,
+and generates `.traffic-e2e/e2e.yaml`:
 
 ```yaml
 version: 4
 project_cli: scripts/<project>-cli
-replay_policy: .migration/replay.yaml
+replay_policy: .traffic-e2e/replay.yaml
 replay_startup_timeout_seconds: 60
 api_verification:
   consecutive_successful_runs: 3
@@ -457,7 +457,7 @@ api_verification:
       consecutive_successful_runs: 5
       successful_cases: 200
 pr_base: <confirmed-base-branch>
-recorder_config: .migration/recorder.toml
+recorder_config: .traffic-e2e/recorder.toml
 recording_rule: record-api
 local_root: local
 ```
@@ -475,14 +475,14 @@ The repeated `--api-verification-override` flag uses
 `METHOD path_pattern=successful-runs,successful-cases`. The successful-case
 threshold counts case executions covered by trailing successful API rounds.
 Once an API's effective thresholds are met, the runner synchronizes it into the
-managed recorder exclusion list; `.migration/recorder.toml` does not own
+managed recorder exclusion list; `.traffic-e2e/recorder.toml` does not own
 another threshold.
 
 The recorder flags are optional only as a pair. Existing configuration is not
 overwritten unless `--force` is explicit. If the file is missing, every other
 runner command points back to `init`; if any required field is missing or the
 configured PR base no longer resolves, every command fails before using
-migration state. `prepare`, `run-api`, and `run` require a named feature branch
+traffic E2E state. `prepare`, `run-api`, and `run` require a named feature branch
 different from `pr_base`. Do not hand-write it. Prepare each API only after
 confirming whether its source URI is static or dynamic:
 
@@ -524,8 +524,8 @@ traffic-e2e-run run \
 The full command starts replay once, loads bootstrap and all selected cases
 once, starts the target once, executes cases sequentially, finalizes and
 aggregates once, runs per-API verified-exclude ensure, atomically publishes
-`.migration/local/<run-key>/latest/`, and updates the Git-eligible
-`.migration/e2e-progress.yaml`.
+`.traffic-e2e/local/<run-key>/latest/`, and updates the Git-eligible
+`.traffic-e2e/e2e-progress.yaml`.
 
 Progress reaches `status: complete` when every grouped API satisfies both of
 its effective verification thresholds with finalized, complete, clean

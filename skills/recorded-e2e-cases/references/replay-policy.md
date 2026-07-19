@@ -5,9 +5,9 @@ response rules.
 
 ## Ownership
 
-Maintain one source-controlled target `.migration/replay.yaml`. Every replay
+Maintain one source-controlled target `.traffic-e2e/replay.yaml`. Every replay
 MUST pass it explicitly with `--policy`; do not auto-discover it or duplicate
-rules in shell, application config, target code, or migration state.
+rules in shell, application config, target code, or traffic E2E state.
 
 Use version one for legacy target-owned response assertions:
 
@@ -158,20 +158,20 @@ intentional and dependency evidence is complete and clean, plan and apply it:
 
 ```bash
 traffic-replay-policy response-rule plan \
-  --policy .migration/replay.yaml \
+  --policy .traffic-e2e/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
-  --assertion-report .migration/local/.../assertions.json \
-  --aggregate-report .migration/local/.../aggregate.json
+  --assertion-report .traffic-e2e/local/.../assertions.json \
+  --aggregate-report .traffic-e2e/local/.../aggregate.json
 
 traffic-replay-policy response-rule apply \
-  --policy .migration/replay.yaml \
+  --policy .traffic-e2e/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
-  --assertion-report .migration/local/.../assertions.json \
-  --aggregate-report .migration/local/.../aggregate.json
+  --assertion-report .traffic-e2e/local/.../assertions.json \
+  --aggregate-report .traffic-e2e/local/.../aggregate.json
 ```
 
 ## Unordered Response Arrays
@@ -197,20 +197,20 @@ behavior, and consumers before planning:
 
 ```bash
 traffic-replay-policy response-rule plan \
-  --policy .migration/replay.yaml \
+  --policy .traffic-e2e/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
-  --assertion-report .migration/local/.../assertions.json \
-  --aggregate-report .migration/local/.../aggregate.json
+  --assertion-report .traffic-e2e/local/.../assertions.json \
+  --aggregate-report .traffic-e2e/local/.../aggregate.json
 
 traffic-replay-policy response-rule apply \
-  --policy .migration/replay.yaml \
+  --policy .traffic-e2e/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
-  --assertion-report .migration/local/.../assertions.json \
-  --aggregate-report .migration/local/.../aggregate.json
+  --assertion-report .traffic-e2e/local/.../assertions.json \
+  --aggregate-report .traffic-e2e/local/.../aggregate.json
 ```
 
 Planning requires runner-owned structural assertion evidence using the current

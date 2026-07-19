@@ -1,11 +1,11 @@
 # Replay And Assertion Policy
 
-Each target repository owns one source-controlled `.migration/replay.yaml`.
+Each target repository owns one source-controlled `.traffic-e2e/replay.yaml`.
 Pass it explicitly to every recorded replay:
 
 ```bash
-traffic-replay --policy .migration/replay.yaml /path/to/case-group
-traffic-replay-policy validate --policy .migration/replay.yaml
+traffic-replay --policy .traffic-e2e/replay.yaml /path/to/case-group
+traffic-replay-policy validate --policy .traffic-e2e/replay.yaml
 ```
 
 This policy is independent of recorder `case_path_patterns`:
@@ -173,20 +173,20 @@ Use evidence-backed plan/apply after diagnosing the source and target:
 
 ```bash
 traffic-replay-policy response-rule plan \
-  --policy .migration/replay.yaml \
+  --policy .traffic-e2e/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
-  --assertion-report .migration/local/.../assertions.json \
-  --aggregate-report .migration/local/.../aggregate.json
+  --assertion-report .traffic-e2e/local/.../assertions.json \
+  --aggregate-report .traffic-e2e/local/.../aggregate.json
 
 traffic-replay-policy response-rule apply \
-  --policy .migration/replay.yaml \
+  --policy .traffic-e2e/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
-  --assertion-report .migration/local/.../assertions.json \
-  --aggregate-report .migration/local/.../aggregate.json
+  --assertion-report .traffic-e2e/local/.../assertions.json \
+  --aggregate-report .traffic-e2e/local/.../aggregate.json
 ```
 
 Version two also supports arrays whose product contract does not assign meaning
@@ -210,20 +210,20 @@ the same evidence-backed workflow:
 
 ```bash
 traffic-replay-policy response-rule plan \
-  --policy .migration/replay.yaml \
+  --policy .traffic-e2e/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
-  --assertion-report .migration/local/.../assertions.json \
-  --aggregate-report .migration/local/.../aggregate.json
+  --assertion-report .traffic-e2e/local/.../assertions.json \
+  --aggregate-report .traffic-e2e/local/.../aggregate.json
 
 traffic-replay-policy response-rule apply \
-  --policy .migration/replay.yaml \
+  --policy .traffic-e2e/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
-  --assertion-report .migration/local/.../assertions.json \
-  --aggregate-report .migration/local/.../aggregate.json
+  --assertion-report .traffic-e2e/local/.../assertions.json \
+  --aggregate-report .traffic-e2e/local/.../aggregate.json
 ```
 
 Planning accepts only the difference kind selected by `--kind`, runner-owned

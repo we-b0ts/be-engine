@@ -7,7 +7,7 @@ thresholds.
 
 ## Ownership
 
-Keep the API verification policy in target `.migration/e2e.yaml`:
+Keep the API verification policy in target `.traffic-e2e/e2e.yaml`:
 
 ```yaml
 api_verification:
@@ -22,7 +22,7 @@ api_verification:
 `successful_cases` counts the case executions covered by the same trailing
 successful API rounds. The top-level values are defaults; a canonical
 `METHOD path_pattern` override replaces both thresholds for that exact API.
-Keep only the verified API list in `.migration/recorder.toml`:
+Keep only the verified API list in `.traffic-e2e/recorder.toml`:
 
 ```toml
 [http_gateway.verified_excludes]
@@ -32,7 +32,7 @@ apis = [
 # END AI-MANAGED VERIFIED API EXCLUDES
 ```
 
-MUST NOT put this policy or exclusion list in `.migration/replay.yaml`. Replay
+MUST NOT put this policy or exclusion list in `.traffic-e2e/replay.yaml`. Replay
 policy owns dynamic dependency matching only.
 
 ## Required Evidence
@@ -69,7 +69,7 @@ exist. The equivalent low-level diagnostic command is:
 
 ```bash
 traffic-recorder-config verified-excludes ensure \
-  --config .migration/recorder.toml \
+  --config .traffic-e2e/recorder.toml \
   --rule <recording-rule> \
   --method <METHOD> \
   --pattern '<exact-or-recorder-path-pattern>' \

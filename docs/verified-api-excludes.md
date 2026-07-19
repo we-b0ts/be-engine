@@ -4,7 +4,7 @@ Use verified API excludes to stop recording an API only after enough trailing
 rounds and case executions have passed both dependency replay and target
 response assertions.
 
-Verification policy belongs in the target migration configuration:
+Verification policy belongs in the target traffic E2E configuration:
 
 ```yaml
 api_verification:
@@ -30,7 +30,7 @@ apis = [
 # END AI-MANAGED VERIFIED API EXCLUDES
 ```
 
-Do not put verification policy or API exclusions in `.migration/replay.yaml`.
+Do not put verification policy or API exclusions in `.traffic-e2e/replay.yaml`.
 Replay policy owns dynamic dependency matching only.
 
 ## Success Evidence
@@ -64,7 +64,7 @@ caches, or side effects from `expected-response.json`.
 The command discovers every published case under the aggregate `case_source`
 whose recorded `matched_rule`, method, and URI match the candidate. Both
 reports must cover exactly that set and every current assertion must pass.
-Dirty or incomplete replay never qualifies. The migration runner supplies the
+Dirty or incomplete replay never qualifies. The traffic E2E runner supplies the
 cumulative streak counters from its run index; the recorder does not maintain a
 competing threshold.
 
@@ -74,12 +74,12 @@ After both final evidence artifacts exist, run one deterministic command:
 
 ```bash
 traffic-recorder-config verified-excludes ensure \
-  --config ../target/.migration/recorder.toml \
+  --config ../target/.traffic-e2e/recorder.toml \
   --rule record-api \
   --method GET \
   --pattern '/api/users/*' \
-  --aggregate-report ../target/.migration/run-reports/run.json \
-  --assertion-report ../target/.migration/run-reports/assertions.json \
+  --aggregate-report ../target/.traffic-e2e/run-reports/run.json \
+  --assertion-report ../target/.traffic-e2e/run-reports/assertions.json \
   --consecutive-successful-runs 3 \
   --consecutive-successful-cases 9 \
   --required-consecutive-successful-runs 3 \
