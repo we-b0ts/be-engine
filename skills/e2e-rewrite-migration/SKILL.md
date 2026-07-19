@@ -73,8 +73,11 @@ before implementation. Source tests may supplement but never replace recordings.
    `traffic-e2e-run init`; do not begin prepare or replay with missing or
    incomplete stable project configuration.
 2. Use `traffic-e2e-run prepare` through `recorded-e2e-cases` to select exactly
-   one canonical API/function group. If no API is named, begin with one complete
-   low-risk GET group. Resolve dynamic patterns before implementation.
+   one canonical API/function group. If no API is named, select one unprocessed
+   complete group from the available source, recording, dependency, and replay
+   evidence, state the selection rationale, and proceed one group at a time. Do
+   not infer priority from HTTP method or directory order. Resolve dynamic
+   patterns before implementation.
 3. Resolve `pr_base` from user or repository evidence. It is only the PR
    target. Perform migration work on a named feature branch.
 4. Inspect only the selected source capability. Implement idiomatic target

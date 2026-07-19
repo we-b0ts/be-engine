@@ -33,7 +33,9 @@ its first published case only to discover a candidate route. Confirm whether it
 is static or dynamic, then call `traffic-e2e-run prepare`; a dynamic route
 requires its safe whole-segment pattern. Complete that grouping before business
 implementation analysis. If the user did not name an API, start with one
-complete low-risk GET group.
+unprocessed complete group selected from the available source, recording,
+dependency, and replay evidence, state the selection rationale, and proceed one
+group at a time. Do not infer priority from HTTP method or directory order.
 
 Keep recordings external and immutable. Never copy, move, rename, edit, or
 silently default to a developer-machine recording path.

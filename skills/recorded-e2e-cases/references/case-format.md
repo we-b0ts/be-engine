@@ -108,8 +108,13 @@ value kind are meaningful: a missing field, `null`, and `""` are three different
 results. Arrays remain ordered unless the product contract or explicit
 assertion config says otherwise.
 
-Use byte-level comparison only for non-JSON bodies, binary payloads, or an
-explicit exact-bytes assertion mode.
+An explicitly captured zero-length response body is valid even when the
+response advertises a JSON content type. Its `original_len`, `stored_len`, and
+`data` are all empty, and replay compares it as exact bytes. A non-empty
+response advertised as JSON must still parse as valid JSON.
+
+Use byte-level comparison only for zero-length bodies, non-JSON bodies, binary
+payloads, or an explicit exact-bytes assertion mode.
 
 ## Body Capture
 
