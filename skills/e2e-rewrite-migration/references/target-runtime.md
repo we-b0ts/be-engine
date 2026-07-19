@@ -73,7 +73,7 @@ Keep the facade thin. It MUST:
 
 - delegate to repository-native commands and propagate their exit status;
 - keep `start`, `test`, and `check` independent of recorded case files;
-- make `e2e` require the exact case directory supplied by `traffic-e2e-run` and
+- make `e2e` require the exact case directory supplied by `traffic-e2e` and
   propagate its assertion exit status;
 - clean up processes it starts without killing unrelated processes;
 - remain source-controlled and portable within the target repository.

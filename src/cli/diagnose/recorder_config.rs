@@ -1,9 +1,8 @@
-use std::io;
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
-use traffic_recorder_proxy::{
+use traffic_e2e::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostReport, CasePathPatternAuthority,
     CasePathPatternFeedback, CasePathPatternReport, VerifiedApiExcludeEnsureReport,
     VerifiedApiExcludeFeedback, VerifiedApiExcludeReport, VerifiedApiVerification,
@@ -13,6 +12,9 @@ use traffic_recorder_proxy::{
 
 #[derive(Debug, Args)]
 pub(super) struct RecorderConfigArgs {
+    /// Recorder configuration to inspect or update.
+    #[arg(long)]
+    config: PathBuf,
     #[command(subcommand)]
     command: RecorderConfigCommand,
 }
@@ -156,8 +158,9 @@ enum OutputFormat {
     Json,
 }
 
-pub(super) fn run(config: PathBuf, args: RecorderConfigArgs) -> Result<()> {
-    match args.command {
+pub(super) fn run(args: RecorderConfigArgs) -> Result<()> {
+    let RecorderConfigArgs { config, command } = args;
+    match command {
         RecorderConfigCommand::AllowedUnusedHttpHosts(args) => match args.command {
             AllowedUnusedHttpHostsCommand::Plan(args) => {
                 let format = args.format;

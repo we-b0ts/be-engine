@@ -6,7 +6,7 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use traffic_recorder_proxy::{
+use traffic_e2e::{
     AppConfig, HttpGatewayRuleConfig, MysqlRouteConfig, MysqlWriteOperation, RecordingAccessPolicy,
     RecordingAccessRuleConfig, RecordingAccessRuleEffect,
 };
@@ -82,7 +82,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let recorder_task = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
     wait_for_port(gateway_addr).await;
@@ -225,7 +225,7 @@ async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let recorder_task = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 

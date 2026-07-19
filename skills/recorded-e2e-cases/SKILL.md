@@ -1,6 +1,6 @@
 ---
 name: recorded-e2e-cases
-description: Replay, group, and diagnose E2E tests from traffic-recorder-proxy case, collection, or run directories, and maintain replay-time recorder feedback in the target repo. Use for recorded request/response artifacts, API-by-API grouping, dependency replay, aggregate reports, recorder.toml case_path_patterns, replay-verified API excludes, or case-driven failures.
+description: "Operate traffic-e2e recorded cases, collections, and runs: group APIs, replay genuine dependencies, diagnose case-driven failures, aggregate evidence, and maintain recorder feedback such as case_path_patterns and verified excludes. Use when working with recorded request/response artifacts or replay evidence; do not invoke merely to review or debug this Skill or the traffic-e2e implementation itself."
 ---
 
 # Recorded E2E Cases
@@ -62,7 +62,7 @@ fakes, in-process mocks, or recording-backed target implementations.
    `expected_response: assertions_only`, validate it, and pass it explicitly to
    every replay. Audit target code and wiring for forbidden expected-response,
    dependency-file, and fixture data flows before replay and before completion.
-4. If `.traffic-e2e/e2e.yaml` is missing, call `traffic-e2e-run init` with the
+4. If `.traffic-e2e/e2e.yaml` is missing, call `traffic-e2e init` with the
    confirmed target project CLI, replay policy, and PR base. The
    command generates and validates the file; do not hand-write it. If any
    required project fact cannot be confirmed from the target repository, ask
@@ -71,12 +71,12 @@ fakes, in-process mocks, or recording-backed target implementations.
    `run-api`, and `run` must reject detached HEAD and the configured PR base.
 5. For each API being migrated, select one unprocessed directory, use its first
    case only to discover the candidate source route, then call
-   `traffic-e2e-run prepare`. Supply the confirmed source route and, for a
+   `traffic-e2e prepare`. Supply the confirmed source route and, for a
    dynamic route, its safe recorder path pattern. Recorder patterns use `*` for
    exactly one non-empty path segment and a final `**` for a catch-all matching
    one or more remaining path segments. Use only the canonical group and exact
    case ids returned by the runner.
-6. During migration, call `traffic-e2e-run run-api --api '<METHOD pattern>'`.
+6. During migration, call `traffic-e2e run-api --api '<METHOD pattern>'`.
    Fix the focused API and rerun it until its complete group passes. Focused
    attempts update cumulative progress and that API's verification streaks.
    Once its global-default or exact per-API override thresholds are met, the
@@ -109,7 +109,7 @@ fakes, in-process mocks, or recording-backed target implementations.
 8. After every published case is grouped and every migrated API passes its
    focused loop, the grouped result is equivalent to a full round unless later
    behavior-affecting changes may invalidate an earlier group. When required,
-   call `traffic-e2e-run run` for regression evidence. The runner MUST
+   call `traffic-e2e run` for regression evidence. The runner MUST
    start replay once, load bootstrap and the exact full case set once, execute
    cases sequentially, finalize once, aggregate once, then run per-API
    verification and publish progress. Do not modify target behavior during a
@@ -136,8 +136,8 @@ MUST NOT claim a selected case source passed or completed unless all applicable
 items hold:
 
 1. Every selected case occurs in exactly one canonical group with persisted
-   `traffic-case-group ensure` evidence; no selected directory is unprocessed or
-   overlapping, and published recordings are unchanged.
+   `traffic-e2e diagnose case-group ensure` evidence; no selected directory is
+   unprocessed or overlapping, and published recordings are unchanged.
 2. The final report records the canonical replay-policy path and fingerprint,
    `expected_response: assertions_only`, rule applicability, and zero unused
    applicable rules. Direct audit proves no expected-response or recorder
@@ -152,9 +152,10 @@ items hold:
    `finalized_at`. Pending, active, live, non-finalized, or dirty state is
    incomplete.
 5. Every collection/run source, multi-case selection, or multi-session source
-   has a persisted `traffic-replay-aggregate` report for the exact case and
-   session ids with complete, clean coverage. Only one published case in one
-   finalized session may use `not_applicable_single_case_single_session`.
+   has a persisted `traffic-e2e diagnose replay-aggregate` report for the exact
+   case and session ids with complete, clean coverage. Only one published case
+   in one finalized session may use
+   `not_applicable_single_case_single_session`.
 6. When source repo and managed recorder config exist, the persisted
    case-path-pattern plan is either confirmed no-change or every safe add-only
    diff is applied through recorder tooling and a final replan has no diff.

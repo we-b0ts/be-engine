@@ -38,8 +38,8 @@ Replay policy owns dynamic dependency matching only.
 For one exact `rule + method + path_pattern`, the recorder-owned command
 requires two artifacts covering the same complete case set:
 
-- a `traffic-replay-aggregate` report with `version: 1` that is complete and
-  clean;
+- a `traffic-e2e diagnose replay-aggregate` report with `version: 1` that is
+  complete and clean;
   every included replay report must carry validated `assertions_only` replay
   policy evidence with no unused applicable rule;
 - a target-owned response assertion report in this format:
@@ -73,8 +73,9 @@ competing threshold.
 After both final evidence artifacts exist, run one deterministic command:
 
 ```bash
-traffic-recorder-config verified-excludes ensure \
+traffic-e2e diagnose recorder-config \
   --config ../target/.traffic-e2e/recorder.toml \
+  verified-excludes ensure \
   --rule record-api \
   --method GET \
   --pattern '/api/users/*' \
@@ -87,7 +88,7 @@ traffic-recorder-config verified-excludes ensure \
   --format json
 ```
 
-`traffic-e2e-run` calls this operation automatically only after updating its
+`traffic-e2e` calls this operation automatically only after updating its
 runner-owned counters. The low-level command above is for diagnostics and
 requires those counters explicitly.
 

@@ -26,7 +26,7 @@ unset BASH_ENV ENV OWNER_UID
 usage() {
   cat >&2 <<EOF
 Usage:
-  traffic-record --config recorder-config.toml [options] [-- extra traffic-recorder-proxy args...]
+  traffic-record --config recorder-config.toml [options] [-- extra traffic-e2e diagnose recorder args...]
 
 Options:
   --config PATH    Recorder TOML configuration. Required.
@@ -148,7 +148,7 @@ if ! command -v cargo >/dev/null 2>&1; then
   fi
 fi
 
-run_args=(-- --config "$CONFIG" "${APP_ARGS[@]}")
+run_args=(-- diagnose recorder --config "$CONFIG" "${APP_ARGS[@]}")
 
 if ! cargo watch --version >/dev/null 2>&1; then
   echo "cargo-watch is not installed; installing with: cargo install cargo-watch" >&2

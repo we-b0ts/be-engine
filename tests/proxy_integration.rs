@@ -11,7 +11,7 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use traffic_recorder_proxy::{
+use traffic_e2e::{
     AppConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
     HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlRouteConfig,
     RecordingAccessPolicy, VerifiedApiExclude, VerifiedApiExcludesConfig,
@@ -43,7 +43,7 @@ async fn records_http_proxy_exchange() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
 
@@ -85,7 +85,7 @@ async fn recording_policy_blocks_http_write_before_upstream_and_audits_it() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
 
@@ -148,7 +148,7 @@ async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -220,7 +220,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -279,7 +279,7 @@ async fn http_gateway_falls_back_before_ready() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -320,7 +320,7 @@ async fn http_gateway_allows_only_one_active_matched_case() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -392,7 +392,7 @@ async fn http_gateway_keeps_matched_case_active_after_downstream_disconnect() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -473,7 +473,7 @@ async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -548,7 +548,7 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -656,7 +656,7 @@ async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let state_for_assertion = state.clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
@@ -694,7 +694,7 @@ async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
     );
     assert_eq!(
         entry.upstream_protocol,
-        Some(traffic_recorder_proxy::FakeDnsUpstreamProtocol::Http)
+        Some(traffic_e2e::FakeDnsUpstreamProtocol::Http)
     );
 
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -750,7 +750,7 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -825,7 +825,7 @@ async fn records_and_rejects_mysql_tls_request() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
 
@@ -882,7 +882,7 @@ async fn supports_multiple_mysql_routes_on_same_port_with_different_ips() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new(config).await.unwrap();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(master_listen).await;
     wait_for_port(slave_listen).await;

@@ -21,13 +21,13 @@ SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 CALLER_CWD="$(pwd)"
 source "$SCRIPT_DIR/intercept-user.sh"
-unset BASH_ENV ENV OWNER_UID TRAFFIC_RECORDER_PROXY_BIN
+unset BASH_ENV ENV OWNER_UID TRAFFIC_E2E_BIN
 
 usage() {
   cat >&2 <<EOF
 Usage:
-  traffic-replay [options] <case-or-collection-dir> [-- extra traffic-recorder-proxy replay args...]
-  traffic-replay --config replay.toml [options] [-- extra traffic-recorder-proxy replay args...]
+  traffic-replay [options] <case-or-collection-dir> [-- extra traffic-e2e diagnose replay args...]
+  traffic-replay --config replay.toml [options] [-- extra traffic-e2e diagnose replay args...]
 
 Options:
   --intercept              Enable local DNS capture and fake-IP TCP redirect. This is default.
@@ -45,11 +45,10 @@ Options:
   --recorder-config PATH   Recorder config containing allowed unused HTTP hosts.
   --recording-rule NAME    Named HTTP gateway rule; requires --recorder-config.
   --print-intercept-user   Print the recorder-owned fixed interception user and exit.
-  --proxy-bin PATH         Explicit traffic-recorder-proxy binary override.
+  --traffic-e2e-bin PATH   Explicit traffic-e2e binary override.
 
-Ensure traffic-replay, traffic-replay-cli, and traffic-recorder-proxy are
-available on PATH for target-project E2E runs. Use --proxy-bin only for local
-proxy development.
+Ensure traffic-replay and traffic-e2e are available on PATH for target-project
+E2E runs. Use --traffic-e2e-bin only for local traffic-e2e development.
 Replay child processes are run with shell startup hooks such as BASH_ENV cleared.
 DNS/fake-IP rules are removed when this script exits.
 Interception is always limited to the fixed Unix user $TRAFFIC_INTERCEPT_USER.
@@ -80,7 +79,7 @@ FAKE_CIDR="198.18.0.0/15"
 FAKE_SET=0
 UPSTREAM_DNS_VALUE="10.10.10.10:53"
 UPSTREAM_SET=0
-PROXY_BIN_OVERRIDE=""
+TRAFFIC_E2E_BIN_OVERRIDE=""
 POLICY_PATH=""
 POLICY_BASE="$CALLER_CWD"
 POLICY_SET=0
@@ -191,9 +190,9 @@ while [ "$#" -gt 0 ]; do
       echo "$1 is not supported; interception always uses $TRAFFIC_INTERCEPT_USER" >&2
       exit 2
       ;;
-    --proxy-bin)
+    --traffic-e2e-bin)
       need_value "$1" "${2:-}"
-      PROXY_BIN_OVERRIDE="$2"
+      TRAFFIC_E2E_BIN_OVERRIDE="$2"
       shift 2
       ;;
     -h|--help)
@@ -384,22 +383,22 @@ else
   CONTROL_SOCKET_PATH="$(resolve_path "$CONTROL_SOCKET_PATH" "$CONTROL_SOCKET_BASE")"
 fi
 
-find_proxy_binary() {
-  local sibling_candidate="$SCRIPT_DIR/traffic-recorder-proxy"
-  local repo_candidate="$REPO_ROOT/target/debug/traffic-recorder-proxy"
-  local cwd_candidate="$CALLER_CWD/target/debug/traffic-recorder-proxy"
+find_traffic_e2e_binary() {
+  local sibling_candidate="$SCRIPT_DIR/traffic-e2e"
+  local repo_candidate="$REPO_ROOT/target/debug/traffic-e2e"
+  local cwd_candidate="$CALLER_CWD/target/debug/traffic-e2e"
 
-  if [ -n "$PROXY_BIN_OVERRIDE" ]; then
-    if [ ! -x "$PROXY_BIN_OVERRIDE" ]; then
-      echo "--proxy-bin is not executable: $PROXY_BIN_OVERRIDE" >&2
+  if [ -n "$TRAFFIC_E2E_BIN_OVERRIDE" ]; then
+    if [ ! -x "$TRAFFIC_E2E_BIN_OVERRIDE" ]; then
+      echo "--traffic-e2e-bin is not executable: $TRAFFIC_E2E_BIN_OVERRIDE" >&2
       exit 1
     fi
-    printf '%s\n' "$PROXY_BIN_OVERRIDE"
+    printf '%s\n' "$TRAFFIC_E2E_BIN_OVERRIDE"
     return
   fi
 
-  if command -v traffic-recorder-proxy >/dev/null 2>&1; then
-    command -v traffic-recorder-proxy
+  if command -v traffic-e2e >/dev/null 2>&1; then
+    command -v traffic-e2e
     return
   fi
 
@@ -418,11 +417,11 @@ find_proxy_binary() {
     return
   fi
 
-  echo "traffic-recorder-proxy command not found on PATH. Add it to PATH, for example ~/.local/bin/traffic-recorder-proxy, or pass --proxy-bin /path/to/traffic-recorder-proxy for local proxy development." >&2
+  echo "traffic-e2e command not found on PATH. Add it to PATH, for example ~/.local/bin/traffic-e2e, or pass --traffic-e2e-bin /path/to/traffic-e2e for local development." >&2
   exit 1
 }
 
-PROXY_BIN="$(find_proxy_binary)"
+TRAFFIC_E2E_BIN="$(find_traffic_e2e_binary)"
 
 if [ "$ENABLE_INTERCEPT" = "1" ]; then
   INTERCEPT_UID="$(traffic_intercept_uid)"
@@ -494,7 +493,7 @@ if [ "$ENABLE_INTERCEPT" = "1" ]; then
   FAKE_REDIRECT_UP=1
 fi
 
-args=(replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LISTEN" --fake-cidr "$FAKE_CIDR" --report "$REPORT_PATH" --session "$SESSION_PATH" --control-socket "$CONTROL_SOCKET_PATH")
+args=(diagnose replay --case "$CASE_DIR" --dns-listen "$DNS_LISTEN" --tcp-listen "$TCP_LISTEN" --fake-cidr "$FAKE_CIDR" --report "$REPORT_PATH" --session "$SESSION_PATH" --control-socket "$CONTROL_SOCKET_PATH")
 if [ -n "$POLICY_PATH" ]; then
   args+=(--policy "$POLICY_PATH")
 fi
@@ -507,4 +506,4 @@ done
 args+=("${APP_ARGS[@]}")
 
 export RUST_LOG="${RUST_LOG:-info}"
-env -u BASH_ENV -u ENV "$PROXY_BIN" "${args[@]}"
+env -u BASH_ENV -u ENV "$TRAFFIC_E2E_BIN" "${args[@]}"

@@ -1,6 +1,7 @@
-# traffic-recorder-proxy
+# traffic-e2e
 
-Rust single-binary proxy that records HTTP, HTTPS, and MySQL traffic to JSONL.
+Rust single-binary CLI for recording, replaying, and verifying traffic-based
+E2E contracts.
 
 ## Features
 
@@ -35,10 +36,30 @@ sparse registry.
 cargo build --release
 ```
 
+## Command Model
+
+Use the binary directly for the standard traffic E2E workflow:
+
+```bash
+traffic-e2e init ...
+traffic-e2e prepare ...
+traffic-e2e run-api ...
+traffic-e2e run ...
+traffic-e2e status ...
+traffic-e2e recover ...
+traffic-e2e abort ...
+```
+
+Low-level recorder, replay, grouping, policy, and report commands live under
+`traffic-e2e diagnose`. The remaining `traffic-record`, `traffic-replay`, and
+`traffic-replay-target` scripts own host interception, watch mode, or fixed-user
+isolation rather than forwarding to another command name.
+
 ## Run
 
 ```bash
-cargo run -- --config config/recorder.example.toml
+cargo run -- --help
+cargo run -- diagnose recorder --config config/recorder.example.toml
 ```
 
 For watch-mode recording, install the repo-level command and run
@@ -81,26 +102,23 @@ directory directly:
 ```bash
 cargo build
 mkdir -p "$HOME/.local/bin"
-ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
+ln -sf "$PWD/target/debug/traffic-e2e" "$HOME/.local/bin/traffic-e2e"
 ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
 ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
 ln -sf "$PWD/scripts/traffic-replay-target" "$HOME/.local/bin/traffic-replay-target"
-ln -sf "$PWD/scripts/traffic-replay-policy" "$HOME/.local/bin/traffic-replay-policy"
-ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
-ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
-command -v traffic-recorder-proxy
+command -v traffic-e2e
 command -v traffic-record
 command -v traffic-replay
 command -v traffic-replay-target
-command -v traffic-replay-policy
-command -v traffic-case-group
+traffic-e2e --help
+traffic-e2e diagnose --help
 traffic-replay path/to/case-dir
 traffic-replay path/to/recordings/<run-id>
 ```
 
 For runtime-generated UUIDs, timestamps, and signed query fields, keep a
 source-controlled `.traffic-e2e/replay.yaml` in the target project and pass it with
-`--policy`. Validate it with `traffic-replay-policy validate --policy
+`--policy`. Validate it with `traffic-e2e diagnose replay-policy validate --policy
 .traffic-e2e/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
 
 `traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
@@ -115,15 +133,16 @@ prebuilt command through `traffic-replay-target`. The command stages the
 executable and copied inputs, clears the inherited environment, provides a
 private writable work directory, and resolves the fixed user from
 `traffic-replay --print-intercept-user`. It never accepts a username or UID.
-Keep `traffic-replay-cli begin/end/finalize` in the outer developer-owned
-facade; the target process must not access the replay session or control socket.
+Keep `traffic-e2e diagnose replay-control begin/end/finalize` in the outer
+developer-owned process; the target process must not access the replay session
+or control socket.
 
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are consumed in recorded connection order. The
 v5 replay report keeps complete unmatched, unsupported, unsafe, and unused
 evidence, records exact success totals, and retains a bounded prefix of success
-details. `traffic-replay-cli end/report --fail-on-dirty` treats all cache
-protocol discrepancies as failures.
+details. `traffic-e2e diagnose replay-control end/report --fail-on-dirty`
+treats all cache protocol discrepancies as failures.
 
 ## Optional Explicit HTTP/HTTPS Proxy
 
@@ -218,7 +237,7 @@ exclusions. Traffic E2E verification thresholds belong in
 trailing successful rounds and the successful case executions covered by those
 rounds. Global defaults may be overridden for an exact
 `METHOD + path_pattern`. When an API first becomes verified,
-`traffic-e2e-run` atomically adds the exact `rule + method + path_pattern` and
+`traffic-e2e` atomically adds the exact `rule + method + path_pattern` and
 verifies convergence.
 The path pattern may be exact, use whole-segment `*`, or end in a `**`
 catch-all matching one or more remaining segments.
@@ -261,13 +280,15 @@ example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
 `case_path_patterns = ["/api/users/*/xxx"]`.
 
 For replay-time AI feedback, keep patterns inside the explicit managed block
-shown above. Use `traffic-recorder-config case-path-patterns plan` to inspect
-the proposed diff, then rerun it with `apply`. Feedback is add-only even for a
+shown above. Use
+`traffic-e2e diagnose recorder-config case-path-patterns plan` to inspect the
+proposed diff, then rerun it with `apply`. Feedback is add-only even for a
 collection-wide case source; an existing pattern is never deleted merely
 because current cases omit it. Correct a specifically proven-invalid
 AI-managed pattern only through the explicit correction flags described in
-[docs/development.md](docs/development.md). Use `traffic-case-group ensure` to
-persist exact static or dynamic API membership before migration; it writes a
+[docs/development.md](docs/development.md). Use
+`traffic-e2e diagnose case-group ensure` to persist exact static or dynamic API
+membership before migration; it writes a
 manifest outside the recording source and never moves or edits published
 cases.
 

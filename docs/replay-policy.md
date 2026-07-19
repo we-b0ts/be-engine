@@ -5,7 +5,7 @@ Pass it explicitly to every recorded replay:
 
 ```bash
 traffic-replay --policy .traffic-e2e/replay.yaml /path/to/case-group
-traffic-replay-policy validate --policy .traffic-e2e/replay.yaml
+traffic-e2e diagnose replay-policy validate --policy .traffic-e2e/replay.yaml
 ```
 
 This policy is independent of recorder `case_path_patterns`:
@@ -172,7 +172,7 @@ source review, unit tests, or real-traffic integration tests.
 Use evidence-backed plan/apply after diagnosing the source and target:
 
 ```bash
-traffic-replay-policy response-rule plan \
+traffic-e2e diagnose replay-policy response-rule plan \
   --policy .traffic-e2e/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
@@ -180,7 +180,7 @@ traffic-replay-policy response-rule plan \
   --assertion-report .traffic-e2e/local/.../assertions.json \
   --aggregate-report .traffic-e2e/local/.../aggregate.json
 
-traffic-replay-policy response-rule apply \
+traffic-e2e diagnose replay-policy response-rule apply \
   --policy .traffic-e2e/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
@@ -209,7 +209,7 @@ After source and target review proves the array is semantically unordered, use
 the same evidence-backed workflow:
 
 ```bash
-traffic-replay-policy response-rule plan \
+traffic-e2e diagnose replay-policy response-rule plan \
   --policy .traffic-e2e/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
@@ -217,7 +217,7 @@ traffic-replay-policy response-rule plan \
   --assertion-report .traffic-e2e/local/.../assertions.json \
   --aggregate-report .traffic-e2e/local/.../aggregate.json
 
-traffic-replay-policy response-rule apply \
+traffic-e2e diagnose replay-policy response-rule apply \
   --policy .traffic-e2e/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \

@@ -21,7 +21,7 @@ Use `recorded-e2e-cases` as the sole authority for case discovery, source-route
 association, grouping, replay, assertions, dependency coverage, recorder
 feedback, and its completion gate.
 
-If `.traffic-e2e/e2e.yaml` is missing, call `traffic-e2e-run init` with the
+If `.traffic-e2e/e2e.yaml` is missing, call `traffic-e2e init` with the
 confirmed project CLI, replay policy, and PR base before preparing a
 group. Ask the user for any project-specific value when repository evidence is
 insufficient; never guess, hand-write, or silently inherit another project's
@@ -30,7 +30,7 @@ config or a PR base that no longer resolves.
 
 For a collection or multi-API source, select one unprocessed directory and use
 its first published case only to discover a candidate route. Confirm whether it
-is static or dynamic, then call `traffic-e2e-run prepare`; a dynamic route
+is static or dynamic, then call `traffic-e2e prepare`; a dynamic route
 requires its safe whole-segment pattern. Complete that grouping before business
 implementation analysis. If the user did not name an API, start with one
 unprocessed complete group selected from the available source, recording,
@@ -45,7 +45,7 @@ silently default to a developer-machine recording path.
 Read [delivery.md](delivery.md). Resolve `pr_base`, protect existing work, and
 create a focused feature branch when safe. Do not work on `pr_base`.
 
-`traffic-e2e-run` creates current pointers and generated evidence according to
+`traffic-e2e` creates current pointers and generated evidence according to
 [e2e-run-state.md](e2e-run-state.md). AI never writes or repairs those files
 itself.
 
@@ -73,7 +73,7 @@ local tests needed by the selected scope. Provide the standard
 
 ## 5. Focused Replay And Iterate
 
-Run the complete selected API through `traffic-e2e-run run-api`. Fix product
+Run the complete selected API through `traffic-e2e run-api`. Fix product
 code only after grouping, replay lifecycle, dependency routing, and evidence
 are complete enough to prove a behavior defect. Terminal focused attempts
 update cumulative progress and the selected API's streaks; reaching its
@@ -93,7 +93,7 @@ or structural change; final verification is not a retry.
 After every published case is prepared exactly once and every migrated API has
 a current focused pass, those grouped results are equivalent to a full round
 when no later behavior-affecting change may invalidate an earlier group. If
-such a change exists, call `traffic-e2e-run run` without editing target
+such a change exists, call `traffic-e2e run` without editing target
 behavior during the command. The runner executes the full case set, finalizes
 and aggregates, runs eligible verified-excludes ensure, updates
 `e2e-progress.yaml`, and atomically publishes global `latest`.

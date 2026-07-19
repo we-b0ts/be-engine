@@ -121,10 +121,10 @@ Keep the source-controlled replay and recorder migration inputs at
 `.traffic-e2e/replay.yaml` and `.traffic-e2e/recorder.toml`.
 
 Generate the source-controlled `.traffic-e2e/e2e.yaml` with
-`traffic-e2e-run init`:
+`traffic-e2e init`:
 
 ```bash
-traffic-e2e-run init \
+traffic-e2e init \
   --target-root <target> \
   --project-cli scripts/<project>-cli \
   --replay-policy .traffic-e2e/replay.yaml \
@@ -182,7 +182,7 @@ confirmed, ask the user; do not hand-edit the file.
 
 ## Focused API State
 
-`traffic-e2e-run run-api` creates the selected API's `.active`, runs its entire
+`traffic-e2e run-api` creates the selected API's `.active`, runs its entire
 canonical case group, then atomically replaces that API's `latest`. A rerun
 keeps only the latest complete focused snapshot.
 
@@ -198,7 +198,7 @@ rerunning affected groups or one full regression round.
 
 ## Full-Round State
 
-`traffic-e2e-run run` requires complete, non-overlapping grouping for every
+`traffic-e2e run` requires complete, non-overlapping grouping for every
 published case. It creates the run-key `.active`, executes one full round, and
 only after terminal evidence atomically replaces the previous global `latest`.
 Readers see either the old complete snapshot or the new complete snapshot,
@@ -233,9 +233,9 @@ Only terminal runner evidence can advance progress:
 Use runner commands, never filesystem surgery:
 
 ```bash
-traffic-e2e-run status  --target-root <target> --case-source <source>
-traffic-e2e-run abort   --target-root <target> --case-source <source>
-traffic-e2e-run recover --target-root <target> --case-source <source>
+traffic-e2e status  --target-root <target> --case-source <source>
+traffic-e2e abort   --target-root <target> --case-source <source>
+traffic-e2e recover --target-root <target> --case-source <source>
 ```
 
 `abort` publishes an interrupted full round so the failure is explicit.

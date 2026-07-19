@@ -25,7 +25,7 @@ route-pattern feedback, verified excludes, and their completion artifacts. Do
 not duplicate or weaken that contract here or in the target repository.
 
 Generate stable project metadata in `.traffic-e2e/e2e.yaml` with
-`traffic-e2e-run init`; if the required project CLI, replay policy, or
+`traffic-e2e init`; if the required project CLI, replay policy, or
 PR base cannot be confirmed, ask the user instead of guessing. The
 generated config must be complete and its PR base resolvable before
 prepare or replay. Put detailed generated evidence under the Git-ignored
@@ -70,9 +70,9 @@ before implementation. Source tests may supplement but never replace recordings.
    repository migration notes. Before generating migration state, require
    `.traffic-e2e/local/` in the target root `.gitignore` and verify it with
    `git check-ignore`. Resolve the PR base and pass it to
-   `traffic-e2e-run init`; do not begin prepare or replay with missing or
+   `traffic-e2e init`; do not begin prepare or replay with missing or
    incomplete stable project configuration.
-2. Use `traffic-e2e-run prepare` through `recorded-e2e-cases` to select exactly
+2. Use `traffic-e2e prepare` through `recorded-e2e-cases` to select exactly
    one canonical API/function group. If no API is named, select one unprocessed
    complete group from the available source, recording, dependency, and replay
    evidence, state the selection rationale, and proceed one group at a time. Do
@@ -90,7 +90,7 @@ before implementation. Source tests may supplement but never replace recordings.
    `expected-response.json` to produce actual behavior. The expected response is
    assertion-only; recorded dependency data is supplied only by recorder-owned
    replay.
-6. Use `traffic-e2e-run run-api` for the selected API's migrate/fix loop. Fix
+6. Use `traffic-e2e run-api` for the selected API's migrate/fix loop. Fix
    product code only after replay evidence proves a real behavior defect.
    Terminal focused attempts update cumulative progress and that API's
    verification streaks; reaching its global-default or exact per-API override
@@ -102,7 +102,7 @@ before implementation. Source tests may supplement but never replace recordings.
    while any focused group still fails. After every published case is prepared
    and migrated, their successful grouped evidence is equivalent to a full
    round if no later behavior-affecting change can invalidate an earlier group.
-   Otherwise use `traffic-e2e-run run` for regression evidence. API
+   Otherwise use `traffic-e2e run` for regression evidence. API
    verification requires both effective trailing-success thresholds configured
    in `.traffic-e2e/e2e.yaml`; a non-successful full round returns to focused
    repair.

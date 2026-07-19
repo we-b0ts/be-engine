@@ -2,14 +2,16 @@
 
 ## Overview
 
-This is a Rust single-binary traffic recorder proxy. It records HTTP, HTTPS,
-HTTP gateway, fake-DNS TCP/UDP gateways, MySQL, Redis, Memcached, and
-constrained Kafka traffic to JSONL files.
+This is a Rust single-binary traffic E2E CLI. It records HTTP, HTTPS, HTTP
+gateway, fake-DNS TCP/UDP gateways, MySQL, Redis, Memcached, and constrained
+Kafka traffic to JSONL files, then groups, replays, and verifies recorded
+contracts.
 
-The primary crate is in `src/` and builds the `traffic-recorder-proxy` binary.
-Recorder configuration starts from `config/recorder.example.toml`. Local command
-facades live in `scripts/`, especially `traffic-record`, `traffic-replay`,
-`traffic-e2e-run`, and `traffic-recorder-config`.
+The primary crate is in `src/` and builds the `traffic-e2e` binary. Standard
+workflow commands are `init`, `prepare`, `run-api`, `run`, `status`, `recover`,
+and `abort`; low-level tooling is under `diagnose`. Recorder configuration
+starts from `config/recorder.example.toml`. Scripts remain only for recording,
+intercepted replay, target isolation, and host network setup.
 
 ## Read First
 
@@ -45,7 +47,7 @@ cargo test proxy_integration
 For local recording and replay:
 
 ```bash
-cargo run -- --config config/recorder.example.toml
+cargo run -- diagnose recorder --config config/recorder.example.toml
 traffic-record --config config/recorder.example.toml
 traffic-replay path/to/case-dir
 traffic-replay --no-intercept path/to/case-dir

@@ -38,8 +38,8 @@ The target command is copied into a private staging area, then executed as the
 recorder-owned fixed interception user returned by
 `traffic-replay --print-intercept-user`. The caller must already have
 non-interactive sudo permission for staging ownership and for running commands
-as that user. Build tools, traffic-replay, and traffic-replay-cli must remain
-under the caller account.
+as that user. Build tools, traffic-replay, and traffic-e2e replay control must
+remain under the caller account.
 
 This command never accepts a username or UID and never grants the target access
 to the replay session, report, control socket, or replay CA private key.
