@@ -90,19 +90,67 @@ require `start` and `status` to prove normal configuration and listener
 initialization, then use `stop` for cleanup. Real dependencies may be unavailable
 only after startup or when the migrated capability is invoked.
 
-## Configuration And Dynamic Values
+## Application Configuration
 
-Follow the target config format and environment override convention. Keep
-normal runtime config about product behavior, not one recording. Derive dynamic
-values from request or session context, dependency state, time, generated ids,
-or explicit product configuration proven by source behavior.
+Follow the target repository's existing config format, environment override
+convention, and local-file loading behavior. When it has no convention, use:
+
+- committed `config/default.yaml` for ordinary non-sensitive defaults;
+- committed `config/.env.example` to define supported environment variables;
+- Git-ignored `config/.env` for actual local values used by normal startup.
+
+Put secrets and other machine-local values in environment variables rather than
+`config/default.yaml`. Every variable in `config/.env.example` MUST map to
+target config code and the normal startup path MUST load `config/.env` when it
+exists. Preserve explicit process-environment values over file values. Do not
+create an inert template whose variables are never consumed.
+
+Keep normal runtime config about product behavior, not one recording. Derive
+runtime-generated values from request or session context, dependency state,
+time, generated ids, or explicit product configuration proven by source
+behavior.
+
+## E2E Environment Materialization
+
+Before materializing a value, trace its authoritative source through the source
+startup path. Generate Git-ignored `.traffic-e2e/.env` only for values that the
+source obtains directly from process environment, startup arguments, or
+machine-local configuration. Recorded request or connection evidence, including
+`dependencies.jsonl`, may supply such a value offline only after source code or
+startup configuration proves that provenance.
+
+When the source loads a value from a database, configuration service, secret
+service, or another runtime dependency, implement the same genuine dependency
+path in the target and let recorder-owned replay provide the result. Never infer
+or materialize such a value from a recorded downstream request. Missing required
+dependency evidence keeps the migration incomplete; do not bypass it with an
+environment variable. Do not require a person to reconstruct a large eligible
+startup configuration by hand, invent unavailable values, or copy case-specific
+business data into configuration.
+
+For eligible materialized inputs, this is an offline migration operation.
+Target product code, test code, and command facades MUST NOT read
+`dependencies.jsonl` at runtime; they receive only ordinary environment
+variables. Make the recorded-E2E startup path actually load
+`.traffic-e2e/.env`, preferably through
+`traffic-e2e target exec --env-file`. Use this precedence:
+
+1. explicitly supplied process environment;
+2. `.traffic-e2e/.env`;
+3. `config/.env`;
+4. `config/default.yaml`.
+
+Log which variable names were materialized, their source evidence, and any
+unresolved names without printing values by default. Add `config/.env`,
+`.traffic-e2e/.env`, and `.traffic-e2e/local/` to the target root `.gitignore`
+and verify each path with `git check-ignore`.
+
+## Replay-Owned Configuration
 
 Keep replay-only dependency matching rules in the single source-controlled
 `.traffic-e2e/replay.yaml` owned by `recorded-e2e-cases`; keep the traffic E2E
 recorder configuration beside it as `.traffic-e2e/recorder.toml`. Do not
-duplicate either in shell, target code, or application config. Keep secrets and
-machine-local values out of committed files and provide the target's
-conventional blank environment template when needed.
+duplicate either in shell, target code, or application config.
 
 ## Diagnostics
 

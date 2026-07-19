@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -15,18 +15,11 @@ use super::interception::{
 };
 use super::signal::shutdown_signal;
 
-const RESERVED_ENVIRONMENT: &[&str] = &[
-    "HOME",
-    "USER",
-    "LOGNAME",
-    "TMPDIR",
-    "PATH",
-    "PWD",
-    "SHELL",
-    "BASH_ENV",
-    "ENV",
-    "TRP_REPLAY_SESSION",
-];
+mod environment;
+
+use environment::{
+    Assignment, assignment_argument, load_files, parse_assignment, validate_unique_assignments,
+};
 
 #[derive(Debug, Args)]
 pub(super) struct TargetArgs {
@@ -42,6 +35,9 @@ enum TargetCommand {
 
 #[derive(Debug, Args)]
 struct TargetExecArgs {
+    /// Load dotenv values; later files and same-named caller values take precedence.
+    #[arg(long = "env-file", value_name = "PATH")]
+    env_files: Vec<PathBuf>,
     /// Copy one read-only file or directory and set NAME to its staged path.
     #[arg(long = "copy-env", value_name = "NAME=PATH", value_parser = parse_assignment)]
     copy_env: Vec<Assignment>,
@@ -57,12 +53,6 @@ struct TargetExecArgs {
     /// Prebuilt target command and arguments.
     #[arg(last = true, required = true, num_args = 1..)]
     command: Vec<OsString>,
-}
-
-#[derive(Clone, Debug)]
-struct Assignment {
-    name: String,
-    value: OsString,
 }
 
 struct Stage {
@@ -173,7 +163,12 @@ pub(super) async fn run(args: TargetArgs) -> Result<()> {
 }
 
 async fn run_exec(args: TargetExecArgs) -> Result<()> {
-    validate_unique_environment(&args)?;
+    validate_unique_assignments(
+        args.copy_env
+            .iter()
+            .chain(&args.path_env)
+            .chain(&args.environment),
+    )?;
     let target_uid = fixed_user_uid()?;
     let target_gid = fixed_user_gid()?;
     prepare_privilege()?;
@@ -195,7 +190,7 @@ async fn run_staged_target(
 ) -> Result<()> {
     stage.stage_command(command)?;
     stage.create_write_dirs(&args.write_dirs)?;
-    let mut environment = BTreeMap::<String, OsString>::new();
+    let mut environment = load_files(&args.env_files)?;
     for (index, assignment) in args.copy_env.iter().enumerate() {
         let source_input = Path::new(&assignment.value);
         ensure!(
@@ -503,52 +498,6 @@ fn set_tree_mode(path: &Path, directory_mode: u32, file_mode: u32) -> Result<()>
     Ok(())
 }
 
-fn validate_unique_environment(args: &TargetExecArgs) -> Result<()> {
-    let mut names = BTreeSet::new();
-    for assignment in args
-        .copy_env
-        .iter()
-        .chain(&args.path_env)
-        .chain(&args.environment)
-    {
-        ensure!(
-            names.insert(&assignment.name),
-            "environment variable {} was supplied more than once",
-            assignment.name
-        );
-    }
-    Ok(())
-}
-
-fn parse_assignment(value: &str) -> std::result::Result<Assignment, String> {
-    let (name, value) = value
-        .split_once('=')
-        .ok_or_else(|| "expected NAME=VALUE".to_string())?;
-    if !valid_environment_name(name) {
-        return Err(format!("invalid environment name: {name}"));
-    }
-    if RESERVED_ENVIRONMENT.contains(&name) || name.starts_with("SUDO_") {
-        return Err(format!("cannot set reserved environment variable {name}"));
-    }
-    Ok(Assignment {
-        name: name.to_string(),
-        value: OsString::from(value),
-    })
-}
-
-fn valid_environment_name(name: &str) -> bool {
-    let mut characters = name.chars();
-    matches!(characters.next(), Some('_' | 'a'..='z' | 'A'..='Z'))
-        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
-}
-
-fn assignment_argument(name: &str, value: &OsStr) -> OsString {
-    let mut assignment = OsString::from(name);
-    assignment.push("=");
-    assignment.push(value);
-    assignment
-}
-
 async fn terminate_target(child: &mut Child) {
     if let Err(error) = child.start_kill() {
         eprintln!("failed to terminate fixed-user target: {error}");
@@ -558,15 +507,6 @@ async fn terminate_target(child: &mut Child) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn assignment_parser_rejects_reserved_and_invalid_names() {
-        assert!(parse_assignment("APP_CONFIG=/tmp/app").is_ok());
-        assert!(parse_assignment("HOME=/tmp/home").is_err());
-        assert!(parse_assignment("SUDO_USER=other").is_err());
-        assert!(parse_assignment("9APP=value").is_err());
-        assert!(parse_assignment("APP").is_err());
-    }
 
     #[test]
     fn write_directory_must_be_normalized_and_relative() {

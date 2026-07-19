@@ -68,8 +68,9 @@ before implementation. Source tests may supplement but never replace recordings.
 1. Inspect target instructions and conventions, the supplied recordings, source
    route registrations or job wiring, normal startup, Git state, and declared
    repository migration notes. Before generating migration state, require
-   `.traffic-e2e/local/` in the target root `.gitignore` and verify it with
-   `git check-ignore`. Resolve the PR base and pass it to
+   `.traffic-e2e/local/`, `.traffic-e2e/.env`, and the target's local
+   application environment file in the target root `.gitignore`, then verify
+   them with `git check-ignore`. Resolve the PR base and pass it to
    `traffic-e2e init`; do not begin prepare or replay with missing or
    incomplete stable project configuration.
 2. Use `traffic-e2e prepare` through `recorded-e2e-cases` to select exactly
@@ -83,13 +84,20 @@ before implementation. Source tests may supplement but never replace recordings.
 4. Inspect only the selected source capability. Implement idiomatic target
    behavior with normal startup and the same genuine dependency interfaces,
    production adapters, and protocol clients used during recorded E2E.
+   Materialize the required normal and E2E runtime configuration according to
+   `target-runtime.md`; do not leave a committed environment template
+   disconnected from target config loading or require a person to reconstruct
+   source-proven dependency configuration by hand.
    Provide the standard `scripts/<project>-cli` facade and delegate its commands
    to the target repository's native build and test tools.
 5. Target product code, E2E code, test support, commands, and normal config MUST
    NOT read `dependencies.jsonl`, dependency fixtures, or
    `expected-response.json` to produce actual behavior. The expected response is
    assertion-only; recorded dependency data is supplied only by recorder-owned
-   replay.
+   replay. The migration agent may inspect recorded dependency evidence offline
+   only under the configuration-provenance rules in `target-runtime.md`; it MUST
+   NOT infer provenance from a downstream request or materialize a value that
+   the source obtains from a runtime dependency.
 6. Use `traffic-e2e run-api` for the selected API's migrate/fix loop. Fix
    product code only after replay evidence proves a real behavior defect.
    Terminal focused attempts update cumulative progress and that API's
@@ -149,7 +157,10 @@ MUST NOT claim a migration complete or delivered unless all items hold:
 4. Normal runtime and recorded E2E use genuine dependency paths. No target-side
    recording-backed, fixture-backed, fake, or in-process dependency
    implementation reads recorder dependency data or constructs actual results
-   from the expected response.
+   from the expected response. Required source-proven configuration is present
+   through its authoritative target startup input or genuine runtime-dependency
+   path, and the committed environment template contains no variable ignored by
+   the target config path.
 5. Source metrics and required side effects, explicit DB schema evidence when
    applicable, meaningful local tests, architecture review, structural
    convergence, and semantics review are complete. Any explicit blocker keeps
@@ -176,6 +187,8 @@ MUST NOT claim a migration complete or delivered unless all items hold:
 - target-side use of recorded dependency files, dependency fixtures, or the
   expected response to create actual behavior;
 - no normal runnable startup or no genuine runtime dependency path;
+- missing required local or E2E environment materialization, ignore rule, or
+  loading path;
 - missing or non-conforming `scripts/<project>-cli` core command facade;
 - missing required schema, metrics, side effects, tests, convergence, or
   semantics evidence;

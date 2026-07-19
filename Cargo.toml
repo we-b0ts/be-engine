@@ -9,6 +9,7 @@ base64 = "0.22"
 bytes = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+dotenvy = "0.15"
 flate2 = "1"
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "http1", "server"] }
