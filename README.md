@@ -51,9 +51,8 @@ traffic-e2e abort ...
 ```
 
 Low-level recorder, replay, grouping, policy, and report commands live under
-`traffic-e2e diagnose`. The remaining `traffic-record`, `traffic-replay`, and
-`traffic-replay-target` scripts own host interception, watch mode, or fixed-user
-isolation rather than forwarding to another command name.
+`traffic-e2e diagnose`. Managed recording, replay, fixed-user target isolation,
+and host interception are implemented by the same Rust binary.
 
 ## Run
 
@@ -62,16 +61,13 @@ cargo run -- --help
 cargo run -- diagnose recorder --config config/recorder.example.toml
 ```
 
-For watch-mode recording, install the repo-level command and run
-`traffic-record`. It runs `cargo watch` and enables local DNS capture plus
-fake-IP TCP redirect by default. Use `traffic-record --no-dns` when you want to
-skip those local rules.
+Install the binary and run managed recording. It enables local DNS capture plus
+fake-IP TCP/UDP redirect by default. Use `--no-dns` when you want to skip those
+local rules.
 
 ```bash
-mkdir -p "$HOME/.local/bin"
-ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
-command -v traffic-record
-traffic-record --config config/recorder.example.toml
+cargo install --path .
+traffic-e2e record --config config/recorder.example.toml
 ```
 
 Local interception is always filtered to the fixed `trp-record` Unix user.
@@ -81,7 +77,7 @@ run the source service as that user, then start the recorder:
 ```bash
 sudo useradd --system --create-home --shell /bin/bash trp-record
 sudo -u trp-record /path/to/source-service start
-traffic-record --config config/recorder.example.toml
+traffic-e2e record --config config/recorder.example.toml
 ```
 
 The owner scope cannot be overridden from the CLI, environment, or recorder
@@ -96,24 +92,14 @@ The default example listens on:
 - JSONL output: `./recordings/<run-id>/traffic.jsonl`
 - Generated CA: `./data/traffic-recorder-ca.pem`
 
-For dependency replay, install the repo-level replay command and pass the case
-directory directly:
+For dependency replay, install the binary and pass the case directory directly:
 
 ```bash
-cargo build
-mkdir -p "$HOME/.local/bin"
-ln -sf "$PWD/target/debug/traffic-e2e" "$HOME/.local/bin/traffic-e2e"
-ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
-ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
-ln -sf "$PWD/scripts/traffic-replay-target" "$HOME/.local/bin/traffic-replay-target"
-command -v traffic-e2e
-command -v traffic-record
-command -v traffic-replay
-command -v traffic-replay-target
+cargo install --path .
 traffic-e2e --help
 traffic-e2e diagnose --help
-traffic-replay path/to/case-dir
-traffic-replay path/to/recordings/<run-id>
+traffic-e2e replay path/to/case-dir
+traffic-e2e replay path/to/recordings/<run-id>
 ```
 
 For runtime-generated UUIDs, timestamps, and signed query fields, keep a
@@ -121,7 +107,7 @@ source-controlled `.traffic-e2e/replay.yaml` in the target project and pass it w
 `--policy`. Validate it with `traffic-e2e diagnose replay-policy validate --policy
 .traffic-e2e/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
 
-`traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
+`traffic-e2e replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
 limited to `trp-record`, so the dependency-producing target process must run as
 that user. Build steps, replay itself, and replay-control commands may remain
@@ -129,11 +115,11 @@ under the developer account. Use `--no-intercept` only when the target already
 routes dependencies directly to the replay listeners.
 
 For an in-process E2E, build its executable as the developer and run the
-prebuilt command through `traffic-replay-target`. The command stages the
+prebuilt command through `traffic-e2e target exec`. The command stages the
 executable and copied inputs, clears the inherited environment, provides a
-private writable work directory, and resolves the fixed user from
-`traffic-replay --print-intercept-user`. It never accepts a username or UID.
-Keep `traffic-e2e diagnose replay-control begin/end/finalize` in the outer
+private writable work directory, and resolves the fixed interception identity.
+It never accepts a username or UID. Keep
+`traffic-e2e diagnose replay-control begin/end/finalize` in the outer
 developer-owned process; the target process must not access the replay session
 or control socket.
 
@@ -421,7 +407,10 @@ Set up local DNS capture. This keeps the recorder on non-privileged port
 forward queries without recursively hitting itself:
 
 ```bash
-sudo DNS_IP=127.0.0.153 DNS_PORT=15353 UPSTREAM_DNS=10.10.10.10:53 ./scripts/setup_local_dns.sh up
+sudo traffic-e2e diagnose interception dns up \
+  --dns-ip 127.0.0.153 \
+  --dns-port 15353 \
+  --upstream-dns 10.10.10.10:53
 ```
 
 On Linux, the whole `127.0.0.0/8` block routes to loopback, so this does not
@@ -435,7 +424,10 @@ sudo ip addr add 127.0.0.153/32 dev lo
 Set up fake-IP TCP capture:
 
 ```bash
-sudo FAKE_CIDR=198.18.0.0/15 GATEWAY_PORT=15001 ./scripts/setup_fake_ip_redirect.sh up
+sudo traffic-e2e diagnose interception fake-ip up \
+  --fake-cidr 198.18.0.0/15 \
+  --tcp-port 15001 \
+  --udp false
 ```
 
 Test the DNS mock with `dig`:
@@ -473,15 +465,21 @@ transparently and does not record or MITM it while the client cache drains.
 
 Port `5353` is intentionally avoided because it is commonly used by mDNS/Avahi
 on UDP. Binding to `127.0.0.153:15353` also avoids the common systemd-resolved
-stub listeners on `127.0.0.53:53` and `127.0.0.54:53`. The setup script does
+stub listeners on `127.0.0.53:53` and `127.0.0.54:53`. Interception does
 not depend on `resolvectl`; it works by adding a narrow nat chain in iptables.
-Keep `UPSTREAM_DNS` aligned with `[dns_mock].upstream_dns`.
+Keep `--upstream-dns` aligned with `[dns_mock].upstream_dns`.
 
 To remove the DNS and fake-IP rules:
 
 ```bash
-sudo DNS_IP=127.0.0.153 DNS_PORT=15353 UPSTREAM_DNS=10.10.10.10:53 ./scripts/setup_local_dns.sh down
-sudo FAKE_CIDR=198.18.0.0/15 GATEWAY_PORT=15001 ./scripts/setup_fake_ip_redirect.sh down
+sudo traffic-e2e diagnose interception fake-ip down \
+  --fake-cidr 198.18.0.0/15 \
+  --tcp-port 15001 \
+  --udp false
+sudo traffic-e2e diagnose interception dns down \
+  --dns-ip 127.0.0.153 \
+  --dns-port 15353 \
+  --upstream-dns 10.10.10.10:53
 sudo ./scripts/setup_system_ca.sh down
 ```
 

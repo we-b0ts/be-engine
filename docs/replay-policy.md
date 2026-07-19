@@ -4,7 +4,7 @@ Each target repository owns one source-controlled `.traffic-e2e/replay.yaml`.
 Pass it explicitly to every recorded replay:
 
 ```bash
-traffic-replay --policy .traffic-e2e/replay.yaml /path/to/case-group
+traffic-e2e replay --policy .traffic-e2e/replay.yaml /path/to/case-group
 traffic-e2e diagnose replay-policy validate --policy .traffic-e2e/replay.yaml
 ```
 

@@ -3,6 +3,11 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod diagnose;
+mod interception;
+mod record;
+mod replay;
+mod signal;
+mod target;
 mod workflow;
 
 #[derive(Debug, Parser)]
@@ -21,6 +26,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Run the recorder with fixed-user local interception.
+    Record(record::RecordArgs),
+    /// Run a managed replay session with fixed-user local interception.
+    Replay(replay::ReplayArgs),
+    /// Execute a prebuilt target command as the fixed interception user.
+    Target(target::TargetArgs),
     /// Generate and validate the target repository's traffic E2E configuration.
     Init(workflow::InitArgs),
     /// Persist one canonical static or dynamic API case group.
@@ -46,6 +57,9 @@ pub(crate) async fn run() -> Result<()> {
         .init();
 
     match Cli::parse().command {
+        Command::Record(args) => record::run(args).await,
+        Command::Replay(args) => replay::run(args).await,
+        Command::Target(args) => target::run(args).await,
         Command::Init(args) => workflow::run(workflow::WorkflowCommand::Init(args)).await,
         Command::Prepare(args) => workflow::run(workflow::WorkflowCommand::Prepare(args)).await,
         Command::RunApi(args) => workflow::run(workflow::WorkflowCommand::RunApi(args)).await,
@@ -69,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn exposes_workflow_commands_at_the_top_level() {
+    fn exposes_public_commands_at_the_top_level() {
         let command = Cli::command();
         let names = command
             .get_subcommands()
@@ -79,7 +93,8 @@ mod tests {
         assert_eq!(
             names,
             [
-                "init", "prepare", "run-api", "run", "status", "recover", "abort", "diagnose"
+                "record", "replay", "target", "init", "prepare", "run-api", "run", "status",
+                "recover", "abort", "diagnose"
             ]
         );
     }

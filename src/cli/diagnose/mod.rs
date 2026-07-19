@@ -22,6 +22,8 @@ pub(super) struct DiagnoseArgs {
 
 #[derive(Debug, Subcommand)]
 enum DiagnoseCommand {
+    /// Inspect or manage host interception rules.
+    Interception(super::interception::InterceptionArgs),
     /// Run the low-level recorder service without local interception setup.
     Recorder(RecorderArgs),
     /// Run the low-level dependency replay service without interception setup.
@@ -221,6 +223,7 @@ enum ReplayControlCommand {
 
 pub(super) async fn run(args: DiagnoseArgs) -> Result<()> {
     match args.command {
+        DiagnoseCommand::Interception(args) => super::interception::run(args),
         DiagnoseCommand::Recorder(args) => run_recorder(args.config).await,
         DiagnoseCommand::Replay(args) => run_replay_command(args).await,
         DiagnoseCommand::ReplayControl(args) => run_replay_control_command(args).await,

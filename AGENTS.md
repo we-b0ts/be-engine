@@ -9,9 +9,10 @@ contracts.
 
 The primary crate is in `src/` and builds the `traffic-e2e` binary. Standard
 workflow commands are `init`, `prepare`, `run-api`, `run`, `status`, `recover`,
-and `abort`; low-level tooling is under `diagnose`. Recorder configuration
-starts from `config/recorder.example.toml`. Scripts remain only for recording,
-intercepted replay, target isolation, and host network setup.
+and `abort`; managed recording, replay, and target isolation are also provided
+by the same binary, while low-level tooling is under `diagnose`. Recorder
+configuration starts from `config/recorder.example.toml`. Repository scripts
+are development or manual host-trust tools only.
 
 ## Read First
 
@@ -47,10 +48,10 @@ cargo test proxy_integration
 For local recording and replay:
 
 ```bash
-cargo run -- diagnose recorder --config config/recorder.example.toml
-traffic-record --config config/recorder.example.toml
-traffic-replay path/to/case-dir
-traffic-replay --no-intercept path/to/case-dir
+traffic-e2e record --config config/recorder.example.toml
+traffic-e2e replay path/to/case-dir
+traffic-e2e replay --no-intercept path/to/case-dir
+traffic-e2e target exec -- path/to/prebuilt-target
 ```
 
 ## Non-Negotiable Rules

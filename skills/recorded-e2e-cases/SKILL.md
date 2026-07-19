@@ -145,8 +145,9 @@ items hold:
    fixtures, branches, caches, or side effects.
 3. Recorded E2E uses genuine target dependency clients. For intercepted replay,
    pre-request evidence proves the dependency-producing process runs as the
-   fixed user returned by `traffic-replay --print-intercept-user`. No target
-   facade or state selects an arbitrary UID, user, or all-user interception.
+   fixed user reported by `traffic-e2e diagnose interception identity`. No
+   target facade or state selects an arbitrary UID, user, or all-user
+   interception.
 4. Every selected case ended cleanly and the final version-five recorder report
    contains the exact case ids, session id, `finalized: true`, and
    `finalized_at`. Pending, active, live, non-finalized, or dirty state is

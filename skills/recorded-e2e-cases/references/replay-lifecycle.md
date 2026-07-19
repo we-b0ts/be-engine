@@ -28,8 +28,8 @@ older batch.
 The normal AI-facing command is `traffic-e2e`. It orchestrates these recorder
 surfaces:
 
-- `traffic-replay` for the replay session;
-- `traffic-replay-target` for a prebuilt in-process target command;
+- `traffic-e2e replay` for the replay session;
+- `traffic-e2e target exec` for a prebuilt in-process target command;
 - `traffic-e2e diagnose replay-policy` for policy validation;
 - `traffic-e2e diagnose replay-control` for readiness, case lifecycle,
   finalization, and cleanup;
@@ -48,15 +48,15 @@ incompatibility. Do not rebuild or replace those tools during migration.
 ## Fixed-User Interception
 
 Resolve the interception identity with
-`traffic-replay --print-intercept-user` and require it to exist. Build and
-orchestration may run as the developer, but the process emitting dependency
-traffic MUST run as that recorder-owned fixed user.
+`traffic-e2e diagnose interception identity` and require it to exist. Build
+and orchestration may run as the developer, but the process emitting
+dependency traffic MUST run as that recorder-owned fixed user.
 
-For a prebuilt in-process E2E, use `traffic-replay-target`; do not run the build
-tool as the fixed user or widen workspace, build cache, control socket, report,
-session, or private CA-key permissions. Keep replay lifecycle control under the
-developer account and stage only the required executable, readable inputs, and
-target-owned output directories.
+For a prebuilt in-process E2E, use `traffic-e2e target exec`; do not run the
+build tool as the fixed user or widen workspace, build cache, control socket,
+report, session, or private CA-key permissions. Keep replay lifecycle control
+under the developer account and stage only the required executable, readable
+inputs, and target-owned output directories.
 
 Target tests, facades, docs, and state MUST NOT pass or emulate `--owner-uid`,
 `--user`, `--all-users`, `OWNER_UID`, or another owner-selection mechanism. If
@@ -71,7 +71,7 @@ listeners; it is not an isolation bypass.
 For each focused API attempt or full round, the runner performs:
 
 1. validate canonical grouping and the explicit source-controlled replay policy;
-2. start `traffic-replay` with the policy and exact case selection;
+2. start `traffic-e2e replay` with the policy and exact case selection;
 3. call `traffic-e2e diagnose replay-control wait-ready` and stop on any
    readiness failure;
 4. start the normal target once and confirm its status;

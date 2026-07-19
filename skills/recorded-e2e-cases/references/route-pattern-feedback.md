@@ -2,7 +2,7 @@
 
 Use this workflow only during replay discovery or replay follow-up. Recording
 remains manually triggered and does not require source-repo scanning.
-`traffic-replay` and all recording artifacts remain read-only.
+`traffic-e2e replay` and all recording artifacts remain read-only.
 
 For a collection or run with multiple canonical input directories, read
 [case-grouping.md](case-grouping.md) first. Route registration analysis may
