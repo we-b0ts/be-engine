@@ -12,17 +12,17 @@ use hyper::Method;
 use serde::{Deserialize, Serialize};
 
 use super::HttpGatewayRuleConfig;
+use crate::path_pattern::validate_path_pattern;
 
 pub use plan::{
     VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
-    VerifiedApiExcludePlan, VerifiedApiExcludeReport, ensure_verified_api_exclude,
-    plan_verified_api_exclude,
+    VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiVerification,
+    ensure_verified_api_exclude, plan_verified_api_exclude,
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct VerifiedApiExcludesConfig {
-    pub consecutive_successes: usize,
     pub apis: Vec<VerifiedApiExclude>,
 }
 
@@ -35,12 +35,6 @@ pub struct VerifiedApiExclude {
 
 impl VerifiedApiExcludesConfig {
     pub(super) fn validate(&self, rules: &[HttpGatewayRuleConfig]) -> Result<()> {
-        if !self.apis.is_empty() {
-            ensure!(
-                self.consecutive_successes > 0,
-                "http_gateway.verified_excludes.consecutive_successes must be greater than zero when apis are configured"
-            );
-        }
         let mut unique = BTreeSet::new();
         for api in &self.apis {
             validate_api(api, rules)?;
@@ -82,42 +76,5 @@ pub(super) fn validate_api(
         api.method
     );
     validate_path_pattern(&api.path_pattern)?;
-    Ok(())
-}
-
-pub(super) fn validate_path_pattern(pattern: &str) -> Result<()> {
-    ensure!(
-        pattern.starts_with('/'),
-        "verified exclude path_pattern must start with '/': {pattern}"
-    );
-    ensure!(
-        !pattern.contains(['?', '#', '\r', '\n']),
-        "verified exclude path_pattern must contain only a URI path: {pattern}"
-    );
-    let segments = pattern
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    ensure!(
-        !segments.is_empty(),
-        "verified exclude path_pattern must not match the root path"
-    );
-    ensure!(
-        format!("/{}", segments.join("/")) == pattern,
-        "verified exclude path_pattern must use canonical separators with no trailing slash: {pattern}"
-    );
-    ensure!(
-        segments
-            .iter()
-            .all(|segment| !segment.contains('*') || *segment == "*" || *segment == "**"),
-        "verified exclude wildcards must occupy a whole path segment: {pattern}"
-    );
-    ensure!(
-        segments
-            .iter()
-            .enumerate()
-            .all(|(index, segment)| *segment != "**" || index == segments.len() - 1),
-        "verified exclude '**' catch-all must be the final path segment: {pattern}"
-    );
     Ok(())
 }

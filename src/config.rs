@@ -32,7 +32,8 @@ pub use recording::{
 pub use verified_excludes::{
     VerifiedApiExclude, VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus,
     VerifiedApiExcludeFeedback, VerifiedApiExcludePlan, VerifiedApiExcludeReport,
-    VerifiedApiExcludesConfig, ensure_verified_api_exclude, plan_verified_api_exclude,
+    VerifiedApiExcludesConfig, VerifiedApiVerification, ensure_verified_api_exclude,
+    plan_verified_api_exclude,
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -463,7 +464,6 @@ mod tests {
             fallback_upstream = "http://127.0.0.1:9002"
 
             [http_gateway.verified_excludes]
-            consecutive_successes = 3
             apis = [
               { rule = "record-api", method = "GET", path_pattern = "/api/users/*" },
             ]
@@ -502,10 +502,6 @@ mod tests {
         assert_eq!(config.http_gateway.ready.success_status, 200);
         assert_eq!(config.http_gateway.ready.interval_ms, 1000);
         assert_eq!(config.http_gateway.rules.len(), 2);
-        assert_eq!(
-            config.http_gateway.verified_excludes.consecutive_successes,
-            3
-        );
         assert_eq!(config.http_gateway.verified_excludes.apis.len(), 1);
         assert_eq!(config.http_gateway.exclude_rules.len(), 1);
         assert_eq!(

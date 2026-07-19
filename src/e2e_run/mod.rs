@@ -28,10 +28,21 @@ pub struct E2eRunInitOptions {
     pub target_root: PathBuf,
     pub project_cli: PathBuf,
     pub replay_policy: PathBuf,
+    pub replay_startup_timeout_seconds: u64,
+    pub api_verification_consecutive_successful_runs: u64,
+    pub api_verification_successful_cases: u64,
+    pub api_verification_overrides: Vec<E2eApiVerificationOverride>,
     pub pr_base: String,
     pub recorder_config: Option<PathBuf>,
     pub recording_rule: Option<String>,
     pub force: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct E2eApiVerificationOverride {
+    pub api: String,
+    pub consecutive_successful_runs: u64,
+    pub successful_cases: u64,
 }
 
 #[derive(Debug, Serialize)]

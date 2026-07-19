@@ -209,7 +209,6 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
         ..Default::default()
     }];
     config.http_gateway.verified_excludes = VerifiedApiExcludesConfig {
-        consecutive_successes: 3,
         apis: vec![VerifiedApiExclude {
             rule: "record-path".to_string(),
             method: "GET".to_string(),
@@ -352,6 +351,90 @@ async fn http_gateway_allows_only_one_active_matched_case() {
         .collect::<Vec<_>>();
     assert_eq!(case_dirs.len(), 1);
     assert!(case_dirs[0].join("request.json").exists());
+}
+
+#[tokio::test]
+async fn http_gateway_keeps_matched_case_active_after_downstream_disconnect() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    let temp = tempdir().unwrap();
+    let matched = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let matched_addr = matched.local_addr().unwrap();
+    let (matched_request_tx, matched_request_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = matched.accept().await.unwrap();
+        let mut buf = [0_u8; 2048];
+        let _ = stream.read(&mut buf).await.unwrap();
+        matched_request_tx.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nmatched")
+            .await
+            .unwrap();
+    });
+    let fallback_upstream = spawn_http_response_upstream("fallback", 1).await;
+    let gateway_addr = free_addr();
+
+    let mut config = AppConfig::default();
+    config.http.listen = free_addr();
+    config.http_gateway.enabled = true;
+    config.http_gateway.listen = gateway_addr;
+    config.http_gateway.matched_upstream = format!("http://{matched_addr}");
+    config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
+    config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+        name: Some("record-path".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/record/".to_string()],
+        ..Default::default()
+    }];
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+    let state = traffic_recorder_proxy::AppState::new(config).await.unwrap();
+    let handle = tokio::spawn(async move { state.run().await });
+    wait_for_port(gateway_addr).await;
+
+    let mut first = TcpStream::connect(gateway_addr).await.unwrap();
+    first
+        .write_all(b"GET /record/one HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    matched_request_rx.await.unwrap();
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let second_response = tokio::time::timeout(
+        Duration::from_secs(1),
+        raw_http_get(gateway_addr, "/record/two"),
+    )
+    .await
+    .expect("second request should be sent to fallback");
+    assert!(second_response.contains("fallback"));
+
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    handle.abort();
+
+    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    assert!(!run_dir.join("record-path").exists());
+    let failed_group = run_dir.join("failed/record-path/record-one");
+    let failed_cases = std::fs::read_dir(failed_group)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    assert_eq!(failed_cases.len(), 1);
+    let error: Value = serde_json::from_str(
+        &std::fs::read_to_string(failed_cases[0].join("recording-error.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(error["reason"], "downstream_disconnected");
+    let admission: Value = serde_json::from_str(
+        &std::fs::read_to_string(failed_cases[0].join("admission.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(admission["uri"], "/record/one");
+    assert_eq!(admission["upstream"], format!("http://{matched_addr}"));
 }
 
 #[tokio::test]

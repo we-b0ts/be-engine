@@ -55,15 +55,15 @@ pub use config::{
     TcpProtocolOverrideConfig, TlsConfig, UdpGatewayConfig, VerifiedApiExclude,
     VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
     VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiExcludesConfig,
-    ensure_verified_api_exclude, plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback,
-    plan_verified_api_exclude,
+    VerifiedApiVerification, ensure_verified_api_exclude, plan_allowed_unused_http_hosts,
+    plan_case_path_pattern_feedback, plan_verified_api_exclude,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
-    E2eApiRunResult, E2eFocusedApiStatus, E2eRunContext, E2eRunInitOptions, E2eRunInitResult,
-    E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus, abort_e2e_run,
-    initialize_e2e_run, prepare_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round,
-    status_e2e_run,
+    E2eApiRunResult, E2eApiVerificationOverride, E2eFocusedApiStatus, E2eRunContext,
+    E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult,
+    E2eRunStatus, abort_e2e_run, initialize_e2e_run, prepare_e2e_run, recover_e2e_run, run_e2e_api,
+    run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
@@ -321,6 +321,16 @@ impl AppState {
 
     pub(crate) fn active_case_invalidation(&self, case_id: Uuid) -> Option<CaseInvalidation> {
         self.inner.active_cases.invalidation_for(case_id)
+    }
+
+    pub(crate) fn invalidate_active_case(
+        &self,
+        case_id: Uuid,
+        invalidation: CaseInvalidation,
+    ) -> Option<CaseContext> {
+        self.inner
+            .active_cases
+            .invalidate_case(case_id, invalidation)
     }
 
     pub(crate) async fn drain_active_case_dependencies(

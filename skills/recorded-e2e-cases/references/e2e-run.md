@@ -12,9 +12,12 @@ Generate and validate the source-controlled `.migration/e2e.yaml` once:
 traffic-e2e-run init \
   --target-root <target> \
   --project-cli scripts/<project>-cli \
-  --replay-policy config/replay.yaml \
+  --replay-policy .migration/replay.yaml \
+  --api-verification-consecutive-successful-runs 3 \
+  --api-verification-successful-cases 3 \
+  --api-verification-override 'GET /api/widgets/*=5,200' \
   --pr-base <confirmed-base-branch> \
-  --recorder-config config/recorder.toml \
+  --recorder-config .migration/recorder.toml \
   --recording-rule record-api
 ```
 
@@ -27,12 +30,33 @@ optional only as a pair. The command generates:
 ```yaml
 version: 4
 project_cli: scripts/<project>-cli
-replay_policy: config/replay.yaml
+replay_policy: .migration/replay.yaml
+replay_startup_timeout_seconds: 60
+api_verification:
+  consecutive_successful_runs: 3
+  successful_cases: 3
+  overrides:
+    GET /api/widgets/*:
+      consecutive_successful_runs: 5
+      successful_cases: 200
 pr_base: <confirmed-base-branch>
-recorder_config: config/recorder.toml
+recorder_config: .migration/recorder.toml
 recording_rule: record-api
 local_root: local
 ```
+
+`replay_startup_timeout_seconds` is the replay readiness deadline and defaults
+to 60 when absent from an older config. The runner prints an initial
+`loaded_cases=0` dependency-loading event, then relays progress about every 5%
+by loaded case count while retaining the complete replay log.
+
+`api_verification` is the sole verification policy. Top-level values are
+defaults; `overrides` keys use the exact canonical `METHOD path_pattern` API id
+and replace both values for that API. Repeat `--api-verification-override` with
+`METHOD path_pattern=successful-runs,successful-cases` when generating them.
+`successful_cases` counts case executions covered by the same trailing
+successful API rounds. The runner synchronizes an API into
+`.migration/recorder.toml` only after its effective thresholds are met.
 
 The target repository MUST ignore `.migration/local/` before initialization.
 Existing configuration is preserved unless `--force` is explicit.
@@ -110,16 +134,13 @@ and persists field-level differences, diagnostic candidates, applied rules,
 unused applicable rules, and policy fingerprints. Version-one policies retain
 the legacy target-owned assertion contract for existing repositories.
 
-Focused attempts are diagnostic migration work. They MUST NOT:
+Terminal focused attempts update cumulative progress and the selected API's
+streaks. Once that API's effective thresholds are met, they run
+verified-excludes ensure. They MUST NOT replace the full-round `latest`.
 
-- update `e2e-progress.yaml`;
-- update full-round or API progress;
-- run verified-excludes ensure;
-- replace the full-round `latest`.
-
-Fix an evidenced defect and rerun the same API. Preparing and migrating another
-API does not make an earlier focused pass current after shared behavior changes;
-the final full round is the regression gate.
+Fix an evidenced defect and rerun the same API. If later shared behavior changes
+may invalidate an earlier focused pass, rerun the affected groups or use one
+full regression round.
 
 When the only remaining dirty evidence is a recorded HTTP exchange that the
 target did not emit, inspect source before changing configuration. If the
@@ -150,7 +171,8 @@ round afterward.
 
 ## Full Round
 
-After all published cases belong to exactly one prepared group, run:
+When behavior changes after earlier groups passed and a full regression is
+therefore required, run:
 
 ```bash
 traffic-e2e-run run \
@@ -161,20 +183,20 @@ traffic-e2e-run run \
 The command owns the entire round: one replay server, one bootstrap/full-case
 load, one target start, sequential case begin/request/assert/end, one target
 stop, one replay finalize, a global aggregate, per-API evidence views,
-per-API verified-excludes ensure, progress update, and atomic publication.
+eligible verified-excludes ensure, progress update, and atomic publication.
 
 Do not repair code inside a full round. If it fails, use focused `run-api` to
-diagnose and fix, then start a new full round from the beginning.
-One successful full round sets `e2e-progress.yaml` to `status: complete`.
+diagnose and fix, then restart the full regression when it remains required.
+Progress reaches `status: complete` only after every API meets both verification
+thresholds configured in `.migration/e2e.yaml`.
 
 ## Completion
 
-- One terminal full round completes when every API and every case passes and
-  canonical evidence is finalized, complete, and clean.
-- A failed, incomplete, or interrupted full round reports
-  `status: needs_attention`.
-- Per-API status is `verified` only when that API passes with complete, clean
-  global replay evidence.
+- Terminal focused and full rounds advance API streaks only from finalized,
+  complete, clean evidence.
+- Human progress uses `status: in_progress` until every API is verified.
+- An API is `verified` only when its trailing successful rounds meet both its
+  effective configured round count and case-execution count.
 - Re-publishing the same terminal sequence is idempotent.
 
 ## Generated State
@@ -182,6 +204,8 @@ One successful full round sets `e2e-progress.yaml` to `status: complete`.
 ```text
 .migration/
 ├── e2e.yaml
+├── replay.yaml
+├── recorder.toml
 ├── e2e-progress.yaml
 └── local/
     ├── current.yaml
@@ -196,11 +220,18 @@ One successful full round sets `e2e-progress.yaml` to `status: complete`.
         └── latest/
 ```
 
+`.migration/replay.yaml` and `.migration/recorder.toml` are source-controlled
+migration inputs.
 `e2e.yaml` is generated by `init`; all files under `local/` and every JSON/YAML
 evidence file inside active, focused, and latest directories are generated by
-the runner. AI MUST NOT hand-edit them. `e2e-progress.yaml` is the concise,
-Git-eligible human report; it omits protocol, connection, policy, session,
-aggregate, root-cause, and repair detail.
+the runner. AI MUST NOT hand-edit generated files. `e2e-progress.yaml` is the
+concise, Git-eligible human report; it omits protocol, connection, policy,
+session, aggregate, root-cause, and repair detail. It reports only executed,
+successful, and trailing-success counts for runs and cases, globally and for
+every API. The case streak is the number of executions covered by trailing
+successful rounds; a non-successful round resets it. Changed source or case
+inventory starts new streaks. Detailed failure categories remain in local
+evidence.
 
 Use `status`, `abort`, or `recover` for an interrupted full round. Never copy
 partial focused evidence into the global `latest`.

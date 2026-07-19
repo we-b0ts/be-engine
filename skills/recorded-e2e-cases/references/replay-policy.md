@@ -5,9 +5,9 @@ response rules.
 
 ## Ownership
 
-Maintain one source-controlled target `config/replay.yaml`. Every replay MUST
-pass it explicitly with `--policy`; do not auto-discover it or duplicate rules
-in shell, application config, target code, or migration state.
+Maintain one source-controlled target `.migration/replay.yaml`. Every replay
+MUST pass it explicitly with `--policy`; do not auto-discover it or duplicate
+rules in shell, application config, target code, or migration state.
 
 Use version one for legacy target-owned response assertions:
 
@@ -158,7 +158,7 @@ intentional and dependency evidence is complete and clean, plan and apply it:
 
 ```bash
 traffic-replay-policy response-rule plan \
-  --policy config/replay.yaml \
+  --policy .migration/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
@@ -166,7 +166,7 @@ traffic-replay-policy response-rule plan \
   --aggregate-report .migration/local/.../aggregate.json
 
 traffic-replay-policy response-rule apply \
-  --policy config/replay.yaml \
+  --policy .migration/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
@@ -197,7 +197,7 @@ behavior, and consumers before planning:
 
 ```bash
 traffic-replay-policy response-rule plan \
-  --policy config/replay.yaml \
+  --policy .migration/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
@@ -205,7 +205,7 @@ traffic-replay-policy response-rule plan \
   --aggregate-report .migration/local/.../aggregate.json
 
 traffic-replay-policy response-rule apply \
-  --policy config/replay.yaml \
+  --policy .migration/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \

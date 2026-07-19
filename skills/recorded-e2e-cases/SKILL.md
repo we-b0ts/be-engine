@@ -58,7 +58,7 @@ fakes, in-process mocks, or recording-backed target implementations.
    `AGENTS.md`. Require the case source as an explicit input. Consult any
    matching known lesson before the first replay or retry. Do not build one
    simultaneous implementation scope for a whole collection.
-3. Create or reuse target `config/replay.yaml`, require
+3. Create or reuse target `.migration/replay.yaml`, require
    `expected_response: assertions_only`, validate it, and pass it explicitly to
    every replay. Audit target code and wiring for forbidden expected-response,
    dependency-file, and fixture data flows before replay and before completion.
@@ -78,8 +78,10 @@ fakes, in-process mocks, or recording-backed target implementations.
    case ids returned by the runner.
 6. During migration, call `traffic-e2e-run run-api --api '<METHOD pattern>'`.
    Fix the focused API and rerun it until its complete group passes. Focused
-   attempts persist evidence but MUST NOT update full-round counts,
-   `e2e-progress.yaml`, verified excludes, or the global `latest`.
+   attempts update cumulative progress and that API's verification streaks.
+   Once its global-default or exact per-API override thresholds are met, the
+   runner synchronizes the verified exclude. Focused attempts MUST NOT replace
+   the global full-round `latest`.
 7. Compare JSON responses structurally; use exact bytes only for non-JSON or an
    explicit exact-byte mode. When a response assertion fails, inspect the
    structured difference and compare source and target behavior before changing
@@ -105,12 +107,14 @@ fakes, in-process mocks, or recording-backed target implementations.
    bootstrap traffic is retained as a non-blocking startup diagnostic because
    traffic observed before readiness is outside the selected E2E contract.
 8. After every published case is grouped and every migrated API passes its
-   focused loop, call `traffic-e2e-run run` for one full round. The runner MUST
+   focused loop, the grouped result is equivalent to a full round unless later
+   behavior-affecting changes may invalidate an earlier group. When required,
+   call `traffic-e2e-run run` for regression evidence. The runner MUST
    start replay once, load bootstrap and the exact full case set once, execute
    cases sequentially, finalize once, aggregate once, then run per-API
-   verified-excludes ensure and publish progress. Do not modify target behavior
-   during a full round. One successful full round with finalized, complete,
-   clean evidence makes generated progress `status: complete`.
+   verification and publish progress. Do not modify target behavior during a
+   full round. Generated progress becomes `status: complete` only when every API
+   satisfies its effective thresholds configured in `.migration/e2e.yaml`.
 9. If a full round fails, diagnose the affected API, return to `run-api`, fix
    it, and restart the full round from the beginning.
 
@@ -152,18 +156,19 @@ items hold:
    session ids with complete, clean coverage. Only one published case in one
    finalized session may use `not_applicable_single_case_single_session`.
 6. When source repo and managed recorder config exist, the persisted
-   case-path-pattern plan is either confirmed no-change or every safe diff is
-   applied through recorder tooling and a final replan has no diff. Missing
+   case-path-pattern plan is either confirmed no-change or every safe add-only
+   diff is applied through recorder tooling and a final replan has no diff.
+   Deletion is never inferred from case-source coverage and is complete only
+   for an explicitly approved correction with source-route evidence. Missing
    prerequisites use only the canonical explicit non-applicable reasons.
-7. When managed verified excludes exist, the full round's API assertion view
-   and clean aggregate view cover the exact group and recorder-owned ensure returns
-   `applied`, `already_present`, or `below_threshold`, with its required apply
-   and verification evidence.
-8. The full-round state is terminal, `.active` was atomically published as
-   `latest`, and the runner-generated `.migration/e2e-progress.yaml` reports
-   `status: complete` from one successful full round with finalized, complete,
-   clean evidence. Focused attempts are never accepted as full-round completion
-   evidence.
+7. When managed verified excludes exist, the API assertion view and clean
+   aggregate view cover the exact group. Once runner-owned streaks satisfy both
+   thresholds, recorder ensure returns `applied` or `already_present`, with its
+   required apply and verification evidence.
+8. Every published case is grouped and the runner-generated
+   `.migration/e2e-progress.yaml` reports `status: complete` only after every
+   API satisfies its effective configured round and case thresholds with finalized,
+   complete, clean terminal focused or full-round evidence.
 9. Target scripts and AI-authored facades remain orchestration helpers. Their
    exit status, summaries, hand-maintained counts, or ledgers do not replace
    canonical grouping, replay, aggregate, pattern, or exclude artifacts.

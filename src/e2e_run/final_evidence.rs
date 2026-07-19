@@ -5,11 +5,13 @@ use anyhow::{Context, Result, ensure};
 
 use super::model::{
     ActiveRunState, ApiExecution, AssertionCase, AssertionReport, CaseStatus,
-    ResolvedProjectConfig, RunLayout,
+    ResolvedProjectConfig, RunIndex, RunLayout,
 };
 use super::store;
 use crate::case_group::CaseGroupInventory;
-use crate::config::{VerifiedApiExcludeFeedback, ensure_verified_api_exclude};
+use crate::config::{
+    VerifiedApiExcludeFeedback, VerifiedApiVerification, ensure_verified_api_exclude,
+};
 use crate::replay::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport,
     aggregate_replay_reports_with_options,
@@ -20,7 +22,6 @@ pub(super) fn build_final_evidence(
     layout: &RunLayout,
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
-    run_verified_ensure: bool,
 ) -> Result<()> {
     let session_id = state
         .session_id
@@ -48,14 +49,7 @@ pub(super) fn build_final_evidence(
         state.cases.iter().map(|case| case.case_id.as_str()),
     );
     store::write_json(&state.assertions_report, &assertion)?;
-    state.apis = build_api_evidence(
-        config,
-        layout,
-        inventory,
-        state,
-        &aggregate,
-        run_verified_ensure,
-    )?;
+    state.apis = build_api_evidence(config, layout, inventory, state, &aggregate)?;
     Ok(())
 }
 
@@ -65,7 +59,6 @@ fn build_api_evidence(
     inventory: &CaseGroupInventory,
     state: &ActiveRunState,
     aggregate: &ReplayAggregateReport,
-    run_verified_ensure: bool,
 ) -> Result<Vec<ApiExecution>> {
     let cases = state
         .cases
@@ -117,19 +110,6 @@ fn build_api_evidence(
             .pattern
             .clone()
             .unwrap_or_else(|| group.source_route.clone());
-        let ensure_status = if run_verified_ensure {
-            ensure_api(
-                config,
-                &group.method,
-                &api_pattern,
-                &aggregate_path,
-                &assertion_path,
-                &report_dir,
-            )?
-        } else {
-            "not_run_focused_iteration".to_string()
-        };
-        let ensure_clean = !ensure_status.starts_with("blocked");
         apis.push(ApiExecution {
             api_key: format!("{} {}", group.method, api_pattern),
             group_id: group.group_id.clone(),
@@ -140,39 +120,57 @@ fn build_api_evidence(
             passed,
             failed,
             incomplete,
-            successful: passed == total
-                && api_aggregate.is_complete()
-                && !api_aggregate.is_dirty()
-                && ensure_clean,
-            ensure_status: Some(ensure_status),
+            successful: passed == total && api_aggregate.is_complete() && !api_aggregate.is_dirty(),
+            ensure_status: None,
             report_dir,
         });
     }
     Ok(apis)
 }
 
-fn ensure_api(
+pub(super) fn sync_verified_excludes(
     config: &ResolvedProjectConfig,
-    method: &str,
-    pattern: &str,
-    aggregate_report: &Path,
-    assertion_report: &Path,
-    report_dir: &Path,
-) -> Result<String> {
+    state: &mut ActiveRunState,
+    index: &RunIndex,
+) -> Result<()> {
     let (Some(recorder_config), Some(rule)) = (
         config.recorder_config.as_ref(),
         config.recording_rule.as_ref(),
     ) else {
-        return Ok("not_applicable_missing_verified_excludes_config".to_string());
+        return Ok(());
     };
-    match ensure_verified_api_exclude(VerifiedApiExcludeFeedback {
-        config_path: recorder_config.clone(),
-        rule_name: rule.clone(),
-        method: method.to_string(),
-        path_pattern: pattern.to_string(),
-        aggregate_report: aggregate_report.to_path_buf(),
-        assertion_report: assertion_report.to_path_buf(),
-    }) {
+    for api in &mut state.apis {
+        let progress = index
+            .apis
+            .get(&api.api_key)
+            .with_context(|| format!("missing progress for API {}", api.api_key))?;
+        if !progress.verified {
+            continue;
+        }
+        let thresholds = config.api_verification.thresholds_for(&api.api_key);
+        api.ensure_status = Some(ensure_api(
+            VerifiedApiExcludeFeedback {
+                config_path: recorder_config.clone(),
+                rule_name: rule.clone(),
+                method: api.method.clone(),
+                path_pattern: api.api_pattern.clone(),
+                aggregate_report: api.report_dir.join("aggregate.json"),
+                assertion_report: api.report_dir.join("assertions.json"),
+                verification: VerifiedApiVerification {
+                    consecutive_successful_runs: progress.consecutive_successful_runs,
+                    consecutive_successful_cases: progress.consecutive_successful_cases,
+                    required_consecutive_successful_runs: thresholds.consecutive_successful_runs,
+                    required_successful_cases: thresholds.successful_cases,
+                },
+            },
+            &api.report_dir,
+        )?);
+    }
+    Ok(())
+}
+
+fn ensure_api(feedback: VerifiedApiExcludeFeedback, report_dir: &Path) -> Result<String> {
+    match ensure_verified_api_exclude(feedback) {
         Ok(report) => {
             store::write_json(&report_dir.join("verified-exclude.json"), &report)?;
             Ok(report.status.to_string())
@@ -182,7 +180,7 @@ fn ensure_api(
                 &report_dir.join("verified-exclude-error.json"),
                 &serde_json::json!({"error": format!("{error:#}")}),
             )?;
-            Ok("blocked_verified_exclude".to_string())
+            Err(error).context("failed to synchronize verified API exclude")
         }
     }
 }

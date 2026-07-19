@@ -576,6 +576,7 @@ mod tests {
             case_id: None,
             fail_on_dirty: false,
             fail_on_incomplete: false,
+            wait_timeout: None,
         })
         .await
         .unwrap();
@@ -957,6 +958,7 @@ mod tests {
             case_id: case_id.map(ToOwned::to_owned),
             fail_on_dirty,
             fail_on_incomplete,
+            wait_timeout: None,
         })
         .await
     }

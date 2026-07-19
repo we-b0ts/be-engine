@@ -280,7 +280,6 @@ mod tests {
     #[test]
     fn verified_api_exclude_uses_rule_scope_and_segment_pattern() {
         let verified_excludes = VerifiedApiExcludesConfig {
-            consecutive_successes: 3,
             apis: vec![crate::config::VerifiedApiExclude {
                 rule: "record-api".to_string(),
                 method: "GET".to_string(),
@@ -334,7 +333,6 @@ mod tests {
     #[test]
     fn verified_api_exclude_supports_trailing_catch_all_pattern() {
         let verified_excludes = VerifiedApiExcludesConfig {
-            consecutive_successes: 3,
             apis: vec![crate::config::VerifiedApiExclude {
                 rule: "record-api".to_string(),
                 method: "GET".to_string(),

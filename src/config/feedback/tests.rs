@@ -35,6 +35,8 @@ fn feedback(path: &Path, authority: CasePathPatternAuthority) -> CasePathPattern
         case_source: "/recordings/focused".to_string(),
         authority,
         patterns: vec!["/api/huaweiyun/loadbalancers/listeners/list/*".to_string()],
+        incorrect_patterns: Vec::new(),
+        correction_evidence: None,
     }
 }
 
@@ -82,7 +84,7 @@ fn focused_feedback_without_candidates_is_a_no_op_plan() {
 }
 
 #[test]
-fn authoritative_removal_requires_explicit_allow_delete() {
+fn authoritative_feedback_is_add_only_and_preserves_omitted_patterns() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("recorder.toml");
     fs::write(&path, CONFIG).unwrap();
@@ -90,21 +92,16 @@ fn authoritative_removal_requires_explicit_allow_delete() {
     let plan =
         plan_case_path_pattern_feedback(feedback(&path, CasePathPatternAuthority::Authoritative))
             .unwrap();
-    assert_eq!(plan.report().removed, vec!["/api/xufei/getone/*"]);
-    let error = plan.apply(false).unwrap_err();
-    assert!(error.to_string().contains("--allow-delete"));
-    assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
+    assert!(plan.report().removed.is_empty());
+    plan.apply(false).unwrap();
 
-    let plan =
-        plan_case_path_pattern_feedback(feedback(&path, CasePathPatternAuthority::Authoritative))
-            .unwrap();
-    plan.apply(true).unwrap();
     let updated = fs::read_to_string(&path).unwrap();
-    assert!(!updated.contains("/api/xufei/getone/*"));
+    assert!(updated.contains("/api/xufei/getone/*"));
+    assert!(updated.contains("/api/huaweiyun/loadbalancers/listeners/list/*"));
 }
 
 #[test]
-fn focused_feedback_rejects_allow_delete() {
+fn allow_delete_without_an_explicit_correction_is_rejected() {
     let directory = tempdir().unwrap();
     let path = directory.path().join("recorder.toml");
     fs::write(&path, CONFIG).unwrap();
@@ -115,8 +112,80 @@ fn focused_feedback_rejects_allow_delete() {
     assert!(
         error
             .to_string()
-            .contains("requires --authority authoritative")
+            .contains("requires at least one explicit --remove-incorrect-pattern")
     );
+    assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
+}
+
+#[test]
+fn explicit_incorrect_pattern_requires_evidence_and_allow_delete() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("recorder.toml");
+    fs::write(&path, CONFIG).unwrap();
+    let mut correction = feedback(&path, CasePathPatternAuthority::Focused);
+    correction.patterns.clear();
+    correction.incorrect_patterns = vec!["/api/xufei/getone/*".to_string()];
+
+    let error = plan_case_path_pattern_feedback(correction.clone()).unwrap_err();
+    assert!(error.to_string().contains("--correction-evidence"));
+
+    correction.correction_evidence =
+        Some("router.go@abc123 has only the static route /api/xufei/getone".to_string());
+    let plan = plan_case_path_pattern_feedback(correction.clone()).unwrap();
+    assert_eq!(plan.report().removed, vec!["/api/xufei/getone/*"]);
+    assert_eq!(
+        plan.report().correction_evidence.as_deref(),
+        correction.correction_evidence.as_deref()
+    );
+    assert_eq!(
+        plan.report().corrections_requested,
+        vec!["/api/xufei/getone/*"]
+    );
+    assert!(plan.report().corrections_already_absent.is_empty());
+    let error = plan.apply(false).unwrap_err();
+    assert!(error.to_string().contains("--allow-delete"));
+    assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
+
+    let plan = plan_case_path_pattern_feedback(correction).unwrap();
+    plan.apply(true).unwrap();
+    assert!(
+        !fs::read_to_string(&path)
+            .unwrap()
+            .contains("/api/xufei/getone/*")
+    );
+
+    let mut verification = feedback(&path, CasePathPatternAuthority::Focused);
+    verification.patterns.clear();
+    verification.incorrect_patterns = vec!["/api/xufei/getone/*".to_string()];
+    verification.correction_evidence =
+        Some("router.go@abc123 has only the static route /api/xufei/getone".to_string());
+    let replan = plan_case_path_pattern_feedback(verification).unwrap();
+    assert!(!replan.report().changed);
+    assert!(replan.report().removed.is_empty());
+    assert_eq!(
+        replan.report().corrections_already_absent,
+        vec!["/api/xufei/getone/*"]
+    );
+}
+
+#[test]
+fn allow_delete_rejects_a_correction_that_is_already_absent() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("recorder.toml");
+    fs::write(&path, CONFIG).unwrap();
+    let mut correction = feedback(&path, CasePathPatternAuthority::Focused);
+    correction.patterns.clear();
+    correction.incorrect_patterns = vec!["/api/not-present/*".to_string()];
+    correction.correction_evidence = Some("source route inspection".to_string());
+
+    let plan = plan_case_path_pattern_feedback(correction).unwrap();
+    assert!(plan.report().removed.is_empty());
+    assert_eq!(
+        plan.report().corrections_already_absent,
+        vec!["/api/not-present/*"]
+    );
+    let error = plan.apply(true).unwrap_err();
+    assert!(error.to_string().contains("--allow-delete requires"));
     assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
 }
 

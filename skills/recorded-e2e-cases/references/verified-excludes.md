@@ -1,25 +1,39 @@
 # Replay-Verified API Excludes
 
-Use this gate only after a full E2E round has finalized and its global aggregate
-and response assertions exist. `traffic-e2e-run run` invokes it once per API
-from the same terminal round. Focused `run-api` attempts MUST NOT invoke it.
+Use this gate only after a terminal API attempt has finalized and its aggregate
+and response assertions exist. `traffic-e2e-run run` and focused `run-api`
+invoke it only for APIs whose runner-owned streaks meet both effective
+thresholds.
 
 ## Ownership
 
-Keep N in target `recorder.toml` because reaching N changes the next recording
-scope:
+Keep the API verification policy in target `.migration/e2e.yaml`:
+
+```yaml
+api_verification:
+  consecutive_successful_runs: 3
+  successful_cases: 3
+  overrides:
+    GET /api/widgets/*:
+      consecutive_successful_runs: 5
+      successful_cases: 200
+```
+
+`successful_cases` counts the case executions covered by the same trailing
+successful API rounds. The top-level values are defaults; a canonical
+`METHOD path_pattern` override replaces both thresholds for that exact API.
+Keep only the verified API list in `.migration/recorder.toml`:
 
 ```toml
 [http_gateway.verified_excludes]
-consecutive_successes = 3
 # BEGIN AI-MANAGED VERIFIED API EXCLUDES
 apis = [
 ]
 # END AI-MANAGED VERIFIED API EXCLUDES
 ```
 
-MUST NOT put this threshold or exclusion list in `replay.yaml`. Replay policy
-owns dynamic dependency matching only.
+MUST NOT put this policy or exclusion list in `.migration/replay.yaml`. Replay
+policy owns dynamic dependency matching only.
 
 ## Required Evidence
 
@@ -43,10 +57,10 @@ clean, and every included replay report MUST contain validated assertion-only
 replay-policy evidence with zero unused applicable rules. The target runner
 MUST NOT use `expected-response.json` outside final assertions.
 
-The recorder command reads each matching request's `timestamp`, orders cases,
-and counts only the trailing consecutive `passed: true` results. A latest
-failure resets the count. It independently verifies every matching case is
-present, so selected-case omission cannot satisfy N.
+The runner owns cumulative successful-round and covered-case streaks. A failed
+API round resets both. The recorder command independently verifies that every
+current matching case is present and passed, so selected-case omission cannot
+satisfy the gate.
 
 ## Gate
 
@@ -55,17 +69,21 @@ exist. The equivalent low-level diagnostic command is:
 
 ```bash
 traffic-recorder-config verified-excludes ensure \
-  --config config/recorder.toml \
+  --config .migration/recorder.toml \
   --rule <recording-rule> \
   --method <METHOD> \
   --pattern '<exact-or-recorder-path-pattern>' \
   --aggregate-report <aggregate.json> \
   --assertion-report <assertions.json> \
+  --consecutive-successful-runs <actual-runs> \
+  --consecutive-successful-cases <actual-cases> \
+  --required-consecutive-successful-runs <required-runs> \
+  --required-successful-cases <required-cases> \
   --format json
 ```
 
-- `below_threshold`: retain the recorder-computed threshold/count; no config
-  write occurs and migration completion is not blocked.
+- `below_threshold`: retain the runner-supplied threshold/count evidence; no
+  config write occurs.
 - `applied`: require the embedded apply report and a verification plan with
   `changed: false`.
 - `already_present`: the initial plan already proves no diff.
@@ -75,9 +93,9 @@ traffic-recorder-config verified-excludes ensure \
   `not_applicable_missing_verified_excludes_config`, never generic skipped.
 
 MUST NOT parse `eligible` and choose whether to call `apply` in AI logic,
-shell, or target-language code. `ensure` owns plan, threshold decision, atomic
-apply, and final convergence verification. Keep `plan` and `apply` only for
-human diagnostics.
+shell, or target-language code. The runner owns counters and calls `ensure`;
+`ensure` validates the supplied gate, owns atomic apply, and verifies final
+convergence. Keep `plan` and `apply` only for human diagnostics.
 
 An applied entry is keyed by recording rule, method, and path pattern. Exact
 paths, whole-segment `*`, and a final `**` catch-all are supported with the same

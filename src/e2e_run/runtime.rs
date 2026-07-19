@@ -1,11 +1,13 @@
 use std::ffi::OsString;
 use std::fs::File;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::process::{Child, Command};
 
 use super::model::{ActiveRunState, ResolvedProjectConfig, RunLayout};
@@ -138,8 +140,99 @@ pub(super) async fn control(
         case_id: case_id.map(ToOwned::to_owned),
         fail_on_dirty,
         fail_on_incomplete,
+        wait_timeout: None,
     })
     .await
+}
+
+pub(super) async fn wait_for_replay_ready(
+    state: &ActiveRunState,
+    timeout: Duration,
+) -> Result<serde_json::Value> {
+    let wait = run_replay_control(ReplayControlConfig {
+        session_path: state.replay_session.clone(),
+        command: "wait_ready".to_string(),
+        case_id: None,
+        fail_on_dirty: false,
+        fail_on_incomplete: false,
+        wait_timeout: Some(timeout),
+    });
+    tokio::pin!(wait);
+    let progress_path = state
+        .replay_report
+        .parent()
+        .context("replay report has no parent directory")?
+        .join("replay.stderr.log");
+    let mut progress_offset = 0;
+    let mut progress_pending = Vec::new();
+    let mut progress_poll = tokio::time::interval(Duration::from_millis(250));
+    loop {
+        tokio::select! {
+            result = &mut wait => {
+                relay_replay_startup_progress(
+                    &progress_path,
+                    &mut progress_offset,
+                    &mut progress_pending,
+                ).await;
+                return result;
+            }
+            _ = progress_poll.tick() => {
+                relay_replay_startup_progress(
+                    &progress_path,
+                    &mut progress_offset,
+                    &mut progress_pending,
+                ).await;
+            }
+        }
+    }
+}
+
+async fn relay_replay_startup_progress(path: &Path, offset: &mut u64, pending: &mut Vec<u8>) {
+    if let Err(error) = try_relay_replay_startup_progress(path, offset, pending).await {
+        tracing::warn!(
+            path = %path.display(),
+            error = %error,
+            "failed to relay replay startup progress"
+        );
+    }
+}
+
+async fn try_relay_replay_startup_progress(
+    path: &Path,
+    offset: &mut u64,
+    pending: &mut Vec<u8>,
+) -> Result<()> {
+    let mut file = match tokio::fs::File::open(path).await {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read replay log {}", path.display()));
+        }
+    };
+    file.seek(SeekFrom::Start(*offset)).await?;
+    let bytes_read = file.read_to_end(pending).await?;
+    *offset = offset.saturating_add(bytes_read as u64);
+
+    let completed_bytes = pending
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    if completed_bytes == 0 {
+        return Ok(());
+    }
+    let completed = pending.drain(..completed_bytes).collect::<Vec<_>>();
+    for line in String::from_utf8_lossy(&completed).lines() {
+        if is_replay_startup_progress(line) {
+            tracing::info!(replay_progress = line, "replay startup progress");
+        }
+    }
+    Ok(())
+}
+
+fn is_replay_startup_progress(line: &str) -> bool {
+    line.contains("loading replay case dependencies")
 }
 
 pub(super) async fn finalize_replay(state: &mut ActiveRunState) -> Result<()> {
@@ -244,13 +337,58 @@ mod tests {
     use super::*;
 
     #[test]
+    fn replay_startup_progress_filter_only_accepts_dependency_loading() {
+        assert!(is_replay_startup_progress(
+            "loading replay case dependencies loaded_cases=0 total_cases=418"
+        ));
+        assert!(!is_replay_startup_progress(
+            "local replay owner filter enabled"
+        ));
+    }
+
+    #[tokio::test]
+    async fn replay_startup_progress_relay_preserves_partial_lines() {
+        use std::io::Write;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("replay.stderr.log");
+        std::fs::write(
+            &path,
+            b"loading replay case dependencies loaded_cases=0 total_cases=418\npartial",
+        )
+        .unwrap();
+        let mut offset = 0;
+        let mut pending = Vec::new();
+
+        try_relay_replay_startup_progress(&path, &mut offset, &mut pending)
+            .await
+            .unwrap();
+
+        assert_eq!(pending, b"partial");
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(b" line\n").unwrap();
+
+        try_relay_replay_startup_progress(&path, &mut offset, &mut pending)
+            .await
+            .unwrap();
+
+        assert!(pending.is_empty());
+        assert_eq!(offset, std::fs::metadata(path).unwrap().len());
+    }
+
+    #[test]
     fn standard_runner_passes_recorder_config_and_rule_to_replay() {
         let config = ResolvedProjectConfig {
             project_cli: PathBuf::from("/target/scripts/project"),
             replay_policy: PathBuf::from("/target/config/replay.yaml"),
+            replay_startup_timeout: Duration::from_secs(60),
             pr_base: "integration".to_string(),
             recorder_config: Some(PathBuf::from("/target/config/recorder.toml")),
             recording_rule: Some("pluto".to_string()),
+            api_verification: super::super::model::ApiVerificationConfig::default(),
             runner_owned_response_assertions: false,
         };
 

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -9,6 +10,57 @@ use crate::replay::ResponseAssertionCaseReport;
 
 pub(super) const STATE_VERSION: u32 = 1;
 pub(super) const ASSERTION_REPORT_VERSION: u32 = 1;
+pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
+pub(super) const DEFAULT_CONSECUTIVE_SUCCESSFUL_RUNS: u64 = 3;
+pub(super) const DEFAULT_SUCCESSFUL_CASES: u64 = 3;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ApiVerificationThresholds {
+    pub consecutive_successful_runs: u64,
+    pub successful_cases: u64,
+}
+
+impl Default for ApiVerificationThresholds {
+    fn default() -> Self {
+        Self {
+            consecutive_successful_runs: DEFAULT_CONSECUTIVE_SUCCESSFUL_RUNS,
+            successful_cases: DEFAULT_SUCCESSFUL_CASES,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct ApiVerificationConfig {
+    pub consecutive_successful_runs: u64,
+    pub successful_cases: u64,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub overrides: BTreeMap<String, ApiVerificationThresholds>,
+}
+
+impl ApiVerificationConfig {
+    pub(super) fn thresholds_for(&self, api_key: &str) -> ApiVerificationThresholds {
+        self.overrides
+            .get(api_key)
+            .copied()
+            .unwrap_or(ApiVerificationThresholds {
+                consecutive_successful_runs: self.consecutive_successful_runs,
+                successful_cases: self.successful_cases,
+            })
+    }
+}
+
+impl Default for ApiVerificationConfig {
+    fn default() -> Self {
+        let thresholds = ApiVerificationThresholds::default();
+        Self {
+            consecutive_successful_runs: thresholds.consecutive_successful_runs,
+            successful_cases: thresholds.successful_cases,
+            overrides: BTreeMap::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +68,10 @@ pub(super) struct ProjectConfig {
     pub version: u32,
     pub project_cli: PathBuf,
     pub replay_policy: PathBuf,
+    #[serde(default = "default_replay_startup_timeout_seconds")]
+    pub replay_startup_timeout_seconds: u64,
+    #[serde(default)]
+    pub api_verification: ApiVerificationConfig,
     pub pr_base: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recorder_config: Option<PathBuf>,
@@ -35,13 +91,19 @@ fn default_local_root() -> PathBuf {
     PathBuf::from("local")
 }
 
+fn default_replay_startup_timeout_seconds() -> u64 {
+    DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ResolvedProjectConfig {
     pub project_cli: PathBuf,
     pub replay_policy: PathBuf,
+    pub replay_startup_timeout: Duration,
     pub pr_base: String,
     pub recorder_config: Option<PathBuf>,
     pub recording_rule: Option<String>,
+    pub api_verification: ApiVerificationConfig,
     pub runner_owned_response_assertions: bool,
 }
 
@@ -205,7 +267,22 @@ impl ActiveRunState {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(super) struct ApiProgress {
     pub cases: u32,
+    #[serde(default, skip_serializing)]
     pub status: String,
+    #[serde(default)]
+    pub executions: u64,
+    #[serde(default)]
+    pub successful: u64,
+    #[serde(default)]
+    pub consecutive_successful_runs: u64,
+    #[serde(default)]
+    pub executed_cases: u64,
+    #[serde(default)]
+    pub successful_cases: u64,
+    #[serde(default)]
+    pub consecutive_successful_cases: u64,
+    #[serde(default)]
+    pub verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +294,8 @@ pub(super) struct RunIndex {
     pub source_revision: String,
     #[serde(default)]
     pub case_inventory_id: String,
+    #[serde(default)]
+    pub inventory_complete: bool,
     pub executions: u64,
     pub successful: u64,
     pub failed: u64,
@@ -226,7 +305,13 @@ pub(super) struct RunIndex {
     pub failed_cases: u64,
     pub incomplete_cases: u64,
     #[serde(default)]
+    pub consecutive_successful_runs: u64,
+    #[serde(default)]
+    pub consecutive_successful_cases: u64,
+    #[serde(default)]
     pub apis: BTreeMap<String, ApiProgress>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub latest_focused_sequences: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_sequence: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -241,6 +326,7 @@ impl RunIndex {
             case_source,
             source_revision: String::new(),
             case_inventory_id: String::new(),
+            inventory_complete: false,
             executions: 0,
             successful: 0,
             failed: 0,
@@ -249,9 +335,47 @@ impl RunIndex {
             passed_cases: 0,
             failed_cases: 0,
             incomplete_cases: 0,
+            consecutive_successful_runs: 0,
+            consecutive_successful_cases: 0,
             apis: BTreeMap::new(),
+            latest_focused_sequences: BTreeMap::new(),
             latest_sequence: None,
             latest_status: None,
+        }
+    }
+
+    pub(super) fn normalize_legacy_progress(&mut self) {
+        if !self.inventory_complete && self.latest_sequence.is_some() {
+            self.inventory_complete = true;
+        }
+        let latest_successful = self.latest_status == Some(RunStatus::Successful);
+        let legacy_current_cases = self
+            .apis
+            .values()
+            .filter(|api| api.executions == 0)
+            .map(|api| u64::from(api.cases))
+            .sum::<u64>();
+        if latest_successful && self.consecutive_successful_runs == 0 {
+            self.consecutive_successful_runs = 1;
+            if self.consecutive_successful_cases == 0 {
+                self.consecutive_successful_cases = legacy_current_cases;
+            }
+        }
+        for api in self.apis.values_mut() {
+            if api.executions > 0 || api.status.is_empty() {
+                continue;
+            }
+            api.executions = self.executions;
+            if api.status == "verified" {
+                api.successful = self.successful;
+                api.successful_cases = u64::from(api.cases).saturating_mul(api.successful);
+                if latest_successful {
+                    api.consecutive_successful_runs = 1;
+                    api.consecutive_successful_cases = u64::from(api.cases);
+                }
+            }
+            api.executed_cases = u64::from(api.cases).saturating_mul(api.executions);
+            api.status.clear();
         }
     }
 }

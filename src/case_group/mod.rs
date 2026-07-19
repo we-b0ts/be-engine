@@ -450,6 +450,8 @@ fn apply_pattern_feedback(
         case_source: case_source.display().to_string(),
         authority: CasePathPatternAuthority::Focused,
         patterns: vec![pattern.to_string()],
+        incorrect_patterns: Vec::new(),
+        correction_evidence: None,
     })?;
     let changed = plan.report().changed;
     let report = plan.apply(false)?;

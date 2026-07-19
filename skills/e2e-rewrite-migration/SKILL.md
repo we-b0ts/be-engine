@@ -89,16 +89,20 @@ before implementation. Source tests may supplement but never replace recordings.
    replay.
 6. Use `traffic-e2e-run run-api` for the selected API's migrate/fix loop. Fix
    product code only after replay evidence proves a real behavior defect.
-   Focused attempts do not update global progress or verified excludes. After a
-   fixed and verified problem meets the cross-scope reuse
-   rule, upsert the concise repository migration lesson required by
-   `repository-memory.md`.
+   Terminal focused attempts update cumulative progress and that API's
+   verification streaks; reaching its global-default or exact per-API override
+   thresholds synchronizes its recorder exclude. After a fixed and verified
+   problem meets the cross-scope reuse rule, upsert the concise repository
+   migration lesson required by `repository-memory.md`.
 7. After the group first passes, perform structural convergence and migration
-   semantics review, then rerun its focused group. After every published case is
-   prepared and migrated, use `traffic-e2e-run run` for one full regression
-   round. One successful round with finalized, complete, clean evidence
-   completes progress. A failed full round returns to focused repair and must
-   then restart from the beginning.
+   semantics review, then rerun its focused group. Do not start a full round
+   while any focused group still fails. After every published case is prepared
+   and migrated, their successful grouped evidence is equivalent to a full
+   round if no later behavior-affecting change can invalidate an earlier group.
+   Otherwise use `traffic-e2e-run run` for regression evidence. API
+   verification requires both effective trailing-success thresholds configured
+   in `.migration/e2e.yaml`; a non-successful full round returns to focused
+   repair.
    Run normal-startup smoke and target-required quality checks from the final
    tree.
 8. Maintain the concise repository migration notes and changelog defined by
@@ -147,11 +151,11 @@ MUST NOT claim a migration complete or delivered unless all items hold:
    applicable, meaningful local tests, architecture review, structural
    convergence, and semantics review are complete. Any explicit blocker keeps
    the migration incomplete.
-6. The full `recorded-e2e-cases` completion gate is satisfied by one terminal
-   full round with finalized, complete, clean evidence and
-   `e2e-progress.yaml` at `status: complete`. Focused API passes, a target
-   facade, or a hand-maintained ledger cannot substitute for canonical
-   final-state artifacts.
+6. The full `recorded-e2e-cases` completion gate is satisfied only after every
+   API meets both effective configured trailing-success thresholds with finalized,
+   complete, clean terminal evidence and `e2e-progress.yaml` at
+   `status: complete`. A target facade or hand-maintained ledger cannot
+   substitute for canonical final-state artifacts.
 7. The standard project facade exposes working `start`, `stop`, `status`,
    `test`, `e2e --case-dir`, and `check` commands for the runnable target.
    Normal-startup smoke and all target-required quality checks pass against the

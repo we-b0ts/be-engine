@@ -1,11 +1,11 @@
 # Replay And Assertion Policy
 
-Each target repository owns one source-controlled `config/replay.yaml`. Pass it
-explicitly to every recorded replay:
+Each target repository owns one source-controlled `.migration/replay.yaml`.
+Pass it explicitly to every recorded replay:
 
 ```bash
-traffic-replay --policy config/replay.yaml /path/to/case-group
-traffic-replay-policy validate --policy config/replay.yaml
+traffic-replay --policy .migration/replay.yaml /path/to/case-group
+traffic-replay-policy validate --policy .migration/replay.yaml
 ```
 
 This policy is independent of recorder `case_path_patterns`:
@@ -173,7 +173,7 @@ Use evidence-backed plan/apply after diagnosing the source and target:
 
 ```bash
 traffic-replay-policy response-rule plan \
-  --policy config/replay.yaml \
+  --policy .migration/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
@@ -181,7 +181,7 @@ traffic-replay-policy response-rule plan \
   --aggregate-report .migration/local/.../aggregate.json
 
 traffic-replay-policy response-rule apply \
-  --policy config/replay.yaml \
+  --policy .migration/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
@@ -210,7 +210,7 @@ the same evidence-backed workflow:
 
 ```bash
 traffic-replay-policy response-rule plan \
-  --policy config/replay.yaml \
+  --policy .migration/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
@@ -218,7 +218,7 @@ traffic-replay-policy response-rule plan \
   --aggregate-report .migration/local/.../aggregate.json
 
 traffic-replay-policy response-rule apply \
-  --policy config/replay.yaml \
+  --policy .migration/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \

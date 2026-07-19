@@ -11,7 +11,6 @@ const CONFIG: &str = r#"[http_gateway]
 enabled = true
 
 [http_gateway.verified_excludes]
-consecutive_successes = 3
 # BEGIN AI-MANAGED VERIFIED API EXCLUDES
 apis = [
 ]
@@ -34,7 +33,8 @@ fn plans_and_applies_exclude_after_threshold_successes() {
 
     assert!(plan.report().eligible);
     assert!(plan.report().changed);
-    assert_eq!(plan.report().consecutive_success_case_ids.len(), 3);
+    assert_eq!(plan.report().verification.consecutive_successful_runs, 3);
+    assert_eq!(plan.report().verification.consecutive_successful_cases, 3);
     assert_eq!(plan.report().added.len(), 1);
 
     let report = plan.apply().unwrap();
@@ -83,10 +83,9 @@ fn failed_latest_assertion_resets_consecutive_success_count() {
     let plan = plan_verified_api_exclude(fixture.feedback()).unwrap();
 
     assert!(!plan.report().eligible);
-    assert!(plan.report().consecutive_success_case_ids.is_empty());
     assert_eq!(
         plan.report().blockers,
-        vec!["consecutive_successes_below_threshold"]
+        vec!["current_assertions_not_successful"]
     );
     assert!(
         plan.apply()
@@ -168,13 +167,29 @@ fn ensure_applies_eligible_exclude_and_verifies_convergence() {
 fn ensure_records_below_threshold_without_changing_config() {
     let fixture = fixture(&[true, true], true, false);
 
-    let report = ensure_verified_api_exclude(fixture.feedback()).unwrap();
+    let report = ensure_verified_api_exclude(fixture.feedback_with_verification(
+        "/api/users/*",
+        VerifiedApiVerification {
+            consecutive_successful_runs: 1,
+            consecutive_successful_cases: 2,
+            required_consecutive_successful_runs: 3,
+            required_successful_cases: 3,
+        },
+    ))
+    .unwrap();
 
     assert_eq!(
         report.status,
         VerifiedApiExcludeEnsureStatus::BelowThreshold
     );
-    assert_eq!(report.plan.consecutive_success_case_ids.len(), 2);
+    assert_eq!(report.plan.verification.consecutive_successful_cases, 2);
+    assert_eq!(
+        report.plan.blockers,
+        vec![
+            "consecutive_successful_runs_below_threshold",
+            "successful_cases_below_threshold"
+        ]
+    );
     assert!(report.apply.is_none());
     assert_eq!(fs::read_to_string(&fixture.config_path).unwrap(), CONFIG);
 }
@@ -223,6 +238,22 @@ impl Fixture {
     }
 
     fn feedback_for(&self, path_pattern: &str) -> VerifiedApiExcludeFeedback {
+        self.feedback_with_verification(
+            path_pattern,
+            VerifiedApiVerification {
+                consecutive_successful_runs: 3,
+                consecutive_successful_cases: 3,
+                required_consecutive_successful_runs: 3,
+                required_successful_cases: 3,
+            },
+        )
+    }
+
+    fn feedback_with_verification(
+        &self,
+        path_pattern: &str,
+        verification: VerifiedApiVerification,
+    ) -> VerifiedApiExcludeFeedback {
         VerifiedApiExcludeFeedback {
             config_path: self.config_path.clone(),
             rule_name: "record-api".to_string(),
@@ -230,6 +261,7 @@ impl Fixture {
             path_pattern: path_pattern.to_string(),
             aggregate_report: self.aggregate_path.clone(),
             assertion_report: self.assertion_path.clone(),
+            verification,
         }
     }
 }

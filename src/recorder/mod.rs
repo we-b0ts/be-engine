@@ -96,6 +96,8 @@ impl Recorder {
         filename: &str,
         value: &T,
     ) -> Result<()> {
+        let _guard = self.dependency_write_lock.lock().await;
+        self.ensure_run_accepts_case_writes().await?;
         let path = self.case_staging_dir(case).join(filename);
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.with_context(|| {

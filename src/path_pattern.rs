@@ -1,3 +1,39 @@
+use anyhow::{Result, ensure};
+
+pub(crate) fn validate_path_pattern(pattern: &str) -> Result<()> {
+    ensure!(
+        pattern.starts_with('/'),
+        "API path pattern must start with '/': {pattern}"
+    );
+    ensure!(
+        !pattern.contains(['?', '#', '\r', '\n']),
+        "API path pattern must contain only a URI path: {pattern}"
+    );
+    let segments = segments(pattern);
+    ensure!(
+        !segments.is_empty(),
+        "API path pattern must not match the root path"
+    );
+    ensure!(
+        format!("/{}", segments.join("/")) == pattern,
+        "API path pattern must use canonical separators with no trailing slash: {pattern}"
+    );
+    ensure!(
+        segments
+            .iter()
+            .all(|segment| !segment.contains('*') || *segment == "*" || *segment == "**"),
+        "API path pattern wildcards must occupy a whole path segment: {pattern}"
+    );
+    ensure!(
+        segments
+            .iter()
+            .enumerate()
+            .all(|(index, segment)| *segment != "**" || index == segments.len() - 1),
+        "API path pattern '**' catch-all must be the final path segment: {pattern}"
+    );
+    Ok(())
+}
+
 pub(crate) fn matches_path_pattern(pattern: &str, path: &str) -> bool {
     if !canonical_path(pattern) || !canonical_path(path) {
         return false;

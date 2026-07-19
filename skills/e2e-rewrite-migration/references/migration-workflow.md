@@ -73,8 +73,10 @@ local tests needed by the selected scope. Provide the standard
 
 Run the complete selected API through `traffic-e2e-run run-api`. Fix product
 code only after grouping, replay lifecycle, dependency routing, and evidence
-are complete enough to prove a behavior defect. Focused attempts do not change
-full-round progress or verified excludes.
+are complete enough to prove a behavior defect. Terminal focused attempts
+update cumulative progress and the selected API's streaks; reaching its
+global-default or exact per-API override thresholds synchronizes its recorder
+exclude.
 
 Continue while each cycle provides new evidence or fixes a distinct evidenced
 defect. If the same root cause repeats for three consecutive cycles without new
@@ -87,15 +89,16 @@ or structural change; final verification is not a retry.
 ## 6. Full Regression Round
 
 After every published case is prepared exactly once and every migrated API has
-a current focused pass, call `traffic-e2e-run run`. Do not edit target behavior
-during the command. The runner executes the full case set, finalizes and
-aggregates, runs per-API verified-excludes ensure, updates
-`e2e-progress.yaml`, and atomically publishes global `latest`. One successful
-round with finalized, complete, clean evidence reaches `status: complete`.
+a current focused pass, those grouped results are equivalent to a full round
+when no later behavior-affecting change may invalidate an earlier group. If
+such a change exists, call `traffic-e2e-run run` without editing target
+behavior during the command. The runner executes the full case set, finalizes
+and aggregates, runs eligible verified-excludes ensure, updates
+`e2e-progress.yaml`, and atomically publishes global `latest`.
 
 If the full round fails, return to focused `run-api` for the affected API. After
-the fix, restart the full round from the beginning; the failed round is not
-completion evidence.
+the fix, rerun the affected groups or restart the full round when the regression
+gate still applies.
 
 ## 7. Converge And Verify
 
