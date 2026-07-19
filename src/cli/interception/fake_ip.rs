@@ -5,6 +5,7 @@ use anyhow::Result;
 use super::{
     FIXED_USER, FakeIpConfig, checked_output, checked_status, fixed_user_uid, status_success,
 };
+use crate::cli::output::stdout_line;
 
 pub(super) fn up(config: &FakeIpConfig) -> Result<()> {
     let result = try_up(config);
@@ -29,11 +30,11 @@ fn try_up(config: &FakeIpConfig) -> Result<()> {
     if config.udp {
         add_rule("udp", config.udp_port, &config.fake_cidr, uid)?;
     }
-    println!(
+    stdout_line(format_args!(
         "fake IP redirect enabled: {} tcp={}:{} udp={}:{}",
         config.fake_cidr, config.tcp, config.tcp_port, config.udp, config.udp_port
-    );
-    println!("owner scope: {FIXED_USER} (uid {uid})");
+    ))?;
+    stdout_line(format_args!("owner scope: {FIXED_USER} (uid {uid})"))?;
     Ok(())
 }
 
@@ -49,22 +50,25 @@ pub(super) fn down(config: &FakeIpConfig) -> Result<()> {
             ["route", "del", "local", &config.fake_cidr, "dev", "lo"],
         )?;
     }
-    println!("fake IP redirect disabled: {}", config.fake_cidr);
+    stdout_line(format_args!(
+        "fake IP redirect disabled: {}",
+        config.fake_cidr
+    ))?;
     Ok(())
 }
 
 pub(super) fn status(config: &FakeIpConfig) -> Result<()> {
     let uid = fixed_user_uid()?;
-    println!("Fake IP CIDR: {}", config.fake_cidr);
-    println!("Owner scope: {FIXED_USER} (uid {uid})");
-    println!(
+    stdout_line(format_args!("Fake IP CIDR: {}", config.fake_cidr))?;
+    stdout_line(format_args!("Owner scope: {FIXED_USER} (uid {uid})"))?;
+    stdout_line(format_args!(
         "Local route installed: {}",
         route_exists(&config.fake_cidr)?
-    );
+    ))?;
     let output = checked_output("iptables", ["-t", "nat", "-S", "OUTPUT"])?;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         if line.contains(&config.fake_cidr) && line.contains("-j REDIRECT") {
-            println!("{line}");
+            stdout_line(format_args!("{line}"))?;
         }
     }
     Ok(())
