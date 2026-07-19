@@ -13,7 +13,7 @@ recordings.
    HTTP method and URI path without the query component against source route
    registrations. Route discovery is allowed here; do not inspect business
    implementation details or modify product code yet.
-3. When the source route is exact and static, run `traffic-e2e-run prepare`
+3. When the source route is exact and static, run `traffic-e2e prepare`
    without `--pattern`. Its canonical grouping operation MUST inspect every
    published case in the directory, require every method and path to resolve to
    that same source route, return the current directory as `group_dir`, and
@@ -21,7 +21,7 @@ recordings.
    is `blocked_grouping`.
 4. When the source route is dynamic, derive the candidate recorder pattern by
    following [route-pattern-feedback.md](route-pattern-feedback.md), then run
-   `traffic-e2e-run prepare` with the original case source, current directory,
+   `traffic-e2e prepare` with the original case source, current directory,
    method, confirmed source route, pattern, and source revision. The runner
    supplies managed recorder config and the persisted index path. Use only the
    returned group directory or manifest and exact case ids.
@@ -44,7 +44,7 @@ Use one runner-owned persisted index for the whole original case source and
 source revision. For a standard migration, run the static form:
 
 ```bash
-traffic-e2e-run prepare \
+traffic-e2e prepare \
   --target-root <target-repository> \
   --case-source <original-case-source> \
   --case-dir <current-canonical-directory> \
@@ -56,7 +56,7 @@ traffic-e2e-run prepare \
 For a dynamic source route, add the confirmed pattern:
 
 ```bash
-traffic-e2e-run prepare \
+traffic-e2e prepare \
   --target-root <target-repository> \
   --case-source <original-case-source> \
   --case-dir <current-canonical-directory> \
@@ -93,13 +93,14 @@ overlapping groups, missing cases, duplicate case ids, stale group inventory,
 or a changed source revision as `blocked_grouping`. Do not replace the command
 with an AI-authored target script or a hand-maintained case list.
 
-`traffic-e2e-run prepare` delegates to `traffic-case-group ensure`; direct
-low-level invocation is for diagnostics, not the normal AI workflow. Dynamic
-groups are manifest-backed: `group_dir` may be absent, in which case
-the returned manifest and exact case ids are the only valid replay selection.
-Do not invent a directory path. `traffic-case-group` may orchestrate the managed
-pattern plan and safe apply, but its result does not replace the final
-`traffic-recorder-config case-path-patterns plan/apply/replan` evidence gate.
+`traffic-e2e prepare` delegates to
+`traffic-e2e diagnose case-group ensure`; direct low-level invocation is for
+diagnostics, not the normal AI workflow. Dynamic groups are manifest-backed:
+`group_dir` may be absent, in which case the returned manifest and exact case
+ids are the only valid replay selection. Do not invent a directory path.
+`traffic-e2e diagnose case-group` may orchestrate the managed pattern plan and
+safe apply, but its result does not replace the final recorder-config
+plan/apply/replan evidence gate.
 
 ## Immutability
 

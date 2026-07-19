@@ -28,7 +28,8 @@ response_rules:
   unordered: {}
 ```
 
-Validate it with `traffic-replay-policy validate` before replay. Retain its
+Validate it with `traffic-e2e diagnose replay-policy validate` before replay.
+Retain its
 canonical path, fingerprint, applicable rules, usage, and unused applicable
 rules from the final report.
 
@@ -157,7 +158,7 @@ the assertion. Inspect source and target behavior first. If the difference is
 intentional and dependency evidence is complete and clean, plan and apply it:
 
 ```bash
-traffic-replay-policy response-rule plan \
+traffic-e2e diagnose replay-policy response-rule plan \
   --policy .traffic-e2e/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
@@ -165,7 +166,7 @@ traffic-replay-policy response-rule plan \
   --assertion-report .traffic-e2e/local/.../assertions.json \
   --aggregate-report .traffic-e2e/local/.../aggregate.json
 
-traffic-replay-policy response-rule apply \
+traffic-e2e diagnose replay-policy response-rule apply \
   --policy .traffic-e2e/replay.yaml \
   --kind dynamic \
   --api 'GET /api/resource/token' \
@@ -196,7 +197,7 @@ It does not prove that order is irrelevant. Inspect source behavior, target
 behavior, and consumers before planning:
 
 ```bash
-traffic-replay-policy response-rule plan \
+traffic-e2e diagnose replay-policy response-rule plan \
   --policy .traffic-e2e/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
@@ -204,7 +205,7 @@ traffic-replay-policy response-rule plan \
   --assertion-report .traffic-e2e/local/.../assertions.json \
   --aggregate-report .traffic-e2e/local/.../aggregate.json
 
-traffic-replay-policy response-rule apply \
+traffic-e2e diagnose replay-policy response-rule apply \
   --policy .traffic-e2e/replay.yaml \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \

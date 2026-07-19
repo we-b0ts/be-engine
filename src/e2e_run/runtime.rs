@@ -42,12 +42,17 @@ pub(super) fn spawn_replay(
     inventory: &CaseGroupInventory,
     state: &ActiveRunState,
 ) -> Result<Child> {
-    let replay_command = std::env::var_os("TRAFFIC_E2E_TRAFFIC_REPLAY")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("traffic-replay"));
+    let replay_override = std::env::var_os("TRAFFIC_E2E_TRAFFIC_REPLAY").map(PathBuf::from);
+    let replay_command = match replay_override.as_ref() {
+        Some(command) => command.clone(),
+        None => std::env::current_exe().context("failed to resolve traffic-e2e binary")?,
+    };
     let stdout = File::create(layout.active_dir.join("reports/replay.stdout.log"))?;
     let stderr = File::create(layout.active_dir.join("reports/replay.stderr.log"))?;
     let mut command = Command::new(&replay_command);
+    if replay_override.is_none() {
+        command.arg("replay");
+    }
     command
         .current_dir(&layout.target_root)
         .arg("--report")

@@ -15,7 +15,7 @@ Resolve the PR base in this order:
 
 If these sources disagree or no intended base can be established, stop and ask.
 Never assume a universal PR base for a generic target.
-`traffic-e2e-run init` must validate and persist the resolved branch before
+`traffic-e2e init` must validate and persist the resolved branch before
 prepare or replay; every later runner command revalidates it.
 
 `pr_base` is only the pull-request target. Never commit, merge, rebase, or

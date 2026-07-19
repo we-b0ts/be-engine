@@ -24,7 +24,7 @@ recorder proxy -> dependency mock 127.0.0.1:18086
 Start the dependency mock:
 
 ```bash
-cd /home/ubuntu/workspace/traffic-recorder-proxy
+cd /home/ubuntu/workspace/traffic-e2e
 rm -f /tmp/readonly-dependency-events.jsonl
 python3 tests/manual/readonly/readonly_mock.py \
   --role dependency \
@@ -35,7 +35,7 @@ python3 tests/manual/readonly/readonly_mock.py \
 Start the application mock in a second terminal:
 
 ```bash
-cd /home/ubuntu/workspace/traffic-recorder-proxy
+cd /home/ubuntu/workspace/traffic-e2e
 rm -f /tmp/readonly-app-events.jsonl
 python3 tests/manual/readonly/readonly_mock.py \
   --role app \
@@ -48,7 +48,7 @@ python3 tests/manual/readonly/readonly_mock.py \
 Start the recorder in a third terminal:
 
 ```bash
-cd /home/ubuntu/workspace/traffic-recorder-proxy
+cd /home/ubuntu/workspace/traffic-e2e
 cargo run -- --config config/recorder.readonly.toml
 ```
 

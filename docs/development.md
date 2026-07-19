@@ -18,37 +18,43 @@ cargo build
 The repository includes `.cargo/config.toml` for the configured crates.io
 mirror. Do not replace that registry configuration unless explicitly asked.
 
+## CLI Boundaries
+
+Use `traffic-e2e init|prepare|run-api|run|status|recover|abort` for the standard
+workflow. Use `traffic-e2e diagnose ...` only for recorder development or
+focused low-level diagnosis. Managed record, replay, target isolation, and host
+interception are implemented in the Rust binary. Repository scripts are
+development checks or explicit host trust-store tools only.
+
 ## Running Locally
 
 Run the service with:
 
 ```bash
-cargo run -- --config config/recorder.example.toml
+cargo run -- diagnose recorder --config config/recorder.example.toml
 ```
 
-For watch-mode recording, install the repo-level command and run
-`traffic-record`:
+Install the binary and run managed recording:
 
 ```bash
-mkdir -p "$HOME/.local/bin"
-ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
-traffic-record --config config/recorder.example.toml
+cargo install --path .
+traffic-e2e record --config config/recorder.example.toml
 ```
 
-`traffic-record` enables local DNS capture and fake-IP TCP/UDP redirect by default,
-which modifies local DNS/iptables state through the setup scripts. Use this
-when you intentionally want the recorder to intercept local traffic. To skip
-those rules:
+`traffic-e2e record` enables local DNS capture and fake-IP TCP/UDP redirect by
+default, which modifies local DNS/iptables state. Use this when you
+intentionally want the recorder to intercept local traffic. To skip those
+rules:
 
 ```bash
-traffic-record --config config/recorder.example.toml --no-dns
+traffic-e2e record --config config/recorder.example.toml --no-dns
 ```
 
-`traffic-record` always limits DNS and fake-IP interception to the dedicated
-Unix user `trp-record`. Run the source service as that user so bootstrap and
-case dependencies are not polluted by unrelated local processes. The owner
-scope cannot be overridden by CLI options, environment variables, or recorder
-configuration.
+`traffic-e2e record` always limits DNS and fake-IP interception to the
+dedicated Unix user `trp-record`. Run the source service as that user so
+bootstrap and case dependencies are not polluted by unrelated local processes.
+The owner scope cannot be overridden by CLI options, environment variables, or
+recorder configuration.
 
 HTTP gateway recording is intentionally conservative. Until the configured
 ready probe succeeds, matching traffic is sent to `fallback_upstream` and no
@@ -144,20 +150,11 @@ involved.
 For replay-mode development:
 
 ```bash
-cargo build
-mkdir -p "$HOME/.local/bin"
-ln -sf "$PWD/target/debug/traffic-recorder-proxy" "$HOME/.local/bin/traffic-recorder-proxy"
-ln -sf "$PWD/scripts/traffic-record" "$HOME/.local/bin/traffic-record"
-ln -sf "$PWD/scripts/traffic-replay" "$HOME/.local/bin/traffic-replay"
-ln -sf "$PWD/scripts/traffic-replay-target" "$HOME/.local/bin/traffic-replay-target"
-ln -sf "$PWD/scripts/traffic-replay-policy" "$HOME/.local/bin/traffic-replay-policy"
-ln -sf "$PWD/scripts/traffic-replay-cli" "$HOME/.local/bin/traffic-replay-cli"
-ln -sf "$PWD/scripts/traffic-replay-aggregate" "$HOME/.local/bin/traffic-replay-aggregate"
-ln -sf "$PWD/scripts/traffic-recorder-config" "$HOME/.local/bin/traffic-recorder-config"
-ln -sf "$PWD/scripts/traffic-case-group" "$HOME/.local/bin/traffic-case-group"
-ln -sf "$PWD/scripts/traffic-e2e-run" "$HOME/.local/bin/traffic-e2e-run"
-traffic-replay path/to/case-dir
-traffic-replay --no-intercept path/to/case-dir
+cargo install --path .
+traffic-e2e --help
+traffic-e2e diagnose --help
+traffic-e2e replay path/to/case-dir
+traffic-e2e replay --no-intercept path/to/case-dir
 ```
 
 Target-specific dynamic UUID, timestamp, and signed-query matching belongs in
@@ -165,8 +162,8 @@ a source-controlled `.traffic-e2e/replay.yaml`, not product code or recorded fix
 overrides. Validate and load it explicitly:
 
 ```bash
-traffic-replay-policy validate --policy ../target/.traffic-e2e/replay.yaml
-traffic-replay --policy ../target/.traffic-e2e/replay.yaml path/to/case-dir
+traffic-e2e diagnose replay-policy validate --policy ../target/.traffic-e2e/replay.yaml
+traffic-e2e replay --policy ../target/.traffic-e2e/replay.yaml path/to/case-dir
 ```
 
 See [replay-policy.md](replay-policy.md) for the policy schemas,
@@ -181,14 +178,16 @@ inspection proves that all traffic to that host belongs to a task that is
 unrelated to API handlers:
 
 ```bash
-traffic-recorder-config allowed-unused-http-hosts plan \
+traffic-e2e diagnose recorder-config \
   --config ../target/.traffic-e2e/recorder.toml \
+  allowed-unused-http-hosts plan \
   --rule record-api \
   --host cs.aliyuncs.com \
   --format json
 
-traffic-recorder-config allowed-unused-http-hosts apply \
+traffic-e2e diagnose recorder-config \
   --config ../target/.traffic-e2e/recorder.toml \
+  allowed-unused-http-hosts apply \
   --rule record-api \
   --host cs.aliyuncs.com \
   --format json
@@ -204,7 +203,7 @@ capture the process-level task.
 Pass the config and rule together for direct replay:
 
 ```bash
-traffic-replay \
+traffic-e2e replay \
   --policy ../target/.traffic-e2e/replay.yaml \
   --recorder-config ../target/.traffic-e2e/recorder.toml \
   --recording-rule record-api \
@@ -219,17 +218,17 @@ diagnostic. A target request that is unmatched or unsupported remains dirty,
 including requests sent to an allowed host. Restart replay after applying a
 new host; running sessions do not hot-reload recorder configuration.
 
-`traffic-replay` also uses the fixed `trp-record` owner filter. Run the
+`traffic-e2e replay` also uses the fixed `trp-record` owner filter. Run the
 dependency-producing target process as that user. Build steps, replay itself,
 and replay-control commands may remain under the developer account. If the
 target cannot run as `trp-record`, intercepted replay is blocked; do not widen
 the owner scope to the login user or all local users.
 
-For a prebuilt in-process E2E command, use `traffic-replay-target` rather than
+For a prebuilt in-process E2E command, use `traffic-e2e target exec` rather than
 granting the fixed user access to the workspace or build cache:
 
 ```bash
-traffic-replay-target \
+traffic-e2e target exec \
   --copy-env APP_CONFIG=path/to/e2e.yaml \
   --copy-env REPLAY_CA=path/to/replay-ca.pem \
   --path-env CASE_DIR=path/to/readable/case-group \
@@ -250,14 +249,14 @@ For a case collection, start one replay session and control active case
 ownership through the CLI:
 
 ```bash
-traffic-replay path/to/recordings/<run-id>/<rule>/<uri-group>
-traffic-replay path/to/recordings/<run-id>
-traffic-replay --case-id <case-id> path/to/recordings/<run-id>
-traffic-replay-cli wait-ready
-traffic-replay-cli cases
-traffic-replay-cli begin <case-id>
-traffic-replay-cli end <case-id> --fail-on-dirty
-traffic-replay-cli finalize --fail-on-dirty --fail-on-incomplete
+traffic-e2e replay path/to/recordings/<run-id>/<rule>/<uri-group>
+traffic-e2e replay path/to/recordings/<run-id>
+traffic-e2e replay --case-id <case-id> path/to/recordings/<run-id>
+traffic-e2e diagnose replay-control wait-ready
+traffic-e2e diagnose replay-control cases
+traffic-e2e diagnose replay-control begin <case-id>
+traffic-e2e diagnose replay-control end <case-id> --fail-on-dirty
+traffic-e2e diagnose replay-control finalize --fail-on-dirty --fail-on-incomplete
 ```
 
 Successful `finalize` writes a version-five report with its session id,
@@ -265,8 +264,9 @@ timestamps, exact selected case ids, and `finalized: true`, then stops replay.
 The command returns success only after atomically publishing that exact report;
 a report-write failure leaves the session open for retry. If finalization
 fails, preserve the diagnostic report and use
-`traffic-replay-cli stop` only for cleanup. Default replay reports are retained
-under a unique `.replay/sessions/<attempt>/replay-report.json` directory.
+`traffic-e2e diagnose replay-control stop` only for cleanup. Default replay
+reports are retained under a unique
+`.replay/sessions/<attempt>/replay-report.json` directory.
 Protocol traffic requests live snapshots through one coalescing writer, which
 writes at most once per second; lifecycle commands and finalization force an
 immediate snapshot. Version five keeps exact success counters while retaining
@@ -280,7 +280,7 @@ Select the exact final case and session ids so older attempts cannot satisfy the
 gate:
 
 ```bash
-traffic-replay-aggregate \
+traffic-e2e diagnose replay-aggregate \
   --case-source recordings/<run-id>/<rule> \
   --case-id <case-id> \
   --session-id <session-id> \
@@ -295,16 +295,14 @@ the same case and no exact session selection resolves them, aggregation fails
 instead of guessing which run is final. The aggregate command does not parse
 target-project test output or classify why an unreported case was skipped.
 
-`traffic-replay-cli` is a thin facade over `traffic-recorder-proxy
-replay-control`; the Rust binary owns the control protocol and Unix socket
-client. The script should stay small and should not implement JSON/socket
-protocol logic.
+`traffic-e2e diagnose replay-control` directly uses the Rust-owned control
+protocol and Unix socket client; no shell facade owns JSON or socket logic.
 
 Before migrating a dynamic API from a collection, persist its exact immutable
 case grouping outside the recording source:
 
 ```bash
-traffic-case-group ensure \
+traffic-e2e diagnose case-group ensure \
   --case-source /path/to/recordings/<run-id>/<rule> \
   --case-dir /path/to/recordings/<run-id>/<rule>/<current-uri-group> \
   --method GET \
@@ -328,16 +326,18 @@ Replay-time route discovery can produce safe `case_path_patterns` feedback for
 a target repository. Preview focused, add-only feedback before applying it:
 
 ```bash
-traffic-recorder-config case-path-patterns plan \
+traffic-e2e diagnose recorder-config \
   --config ../target/.traffic-e2e/recorder.toml \
+  case-path-patterns plan \
   --rule record-api \
   --authority focused \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --case-source /path/to/focused-cases \
   --pattern '/api/users/*/xxx'
 
-traffic-recorder-config case-path-patterns apply \
+traffic-e2e diagnose recorder-config \
   --config ../target/.traffic-e2e/recorder.toml \
+  case-path-patterns apply \
   --rule record-api \
   --authority focused \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
@@ -358,16 +358,18 @@ and show the plan diff, then apply the same correction with `--allow-delete`
 only after the user requested or approved it:
 
 ```bash
-traffic-recorder-config case-path-patterns plan \
+traffic-e2e diagnose recorder-config \
   --config ../target/.traffic-e2e/recorder.toml \
+  case-path-patterns plan \
   --rule record-api \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --case-source /path/to/cases \
   --remove-incorrect-pattern '/api/incorrect/*' \
   --correction-evidence 'router.go@<revision>: route is static /api/incorrect'
 
-traffic-recorder-config case-path-patterns apply \
+traffic-e2e diagnose recorder-config \
   --config ../target/.traffic-e2e/recorder.toml \
+  case-path-patterns apply \
   --rule record-api \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --case-source /path/to/cases \
@@ -391,8 +393,9 @@ After the final aggregate and target response-assertion report exist, ensure
 the recorder exclusion deterministically:
 
 ```bash
-traffic-recorder-config verified-excludes ensure \
+traffic-e2e diagnose recorder-config \
   --config ../target/.traffic-e2e/recorder.toml \
+  verified-excludes ensure \
   --rule record-api \
   --method GET \
   --pattern '/api/users/*' \
@@ -423,11 +426,11 @@ failures, not product behavior evidence.
 
 ## Migration E2E Runner
 
-Use `scripts/traffic-e2e-run` as the high-level migration replay facade.
-Initialize the target repository once:
+Use `traffic-e2e` as the high-level migration replay command. Initialize the
+target repository once:
 
 ```bash
-traffic-e2e-run init \
+traffic-e2e init \
   --target-root ../target \
   --project-cli scripts/<project>-cli \
   --replay-policy .traffic-e2e/replay.yaml \
@@ -487,7 +490,7 @@ different from `pr_base`. Do not hand-write it. Prepare each API only after
 confirming whether its source URI is static or dynamic:
 
 ```bash
-traffic-e2e-run prepare \
+traffic-e2e prepare \
   --target-root ../target \
   --case-source recordings/<run>/<rule> \
   --case-dir recordings/<run>/<rule>/<group> \
@@ -500,7 +503,7 @@ traffic-e2e-run prepare \
 Use the returned group id for the focused migration loop:
 
 ```bash
-traffic-e2e-run run-api \
+traffic-e2e run-api \
   --target-root ../target \
   --case-source recordings/<run>/<rule> \
   --api 'GET /api/widgets/*'
@@ -516,7 +519,7 @@ passes, the grouped result is sufficient unless behavior-affecting code changed
 after an earlier group pass. In that case, run the complete regression round:
 
 ```bash
-traffic-e2e-run run \
+traffic-e2e run \
   --target-root ../target \
   --case-source recordings/<run>/<rule>
 ```
@@ -534,13 +537,13 @@ may invalidate it; then use one full regression round. Use `status`, `abort`,
 and `recover` for interrupted global rounds. Generated local JSON/YAML is
 tool-owned and must not be edited by AI or by target scripts.
 
-When using setup scripts directly, always pair `up` with `down`:
+When managing host interception directly, always pair `up` with `down`:
 
 ```bash
-sudo ./scripts/setup_local_dns.sh up
-sudo ./scripts/setup_fake_ip_redirect.sh up
-sudo ./scripts/setup_fake_ip_redirect.sh down
-sudo ./scripts/setup_local_dns.sh down
+sudo traffic-e2e diagnose interception dns up
+sudo traffic-e2e diagnose interception fake-ip up
+sudo traffic-e2e diagnose interception fake-ip down
+sudo traffic-e2e diagnose interception dns down
 ```
 
 ## Recording Files

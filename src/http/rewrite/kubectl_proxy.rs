@@ -161,7 +161,7 @@ fn spawn_kubectl_proxy(spec: &KubectlProxySpec, kubeconfig_path: &Path) -> Resul
 
 async fn write_kubeconfig(kubeconfig: &[u8]) -> Result<PathBuf> {
     let path = std::env::temp_dir().join(format!(
-        "traffic-recorder-proxy-kubeconfig-{}-{}.yaml",
+        "traffic-e2e-kubeconfig-{}-{}.yaml",
         std::process::id(),
         Uuid::new_v4()
     ));

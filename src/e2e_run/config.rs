@@ -204,7 +204,7 @@ pub(super) fn require_local_ignored(target_root: &Path, local_root: &Path) -> Re
 fn load_project_config(target_root: &Path, config_path: &Path) -> Result<ProjectConfig> {
     if !config_path.exists() {
         bail!(
-            "{} is missing; run `traffic-e2e-run init --target-root <target> \
+            "{} is missing; run `traffic-e2e init --target-root <target> \
              --project-cli <path> --replay-policy <path> \
              --pr-base <branch>` with confirmed project settings",
             config_path.display()
@@ -212,14 +212,14 @@ fn load_project_config(target_root: &Path, config_path: &Path) -> Result<Project
     }
     let config: ProjectConfig = store::read_yaml(config_path).with_context(|| {
         format!(
-            "{} is incomplete or obsolete; rerun `traffic-e2e-run init --force` \
+            "{} is incomplete or obsolete; rerun `traffic-e2e init --force` \
              with confirmed project settings",
             config_path.display()
         )
     })?;
     validate_project_config(&config).with_context(|| {
         format!(
-            "{} is incomplete or obsolete; rerun `traffic-e2e-run init --force` \
+            "{} is incomplete or obsolete; rerun `traffic-e2e init --force` \
              with confirmed project settings",
             config_path.display()
         )
@@ -749,7 +749,7 @@ overrides:
         let error = resolve_layout(target.path(), &cases, None).unwrap_err();
 
         assert!(error.to_string().contains("incomplete or obsolete"));
-        assert!(error.to_string().contains("traffic-e2e-run init --force"));
+        assert!(error.to_string().contains("traffic-e2e init --force"));
     }
 
     #[test]
@@ -775,7 +775,7 @@ overrides:
 
         let error = resolve_layout(target.path(), &cases, None).unwrap_err();
 
-        assert!(error.to_string().contains("traffic-e2e-run init"));
+        assert!(error.to_string().contains("traffic-e2e init"));
         assert!(error.to_string().contains("--project-cli"));
         assert!(error.to_string().contains("--replay-policy"));
         assert!(error.to_string().contains("--pr-base"));

@@ -2,11 +2,11 @@
 
 Use this workflow only during replay discovery or replay follow-up. Recording
 remains manually triggered and does not require source-repo scanning.
-`traffic-replay` and all recording artifacts remain read-only.
+`traffic-e2e replay` and all recording artifacts remain read-only.
 
 For a collection or run with multiple canonical input directories, read
 [case-grouping.md](case-grouping.md) first. Route registration analysis may
-produce the candidate used by `traffic-e2e-run prepare` before business-code
+produce the candidate used by `traffic-e2e prepare` before business-code
 analysis begins. A grouping result never waives the final managed pattern
 plan/apply/replan gate below.
 
@@ -77,7 +77,7 @@ case_path_patterns = [
   exact keys under `http_gateway.case_limits.overrides` may set different
   limits. Do not add or raise these limits merely to make replay discovery
   record more cases. Pattern feedback must preserve existing limit settings.
-- Require `traffic-recorder-config` from `PATH`. Never edit the target TOML
+- Require `traffic-e2e` from `PATH`. Never edit the target TOML
   directly and never create the config or managed markers on the target's
   behalf. If the command is unavailable or rejects an existing managed block,
   report `blocked` with the confirmed patterns and stop the config-update step.
@@ -92,8 +92,9 @@ case_path_patterns = [
   name, source revision, case source, authority mode, and every accepted pattern:
 
 ```bash
-traffic-recorder-config case-path-patterns plan \
+traffic-e2e diagnose recorder-config \
   --config path/to/recorder.toml \
+  case-path-patterns plan \
   --rule record-api \
   --authority focused \
   --source-revision <revision> \

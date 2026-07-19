@@ -1,6 +1,6 @@
 # Standard Traffic E2E Runner
 
-Use `traffic-e2e-run` as the only normal AI-facing replay command. Low-level
+Use `traffic-e2e` as the only normal AI-facing replay command. Low-level
 grouping, replay-control, aggregate, and verified-exclude commands remain
 recorder-owned implementation details and human diagnostic surfaces.
 
@@ -9,7 +9,7 @@ recorder-owned implementation details and human diagnostic surfaces.
 Generate and validate the source-controlled `.traffic-e2e/e2e.yaml` once:
 
 ```bash
-traffic-e2e-run init \
+traffic-e2e init \
   --target-root <target> \
   --project-cli scripts/<project>-cli \
   --replay-policy .traffic-e2e/replay.yaml \
@@ -76,7 +76,7 @@ Before inspecting or running an API, read the first published case only for
 route discovery and confirm the route against source registrations. Then call:
 
 ```bash
-traffic-e2e-run prepare \
+traffic-e2e prepare \
   --target-root <target> \
   --case-source <case-source> \
   --case-dir <canonical-input-directory> \
@@ -95,7 +95,7 @@ key from directory names; use the returned `group.group_id`.
 Run one complete API group while implementing and repairing behavior:
 
 ```bash
-traffic-e2e-run run-api \
+traffic-e2e run-api \
   --target-root <target> \
   --case-source <case-source> \
   --api '<group.group_id>'
@@ -149,14 +149,16 @@ the focused API's response assertions and all other dependency evidence pass,
 run:
 
 ```bash
-traffic-recorder-config allowed-unused-http-hosts plan \
+traffic-e2e diagnose recorder-config \
   --config <recorder-config> \
+  allowed-unused-http-hosts plan \
   --rule <recording-rule> \
   --host <dependency-host> \
   --format json
 
-traffic-recorder-config allowed-unused-http-hosts apply \
+traffic-e2e diagnose recorder-config \
   --config <recorder-config> \
+  allowed-unused-http-hosts apply \
   --rule <recording-rule> \
   --host <dependency-host> \
   --format json
@@ -175,7 +177,7 @@ When behavior changes after earlier groups passed and a full regression is
 therefore required, run:
 
 ```bash
-traffic-e2e-run run \
+traffic-e2e run \
   --target-root <target> \
   --case-source <case-source>
 ```

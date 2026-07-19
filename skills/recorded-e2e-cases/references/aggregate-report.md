@@ -11,7 +11,7 @@ Call the repository-provided command from `PATH` with only the recording case
 source root:
 
 ```bash
-traffic-replay-aggregate \
+traffic-e2e diagnose replay-aggregate \
   --case-source /path/to/recordings/<run-id>/<rule-or-collection> \
   --case-id <selected-case-id> \
   --session-id <final-session-id> \

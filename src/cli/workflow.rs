@@ -1,22 +1,15 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, ensure};
-use clap::{Args, Subcommand};
-use traffic_recorder_proxy::{
+use clap::Args;
+use traffic_e2e::{
     E2eApiVerificationOverride, E2eRunContext, E2eRunInitOptions, E2eRunPrepareOptions,
     abort_e2e_run, initialize_e2e_run, prepare_e2e_run, recover_e2e_run, run_e2e_api,
     run_e2e_round, status_e2e_run,
 };
 
-#[derive(Debug, Args)]
-pub(super) struct E2eRunArgs {
-    #[command(subcommand)]
-    command: E2eRunCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum E2eRunCommand {
-    /// Generate and validate the target repository's traffic E2E configuration.
+#[derive(Debug)]
+pub(super) enum WorkflowCommand {
     Init(InitArgs),
     Prepare(PrepareArgs),
     RunApi(RunApiArgs),
@@ -27,7 +20,7 @@ enum E2eRunCommand {
 }
 
 #[derive(Debug, Args)]
-struct InitArgs {
+pub(super) struct InitArgs {
     /// Target repository root.
     #[arg(long, default_value = ".")]
     target_root: PathBuf,
@@ -68,7 +61,7 @@ struct InitArgs {
 }
 
 #[derive(Debug, Clone, Args)]
-struct ContextArgs {
+pub(super) struct ContextArgs {
     #[arg(long, default_value = ".")]
     target_root: PathBuf,
     #[arg(long)]
@@ -78,7 +71,7 @@ struct ContextArgs {
 }
 
 #[derive(Debug, Args)]
-struct PrepareArgs {
+pub(super) struct PrepareArgs {
     #[command(flatten)]
     context: ContextArgs,
     #[arg(long)]
@@ -97,16 +90,16 @@ struct PrepareArgs {
 }
 
 #[derive(Debug, Args)]
-struct RunApiArgs {
+pub(super) struct RunApiArgs {
     #[command(flatten)]
     context: ContextArgs,
     #[arg(long)]
     api: String,
 }
 
-pub(super) async fn run(args: E2eRunArgs) -> Result<()> {
-    match args.command {
-        E2eRunCommand::Init(args) => print_json(&initialize_e2e_run(E2eRunInitOptions {
+pub(super) async fn run(command: WorkflowCommand) -> Result<()> {
+    match command {
+        WorkflowCommand::Init(args) => print_json(&initialize_e2e_run(E2eRunInitOptions {
             target_root: args.target_root,
             project_cli: args.project_cli,
             replay_policy: args.replay_policy,
@@ -120,7 +113,7 @@ pub(super) async fn run(args: E2eRunArgs) -> Result<()> {
             recording_rule: args.recording_rule,
             force: args.force,
         })?),
-        E2eRunCommand::Prepare(args) => {
+        WorkflowCommand::Prepare(args) => {
             let report = prepare_e2e_run(E2eRunPrepareOptions {
                 context: context(args.context),
                 case_dir: args.case_dir,
@@ -131,7 +124,7 @@ pub(super) async fn run(args: E2eRunArgs) -> Result<()> {
             })?;
             print_json(&report)
         }
-        E2eRunCommand::RunApi(args) => {
+        WorkflowCommand::RunApi(args) => {
             let report = run_e2e_api(context(args.context), &args.api).await?;
             print_json(&report)?;
             ensure!(
@@ -141,7 +134,7 @@ pub(super) async fn run(args: E2eRunArgs) -> Result<()> {
             );
             Ok(())
         }
-        E2eRunCommand::Run(args) => {
+        WorkflowCommand::Run(args) => {
             let report = run_e2e_round(context(args)).await?;
             print_json(&report)?;
             ensure!(
@@ -151,9 +144,9 @@ pub(super) async fn run(args: E2eRunArgs) -> Result<()> {
             );
             Ok(())
         }
-        E2eRunCommand::Status(args) => print_json(&status_e2e_run(context(args))?),
-        E2eRunCommand::Abort(args) => print_json(&abort_e2e_run(context(args)).await?),
-        E2eRunCommand::Recover(args) => print_json(&recover_e2e_run(context(args)).await?),
+        WorkflowCommand::Status(args) => print_json(&status_e2e_run(context(args))?),
+        WorkflowCommand::Abort(args) => print_json(&abort_e2e_run(context(args)).await?),
+        WorkflowCommand::Recover(args) => print_json(&recover_e2e_run(context(args)).await?),
     }
 }
 

@@ -1,7 +1,7 @@
 # Replay-Verified API Excludes
 
 Use this gate only after a terminal API attempt has finalized and its aggregate
-and response assertions exist. `traffic-e2e-run run` and focused `run-api`
+and response assertions exist. `traffic-e2e run` and focused `run-api`
 invoke it only for APIs whose runner-owned streaks meet both effective
 thresholds.
 
@@ -68,8 +68,9 @@ The standard runner persists the JSON ensure report after both evidence views
 exist. The equivalent low-level diagnostic command is:
 
 ```bash
-traffic-recorder-config verified-excludes ensure \
+traffic-e2e diagnose recorder-config \
   --config .traffic-e2e/recorder.toml \
+  verified-excludes ensure \
   --rule <recording-rule> \
   --method <METHOD> \
   --pattern '<exact-or-recorder-path-pattern>' \
