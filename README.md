@@ -99,9 +99,9 @@ traffic-replay path/to/recordings/<run-id>
 ```
 
 For runtime-generated UUIDs, timestamps, and signed query fields, keep a
-source-controlled `config/replay.yaml` in the target project and pass it with
+source-controlled `.traffic-e2e/replay.yaml` in the target project and pass it with
 `--policy`. Validate it with `traffic-replay-policy validate --policy
-config/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
+.traffic-e2e/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
 
 `traffic-replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
@@ -179,7 +179,6 @@ success_status = 200
 interval_ms = 1000
 
 [http_gateway.verified_excludes]
-consecutive_successes = 3
 # BEGIN AI-MANAGED VERIFIED API EXCLUDES
 apis = [
   # { rule = "record-api", method = "GET", path_pattern = "/api/users/*" },
@@ -214,10 +213,13 @@ evaluated before both rule sets, so exclusion rules do not bypass
 `block_known_writes`.
 
 `[http_gateway.verified_excludes]` contains recorder-owned, replay-verified API
-exclusions. After the configured number of consecutive clean cases also pass
-the target response assertions, run the managed `verified-excludes ensure`
-command. It decides the threshold outcome, applies an eligible exact
-`rule + method + path_pattern`, and verifies convergence without AI judgment.
+exclusions. Traffic E2E verification thresholds belong in
+`.traffic-e2e/e2e.yaml`: an API must satisfy both the configured number of
+trailing successful rounds and the successful case executions covered by those
+rounds. Global defaults may be overridden for an exact
+`METHOD + path_pattern`. When an API first becomes verified,
+`traffic-e2e-run` atomically adds the exact `rule + method + path_pattern` and
+verifies convergence.
 The path pattern may be exact, use whole-segment `*`, or end in a `**`
 catch-all matching one or more remaining segments.
 On the next recorder start, matching traffic goes to `fallback_upstream`
@@ -260,12 +262,14 @@ example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
 
 For replay-time AI feedback, keep patterns inside the explicit managed block
 shown above. Use `traffic-recorder-config case-path-patterns plan` to inspect
-the proposed diff, then rerun it with `apply`. Focused case sources are
-add-only; deletion requires an authoritative case source and the explicit
-`--allow-delete` flag. See [docs/development.md](docs/development.md) for the
-complete command. Use `traffic-case-group ensure` to persist exact static or
-dynamic API membership before migration; it writes a manifest outside the
-recording source and never moves or edits published cases.
+the proposed diff, then rerun it with `apply`. Feedback is add-only even for a
+collection-wide case source; an existing pattern is never deleted merely
+because current cases omit it. Correct a specifically proven-invalid
+AI-managed pattern only through the explicit correction flags described in
+[docs/development.md](docs/development.md). Use `traffic-case-group ensure` to
+persist exact static or dynamic API membership before migration; it writes a
+manifest outside the recording source and never moves or edits published
+cases.
 
 `request.json` stores the matched gateway request. `expected-response.json`
 stores the matched upstream response; if the response body has

@@ -6,8 +6,9 @@ use clap::{Args, Subcommand, ValueEnum};
 use traffic_recorder_proxy::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostReport, CasePathPatternAuthority,
     CasePathPatternFeedback, CasePathPatternReport, VerifiedApiExcludeEnsureReport,
-    VerifiedApiExcludeFeedback, VerifiedApiExcludeReport, ensure_verified_api_exclude,
-    plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback, plan_verified_api_exclude,
+    VerifiedApiExcludeFeedback, VerifiedApiExcludeReport, VerifiedApiVerification,
+    ensure_verified_api_exclude, plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback,
+    plan_verified_api_exclude,
 };
 
 #[derive(Debug, Args)]
@@ -85,6 +86,14 @@ struct VerifiedExcludeArgs {
     aggregate_report: PathBuf,
     #[arg(long)]
     assertion_report: PathBuf,
+    #[arg(long)]
+    consecutive_successful_runs: u64,
+    #[arg(long)]
+    consecutive_successful_cases: u64,
+    #[arg(long)]
+    required_consecutive_successful_runs: u64,
+    #[arg(long)]
+    required_successful_cases: u64,
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     format: OutputFormat,
 }
@@ -104,6 +113,16 @@ struct PatternFeedbackArgs {
         help = "Recorder path pattern: '*' matches one segment; trailing '**' matches one or more remaining segments"
     )]
     patterns: Vec<String>,
+    #[arg(
+        long = "remove-incorrect-pattern",
+        help = "Exact existing AI-managed pattern proven incorrect from source routes; omission from cases is never evidence"
+    )]
+    incorrect_patterns: Vec<String>,
+    #[arg(
+        long,
+        help = "Single-line source-route evidence for every explicitly removed incorrect pattern"
+    )]
+    correction_evidence: Option<String>,
     #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
     format: OutputFormat,
 }
@@ -210,6 +229,12 @@ fn verified_exclude_feedback(
         path_pattern: args.pattern,
         aggregate_report: args.aggregate_report,
         assertion_report: args.assertion_report,
+        verification: VerifiedApiVerification {
+            consecutive_successful_runs: args.consecutive_successful_runs,
+            consecutive_successful_cases: args.consecutive_successful_cases,
+            required_consecutive_successful_runs: args.required_consecutive_successful_runs,
+            required_successful_cases: args.required_successful_cases,
+        },
     }
 }
 
@@ -221,6 +246,8 @@ fn feedback(config_path: PathBuf, args: PatternFeedbackArgs) -> CasePathPatternF
         case_source: args.case_source,
         authority: args.authority.into(),
         patterns: args.patterns,
+        incorrect_patterns: args.incorrect_patterns,
+        correction_evidence: args.correction_evidence,
     }
 }
 
@@ -239,6 +266,13 @@ fn print_pattern_report(report: &CasePathPatternReport, format: OutputFormat) ->
             println!("applied: {}", report.applied);
             println!("added: {}", report.added.len());
             println!("removed: {}", report.removed.len());
+            println!(
+                "corrections_already_absent: {}",
+                report.corrections_already_absent.len()
+            );
+            if let Some(evidence) = &report.correction_evidence {
+                println!("correction_evidence: {evidence}");
+            }
             if !report.diff.is_empty() {
                 print!("{}", report.diff);
             }
@@ -283,10 +317,15 @@ fn print_verified_exclude_report(
             println!("config: {}", report.config.display());
             println!("api: {} {}", report.method, report.path_pattern);
             println!("rule: {}", report.rule);
-            println!("threshold: {}", report.threshold);
             println!(
-                "consecutive_successes: {}",
-                report.consecutive_success_case_ids.len()
+                "consecutive_successful_runs: {}/{}",
+                report.verification.consecutive_successful_runs,
+                report.verification.required_consecutive_successful_runs
+            );
+            println!(
+                "consecutive_successful_cases: {}/{}",
+                report.verification.consecutive_successful_cases,
+                report.verification.required_successful_cases
             );
             println!("eligible: {}", report.eligible);
             println!("changed: {}", report.changed);
@@ -316,10 +355,18 @@ fn print_verified_exclude_ensure_report(
             println!("config: {}", report.plan.config.display());
             println!("api: {} {}", report.plan.method, report.plan.path_pattern);
             println!("rule: {}", report.plan.rule);
-            println!("threshold: {}", report.plan.threshold);
             println!(
-                "consecutive_successes: {}",
-                report.plan.consecutive_success_case_ids.len()
+                "consecutive_successful_runs: {}/{}",
+                report.plan.verification.consecutive_successful_runs,
+                report
+                    .plan
+                    .verification
+                    .required_consecutive_successful_runs
+            );
+            println!(
+                "consecutive_successful_cases: {}/{}",
+                report.plan.verification.consecutive_successful_cases,
+                report.plan.verification.required_successful_cases
             );
             println!("initial_changed: {}", report.plan.changed);
             println!("apply_performed: {}", report.apply.is_some());

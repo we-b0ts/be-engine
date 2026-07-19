@@ -1,16 +1,18 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use serde::Serialize;
 use tokio::process::Child;
 
-use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
+use super::final_evidence::{
+    build_final_evidence, summarize_apis_without_aggregate, sync_verified_excludes,
+};
 use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout, RunStatus};
-use super::progress::{build_progress, update_index};
+use super::progress::{build_progress, refresh_verification, update_focused_index, update_index};
 use super::runtime::{
     best_effort_stop, control, finalize_replay, run_project, spawn_replay, stop_replay_process,
-    wait_for_replay,
+    wait_for_replay, wait_for_replay_ready,
 };
 use super::store;
 use super::support::{allocate_replay_report, api_directory, process_exists, status_label};
@@ -39,6 +41,7 @@ pub struct E2eApiRunResult {
     pub status: String,
     pub successful: bool,
     pub latest_state: PathBuf,
+    pub progress: PathBuf,
 }
 
 pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
@@ -67,13 +70,13 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
     )?;
     store::begin_active(&layout, &state)?;
 
-    if let Err(error) = run_active(&config, &layout, &inventory, &mut state, true).await {
+    if let Err(error) = run_active(&config, &layout, &inventory, &mut state).await {
         state.errors.push(format!("{error:#}"));
         state.status = RunStatus::Interrupted;
         mark_unfinished_cases(&mut state);
         best_effort_stop(&config, &layout, &mut state).await;
     }
-    finish_and_publish(&layout, &mut index, &mut state)
+    finish_and_publish(&config, &layout, &mut index, &mut state)
 }
 
 pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
@@ -98,7 +101,7 @@ pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
     let inventory =
         load_complete_case_group_inventory(&layout.group_index_path, &layout.case_source)?;
     summarize_apis_without_aggregate(&layout, &mut state, &inventory);
-    finish_and_publish(&layout, &mut index, &mut state)
+    finish_and_publish(&config, &layout, &mut index, &mut state)
 }
 
 pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApiRunResult> {
@@ -110,6 +113,11 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
     let inventory =
         load_case_group_inventory(&base_layout.group_index_path, &base_layout.case_source)
             .context("E2E API has not been prepared or its grouping is stale")?;
+    let inventory_complete =
+        load_complete_case_group_inventory(&base_layout.group_index_path, &base_layout.case_source)
+            .is_ok();
+    let mut index =
+        store::load_or_create_index(&base_layout, &base_layout.run_key, &base_layout.case_source)?;
     let group = inventory
         .groups
         .iter()
@@ -117,9 +125,9 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         .with_context(|| format!("prepared API group not found: {api_key}"))?
         .clone();
     let focused_inventory = CaseGroupInventory {
-        case_source: inventory.case_source,
-        source_revision: inventory.source_revision,
-        case_inventory_id: inventory.case_inventory_id,
+        case_source: inventory.case_source.clone(),
+        source_revision: inventory.source_revision.clone(),
+        case_inventory_id: inventory.case_inventory_id.clone(),
         groups: vec![group],
     };
     let focused_root = base_layout
@@ -139,6 +147,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
             .map(|path| path.display().to_string())
             .unwrap_or_default()
     );
+    let global_layout = base_layout.clone();
     let mut layout = base_layout;
     layout.run_root = focused_root.clone();
     layout.active_dir = focused_root.join(".active");
@@ -161,7 +170,33 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
             mark_unfinished_cases(&mut interrupted);
             summarize_apis_without_aggregate(&layout, &mut interrupted, &focused_inventory);
         }
-        store::publish_snapshot(&layout.active_dir, &layout.latest_dir, &interrupted)?;
+        finish_focused_and_publish(
+            &config,
+            &global_layout,
+            &layout,
+            &mut index,
+            &inventory,
+            inventory_complete,
+            &mut interrupted,
+        )?;
+    }
+    let previous_path = layout.latest_dir.join("state.yaml");
+    if previous_path.is_file() {
+        let mut previous: ActiveRunState = store::read_yaml(&previous_path)?;
+        update_focused_index(
+            &mut index,
+            &previous,
+            &inventory,
+            inventory_complete,
+            &config.api_verification,
+        );
+        sync_verified_excludes(&config, &mut previous, &index)?;
+        store::write_yaml(&previous_path, &previous)?;
+        store::write_yaml(&global_layout.index_path, &index)?;
+        store::write_yaml(
+            &global_layout.progress_path,
+            &build_progress(&index, &previous),
+        )?;
     }
     let attempt = if layout.latest_dir.join("state.yaml").is_file() {
         let previous: ActiveRunState = store::read_yaml(&layout.latest_dir.join("state.yaml"))?;
@@ -182,7 +217,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         &format!("focused-{}-{attempt:06}", api_directory(api_key)),
     )?;
     store::begin_active(&layout, &state)?;
-    if let Err(error) = run_active(&config, &layout, &focused_inventory, &mut state, false).await {
+    if let Err(error) = run_active(&config, &layout, &focused_inventory, &mut state).await {
         state.errors.push(format!("{error:#}"));
         state.status = RunStatus::Interrupted;
         mark_unfinished_cases(&mut state);
@@ -190,7 +225,15 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         summarize_apis_without_aggregate(&layout, &mut state, &focused_inventory);
     }
     state.finished_at.get_or_insert_with(Utc::now);
-    store::publish_snapshot(&layout.active_dir, &layout.latest_dir, &state)?;
+    finish_focused_and_publish(
+        &config,
+        &global_layout,
+        &layout,
+        &mut index,
+        &inventory,
+        inventory_complete,
+        &mut state,
+    )?;
     let successful = state.status == RunStatus::Successful;
     Ok(E2eApiRunResult {
         run_key: state.run_key,
@@ -199,11 +242,44 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         status: status_label(state.status).to_string(),
         successful,
         latest_state: layout.latest_dir.join("state.yaml"),
+        progress: global_layout.progress_path,
     })
 }
 
+fn finish_focused_and_publish(
+    config: &ResolvedProjectConfig,
+    global_layout: &RunLayout,
+    focused_layout: &RunLayout,
+    index: &mut super::model::RunIndex,
+    inventory: &CaseGroupInventory,
+    inventory_complete: bool,
+    state: &mut ActiveRunState,
+) -> Result<()> {
+    state.finished_at.get_or_insert_with(Utc::now);
+    ensure!(
+        state.status.is_terminal(),
+        "focused run state is not terminal"
+    );
+    update_focused_index(
+        index,
+        state,
+        inventory,
+        inventory_complete,
+        &config.api_verification,
+    );
+    sync_verified_excludes(config, state, index)?;
+    let progress = build_progress(index, state);
+    store::publish_snapshot(
+        &focused_layout.active_dir,
+        &focused_layout.latest_dir,
+        state,
+    )?;
+    store::write_yaml(&global_layout.index_path, index)?;
+    store::write_yaml(&global_layout.progress_path, &progress)
+}
+
 pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
-    let (_, layout) = config::resolve_layout(
+    let (config, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
         context.run_key.as_deref(),
@@ -216,7 +292,7 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
         if state.status.is_terminal() {
             let mut index =
                 store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
-            return finish_and_publish(&layout, &mut index, &mut state);
+            return finish_and_publish(&config, &layout, &mut index, &mut state);
         }
         return abort_e2e_run(context).await;
     }
@@ -225,7 +301,13 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
         latest_path.is_file(),
         "there is no active or latest E2E run to recover"
     );
-    let state: ActiveRunState = store::read_yaml(&latest_path)?;
+    let mut state: ActiveRunState = store::read_yaml(&latest_path)?;
+    let mut index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
+    refresh_verification(&mut index, &config.api_verification);
+    sync_verified_excludes(&config, &mut state, &index)?;
+    store::write_yaml(&latest_path, &state)?;
+    store::write_yaml(&layout.progress_path, &build_progress(&index, &state))?;
+    store::write_yaml(&layout.index_path, &index)?;
     Ok(result(&layout, &state))
 }
 
@@ -252,20 +334,11 @@ async fn run_active(
     layout: &RunLayout,
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
-    run_verified_ensure: bool,
 ) -> Result<()> {
     let mut replay = spawn_replay(config, layout, inventory, state)?;
     state.replay_pid = replay.id();
     store::write_active(layout, state)?;
-    let outcome = run_active_with_replay(
-        config,
-        layout,
-        inventory,
-        state,
-        &mut replay,
-        run_verified_ensure,
-    )
-    .await;
+    let outcome = run_active_with_replay(config, layout, inventory, state, &mut replay).await;
     if outcome.is_err() {
         stop_replay_process(state, &mut replay).await;
     }
@@ -278,11 +351,16 @@ async fn run_active_with_replay(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
     replay: &mut Child,
-    run_verified_ensure: bool,
 ) -> Result<()> {
-    let ready = control(state, "wait_ready", None, false, false)
-        .await
-        .context("replay server did not become ready")?;
+    let ready = tokio::select! {
+        ready = wait_for_replay_ready(state, config.replay_startup_timeout) => {
+            ready.context("replay server did not become ready")?
+        }
+        status = replay.wait() => {
+            let status = status.context("failed to wait for replay process during startup")?;
+            bail!("replay process exited before becoming ready with {status}");
+        }
+    };
     state.session_id = ready
         .pointer("/session/session_id")
         .and_then(serde_json::Value::as_str)
@@ -345,7 +423,7 @@ async fn run_active_with_replay(
     finalize_replay(state).await?;
     wait_for_replay(replay).await?;
     state.replay_pid = None;
-    build_final_evidence(config, layout, inventory, state, run_verified_ensure)?;
+    build_final_evidence(config, layout, inventory, state)?;
     if state.target_started {
         best_effort_stop(config, layout, state).await;
     }
@@ -491,6 +569,7 @@ fn mark_unfinished_cases(state: &mut ActiveRunState) {
 }
 
 fn finish_and_publish(
+    config: &ResolvedProjectConfig,
     layout: &RunLayout,
     index: &mut super::model::RunIndex,
     state: &mut ActiveRunState,
@@ -502,7 +581,8 @@ fn finish_and_publish(
     }
     state.finished_at.get_or_insert_with(Utc::now);
     ensure!(state.status.is_terminal(), "run state is not terminal");
-    update_index(index, state);
+    update_index(index, state, &config.api_verification);
+    sync_verified_excludes(config, state, index)?;
     let progress = build_progress(index, state);
     store::write_yaml(&layout.progress_path, &progress)?;
     store::publish_terminal(layout, state, index)?;

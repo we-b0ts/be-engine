@@ -15,8 +15,8 @@ plan/apply/replan gate below.
 - published case, collection, rule, or run directory
 - source repository and revision used to interpret API routes
 - target repository recorder config, when it is source-controlled
-- whether the supplied cases are a focused subset or the declared authoritative
-  collection
+- whether the supplied cases are focused or collection-wide feedback; this
+  scope is metadata only and never authorizes deletion by omission
 
 Read the source framework's route registrations, including nested prefixes,
 HTTP methods, `ANY` semantics, optional parameters, constraints, and handler
@@ -102,20 +102,32 @@ traffic-recorder-config case-path-patterns plan \
   --format json
 ```
 
-- Inspect `added`, `removed`, and `diff`. For focused feedback, require
-  `removed` to be empty. When the reviewed plan contains a confirmed safe diff,
-  running the same command with `apply` is mandatory; a planned-but-unapplied
-  diff is incomplete. Persist the JSON apply report, then rerun and persist
-  `plan` with the same inputs; its final `diff` MUST be empty. Record
-  `confirmed_no_change` only when the initial plan has no diff, and `applied`
-  only after this apply-and-replan verification closes the loop.
-- For an authoritative collection, pass `--authority authoritative`. If the
-  reviewed plan removes patterns, the apply command must also include
-  `--allow-delete`. Never use that flag for focused feedback.
-- For a focused or partial case source, preserve existing entries and add only
-  newly confirmed safe patterns.
-- Rebuild or delete entries only when the case source is declared authoritative
-  by the target workflow.
+- Inspect `added`, `removed`, and `diff`. Normal feedback under every authority
+  mode is add-only: preserve every existing entry and add only newly confirmed
+  safe patterns. A full run, all published cases in one case source, a changed
+  inventory, or the absence of a current matching case never proves an existing
+  pattern is obsolete.
+- Delete only to correct a specifically named pattern previously generated
+  inside the `AI-MANAGED CASE PATH PATTERNS` block. First inspect the current
+  source route registration and prove that the existing pattern itself is
+  incorrect, ambiguous, or unsupported. Never treat a route or case missing
+  from the current recording as correction evidence.
+- For a correction plan, pass each exact existing pattern with
+  `--remove-incorrect-pattern` and provide single-line source file, revision,
+  and route evidence with `--correction-evidence`. The tool must reject an
+  implicit removal or correction evidence without a named removal. On the
+  initial plan, require every named correction to appear in `removed`; an
+  already absent name is a no-op and must not authorize apply. Show the deletion
+  diff to the user before applying it. Apply only when the user requested that
+  correction or explicitly approved the shown diff, and include
+  `--allow-delete`.
+- When a reviewed plan contains a confirmed safe addition or approved
+  correction, running the same command with `apply` is mandatory. Persist the
+  JSON apply report, then rerun and persist `plan` with the same inputs. Its
+  final `diff` MUST be empty; a corrected pattern appears in
+  `corrections_already_absent`. Record `confirmed_no_change` only when the
+  initial plan has no diff, and `applied` only after this apply-and-replan
+  verification closes the loop.
 - Never copy recorded parameter values into product config or product code.
 - The CLI must validate the complete TOML, preserve text outside the managed
   block, and show the config diff. Show that diff to the user.
@@ -123,5 +135,6 @@ traffic-recorder-config case-path-patterns plan \
   future manual recordings.
 
 Record `recorder_config`, source revision, case source, authority mode, counts
-for each decision status, and `route_pattern_feedback_status` in the target
-migration state when that file exists.
+for each decision status, correction evidence when applicable, and
+`route_pattern_feedback_status` in the target traffic E2E state when that file
+exists.

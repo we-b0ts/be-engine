@@ -98,10 +98,11 @@ values from request or session context, dependency state, time, generated ids,
 or explicit product configuration proven by source behavior.
 
 Keep replay-only dependency matching rules in the single source-controlled
-`config/replay.yaml` owned by `recorded-e2e-cases`; do not duplicate them in
-shell, target code, or application config. Keep secrets and machine-local
-values out of committed files and provide the target's conventional blank
-environment template when needed.
+`.traffic-e2e/replay.yaml` owned by `recorded-e2e-cases`; keep the traffic E2E
+recorder configuration beside it as `.traffic-e2e/recorder.toml`. Do not
+duplicate either in shell, target code, or application config. Keep secrets and
+machine-local values out of committed files and provide the target's
+conventional blank environment template when needed.
 
 ## Diagnostics
 

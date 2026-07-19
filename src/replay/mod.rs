@@ -78,6 +78,7 @@ pub struct ReplayControlConfig {
     pub case_id: Option<String>,
     pub fail_on_dirty: bool,
     pub fail_on_incomplete: bool,
+    pub wait_timeout: Option<std::time::Duration>,
 }
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
@@ -186,6 +187,15 @@ impl ReplayRuntime {
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
         let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
+        let total_cases = cases.len();
+        let mut next_progress_percent = 5;
+        info!(
+            loaded_cases = 0,
+            total_cases,
+            progress_percent = 0,
+            case_source = %root_dir.display(),
+            "loading replay case dependencies"
+        );
 
         if let Some(path) = &bootstrap_path {
             load_dependency_file(
@@ -202,7 +212,7 @@ impl ReplayRuntime {
             )
             .await?;
         }
-        for case in cases.values() {
+        for (index, case) in cases.values().enumerate() {
             load_dependency_file(
                 &case.dependencies_path,
                 ReplaySource::Case,
@@ -216,6 +226,18 @@ impl ReplayRuntime {
                 &mut connection_identities,
             )
             .await?;
+            let loaded_cases = index + 1;
+            let progress_percent = loaded_cases.saturating_mul(100) / total_cases.max(1);
+            if progress_percent >= next_progress_percent || loaded_cases == total_cases {
+                info!(
+                    loaded_cases,
+                    total_cases,
+                    progress_percent,
+                    case_source = %root_dir.display(),
+                    "loading replay case dependencies"
+                );
+                next_progress_percent = (progress_percent / 5 + 1).saturating_mul(5);
+            }
         }
 
         let targets = assign_fake_ips(targets, fake_cidr)?;

@@ -32,6 +32,7 @@ impl Recorder {
             return Ok(());
         }
         let _guard = self.dependency_write_lock.lock().await;
+        self.ensure_run_accepts_case_writes().await?;
         if self.finalized_cases.lock().await.contains(&case.id) {
             return Ok(());
         }
@@ -57,6 +58,7 @@ impl Recorder {
             return Ok(());
         }
         let _guard = self.dependency_write_lock.lock().await;
+        self.ensure_run_accepts_case_writes().await?;
         tokio::fs::create_dir_all(&*self.run_dir)
             .await
             .with_context(|| {
@@ -78,6 +80,8 @@ impl Recorder {
         &self,
         case: &CaseContext,
     ) -> Result<Option<String>> {
+        let _guard = self.dependency_write_lock.lock().await;
+        self.ensure_run_accepts_case_writes().await?;
         let path = self.case_staging_dir(case).join("dependencies.jsonl");
         let raw = match tokio::fs::read_to_string(&path).await {
             Ok(raw) => raw,

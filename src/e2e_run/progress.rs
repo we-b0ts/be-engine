@@ -1,10 +1,12 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
 use super::model::{
-    ActiveRunState, ApiExecution, ApiProgress, CaseStatus, RunIndex, RunStatus, STATE_VERSION,
+    ActiveRunState, ApiExecution, ApiProgress, ApiVerificationConfig, CaseStatus, RunIndex,
+    RunStatus, STATE_VERSION,
 };
+use crate::case_group::CaseGroupInventory;
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ProgressReport {
@@ -24,116 +26,57 @@ struct ProgressRun {
 
 #[derive(Debug, Clone, Serialize)]
 struct ProgressSummary {
-    runs: RunCounts,
-    cases: CaseCounts,
+    runs: SuccessCounts,
+    cases: SuccessCounts,
     apis: ApiCounts,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct RunCounts {
-    total: u64,
+#[derive(Debug, Clone, Copy, Serialize)]
+struct SuccessCounts {
+    executed: u64,
     successful: u64,
-    failed: u64,
-    interrupted: u64,
+    consecutive_successful: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct CaseCounts {
-    total: u32,
-    replayed: u64,
-    passed: u64,
-    failed: u64,
-    incomplete: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
 struct ApiCounts {
     total: u32,
     verified: u32,
-    pending: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct LatestRun {
     number: u64,
-    status: RunStatus,
-    cases: LatestCaseCounts,
-    apis: LatestApiCounts,
-    highlights: Highlights,
+    successful: bool,
+    cases: LatestCounts,
+    apis: LatestCounts,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct LatestCaseCounts {
-    total: u32,
-    passed: u32,
-    failed: u32,
-    incomplete: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct LatestApiCounts {
-    total: u32,
-    passed: u32,
-    failed: u32,
-    incomplete: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct Highlights {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    most_failed_cases: Option<ApiHighlight>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    highest_failure_rate: Option<ApiHighlight>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct ApiHighlight {
-    api: String,
-    failed: u32,
-    total: u32,
-    failure_rate: f64,
+#[derive(Debug, Clone, Copy, Serialize)]
+struct LatestCounts {
+    executed: u32,
+    successful: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct ProgressApi {
-    cases: u32,
-    status: String,
+    verified: bool,
+    runs: SuccessCounts,
+    cases: SuccessCounts,
 }
 
-pub(super) fn update_index(index: &mut RunIndex, state: &ActiveRunState) {
+pub(super) fn update_index(
+    index: &mut RunIndex,
+    state: &ActiveRunState,
+    verification: &ApiVerificationConfig,
+) {
     if index.latest_sequence == Some(state.sequence) {
         return;
     }
-    index.source_revision = state.source_revision.clone();
-    index.case_inventory_id = state.case_inventory_id.clone();
-    index.executions += 1;
+    reconcile_baseline(index, state);
+    index.inventory_complete = true;
+    update_execution_totals(index, state);
     index.latest_sequence = Some(state.sequence);
-    index.latest_status = Some(state.status);
-    match state.status {
-        RunStatus::Successful => {
-            index.successful += 1;
-        }
-        RunStatus::Failed => {
-            index.failed += 1;
-        }
-        RunStatus::Interrupted => {
-            index.interrupted += 1;
-        }
-        RunStatus::Running | RunStatus::Finalizing => {}
-    }
-
-    for case in &state.cases {
-        if case.status != CaseStatus::Pending {
-            index.replayed_cases += 1;
-        }
-        match case.status {
-            CaseStatus::Passed => index.passed_cases += 1,
-            CaseStatus::Failed => index.failed_cases += 1,
-            CaseStatus::Incomplete | CaseStatus::Pending | CaseStatus::Running => {
-                index.incomplete_cases += 1;
-            }
-        }
-    }
 
     let global_evidence_clean =
         state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
@@ -141,55 +84,199 @@ pub(super) fn update_index(index: &mut RunIndex, state: &ActiveRunState) {
         .apis
         .iter()
         .map(|api| api.api_key.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<BTreeSet<_>>();
     index
         .apis
         .retain(|api_key, _| current_api_keys.contains(api_key.as_str()));
     for api in &state.apis {
-        let progress = index
-            .apis
-            .entry(api.api_key.clone())
-            .or_insert(ApiProgress {
-                cases: api.total,
-                status: "pending".to_string(),
-            });
-        progress.cases = api.total;
-        progress.status =
-            if state.status != RunStatus::Interrupted && global_evidence_clean && api.successful {
-                "verified"
-            } else if !api.successful {
-                "needs_attention"
-            } else {
-                "pending"
-            }
-            .to_string();
+        let progress = index.apis.entry(api.api_key.clone()).or_default();
+        update_api_progress(progress, state, api, global_evidence_clean);
+    }
+    refresh_verification(index, verification);
+}
+
+pub(super) fn update_focused_index(
+    index: &mut RunIndex,
+    state: &ActiveRunState,
+    inventory: &CaseGroupInventory,
+    inventory_complete: bool,
+    verification: &ApiVerificationConfig,
+) {
+    let Some(api) = state.apis.first() else {
+        return;
+    };
+    if index.latest_focused_sequences.get(&api.api_key) == Some(&state.sequence) {
+        return;
+    }
+    reconcile_baseline(index, state);
+    index.inventory_complete = inventory_complete;
+    update_execution_totals(index, state);
+    index
+        .latest_focused_sequences
+        .insert(api.api_key.clone(), state.sequence);
+
+    let current_apis = inventory
+        .groups
+        .iter()
+        .map(|group| {
+            let pattern = group
+                .pattern
+                .clone()
+                .unwrap_or_else(|| group.source_route.clone());
+            (
+                format!("{} {pattern}", group.method),
+                group.cases.len() as u32,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    index
+        .apis
+        .retain(|api_key, _| current_apis.contains_key(api_key));
+    for (api_key, cases) in current_apis {
+        index.apis.entry(api_key).or_default().cases = cases;
+    }
+    let global_evidence_clean =
+        state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
+    let progress = index.apis.entry(api.api_key.clone()).or_default();
+    update_api_progress(progress, state, api, global_evidence_clean);
+    refresh_verification(index, verification);
+}
+
+fn reconcile_baseline(index: &mut RunIndex, state: &ActiveRunState) {
+    let baseline_changed = (!index.source_revision.is_empty()
+        && index.source_revision != state.source_revision)
+        || (!index.case_inventory_id.is_empty()
+            && index.case_inventory_id != state.case_inventory_id);
+    if baseline_changed {
+        index.consecutive_successful_runs = 0;
+        index.consecutive_successful_cases = 0;
+        for api in index.apis.values_mut() {
+            api.consecutive_successful_runs = 0;
+            api.consecutive_successful_cases = 0;
+            api.verified = false;
+        }
+        index.latest_focused_sequences.clear();
+    }
+    index.source_revision = state.source_revision.clone();
+    index.case_inventory_id = state.case_inventory_id.clone();
+}
+
+fn update_execution_totals(index: &mut RunIndex, state: &ActiveRunState) {
+    index.executions += 1;
+    index.latest_status = Some(state.status);
+    match state.status {
+        RunStatus::Successful => {
+            index.successful += 1;
+            index.consecutive_successful_runs = index.consecutive_successful_runs.saturating_add(1);
+        }
+        RunStatus::Failed => {
+            index.failed += 1;
+            index.consecutive_successful_runs = 0;
+        }
+        RunStatus::Interrupted => {
+            index.interrupted += 1;
+            index.consecutive_successful_runs = 0;
+        }
+        RunStatus::Running | RunStatus::Finalizing => {}
+    }
+
+    let executed_cases = state
+        .cases
+        .iter()
+        .filter(|case| case.status != CaseStatus::Pending)
+        .count() as u64;
+    let successful_cases = state
+        .cases
+        .iter()
+        .filter(|case| case.status == CaseStatus::Passed)
+        .count() as u64;
+    index.replayed_cases = index.replayed_cases.saturating_add(executed_cases);
+    index.passed_cases = index.passed_cases.saturating_add(successful_cases);
+    index.failed_cases = index.failed_cases.saturating_add(
+        state
+            .cases
+            .iter()
+            .filter(|case| case.status == CaseStatus::Failed)
+            .count() as u64,
+    );
+    index.incomplete_cases = index.incomplete_cases.saturating_add(
+        state
+            .cases
+            .iter()
+            .filter(|case| {
+                matches!(
+                    case.status,
+                    CaseStatus::Incomplete | CaseStatus::Pending | CaseStatus::Running
+                )
+            })
+            .count() as u64,
+    );
+    index.consecutive_successful_cases = if state.status == RunStatus::Successful {
+        index
+            .consecutive_successful_cases
+            .saturating_add(successful_cases)
+    } else {
+        0
+    };
+}
+
+fn update_api_progress(
+    progress: &mut ApiProgress,
+    state: &ActiveRunState,
+    api: &ApiExecution,
+    global_evidence_clean: bool,
+) {
+    progress.cases = api.total;
+    progress.status.clear();
+    progress.executions = progress.executions.saturating_add(1);
+    let api_executed_cases = state
+        .cases
+        .iter()
+        .filter(|case| case.group_id == api.group_id && case.status != CaseStatus::Pending)
+        .count() as u64;
+    progress.executed_cases = progress.executed_cases.saturating_add(api_executed_cases);
+    progress.successful_cases = progress
+        .successful_cases
+        .saturating_add(u64::from(api.passed));
+
+    let successful = global_evidence_clean && api.successful;
+    if successful {
+        progress.successful = progress.successful.saturating_add(1);
+        progress.consecutive_successful_runs =
+            progress.consecutive_successful_runs.saturating_add(1);
+        progress.consecutive_successful_cases = progress
+            .consecutive_successful_cases
+            .saturating_add(u64::from(api.passed));
+    } else {
+        progress.consecutive_successful_runs = 0;
+        progress.consecutive_successful_cases = 0;
+    }
+}
+
+pub(super) fn refresh_verification(index: &mut RunIndex, verification: &ApiVerificationConfig) {
+    for (api_key, progress) in &mut index.apis {
+        let thresholds = verification.thresholds_for(api_key);
+        progress.verified = progress.consecutive_successful_runs
+            >= thresholds.consecutive_successful_runs
+            && progress.consecutive_successful_cases >= thresholds.successful_cases;
     }
 }
 
 pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> ProgressReport {
-    let total_cases = state.cases.len() as u32;
-    let passed_cases = count_cases(state, CaseStatus::Passed);
-    let failed_cases = count_cases(state, CaseStatus::Failed);
-    let incomplete_cases = total_cases - passed_cases - failed_cases;
-    let passed_apis = state.apis.iter().filter(|api| api.successful).count() as u32;
-    let failed_apis = state.apis.iter().filter(|api| api.failed > 0).count() as u32;
-    let incomplete_apis = state
-        .apis
-        .iter()
-        .filter(|api| !api.successful && api.failed == 0)
-        .count() as u32;
-    let verified = index
-        .apis
-        .values()
-        .filter(|api| api.status == "verified")
-        .count() as u32;
-    let complete = state.status == RunStatus::Successful && verified == state.apis.len() as u32;
-    let status = if complete {
-        "complete"
-    } else if state.status == RunStatus::Successful {
-        "in_progress"
-    } else {
-        "needs_attention"
+    let verified = index.apis.values().filter(|api| api.verified).count() as u32;
+    let complete =
+        index.inventory_complete && !index.apis.is_empty() && verified == index.apis.len() as u32;
+    let latest_cases = LatestCounts {
+        executed: state
+            .cases
+            .iter()
+            .filter(|case| case.status != CaseStatus::Pending)
+            .count() as u32,
+        successful: state
+            .cases
+            .iter()
+            .filter(|case| case.status == CaseStatus::Passed)
+            .count() as u32,
     };
 
     ProgressReport {
@@ -198,46 +285,38 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
             .finished_at
             .unwrap_or_else(chrono::Utc::now)
             .to_rfc3339(),
-        status: status.to_string(),
+        status: if complete {
+            "complete".to_string()
+        } else {
+            "in_progress".to_string()
+        },
         run: ProgressRun {
             key: state.run_key.clone(),
         },
         progress: ProgressSummary {
-            runs: RunCounts {
-                total: index.executions,
+            runs: SuccessCounts {
+                executed: index.executions,
                 successful: index.successful,
-                failed: index.failed,
-                interrupted: index.interrupted,
+                consecutive_successful: index.consecutive_successful_runs,
             },
-            cases: CaseCounts {
-                total: total_cases,
-                replayed: index.replayed_cases,
-                passed: index.passed_cases,
-                failed: index.failed_cases,
-                incomplete: index.incomplete_cases,
+            cases: SuccessCounts {
+                executed: index.replayed_cases,
+                successful: index.passed_cases,
+                consecutive_successful: index.consecutive_successful_cases,
             },
             apis: ApiCounts {
-                total: state.apis.len() as u32,
+                total: index.apis.len() as u32,
                 verified,
-                pending: state.apis.len() as u32 - verified,
             },
         },
         latest_run: LatestRun {
-            number: state.sequence,
-            status: state.status,
-            cases: LatestCaseCounts {
-                total: total_cases,
-                passed: passed_cases,
-                failed: failed_cases,
-                incomplete: incomplete_cases,
+            number: index.executions,
+            successful: state.status == RunStatus::Successful,
+            cases: latest_cases,
+            apis: LatestCounts {
+                executed: state.apis.len() as u32,
+                successful: state.apis.iter().filter(|api| api.successful).count() as u32,
             },
-            apis: LatestApiCounts {
-                total: state.apis.len() as u32,
-                passed: passed_apis,
-                failed: failed_apis,
-                incomplete: incomplete_apis,
-            },
-            highlights: highlights(&state.apis),
         },
         apis: index
             .apis
@@ -246,59 +325,21 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
                 (
                     api_key.clone(),
                     ProgressApi {
-                        cases: api.cases,
-                        status: api.status.clone(),
+                        verified: api.verified,
+                        runs: SuccessCounts {
+                            executed: api.executions,
+                            successful: api.successful,
+                            consecutive_successful: api.consecutive_successful_runs,
+                        },
+                        cases: SuccessCounts {
+                            executed: api.executed_cases,
+                            successful: api.successful_cases,
+                            consecutive_successful: api.consecutive_successful_cases,
+                        },
                     },
                 )
             })
             .collect(),
-    }
-}
-
-fn count_cases(state: &ActiveRunState, status: CaseStatus) -> u32 {
-    state
-        .cases
-        .iter()
-        .filter(|case| case.status == status)
-        .count() as u32
-}
-
-fn highlights(apis: &[ApiExecution]) -> Highlights {
-    let failing = apis.iter().filter(|api| api.failed > 0).collect::<Vec<_>>();
-    let most_failed_cases = failing
-        .iter()
-        .copied()
-        .max_by_key(|api| (api.failed, std::cmp::Reverse(api.api_key.as_str())))
-        .map(highlight);
-    let highest_failure_rate = failing
-        .iter()
-        .copied()
-        .max_by(|left, right| {
-            failure_rate(left)
-                .total_cmp(&failure_rate(right))
-                .then_with(|| right.api_key.cmp(&left.api_key))
-        })
-        .map(highlight);
-    Highlights {
-        most_failed_cases,
-        highest_failure_rate,
-    }
-}
-
-fn highlight(api: &ApiExecution) -> ApiHighlight {
-    ApiHighlight {
-        api: api.api_key.clone(),
-        failed: api.failed,
-        total: api.total,
-        failure_rate: failure_rate(api),
-    }
-}
-
-fn failure_rate(api: &ApiExecution) -> f64 {
-    if api.total == 0 {
-        0.0
-    } else {
-        (f64::from(api.failed) * 10_000.0 / f64::from(api.total)).round() / 100.0
     }
 }
 
@@ -309,7 +350,18 @@ mod tests {
     use chrono::Utc;
 
     use super::*;
-    use crate::e2e_run::model::{ActiveRunState, ApiExecution, CaseExecution};
+    use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
+    use crate::e2e_run::model::{
+        ApiExecution, ApiProgress, ApiVerificationThresholds, CaseExecution,
+    };
+
+    fn verification(runs: u64, cases: u64) -> ApiVerificationConfig {
+        ApiVerificationConfig {
+            consecutive_successful_runs: runs,
+            successful_cases: cases,
+            overrides: BTreeMap::new(),
+        }
+    }
 
     fn state(api_passed: u32, api_failed: u32, status: RunStatus) -> ActiveRunState {
         let cases = (0..api_passed)
@@ -372,72 +424,96 @@ mod tests {
         }
     }
 
-    #[test]
-    fn one_clean_successful_round_completes_progress() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
-        let completed = state(30, 0, RunStatus::Successful);
-
-        update_index(&mut index, &completed);
-        let progress = build_progress(&index, &completed);
-
-        assert_eq!(progress.status, "complete");
-        assert_eq!(index.apis["GET /api/orders/*"].status, "verified");
-        assert_eq!(index.successful, 1);
+    fn inventory() -> CaseGroupInventory {
+        CaseGroupInventory {
+            case_source: PathBuf::from("/cases"),
+            source_revision: "source".to_string(),
+            case_inventory_id: "inventory".to_string(),
+            groups: vec![
+                CanonicalCaseGroup {
+                    group_id: "GET /api/orders/*".to_string(),
+                    method: "GET".to_string(),
+                    source_route: "/api/orders/:id".to_string(),
+                    pattern: Some("/api/orders/*".to_string()),
+                    case_inventory_id: "inventory".to_string(),
+                    cases: (0..3)
+                        .map(|index| CanonicalCase {
+                            case_id: format!("passed-{index}"),
+                            case_dir: PathBuf::from("/cases"),
+                        })
+                        .collect(),
+                },
+                CanonicalCaseGroup {
+                    group_id: "POST /api/payments".to_string(),
+                    method: "POST".to_string(),
+                    source_route: "/api/payments".to_string(),
+                    pattern: None,
+                    case_inventory_id: "inventory".to_string(),
+                    cases: vec![CanonicalCase {
+                        case_id: "payment-passed".to_string(),
+                        case_dir: PathBuf::from("/cases"),
+                    }],
+                },
+            ],
+        }
     }
 
     #[test]
-    fn highlights_report_largest_count_and_rate() {
-        let mut first = state(29, 1, RunStatus::Failed);
-        first.apis.push(ApiExecution {
-            api_key: "POST /api/payments".to_string(),
+    fn verification_requires_both_round_and_case_thresholds() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let first = state(2, 0, RunStatus::Successful);
+
+        update_index(&mut index, &first, &verification(2, 5));
+        assert!(!index.apis["GET /api/orders/*"].verified);
+
+        let mut second = first.clone();
+        second.sequence = 2;
+        update_index(&mut index, &second, &verification(2, 5));
+        assert!(!index.apis["GET /api/orders/*"].verified);
+
+        let mut third = state(3, 0, RunStatus::Successful);
+        third.sequence = 3;
+        update_index(&mut index, &third, &verification(2, 5));
+        assert!(index.apis["GET /api/orders/*"].verified);
+        assert_eq!(index.consecutive_successful_runs, 3);
+        assert_eq!(index.consecutive_successful_cases, 7);
+    }
+
+    #[test]
+    fn failed_round_resets_round_and_covered_case_streaks() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let first = state(3, 0, RunStatus::Successful);
+        update_index(&mut index, &first, &verification(2, 6));
+
+        let mut second = first.clone();
+        second.sequence = 2;
+        update_index(&mut index, &second, &verification(2, 6));
+        assert!(index.apis["GET /api/orders/*"].verified);
+
+        let mut failed = state(2, 1, RunStatus::Failed);
+        failed.sequence = 3;
+        update_index(&mut index, &failed, &verification(2, 6));
+        let api = &index.apis["GET /api/orders/*"];
+        assert!(!api.verified);
+        assert_eq!(api.consecutive_successful_runs, 0);
+        assert_eq!(api.consecutive_successful_cases, 0);
+        assert_eq!(index.consecutive_successful_runs, 0);
+        assert_eq!(index.consecutive_successful_cases, 0);
+    }
+
+    #[test]
+    fn successful_api_accumulates_when_another_api_fails() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let mut round = state(3, 0, RunStatus::Failed);
+        round.cases.push(CaseExecution {
+            case_id: "payment-failed".to_string(),
+            case_dir: PathBuf::from("/cases"),
             group_id: "POST /api/payments".to_string(),
-            method: "POST".to_string(),
-            api_pattern: "/api/payments".to_string(),
-            case_ids: Vec::new(),
-            total: 4,
-            passed: 2,
-            failed: 2,
-            incomplete: 0,
-            successful: false,
-            ensure_status: None,
-            report_dir: PathBuf::from("apis/api-0002"),
+            status: CaseStatus::Failed,
+            assertion_passed: Some(false),
+            replay_clean: Some(true),
+            response_assertion: None,
         });
-        let highlights = highlights(&first.apis);
-        assert_eq!(
-            highlights.most_failed_cases.unwrap().api,
-            "POST /api/payments"
-        );
-        assert_eq!(highlights.highest_failure_rate.unwrap().failure_rate, 50.0);
-    }
-
-    #[test]
-    fn interrupted_run_requires_attention_without_verifying_api() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
-        let interrupted = state(30, 0, RunStatus::Interrupted);
-
-        update_index(&mut index, &interrupted);
-        let progress = build_progress(&index, &interrupted);
-
-        assert_eq!(progress.status, "needs_attention");
-        assert_eq!(index.apis["GET /api/orders/*"].status, "pending");
-        assert_eq!(index.interrupted, 1);
-    }
-
-    #[test]
-    fn publishing_same_sequence_is_idempotent() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
-        let completed = state(30, 0, RunStatus::Successful);
-        update_index(&mut index, &completed);
-        update_index(&mut index, &completed);
-        assert_eq!(index.executions, 1);
-        assert_eq!(index.replayed_cases, 30);
-        assert_eq!(index.successful, 1);
-    }
-
-    #[test]
-    fn clean_api_is_verified_while_failed_api_needs_attention() {
-        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
-        let mut round = state(30, 0, RunStatus::Failed);
         round.apis.push(ApiExecution {
             api_key: "POST /api/payments".to_string(),
             group_id: "POST /api/payments".to_string(),
@@ -452,25 +528,172 @@ mod tests {
             ensure_status: None,
             report_dir: PathBuf::from("apis/api-0002"),
         });
-        update_index(&mut index, &round);
-        let progress = build_progress(&index, &round);
-        assert_eq!(progress.status, "needs_attention");
-        assert_eq!(index.apis["GET /api/orders/*"].status, "verified");
-        assert_eq!(index.apis["POST /api/payments"].status, "needs_attention");
+
+        update_index(&mut index, &round, &verification(1, 3));
+
+        assert!(index.apis["GET /api/orders/*"].verified);
+        assert!(!index.apis["POST /api/payments"].verified);
     }
 
     #[test]
-    fn human_progress_omits_protocol_evidence() {
+    fn publishing_same_sequence_is_idempotent() {
         let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
-        let completed = state(30, 0, RunStatus::Successful);
-        update_index(&mut index, &completed);
+        let completed = state(3, 0, RunStatus::Successful);
+        update_index(&mut index, &completed, &verification(1, 3));
+        update_index(&mut index, &completed, &verification(1, 3));
+
+        assert_eq!(index.executions, 1);
+        assert_eq!(index.replayed_cases, 3);
+        assert_eq!(index.successful, 1);
+    }
+
+    #[test]
+    fn focused_api_rounds_update_progress_and_can_complete_all_groups() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let orders = state(3, 0, RunStatus::Successful);
+
+        update_focused_index(&mut index, &orders, &inventory(), true, &verification(1, 1));
+
+        assert_eq!(index.executions, 1);
+        assert!(index.apis["GET /api/orders/*"].verified);
+        assert!(!index.apis["POST /api/payments"].verified);
+        assert_eq!(build_progress(&index, &orders).status, "in_progress");
+
+        let mut payment = state(1, 0, RunStatus::Successful);
+        payment.cases[0].case_id = "payment-passed".to_string();
+        payment.cases[0].group_id = "POST /api/payments".to_string();
+        payment.apis[0] = ApiExecution {
+            api_key: "POST /api/payments".to_string(),
+            group_id: "POST /api/payments".to_string(),
+            method: "POST".to_string(),
+            api_pattern: "/api/payments".to_string(),
+            case_ids: vec!["payment-passed".to_string()],
+            total: 1,
+            passed: 1,
+            failed: 0,
+            incomplete: 0,
+            successful: true,
+            ensure_status: None,
+            report_dir: PathBuf::from("apis/api-0001"),
+        };
+
+        update_focused_index(
+            &mut index,
+            &payment,
+            &inventory(),
+            true,
+            &verification(1, 1),
+        );
+
+        assert_eq!(index.executions, 2);
+        assert!(index.apis.values().all(|api| api.verified));
+        assert_eq!(build_progress(&index, &payment).status, "complete");
+    }
+
+    #[test]
+    fn focused_apis_use_individual_verification_overrides() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let mut policy = verification(1, 1);
+        policy.overrides.insert(
+            "POST /api/payments".to_string(),
+            ApiVerificationThresholds {
+                consecutive_successful_runs: 2,
+                successful_cases: 2,
+            },
+        );
+        let orders = state(3, 0, RunStatus::Successful);
+        update_focused_index(&mut index, &orders, &inventory(), true, &policy);
+
+        let mut payment = state(1, 0, RunStatus::Successful);
+        payment.cases[0].case_id = "payment-passed".to_string();
+        payment.cases[0].group_id = "POST /api/payments".to_string();
+        payment.apis[0] = ApiExecution {
+            api_key: "POST /api/payments".to_string(),
+            group_id: "POST /api/payments".to_string(),
+            method: "POST".to_string(),
+            api_pattern: "/api/payments".to_string(),
+            case_ids: vec!["payment-passed".to_string()],
+            total: 1,
+            passed: 1,
+            failed: 0,
+            incomplete: 0,
+            successful: true,
+            ensure_status: None,
+            report_dir: PathBuf::from("apis/api-0001"),
+        };
+        update_focused_index(&mut index, &payment, &inventory(), true, &policy);
+
+        assert!(index.apis["GET /api/orders/*"].verified);
+        assert!(!index.apis["POST /api/payments"].verified);
+
+        payment.sequence = 2;
+        update_focused_index(&mut index, &payment, &inventory(), true, &policy);
+
+        assert!(index.apis["POST /api/payments"].verified);
+    }
+
+    #[test]
+    fn changed_baseline_starts_new_streaks() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let first = state(3, 0, RunStatus::Successful);
+        update_index(&mut index, &first, &verification(2, 6));
+        let mut changed = first.clone();
+        changed.sequence = 2;
+        changed.case_inventory_id = "changed-inventory".to_string();
+        update_index(&mut index, &changed, &verification(2, 6));
+
+        assert_eq!(index.consecutive_successful_runs, 1);
+        assert_eq!(index.consecutive_successful_cases, 3);
+        assert!(!index.apis["GET /api/orders/*"].verified);
+    }
+
+    #[test]
+    fn legacy_progress_is_migrated_as_a_conservative_single_round_streak() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        index.executions = 1;
+        index.successful = 1;
+        index.latest_status = Some(RunStatus::Successful);
+        index.apis.insert(
+            "GET /api/orders/*".to_string(),
+            ApiProgress {
+                cases: 3,
+                status: "verified".to_string(),
+                ..ApiProgress::default()
+            },
+        );
+
+        index.normalize_legacy_progress();
+        refresh_verification(&mut index, &verification(2, 6));
+
+        let api = &index.apis["GET /api/orders/*"];
+        assert_eq!(index.consecutive_successful_runs, 1);
+        assert_eq!(index.consecutive_successful_cases, 3);
+        assert_eq!(api.executions, 1);
+        assert_eq!(api.successful, 1);
+        assert_eq!(api.consecutive_successful_runs, 1);
+        assert_eq!(api.consecutive_successful_cases, 3);
+        assert!(!api.verified);
+    }
+
+    #[test]
+    fn human_progress_uses_only_simplified_success_counts() {
+        let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+        let completed = state(3, 0, RunStatus::Successful);
+        update_index(&mut index, &completed, &verification(1, 3));
         let yaml = serde_yaml::to_string(&build_progress(&index, &completed)).unwrap();
-        assert!(!yaml.contains("connection"));
-        assert!(!yaml.contains("aggregate"));
-        assert!(!yaml.contains("policy"));
-        assert!(!yaml.contains("session"));
-        assert!(!yaml.contains("protocol"));
-        assert!(!yaml.contains("/cases"));
-        assert!(!yaml.contains("consecutive"));
+
+        assert!(yaml.contains("consecutive_successful: 3"));
+        assert!(yaml.contains("verified: true"));
+        for omitted in [
+            "failed:",
+            "incomplete:",
+            "interrupted:",
+            "replayed:",
+            "passed:",
+            "needs_attention",
+            "highlights:",
+        ] {
+            assert!(!yaml.contains(omitted), "{omitted} leaked into progress");
+        }
     }
 }

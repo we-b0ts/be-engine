@@ -39,6 +39,8 @@ pub struct CasePathPatternFeedback {
     pub case_source: String,
     pub authority: CasePathPatternAuthority,
     pub patterns: Vec<String>,
+    pub incorrect_patterns: Vec<String>,
+    pub correction_evidence: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +57,10 @@ pub struct CasePathPatternReport {
     pub patterns_after: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
+    pub corrections_requested: Vec<String>,
+    pub corrections_already_absent: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correction_evidence: Option<String>,
     pub diff: String,
 }
 
@@ -73,17 +79,13 @@ impl CasePathPatternPlan {
 
     pub fn apply(self, allow_delete: bool) -> Result<CasePathPatternReport> {
         ensure!(
-            !allow_delete || self.report.authority == CasePathPatternAuthority::Authoritative,
-            "--allow-delete requires --authority authoritative"
+            !allow_delete || !self.report.removed.is_empty(),
+            "--allow-delete requires at least one explicit --remove-incorrect-pattern"
         );
         if !self.report.removed.is_empty() {
             ensure!(
-                self.report.authority == CasePathPatternAuthority::Authoritative,
-                "focused case feedback must not remove case path patterns"
-            );
-            ensure!(
                 allow_delete,
-                "authoritative feedback would remove patterns; rerun apply with --allow-delete after reviewing the plan"
+                "corrective feedback would remove explicitly named patterns; rerun apply with --allow-delete after reviewing the plan"
             );
         }
 
@@ -157,7 +159,26 @@ pub fn plan_case_path_pattern_feedback(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
-    if feedback.authority == CasePathPatternAuthority::Focused && requested.is_empty() {
+    let incorrect = feedback
+        .incorrect_patterns
+        .iter()
+        .map(|pattern| validate_incorrect_pattern(pattern))
+        .collect::<Result<BTreeSet<_>>>()?;
+    ensure!(
+        requested.is_disjoint(&incorrect),
+        "a pattern cannot be both requested and marked incorrect"
+    );
+    match (&feedback.correction_evidence, incorrect.is_empty()) {
+        (Some(evidence), false) => validate_single_line("correction evidence", evidence)?,
+        (Some(_), true) => {
+            anyhow::bail!("correction evidence requires at least one incorrect pattern")
+        }
+        (None, false) => {
+            anyhow::bail!("removing an incorrect AI-managed pattern requires --correction-evidence")
+        }
+        (None, true) => {}
+    }
+    if requested.is_empty() && incorrect.is_empty() {
         let patterns = before.into_iter().collect::<Vec<_>>();
         return Ok(CasePathPatternPlan {
             config_path: feedback.config_path.clone(),
@@ -176,14 +197,17 @@ pub fn plan_case_path_pattern_feedback(
                 patterns_after: patterns,
                 added: Vec::new(),
                 removed: Vec::new(),
+                corrections_requested: Vec::new(),
+                corrections_already_absent: Vec::new(),
+                correction_evidence: None,
                 diff: String::new(),
             },
         });
     }
-    let after = match feedback.authority {
-        CasePathPatternAuthority::Focused => before.union(&requested).cloned().collect(),
-        CasePathPatternAuthority::Authoritative => requested,
-    };
+    let mut after = before.union(&requested).cloned().collect::<BTreeSet<_>>();
+    for pattern in &incorrect {
+        after.remove(pattern);
+    }
 
     let newline = newline(&original);
     let old_block = &original[block.clone()];
@@ -202,6 +226,8 @@ pub fn plan_case_path_pattern_feedback(
 
     let added = after.difference(&before).cloned().collect::<Vec<_>>();
     let removed = before.difference(&after).cloned().collect::<Vec<_>>();
+    let corrections_requested = incorrect.iter().cloned().collect::<Vec<_>>();
+    let corrections_already_absent = incorrect.difference(&before).cloned().collect::<Vec<_>>();
     let patterns_before = before.into_iter().collect::<Vec<_>>();
     let patterns_after = after.into_iter().collect::<Vec<_>>();
     let changed = updated != original;
@@ -234,6 +260,9 @@ pub fn plan_case_path_pattern_feedback(
             patterns_after,
             added,
             removed,
+            corrections_requested,
+            corrections_already_absent,
+            correction_evidence: feedback.correction_evidence,
             diff,
         },
     })
@@ -303,6 +332,15 @@ fn validate_feedback_pattern(pattern: &str, rule: &HttpGatewayRuleConfig) -> Res
             "pattern {pattern} is outside the selected rule's path_prefixes"
         );
     }
+    Ok(pattern.to_string())
+}
+
+fn validate_incorrect_pattern(pattern: &str) -> Result<String> {
+    validate_single_line("incorrect pattern", pattern)?;
+    ensure!(
+        pattern.starts_with('/') && !pattern.contains(['?', '#']),
+        "incorrect pattern must be an exact URI path pattern: {pattern}"
+    );
     Ok(pattern.to_string())
 }
 

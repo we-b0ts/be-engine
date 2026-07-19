@@ -8,7 +8,7 @@ the verified change.
 Resolve the PR base in this order:
 
 1. the user's explicit instruction;
-2. the generated and validated `.migration/e2e.yaml` `pr_base`;
+2. the generated and validated `.traffic-e2e/e2e.yaml` `pr_base`;
 3. target `AGENTS.md` or linked repository documentation;
 4. the hosting repository's default branch when it is clearly the intended
    integration target.
@@ -35,7 +35,7 @@ otherwise.
   permits it. Follow the target naming convention; otherwise use a concise
   `codex/` scope name.
 - Do not run migration write commands on `pr_base` or detached HEAD.
-- Keep `.migration/local/` ignored. Never stage, commit, or force-add its run
+- Keep `.traffic-e2e/local/` ignored. Never stage, commit, or force-add its run
   state, reports, logs, sessions, PIDs, or temporary files.
 
 ## Deliver The Increment
@@ -46,9 +46,9 @@ evidence audit, even when recorded E2E leaves the migration `incomplete` or
 push, or PR creation.
 
 1. inspect the final diff and `git diff --check`;
-2. verify `git ls-files .migration/local` and the staged diff contain no local
+2. verify `git ls-files .traffic-e2e/local` and the staged diff contain no local
    migration artifact;
-3. commit only intended migration, stable `.migration/e2e.yaml` project
+3. commit only intended migration, stable `.traffic-e2e/e2e.yaml` project
    metadata changes, applicable verified cross-scope lessons, and one concise
    changelog entry for this delivered increment;
 4. require no uncommitted intended-scope change after the commit;

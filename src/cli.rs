@@ -424,6 +424,7 @@ fn replay_control_config(args: ReplayControlArgs) -> Result<ReplayControlConfig>
         case_id,
         fail_on_dirty,
         fail_on_incomplete,
+        wait_timeout: None,
     })
 }
 

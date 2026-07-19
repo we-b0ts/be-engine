@@ -153,6 +153,25 @@ impl ActiveCaseRegistry {
         Some(registration.case.clone())
     }
 
+    pub(crate) fn invalidate_case(
+        &self,
+        case_id: Uuid,
+        invalidation: CaseInvalidation,
+    ) -> Option<CaseContext> {
+        let mut state = self.state.lock().expect("active case registry poisoned");
+        let registration = state
+            .active
+            .iter_mut()
+            .find(|registration| registration.case.id == case_id)?;
+        if !registration.accepting_dependencies {
+            return None;
+        }
+        if registration.invalidation.is_none() {
+            registration.invalidation = Some(invalidation);
+        }
+        Some(registration.case.clone())
+    }
+
     pub(crate) fn invalidation_for(&self, case_id: Uuid) -> Option<CaseInvalidation> {
         let state = self.state.lock().expect("active case registry poisoned");
         state
@@ -295,6 +314,28 @@ mod tests {
 
         drop(guard);
         assert_eq!(registry.invalidation_for(case.id), None);
+    }
+
+    #[test]
+    fn invalidates_only_the_requested_active_case() {
+        let registry = ActiveCaseRegistry::default();
+        let active = case();
+        let other = case();
+        let guard = registry.try_register(active.clone(), Some(42)).unwrap();
+        let invalidation = CaseInvalidation::new("client_disconnected", "client disconnected");
+
+        assert_eq!(
+            registry.invalidate_case(other.id, invalidation.clone()),
+            None
+        );
+        assert_eq!(registry.invalidation_for(active.id), None);
+        assert_eq!(
+            registry.invalidate_case(active.id, invalidation.clone()),
+            Some(active.clone())
+        );
+        assert_eq!(registry.invalidation_for(active.id), Some(invalidation));
+
+        drop(guard);
     }
 
     #[test]

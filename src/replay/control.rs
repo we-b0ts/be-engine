@@ -1,3 +1,11 @@
+use std::time::{Duration, Instant};
+
+use super::*;
+
+const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+const READY_PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
+
 #[derive(Debug, Deserialize)]
 pub(super) struct ReplayControlRequest {
     pub(super) command: String,
@@ -11,18 +19,38 @@ pub(super) struct ReplayControlRequest {
 
 pub(crate) async fn send_control_request(config: MysqlReplayControlConfig) -> Result<Value> {
     if config.command == "wait_ready" {
-        let mut last_error = None;
-        for _ in 0..200 {
-            match send_control_request_once(config.clone()).await {
+        let timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_TIMEOUT);
+        let started = Instant::now();
+        let mut next_progress = READY_PROGRESS_INTERVAL;
+        tracing::info!(
+            timeout_seconds = timeout.as_secs(),
+            session = %config.session_path.display(),
+            "waiting for replay session readiness"
+        );
+        loop {
+            let error = match send_control_request_once(config.clone()).await {
                 Ok(response) => return Ok(response),
-                Err(err) => {
-                    last_error = Some(err);
-                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-                }
+                Err(err) => err,
+            };
+            let elapsed = started.elapsed();
+            if elapsed >= timeout {
+                return Err(error).with_context(|| {
+                    format!(
+                        "replay session did not become ready within {} seconds",
+                        timeout.as_secs()
+                    )
+                });
             }
-        }
-        if let Some(err) = last_error {
-            return Err(err).context("replay session did not become ready");
+            if elapsed >= next_progress {
+                tracing::info!(
+                    elapsed_seconds = elapsed.as_secs(),
+                    timeout_seconds = timeout.as_secs(),
+                    session = %config.session_path.display(),
+                    "still waiting for replay session readiness"
+                );
+                next_progress += READY_PROGRESS_INTERVAL;
+            }
+            tokio::time::sleep(READY_POLL_INTERVAL.min(timeout.saturating_sub(elapsed))).await;
         }
     }
     send_control_request_once(config).await
@@ -536,4 +564,3 @@ pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
 pub(super) fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
     report.case_is_dirty(case_id)
 }
-use super::*;

@@ -19,6 +19,15 @@ pub struct VerifiedApiExcludeFeedback {
     pub path_pattern: String,
     pub aggregate_report: PathBuf,
     pub assertion_report: PathBuf,
+    pub verification: VerifiedApiVerification,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct VerifiedApiVerification {
+    pub consecutive_successful_runs: u64,
+    pub consecutive_successful_cases: u64,
+    pub required_consecutive_successful_runs: u64,
+    pub required_successful_cases: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -32,9 +41,8 @@ pub struct VerifiedApiExcludeReport {
     pub assertion_report: PathBuf,
     pub assertion_fingerprint: String,
     pub case_source: PathBuf,
-    pub threshold: usize,
+    pub verification: VerifiedApiVerification,
     pub matching_case_ids: Vec<String>,
-    pub consecutive_success_case_ids: Vec<String>,
     pub eligible: bool,
     pub blockers: Vec<String>,
     pub changed: bool,
@@ -129,10 +137,13 @@ pub fn plan_verified_api_exclude(
     let original = fs::read_to_string(&config_path)
         .with_context(|| format!("failed to read recorder config {}", config_path.display()))?;
     let config = parse_config(&original, &config_path)?;
-    let threshold = config.http_gateway.verified_excludes.consecutive_successes;
     ensure!(
-        threshold > 0,
-        "http_gateway.verified_excludes.consecutive_successes must be greater than zero"
+        feedback.verification.required_consecutive_successful_runs > 0,
+        "required consecutive successful runs must be greater than zero"
+    );
+    ensure!(
+        feedback.verification.required_successful_cases > 0,
+        "required successful cases must be greater than zero"
     );
     let candidate = VerifiedApiExclude {
         rule: feedback.rule_name,
@@ -153,8 +164,18 @@ pub fn plan_verified_api_exclude(
     if evidence.aggregate_dirty {
         blockers.push("aggregate_dirty".to_string());
     }
-    if evidence.consecutive_success_case_ids.len() < threshold {
-        blockers.push("consecutive_successes_below_threshold".to_string());
+    if evidence.consecutive_success_case_ids.len() != evidence.matching_case_ids.len() {
+        blockers.push("current_assertions_not_successful".to_string());
+    }
+    if feedback.verification.consecutive_successful_runs
+        < feedback.verification.required_consecutive_successful_runs
+    {
+        blockers.push("consecutive_successful_runs_below_threshold".to_string());
+    }
+    if feedback.verification.consecutive_successful_cases
+        < feedback.verification.required_successful_cases
+    {
+        blockers.push("successful_cases_below_threshold".to_string());
     }
     let eligible = blockers.is_empty();
 
@@ -175,9 +196,8 @@ pub fn plan_verified_api_exclude(
         assertion_report: evidence.assertion_path,
         assertion_fingerprint: evidence.assertion_fingerprint,
         case_source: evidence.case_source,
-        threshold,
+        verification: feedback.verification,
         matching_case_ids: evidence.matching_case_ids,
-        consecutive_success_case_ids: evidence.consecutive_success_case_ids,
         eligible,
         blockers,
         changed: managed.changed,
@@ -201,8 +221,14 @@ pub fn ensure_verified_api_exclude(
     let plan = plan_verified_api_exclude(feedback.clone())?;
     let initial = plan.report().clone();
     if !initial.eligible {
+        let evidence_blocked = initial.blockers.iter().any(|blocker| {
+            matches!(
+                blocker.as_str(),
+                "aggregate_incomplete" | "aggregate_dirty" | "current_assertions_not_successful"
+            )
+        });
         ensure!(
-            initial.blockers == ["consecutive_successes_below_threshold"],
+            !evidence_blocked,
             "verified API exclude evidence is blocked: {}",
             initial.blockers.join(", ")
         );

@@ -76,7 +76,7 @@ pub(super) fn load_or_create_index(
     case_source: &Path,
 ) -> Result<RunIndex> {
     if layout.index_path.is_file() {
-        let index: RunIndex = read_yaml(&layout.index_path)?;
+        let mut index: RunIndex = read_yaml(&layout.index_path)?;
         ensure!(
             index.version == STATE_VERSION,
             "unsupported E2E run index version {}",
@@ -90,6 +90,7 @@ pub(super) fn load_or_create_index(
             index.case_source == case_source,
             "E2E run index belongs to another case source"
         );
+        index.normalize_legacy_progress();
         return Ok(index);
     }
     Ok(RunIndex::empty(
@@ -245,7 +246,7 @@ fn write_current(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
         .latest_dir
         .join("state.yaml")
         .strip_prefix(&layout.local_root)
-        .context("latest state is outside migration local root")?
+        .context("latest state is outside traffic E2E local root")?
         .to_path_buf();
     write_yaml(
         &layout.current_path,

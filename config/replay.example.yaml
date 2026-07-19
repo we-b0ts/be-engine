@@ -1,7 +1,7 @@
 version: 1
 expected_response: assertions_only
 
-# Copy this file to the target repository as config/replay.yaml. Keep only
+# Copy this file to the target repository as .traffic-e2e/replay.yaml. Keep only
 # evidence-backed rules for that target; never put recorded UUIDs, timestamps,
 # response bodies, secrets, absolute case paths, or case-id exceptions here.
 rules:

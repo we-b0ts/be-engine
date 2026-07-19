@@ -1,4 +1,4 @@
 interface:
   display_name: "Recorded E2E Cases"
   short_description: "Replay cases and maintain recorder feedback"
-  default_prompt: "Use $recorded-e2e-cases to prepare pattern-aware API groups, preserve only verified cross-scope replay lessons in concise migration notes, and repeat clean full rounds until generated progress is complete."
+  default_prompt: "Use $recorded-e2e-cases to prepare pattern-aware API groups, preserve only verified cross-scope replay lessons in concise migration notes, and repeat focused groups or one required full regression until generated progress is complete."

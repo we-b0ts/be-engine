@@ -6,8 +6,10 @@ attempts, and full-round canonical evidence separate.
 ## Layout
 
 ```text
-.migration/
+.traffic-e2e/
 ├── e2e.yaml
+├── replay.yaml
+├── recorder.toml
 ├── e2e-progress.yaml
 └── local/
     ├── current.yaml
@@ -36,7 +38,7 @@ run keys.
 The target root `.gitignore` MUST contain:
 
 ```gitignore
-.migration/local/
+.traffic-e2e/local/
 ```
 
 Verify it with `git check-ignore` before runner state is created. Never stage or
@@ -44,14 +46,14 @@ force-add `local/`. The runner writes all JSON/YAML evidence under `local/`;
 AI MUST NOT create, edit, merge, repair, or copy these files by hand.
 
 `e2e-progress.yaml` is different: it is a concise runner-generated report for
-humans and is expected to be committed. It contains counts, status, latest
-full-round summaries, failure highlights, and per-API progress. It intentionally
-excludes protocol evidence, connections, policies, sessions, aggregates, root
-causes, and repair suggestions. AI reads local evidence when diagnosis is
-needed.
+humans and is expected to be committed. It contains only execution, success,
+trailing-success, verification, and latest-round counts. It intentionally
+excludes failed/incomplete categories, protocol evidence, connections,
+policies, sessions, aggregates, root causes, and repair suggestions. AI reads
+local evidence when diagnosis is needed.
 
 Details for unresolved or unfixable problems remain in runner-generated reports
-and evidence under `.migration/local/`.
+and evidence under `.traffic-e2e/local/`.
 
 The generated shape is:
 
@@ -63,60 +65,74 @@ run:
   key: 20260717080000-record-api
 progress:
   runs:
-    total: 4
+    executed: 4
     successful: 3
-    failed: 1
-    interrupted: 0
+    consecutive_successful: 2
   cases:
-    total: 34
-    replayed: 136
-    passed: 132
-    failed: 4
-    incomplete: 0
+    executed: 136
+    successful: 132
+    consecutive_successful: 68
   apis:
     total: 5
     verified: 5
-    pending: 0
 latest_run:
   number: 4
-  status: successful
+  successful: true
   cases:
-    total: 34
-    passed: 34
-    failed: 0
-    incomplete: 0
+    executed: 34
+    successful: 34
   apis:
-    total: 5
-    passed: 5
-    failed: 0
-    incomplete: 0
-  highlights: {}
+    executed: 5
+    successful: 5
 apis:
   GET /api/widgets/*:
-    cases: 8
-    status: verified
+    verified: true
+    runs:
+      executed: 3
+      successful: 3
+      consecutive_successful: 3
+    cases:
+      executed: 24
+      successful: 24
+      consecutive_successful: 24
   POST /api/widgets:
-    cases: 4
-    status: verified
+    verified: true
+    runs:
+      executed: 3
+      successful: 3
+      consecutive_successful: 3
+    cases:
+      executed: 12
+      successful: 12
+      consecutive_successful: 12
 ```
 
-`progress.cases` is cumulative across full rounds except `total`, which is the
-current published inventory. `latest_run` never expands every API; on a failed
-round its `highlights` contains only `most_failed_cases` and
-`highest_failure_rate`.
+`progress.runs` and `progress.cases` are cumulative across terminal focused and
+full rounds. `consecutive_successful` under `cases` is the number of case
+executions covered by the same trailing fully successful rounds, not a sequence
+assembled from individual case outcomes. A non-successful round resets both
+global streaks. Per-API streaks reset only when that API's round is not successful.
+An inventory or source-revision change starts new streaks. Detailed failure
+categories remain in runner-local evidence, not this human report.
 
 ## Stable Configuration
 
-Generate the source-controlled `.migration/e2e.yaml` with
+Keep the source-controlled replay and recorder migration inputs at
+`.traffic-e2e/replay.yaml` and `.traffic-e2e/recorder.toml`.
+
+Generate the source-controlled `.traffic-e2e/e2e.yaml` with
 `traffic-e2e-run init`:
 
 ```bash
 traffic-e2e-run init \
   --target-root <target> \
   --project-cli scripts/<project>-cli \
-  --replay-policy config/replay.yaml \
+  --replay-policy .traffic-e2e/replay.yaml \
+  --api-verification-consecutive-successful-runs 3 \
+  --api-verification-successful-cases 3 \
+  --api-verification-override 'GET /api/widgets/*=5,200' \
   --pr-base <confirmed-base-branch> \
-  --recorder-config config/recorder.toml \
+  --recorder-config .traffic-e2e/recorder.toml \
   --recording-rule record-api
 ```
 
@@ -125,18 +141,40 @@ The resulting file is:
 ```yaml
 version: 4
 project_cli: scripts/<project>-cli
-replay_policy: config/replay.yaml
+replay_policy: .traffic-e2e/replay.yaml
+replay_startup_timeout_seconds: 60
+api_verification:
+  consecutive_successful_runs: 3
+  successful_cases: 3
+  overrides:
+    GET /api/widgets/*:
+      consecutive_successful_runs: 5
+      successful_cases: 200
 pr_base: <confirmed-base-branch>
-recorder_config: config/recorder.toml
+recorder_config: .traffic-e2e/recorder.toml
 recording_rule: record-api
 local_root: local
 ```
+
+`replay_startup_timeout_seconds` is the replay readiness deadline and defaults
+to 60 when absent from an older config. The runner prints dependency-loading
+progress by loaded case count, beginning with `loaded_cases=0` and then about
+every 5%, while retaining the complete replay log.
+
+`api_verification` is the sole verification policy. Top-level values are
+defaults; a canonical `METHOD path_pattern` override replaces both values for
+that exact API. Repeat `--api-verification-override` with
+`METHOD path_pattern=successful-runs,successful-cases` when generating
+overrides. An API becomes verified only when its trailing successful API rounds
+meet its effective thresholds. The runner then synchronizes that API into
+`.traffic-e2e/recorder.toml`; the recorder config stores the result, not another
+threshold.
 
 `project_cli`, `replay_policy`, and `pr_base` are required. `init`
 validates that the PR base exists locally or as an `origin`
 remote-tracking branch. `recorder_config` and `recording_rule` are optional only
 as a pair. Every runner command rejects a missing, incomplete, obsolete, or
-unresolvable project config before using migration state. `prepare`, `run-api`,
+unresolvable project config before using traffic E2E state. `prepare`, `run-api`,
 and `run` require a named feature branch different from `pr_base`. Do not put a current
 run id, case count, API list, status, session, report result, blocker, PID,
 address, or temporary path in this file. If required project facts cannot be
@@ -148,15 +186,15 @@ confirmed, ask the user; do not hand-edit the file.
 canonical case group, then atomically replaces that API's `latest`. A rerun
 keeps only the latest complete focused snapshot.
 
-Focused attempts support migration diagnosis and repair. They never update:
+Terminal focused attempts update the run-key cumulative execution/case totals,
+the selected API's streaks, `e2e-progress.yaml`, and an eligible verified
+exclude. They never replace full-round `.active`, global `latest`, or
+`.traffic-e2e/local/current.yaml`.
 
-- the run-key `state.yaml` cumulative full-round counters;
-- `.migration/e2e-progress.yaml`;
-- full-round `.active` or `latest`;
-- verified API excludes.
-
-A focused pass is not completion proof because later shared changes may
-invalidate it.
+When every published case is grouped and every API reaches both of its
+effective thresholds, the grouped focused result is completion proof unless a
+later shared change can invalidate an earlier group. Such a change requires
+rerunning affected groups or one full regression round.
 
 ## Full-Round State
 
@@ -166,25 +204,28 @@ only after terminal evidence atomically replaces the previous global `latest`.
 Readers see either the old complete snapshot or the new complete snapshot,
 never a mix of API results from different rounds.
 
-The run-key `state.yaml` stores cumulative full-round counts.
+The run-key `state.yaml` stores cumulative terminal focused and full-round
+counts.
 Global `latest/state.yaml` stores only the most recent full round and its exact
-case/API evidence. `.migration/local/current.yaml` points to that terminal
+case/API evidence. `.traffic-e2e/local/current.yaml` points to that terminal
 state.
 
-If the full round fails, use focused `run-api` for diagnosis and repair, then
-start a new full round from the beginning. Never patch a failed `.active`
-snapshot into success. One successful full round with every API and case
-passing and finalized, complete, clean evidence sets progress to `complete`.
+If the full round fails, use focused `run-api` for diagnosis and repair. Run a
+new full round only when the regression gate remains required. Never patch a
+failed `.active` snapshot into success.
 
 ## Completion
 
-Only a terminal full round can complete progress:
+Only terminal runner evidence can advance progress:
 
 - every API and every case must pass;
 - canonical replay evidence must be finalized, complete, and clean;
-- a failed, incomplete, or interrupted full round reports
-  `status: needs_attention`;
-- a successful API is `verified` only with complete, clean global evidence;
+- a non-successful focused or full round leaves human progress
+  `status: in_progress`;
+- a successful API is `verified` only after complete, clean evidence meets both
+  configured streak thresholds;
+- verified APIs are synchronized add-only into the managed recorder exclusion
+  list before progress is published;
 - the same terminal sequence is applied idempotently during recovery.
 
 ## Recovery

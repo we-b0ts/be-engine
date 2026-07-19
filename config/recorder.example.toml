@@ -96,13 +96,10 @@ default = 100
 # "/api/example/*" = 20
 # "/api/namespaces/**" = 50
 
-# APIs with enough consecutive clean replay + response-assertion successes can
-# be added here by `traffic-recorder-config verified-excludes ensure`. The
-# command, not AI logic, owns the threshold decision, apply, and verification.
-# This threshold belongs to recorder scope because these entries suppress
-# future recording; replay.yaml never controls capture scope.
+# The traffic E2E runner adds APIs here after both verification thresholds in
+# .traffic-e2e/e2e.yaml are met. This block stores only the add-only result;
+# replay.yaml never controls capture scope.
 [http_gateway.verified_excludes]
-consecutive_successes = 3
 # BEGIN AI-MANAGED VERIFIED API EXCLUDES
 apis = [
 ]
