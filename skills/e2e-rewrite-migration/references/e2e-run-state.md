@@ -163,7 +163,10 @@ local_root: local
 `replay_startup_timeout_seconds` is the replay readiness deadline and defaults
 to 60 when absent from an older config. The runner prints dependency-loading
 progress by loaded case count, beginning with `loaded_cases=0` and then about
-every 5%, while retaining the complete replay log.
+every 5%, while retaining the complete replay log. After readiness, it prints
+case-execution progress beginning with `completed_cases=0`, then about every 5%
+by completed case count, including the final 100% event. Small focused groups
+report each completed case.
 
 `api_verification` is the sole verification policy. Top-level values are
 defaults; a canonical `METHOD path_pattern` override replaces both values for

@@ -76,8 +76,10 @@ separation, and file sizes. Refactor only the boundary introduced or expanded
 by the current migration; keep unrelated legacy cleanup out of scope.
 
 Rerun affected unit or component tests and the entire selected recorded case
-set after every structural or behavior-affecting change. The final replay is
-mandatory and is not counted as a retry.
+set after every structural or behavior-affecting change. The latest successful
+replay after the last such change is final evidence and is not counted as a
+retry. If the review makes no such change after a successful replay, retain
+that replay as final evidence instead of repeating it.
 
 ## Semantics Review
 

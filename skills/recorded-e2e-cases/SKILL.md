@@ -123,11 +123,14 @@ fakes, in-process mocks, or recording-backed target implementations.
    full round. Generated progress becomes `status: complete` when every API in
    the current logical run passes; verification thresholds remain independent.
 9. If a full round fails, diagnose the affected API, return to `run-api`, fix
-   it, and restart the full round from the beginning.
+   it, and restart the full round from the beginning only when the regression
+   gate remains required.
 
 If the same root cause repeats for three consecutive cycles without new
 evidence or meaningful progress, stop as `blocked` or `incomplete`. The final
-verification is mandatory and never counted as a retry.
+verification is the latest successful replay after the last behavior-affecting
+change. Rerun after such a change, but do not repeat a successful replay when
+no change follows it.
 
 During migration, upsert a concise repository lesson only after the fix passes
 verification and the lesson applies across multiple APIs, cases, or migration
