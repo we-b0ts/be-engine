@@ -249,5 +249,8 @@ preserves APIs absent from the current inventory. AI does not merge,
 reconstruct, or validate these counters. Detailed failure categories remain in
 local evidence.
 
-Use `status`, `abort`, or `recover` for an interrupted full round. Never copy
-partial focused evidence into the global `latest`.
+Run `status` first for an interrupted full round. Use `recover` to restore an
+interrupted atomic publication or abort a surviving global `.active`; use
+`abort` to publish an explicit interrupted full-round failure. Never repair
+runner state through filesystem operations or copy partial focused evidence
+into the global `latest`.

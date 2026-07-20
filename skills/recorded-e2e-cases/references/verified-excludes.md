@@ -55,8 +55,9 @@ assertion path:
 The assertion report and final recorder aggregate MUST cover the same complete
 set returned by canonical API grouping. The aggregate MUST be complete and
 clean, and every included replay report MUST contain validated assertion-only
-replay-policy evidence with zero unused applicable rules. The target runner
-MUST NOT use `expected-response.json` outside final assertions.
+replay-policy evidence with zero unused applicable rules. The `traffic-e2e`
+runner uses `expected-response.json` only for final assertions. Under version
+two, the target facade MUST NOT read it.
 
 The runner owns cumulative successful-run and covered-case streaks. An API's
 unsuccessful final contribution in a distinct run resets both; retry attempts

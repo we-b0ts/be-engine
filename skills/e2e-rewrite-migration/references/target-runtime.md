@@ -37,10 +37,13 @@ routed to recorder-owned replay listeners.
 
 Target product code, E2E code, test support, command facades, and normal config
 MUST NOT read, parse, copy, or derive dependency results from
-`dependencies.jsonl` or dependency fixtures. They also MUST NOT read
-`expected-response.json` outside the final assertion path. Do not introduce a
-recording-backed, fixture-backed, fake, or in-process dependency implementation
-to make recorded E2E pass.
+`dependencies.jsonl` or dependency fixtures. New migrations use replay-policy
+version two: the target facade MUST NOT read `expected-response.json`; it writes
+the actual-response artifact and the runner owns comparison. Version-one
+target-owned assertions are legacy compatibility for existing repositories and
+MUST NOT be introduced by a new migration. Do not introduce a recording-backed,
+fixture-backed, fake, or in-process dependency implementation to make recorded
+E2E pass.
 
 Focused unit tests may isolate pure local logic, but they cannot replace
 recorded E2E or provide migration completion evidence for dependency behavior.
@@ -60,8 +63,9 @@ The facade MUST provide these stable commands:
 - `status`: report running state plus useful pid, port, health, or diagnostic
   location and return a non-zero status when the target is not running;
 - `test`: run ordinary target unit and component tests without recorded E2E;
-- `e2e --case-dir <path>`: execute the one currently active case through the
-  target's genuine runtime path and perform only the final response assertion;
+- `e2e --case-dir <path> --actual-response <path>`: execute the one currently
+  active case through the target's genuine runtime path and write the
+  runner-named actual-response artifact;
 - `check`: run the target's submission-quality format, lint, static analysis,
   and test gates.
 
@@ -74,15 +78,17 @@ Keep the facade thin. It MUST:
 - delegate to repository-native commands and propagate their exit status;
 - keep `start`, `test`, and `check` independent of recorded case files;
 - make `e2e` require the exact case directory supplied by `traffic-e2e` and
-  propagate its assertion exit status;
+  exact actual-response path named by the runner;
+- make `e2e` return success only after the actual response is captured and
+  written in the runner-required format;
 - clean up processes it starts without killing unrelated processes;
 - remain source-controlled and portable within the target repository.
 
 It MUST NOT start or finalize replay, call begin/end, aggregate reports, update
 progress, run verified-exclude eligibility, select an interception UID or user,
-read dependency recordings to produce results, or use the expected response
-outside final assertions. Its exit code is assertion output, never canonical
-replay evidence.
+read dependency recordings to produce results, read the expected response, or
+compare expected and actual responses. Its exit code reports request execution
+and actual-response capture, never assertion or canonical replay evidence.
 
 Record the exact facade path in the project migration index and keep it in the
 factual `AGENTS.md` repository map when that map exists. For runnable services,

@@ -35,9 +35,10 @@ the replay boundary.
 
 Rust product code, integration tests, test support, and commands MUST NOT read
 `dependencies.jsonl` or dependency fixtures to return recorded dependency
-results. They MUST NOT read `expected-response.json` outside the final response
-assertion. Do not create an alternate recording-backed, fixture-backed, fake,
-or in-process dependency implementation for recorded E2E.
+results. For new migrations, the version-two target facade MUST NOT read
+`expected-response.json`; it writes the runner-named actual response and leaves
+comparison to the runner. Do not create an alternate recording-backed,
+fixture-backed, fake, or in-process dependency implementation for recorded E2E.
 
 Pure local unit tests may use directly constructed inputs, but they cannot
 replace recorded E2E or prove external dependency behavior through a fixture or

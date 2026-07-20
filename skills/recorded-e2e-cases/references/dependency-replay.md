@@ -10,9 +10,12 @@ their emitted traffic to recorder-owned replay listeners. Do not reach
 production resources, and do not replace dependency calls with project-local
 fixtures, fakes, in-process mocks, or recording-backed implementations.
 
-Only recorder-owned replay consumes `dependencies.jsonl`. The target harness
-constructs inbound requests from `request.json` and reads
-`expected-response.json` only for final assertions.
+Only recorder-owned replay consumes `dependencies.jsonl`. Under the standard
+version-two runner contract, the target facade constructs the inbound request
+from `request.json` and writes the runner-named actual-response artifact. It
+MUST NOT read `expected-response.json`; the runner alone reads it for final
+assertions. Version-one target-owned assertions are legacy compatibility for
+existing repositories only.
 
 ## Request And Touch Contract
 
