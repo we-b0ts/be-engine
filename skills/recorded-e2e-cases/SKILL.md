@@ -77,11 +77,12 @@ fakes, in-process mocks, or recording-backed target implementations.
    one or more remaining path segments. Use only the canonical group and exact
    case ids returned by the runner.
 6. During migration, call `traffic-e2e run-api --api '<METHOD pattern>'`.
-   Fix the focused API and rerun it until its complete group passes. Focused
-   attempts update cumulative progress and that API's verification streaks.
-   Once its global-default or exact per-API override thresholds are met, the
-   runner synchronizes the verified exclude. Focused attempts MUST NOT replace
-   the global full-round `latest`.
+   Run it only until the current complete API group passes, then stop. Do not
+   repeat a successful case source to advance API verification. Verification is
+   maintained automatically across distinct published runs and does not gate
+   the current migration or delivery. Once its global-default or exact per-API
+   override thresholds are met, the runner synchronizes the verified exclude.
+   Focused attempts MUST NOT replace the global full-round `latest`.
 7. Compare JSON responses structurally; use exact bytes only for non-JSON or an
    explicit exact-byte mode. When a response assertion fails, inspect the
    structured difference and compare source and target behavior before changing
@@ -119,8 +120,8 @@ fakes, in-process mocks, or recording-backed target implementations.
    start replay once, load bootstrap and the exact full case set once, execute
    cases sequentially, finalize once, aggregate once, then run per-API
    verification and publish progress. Do not modify target behavior during a
-   full round. Generated progress becomes `status: complete` only when every API
-   satisfies its effective thresholds configured in `.traffic-e2e/e2e.yaml`.
+   full round. Generated progress becomes `status: complete` when every API in
+   the current logical run passes; verification thresholds remain independent.
 9. If a full round fails, diagnose the affected API, return to `run-api`, fix
    it, and restart the full round from the beginning.
 
@@ -177,9 +178,9 @@ items hold:
    thresholds, recorder ensure returns `applied` or `already_present`, with its
    required apply and verification evidence.
 8. Every published case is grouped and the runner-generated
-   `.traffic-e2e/e2e-progress.yaml` reports `status: complete` only after every
-   API satisfies its effective configured round and case thresholds with finalized,
-   complete, clean terminal focused or full-round evidence.
+   `.traffic-e2e/e2e-progress.yaml` reports `status: complete` after every API in
+   the current logical run has finalized, complete, clean passing evidence.
+   Verification thresholds do not gate the current migration or delivery.
 9. Target scripts and AI-authored facades remain orchestration helpers. Their
    exit status, summaries, hand-maintained counts, or ledgers do not replace
    canonical grouping, replay, aggregate, pattern, or exclude artifacts.

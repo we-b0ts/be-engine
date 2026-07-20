@@ -55,7 +55,7 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
             .context("E2E run prepare is incomplete or stale")?;
     let mut index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
 
-    let sequence = index.executions + 1;
+    let sequence = index.latest_sequence.unwrap_or(0).saturating_add(1);
     let mut state = ActiveRunState::new(
         layout.run_key.clone(),
         sequence,
@@ -584,8 +584,8 @@ fn finish_and_publish(
     update_index(index, state, &config.api_verification);
     sync_verified_excludes(config, state, index)?;
     let progress = build_progress(index, state);
-    store::write_yaml(&layout.progress_path, &progress)?;
     store::publish_terminal(layout, state, index)?;
+    store::write_yaml(&layout.progress_path, &progress)?;
     Ok(result(layout, state))
 }
 

@@ -103,9 +103,11 @@ multi-case selection, or source replayed through multiple reports or sessions.
 Pass the exact repeated case and session ids and both fail-on-incomplete and
 fail-on-dirty gates.
 
-Focused attempts retain their own aggregate for diagnosis and use it to update
-cumulative progress and the selected API's verified exclude. They never replace
-the global full-round `latest`. Only one published case replayed in exactly one finalized session may record
+Focused attempts retain their own aggregate for diagnosis and use it to replace
+the selected API's contribution to the current logical run and update any
+eligible verified exclude. Repeating one run does not add counts. Focused
+attempts never replace the global full-round `latest`. Only one published case
+replayed in exactly one finalized session may record
 `not_applicable_single_case_single_session`. Never enumerate report paths,
 manually total counters, merge overlapping attempts without exact session
 selection, or substitute target test output for recorder evidence.
