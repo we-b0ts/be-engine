@@ -106,17 +106,21 @@ gate still applies.
 ## 7. Converge And Verify
 
 After the group first passes, perform the structural convergence and semantics
-review in [implementation-quality.md](implementation-quality.md), then rerun the
-entire selected case set. Run normal-startup smoke and the target repository's
-required quality checks. Read [logging.md](logging.md) only when runnable-service
-diagnostics are missing or changed by the migration.
+review in [implementation-quality.md](implementation-quality.md). If the review
+causes no behavior, structure, dependency wiring, replay-policy, or assertion
+change, keep the existing successful focused attempt as final evidence and do
+not repeat it. If the review causes such a change, rerun the affected focused
+group after the last change. Run normal-startup smoke and the target
+repository's required quality checks. Read [logging.md](logging.md) only when
+runnable-service diagnostics are missing or changed by the migration.
 
 Update factual `AGENTS.md` map entries made inaccurate or materially incomplete
 by the current change. Do not change repository policy or completion gates
 without explicit user authorization.
 
 After convergence or any other behavior-affecting change, rerun the affected
-focused API and then a new full round.
+focused API, then apply the full-regression gate in section 6. Do not add a full
+round when the updated grouped evidence is already equivalent to one.
 
 ## 8. Deliver
 

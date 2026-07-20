@@ -5,6 +5,7 @@ use chrono::Utc;
 use serde::Serialize;
 use tokio::process::Child;
 
+use super::case_progress;
 use super::final_evidence::{
     build_final_evidence, summarize_apis_without_aggregate, sync_verified_excludes,
 };
@@ -393,6 +394,8 @@ async fn run_active_with_replay(
         "project CLI status did not confirm a running target"
     );
 
+    let total_cases = state.cases.len();
+    case_progress::log_start(total_cases);
     for (position, case) in state.cases.clone().into_iter().enumerate() {
         execute_case(
             config,
@@ -403,6 +406,7 @@ async fn run_active_with_replay(
             &case.case_dir,
         )
         .await;
+        case_progress::log_completion(position + 1, total_cases);
     }
 
     let stop = run_project(

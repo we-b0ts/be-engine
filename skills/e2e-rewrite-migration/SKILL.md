@@ -108,7 +108,11 @@ before implementation. Source tests may supplement but never replace recordings.
    fixed and verified problem meets the cross-scope reuse rule, upsert the
    concise repository migration lesson required by `repository-memory.md`.
 7. After the group first passes, perform structural convergence and migration
-   semantics review, then rerun its focused group. Do not start a full round
+   semantics review. If that review changes behavior, structure, dependency
+   wiring, replay policy, or assertions, rerun the affected focused group after
+   the last such change. If the review makes no such change, the existing
+   successful focused attempt is the final focused evidence; do not repeat it
+   merely to create a separate final verification. Do not start a full round
    while any focused group still fails. After every published case is prepared
    and migrated, their successful grouped evidence is equivalent to a full
    round if no later behavior-affecting change can invalidate an earlier group.
@@ -132,8 +136,10 @@ before implementation. Source tests may supplement but never replace recordings.
 Continue the implementation/replay loop while each cycle adds evidence or fixes
 a distinct evidenced defect. If the same root cause repeats for three
 consecutive cycles without progress, stop that group as `blocked` or
-`incomplete`. A final verification after the last behavior-affecting change is
-mandatory and is never counted as a retry. Apply the resolved cross-scope
+`incomplete`. The latest successful replay performed after the last
+behavior-affecting change is the final verification. Rerunning after such a
+change is mandatory and is never counted as a retry; do not add another attempt
+when no change follows the successful replay. Apply the resolved cross-scope
 migration-notes rule to implementation, build, startup, test, and replay
 failures.
 

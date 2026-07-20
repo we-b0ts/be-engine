@@ -1,4 +1,5 @@
 mod branch;
+mod case_progress;
 mod config;
 mod execute;
 mod final_evidence;
