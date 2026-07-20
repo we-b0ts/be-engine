@@ -49,8 +49,9 @@ push, or PR creation.
 2. verify `git ls-files .traffic-e2e/local` and the staged diff contain no local
    migration artifact;
 3. commit only intended migration, stable `.traffic-e2e/e2e.yaml` project
-   metadata changes, applicable verified cross-scope lessons, and one concise
-   changelog entry for this delivered increment;
+   metadata changes, a changed runner-generated `.traffic-e2e/e2e-progress.yaml`,
+   applicable verified cross-scope lessons, and one concise changelog entry for
+   this delivered increment;
 4. require no uncommitted intended-scope change after the commit;
 5. push the feature branch;
 6. open a PR to `pr_base`;

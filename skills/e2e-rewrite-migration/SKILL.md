@@ -23,14 +23,15 @@ Use `recorded-e2e-cases` as the sole owner of case grouping, managed replay,
 dependency coverage, response assertions, replay policy, aggregate reports,
 route-pattern feedback, verified excludes, and their completion artifacts. Do
 not duplicate or weaken that contract here or in the target repository.
+Before prepare or replay, load `recorded-e2e-cases` and follow its reference
+routing. If the companion skill is unavailable or incompatible, stop as
+`blocked` and report the exact issue.
 
 Generate stable project metadata in `.traffic-e2e/e2e.yaml` with
-`traffic-e2e init`; if the required project CLI, replay policy, or
-PR base cannot be confirmed, ask the user instead of guessing. The
-generated config must be complete and its PR base resolvable before
-prepare or replay. Put detailed generated evidence under the Git-ignored
-`.traffic-e2e/local/` layout and keep the concise runner-generated human report
-in `.traffic-e2e/e2e-progress.yaml`, as defined by
+`traffic-e2e init`; if the required project CLI, replay policy, or PR base
+cannot be confirmed, ask the user instead of guessing. The generated config
+must be complete and its PR base resolvable before prepare or replay. Treat
+runner-generated progress and detailed evidence according to
 [e2e-run-state.md](references/e2e-run-state.md). MUST NOT stage, commit, or
 force-add `.traffic-e2e/local/`; ignoring it never waives evidence.
 
@@ -46,8 +47,6 @@ before implementation. Source tests may supplement but never replace recordings.
 
 ## Reference Routing
 
-- Read [migration-workflow.md](references/migration-workflow.md) for the stage
-  order.
 - Read the language reference only for the selected language, such as
   [rust.md](references/rust.md).
 - Read [delivery.md](references/delivery.md) before choosing a branch and again
@@ -56,8 +55,8 @@ before implementation. Source tests may supplement but never replace recordings.
   dependency wiring, config, commands, diagnostics, or `AGENTS.md`.
 - Read [implementation-quality.md](references/implementation-quality.md) after
   grouping and again after the selected group first passes.
-- Read [e2e-run-state.md](references/e2e-run-state.md) for the current run index
-  and per-run evidence state.
+- Read [e2e-run-state.md](references/e2e-run-state.md) before reading,
+  delivering, or diagnosing runner-generated state.
 - Read [repository-memory.md](references/repository-memory.md) before the first
   implementation or replay attempt and again before delivery.
 - Read [logging.md](references/logging.md) only when runnable-service diagnostics
@@ -90,23 +89,24 @@ before implementation. Source tests may supplement but never replace recordings.
    source-proven dependency configuration by hand.
    Provide the standard `scripts/<project>-cli` facade and delegate its commands
    to the target repository's native build and test tools.
-5. Target product code, E2E code, test support, commands, and normal config MUST
-   NOT read `dependencies.jsonl`, dependency fixtures, or
-   `expected-response.json` to produce actual behavior. The expected response is
-   assertion-only; recorded dependency data is supplied only by recorder-owned
-   replay. The migration agent may inspect recorded dependency evidence offline
-   only under the configuration-provenance rules in `target-runtime.md`; it MUST
-   NOT infer provenance from a downstream request or materialize a value that
-   the source obtains from a runtime dependency.
+5. Use the replay-policy version-two facade contract for new migrations: the
+   target reads `request.json`, exercises genuine runtime behavior, and writes
+   the runner-named actual-response artifact. It MUST NOT read
+   `expected-response.json`; the runner alone owns final response assertions.
+   Target product code, E2E code, test support, commands, and normal config MUST
+   NOT read `dependencies.jsonl` or dependency fixtures to produce dependency
+   results. The migration agent may inspect recorded dependency evidence
+   offline only under the configuration-provenance rules in
+   `target-runtime.md`; it MUST NOT infer provenance from a downstream request
+   or materialize a value that the source obtains from a runtime dependency.
 6. Use `traffic-e2e run-api` for the selected API's migrate/fix loop. Fix
    product code only after replay evidence proves a real behavior defect.
    Run it only until the current complete API group passes, then stop. Do not
-   repeat a successful case source to advance verification. Verification is
-   maintained automatically across distinct published runs, does not gate the
-   current migration or delivery, and synchronizes the recorder exclude after
-   its global-default or exact per-API override thresholds are met. After a
-   fixed and verified problem meets the cross-scope reuse rule, upsert the
-   concise repository migration lesson required by `repository-memory.md`.
+   repeat a successful case source to advance verification or manually
+   reconstruct runner state. Let `recorded-e2e-cases` own aggregation, progress,
+   and verified-exclude updates. After a fixed and verified problem meets the
+   cross-scope reuse rule, upsert the concise repository migration lesson
+   required by `repository-memory.md`.
 7. After the group first passes, perform structural convergence and migration
    semantics review. If that review changes behavior, structure, dependency
    wiring, replay policy, or assertions, rerun the affected focused group after
@@ -114,11 +114,9 @@ before implementation. Source tests may supplement but never replace recordings.
    successful focused attempt is the final focused evidence; do not repeat it
    merely to create a separate final verification. Do not start a full round
    while any focused group still fails. After every published case is prepared
-   and migrated, their successful grouped evidence is equivalent to a full
-   round if no later behavior-affecting change can invalidate an earlier group.
-   Otherwise use `traffic-e2e run` for regression evidence. A non-successful
-   full round returns to focused repair; API verification thresholds are
-   maintained independently for recorder feedback.
+   and migrated, follow the `recorded-e2e-cases` regression gate to retain the
+   grouped evidence or run `traffic-e2e run`. A non-successful full round
+   returns to focused repair.
    Run normal-startup smoke and target-required quality checks from the final
    tree.
 8. Maintain the concise repository migration notes and changelog defined by
@@ -128,10 +126,12 @@ before implementation. Source tests may supplement but never replace recordings.
    authorization.
 9. Commit only intended changes, including one concise changelog entry for the
    delivered migration increment, push the feature branch, create a PR to the
-   configured `pr_base`, verify the remote state, and update the run
-   index with canonical artifact paths and identifiers. Exclude all files under
-   `.traffic-e2e/local/` from staging and delivery. Do not skip incremental
-   delivery solely because the migration remains `incomplete` or `blocked`.
+   configured `pr_base`, and verify the remote state. Let `traffic-e2e` update
+   the runner-owned run index; record its exact canonical artifact paths and
+   identifiers in the final handoff without editing generated state. Exclude all
+   files under `.traffic-e2e/local/` from staging and delivery. Do not skip
+   incremental delivery solely because the migration remains `incomplete` or
+   `blocked`.
 
 Continue the implementation/replay loop while each cycle adds evidence or fixes
 a distinct evidenced defect. If the same root cause repeats for three
@@ -158,31 +158,30 @@ MUST NOT claim a migration complete or delivered unless all items hold:
 2. `.traffic-e2e/e2e.yaml` records the confirmed `pr_base`. Migration writes run
    on a named feature branch different from it, with unrelated changes
    preserved.
-3. `recorded-e2e-cases` returned valid non-overlapping canonical groups
-   containing every full-round case exactly once, and published recordings
-   remain unchanged.
+3. `recorded-e2e-cases` reports complete canonical grouping and immutable
+   published recordings for the exact selected scope.
 4. Normal runtime and recorded E2E use genuine dependency paths. No target-side
    recording-backed, fixture-backed, fake, or in-process dependency
-   implementation reads recorder dependency data or constructs actual results
-   from the expected response. Required source-proven configuration is present
+   implementation reads recorder dependency data. The version-two target facade
+   reads the request and writes only the runner-named actual response; it never
+   reads the expected response. Required source-proven configuration is present
    through its authoritative target startup input or genuine runtime-dependency
-   path, and the committed environment template contains no variable ignored by
-   the target config path.
+   path, and the committed environment template contains no variable ignored
+   by the target config path.
 5. Source metrics and required side effects, explicit DB schema evidence when
    applicable, meaningful local tests, architecture review, structural
    convergence, and semantics review are complete. Any explicit blocker keeps
    the migration incomplete.
-6. The full `recorded-e2e-cases` completion gate is satisfied after every
-   selected API has finalized, complete, clean passing evidence and
-   `e2e-progress.yaml` is at `status: complete` for the current logical run.
-   Verification thresholds do not gate the current migration or delivery. A
-   target facade or hand-maintained ledger cannot substitute for canonical
-   final-state artifacts.
+6. The full `recorded-e2e-cases` completion gate is satisfied after the last
+   behavior-affecting change for every selected API, and its runner-owned
+   progress reports the current logical run complete. A target facade or
+   hand-maintained ledger cannot substitute for canonical final-state
+   artifacts.
 7. The standard project facade exposes working `start`, `stop`, `status`,
-   `test`, `e2e --case-dir`, and `check` commands for the runnable target.
-   Normal-startup smoke and all target-required quality checks pass against the
-   same final tree. Any later behavior, wiring, policy, assertion, or structural
-   change invalidates earlier replay evidence.
+   `test`, `e2e --case-dir --actual-response`, and `check` commands for the
+   runnable target. Normal-startup smoke and all target-required quality checks
+   pass against the same final tree. Any later behavior, wiring, policy,
+   assertion, or structural change invalidates earlier replay evidence.
 8. A focused commit is pushed and a PR to `pr_base` is
    independently verified. The per-run state records, but does not manufacture,
    the exact evidence and delivery identifiers. `.traffic-e2e/local/` is ignored
@@ -192,8 +191,8 @@ MUST NOT claim a migration complete or delivered unless all items hold:
 
 - missing published cases, ambiguous grouping, or changed recordings;
 - incomplete or dirty `recorded-e2e-cases` evidence;
-- target-side use of recorded dependency files, dependency fixtures, or the
-  expected response to create actual behavior;
+- target-side use of recorded dependency files or fixtures, or a version-two
+  target facade that reads the expected response;
 - no normal runnable startup or no genuine runtime dependency path;
 - missing required local or E2E environment materialization, ignore rule, or
   loading path;

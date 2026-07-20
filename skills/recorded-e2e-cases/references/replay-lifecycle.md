@@ -10,10 +10,11 @@ orchestration.
 
 When the target uses `e2e-rewrite-migration`, invoke recorded E2E through
 `traffic-e2e run-api` or `traffic-e2e run`. The runner calls the target's
-standard `scripts/<project>-cli e2e --case-dir <path>` once per active case.
-That facade executes the request and captures the actual response; it does not
-own replay startup, begin/end, response comparison, aggregate, progress, or
-verified-exclude operations.
+standard version-two
+`scripts/<project>-cli e2e --case-dir <path> --actual-response <path>` once per
+active case. That facade executes the request and writes the actual response;
+it does not read the expected response or own replay startup, begin/end,
+response comparison, aggregate, progress, or verified-exclude operations.
 
 Clear inherited HTTP proxy variables only inside the recorded-E2E invocation so
 dependency traffic can reach DNS and fake-IP interception. Do not change the
