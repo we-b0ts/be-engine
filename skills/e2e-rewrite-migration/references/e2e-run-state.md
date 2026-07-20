@@ -50,7 +50,9 @@ humans and is expected to be committed. It contains only execution, success,
 trailing-success, verification, and latest-round counts. It intentionally
 excludes failed/incomplete categories, protocol evidence, connections,
 policies, sessions, aggregates, root causes, and repair suggestions. AI reads
-local evidence when diagnosis is needed.
+local evidence when diagnosis is needed. The runner loads and incrementally
+updates project history, preserving APIs absent from the current inventory; AI
+does not edit, merge, reconstruct, or validate these counters.
 
 Details for unresolved or unfixable problems remain in runner-generated reports
 and evidence under `.traffic-e2e/local/`.
@@ -58,7 +60,7 @@ and evidence under `.traffic-e2e/local/`.
 The generated shape is:
 
 ```yaml
-version: 1
+version: 2
 updated_at: "2026-07-17T08:00:00Z"
 status: complete
 run:
@@ -107,13 +109,15 @@ apis:
       consecutive_successful: 12
 ```
 
-`progress.runs` and `progress.cases` are cumulative across terminal focused and
-full rounds. `consecutive_successful` under `cases` is the number of case
-executions covered by the same trailing fully successful rounds, not a sequence
-assembled from individual case outcomes. A non-successful round resets both
-global streaks. Per-API streaks reset only when that API's round is not successful.
-An inventory or source-revision change starts new streaks. Detailed failure
-categories remain in runner-local evidence, not this human report.
+`progress.runs` and `progress.cases` are cumulative across distinct published
+run keys. Focused and full attempts within the current run replace that run's
+terminal contribution instead of adding counts. `consecutive_successful` under
+`cases` is the number of canonical cases covered by the same trailing fully
+successful distinct runs, not a sequence assembled from attempts or individual
+case outcomes. A non-successful run resets both global streaks. Per-API streaks
+reset only when that API's run is not successful. An inventory or
+source-revision change starts new streaks. Detailed failure categories remain
+in runner-local evidence, not this human report.
 
 ## Stable Configuration
 
@@ -165,10 +169,10 @@ every 5%, while retaining the complete replay log.
 defaults; a canonical `METHOD path_pattern` override replaces both values for
 that exact API. Repeat `--api-verification-override` with
 `METHOD path_pattern=successful-runs,successful-cases` when generating
-overrides. An API becomes verified only when its trailing successful API rounds
-meet its effective thresholds. The runner then synchronizes that API into
-`.traffic-e2e/recorder.toml`; the recorder config stores the result, not another
-threshold.
+overrides. An API becomes verified only when its trailing successful distinct
+published runs meet its effective thresholds. The runner then synchronizes that
+API into `.traffic-e2e/recorder.toml`; the recorder config stores the result,
+not another threshold.
 
 `project_cli`, `replay_policy`, and `pr_base` are required. `init`
 validates that the PR base exists locally or as an `origin`
@@ -186,15 +190,17 @@ confirmed, ask the user; do not hand-edit the file.
 canonical case group, then atomically replaces that API's `latest`. A rerun
 keeps only the latest complete focused snapshot.
 
-Terminal focused attempts update the run-key cumulative execution/case totals,
-the selected API's streaks, `e2e-progress.yaml`, and an eligible verified
-exclude. They never replace full-round `.active`, global `latest`, or
+Terminal focused attempts replace the selected API's final contribution to the
+current logical run and update `e2e-progress.yaml` and any eligible verified
+exclude. Repeating the same run does not add another run or another copy of its
+cases. Focused attempts never replace full-round `.active`, global `latest`, or
 `.traffic-e2e/local/current.yaml`.
 
-When every published case is grouped and every API reaches both of its
-effective thresholds, the grouped focused result is completion proof unless a
-later shared change can invalidate an earlier group. Such a change requires
-rerunning affected groups or one full regression round.
+When every published case is grouped and every API's current group passes, the
+grouped focused result is completion proof unless a later shared change can
+invalidate an earlier group. Verification thresholds do not gate the current
+migration or delivery. Such a change requires rerunning affected groups or one
+full regression round.
 
 ## Full-Round State
 
@@ -204,8 +210,8 @@ only after terminal evidence atomically replaces the previous global `latest`.
 Readers see either the old complete snapshot or the new complete snapshot,
 never a mix of API results from different rounds.
 
-The run-key `state.yaml` stores cumulative terminal focused and full-round
-counts.
+The run-key `state.yaml` stores the project history baseline plus the current
+logical run's idempotent terminal contribution.
 Global `latest/state.yaml` stores only the most recent full round and its exact
 case/API evidence. `.traffic-e2e/local/current.yaml` points to that terminal
 state.
@@ -220,13 +226,14 @@ Only terminal runner evidence can advance progress:
 
 - every API and every case must pass;
 - canonical replay evidence must be finalized, complete, and clean;
-- a non-successful focused or full round leaves human progress
+- a non-successful current logical run leaves human progress
   `status: in_progress`;
-- a successful API is `verified` only after complete, clean evidence meets both
-  configured streak thresholds;
+- a successful API is `verified` only after distinct published runs with
+  complete, clean evidence meet both configured streak thresholds;
 - verified APIs are synchronized add-only into the managed recorder exclusion
   list before progress is published;
-- the same terminal sequence is applied idempotently during recovery.
+- the same terminal sequence and repeated attempts within one run are applied
+  idempotently.
 
 ## Recovery
 

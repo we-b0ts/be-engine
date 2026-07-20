@@ -75,10 +75,11 @@ local tests needed by the selected scope. Provide the standard
 
 Run the complete selected API through `traffic-e2e run-api`. Fix product
 code only after grouping, replay lifecycle, dependency routing, and evidence
-are complete enough to prove a behavior defect. Terminal focused attempts
-update cumulative progress and the selected API's streaks; reaching its
-global-default or exact per-API override thresholds synchronizes its recorder
-exclude.
+are complete enough to prove a behavior defect. Run the current complete API
+group only until it passes, then stop. Repeating a successful case source does
+not advance verification. Distinct published runs maintain verification and
+synchronize the recorder exclude after the global-default or exact per-API
+override thresholds are met.
 
 Continue while each cycle provides new evidence or fixes a distinct evidenced
 defect. If the same root cause repeats for three consecutive cycles without new

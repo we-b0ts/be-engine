@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -285,6 +285,44 @@ pub(super) struct ApiProgress {
     pub verified: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(super) struct ApiRunContribution {
+    #[serde(default)]
+    pub counted: bool,
+    #[serde(default)]
+    pub successful: bool,
+    #[serde(default)]
+    pub executed_cases: u64,
+    #[serde(default)]
+    pub successful_cases: u64,
+    #[serde(default)]
+    pub baseline_consecutive_successful_runs: u64,
+    #[serde(default)]
+    pub baseline_consecutive_successful_cases: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(super) struct RunContribution {
+    #[serde(default)]
+    pub initialized: bool,
+    #[serde(default)]
+    pub counted: bool,
+    #[serde(default)]
+    pub successful: bool,
+    #[serde(default)]
+    pub executed_cases: u64,
+    #[serde(default)]
+    pub successful_cases: u64,
+    #[serde(default)]
+    pub baseline_consecutive_successful_runs: u64,
+    #[serde(default)]
+    pub baseline_consecutive_successful_cases: u64,
+    #[serde(default)]
+    pub api_keys: BTreeSet<String>,
+    #[serde(default)]
+    pub apis: BTreeMap<String, ApiRunContribution>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RunIndex {
     pub version: u32,
@@ -298,18 +336,16 @@ pub(super) struct RunIndex {
     pub inventory_complete: bool,
     pub executions: u64,
     pub successful: u64,
-    pub failed: u64,
-    pub interrupted: u64,
     pub replayed_cases: u64,
     pub passed_cases: u64,
-    pub failed_cases: u64,
-    pub incomplete_cases: u64,
     #[serde(default)]
     pub consecutive_successful_runs: u64,
     #[serde(default)]
     pub consecutive_successful_cases: u64,
     #[serde(default)]
     pub apis: BTreeMap<String, ApiProgress>,
+    #[serde(default)]
+    pub current_run: RunContribution,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub latest_focused_sequences: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -329,15 +365,15 @@ impl RunIndex {
             inventory_complete: false,
             executions: 0,
             successful: 0,
-            failed: 0,
-            interrupted: 0,
             replayed_cases: 0,
             passed_cases: 0,
-            failed_cases: 0,
-            incomplete_cases: 0,
             consecutive_successful_runs: 0,
             consecutive_successful_cases: 0,
             apis: BTreeMap::new(),
+            current_run: RunContribution {
+                initialized: true,
+                ..RunContribution::default()
+            },
             latest_focused_sequences: BTreeMap::new(),
             latest_sequence: None,
             latest_status: None,
@@ -345,38 +381,73 @@ impl RunIndex {
     }
 
     pub(super) fn normalize_legacy_progress(&mut self) {
+        if self.current_run.initialized {
+            return;
+        }
         if !self.inventory_complete && self.latest_sequence.is_some() {
             self.inventory_complete = true;
         }
-        let latest_successful = self.latest_status == Some(RunStatus::Successful);
-        let legacy_current_cases = self
-            .apis
-            .values()
-            .filter(|api| api.executions == 0)
-            .map(|api| u64::from(api.cases))
-            .sum::<u64>();
-        if latest_successful && self.consecutive_successful_runs == 0 {
-            self.consecutive_successful_runs = 1;
-            if self.consecutive_successful_cases == 0 {
-                self.consecutive_successful_cases = legacy_current_cases;
-            }
-        }
+        let had_execution = self.executions > 0;
+        let api_keys = self.apis.keys().cloned().collect::<BTreeSet<_>>();
+        let mut executed_cases = 0_u64;
+        let mut successful_cases = 0_u64;
+        let mut all_current_apis_successful = !api_keys.is_empty();
         for api in self.apis.values_mut() {
-            if api.executions > 0 || api.status.is_empty() {
-                continue;
+            let counted = api.executions > 0 || !api.status.is_empty();
+            let successful = counted
+                && (api.consecutive_successful_runs > 0
+                    || (api.status == "verified"
+                        && self.latest_status == Some(RunStatus::Successful)));
+            let current_executed_cases = if counted { u64::from(api.cases) } else { 0 };
+            let current_successful_cases = if successful { u64::from(api.cases) } else { 0 };
+            if counted {
+                api.executions = 1;
+                api.successful = u64::from(successful);
+                api.executed_cases = current_executed_cases;
+                api.successful_cases = current_successful_cases;
+                api.consecutive_successful_runs = u64::from(successful);
+                api.consecutive_successful_cases = current_successful_cases;
             }
-            api.executions = self.executions;
-            if api.status == "verified" {
-                api.successful = self.successful;
-                api.successful_cases = u64::from(api.cases).saturating_mul(api.successful);
-                if latest_successful {
-                    api.consecutive_successful_runs = 1;
-                    api.consecutive_successful_cases = u64::from(api.cases);
-                }
-            }
-            api.executed_cases = u64::from(api.cases).saturating_mul(api.executions);
+            api.verified = false;
             api.status.clear();
+            executed_cases = executed_cases.saturating_add(current_executed_cases);
+            successful_cases = successful_cases.saturating_add(current_successful_cases);
+            all_current_apis_successful &= successful;
         }
+        let successful = had_execution && self.inventory_complete && all_current_apis_successful;
+        self.executions = u64::from(had_execution);
+        self.successful = u64::from(successful);
+        self.replayed_cases = executed_cases;
+        self.passed_cases = successful_cases;
+        self.consecutive_successful_runs = u64::from(successful);
+        self.consecutive_successful_cases = if successful { successful_cases } else { 0 };
+        self.current_run = RunContribution {
+            initialized: true,
+            counted: had_execution,
+            successful,
+            executed_cases,
+            successful_cases,
+            baseline_consecutive_successful_runs: 0,
+            baseline_consecutive_successful_cases: 0,
+            api_keys,
+            apis: self
+                .apis
+                .iter()
+                .map(|(api_key, api)| {
+                    (
+                        api_key.clone(),
+                        ApiRunContribution {
+                            counted: api.executions > 0,
+                            successful: api.successful > 0,
+                            executed_cases: api.executed_cases,
+                            successful_cases: api.successful_cases,
+                            baseline_consecutive_successful_runs: 0,
+                            baseline_consecutive_successful_cases: 0,
+                        },
+                    )
+                })
+                .collect(),
+        };
     }
 }
 

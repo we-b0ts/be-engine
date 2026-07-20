@@ -481,10 +481,11 @@ defaults. `overrides` uses the canonical runner API id
 `METHOD path_pattern`; each entry replaces both defaults for that exact API.
 The repeated `--api-verification-override` flag uses
 `METHOD path_pattern=successful-runs,successful-cases`. The successful-case
-threshold counts case executions covered by trailing successful API rounds.
-Once an API's effective thresholds are met, the runner synchronizes it into the
-managed recorder exclusion list; `.traffic-e2e/recorder.toml` does not own
-another threshold.
+threshold counts canonical cases covered by trailing successful distinct
+published runs. Replaying one run does not advance either threshold. Once an
+API's effective thresholds are met, the runner synchronizes it into the managed
+recorder exclusion list; `.traffic-e2e/recorder.toml` does not own another
+threshold.
 
 The recorder flags are optional only as a pair. Existing configuration is not
 overwritten unless `--force` is explicit. If the file is missing, every other
@@ -514,10 +515,12 @@ traffic-e2e run-api \
   --api 'GET /api/widgets/*'
 ```
 
-Focused attempts update cumulative run/case totals and the selected API's
-streaks in `e2e-progress.yaml`. When that API reaches both of its effective
-thresholds, the runner synchronizes its verified exclude. Focused evidence
-never replaces the global full-round `latest`.
+Run the current complete API group only until it passes, then stop. Focused
+attempts replace the selected API's terminal contribution to the current
+logical run in `e2e-progress.yaml`; repeating one run does not add runs or
+cases. When distinct published runs reach both effective thresholds, the runner
+synchronizes the verified exclude. Focused evidence never replaces the global
+full-round `latest`.
 
 After every published case is prepared exactly once and every focused group
 passes, the grouped result is sufficient unless behavior-affecting code changed
@@ -535,9 +538,10 @@ aggregates once, runs per-API verified-exclude ensure, atomically publishes
 `.traffic-e2e/local/<run-key>/latest/`, and updates the Git-eligible
 `.traffic-e2e/e2e-progress.yaml`.
 
-Progress reaches `status: complete` when every grouped API satisfies both of
-its effective verification thresholds with finalized, complete, clean
-evidence. A grouped focused pass is sufficient unless later behavior changes
+Progress reaches `status: complete` when every grouped API in the current
+logical run has finalized, complete, clean passing evidence. Verification
+thresholds are maintained independently and do not gate the current run or
+delivery. A grouped focused pass is sufficient unless later behavior changes
 may invalidate it; then use one full regression round. Use `status`, `abort`,
 and `recover` for interrupted global rounds. Generated local JSON/YAML is
 tool-owned and must not be edited by AI or by target scripts.

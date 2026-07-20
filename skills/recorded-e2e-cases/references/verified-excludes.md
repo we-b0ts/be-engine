@@ -19,8 +19,9 @@ api_verification:
       successful_cases: 200
 ```
 
-`successful_cases` counts the case executions covered by the same trailing
-successful API rounds. The top-level values are defaults; a canonical
+`successful_cases` counts canonical cases covered by the same trailing
+successful distinct published runs. Replaying one run does not advance either
+threshold. The top-level values are defaults; a canonical
 `METHOD path_pattern` override replaces both thresholds for that exact API.
 Keep only the verified API list in `.traffic-e2e/recorder.toml`:
 
@@ -57,10 +58,11 @@ clean, and every included replay report MUST contain validated assertion-only
 replay-policy evidence with zero unused applicable rules. The target runner
 MUST NOT use `expected-response.json` outside final assertions.
 
-The runner owns cumulative successful-round and covered-case streaks. A failed
-API round resets both. The recorder command independently verifies that every
-current matching case is present and passed, so selected-case omission cannot
-satisfy the gate.
+The runner owns cumulative successful-run and covered-case streaks. An API's
+unsuccessful final contribution in a distinct run resets both; retry attempts
+within that run replace its contribution. The recorder command independently
+verifies that every current matching case is present and passed, so
+selected-case omission cannot satisfy the gate.
 
 ## Gate
 
