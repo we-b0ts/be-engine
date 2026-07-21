@@ -41,6 +41,8 @@ docker-server:
     DOCKERFILE_PATH: .
   script:
     - build_image
+  only:
+    - master
 
 deploy-recorder:
   stage: production
