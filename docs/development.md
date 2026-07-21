@@ -128,9 +128,17 @@ uses the original kubeconfig for HTTPS and client authentication to Kubernetes.
 
 Enable the example `[http_response_rewrite]` configuration in
 `config/recorder.example.toml` and ensure the configured `kubectl_binary` is
-installed. The rewrite feature requires `dns_mock`, `tcp_gateway`, and
+installed. `traffic-e2e record` checks executables required by enabled rewrite
+plugins immediately after loading the configuration, so a missing `kubectl`
+is reported before Recorder changes local interception state. The rewrite
+feature requires `dns_mock`, `tcp_gateway`, and
 `tcp_gateway.record_http` to be enabled. The configured `proxy_listen` address
 must not already be occupied.
+
+The MITM CA certificate and private key configured under `[tls]` are a pair.
+When both files are absent, `traffic-e2e record` reports that Recorder will
+generate them automatically. If only one exists, startup stops with recovery
+guidance instead of replacing the remaining file and silently changing the CA.
 
 Rules are evaluated in configuration order and only the first matching rule is
 run. Version one accepts complete, identity-encoded HTTP response bodies; a

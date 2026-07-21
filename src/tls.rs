@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose,
@@ -27,7 +27,32 @@ impl MitmCa {
         let cert_path = cert_path.as_ref();
         let key_path = key_path.as_ref();
 
-        if cert_path.exists() && key_path.exists() {
+        ensure!(
+            cert_path != key_path,
+            "CA certificate and private key paths must be different: {}",
+            cert_path.display()
+        );
+
+        let cert_exists = cert_path
+            .try_exists()
+            .with_context(|| format!("failed to inspect CA cert {}", cert_path.display()))?;
+        let key_exists = key_path
+            .try_exists()
+            .with_context(|| format!("failed to inspect CA key {}", key_path.display()))?;
+
+        match (cert_exists, key_exists) {
+            (true, false) => bail!(
+                "CA cert exists but its private key is missing: {}",
+                key_path.display()
+            ),
+            (false, true) => bail!(
+                "CA key exists but its certificate is missing: {}",
+                cert_path.display()
+            ),
+            _ => {}
+        }
+
+        if cert_exists && key_exists {
             let cert_pem = fs::read_to_string(cert_path)
                 .with_context(|| format!("failed to read CA cert {}", cert_path.display()))?;
             let ca_cert_der = parse_first_cert_der(&cert_pem)
@@ -189,5 +214,25 @@ mod tests {
         let ca = MitmCa::load_or_generate(&cert, &key).unwrap();
         assert_eq!(ca.ca_cert_pem(), persisted_pem);
         let _ = ca.server_config_for_host("example.com:443").unwrap();
+    }
+
+    #[test]
+    fn refuses_to_overwrite_a_partial_ca_pair() {
+        let dir = tempdir().unwrap();
+        let cert = dir.path().join("ca.pem");
+        let key = dir.path().join("ca-key.pem");
+        std::fs::write(&cert, "existing certificate").unwrap();
+
+        let error = MitmCa::load_or_generate(&cert, &key)
+            .err()
+            .expect("partial CA pair must fail")
+            .to_string();
+
+        assert!(error.contains("private key is missing"));
+        assert_eq!(
+            std::fs::read_to_string(&cert).unwrap(),
+            "existing certificate"
+        );
+        assert!(!key.exists());
     }
 }
