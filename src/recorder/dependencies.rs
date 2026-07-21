@@ -2,7 +2,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
 
 use super::summary::should_append_case_dependency;
 use crate::recorder::{CaseContext, Recorder, RecorderEvent};
@@ -40,13 +39,13 @@ impl Recorder {
         tokio::fs::create_dir_all(&dir)
             .await
             .with_context(|| format!("failed to create case recording dir {}", dir.display()))?;
-        append_dependency(
-            &dir.join(case_dependency_filename(event)),
-            event,
-            "case_dependency_matched_by",
-            matched_by,
-        )
-        .await
+        let path = dir.join(case_dependency_filename(event));
+        let line = dependency_line(event, "case_dependency_matched_by", matched_by)?;
+        self.dependency_files
+            .lock()
+            .await
+            .append(&path, &line)
+            .await
     }
 
     pub async fn append_bootstrap_dependency(
@@ -67,13 +66,13 @@ impl Recorder {
                     self.run_dir.display()
                 )
             })?;
-        append_dependency(
-            &self.run_dir.join(bootstrap_dependency_filename(event)),
-            event,
-            "bootstrap_dependency_matched_by",
-            matched_by,
-        )
-        .await
+        let path = self.run_dir.join(bootstrap_dependency_filename(event));
+        let line = dependency_line(event, "bootstrap_dependency_matched_by", matched_by)?;
+        self.dependency_files
+            .lock()
+            .await
+            .append(&path, &line)
+            .await
     }
 
     pub(crate) async fn case_dependency_safety_issue(
@@ -83,6 +82,11 @@ impl Recorder {
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         let path = self.case_staging_dir(case).join("dependencies.jsonl");
+        self.dependency_files
+            .lock()
+            .await
+            .flush_and_remove(&path)
+            .await?;
         let raw = match tokio::fs::read_to_string(&path).await {
             Ok(raw) => raw,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -143,14 +147,33 @@ impl Recorder {
         }
         Ok(None)
     }
+
+    pub(super) async fn flush_case_dependency_files(&self, dir: &Path) -> Result<()> {
+        self.dependency_files
+            .lock()
+            .await
+            .flush_and_remove_under(dir)
+            .await
+    }
+
+    pub(super) async fn flush_bootstrap_dependency_files(&self) -> Result<()> {
+        let semantic = self.run_dir.join("bootstrap-dependencies.jsonl");
+        let debug = self.run_dir.join("bootstrap-dependencies-debug.jsonl");
+        let mut files = self.dependency_files.lock().await;
+        files.flush_and_remove(&semantic).await?;
+        files.flush_and_remove(&debug).await
+    }
+
+    pub(super) async fn flush_all_dependency_files(&self) -> Result<()> {
+        self.dependency_files.lock().await.flush_all().await
+    }
 }
 
-async fn append_dependency(
-    path: &Path,
+fn dependency_line(
     event: &RecorderEvent,
     matched_by_field: &str,
     matched_by: &str,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     let mut value = serde_json::to_value(event).context("failed to serialize dependency event")?;
     compact_process_info(&mut value);
     if let serde_json::Value::Object(object) = &mut value {
@@ -161,18 +184,7 @@ async fn append_dependency(
     }
     let mut line = serde_json::to_vec(&value).context("failed to serialize dependency event")?;
     line.push(b'\n');
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await
-        .with_context(|| format!("failed to open dependencies file {}", path.display()))?;
-    file.write_all(&line)
-        .await
-        .context("failed to append dependency event")?;
-    file.flush()
-        .await
-        .context("failed to flush dependency event")
+    Ok(line)
 }
 
 fn case_dependency_filename(event: &RecorderEvent) -> &'static str {

@@ -29,13 +29,15 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
         args.config.display()
     );
     reject_owner_config(&args.config)?;
-    let config = AppConfig::load(&args.config)?;
+    let mut config = AppConfig::load(&args.config)?;
+    config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
+    let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
     let state = AppState::new(config).await?;
     let mut interception = if args.dns && !args.no_dns {
         Some(Guard::enable(
             record_dns_config()?,
-            record_fake_ip_config()?,
+            record_fake_ip_config(&configured_fake_cidr)?,
         )?)
     } else {
         None
@@ -211,9 +213,9 @@ fn record_dns_config() -> Result<DnsConfig> {
     })
 }
 
-fn record_fake_ip_config() -> Result<FakeIpConfig> {
+fn record_fake_ip_config(configured_fake_cidr: &str) -> Result<FakeIpConfig> {
     Ok(FakeIpConfig {
-        fake_cidr: environment("FAKE_CIDR", "198.18.0.0/15"),
+        fake_cidr: environment("FAKE_CIDR", configured_fake_cidr),
         tcp_port: environment("GATEWAY_PORT", "15001")
             .parse()
             .context("GATEWAY_PORT must be a valid port")?,
@@ -226,7 +228,15 @@ fn record_fake_ip_config() -> Result<FakeIpConfig> {
 }
 
 fn environment(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_string())
+    let value = std::env::var(name).ok();
+    resolve_environment_config_default(value.as_deref(), default)
+}
+
+fn resolve_environment_config_default(
+    environment_value: Option<&str>,
+    configured_value: &str,
+) -> String {
+    environment_value.unwrap_or(configured_value).to_string()
 }
 
 fn parse_bool_environment(name: &str, default: bool) -> Result<bool> {
@@ -244,6 +254,7 @@ mod tests {
     use std::fs;
 
     use clap::Parser;
+    use traffic_e2e::DEFAULT_FAKE_CIDR;
 
     use super::*;
 
@@ -262,6 +273,34 @@ mod tests {
         let cli =
             TestCli::try_parse_from(["test", "--config", "recorder.toml", "--no-dns"]).unwrap();
         assert!(cli.record.no_dns);
+    }
+
+    #[test]
+    fn fake_cidr_precedence_is_environment_then_config_then_default() {
+        let configured: AppConfig = toml::from_str(
+            r#"
+            [dns_mock]
+            fake_cidr = "198.19.64.0/18"
+            "#,
+        )
+        .unwrap();
+        let defaults = AppConfig::default();
+
+        assert_eq!(
+            resolve_environment_config_default(
+                Some("198.19.128.0/17"),
+                &configured.dns_mock.fake_cidr,
+            ),
+            "198.19.128.0/17"
+        );
+        assert_eq!(
+            resolve_environment_config_default(None, &configured.dns_mock.fake_cidr),
+            "198.19.64.0/18"
+        );
+        assert_eq!(
+            resolve_environment_config_default(None, &defaults.dns_mock.fake_cidr),
+            DEFAULT_FAKE_CIDR
+        );
     }
 
     #[test]

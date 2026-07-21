@@ -18,6 +18,7 @@ struct RecorderRunReport {
     status: &'static str,
     output_dir: String,
     access_policy: &'static str,
+    traffic_jsonl: &'static str,
     published_cases: usize,
     failed_cases: usize,
     errors: Vec<RecordingErrorSummary>,
@@ -57,10 +58,12 @@ struct RecordingErrorDetail {
 
 impl Recorder {
     pub async fn publish_case(&self, case: &CaseContext) -> Result<()> {
+        self.flush_traffic().await?;
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         let staging_dir = self.case_staging_dir(case);
         let published_dir = self.case_dir(case);
+        self.flush_case_dependency_files(&staging_dir).await?;
         ensure_case_dependency_file(&staging_dir).await?;
         write_case_dependency_summary(&staging_dir).await?;
         if let Some(parent) = published_dir.parent() {
@@ -129,6 +132,7 @@ impl Recorder {
     ) -> Result<()> {
         let reason = reason.into();
         let message = message.into();
+        self.flush_traffic().await?;
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         let failed_dir = self.move_case_to_failed(case).await?;
@@ -179,6 +183,7 @@ impl Recorder {
         }
         let unfinished = {
             let _guard = self.dependency_write_lock.lock().await;
+            self.flush_all_dependency_files().await?;
             write_bootstrap_dependency_summary(&self.run_dir).await?;
             let mut unfinished = Vec::new();
             for case in self.unfinished_staging_cases().await? {
@@ -207,6 +212,7 @@ impl Recorder {
             "completed"
         })
         .await?;
+        self.flush_traffic().await?;
         Ok(has_failed_cases)
     }
 
@@ -221,6 +227,7 @@ impl Recorder {
     async fn move_case_to_failed(&self, case: &CaseContext) -> Result<PathBuf> {
         let staging_dir = self.case_staging_dir(case);
         let failed_dir = self.case_failed_dir(case);
+        self.flush_case_dependency_files(&staging_dir).await?;
         if let Some(parent) = failed_dir.parent() {
             tokio::fs::create_dir_all(parent).await.with_context(|| {
                 format!(
@@ -309,6 +316,7 @@ impl Recorder {
 
     pub(crate) async fn finalize_bootstrap_dependency_summary(&self) -> Result<()> {
         let _guard = self.dependency_write_lock.lock().await;
+        self.flush_bootstrap_dependency_files().await?;
         write_bootstrap_dependency_summary(&self.run_dir).await
     }
 
@@ -377,6 +385,7 @@ impl Recorder {
             status,
             output_dir: self.run_dir.display().to_string(),
             access_policy: self.access_policy.as_str(),
+            traffic_jsonl: self.traffic_jsonl.as_str(),
             published_cases: state.published_cases,
             failed_cases: state.failed_cases,
             errors: state.errors.clone(),

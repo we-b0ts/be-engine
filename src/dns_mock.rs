@@ -13,6 +13,10 @@ use tracing::{info, warn};
 
 use crate::AppState;
 
+mod bypass;
+pub(crate) use bypass::DomainMatcher;
+use bypass::normalize_domain;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FakeDnsUpstreamProtocol {
@@ -252,7 +256,9 @@ pub async fn run(state: AppState) -> Result<()> {
         listen = %config.listen,
         upstream_dns = %config.upstream_dns,
         fake_cidr = %config.fake_cidr,
-        bypass_domains = ?config.bypass_domains,
+        bypass_exact_domains = state.dns_bypass_matcher().exact_count(),
+        bypass_suffixes = state.dns_bypass_matcher().suffix_count(),
+        bypass_wildcards = state.dns_bypass_matcher().wildcard_count(),
         static_hosts = config.hosts.len(),
         "DNS mock listening"
     );
@@ -307,7 +313,7 @@ async fn handle_query(
             )?
         } else {
             let upstream_response = query_upstream(&query, config.upstream_dns).await?;
-            if domain_matches(&question.domain, &config.bypass_domains) {
+            if state.dns_bypass_matcher().matches(&question.domain) {
                 upstream_response
             } else {
                 let real_ips = parse_a_answers(&upstream_response).unwrap_or_default();
@@ -418,51 +424,6 @@ fn static_hosts_for_domain(
         .cloned()
 }
 
-pub fn domain_matches(domain: &str, patterns: &[String]) -> bool {
-    let domain = normalize_domain(domain);
-    patterns.iter().any(|pattern| {
-        let pattern = normalize_domain(pattern);
-        if pattern.contains('*') || pattern.contains('?') {
-            wildcard_matches(&pattern, &domain)
-        } else if let Some(suffix) = pattern.strip_prefix('.') {
-            domain == suffix || domain.ends_with(&format!(".{suffix}"))
-        } else {
-            domain == pattern
-        }
-    })
-}
-
-fn wildcard_matches(pattern: &str, value: &str) -> bool {
-    let pattern = pattern.as_bytes();
-    let value = value.as_bytes();
-    let mut previous = vec![false; value.len() + 1];
-    previous[0] = true;
-
-    for pattern_char in pattern {
-        let mut current = vec![false; value.len() + 1];
-        match *pattern_char {
-            b'*' => {
-                current[0] = previous[0];
-                for idx in 1..=value.len() {
-                    current[idx] = previous[idx] || current[idx - 1];
-                }
-            }
-            b'?' => {
-                current[1..=value.len()].copy_from_slice(&previous[..value.len()]);
-            }
-            literal => {
-                current[0] = false;
-                for idx in 1..=value.len() {
-                    current[idx] = previous[idx - 1] && value[idx - 1] == literal;
-                }
-            }
-        }
-        previous = current;
-    }
-
-    previous[value.len()]
-}
-
 fn build_empty_response(query: &[u8], question_end: usize) -> Result<Vec<u8>> {
     let mut response = Vec::with_capacity(question_end);
     response.extend_from_slice(query.get(0..2).ok_or_else(|| anyhow!("missing DNS id"))?);
@@ -541,10 +502,6 @@ fn read_u16(packet: &[u8], offset: usize) -> Result<u16> {
             .get(offset + 1)
             .ok_or_else(|| anyhow!("u16 out of bounds"))?,
     ]))
-}
-
-fn normalize_domain(domain: &str) -> String {
-    domain.trim_end_matches('.').to_ascii_lowercase()
 }
 
 impl Ipv4Cidr {
@@ -715,33 +672,6 @@ mod tests {
             registry.get_by_fake_ip(entry.fake_ip).await.unwrap().domain,
             "preview-wss-wegent.intra.demo.test"
         );
-    }
-
-    #[test]
-    fn matches_bypass_domains_by_exact_name_suffix_or_wildcard() {
-        let patterns = vec![
-            "preview-wss-wegent.intra.demo.test".to_string(),
-            ".internal.example.com".to_string(),
-            "*.dingtalk.com".to_string(),
-            "api?.service.example.com".to_string(),
-        ];
-
-        assert!(domain_matches(
-            "preview-wss-wegent.intra.demo.test",
-            &patterns
-        ));
-        assert!(domain_matches("api.internal.example.com", &patterns));
-        assert!(domain_matches("internal.example.com", &patterns));
-        assert!(!domain_matches("notinternal.example.com", &patterns));
-        assert!(!domain_matches(
-            "preview-wss-wegent.intra.weibo.cn",
-            &patterns
-        ));
-        assert!(domain_matches("open.dingtalk.com", &patterns));
-        assert!(domain_matches("a.b.dingtalk.com", &patterns));
-        assert!(!domain_matches("dingtalk.com", &patterns));
-        assert!(domain_matches("api1.service.example.com", &patterns));
-        assert!(!domain_matches("api12.service.example.com", &patterns));
     }
 
     #[test]

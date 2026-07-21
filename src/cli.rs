@@ -21,6 +21,15 @@ mod workflow;
     arg_required_else_help = true
 )]
 struct Cli {
+    /// Default recorder log filter when RUST_LOG is not set.
+    #[arg(
+        long,
+        global = true,
+        env = "TRAFFIC_E2E_LOG_LEVEL",
+        default_value = "info",
+        value_name = "FILTER"
+    )]
+    log_level: String,
     #[command(subcommand)]
     command: Command,
 }
@@ -53,12 +62,18 @@ enum Command {
 
 pub(crate) async fn run() -> Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let cli = Cli::parse();
+    let log_filter = if std::env::var_os("RUST_LOG").is_some() {
+        EnvFilter::try_from_default_env()?
+    } else {
+        EnvFilter::try_new(&cli.log_level)?
+    };
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse()?))
+        .with_env_filter(log_filter)
         .with_writer(output::TracingWriter)
         .init();
 
-    match Cli::parse().command {
+    match cli.command {
         Command::Record(args) => record::run(args).await,
         Command::Replay(args) => replay::run(args).await,
         Command::Target(args) => target::run(args).await,
@@ -123,5 +138,20 @@ mod tests {
     #[test]
     fn rejects_the_removed_e2e_run_facade_shape() {
         assert!(Cli::try_parse_from(["traffic-e2e", "e2e-run", "status"]).is_err());
+    }
+
+    #[test]
+    fn accepts_a_global_log_filter() {
+        let parsed = Cli::try_parse_from([
+            "traffic-e2e",
+            "--log-level",
+            "warn",
+            "record",
+            "--config",
+            "recorder.toml",
+        ])
+        .unwrap();
+
+        assert_eq!(parsed.log_level, "warn");
     }
 }

@@ -372,6 +372,11 @@ mod tests {
         )
         .await
         .unwrap();
+        state
+            .recorder()
+            .finalize_bootstrap_dependency_summary()
+            .await
+            .unwrap();
 
         let dependencies = state
             .recorder()

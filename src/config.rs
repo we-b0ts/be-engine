@@ -1,12 +1,15 @@
 use std::collections::BTreeMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
+
 mod allowed_unused_http;
 mod case_limits;
+mod dns;
 pub(crate) mod edit;
 mod feedback;
 mod http_response_rewrite;
@@ -19,6 +22,7 @@ pub use allowed_unused_http::{
     plan_allowed_unused_http_hosts,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
+pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
     plan_case_path_pattern_feedback,
@@ -28,6 +32,7 @@ pub use http_response_rewrite::{
 };
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
+    TrafficJsonlMode,
 };
 pub use verified_excludes::{
     VerifiedApiExclude, VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus,
@@ -48,19 +53,6 @@ pub struct AppConfig {
     pub mysql: MysqlConfig,
     pub recording: RecordingConfig,
     pub tls: TlsConfig,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
-pub struct DnsMockConfig {
-    pub enabled: bool,
-    pub listen: SocketAddr,
-    pub upstream_dns: SocketAddr,
-    pub fake_cidr: String,
-    pub ttl_seconds: u32,
-    pub bypass_domains: Vec<String>,
-    pub hosts: BTreeMap<String, Vec<Ipv4Addr>>,
-    pub registry_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -190,6 +182,7 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.dns_mock.validate()?;
         self.recording.validate()?;
         self.http_response_rewrite.validate()?;
         allowed_unused_http::validate_config(&self.http_gateway)?;
@@ -219,25 +212,6 @@ impl Default for HttpConfig {
             listen: "127.0.0.1:8080"
                 .parse()
                 .expect("valid default http listen address"),
-        }
-    }
-}
-
-impl Default for DnsMockConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            listen: "127.0.0.153:15353"
-                .parse()
-                .expect("valid default DNS mock listen address"),
-            upstream_dns: "10.10.10.10:53"
-                .parse()
-                .expect("valid default upstream DNS address"),
-            fake_cidr: "198.18.0.0/15".to_string(),
-            ttl_seconds: 60,
-            bypass_domains: Vec::new(),
-            hosts: BTreeMap::new(),
-            registry_path: PathBuf::from("./recordings/fake_dns_registry.json"),
         }
     }
 }
@@ -362,6 +336,8 @@ impl Default for TlsConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::net::Ipv4Addr;
+
     use super::*;
 
     #[test]
@@ -391,6 +367,9 @@ mod tests {
             case_limits::DEFAULT_MAX_CASES_PER_PATTERN
         );
         assert_eq!(config.recording.max_body_bytes, 1024 * 1024);
+        assert_eq!(config.recording.traffic_jsonl, TrafficJsonlMode::Full);
+        assert_eq!(config.recording.jsonl_buffer_capacity_bytes, 256 * 1024);
+        assert_eq!(config.recording.jsonl_flush_interval_ms, 1_000);
         assert_eq!(config.recording.case_dependency_quiet_period_ms, 100);
         assert_eq!(config.recording.case_dependency_drain_timeout_ms, 5_000);
         assert_eq!(
@@ -539,6 +518,10 @@ mod tests {
             bypass_domains = ["preview-wss-wegent.intra.demo.test", ".internal.example.com"]
             registry_path = "./recordings/test_fake_dns_registry.json"
 
+            [[dns_mock.bypass_strategies]]
+            strategy = "breeze"
+            snapshot_dir = "/data1/breeze/snapshot"
+
             [dns_mock.hosts]
             "db-10-185-28-119.test" = ["10.185.28.119"]
             "multi-db.test" = ["10.0.0.1", "10.0.0.2"]
@@ -572,6 +555,12 @@ mod tests {
                 "preview-wss-wegent.intra.demo.test".to_string(),
                 ".internal.example.com".to_string()
             ]
+        );
+        assert_eq!(
+            config.dns_mock.bypass_strategies,
+            vec![DnsBypassStrategyConfig::Breeze {
+                snapshot_dir: PathBuf::from("/data1/breeze/snapshot")
+            }]
         );
         assert_eq!(
             config.dns_mock.registry_path,

@@ -83,6 +83,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let recorder = state.recorder().clone();
     let recorder_task = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
     wait_for_port(gateway_addr).await;
@@ -98,6 +99,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
     dependency_task.await.unwrap();
     tokio::time::sleep(Duration::from_millis(50)).await;
     recorder_task.abort();
+    recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     assert!(!run_dir.join("readonly").exists());
@@ -226,6 +228,7 @@ async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let recorder = state.recorder().clone();
     let recorder_task = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -240,6 +243,7 @@ async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
     mysql_upstream_task.await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     recorder_task.abort();
+    recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     assert!(!run_dir.join("failed").exists());

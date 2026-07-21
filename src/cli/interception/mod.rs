@@ -4,6 +4,7 @@ use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
+use traffic_e2e::DEFAULT_FAKE_CIDR;
 
 use super::output::{stderr_line, stdout_line};
 
@@ -44,7 +45,7 @@ struct DnsArgs {
 struct FakeIpArgs {
     #[command(subcommand)]
     action: RuleAction,
-    #[arg(long, global = true, default_value = "198.18.0.0/15")]
+    #[arg(long, global = true, default_value = DEFAULT_FAKE_CIDR)]
     fake_cidr: String,
     #[arg(long, global = true, default_value_t = 15001)]
     tcp_port: u16,
