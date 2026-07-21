@@ -70,6 +70,9 @@ cargo install --path .
 traffic-e2e record --config config/recorder.example.toml
 ```
 
+Automation can reserve the recording directory name with an explicit UTC run
+identifier: `traffic-e2e record --config ... --run-id YYYYMMDDHHMMSS`.
+
 Local interception is always filtered to the fixed `trp-record` Unix user.
 This is a project-created system account, not a Linux built-in. Create it once,
 run the source service as that user, then start the recorder:

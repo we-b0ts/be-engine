@@ -110,12 +110,16 @@ struct AppStateInner {
 
 impl AppState {
     pub async fn new(config: AppConfig) -> Result<Self> {
+        Self::new_with_run_id(config, None).await
+    }
+
+    pub async fn new_with_run_id(config: AppConfig, run_id: Option<String>) -> Result<Self> {
         config
             .validate()
             .context("invalid recorder configuration")?;
         let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
             .context("failed to initialize DNS bypass matcher")?;
-        let recorder = Recorder::new_with_recording_config(&config.recording)
+        let recorder = Recorder::new_with_recording_config_and_run_id(&config.recording, run_id)
             .await
             .context("failed to initialize JSONL recorder")?;
         let dns_registry = FakeDnsRegistry::load_or_new(
