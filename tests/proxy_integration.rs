@@ -44,6 +44,7 @@ async fn records_http_proxy_exchange() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let recorder = state.recorder().clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
 
@@ -58,6 +59,7 @@ async fn records_http_proxy_exchange() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
+    recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
@@ -86,6 +88,7 @@ async fn recording_policy_blocks_http_write_before_upstream_and_audits_it() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let recorder = state.recorder().clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
 
@@ -105,6 +108,7 @@ async fn recording_policy_blocks_http_write_before_upstream_and_audits_it() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
+    recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
@@ -149,6 +153,7 @@ async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let recorder = state.recorder().clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -173,6 +178,7 @@ async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
+    recorder.flush_traffic().await.unwrap();
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     assert!(!run_dir.join("default").exists());
     let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
@@ -221,6 +227,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let recorder = state.recorder().clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -235,6 +242,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
     handle.abort();
+    recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
@@ -826,6 +834,7 @@ async fn records_and_rejects_mysql_tls_request() {
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let recorder = state.recorder().clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
 
@@ -846,6 +855,7 @@ async fn records_and_rejects_mysql_tls_request() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
     handle.abort();
+    recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))

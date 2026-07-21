@@ -93,6 +93,7 @@ async fn records_successful_produce_as_semantic_event() {
     drop(test_client);
     drop(broker);
     handler.await.unwrap().unwrap();
+    state.recorder().flush_traffic().await.unwrap();
 
     let run_dir = std::fs::read_dir(temp.path().join("recordings"))
         .unwrap()

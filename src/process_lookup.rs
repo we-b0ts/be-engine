@@ -27,12 +27,16 @@ pub fn lookup_tcp_process(
 ) -> Option<ProcessInfo> {
     let entries = read_tcp_entries().ok()?;
     let mut exact_inodes = HashSet::new();
+    let mut local_addr_inodes = HashSet::new();
     let mut port_fallback_inodes = HashSet::new();
     let mut unique_local_port_inodes = HashSet::new();
 
     for entry in entries {
         if entry.state != TCP_STATE_LISTEN && entry.local.port() == local_addr.port() {
             unique_local_port_inodes.insert(entry.inode);
+        }
+        if entry.state != TCP_STATE_LISTEN && entry.local == local_addr {
+            local_addr_inodes.insert(entry.inode);
         }
         if !candidate_remote_addrs.contains(&entry.remote) {
             continue;
@@ -45,6 +49,7 @@ pub fn lookup_tcp_process(
     }
 
     find_process_for_inodes(&exact_inodes)
+        .or_else(|| find_process_for_inodes(&local_addr_inodes))
         .or_else(|| find_process_for_inodes(&port_fallback_inodes))
         .or_else(|| {
             if unique_local_port_inodes.len() == 1 {
@@ -367,17 +372,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn falls_back_to_unique_local_port_for_redirected_connections() {
+    async fn falls_back_to_local_source_address_for_redirected_connections() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let server_addr = listener.local_addr().unwrap();
         let client = TcpStream::connect(server_addr).await.unwrap();
         let (server, peer_addr) = listener.accept().await.unwrap();
-        let redirected_peer =
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(198, 18, 0, 7)), peer_addr.port());
         let fake_remote = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(198, 18, 0, 7)), 443);
 
-        let process = lookup_tcp_process(redirected_peer, &[fake_remote])
-            .expect("unique local source port should identify current process");
+        let process = lookup_tcp_process(peer_addr, &[fake_remote])
+            .expect("local source address should identify current process");
         assert_eq!(process.pid, std::process::id());
 
         drop(client);

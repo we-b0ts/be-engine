@@ -1,0 +1,167 @@
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context, Result};
+use tokio::fs::{File, OpenOptions};
+use tokio::io::{AsyncWriteExt, BufWriter};
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct JsonlBufferSettings {
+    pub(super) capacity: usize,
+    pub(super) flush_interval: Duration,
+}
+
+pub(super) struct BufferedJsonlWriter {
+    writer: BufWriter<File>,
+    flush_interval: Duration,
+    last_flush: Instant,
+}
+
+impl BufferedJsonlWriter {
+    pub(super) async fn open(path: &Path, settings: JsonlBufferSettings) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .with_context(|| format!("failed to create JSONL dir {}", parent.display()))?;
+        }
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .await
+            .with_context(|| format!("failed to open JSONL file {}", path.display()))?;
+        Ok(Self {
+            writer: BufWriter::with_capacity(settings.capacity, file),
+            flush_interval: settings.flush_interval,
+            last_flush: Instant::now(),
+        })
+    }
+
+    pub(super) async fn append(&mut self, line: &[u8]) -> Result<()> {
+        self.writer
+            .write_all(line)
+            .await
+            .context("failed to append JSONL record")?;
+        if self.last_flush.elapsed() >= self.flush_interval {
+            self.flush().await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn flush(&mut self) -> Result<()> {
+        self.writer
+            .flush()
+            .await
+            .context("failed to flush JSONL records")?;
+        self.last_flush = Instant::now();
+        Ok(())
+    }
+}
+
+pub(super) struct JsonlWriterPool {
+    settings: JsonlBufferSettings,
+    writers: HashMap<PathBuf, BufferedJsonlWriter>,
+}
+
+impl JsonlWriterPool {
+    pub(super) fn new(settings: JsonlBufferSettings) -> Self {
+        Self {
+            settings,
+            writers: HashMap::new(),
+        }
+    }
+
+    pub(super) async fn append(&mut self, path: &Path, line: &[u8]) -> Result<()> {
+        if let Some(writer) = self.writers.get_mut(path) {
+            return writer.append(line).await;
+        }
+
+        let writer = BufferedJsonlWriter::open(path, self.settings).await?;
+        self.writers.insert(path.to_path_buf(), writer);
+        self.writers
+            .get_mut(path)
+            .expect("JSONL writer was just inserted")
+            .append(line)
+            .await
+    }
+
+    pub(super) async fn flush_and_remove(&mut self, path: &Path) -> Result<()> {
+        if let Some(mut writer) = self.writers.remove(path) {
+            writer.flush().await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn flush_and_remove_under(&mut self, dir: &Path) -> Result<()> {
+        let paths = self
+            .writers
+            .keys()
+            .filter(|path| path.starts_with(dir))
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in paths {
+            self.flush_and_remove(&path).await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn flush_all(&mut self) -> Result<()> {
+        let paths = self.writers.keys().cloned().collect::<Vec<_>>();
+        for path in paths {
+            self.flush_and_remove(&path).await?;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn flush_open(&mut self) -> Result<()> {
+        for writer in self.writers.values_mut() {
+            writer.flush().await?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings() -> JsonlBufferSettings {
+        JsonlBufferSettings {
+            capacity: 4096,
+            flush_interval: Duration::from_secs(60),
+        }
+    }
+
+    #[tokio::test]
+    async fn buffered_writer_flushes_explicitly() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("events.jsonl");
+        let mut writer = BufferedJsonlWriter::open(&path, settings()).await.unwrap();
+
+        writer.append(b"{\"event\":1}\n").await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"");
+
+        writer.flush().await.unwrap();
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"{\"event\":1}\n");
+    }
+
+    #[tokio::test]
+    async fn writer_pool_flushes_only_selected_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first/events.jsonl");
+        let second = temp.path().join("second/events.jsonl");
+        let mut pool = JsonlWriterPool::new(settings());
+        pool.append(&first, b"first\n").await.unwrap();
+        pool.append(&second, b"second\n").await.unwrap();
+
+        pool.flush_and_remove_under(first.parent().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(tokio::fs::read(&first).await.unwrap(), b"first\n");
+        assert_eq!(tokio::fs::read(&second).await.unwrap(), b"");
+        pool.flush_all().await.unwrap();
+        assert_eq!(tokio::fs::read(&second).await.unwrap(), b"second\n");
+    }
+}

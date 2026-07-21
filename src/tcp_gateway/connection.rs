@@ -7,12 +7,12 @@ use anyhow::{Context, Result, anyhow};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Duration, sleep, timeout};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::AppState;
 use crate::access_policy::{AccessDecision, OperationClass};
-use crate::dns_mock::{FakeDnsEntry, domain_matches};
+use crate::dns_mock::FakeDnsEntry;
 use crate::memcached::MemcachedWireProtocol;
 use crate::process_lookup::lookup_tcp_process;
 use crate::recorder::ProcessInfo;
@@ -52,10 +52,29 @@ pub(crate) async fn run(state: AppState) -> Result<()> {
         let state = state.clone();
         tokio::spawn(async move {
             if let Err(err) = handle_connection(client, peer_addr, state).await {
-                warn!(error = %format!("{err:#}"), "TCP gateway connection failed");
+                if is_expected_connection_end(&err) {
+                    debug!(error = %format!("{err:#}"), "TCP gateway connection ended");
+                } else {
+                    warn!(error = %format!("{err:#}"), "TCP gateway connection failed");
+                }
             }
         });
     }
+}
+
+fn is_expected_connection_end(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::UnexpectedEof
+            )
+        })
+    })
 }
 
 async fn handle_connection(
@@ -93,7 +112,7 @@ async fn handle_connection(
         return Err(anyhow!(error));
     };
 
-    if domain_matches(&entry.domain, &state.config().dns_mock.bypass_domains) {
+    if state.dns_bypass_matcher().matches(&entry.domain) {
         return proxy_raw_tcp(
             client,
             fake_addr,

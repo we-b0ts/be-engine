@@ -92,6 +92,7 @@ async fn mitms_fake_ip_https_and_records_exchange() {
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     gateway.abort();
+    state.recorder().flush_traffic().await.unwrap();
 
     let run_dir = std::fs::read_dir(temp.path().join("recordings"))
         .unwrap()

@@ -11,11 +11,33 @@ use crate::mysql::operation::MysqlWriteOperation;
 pub struct RecordingConfig {
     pub output_dir: PathBuf,
     pub max_body_bytes: usize,
+    pub traffic_jsonl: TrafficJsonlMode,
+    pub jsonl_buffer_capacity_bytes: usize,
+    pub jsonl_flush_interval_ms: u64,
     pub case_dependency_quiet_period_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
     pub access_rules: Vec<RecordingAccessRuleConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrafficJsonlMode {
+    #[default]
+    Full,
+    Errors,
+    Off,
+}
+
+impl TrafficJsonlMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Errors => "errors",
+            Self::Off => "off",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -67,6 +89,12 @@ impl RecordingAccessPolicy {
 
 impl RecordingConfig {
     pub(super) fn validate(&self) -> Result<()> {
+        if self.jsonl_buffer_capacity_bytes == 0 {
+            bail!("recording.jsonl_buffer_capacity_bytes must be greater than zero");
+        }
+        if self.jsonl_flush_interval_ms == 0 {
+            bail!("recording.jsonl_flush_interval_ms must be greater than zero");
+        }
         if self.case_dependency_quiet_period_ms == 0 {
             bail!("recording.case_dependency_quiet_period_ms must be greater than zero");
         }
@@ -150,6 +178,9 @@ impl Default for RecordingConfig {
         Self {
             output_dir: PathBuf::from("./recordings"),
             max_body_bytes: 1024 * 1024,
+            traffic_jsonl: TrafficJsonlMode::Full,
+            jsonl_buffer_capacity_bytes: 256 * 1024,
+            jsonl_flush_interval_ms: 1_000,
             case_dependency_quiet_period_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,
             redact_headers: vec![
@@ -206,6 +237,24 @@ mod tests {
         assert!(config.validate().is_err());
 
         config.recording.case_dependency_drain_timeout_ms = 100;
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_jsonl_output_and_buffer_settings() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [recording]
+            traffic_jsonl = "off"
+            jsonl_buffer_capacity_bytes = 524288
+            jsonl_flush_interval_ms = 250
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(config.recording.traffic_jsonl, TrafficJsonlMode::Off);
+        assert_eq!(config.recording.jsonl_buffer_capacity_bytes, 524_288);
+        assert_eq!(config.recording.jsonl_flush_interval_ms, 250);
         config.validate().unwrap();
     }
 

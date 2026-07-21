@@ -37,6 +37,7 @@ use crate::active_case::{
     ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection, DependencyDrainResult,
     DependencyTargets,
 };
+use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::http::case::CaseInvalidation;
 
@@ -47,16 +48,17 @@ pub use case_group::{
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
-    CasePathPatternReport, DnsMockConfig, HttpConfig, HttpGatewayCaseLimitsConfig,
-    HttpGatewayConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
-    HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlConfig, MysqlRouteConfig,
-    RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
-    TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
-    TcpProtocolOverrideConfig, TlsConfig, UdpGatewayConfig, VerifiedApiExclude,
-    VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
-    VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiExcludesConfig,
-    VerifiedApiVerification, ensure_verified_api_exclude, plan_allowed_unused_http_hosts,
-    plan_case_path_pattern_feedback, plan_verified_api_exclude,
+    CasePathPatternReport, DEFAULT_FAKE_CIDR, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
+    HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
+    HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
+    MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy, RecordingAccessRuleConfig,
+    RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol, TcpGatewayConfig,
+    TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
+    UdpGatewayConfig, VerifiedApiExclude, VerifiedApiExcludeEnsureReport,
+    VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback, VerifiedApiExcludePlan,
+    VerifiedApiExcludeReport, VerifiedApiExcludesConfig, VerifiedApiVerification,
+    ensure_verified_api_exclude, plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback,
+    plan_verified_api_exclude,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
@@ -98,6 +100,7 @@ struct AppStateInner {
     config: AppConfig,
     recorder: Recorder,
     dns_registry: FakeDnsRegistry,
+    dns_bypass_matcher: DomainMatcher,
     ca: MitmCa,
     client: ProxyClient,
     upstream_tls_config: Arc<ClientConfig>,
@@ -110,12 +113,11 @@ impl AppState {
         config
             .validate()
             .context("invalid recorder configuration")?;
-        let recorder = Recorder::new_with_access_policy(
-            &config.recording.output_dir,
-            config.recording.access_policy,
-        )
-        .await
-        .context("failed to initialize JSONL recorder")?;
+        let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
+            .context("failed to initialize DNS bypass matcher")?;
+        let recorder = Recorder::new_with_recording_config(&config.recording)
+            .await
+            .context("failed to initialize JSONL recorder")?;
         let dns_registry = FakeDnsRegistry::load_or_new(
             &config.dns_mock.fake_cidr,
             Some(&config.dns_mock.registry_path),
@@ -138,6 +140,7 @@ impl AppState {
                 config,
                 recorder,
                 dns_registry,
+                dns_bypass_matcher,
                 ca,
                 client,
                 upstream_tls_config,
@@ -264,6 +267,10 @@ impl AppState {
 
     pub fn dns_registry(&self) -> &FakeDnsRegistry {
         &self.inner.dns_registry
+    }
+
+    pub(crate) fn dns_bypass_matcher(&self) -> &DomainMatcher {
+        &self.inner.dns_bypass_matcher
     }
 
     pub(crate) fn kubectl_proxy_manager(&self) -> &KubectlProxyManager {

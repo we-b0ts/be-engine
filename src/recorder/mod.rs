@@ -1,21 +1,22 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use self::run::{RecorderRunState, new_run_id};
 use anyhow::{Context, Result};
 use serde::Serialize;
-use tokio::fs::{File, OpenOptions};
-use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
+use tracing::warn;
 use uuid::Uuid;
 
-use crate::config::RecordingAccessPolicy;
+use crate::config::{RecordingAccessPolicy, RecordingConfig, TrafficJsonlMode};
 
 mod capture;
 mod dependencies;
 mod event;
 pub(crate) mod http;
+mod jsonl;
 pub(crate) mod kafka;
 pub(crate) mod memcached;
 pub(crate) mod mysql;
@@ -28,7 +29,9 @@ pub use event::*;
 
 #[derive(Clone)]
 pub struct Recorder {
-    file: Arc<Mutex<File>>,
+    traffic_file: Arc<Mutex<Option<jsonl::BufferedJsonlWriter>>>,
+    traffic_jsonl: TrafficJsonlMode,
+    dependency_files: Arc<Mutex<jsonl::JsonlWriterPool>>,
     pub(crate) run_dir: Arc<PathBuf>,
     pub(crate) run_state: Arc<Mutex<RecorderRunState>>,
     pub(crate) dependency_write_lock: Arc<Mutex<()>>,
@@ -45,6 +48,38 @@ impl Recorder {
         output_dir: impl AsRef<Path>,
         access_policy: RecordingAccessPolicy,
     ) -> Result<Self> {
+        let defaults = RecordingConfig::default();
+        Self::new_with_options(
+            output_dir,
+            access_policy,
+            defaults.traffic_jsonl,
+            jsonl::JsonlBufferSettings {
+                capacity: defaults.jsonl_buffer_capacity_bytes,
+                flush_interval: Duration::from_millis(defaults.jsonl_flush_interval_ms),
+            },
+        )
+        .await
+    }
+
+    pub(crate) async fn new_with_recording_config(config: &RecordingConfig) -> Result<Self> {
+        Self::new_with_options(
+            &config.output_dir,
+            config.access_policy,
+            config.traffic_jsonl,
+            jsonl::JsonlBufferSettings {
+                capacity: config.jsonl_buffer_capacity_bytes,
+                flush_interval: Duration::from_millis(config.jsonl_flush_interval_ms),
+            },
+        )
+        .await
+    }
+
+    async fn new_with_options(
+        output_dir: impl AsRef<Path>,
+        access_policy: RecordingAccessPolicy,
+        traffic_jsonl: TrafficJsonlMode,
+        buffer_settings: jsonl::JsonlBufferSettings,
+    ) -> Result<Self> {
         let output_dir = output_dir.as_ref();
         tokio::fs::create_dir_all(output_dir)
             .await
@@ -54,15 +89,18 @@ impl Recorder {
         tokio::fs::create_dir(&run_dir)
             .await
             .with_context(|| format!("failed to create recording run dir {}", run_dir.display()))?;
-        let path = run_dir.join("traffic.jsonl");
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await
-            .with_context(|| format!("failed to open JSONL recording file {}", path.display()))?;
+        let traffic_file = if traffic_jsonl == TrafficJsonlMode::Off {
+            None
+        } else {
+            Some(
+                jsonl::BufferedJsonlWriter::open(&run_dir.join("traffic.jsonl"), buffer_settings)
+                    .await?,
+            )
+        };
         let recorder = Self {
-            file: Arc::new(Mutex::new(file)),
+            traffic_file: Arc::new(Mutex::new(traffic_file)),
+            traffic_jsonl,
+            dependency_files: Arc::new(Mutex::new(jsonl::JsonlWriterPool::new(buffer_settings))),
             run_dir: Arc::new(run_dir),
             run_state: Arc::new(Mutex::new(RecorderRunState {
                 run_id,
@@ -72,21 +110,35 @@ impl Recorder {
             finalized_cases: Arc::new(Mutex::new(HashSet::new())),
             access_policy,
         };
+        spawn_jsonl_flush_task(
+            &recorder.traffic_file,
+            &recorder.dependency_files,
+            buffer_settings.flush_interval,
+        );
         recorder.write_run_report("running").await?;
         Ok(recorder)
     }
 
     pub async fn record(&self, event: RecorderEvent) -> Result<()> {
+        if !should_write_traffic_event(self.traffic_jsonl, &event) {
+            return Ok(());
+        }
         let mut line = serde_json::to_vec(&event).context("failed to serialize recorder event")?;
         line.push(b'\n');
 
-        let mut file = self.file.lock().await;
-        file.write_all(&line)
-            .await
-            .context("failed to append recorder event")?;
-        file.flush()
-            .await
-            .context("failed to flush recorder event")?;
+        let mut file = self.traffic_file.lock().await;
+        if let Some(file) = file.as_mut() {
+            file.append(&line).await?;
+        }
+        Ok(())
+    }
+
+    /// Flush currently buffered run-level `traffic.jsonl` records.
+    pub async fn flush_traffic(&self) -> Result<()> {
+        let mut file = self.traffic_file.lock().await;
+        if let Some(file) = file.as_mut() {
+            file.flush().await?;
+        }
         Ok(())
     }
 
@@ -110,6 +162,74 @@ impl Recorder {
         tokio::fs::write(&path, payload)
             .await
             .with_context(|| format!("failed to write case recording file {}", path.display()))
+    }
+}
+
+fn spawn_jsonl_flush_task(
+    traffic_file: &Arc<Mutex<Option<jsonl::BufferedJsonlWriter>>>,
+    dependency_files: &Arc<Mutex<jsonl::JsonlWriterPool>>,
+    interval: Duration,
+) {
+    let traffic_file = Arc::downgrade(traffic_file);
+    let dependency_files = Arc::downgrade(dependency_files);
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(interval).await;
+
+            let Some(traffic_file) = traffic_file.upgrade() else {
+                break;
+            };
+            let traffic_flush = {
+                let mut writer = traffic_file.lock().await;
+                match writer.as_mut() {
+                    Some(writer) => writer.flush().await,
+                    None => Ok(()),
+                }
+            };
+            drop(traffic_file);
+            if let Err(error) = traffic_flush {
+                warn!(%error, "failed to periodically flush traffic JSONL");
+            }
+
+            let Some(dependency_files) = dependency_files.upgrade() else {
+                break;
+            };
+            let dependency_flush = dependency_files.lock().await.flush_open().await;
+            drop(dependency_files);
+            if let Err(error) = dependency_flush {
+                warn!(%error, "failed to periodically flush dependency JSONL");
+            }
+        }
+    });
+}
+
+fn should_write_traffic_event(mode: TrafficJsonlMode, event: &RecorderEvent) -> bool {
+    match mode {
+        TrafficJsonlMode::Full => true,
+        TrafficJsonlMode::Off => false,
+        TrafficJsonlMode::Errors => match event {
+            RecorderEvent::HttpExchange(event) => {
+                event.error.is_some() || event.response_status.is_some_and(|status| status >= 500)
+            }
+            RecorderEvent::TcpGatewayConnection(event) => event.error.is_some(),
+            RecorderEvent::UdpDatagram(event) => event.error.is_some(),
+            RecorderEvent::RedisConnection(event) => event.error.is_some(),
+            RecorderEvent::MemcachedConnection(event) => event.error.is_some(),
+            RecorderEvent::KafkaConnection(event) => event.error.is_some(),
+            RecorderEvent::MysqlConnection(event) => event.error.is_some(),
+            RecorderEvent::MysqlPacket(event) => event.error_code.is_some(),
+            RecorderEvent::MysqlResponse(event) => event.error_code.is_some(),
+            RecorderEvent::MysqlExchange(event) => event.response.error_code.is_some(),
+            RecorderEvent::MysqlTlsRejected(_)
+            | RecorderEvent::AccessPolicyAllow(_)
+            | RecorderEvent::ReadonlyRejection(_)
+            | RecorderEvent::ProxyError(_) => true,
+            RecorderEvent::RedisExchange(_)
+            | RecorderEvent::MemcachedExchange(_)
+            | RecorderEvent::KafkaProduce(_)
+            | RecorderEvent::KafkaDelivery(_)
+            | RecorderEvent::MysqlQuery(_) => false,
+        },
     }
 }
 
@@ -137,6 +257,137 @@ mod tests {
 
     use super::*;
 
+    async fn flush_case_dependencies(recorder: &Recorder, case: &CaseContext) {
+        let _guard = recorder.dependency_write_lock.lock().await;
+        recorder
+            .flush_case_dependency_files(&recorder.case_staging_dir(case))
+            .await
+            .unwrap();
+    }
+
+    async fn flush_bootstrap_dependencies(recorder: &Recorder) {
+        let _guard = recorder.dependency_write_lock.lock().await;
+        recorder.flush_bootstrap_dependency_files().await.unwrap();
+    }
+
+    fn test_proxy_error(message: &str) -> RecorderEvent {
+        RecorderEvent::ProxyError(ProxyErrorEvent {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            protocol: "test".to_string(),
+            client_addr: None,
+            client_process: None,
+            target: Some("upstream".to_string()),
+            error: message.to_string(),
+        })
+    }
+
+    fn test_mysql_query() -> RecorderEvent {
+        RecorderEvent::MysqlQuery(MysqlQueryEvent {
+            id: Uuid::new_v4(),
+            connection_id: Uuid::new_v4(),
+            sequence: 1,
+            timestamp: Utc::now(),
+            client_addr: None,
+            client_process: None,
+            command: "COM_QUERY".to_string(),
+            query: Some("select 1".to_string()),
+            payload_len: 8,
+        })
+    }
+
+    #[tokio::test]
+    async fn traffic_jsonl_off_skips_the_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = RecordingConfig {
+            output_dir: temp.path().to_path_buf(),
+            traffic_jsonl: TrafficJsonlMode::Off,
+            ..Default::default()
+        };
+        let recorder = Recorder::new_with_recording_config(&config).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: None,
+        };
+        let event = test_proxy_error("boom");
+
+        recorder.record(event.clone()).await.unwrap();
+        recorder
+            .append_case_dependency(&case, &event, "active_window")
+            .await
+            .unwrap();
+        recorder.publish_case(&case).await.unwrap();
+        recorder.finish_run().await.unwrap();
+
+        assert!(!recorder.run_dir.join("traffic.jsonl").exists());
+        let dependencies =
+            tokio::fs::read_to_string(recorder.case_dir(&case).join("dependencies.jsonl"))
+                .await
+                .unwrap();
+        assert!(dependencies.contains("\"event_type\":\"proxy_error\""));
+    }
+
+    #[tokio::test]
+    async fn traffic_jsonl_errors_keeps_only_diagnostic_events() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = RecordingConfig {
+            output_dir: temp.path().to_path_buf(),
+            traffic_jsonl: TrafficJsonlMode::Errors,
+            ..Default::default()
+        };
+        let recorder = Recorder::new_with_recording_config(&config).await.unwrap();
+
+        recorder.record(test_mysql_query()).await.unwrap();
+        recorder.record(test_proxy_error("boom")).await.unwrap();
+        recorder.finish_run().await.unwrap();
+
+        let raw = tokio::fs::read_to_string(recorder.run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
+        assert_eq!(raw.lines().count(), 1);
+        assert!(raw.contains("\"event_type\":\"proxy_error\""));
+    }
+
+    #[tokio::test]
+    async fn traffic_jsonl_full_flushes_buffer_when_run_finishes() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let path = recorder.run_dir.join("traffic.jsonl");
+
+        recorder.record(test_proxy_error("boom")).await.unwrap();
+        assert!(tokio::fs::read(&path).await.unwrap().is_empty());
+
+        recorder.finish_run().await.unwrap();
+        assert!(!tokio::fs::read(&path).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn traffic_jsonl_flushes_on_the_configured_interval() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = RecordingConfig {
+            output_dir: temp.path().to_path_buf(),
+            jsonl_flush_interval_ms: 10,
+            ..Default::default()
+        };
+        let recorder = Recorder::new_with_recording_config(&config).await.unwrap();
+        let path = recorder.run_dir.join("traffic.jsonl");
+
+        recorder.record(test_proxy_error("boom")).await.unwrap();
+        assert!(tokio::fs::read(&path).await.unwrap().is_empty());
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if !tokio::fs::read(&path).await.unwrap().is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn case_dependency_records_match_reason() {
         let temp = tempfile::tempdir().unwrap();
@@ -160,6 +411,7 @@ mod tests {
             .append_case_dependency(&case, &event, "active_window")
             .await
             .unwrap();
+        flush_case_dependencies(&recorder, &case).await;
 
         let raw =
             tokio::fs::read_to_string(recorder.case_staging_dir(&case).join("dependencies.jsonl"))
@@ -221,6 +473,7 @@ mod tests {
             .append_case_dependency(&case, &event, "process")
             .await
             .unwrap();
+        flush_case_dependencies(&recorder, &case).await;
 
         let raw =
             tokio::fs::read_to_string(recorder.case_staging_dir(&case).join("dependencies.jsonl"))
@@ -254,6 +507,7 @@ mod tests {
             .append_bootstrap_dependency(&event, "bootstrap_window")
             .await
             .unwrap();
+        flush_bootstrap_dependencies(&recorder).await;
 
         let raw = tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
             .await
@@ -354,6 +608,8 @@ mod tests {
             .await
             .unwrap();
 
+        flush_case_dependencies(&recorder, &case).await;
+
         let raw = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
             .await
             .unwrap();
@@ -430,6 +686,8 @@ mod tests {
             .await
             .unwrap();
 
+        flush_case_dependencies(&recorder, &case).await;
+
         let raw = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
             .await
             .unwrap();
@@ -468,6 +726,7 @@ mod tests {
             .append_case_dependency(&case, &event, "process")
             .await
             .unwrap();
+        flush_case_dependencies(&recorder, &case).await;
 
         let case_dir = recorder.case_staging_dir(&case);
         assert!(!case_dir.join("dependencies.jsonl").exists());
@@ -647,6 +906,7 @@ mod tests {
             .append_bootstrap_dependency(&event, "bootstrap_window")
             .await
             .unwrap();
+        flush_bootstrap_dependencies(&recorder).await;
 
         assert!(
             !recorder

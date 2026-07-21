@@ -204,6 +204,7 @@ async fn assert_blocked_query(sql: &str) {
             .is_err()
     );
 
+    state.recorder().flush_traffic().await.unwrap();
     let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
@@ -328,6 +329,7 @@ async fn allowed_insert_reaches_upstream_and_records_exchange_and_audit() {
     let response = read_packet(&mut client).await.unwrap().unwrap();
     assert_eq!(response.payload[0], 0x00);
 
+    state.recorder().flush_traffic().await.unwrap();
     let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
@@ -496,6 +498,7 @@ async fn stmt_close_is_forwarded_without_recording_an_incomplete_exchange() {
         0x00
     );
 
+    state.recorder().flush_traffic().await.unwrap();
     let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
         .await
         .unwrap();

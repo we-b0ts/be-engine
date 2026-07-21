@@ -92,7 +92,7 @@ struct ReplayArgs {
     dns_listen: SocketAddr,
     #[arg(long, default_value = "127.0.0.1:15001")]
     tcp_listen: SocketAddr,
-    #[arg(long, default_value = "198.18.0.0/15")]
+    #[arg(long, default_value = traffic_e2e::DEFAULT_FAKE_CIDR)]
     fake_cidr: String,
     #[arg(long)]
     report: Option<PathBuf>,

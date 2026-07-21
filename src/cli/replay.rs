@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use clap::{ArgAction, Args};
 use serde::Deserialize;
-use traffic_e2e::{AppConfig, ReplayAllowedUnusedHttpConfig, ReplayConfig, run_replay};
+use traffic_e2e::{
+    AppConfig, DEFAULT_FAKE_CIDR, ReplayAllowedUnusedHttpConfig, ReplayConfig, run_replay,
+};
 use uuid::Uuid;
 
 use super::interception::{DnsConfig, FakeIpConfig, Guard};
@@ -13,7 +15,6 @@ use super::signal::shutdown_signal;
 
 const DEFAULT_DNS_LISTEN: &str = "127.0.0.153:15353";
 const DEFAULT_TCP_LISTEN: &str = "127.0.0.1:15001";
-const DEFAULT_FAKE_CIDR: &str = "198.18.0.0/15";
 const DEFAULT_UPSTREAM_DNS: &str = "10.10.10.10:53";
 
 #[derive(Debug, Args)]
