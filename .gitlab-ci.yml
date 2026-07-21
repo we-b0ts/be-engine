@@ -16,7 +16,6 @@ docker-server:
   retry: 1
   variables:
     DOCKERFILE_PATH: .
-    DOCKERFILE_NAME: deploy/Dockerfile
   script:
     - build_image
 
