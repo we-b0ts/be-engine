@@ -1,0 +1,7 @@
+.git
+.gitlab-ci.yml
+.replay
+data
+recordings
+target
+*.swp

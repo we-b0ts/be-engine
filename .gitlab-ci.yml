@@ -1,0 +1,35 @@
+image: registry.api.demo.test/ci/ci-runner:extend
+
+variables:
+  PAAS_NAMESPACE: wb-plat-if
+  SERVICE: record-replay-web
+  IMAGE_NAME: record-replay-web
+  PREPARE_IMAGE: weibo_rd_if/traffic_recorder_proxy:0.0.0
+  CI_PIPELINE_STRATEGY: latest_first
+
+stages:
+  - package
+  - production
+
+docker-server:
+  stage: package
+  retry: 1
+  variables:
+    DOCKERFILE_PATH: .
+  script:
+    - build_image
+
+deploy-recorder:
+  stage: production
+  variables:
+    APP: record-replay-web
+    UPSTREAM_CI_PROJECT_ID: $CI_PROJECT_ID
+    UPSTREAM_CI_PIPELINE_ID: $CI_PIPELINE_ID
+    UPSTREAM_CI_COMMIT_REF_NAME: $CI_COMMIT_REF_NAME
+    UPSTREAM_CI_COMMIT_SHA: $CI_COMMIT_SHA
+  trigger:
+    project: krs/gitops_biz_manifest
+    branch: master
+    strategy: depend
+  only:
+    - master
