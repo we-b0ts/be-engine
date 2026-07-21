@@ -8,8 +8,31 @@ variables:
   CI_PIPELINE_STRATEGY: latest_first
 
 stages:
+  - base
   - package
   - production
+
+builder-image:
+  stage: base
+  when: manual
+  variables:
+    DOCKERFILE_PATH: docker/builder
+    PREPARE_IMAGE: weibo_rd_if/traffic-e2e-rust-builder:1.88.0
+  script:
+    - build_image
+  only:
+    - master
+
+runtime-image:
+  stage: base
+  when: manual
+  variables:
+    DOCKERFILE_PATH: docker/runtime
+    PREPARE_IMAGE: weibo_rd_if/traffic-e2e-runtime:debian12-iptables
+  script:
+    - build_image
+  only:
+    - master
 
 docker-server:
   stage: package
