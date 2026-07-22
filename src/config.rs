@@ -12,6 +12,7 @@ mod case_limits;
 mod dns;
 pub(crate) mod edit;
 mod feedback;
+mod http_gateway;
 mod http_response_rewrite;
 mod recording;
 mod rule_document;
@@ -27,6 +28,7 @@ pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
     plan_case_path_pattern_feedback,
 };
+pub use http_gateway::{HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig};
 pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
@@ -114,6 +116,9 @@ pub struct HttpGatewayConfig {
     pub listen: SocketAddr,
     pub matched_upstream: String,
     pub fallback_upstream: String,
+    pub fallback_mode: HttpGatewayFallbackMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_response: Option<HttpGatewayFixedResponseConfig>,
     pub preserve_host: bool,
     pub ready: HttpGatewayReadyConfig,
     pub case_limits: HttpGatewayCaseLimitsConfig,
@@ -185,6 +190,7 @@ impl AppConfig {
         self.dns_mock.validate()?;
         self.recording.validate()?;
         self.http_response_rewrite.validate()?;
+        http_gateway::validate_config(&self.http_gateway)?;
         allowed_unused_http::validate_config(&self.http_gateway)?;
         self.http_gateway
             .case_limits
@@ -264,6 +270,8 @@ impl Default for HttpGatewayConfig {
                 .expect("valid default HTTP gateway listen address"),
             matched_upstream: "http://127.0.0.1:8081".to_string(),
             fallback_upstream: "http://127.0.0.1:8082".to_string(),
+            fallback_mode: HttpGatewayFallbackMode::Upstream,
+            fixed_response: None,
             preserve_host: true,
             ready: HttpGatewayReadyConfig::default(),
             case_limits: HttpGatewayCaseLimitsConfig::default(),

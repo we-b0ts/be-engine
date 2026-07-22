@@ -57,10 +57,32 @@ The owner scope cannot be overridden by CLI options, environment variables, or
 recorder configuration.
 
 HTTP gateway recording is intentionally conservative. Until the configured
-ready probe succeeds, matching traffic is sent to `fallback_upstream` and no
-case is created. After ready, only one matched case can be active at a time;
-overlapping matching requests are also sent to fallback so dependencies are not
+ready probe succeeds, matching traffic uses the configured fallback strategy
+and no case is created. After ready, only one matched case can be active at a
+time; overlapping matching requests also use fallback so dependencies are not
 shared across cases.
+
+The default `http_gateway.fallback_mode = "upstream"` forwards those requests
+to `fallback_upstream`. For a fallback that always returns the same payload,
+use an in-process fixed response instead of running another service:
+
+```toml
+[http_gateway]
+fallback_mode = "fixed_response"
+
+[http_gateway.fixed_response]
+status = 200
+content_type = "application/json"
+headers = { x-recorder-fallback = "fixed" }
+body = '{"code":"xxx","msg":"xxx"}'
+```
+
+`status` is required and must be a final HTTP status. Configure `201` only
+when the response semantically represents resource creation. Fixed fallback
+requests are not forwarded, do not create cases, and are not recorded as
+business exchanges. Framing and hop-by-hop headers such as `content-length`,
+`transfer-encoding`, and `connection` are managed by the gateway and cannot be
+configured in `headers`.
 
 The gateway also limits successfully published cases per resolved case pattern
 within one recorder run. The default is
@@ -79,9 +101,9 @@ default = 100
 
 Dynamic override keys must already exist in a recording rule's
 `case_path_patterns`. Once the published count reaches the effective limit,
-later matching requests are sent directly to `fallback_upstream` without
-creating a case. Failed cases do not consume the limit, and restarting Recorder
-starts a new run with fresh counts.
+later matching requests use the configured fallback strategy without creating
+a case. Failed cases do not consume the limit, and restarting Recorder starts
+a new run with fresh counts.
 
 After an upstream HTTP response completes, Recorder continues accepting new
 case dependencies for the fixed

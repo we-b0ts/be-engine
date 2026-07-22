@@ -105,6 +105,6 @@ An applied entry is keyed by recording rule, method, and path pattern. Exact
 paths, whole-segment `*`, and a final `**` catch-all are supported with the same
 semantics as canonical API groups: `*` matches one non-empty segment and a final
 `**` matches one or more remaining segments. It takes effect after the recorder
-reloads the updated config; matching requests use `fallback_upstream` and
-create no case. The managed operation is add-only and never deletes exclusions
-automatically.
+reloads the updated config; matching requests use the configured fallback
+strategy and create no case. The managed operation is add-only and never
+deletes exclusions automatically.
