@@ -9,6 +9,7 @@ pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
 
 mod allowed_unused_http;
 mod case_limits;
+mod compare;
 mod dns;
 pub(crate) mod edit;
 mod feedback;
@@ -22,6 +23,7 @@ pub use allowed_unused_http::{
     plan_allowed_unused_http_hosts,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
+pub use compare::CompareConfig;
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
@@ -44,6 +46,7 @@ pub use verified_excludes::{
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
+    pub compare: Option<CompareConfig>,
     pub dns_mock: DnsMockConfig,
     pub tcp_gateway: TcpGatewayConfig,
     pub udp_gateway: UdpGatewayConfig,
@@ -181,6 +184,29 @@ impl AppConfig {
         Ok(config)
     }
 
+    pub fn load_compare(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read config {}", path.display()))?;
+        let config: Self = toml::from_str(&raw)
+            .with_context(|| format!("failed to parse config {}", path.display()))?;
+        config
+            .validate_compare()
+            .with_context(|| format!("invalid compare config {}", path.display()))?;
+        Ok(config)
+    }
+
+    pub fn validate_compare(&self) -> Result<()> {
+        let compare = self
+            .compare
+            .as_ref()
+            .context("compare command requires a [compare] configuration section")?;
+        compare.validate(&self.http_gateway)?;
+        self.http_gateway
+            .case_limits
+            .validate(&self.http_gateway.rules)
+    }
+
     pub fn validate(&self) -> Result<()> {
         self.dns_mock.validate()?;
         self.recording.validate()?;
@@ -192,6 +218,9 @@ impl AppConfig {
         self.http_gateway
             .verified_excludes
             .validate(&self.http_gateway.rules)?;
+        if let Some(compare) = &self.compare {
+            compare.validate(&self.http_gateway)?;
+        }
         if self.http_response_rewrite.enabled
             && (!self.dns_mock.enabled
                 || !self.tcp_gateway.enabled
@@ -346,6 +375,16 @@ mod tests {
             .join("config")
             .join("recorder.example.toml");
         AppConfig::load(path).unwrap();
+    }
+
+    #[test]
+    fn loads_example_compare_config() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("config")
+            .join("compare.example.toml");
+        let config = AppConfig::load_compare(path).unwrap();
+        assert!(config.compare.is_some());
+        assert_eq!(config.http_gateway.rules.len(), 1);
     }
 
     #[test]

@@ -314,6 +314,7 @@ fn discover_published_cases(case_source: &Path) -> Result<BTreeMap<String, Publi
     let mut cases = BTreeMap::new();
     let mut pending = vec![case_source.to_path_buf()];
     while let Some(directory) = pending.pop() {
+        crate::case_kind::reject_online_compare(&directory)?;
         let request = directory.join("request.json");
         let expected = directory.join("expected-response.json");
         let alternate_expected = directory.join("expected_response.json");

@@ -27,8 +27,8 @@ use crate::recorder::{
 mod admission;
 mod lifecycle;
 mod ready;
-mod rules;
-mod transport;
+pub(crate) mod rules;
+pub(crate) mod transport;
 
 use admission::try_admit_case;
 use rules::{RuleDecision, evaluate_request, request_authority, resolve_case_group};

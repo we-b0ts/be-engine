@@ -12,9 +12,9 @@ use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use crate::ProxyClient;
 use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 
-pub(super) type GatewayBody = BoxBody<Bytes, Infallible>;
+pub(crate) type GatewayBody = BoxBody<Bytes, Infallible>;
 
-pub(super) async fn send_upstream(
+pub(crate) async fn send_upstream(
     client: &ProxyClient,
     request: Request<Full<Bytes>>,
 ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
@@ -38,7 +38,7 @@ pub(super) fn upstream_socket_addr(base: &str) -> Option<SocketAddr> {
     Some(SocketAddr::new(ip, port))
 }
 
-pub(super) fn build_upstream_uri(base: &str, original_uri: &Uri) -> Result<Uri> {
+pub(crate) fn build_upstream_uri(base: &str, original_uri: &Uri) -> Result<Uri> {
     let base = base
         .parse::<Uri>()
         .with_context(|| format!("invalid gateway upstream URI {base}"))?;
@@ -62,7 +62,7 @@ pub(super) fn build_upstream_uri(base: &str, original_uri: &Uri) -> Result<Uri> 
     Uri::from_parts(parts).context("failed to construct gateway upstream URI")
 }
 
-pub(super) fn build_upstream_request(
+pub(crate) fn build_upstream_request(
     method: &Method,
     uri: Uri,
     body: Bytes,
@@ -85,7 +85,7 @@ pub(super) fn build_upstream_request(
         .context("failed to build gateway upstream request")
 }
 
-pub(super) fn build_downstream_response(
+pub(crate) fn build_downstream_response(
     status: StatusCode,
     headers: &HeaderMap,
     body: Bytes,
@@ -98,7 +98,7 @@ pub(super) fn build_downstream_response(
         .unwrap_or_else(|_| simple_response(StatusCode::BAD_GATEWAY, "failed to build response"))
 }
 
-pub(super) fn simple_response(status: StatusCode, body: &str) -> Response<GatewayBody> {
+pub(crate) fn simple_response(status: StatusCode, body: &str) -> Response<GatewayBody> {
     Response::builder()
         .status(status)
         .body(boxed_body(Bytes::copy_from_slice(body.as_bytes())))

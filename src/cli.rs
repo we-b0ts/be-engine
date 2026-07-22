@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+mod compare;
 mod diagnose;
 mod interception;
 mod output;
@@ -36,6 +37,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Mirror matched HTTP requests to baseline and candidate services and record both responses.
+    Compare(compare::CompareArgs),
     /// Run the recorder with fixed-user local interception.
     Record(record::RecordArgs),
     /// Run a managed replay session with fixed-user local interception.
@@ -74,6 +77,7 @@ pub(crate) async fn run() -> Result<()> {
         .init();
 
     match cli.command {
+        Command::Compare(args) => compare::run(args).await,
         Command::Record(args) => record::run(args).await,
         Command::Replay(args) => replay::run(args).await,
         Command::Target(args) => target::run(args).await,
@@ -114,8 +118,8 @@ mod tests {
         assert_eq!(
             names,
             [
-                "record", "replay", "target", "init", "prepare", "run-api", "run", "status",
-                "recover", "abort", "diagnose"
+                "compare", "record", "replay", "target", "init", "prepare", "run-api", "run",
+                "status", "recover", "abort", "diagnose"
             ]
         );
     }
