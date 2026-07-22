@@ -14,7 +14,8 @@ pub struct RecordingConfig {
     pub traffic_jsonl: TrafficJsonlMode,
     pub jsonl_buffer_capacity_bytes: usize,
     pub jsonl_flush_interval_ms: u64,
-    pub case_dependency_quiet_period_ms: u64,
+    #[serde(alias = "case_dependency_quiet_period_ms")]
+    pub case_dependency_post_response_window_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
@@ -95,13 +96,8 @@ impl RecordingConfig {
         if self.jsonl_flush_interval_ms == 0 {
             bail!("recording.jsonl_flush_interval_ms must be greater than zero");
         }
-        if self.case_dependency_quiet_period_ms == 0 {
-            bail!("recording.case_dependency_quiet_period_ms must be greater than zero");
-        }
-        if self.case_dependency_drain_timeout_ms < self.case_dependency_quiet_period_ms {
-            bail!(
-                "recording.case_dependency_drain_timeout_ms must be greater than or equal to case_dependency_quiet_period_ms"
-            );
+        if self.case_dependency_drain_timeout_ms == 0 {
+            bail!("recording.case_dependency_drain_timeout_ms must be greater than zero");
         }
         let mut names = HashSet::new();
         for rule in &self.access_rules {
@@ -181,7 +177,7 @@ impl Default for RecordingConfig {
             traffic_jsonl: TrafficJsonlMode::Full,
             jsonl_buffer_capacity_bytes: 256 * 1024,
             jsonl_flush_interval_ms: 1_000,
-            case_dependency_quiet_period_ms: 100,
+            case_dependency_post_response_window_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,
             redact_headers: vec![
                 "authorization".to_string(),
@@ -229,15 +225,27 @@ mod tests {
     #[test]
     fn validates_case_dependency_drain_timing() {
         let mut config = AppConfig::default();
-        config.recording.case_dependency_quiet_period_ms = 0;
-        assert!(config.validate().is_err());
-
-        config.recording.case_dependency_quiet_period_ms = 100;
-        config.recording.case_dependency_drain_timeout_ms = 99;
-        assert!(config.validate().is_err());
-
-        config.recording.case_dependency_drain_timeout_ms = 100;
+        config.recording.case_dependency_post_response_window_ms = 0;
         config.validate().unwrap();
+
+        config.recording.case_dependency_drain_timeout_ms = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn accepts_legacy_quiet_period_as_post_response_window() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [recording]
+            case_dependency_quiet_period_ms = 250
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.recording.case_dependency_post_response_window_ms,
+            250
+        );
     }
 
     #[test]

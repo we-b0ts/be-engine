@@ -1,7 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use bytes::{Bytes, BytesMut};
 use redis_protocol::resp2::types::BytesFrame as Resp2Frame;
-use redis_protocol::resp3::types::BytesFrame as Resp3Frame;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 #[derive(Debug)]
@@ -34,14 +33,7 @@ pub(crate) enum RedisFrameKind {
     Integer,
     BulkString,
     Array,
-    Map,
-    Set,
-    Boolean,
-    Double,
-    BigNumber,
-    VerbatimString,
     Null,
-    Push,
     Other,
 }
 
@@ -53,14 +45,7 @@ impl RedisFrameKind {
             Self::Integer => "integer",
             Self::BulkString => "bulk_string",
             Self::Array => "array",
-            Self::Map => "map",
-            Self::Set => "set",
-            Self::Boolean => "boolean",
-            Self::Double => "double",
-            Self::BigNumber => "big_number",
-            Self::VerbatimString => "verbatim_string",
             Self::Null => "null",
-            Self::Push => "push",
             Self::Other => "other",
         }
     }
@@ -77,11 +62,11 @@ where
     R: AsyncRead + Unpin,
 {
     loop {
-        match redis_protocol::resp3::decode::complete::decode_bytes_mut(&mut reader.buffer) {
+        match redis_protocol::resp2::decode::decode_bytes_mut(&mut reader.buffer) {
             Ok(Some((frame, _consumed, raw))) => {
                 return Ok(Some(RedisFrame {
                     raw,
-                    kind: resp3_kind(&frame),
+                    kind: resp2_kind(&frame),
                 }));
             }
             Ok(None) => {}
@@ -139,28 +124,31 @@ fn resp2_bytes(frame: Resp2Frame) -> Option<Vec<u8>> {
     }
 }
 
-fn resp3_kind(frame: &Resp3Frame) -> RedisFrameKind {
+fn resp2_kind(frame: &Resp2Frame) -> RedisFrameKind {
     match frame {
-        Resp3Frame::SimpleString { .. } => RedisFrameKind::SimpleString,
-        Resp3Frame::SimpleError { .. } | Resp3Frame::BlobError { .. } => RedisFrameKind::Error,
-        Resp3Frame::Number { .. } => RedisFrameKind::Integer,
-        Resp3Frame::BlobString { .. } | Resp3Frame::ChunkedString(_) => RedisFrameKind::BulkString,
-        Resp3Frame::Array { .. } => RedisFrameKind::Array,
-        Resp3Frame::Map { .. } => RedisFrameKind::Map,
-        Resp3Frame::Set { .. } => RedisFrameKind::Set,
-        Resp3Frame::Boolean { .. } => RedisFrameKind::Boolean,
-        Resp3Frame::Double { .. } => RedisFrameKind::Double,
-        Resp3Frame::BigNumber { .. } => RedisFrameKind::BigNumber,
-        Resp3Frame::VerbatimString { .. } => RedisFrameKind::VerbatimString,
-        Resp3Frame::Null => RedisFrameKind::Null,
-        Resp3Frame::Push { .. } => RedisFrameKind::Push,
-        Resp3Frame::Hello { .. } => RedisFrameKind::Other,
+        Resp2Frame::SimpleString(_) => RedisFrameKind::SimpleString,
+        Resp2Frame::Error(_) => RedisFrameKind::Error,
+        Resp2Frame::Integer(_) => RedisFrameKind::Integer,
+        Resp2Frame::BulkString(_) => RedisFrameKind::BulkString,
+        Resp2Frame::Array(_) => RedisFrameKind::Array,
+        Resp2Frame::Null => RedisFrameKind::Null,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    async fn parse_frame(raw: &'static [u8]) -> RedisFrame {
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        writer.write_all(raw).await.unwrap();
+        writer.shutdown().await.unwrap();
+        read_frame(&mut BufferedReader::new(reader, 1024))
+            .await
+            .unwrap()
+            .unwrap()
+    }
 
     #[test]
     fn parses_binary_safe_redis_command() {
@@ -170,5 +158,42 @@ mod tests {
         .unwrap();
         assert_eq!(command.name, "SET");
         assert_eq!(command.args, vec![b"key".to_vec(), b"a\0b".to_vec()]);
+    }
+
+    #[tokio::test]
+    async fn parses_resp2_null_bulk_string() {
+        let frame = parse_frame(b"$-1\r\n").await;
+
+        assert_eq!(frame.kind, RedisFrameKind::Null);
+        assert_eq!(frame.raw, Bytes::from_static(b"$-1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn parses_resp2_null_array() {
+        let frame = parse_frame(b"*-1\r\n").await;
+
+        assert_eq!(frame.kind, RedisFrameKind::Null);
+        assert_eq!(frame.raw, Bytes::from_static(b"*-1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn parses_resp2_array_containing_nulls() {
+        let frame = parse_frame(b"*2\r\n$-1\r\n$-1\r\n").await;
+
+        assert_eq!(frame.kind, RedisFrameKind::Array);
+        assert_eq!(frame.raw, Bytes::from_static(b"*2\r\n$-1\r\n$-1\r\n"));
+    }
+
+    #[tokio::test]
+    async fn rejects_resp3_null_frame() {
+        let (mut writer, reader) = tokio::io::duplex(1024);
+        writer.write_all(b"_\r\n").await.unwrap();
+        writer.shutdown().await.unwrap();
+
+        let error = read_frame(&mut BufferedReader::new(reader, 1024))
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("invalid Redis RESP frame"));
     }
 }

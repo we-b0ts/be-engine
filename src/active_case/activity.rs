@@ -1,5 +1,5 @@
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tokio::sync::Notify;
 use tokio::time::{Instant as TokioInstant, sleep_until};
@@ -13,7 +13,6 @@ pub(super) struct DependencyActivity {
 #[derive(Debug)]
 struct DependencyActivityState {
     in_flight: usize,
-    last_activity: Instant,
 }
 
 pub(super) struct DependencyReservation {
@@ -23,10 +22,7 @@ pub(super) struct DependencyReservation {
 impl Default for DependencyActivity {
     fn default() -> Self {
         Self {
-            state: Mutex::new(DependencyActivityState {
-                in_flight: 0,
-                last_activity: Instant::now(),
-            }),
+            state: Mutex::new(DependencyActivityState { in_flight: 0 }),
             changed: Notify::new(),
         }
     }
@@ -37,20 +33,11 @@ impl DependencyActivity {
         {
             let mut state = self.state.lock().expect("dependency activity poisoned");
             state.in_flight += 1;
-            state.last_activity = Instant::now();
         }
-        self.changed.notify_waiters();
+        self.changed.notify_one();
         DependencyReservation {
             activity: self.clone(),
         }
-    }
-
-    pub(super) fn touch(&self) {
-        self.state
-            .lock()
-            .expect("dependency activity poisoned")
-            .last_activity = Instant::now();
-        self.changed.notify_waiters();
     }
 
     pub(super) async fn wait_until_idle(&self) {
@@ -69,35 +56,26 @@ impl DependencyActivity {
         }
     }
 
-    pub(super) async fn wait_until_quiet(&self, quiet_period: Duration, deadline: Instant) -> bool {
+    pub(super) async fn wait_until_idle_until(&self, deadline: Instant) -> bool {
         loop {
             let changed = self.changed.notified();
-            let (in_flight, last_activity) = {
-                let state = self.state.lock().expect("dependency activity poisoned");
-                (state.in_flight, state.last_activity)
-            };
-            let now = Instant::now();
-            if in_flight == 0 && now.saturating_duration_since(last_activity) >= quiet_period {
+            let in_flight = self
+                .state
+                .lock()
+                .expect("dependency activity poisoned")
+                .in_flight;
+            if in_flight == 0 {
                 return true;
             }
+            let now = Instant::now();
             if now >= deadline {
                 return false;
             }
-            let next_check = if in_flight == 0 {
-                deadline.min(last_activity + quiet_period)
-            } else {
-                deadline
-            };
             tokio::select! {
-                _ = sleep_until(TokioInstant::from_std(next_check)) => {}
+                _ = sleep_until(TokioInstant::from_std(deadline)) => {}
                 _ = changed => {}
             }
         }
-    }
-
-    pub(super) fn is_quiet_for(&self, quiet_period: Duration) -> bool {
-        let state = self.state.lock().expect("dependency activity poisoned");
-        state.in_flight == 0 && state.last_activity.elapsed() >= quiet_period
     }
 }
 
@@ -125,8 +103,7 @@ impl Drop for DependencyReservation {
                 .in_flight
                 .checked_sub(1)
                 .expect("dependency reservation underflow");
-            state.last_activity = Instant::now();
         }
-        self.activity.changed.notify_waiters();
+        self.activity.changed.notify_one();
     }
 }

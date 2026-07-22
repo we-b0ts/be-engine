@@ -348,29 +348,32 @@ impl AppState {
         &self,
         case_id: Uuid,
     ) -> Option<CaseInvalidation> {
-        let quiet_period =
-            Duration::from_millis(self.config().recording.case_dependency_quiet_period_ms);
+        let post_response_window = Duration::from_millis(
+            self.config()
+                .recording
+                .case_dependency_post_response_window_ms,
+        );
         let timeout =
             Duration::from_millis(self.config().recording.case_dependency_drain_timeout_ms);
         let result = self
             .inner
             .active_cases
-            .drain_case_dependencies(case_id, quiet_period, timeout)
+            .drain_case_dependencies(case_id, post_response_window, timeout)
             .await;
         match result {
             DependencyDrainResult::Drained => None,
             DependencyDrainResult::TimedOut => {
                 warn!(
                     case_id = %case_id,
-                    quiet_period_ms = quiet_period.as_millis(),
+                    post_response_window_ms = post_response_window.as_millis(),
                     timeout_ms = timeout.as_millis(),
-                    "recording case dependency drain timed out"
+                    "recording case in-flight dependency drain timed out"
                 );
                 Some(CaseInvalidation::new(
                     "dependency_drain_timeout",
                     format!(
-                        "case dependencies did not become idle for {} ms within {} ms",
-                        quiet_period.as_millis(),
+                        "case dependencies accepted during the {} ms post-response window did not complete within {} ms after dependency admission closed",
+                        post_response_window.as_millis(),
                         timeout.as_millis()
                     ),
                 ))

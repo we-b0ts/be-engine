@@ -28,7 +28,6 @@ struct ActiveCaseRegistration {
     upstream_pid: Option<u32>,
     invalidation: Option<CaseInvalidation>,
     accepting_dependencies: bool,
-    dependency_drain_started: bool,
     dependencies: Arc<DependencyActivity>,
 }
 
@@ -99,7 +98,6 @@ impl ActiveCaseRegistry {
             upstream_pid,
             invalidation: None,
             accepting_dependencies: true,
-            dependency_drain_started: false,
             dependencies: Arc::new(DependencyActivity::default()),
         });
         Ok(ActiveCaseGuard {
@@ -184,9 +182,13 @@ impl ActiveCaseRegistry {
     pub(crate) async fn drain_case_dependencies(
         &self,
         case_id: Uuid,
-        quiet_period: Duration,
+        post_response_window: Duration,
         timeout: Duration,
     ) -> DependencyDrainResult {
+        if !post_response_window.is_zero() {
+            tokio::time::sleep(post_response_window).await;
+        }
+
         let started = Instant::now();
         let deadline = started.checked_add(timeout).unwrap_or(started);
         let dependencies = {
@@ -198,37 +200,13 @@ impl ActiveCaseRegistry {
             else {
                 return DependencyDrainResult::Drained;
             };
-            if !registration.dependency_drain_started {
-                registration.dependency_drain_started = true;
-                registration.dependencies.touch();
-            }
+            registration.accepting_dependencies = false;
             registration.dependencies.clone()
         };
-        loop {
-            if !dependencies.wait_until_quiet(quiet_period, deadline).await {
-                let mut state = self.state.lock().expect("active case registry poisoned");
-                if let Some(registration) = state
-                    .active
-                    .iter_mut()
-                    .find(|registration| registration.case.id == case_id)
-                {
-                    registration.accepting_dependencies = false;
-                }
-                return DependencyDrainResult::TimedOut;
-            }
-
-            let mut state = self.state.lock().expect("active case registry poisoned");
-            let Some(registration) = state
-                .active
-                .iter_mut()
-                .find(|registration| registration.case.id == case_id)
-            else {
-                return DependencyDrainResult::Drained;
-            };
-            if registration.dependencies.is_quiet_for(quiet_period) {
-                registration.accepting_dependencies = false;
-                return DependencyDrainResult::Drained;
-            }
+        if dependencies.wait_until_idle_until(deadline).await {
+            DependencyDrainResult::Drained
+        } else {
+            DependencyDrainResult::TimedOut
         }
     }
 
@@ -388,7 +366,6 @@ mod tests {
                 upstream_pid: None,
                 invalidation: None,
                 accepting_dependencies: true,
-                dependency_drain_started: false,
                 dependencies: Arc::new(DependencyActivity::default()),
             });
             state.active.push(ActiveCaseRegistration {
@@ -396,7 +373,6 @@ mod tests {
                 upstream_pid: None,
                 invalidation: None,
                 accepting_dependencies: true,
-                dependency_drain_started: false,
                 dependencies: Arc::new(DependencyActivity::default()),
             });
         }
@@ -422,7 +398,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closing_case_waits_for_captured_dependencies() {
+    async fn closing_case_stops_new_dependencies_and_waits_only_for_captured_dependencies() {
         let registry = ActiveCaseRegistry::default();
         let case = case();
         let _guard = registry.try_register(case.clone(), Some(42)).unwrap();
@@ -432,19 +408,75 @@ mod tests {
         let closing_registry = registry.clone();
         let closing = tokio::spawn(async move {
             closing_registry
-                .drain_case_dependencies(case.id, Duration::from_millis(10), Duration::from_secs(1))
+                .drain_case_dependencies(case.id, Duration::ZERO, Duration::from_secs(5))
                 .await
         });
         tokio::task::yield_now().await;
         assert!(!closing.is_finished());
-
-        drop(targets);
-        assert_eq!(closing.await.unwrap(), DependencyDrainResult::Drained);
         assert!(
             registry
                 .current_targets_for_event(Some(42))
                 .cases
                 .is_empty()
+        );
+
+        drop(targets);
+        assert_eq!(
+            tokio::time::timeout(Duration::from_millis(100), closing)
+                .await
+                .unwrap()
+                .unwrap(),
+            DependencyDrainResult::Drained
+        );
+    }
+
+    #[tokio::test]
+    async fn post_response_window_accepts_new_dependencies_until_it_closes() {
+        let registry = ActiveCaseRegistry::default();
+        let case = case();
+        let _guard = registry.try_register(case.clone(), Some(42)).unwrap();
+
+        let closing_registry = registry.clone();
+        let closing_case_id = case.id;
+        let closing = tokio::spawn(async move {
+            closing_registry
+                .drain_case_dependencies(
+                    closing_case_id,
+                    Duration::from_millis(100),
+                    Duration::from_secs(5),
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+
+        let during_window = registry.current_targets_for_event(Some(42));
+        assert_eq!(during_window.cases, vec![(case, "process")]);
+        drop(during_window);
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert!(
+            registry
+                .current_targets_for_event(Some(42))
+                .cases
+                .is_empty()
+        );
+        assert_eq!(closing.await.unwrap(), DependencyDrainResult::Drained);
+    }
+
+    #[tokio::test]
+    async fn dependency_drain_returns_immediately_when_nothing_is_in_flight() {
+        let registry = ActiveCaseRegistry::default();
+        let case = case();
+        let _guard = registry.try_register(case.clone(), None).unwrap();
+
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                registry.drain_case_dependencies(case.id, Duration::ZERO, Duration::from_secs(5),),
+            )
+            .await
+            .unwrap(),
+            DependencyDrainResult::Drained
         );
     }
 
@@ -475,11 +507,7 @@ mod tests {
 
         assert_eq!(
             registry
-                .drain_case_dependencies(
-                    case.id,
-                    Duration::from_millis(10),
-                    Duration::from_millis(20),
-                )
+                .drain_case_dependencies(case.id, Duration::ZERO, Duration::from_millis(20),)
                 .await,
             DependencyDrainResult::TimedOut
         );
