@@ -49,7 +49,6 @@ struct PendingRedisExchange {
 
 enum RedisOutput {
     Sequenced { sequence: u64, bytes: Bytes },
-    Push(Bytes),
 }
 
 pub(crate) async fn handle_connected(
@@ -106,6 +105,11 @@ pub(crate) async fn handle_connected(
                 Ok(Some(frame)) => frame,
                 Ok(None) => break,
                 Err(error) => {
+                    // SO_LINGER=0 clients reset even after a complete exchange. Pending-response
+                    // and writer checks below still reject resets that interrupt data transfer.
+                    if is_abortive_close_between_frames(&reader, &error) {
+                        break;
+                    }
                     activate_raw_fallback(
                         &c2s_raw_fallback,
                         &c2s_fallback_reason,
@@ -214,23 +218,6 @@ pub(crate) async fn handle_connected(
                 bytes += frame.raw.len() as u64;
                 bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                 break;
-            }
-            if frame.kind == RedisFrameKind::Push {
-                let event = crate::recorder::ProxyErrorEvent {
-                    id: Uuid::new_v4(),
-                    timestamp: Utc::now(),
-                    protocol: "redis".to_string(),
-                    client_addr: s2c_context.client_addr.clone(),
-                    client_process: s2c_context.client_process.clone(),
-                    target: Some(s2c_context.target_addr.clone()),
-                    error: "RESP3 Push is unsupported for semantic replay".to_string(),
-                };
-                record_event(&s2c_state, RecorderEvent::ProxyError(event)).await?;
-                s2c_output
-                    .send(RedisOutput::Push(frame.raw.clone()))
-                    .map_err(|_| anyhow!("Redis client response writer closed"))?;
-                bytes += frame.raw.len() as u64;
-                continue;
             }
             let Some(mut exchange) = s2c_pending.lock().await.pop_front() else {
                 activate_raw_fallback(
@@ -356,10 +343,6 @@ async fn run_ordered_writer(
     let mut bytes = 0_u64;
     while let Some(output) = output_rx.recv().await {
         match output {
-            RedisOutput::Push(payload) => {
-                client_write.lock().await.write_all(&payload).await?;
-                bytes += payload.len() as u64;
-            }
             RedisOutput::Sequenced {
                 sequence,
                 bytes: payload,
@@ -429,6 +412,15 @@ where
     Ok(buffered.len() as u64 + copied)
 }
 
+fn is_abortive_close_between_frames<R>(reader: &BufferedReader<R>, error: &anyhow::Error) -> bool {
+    reader.buffer.is_empty()
+        && error.chain().any(|cause| {
+            cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::ConnectionReset)
+        })
+}
+
 async fn record_exchange(
     state: &AppState,
     connection_id: Uuid,
@@ -447,7 +439,6 @@ async fn record_exchange(
     let replay_safe = pending.replay_safe
         && !response.truncated
         && args.iter().all(|argument| !argument.truncated)
-        && response_kind != RedisFrameKind::Push
         && response_kind != RedisFrameKind::Other;
     record_event(
         state,
@@ -619,96 +610,4 @@ async fn apply_successful_setup(session: &Arc<Mutex<RedisSession>>, command: &Re
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::Duration;
-
-    use tempfile::tempdir;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{TcpListener, TcpStream};
-
-    use crate::{AppConfig, RecordingAccessPolicy};
-
-    use super::*;
-
-    #[test]
-    fn authentication_secrets_are_never_recorded() {
-        let auth = RedisCommand {
-            name: "AUTH".to_string(),
-            args: vec![b"alice".to_vec(), b"super-secret".to_vec()],
-        };
-        let (args, session_setup, replay_safe, _) = sanitize_and_classify(&auth);
-        assert_eq!(args, vec![b"alice".to_vec(), b"<redacted>".to_vec()]);
-        assert!(session_setup);
-        assert!(replay_safe);
-
-        let hello = RedisCommand {
-            name: "HELLO".to_string(),
-            args: vec![
-                b"3".to_vec(),
-                b"AUTH".to_vec(),
-                b"alice".to_vec(),
-                b"another-secret".to_vec(),
-            ],
-        };
-        let (args, _, _, _) = sanitize_and_classify(&hello);
-        assert_eq!(args[2], b"alice");
-        assert_eq!(args[3], b"<redacted>");
-    }
-
-    #[tokio::test]
-    async fn blocked_write_returns_ordered_error_without_reaching_upstream() {
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let temp = tempdir().unwrap();
-        let mut config = AppConfig::default();
-        config.recording.output_dir = temp.path().join("recordings");
-        config.recording.access_policy = RecordingAccessPolicy::BlockKnownWrites;
-        config.tls.ca_cert_path = temp.path().join("ca.pem");
-        config.tls.ca_key_path = temp.path().join("ca-key.pem");
-        let state = AppState::new(config).await.unwrap();
-
-        let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let client_addr = client_listener.local_addr().unwrap();
-        let client = tokio::spawn(TcpStream::connect(client_addr));
-        let (proxy_client, _) = client_listener.accept().await.unwrap();
-        let mut client = client.await.unwrap().unwrap();
-
-        let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let upstream_addr = upstream_listener.local_addr().unwrap();
-        let proxy_upstream = tokio::spawn(TcpStream::connect(upstream_addr));
-        let (mut upstream, _) = upstream_listener.accept().await.unwrap();
-        let proxy_upstream = proxy_upstream.await.unwrap().unwrap();
-
-        let handler = tokio::spawn(handle_connected(
-            proxy_client,
-            proxy_upstream,
-            state,
-            ConnectionContext {
-                client_addr: None,
-                client_process: None,
-                target_host: "redis.test".to_string(),
-                target_port: 6379,
-                target_addr: "redis.test:6379".to_string(),
-                upstream_addr: upstream_addr.to_string(),
-            },
-        ));
-
-        client
-            .write_all(b"*3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n")
-            .await
-            .unwrap();
-        let mut response = [0_u8; 128];
-        let read = tokio::time::timeout(Duration::from_secs(1), client.read(&mut response))
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(String::from_utf8_lossy(&response[..read]).starts_with("-READONLY"));
-
-        let mut probe = [0_u8; 1];
-        assert!(
-            tokio::time::timeout(Duration::from_millis(100), upstream.read(&mut probe))
-                .await
-                .is_err()
-        );
-        handler.abort();
-    }
-}
+mod tests;
