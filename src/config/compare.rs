@@ -21,10 +21,10 @@ pub struct CompareConfig {
 
 impl CompareConfig {
     pub(super) fn validate(&self, gateway: &HttpGatewayConfig) -> Result<()> {
-        validate_upstream("baseline_upstream", &self.baseline_upstream)?;
-        validate_upstream("candidate_upstream", &self.candidate_upstream)?;
+        let baseline = validate_upstream("baseline_upstream", &self.baseline_upstream)?;
+        let candidate = validate_upstream("candidate_upstream", &self.candidate_upstream)?;
         ensure!(
-            self.baseline_upstream != self.candidate_upstream,
+            baseline != candidate,
             "compare baseline_upstream and candidate_upstream must be different"
         );
         ensure!(
@@ -80,14 +80,35 @@ impl CompareConfig {
     }
 }
 
-fn validate_upstream(field: &str, value: &str) -> Result<()> {
+#[derive(Debug, PartialEq, Eq)]
+struct UpstreamOrigin {
+    scheme: String,
+    host: String,
+    port: u16,
+}
+
+fn validate_upstream(field: &str, value: &str) -> Result<UpstreamOrigin> {
     let uri = value
         .parse::<Uri>()
         .map_err(|error| anyhow::anyhow!("invalid compare.{field}: {error}"))?;
-    if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.authority().is_none() {
+    let Some(scheme @ ("http" | "https")) = uri.scheme_str() else {
         bail!("compare.{field} must be an absolute HTTP or HTTPS URI");
-    }
-    Ok(())
+    };
+    let Some(authority) = uri.authority() else {
+        bail!("compare.{field} must be an absolute HTTP or HTTPS URI");
+    };
+    ensure!(
+        uri.path() == "/" && uri.query().is_none(),
+        "compare.{field} must contain only an HTTP or HTTPS origin without a path or query"
+    );
+    let port = authority
+        .port_u16()
+        .unwrap_or(if scheme == "http" { 80 } else { 443 });
+    Ok(UpstreamOrigin {
+        scheme: scheme.to_string(),
+        host: authority.host().trim_end_matches('.').to_ascii_lowercase(),
+        port,
+    })
 }
 
 impl Default for CompareConfig {
@@ -136,5 +157,29 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validate(&gateway(&["POST"])).is_ok());
+    }
+
+    #[test]
+    fn rejects_differently_spelled_equivalent_upstreams() {
+        for (baseline, candidate) in [
+            ("http://127.0.0.1:8082", "http://127.0.0.1:8082/"),
+            ("http://EXAMPLE.test", "http://example.test:80/"),
+        ] {
+            let config = CompareConfig {
+                baseline_upstream: baseline.to_string(),
+                candidate_upstream: candidate.to_string(),
+                ..Default::default()
+            };
+            assert!(config.validate(&gateway(&["GET"])).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_upstream_base_paths_that_would_be_ignored() {
+        let config = CompareConfig {
+            candidate_upstream: "http://127.0.0.1:8081/base".to_string(),
+            ..Default::default()
+        };
+        assert!(config.validate(&gateway(&["GET"])).is_err());
     }
 }

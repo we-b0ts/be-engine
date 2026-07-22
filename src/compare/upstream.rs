@@ -35,13 +35,25 @@ pub(super) struct UpstreamCapture {
 }
 
 pub(super) enum LimitedBodyError {
-    TooLarge(Bytes),
+    TooLarge,
     Read(anyhow::Error),
 }
 
 enum FetchOutcome {
-    Complete(StatusCode, HeaderMap, Bytes),
-    TooLarge(StatusCode, HeaderMap, Bytes),
+    Complete {
+        status: StatusCode,
+        headers: HeaderMap,
+        downstream: Option<Bytes>,
+        captured: Bytes,
+        original_len: usize,
+        truncated: bool,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) enum ResponseDisposition {
+    Downstream,
+    CaptureOnly,
 }
 
 pub(super) async fn fetch_upstream(
@@ -51,6 +63,7 @@ pub(super) async fn fetch_upstream(
     uri: &Uri,
     headers: &HeaderMap,
     body: Bytes,
+    disposition: ResponseDisposition,
 ) -> UpstreamCapture {
     let timestamp = Utc::now();
     let started = Instant::now();
@@ -68,13 +81,20 @@ pub(super) async fn fetch_upstream(
             .map_err(anyhow::Error::from)?;
         let status = response.status();
         let response_headers = response.headers().clone();
-        match collect_limited(response.into_body(), runtime.compare.max_response_bytes).await {
-            Ok(body) => Ok(FetchOutcome::Complete(status, response_headers, body)),
-            Err(LimitedBodyError::TooLarge(partial)) => {
-                Ok(FetchOutcome::TooLarge(status, response_headers, partial))
-            }
-            Err(LimitedBodyError::Read(error)) => Err(error),
-        }
+        let body = collect_response(
+            response.into_body(),
+            runtime.compare.max_response_bytes,
+            matches!(disposition, ResponseDisposition::Downstream),
+        )
+        .await?;
+        Ok::<FetchOutcome, anyhow::Error>(FetchOutcome::Complete {
+            status,
+            headers: response_headers,
+            downstream: body.downstream,
+            captured: body.captured,
+            original_len: body.original_len,
+            truncated: body.truncated,
+        })
     };
     match tokio::time::timeout(
         Duration::from_millis(runtime.compare.upstream_timeout_ms),
@@ -82,34 +102,34 @@ pub(super) async fn fetch_upstream(
     )
     .await
     {
-        Ok(Ok(FetchOutcome::Complete(status, response_headers, body))) => UpstreamCapture {
-            record: response_record(
-                runtime,
-                timestamp,
-                upstream,
-                status,
-                &response_headers,
-                &body,
-                started,
-            ),
-            downstream: Some((status, response_headers, body)),
-            error_kind: None,
-        },
-        Ok(Ok(FetchOutcome::TooLarge(status, response_headers, partial))) => UpstreamCapture {
-            record: CompareResponseRecord {
-                timestamp,
-                upstream: upstream.to_string(),
-                status: Some(status.as_u16()),
-                headers: Some(redact_headers(
-                    &response_headers,
-                    &runtime.config.recording.redact_headers,
-                )),
-                body: Some(body_capture(&partial, true, None)),
-                duration_ms: started.elapsed().as_millis(),
-                error: Some("response body exceeded compare.max_response_bytes".to_string()),
+        Ok(Ok(FetchOutcome::Complete {
+            status,
+            headers,
+            downstream,
+            captured,
+            original_len,
+            truncated,
+        })) => UpstreamCapture {
+            record: if truncated {
+                CompareResponseRecord {
+                    timestamp,
+                    upstream: upstream.to_string(),
+                    status: Some(status.as_u16()),
+                    headers: Some(redact_headers(
+                        &headers,
+                        &runtime.config.recording.redact_headers,
+                    )),
+                    body: Some(body_capture(&captured, true, Some(original_len))),
+                    duration_ms: started.elapsed().as_millis(),
+                    error: Some("response body exceeded compare.max_response_bytes".to_string()),
+                }
+            } else {
+                response_record(
+                    runtime, timestamp, upstream, status, &headers, &captured, started,
+                )
             },
-            downstream: None,
-            error_kind: Some(UpstreamErrorKind::ResponseTooLarge),
+            downstream: downstream.map(|body| (status, headers, body)),
+            error_kind: truncated.then_some(UpstreamErrorKind::ResponseTooLarge),
         },
         Ok(Err(error)) => failed_capture(
             upstream,
@@ -124,6 +144,47 @@ pub(super) async fn fetch_upstream(
             UpstreamErrorKind::Timeout,
         ),
     }
+}
+
+struct CollectedResponse {
+    downstream: Option<Bytes>,
+    captured: Bytes,
+    original_len: usize,
+    truncated: bool,
+}
+
+async fn collect_response(
+    mut body: Incoming,
+    limit: usize,
+    retain_downstream: bool,
+) -> Result<CollectedResponse> {
+    let mut captured = BytesMut::new();
+    let mut downstream = retain_downstream.then(BytesMut::new);
+    let mut original_len = 0_usize;
+    while let Some(frame) = body.frame().await {
+        let frame = frame?;
+        let Ok(data) = frame.into_data() else {
+            continue;
+        };
+        original_len = original_len.saturating_add(data.len());
+        if let Some(full) = downstream.as_mut() {
+            full.extend_from_slice(&data);
+        } else if captured.len() < limit {
+            let remaining = limit - captured.len();
+            captured.extend_from_slice(&data[..data.len().min(remaining)]);
+        }
+    }
+    let downstream = downstream.map(BytesMut::freeze);
+    let captured = downstream.as_ref().map_or_else(
+        || captured.freeze(),
+        |full| full.slice(..full.len().min(limit)),
+    );
+    Ok(CollectedResponse {
+        downstream,
+        captured,
+        original_len,
+        truncated: original_len > limit,
+    })
 }
 
 fn response_record(
@@ -195,9 +256,22 @@ pub(super) async fn collect_limited(
         if collected.len().saturating_add(data.len()) > limit {
             let remaining = limit.saturating_sub(collected.len());
             collected.extend_from_slice(&data[..remaining]);
-            return Err(LimitedBodyError::TooLarge(collected.freeze()));
+            return Err(LimitedBodyError::TooLarge);
         }
         collected.extend_from_slice(&data);
+    }
+    Ok(collected.freeze())
+}
+
+pub(super) async fn collect_unlimited(
+    mut body: Incoming,
+) -> std::result::Result<Bytes, LimitedBodyError> {
+    let mut collected = BytesMut::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|error| LimitedBodyError::Read(error.into()))?;
+        if let Ok(data) = frame.into_data() {
+            collected.extend_from_slice(&data);
+        }
     }
     Ok(collected.freeze())
 }
@@ -250,6 +324,7 @@ async fn probe_once(
         &uri,
         &HeaderMap::new(),
         Bytes::new(),
+        ResponseDisposition::CaptureOnly,
     )
     .await;
     Ok(capture.record.status == Some(ready.success_status))

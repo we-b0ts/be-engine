@@ -88,7 +88,7 @@ async fn case_limit_suppresses_files_but_keeps_mirroring() {
 }
 
 #[tokio::test]
-async fn response_limit_returns_502_and_records_partial_response() {
+async fn response_limit_preserves_baseline_and_records_partial_response() {
     install_crypto();
     let temp = tempdir().unwrap();
     let baseline = spawn_response_upstream("baseline-too-large", 1).await;
@@ -103,11 +103,12 @@ async fn response_limit_returns_502_and_records_partial_response() {
     assert!(
         raw_get(gateway, "/api/large")
             .await
-            .contains("502 Bad Gateway")
+            .contains("baseline-too-large")
     );
     let case = wait_for_only_child(&run_dir(&temp, run_id).join("api/api-large")).await;
     let baseline = read_json(&case.join("baseline-response.json"));
     assert_eq!(baseline["status"], 200);
+    assert_eq!(baseline["body"]["original_len"], 18);
     assert_eq!(baseline["body"]["stored_len"], 8);
     assert_eq!(baseline["body"]["truncated"], true);
     assert!(
@@ -116,6 +117,32 @@ async fn response_limit_returns_502_and_records_partial_response() {
             .unwrap()
             .contains("max_response_bytes")
     );
+    task.abort();
+}
+
+#[tokio::test]
+async fn unmatched_request_bypasses_compare_request_limit() {
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let (baseline, baseline_requests) =
+        spawn_counting_upstream(StatusCode::OK, "baseline", 1, None).await;
+    let (candidate, candidate_requests) =
+        spawn_counting_upstream(StatusCode::OK, "candidate", 1, None).await;
+    let gateway = free_addr();
+    let run_id = "20260722160007";
+    let mut config = compare_config(&temp, gateway, baseline, candidate);
+    config.compare.as_mut().unwrap().max_request_bytes = 4;
+    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    wait_for_port(gateway).await;
+
+    let response = raw_request(
+        gateway,
+        b"POST /health HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\nConnection: close\r\n\r\n12345",
+    )
+    .await;
+    assert!(response.contains("baseline"));
+    wait_for_counter(&baseline_requests, 1).await;
+    assert_eq!(candidate_requests.load(Ordering::SeqCst), 0);
     task.abort();
 }
 

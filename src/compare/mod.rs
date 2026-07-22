@@ -25,8 +25,8 @@ use uuid::Uuid;
 use self::model::{CompareCase, CompareRequestRecord};
 use self::store::{CompareStore, Reservation};
 use self::upstream::{
-    LimitedBodyError, UpstreamCapture, UpstreamErrorKind, body_capture, collect_limited,
-    downstream_response, fetch_upstream, run_ready_probe,
+    LimitedBodyError, ResponseDisposition, UpstreamCapture, UpstreamErrorKind, body_capture,
+    collect_limited, collect_unlimited, downstream_response, fetch_upstream, run_ready_probe,
 };
 use crate::VerifiedApiExcludesConfig;
 use crate::config::{AppConfig, CompareConfig, HttpGatewayConfig};
@@ -293,9 +293,15 @@ async fn handle_request(
         None
     };
 
-    let body = match collect_limited(request.into_body(), runtime.compare.max_request_bytes).await {
+    let mirrored = matched.is_some() && permit.is_some();
+    let body_result = if mirrored {
+        collect_limited(request.into_body(), runtime.compare.max_request_bytes).await
+    } else {
+        collect_unlimited(request.into_body()).await
+    };
+    let body = match body_result {
         Ok(body) => body,
-        Err(LimitedBodyError::TooLarge(_)) => {
+        Err(LimitedBodyError::TooLarge) => {
             runtime
                 .store
                 .summary()
@@ -409,6 +415,7 @@ async fn run_dual(
         &uri,
         &headers,
         body.clone(),
+        ResponseDisposition::Downstream,
     );
     let candidate_request = fetch_upstream(
         &runtime,
@@ -417,6 +424,7 @@ async fn run_dual(
         &uri,
         &headers,
         body,
+        ResponseDisposition::CaptureOnly,
     );
     tokio::pin!(baseline_request, candidate_request);
     let mut baseline = None;
@@ -496,6 +504,7 @@ async fn forward_baseline(
         uri,
         headers,
         body,
+        ResponseDisposition::Downstream,
     )
     .await;
     update_upstream_counts(runtime, true, &capture).await;
