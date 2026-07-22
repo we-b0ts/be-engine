@@ -1,6 +1,8 @@
 mod access_policy;
 mod active_case;
 mod case_group;
+mod case_kind;
+mod compare;
 mod config;
 mod dns_mock;
 mod e2e_run;
@@ -45,20 +47,21 @@ pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
     ensure_case_group,
 };
+pub use compare::run as run_compare;
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
-    CasePathPatternReport, DEFAULT_FAKE_CIDR, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
-    HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
-    HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
-    MysqlConfig, MysqlRouteConfig, RecordingAccessPolicy, RecordingAccessRuleConfig,
-    RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol, TcpGatewayConfig,
-    TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
-    UdpGatewayConfig, VerifiedApiExclude, VerifiedApiExcludeEnsureReport,
-    VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback, VerifiedApiExcludePlan,
-    VerifiedApiExcludeReport, VerifiedApiExcludesConfig, VerifiedApiVerification,
-    ensure_verified_api_exclude, plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback,
-    plan_verified_api_exclude,
+    CasePathPatternReport, CompareConfig, DEFAULT_FAKE_CIDR, DnsBypassStrategyConfig,
+    DnsMockConfig, HttpConfig, HttpGatewayCaseLimitsConfig, HttpGatewayConfig,
+    HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
+    HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlConfig, MysqlRouteConfig,
+    RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
+    TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
+    TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode, UdpGatewayConfig, VerifiedApiExclude,
+    VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
+    VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiExcludesConfig,
+    VerifiedApiVerification, ensure_verified_api_exclude, plan_allowed_unused_http_hosts,
+    plan_case_path_pattern_feedback, plan_verified_api_exclude,
 };
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{

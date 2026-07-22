@@ -1,0 +1,139 @@
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
+
+use super::model::{ApiCountMap, ApiCounts};
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub(super) struct CompareCounts {
+    pub(super) received: usize,
+    pub(super) matched: usize,
+    pub(super) unmatched: usize,
+    pub(super) excluded: usize,
+    pub(super) not_ready: usize,
+    pub(super) overloaded: usize,
+    pub(super) request_too_large: usize,
+    pub(super) baseline_only: usize,
+    pub(super) dual_dispatched: usize,
+    pub(super) dual_completed: usize,
+    pub(super) baseline_success: usize,
+    pub(super) baseline_error: usize,
+    pub(super) baseline_response_too_large: usize,
+    pub(super) candidate_success: usize,
+    pub(super) candidate_error: usize,
+    pub(super) candidate_response_too_large: usize,
+    pub(super) published: usize,
+    pub(super) failed: usize,
+    pub(super) suppressed_by_case_limit: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CompareRunReport {
+    version: u8,
+    run_id: String,
+    status: String,
+    output_dir: String,
+    started_at: DateTime<Utc>,
+    finished_at: Option<DateTime<Utc>>,
+    ready: bool,
+    in_flight: usize,
+    counts: CompareCounts,
+    apis: ApiCountMap,
+    errors: Vec<String>,
+}
+
+#[derive(Clone)]
+pub(super) struct CompareSummary {
+    path: Arc<PathBuf>,
+    state: Arc<Mutex<CompareRunReport>>,
+}
+
+impl CompareSummary {
+    pub(super) fn new(run_id: String, run_dir: &Path) -> Self {
+        Self {
+            path: Arc::new(run_dir.join("compare-run.json")),
+            state: Arc::new(Mutex::new(CompareRunReport {
+                version: 1,
+                run_id,
+                status: "running".to_string(),
+                output_dir: run_dir.display().to_string(),
+                started_at: Utc::now(),
+                finished_at: None,
+                ready: false,
+                in_flight: 0,
+                counts: CompareCounts::default(),
+                apis: ApiCountMap::new(),
+                errors: Vec::new(),
+            })),
+        }
+    }
+
+    pub(super) async fn update(&self, change: impl FnOnce(&mut CompareCounts)) {
+        change(&mut self.state.lock().await.counts);
+    }
+
+    pub(super) async fn set_ready(&self) {
+        self.state.lock().await.ready = true;
+    }
+
+    pub(super) async fn set_in_flight(&self, value: usize) {
+        self.state.lock().await.in_flight = value;
+    }
+
+    pub(super) async fn api_update(
+        &self,
+        rule: &str,
+        pattern: &str,
+        change: impl FnOnce(&mut ApiCounts),
+    ) {
+        let key = format!("{rule}:{pattern}");
+        change(self.state.lock().await.apis.entry(key).or_default());
+    }
+
+    pub(super) async fn record_error(&self, error: String) {
+        self.state.lock().await.errors.push(error);
+    }
+
+    pub(super) async fn finish(&self) -> Result<()> {
+        {
+            let mut state = self.state.lock().await;
+            state.status = if state.errors.is_empty() {
+                "completed".to_string()
+            } else {
+                "completed_with_errors".to_string()
+            };
+            state.finished_at = Some(Utc::now());
+            state.in_flight = 0;
+        }
+        self.flush().await
+    }
+
+    pub(super) async fn flush(&self) -> Result<()> {
+        let payload = {
+            let state = self.state.lock().await;
+            let mut payload = serde_json::to_vec_pretty(&*state)
+                .context("failed to serialize compare run report")?;
+            payload.push(b'\n');
+            payload
+        };
+        let temporary = self.path.with_extension("json.tmp");
+        let mut file = tokio::fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&temporary)
+            .await
+            .with_context(|| format!("failed to open {}", temporary.display()))?;
+        file.write_all(&payload).await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::rename(&temporary, self.path.as_ref())
+            .await
+            .with_context(|| format!("failed to publish {}", self.path.display()))
+    }
+}
