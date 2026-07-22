@@ -671,6 +671,16 @@ bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.
 
+Recognized MySQL connection maintenance is not a semantic dependency. The
+strict built-in fingerprints are protocol `COM_PING`, c3p0's exact
+empty-database `SHOW FULL TABLES` probe using the `PROBABLYNOT` sentinel, and exact
+`SELECT 1` with an optional trailing semicolon. Their raw `mysql_query` and
+`mysql_response` records remain in the applicable case or bootstrap debug
+JSONL, while their derived `mysql_exchange` records are omitted from semantic
+dependency JSONL and summaries. Replay handles the same fingerprints without a
+recorded exchange: ping returns OK, `SELECT 1` returns one integer row, and the
+c3p0 empty-database probe returns MySQL error 1102.
+
 Redis and Memcached dependencies are semantic `redis_connection`,
 `redis_exchange`, `memcached_connection`, and `memcached_exchange` records.
 Successful Redis authentication/session initialization is handled by replay

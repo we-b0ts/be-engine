@@ -94,7 +94,8 @@ missed, or leaked to the network.
 
 Treat these as replay risks:
 
-- missing `sql`
+- missing `sql` for a SQL-bearing command such as `COM_QUERY`,
+  `COM_STMT_PREPARE`, or `COM_STMT_EXECUTE`
 - missing MySQL dependency identity fields: business `target_host`,
   `target_port`, default `database`/schema, or `username`
 - use of fake IPs or upstream IPs instead of the business/original target host

@@ -232,3 +232,212 @@ fn compact_process_info(value: &mut serde_json::Value) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::recorder::{MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent};
+
+    #[tokio::test]
+    async fn mysql_maintenance_requests_are_kept_in_debug_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: None,
+        };
+        let connection_id = Uuid::new_v4();
+
+        let maintenance = [
+            (1, "COM_PING", None),
+            (
+                2,
+                "COM_QUERY",
+                Some("SHOW FULL TABLES FROM `` LIKE 'PROBABLYNOT'"),
+            ),
+            (3, "COM_QUERY", Some("SELECT 1;")),
+        ];
+        for (sequence, command, sql) in maintenance {
+            recorder
+                .append_case_dependency(
+                    &case,
+                    &RecorderEvent::MysqlQuery(mysql_query(connection_id, sequence, command, sql)),
+                    "process",
+                )
+                .await
+                .unwrap();
+            let mut exchange = mysql_exchange(connection_id, sequence, command, sql);
+            if sequence == 2 {
+                exchange.response.status = "incomplete".to_string();
+                exchange
+                    .parse_warnings
+                    .push("no server response packets were captured".to_string());
+            }
+            recorder
+                .append_case_dependency(&case, &RecorderEvent::MysqlExchange(exchange), "process")
+                .await
+                .unwrap();
+        }
+        recorder
+            .append_case_dependency(
+                &case,
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    connection_id,
+                    4,
+                    "COM_QUERY",
+                    Some("SELECT 2"),
+                )),
+                "process",
+            )
+            .await
+            .unwrap();
+
+        let case_dir = recorder.case_staging_dir(&case);
+        recorder
+            .flush_case_dependency_files(&case_dir)
+            .await
+            .unwrap();
+
+        let semantic = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+            .await
+            .unwrap();
+        assert_eq!(semantic.lines().count(), 1);
+        assert!(semantic.contains("SELECT 2"));
+        assert!(!semantic.contains("COM_PING"));
+        assert!(!semantic.contains("PROBABLYNOT"));
+        assert!(!semantic.contains("SELECT 1"));
+
+        let debug = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
+            .await
+            .unwrap();
+        assert!(debug.contains("COM_PING"));
+        assert!(debug.contains("PROBABLYNOT"));
+        assert!(debug.contains("SELECT 1"));
+
+        super::super::summary::write_case_dependency_summary(&case_dir)
+            .await
+            .unwrap();
+        let summary = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
+            .await
+            .unwrap();
+        assert!(!summary.contains("COM_PING"));
+        assert!(!summary.contains("PROBABLYNOT"));
+        assert!(!summary.contains("SELECT 1"));
+
+        for (sequence, command, sql) in maintenance {
+            recorder
+                .append_bootstrap_dependency(
+                    &RecorderEvent::MysqlQuery(mysql_query(connection_id, sequence, command, sql)),
+                    "bootstrap_window",
+                )
+                .await
+                .unwrap();
+            recorder
+                .append_bootstrap_dependency(
+                    &RecorderEvent::MysqlExchange(mysql_exchange(
+                        connection_id,
+                        sequence,
+                        command,
+                        sql,
+                    )),
+                    "bootstrap_window",
+                )
+                .await
+                .unwrap();
+        }
+        recorder
+            .append_bootstrap_dependency(
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    connection_id,
+                    4,
+                    "COM_QUERY",
+                    Some("SELECT 2"),
+                )),
+                "bootstrap_window",
+            )
+            .await
+            .unwrap();
+        recorder.flush_bootstrap_dependency_files().await.unwrap();
+
+        let bootstrap_semantic =
+            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
+                .await
+                .unwrap();
+        assert_eq!(bootstrap_semantic.lines().count(), 1);
+        assert!(bootstrap_semantic.contains("SELECT 2"));
+        assert!(!bootstrap_semantic.contains("COM_PING"));
+        assert!(!bootstrap_semantic.contains("PROBABLYNOT"));
+        assert!(!bootstrap_semantic.contains("SELECT 1"));
+
+        let bootstrap_debug =
+            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-debug.jsonl"))
+                .await
+                .unwrap();
+        assert!(bootstrap_debug.contains("COM_PING"));
+        assert!(bootstrap_debug.contains("PROBABLYNOT"));
+        assert!(bootstrap_debug.contains("SELECT 1"));
+    }
+
+    fn mysql_query(
+        connection_id: Uuid,
+        sequence: u64,
+        command: &str,
+        query: Option<&str>,
+    ) -> MysqlQueryEvent {
+        MysqlQueryEvent {
+            id: Uuid::new_v4(),
+            connection_id,
+            sequence,
+            timestamp: Utc::now(),
+            client_addr: None,
+            client_process: None,
+            command: command.to_string(),
+            query: query.map(ToOwned::to_owned),
+            payload_len: query.map_or(1, str::len),
+        }
+    }
+
+    fn mysql_exchange(
+        connection_id: Uuid,
+        query_sequence: u64,
+        command: &str,
+        sql: Option<&str>,
+    ) -> MysqlExchangeEvent {
+        MysqlExchangeEvent {
+            id: Uuid::new_v4(),
+            connection_id,
+            query_sequence,
+            timestamp: Utc::now(),
+            client_addr: None,
+            client_process: None,
+            route_name: None,
+            target_host: Some("mysql.internal".to_string()),
+            target_port: Some(3306),
+            target_addr: Some("mysql.internal:3306".to_string()),
+            upstream_addr: Some("10.0.0.1:3306".to_string()),
+            username: Some("root".to_string()),
+            database: Some("appdb".to_string()),
+            command: command.to_string(),
+            sql: sql.map(ToOwned::to_owned),
+            statement_id: None,
+            params: None,
+            response: MysqlExchangeResponse {
+                status: "ok".to_string(),
+                error_code: None,
+                error_message: None,
+                affected_rows: Some(0),
+                last_insert_id: Some(0),
+                columns: Vec::new(),
+                rows: Vec::new(),
+                row_count: 0,
+                rows_truncated: false,
+            },
+            duration_ms: 1,
+            parse_warnings: Vec::new(),
+        }
+    }
+}

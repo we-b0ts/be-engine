@@ -191,6 +191,8 @@ Summary rules:
 
 - Successful protocol setup is omitted from `dependencies.jsonl` and from the
   acceptance summary; the debug file keeps raw protocol evidence.
+- Recorder-recognized driver maintenance probes are also debug-only and are
+  handled as deterministic built-ins during replay.
 - Executed dependency calls, returned rows, write results, and dependency
   failures are semantic dependencies and should appear in `dependencies.jsonl`
   and the summary.

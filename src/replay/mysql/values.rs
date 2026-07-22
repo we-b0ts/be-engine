@@ -1,7 +1,24 @@
+use crate::mysql::maintenance::{MysqlMaintenanceQuery, classify_mysql_maintenance_query};
+
 pub(in crate::replay) fn builtin_response(
     sql: &str,
     database: Option<&str>,
 ) -> Option<RecordedMysqlResponse> {
+    if let Some(maintenance) = classify_mysql_maintenance_query(sql) {
+        return Some(match maintenance {
+            MysqlMaintenanceQuery::C3p0TableProbe => RecordedMysqlResponse {
+                status: "error".to_string(),
+                error_code: Some(1102),
+                error_message: Some("Incorrect database name ''".to_string()),
+                affected_rows: None,
+                last_insert_id: None,
+                columns: Vec::new(),
+                rows: Vec::new(),
+            },
+            MysqlMaintenanceQuery::SelectOne => single_integer_result("1", 1),
+        });
+    }
+
     let normalized = normalize_sql(sql);
     if is_builtin_ok(&normalized) {
         return Some(RecordedMysqlResponse {
@@ -80,6 +97,18 @@ pub(in crate::replay) fn single_string_result(name: &str, value: &str) -> Record
         last_insert_id: None,
         columns: vec![string_column(name)],
         rows: vec![vec![mysql_json("string", Value::String(value.to_string()))]],
+    }
+}
+
+fn single_integer_result(name: &str, value: i64) -> RecordedMysqlResponse {
+    RecordedMysqlResponse {
+        status: "resultset".to_string(),
+        error_code: None,
+        error_message: None,
+        affected_rows: None,
+        last_insert_id: None,
+        columns: vec![integer_column(name)],
+        rows: vec![vec![mysql_json("integer", Value::Number(value.into()))]],
     }
 }
 

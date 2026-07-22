@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::mysql::maintenance::is_mysql_maintenance_exchange;
 use crate::recorder::RecorderEvent;
 
 mod kafka;
@@ -525,7 +526,8 @@ fn record_proxy_error_summary(summary: &mut ProxyErrorSummary, value: &Value) {
 }
 
 fn is_debug_only_mysql_exchange(exchange: &crate::recorder::MysqlExchangeEvent) -> bool {
-    is_successful_stmt_prepare(exchange)
+    is_mysql_maintenance_exchange(exchange.command.as_str(), exchange.sql.as_deref())
+        || is_successful_stmt_prepare(exchange)
         || is_successful_mysql_session_setup(
             exchange.command.as_str(),
             exchange.sql.as_deref(),
@@ -538,7 +540,10 @@ fn is_successful_stmt_prepare(exchange: &crate::recorder::MysqlExchangeEvent) ->
 }
 
 fn is_debug_only_mysql_exchange_value(value: &Value) -> bool {
-    is_successful_stmt_prepare_value(value)
+    is_mysql_maintenance_exchange(
+        json_str(value, "command").unwrap_or_default(),
+        json_str(value, "sql"),
+    ) || is_successful_stmt_prepare_value(value)
         || is_successful_mysql_session_setup(
             json_str(value, "command").unwrap_or_default(),
             json_str(value, "sql"),
