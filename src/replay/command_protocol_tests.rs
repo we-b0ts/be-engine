@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -44,6 +45,76 @@ async fn replays_redis_pipeline_in_recorded_lane_order() {
 }
 
 #[tokio::test]
+async fn delays_redis_response_by_recorded_duration() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let mut dependency = redis_dependency(Uuid::new_v4(), 1, "key", b"$1\r\n1\r\n");
+    dependency["duration_ms"] = Value::from(80);
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let (addr, task) = spawn_replay(&case_dir, None).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    let started = Instant::now();
+    client
+        .write_all(b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n")
+        .await
+        .unwrap();
+    let mut response = vec![0_u8; 7];
+    client.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, b"$1\r\n1\r\n");
+    assert!(started.elapsed() >= Duration::from_millis(70));
+    task.abort();
+}
+
+#[tokio::test]
+async fn consumes_redis_timeout_only_after_client_close() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let mut dependency = redis_dependency(Uuid::new_v4(), 1, "key", b"");
+    dependency["response_kind"] = Value::String("other".to_string());
+    dependency["outcome"] = Value::String("client_terminated".to_string());
+    dependency["duration_ms"] = Value::from(60);
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    client
+        .write_all(b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n")
+        .await
+        .unwrap();
+    let mut probe = [0_u8; 1];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), client.read(&mut probe))
+            .await
+            .is_err()
+    );
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    client.shutdown().await.unwrap();
+
+    let report = wait_for_matched_count(&report_path, "redis", 1).await;
+    assert!(
+        report["redis"]["unsafe_events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn replays_memcached_binary_with_live_opaque() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case");
@@ -82,13 +153,7 @@ async fn replays_memcached_binary_with_live_opaque() {
     let report_path = temp.path().join("report.json");
     let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
     let mut client = TcpStream::connect(addr).await.unwrap();
-    let mut request = vec![0_u8; 24];
-    request[0] = 0x80;
-    request[1] = 0x00;
-    request[2..4].copy_from_slice(&3_u16.to_be_bytes());
-    request[8..12].copy_from_slice(&3_u32.to_be_bytes());
-    request[12..16].copy_from_slice(&42_u32.to_be_bytes());
-    request.extend_from_slice(b"key");
+    let request = binary_get_request(42);
     client.write_all(&request).await.unwrap();
     let mut response = vec![0_u8; 24];
     client.read_exact(&mut response).await.unwrap();
@@ -97,6 +162,65 @@ async fn replays_memcached_binary_with_live_opaque() {
 
     let report = wait_for_matched_count(&report_path, "memcached", 1).await;
     assert_eq!(report["memcached"]["matched"].as_array().unwrap().len(), 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn consumes_memcached_timeout_only_after_client_close() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let dependency = serde_json::json!({
+        "event_type": "memcached_exchange",
+        "connection_id": Uuid::new_v4(),
+        "sequence": 1,
+        "target_host": "cache.internal",
+        "target_port": 11211,
+        "wire_protocol": "binary",
+        "command": "get",
+        "opcode": 0,
+        "key": capture_json(b"key"),
+        "args": [],
+        "value": null,
+        "extras": null,
+        "cas": null,
+        "quiet": false,
+        "noreply": false,
+        "response_status": "incomplete",
+        "response_frames": [],
+        "no_response": false,
+        "outcome": "client_terminated",
+        "duration_ms": 60,
+        "replay_safe": true
+    });
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let request = binary_get_request(42);
+    client.write_all(&request).await.unwrap();
+
+    let mut probe = [0_u8; 1];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), client.read(&mut probe))
+            .await
+            .is_err()
+    );
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    client.shutdown().await.unwrap();
+
+    let report = wait_for_matched_count(&report_path, "memcached", 1).await;
+    assert!(
+        report["memcached"]["unsafe_events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     task.abort();
 }
 
@@ -205,6 +329,17 @@ fn capture_json(bytes: &[u8]) -> Value {
         "data": STANDARD.encode(bytes),
         "truncated": false
     })
+}
+
+fn binary_get_request(opaque: u32) -> Vec<u8> {
+    let mut request = vec![0_u8; 24];
+    request[0] = 0x80;
+    request[1] = 0x00;
+    request[2..4].copy_from_slice(&3_u16.to_be_bytes());
+    request[8..12].copy_from_slice(&3_u32.to_be_bytes());
+    request[12..16].copy_from_slice(&opaque.to_be_bytes());
+    request.extend_from_slice(b"key");
+    request
 }
 
 async fn wait_for_matched_count(path: &Path, protocol: &str, expected: usize) -> Value {

@@ -100,14 +100,26 @@ pub(in crate::replay) async fn handle_connection(
             }
             "COM_QUERY" => {
                 let sql = command.query.as_deref().unwrap_or_default();
-                handle_query(&mut stream, state.clone(), &session, sql).await?;
+                if handle_query(&mut stream, state.clone(), &session, sql).await?
+                    == SessionDirective::ClientTerminated
+                {
+                    break;
+                }
             }
             "COM_STMT_PREPARE" => {
                 let sql = command.query.as_deref().unwrap_or_default();
-                handle_stmt_prepare(&mut stream, state.clone(), &mut session, sql).await?;
+                if handle_stmt_prepare(&mut stream, state.clone(), &mut session, sql).await?
+                    == SessionDirective::ClientTerminated
+                {
+                    break;
+                }
             }
             "COM_STMT_EXECUTE" => {
-                handle_stmt_execute(&mut stream, state.clone(), &mut session, &packet).await?;
+                if handle_stmt_execute(&mut stream, state.clone(), &mut session, &packet).await?
+                    == SessionDirective::ClientTerminated
+                {
+                    break;
+                }
             }
             "COM_STMT_CLOSE" => {
                 let statement_id = read_u32_le(&packet.payload, 1);

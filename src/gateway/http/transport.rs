@@ -5,11 +5,12 @@ use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
-use hyper::header::HOST;
+use hyper::header::{CONTENT_TYPE, HOST, HeaderName, HeaderValue};
 use hyper::http::uri::{Authority, PathAndQuery, Scheme};
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 
 use crate::ProxyClient;
+use crate::config::HttpGatewayFixedResponseConfig;
 use crate::http::forward::{HostHeaderPolicy, append_end_to_end_headers};
 
 pub(crate) type GatewayBody = BoxBody<Bytes, Infallible>;
@@ -105,6 +106,28 @@ pub(crate) fn simple_response(status: StatusCode, body: &str) -> Response<Gatewa
         .expect("valid static response")
 }
 
+pub(super) fn build_fixed_response(
+    config: &HttpGatewayFixedResponseConfig,
+) -> Response<GatewayBody> {
+    let mut builder = Response::builder().status(config.status);
+    let headers = builder.headers_mut().expect("fixed response headers");
+    if let Some(content_type) = &config.content_type {
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_str(content_type).expect("validated fixed response content type"),
+        );
+    }
+    for (name, value) in &config.headers {
+        headers.insert(
+            HeaderName::from_bytes(name.as_bytes()).expect("validated fixed response header name"),
+            HeaderValue::from_str(value).expect("validated fixed response header value"),
+        );
+    }
+    builder
+        .body(boxed_body(Bytes::copy_from_slice(config.body.as_bytes())))
+        .expect("validated fixed response")
+}
+
 fn boxed_body(bytes: Bytes) -> GatewayBody {
     Full::new(bytes).boxed()
 }
@@ -118,5 +141,21 @@ mod tests {
         let uri =
             build_upstream_uri("http://127.0.0.1:9000", &"/hello?a=1".parse().unwrap()).unwrap();
         assert_eq!(uri.to_string(), "http://127.0.0.1:9000/hello?a=1");
+    }
+
+    #[test]
+    fn builds_configured_fixed_response() {
+        let response = build_fixed_response(&HttpGatewayFixedResponseConfig {
+            status: 201,
+            content_type: Some("application/json".to_string()),
+            headers: std::collections::BTreeMap::from([(
+                "x-fallback".to_string(),
+                "fixed".to_string(),
+            )]),
+            body: r#"{"code":"created"}"#.to_string(),
+        });
+        assert_eq!(response.status(), StatusCode::CREATED);
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+        assert_eq!(response.headers()["x-fallback"], "fixed");
     }
 }

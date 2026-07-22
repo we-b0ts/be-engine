@@ -4,29 +4,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
-use chrono::Utc;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::DependencyExchangeOutcome;
 use crate::access_policy::AccessDecision;
+use crate::dependency::termination::ConnectionTermination;
 use crate::memcached::access::classify_request;
 use crate::memcached::{
     BinaryFrame, BufferedReader, MemcachedRequest, MemcachedWireProtocol,
     binary_access_denied_response, binary_response_is_complete, read_binary_frame,
     read_text_request, read_text_response,
 };
-use crate::recorder::{
-    MemcachedConnectionEvent, MemcachedExchangeEvent, RecorderEvent, capture_body,
-};
 
 mod fallback;
+mod recording;
 #[cfg(test)]
 mod tests;
 
 use fallback::{activate_raw_fallback, forward_buffer_and_copy};
+use recording::{finish_pending, record_connection, record_exchange};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
@@ -126,6 +126,7 @@ async fn proxy_text(
     let pending = Arc::new(Mutex::new(VecDeque::<PendingMemcachedExchange>::new()));
     let raw_fallback = Arc::new(AtomicBool::new(false));
     let fallback_reason = Arc::new(Mutex::new(None::<String>));
+    let termination = ConnectionTermination::default();
     let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
@@ -137,6 +138,7 @@ async fn proxy_text(
     let c2s_fallback_reason = fallback_reason.clone();
     let c2s_client_write = client_write.clone();
     let c2s_pending_drained = pending_drained.clone();
+    let c2s_termination = termination.clone();
     let c2s = tokio::spawn(async move {
         let mut reader = BufferedReader::new(client_read, max_frame_bytes);
         let mut sequence = 0_u64;
@@ -144,8 +146,14 @@ async fn proxy_text(
         loop {
             let request = match read_text_request(&mut reader).await {
                 Ok(Some(request)) => request,
-                Ok(None) => break,
+                Ok(None) => {
+                    c2s_termination.observe_client_eof();
+                    break;
+                }
                 Err(error) => {
+                    if reader.buffer.is_empty() && c2s_termination.observe_client_error(&error) {
+                        break;
+                    }
                     activate_raw_fallback(
                         &c2s_raw_fallback,
                         &c2s_fallback_reason,
@@ -216,6 +224,7 @@ async fn proxy_text(
                     MemcachedWireProtocol::Text,
                     pending_exchange,
                     true,
+                    DependencyExchangeOutcome::NoResponse,
                     max_frame_bytes,
                 )
                 .await?;
@@ -234,6 +243,7 @@ async fn proxy_text(
     let s2c_fallback_reason = fallback_reason.clone();
     let s2c_client_write = client_write.clone();
     let s2c_pending_drained = pending_drained.clone();
+    let s2c_termination = termination.clone();
     let s2c = tokio::spawn(async move {
         let mut reader = BufferedReader::new(upstream_read, max_frame_bytes);
         let mut bytes = 0_u64;
@@ -258,7 +268,10 @@ async fn proxy_text(
                 }
                 let mut probe = [0_u8; 1];
                 match reader.inner.peek(&mut probe).await {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        s2c_termination.observe_server_eof();
+                        break;
+                    }
                     Ok(_) => {
                         activate_raw_fallback(
                             &s2c_raw_fallback,
@@ -273,13 +286,21 @@ async fn proxy_text(
                         bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                         break;
                     }
-                    Err(err) => return Err(err.into()),
+                    Err(err) => {
+                        let error = anyhow::Error::from(err);
+                        s2c_termination.observe_server_error(&error);
+                        return Err(error);
+                    }
                 }
             };
             let response = match read_text_response(&mut reader, &command).await {
                 Ok(Some(response)) => response,
-                Ok(None) => break,
+                Ok(None) => {
+                    s2c_termination.observe_server_eof();
+                    break;
+                }
                 Err(error) => {
+                    s2c_termination.observe_server_error(&error);
                     activate_raw_fallback(
                         &s2c_raw_fallback,
                         &s2c_fallback_reason,
@@ -309,18 +330,53 @@ async fn proxy_text(
                 .expect("pending Memcached text request");
             s2c_pending_drained.notify_waiters();
             exchange.response_frames.push(response.to_vec());
-            record_exchange(
-                &s2c_state,
-                connection_id,
-                &s2c_context,
-                MemcachedWireProtocol::Text,
-                exchange,
-                false,
-                max_frame_bytes,
-            )
-            .await?;
-            s2c_client_write.lock().await.write_all(&response).await?;
-            bytes += response.len() as u64;
+            if s2c_termination.client_ended_first() {
+                exchange.response_frames.clear();
+                record_exchange(
+                    &s2c_state,
+                    connection_id,
+                    &s2c_context,
+                    MemcachedWireProtocol::Text,
+                    exchange,
+                    false,
+                    DependencyExchangeOutcome::ClientTerminated,
+                    max_frame_bytes,
+                )
+                .await?;
+                break;
+            }
+            match s2c_client_write.lock().await.write_all(&response).await {
+                Ok(()) => {
+                    bytes += response.len() as u64;
+                    record_exchange(
+                        &s2c_state,
+                        connection_id,
+                        &s2c_context,
+                        MemcachedWireProtocol::Text,
+                        exchange,
+                        false,
+                        DependencyExchangeOutcome::Response,
+                        max_frame_bytes,
+                    )
+                    .await?;
+                }
+                Err(error) if s2c_termination.observe_client_io_error(&error) => {
+                    exchange.response_frames.clear();
+                    record_exchange(
+                        &s2c_state,
+                        connection_id,
+                        &s2c_context,
+                        MemcachedWireProtocol::Text,
+                        exchange,
+                        false,
+                        DependencyExchangeOutcome::ClientTerminated,
+                        max_frame_bytes,
+                    )
+                    .await?;
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         let _ = s2c_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
@@ -335,6 +391,7 @@ async fn proxy_text(
         &context,
         MemcachedWireProtocol::Text,
         &pending,
+        termination.client_ended_first(),
         max_frame_bytes,
     )
     .await?;
@@ -355,6 +412,7 @@ async fn proxy_binary(
     let pending = Arc::new(Mutex::new(VecDeque::<PendingMemcachedExchange>::new()));
     let raw_fallback = Arc::new(AtomicBool::new(false));
     let fallback_reason = Arc::new(Mutex::new(None::<String>));
+    let termination = ConnectionTermination::default();
     let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
@@ -364,6 +422,7 @@ async fn proxy_binary(
     let c2s_state = state.clone();
     let c2s_context = context.clone();
     let c2s_client_write = client_write.clone();
+    let c2s_termination = termination.clone();
     let c2s = tokio::spawn(async move {
         let mut reader = BufferedReader::new(client_read, max_frame_bytes);
         let mut sequence = 0_u64;
@@ -371,8 +430,14 @@ async fn proxy_binary(
         loop {
             let frame = match read_binary_frame(&mut reader).await {
                 Ok(Some(frame)) => frame,
-                Ok(None) => break,
+                Ok(None) => {
+                    c2s_termination.observe_client_eof();
+                    break;
+                }
                 Err(error) => {
+                    if reader.buffer.is_empty() && c2s_termination.observe_client_error(&error) {
+                        break;
+                    }
                     activate_raw_fallback(
                         &c2s_raw_fallback,
                         &c2s_fallback_reason,
@@ -471,14 +536,19 @@ async fn proxy_binary(
     let s2c_raw_fallback = raw_fallback.clone();
     let s2c_fallback_reason = fallback_reason.clone();
     let s2c_client_write = client_write.clone();
+    let s2c_termination = termination.clone();
     let s2c = tokio::spawn(async move {
         let mut reader = BufferedReader::new(upstream_read, max_frame_bytes);
         let mut bytes = 0_u64;
         loop {
             let frame = match read_binary_frame(&mut reader).await {
                 Ok(Some(frame)) => frame,
-                Ok(None) => break,
+                Ok(None) => {
+                    s2c_termination.observe_server_eof();
+                    break;
+                }
                 Err(error) => {
+                    s2c_termination.observe_server_error(&error);
                     activate_raw_fallback(
                         &s2c_raw_fallback,
                         &s2c_fallback_reason,
@@ -527,24 +597,64 @@ async fn proxy_binary(
                     MemcachedWireProtocol::Binary,
                     exchange,
                     true,
+                    DependencyExchangeOutcome::NoResponse,
                     max_frame_bytes,
                 )
                 .await?;
             }
-            if let Some(exchange) = completed {
-                record_exchange(
-                    &s2c_state,
-                    connection_id,
-                    &s2c_context,
-                    MemcachedWireProtocol::Binary,
-                    exchange,
-                    false,
-                    max_frame_bytes,
-                )
-                .await?;
+            if s2c_termination.client_ended_first() {
+                if let Some(mut exchange) = completed {
+                    exchange.response_frames.clear();
+                    record_exchange(
+                        &s2c_state,
+                        connection_id,
+                        &s2c_context,
+                        MemcachedWireProtocol::Binary,
+                        exchange,
+                        false,
+                        DependencyExchangeOutcome::ClientTerminated,
+                        max_frame_bytes,
+                    )
+                    .await?;
+                }
+                break;
             }
-            s2c_client_write.lock().await.write_all(&frame.raw).await?;
-            bytes += frame.raw.len() as u64;
+            match s2c_client_write.lock().await.write_all(&frame.raw).await {
+                Ok(()) => {
+                    bytes += frame.raw.len() as u64;
+                    if let Some(exchange) = completed {
+                        record_exchange(
+                            &s2c_state,
+                            connection_id,
+                            &s2c_context,
+                            MemcachedWireProtocol::Binary,
+                            exchange,
+                            false,
+                            DependencyExchangeOutcome::Response,
+                            max_frame_bytes,
+                        )
+                        .await?;
+                    }
+                }
+                Err(error) if s2c_termination.observe_client_io_error(&error) => {
+                    if let Some(mut exchange) = completed {
+                        exchange.response_frames.clear();
+                        record_exchange(
+                            &s2c_state,
+                            connection_id,
+                            &s2c_context,
+                            MemcachedWireProtocol::Binary,
+                            exchange,
+                            false,
+                            DependencyExchangeOutcome::ClientTerminated,
+                            max_frame_bytes,
+                        )
+                        .await?;
+                    }
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
         let _ = s2c_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
@@ -559,6 +669,7 @@ async fn proxy_binary(
         &context,
         MemcachedWireProtocol::Binary,
         &pending,
+        termination.client_ended_first(),
         max_frame_bytes,
     )
     .await?;
@@ -601,170 +712,6 @@ async fn correlate_binary_response(
     Ok((quiet_completed, completed))
 }
 
-async fn finish_pending(
-    state: &AppState,
-    connection_id: Uuid,
-    context: &ConnectionContext,
-    wire_protocol: MemcachedWireProtocol,
-    pending: &Arc<Mutex<VecDeque<PendingMemcachedExchange>>>,
-    max_frame_bytes: usize,
-) -> Result<bool> {
-    let exchanges = pending.lock().await.drain(..).collect::<Vec<_>>();
-    let mut replay_safe = true;
-    for mut exchange in exchanges {
-        let no_response = exchange.request.quiet || exchange.request.noreply;
-        if !no_response {
-            exchange.replay_safe = false;
-            exchange
-                .warnings
-                .push("connection closed before Memcached response".to_string());
-            replay_safe = false;
-        }
-        record_exchange(
-            state,
-            connection_id,
-            context,
-            wire_protocol,
-            exchange,
-            no_response,
-            max_frame_bytes,
-        )
-        .await?;
-    }
-    Ok(replay_safe)
-}
-
-async fn record_exchange(
-    state: &AppState,
-    connection_id: Uuid,
-    context: &ConnectionContext,
-    wire_protocol: MemcachedWireProtocol,
-    pending: PendingMemcachedExchange,
-    no_response: bool,
-    max_frame_bytes: usize,
-) -> Result<()> {
-    let request = pending.request;
-    let key = request
-        .key
-        .as_ref()
-        .map(|value| capture_body(value, max_frame_bytes));
-    let args = request
-        .args
-        .iter()
-        .map(|value| capture_body(value, max_frame_bytes))
-        .collect::<Vec<_>>();
-    let value = request
-        .value
-        .as_ref()
-        .map(|value| capture_body(value, max_frame_bytes));
-    let extras = request
-        .extras
-        .as_ref()
-        .map(|value| capture_body(value, max_frame_bytes));
-    let response_frames = pending
-        .response_frames
-        .iter()
-        .map(|frame| capture_body(frame, max_frame_bytes))
-        .collect::<Vec<_>>();
-    let captures_safe = key.as_ref().is_none_or(|capture| !capture.truncated)
-        && value.as_ref().is_none_or(|capture| !capture.truncated)
-        && extras.as_ref().is_none_or(|capture| !capture.truncated)
-        && args.iter().all(|capture| !capture.truncated)
-        && response_frames.iter().all(|capture| !capture.truncated);
-    let response_status = if no_response {
-        "no_response".to_string()
-    } else if wire_protocol == MemcachedWireProtocol::Binary {
-        pending
-            .response_frames
-            .last()
-            .filter(|frame| frame.len() >= 8)
-            .map(|frame| u16::from_be_bytes([frame[6], frame[7]]).to_string())
-            .unwrap_or_else(|| "incomplete".to_string())
-    } else {
-        pending
-            .response_frames
-            .first()
-            .and_then(|frame| frame.split(|byte| *byte == b'\r').next())
-            .map(|line| String::from_utf8_lossy(line).to_string())
-            .unwrap_or_else(|| "incomplete".to_string())
-    };
-    record_event(
-        state,
-        RecorderEvent::MemcachedExchange(MemcachedExchangeEvent {
-            id: Uuid::new_v4(),
-            connection_id,
-            sequence: pending.sequence,
-            timestamp: Utc::now(),
-            client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
-            target_host: context.target_host.clone(),
-            target_port: context.target_port,
-            target_addr: context.target_addr.clone(),
-            upstream_addr: context.upstream_addr.clone(),
-            wire_protocol: wire_protocol.as_str().to_string(),
-            command: request.command,
-            opcode: request.opcode,
-            opaque: request.opaque,
-            key,
-            args,
-            value,
-            extras,
-            cas: request.cas,
-            noreply: request.noreply,
-            quiet: request.quiet,
-            response_status,
-            response_frames,
-            no_response,
-            duration_ms: pending.started.elapsed().as_millis(),
-            replay_safe: pending.replay_safe && captures_safe,
-            parse_warnings: pending.warnings,
-        }),
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn record_connection(
-    state: &AppState,
-    id: Uuid,
-    context: &ConnectionContext,
-    wire_protocol: MemcachedWireProtocol,
-    phase: &str,
-    duration_ms: Option<u128>,
-    client_to_server_bytes: u64,
-    server_to_client_bytes: u64,
-    replay_safe: bool,
-    error: Option<String>,
-) -> Result<()> {
-    record_event(
-        state,
-        RecorderEvent::MemcachedConnection(MemcachedConnectionEvent {
-            id,
-            timestamp: Utc::now(),
-            phase: phase.to_string(),
-            client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
-            target_host: context.target_host.clone(),
-            target_port: context.target_port,
-            target_addr: context.target_addr.clone(),
-            upstream_addr: context.upstream_addr.clone(),
-            wire_protocol: wire_protocol.as_str().to_string(),
-            duration_ms,
-            client_to_server_bytes,
-            server_to_client_bytes,
-            replay_safe,
-            error,
-        }),
-    )
-    .await
-}
-
 fn is_meta_command(command: &str) -> bool {
     matches!(command, "mg" | "ms" | "md" | "ma" | "me" | "mn")
-}
-
-async fn record_event(state: &AppState, event: RecorderEvent) -> Result<()> {
-    state.recorder().record(event.clone()).await?;
-    state.record_dependency_if_relevant(&event).await;
-    Ok(())
 }

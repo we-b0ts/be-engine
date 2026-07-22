@@ -78,10 +78,32 @@ The owner scope cannot be overridden by CLI options, environment variables, or
 recorder configuration.
 
 HTTP gateway recording is intentionally conservative. Until the configured
-ready probe succeeds, matching traffic is sent to `fallback_upstream` and no
-case is created. After ready, only one matched case can be active at a time;
-overlapping matching requests are also sent to fallback so dependencies are not
+ready probe succeeds, matching traffic uses the configured fallback strategy
+and no case is created. After ready, only one matched case can be active at a
+time; overlapping matching requests also use fallback so dependencies are not
 shared across cases.
+
+The default `http_gateway.fallback_mode = "upstream"` forwards those requests
+to `fallback_upstream`. For a fallback that always returns the same payload,
+use an in-process fixed response instead of running another service:
+
+```toml
+[http_gateway]
+fallback_mode = "fixed_response"
+
+[http_gateway.fixed_response]
+status = 200
+content_type = "application/json"
+headers = { x-recorder-fallback = "fixed" }
+body = '{"code":"xxx","msg":"xxx"}'
+```
+
+`status` is required and must be a final HTTP status. Configure `201` only
+when the response semantically represents resource creation. Fixed fallback
+requests are not forwarded, do not create cases, and are not recorded as
+business exchanges. Framing and hop-by-hop headers such as `content-length`,
+`transfer-encoding`, and `connection` are managed by the gateway and cannot be
+configured in `headers`.
 
 The gateway also limits successfully published cases per resolved case pattern
 within one recorder run. The default is
@@ -100,9 +122,9 @@ default = 100
 
 Dynamic override keys must already exist in a recording rule's
 `case_path_patterns`. Once the published count reaches the effective limit,
-later matching requests are sent directly to `fallback_upstream` without
-creating a case. Failed cases do not consume the limit, and restarting Recorder
-starts a new run with fresh counts.
+later matching requests use the configured fallback strategy without creating
+a case. Failed cases do not consume the limit, and restarting Recorder starts
+a new run with fresh counts.
 
 After an upstream HTTP response completes, Recorder continues accepting new
 case dependencies for the fixed
@@ -692,6 +714,16 @@ bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.
 
+Recognized MySQL connection maintenance is not a semantic dependency. The
+strict built-in fingerprints are protocol `COM_PING`, c3p0's exact
+empty-database `SHOW FULL TABLES` probe using the `PROBABLYNOT` sentinel, and exact
+`SELECT 1` with an optional trailing semicolon. Their raw `mysql_query` and
+`mysql_response` records remain in the applicable case or bootstrap debug
+JSONL, while their derived `mysql_exchange` records are omitted from semantic
+dependency JSONL and summaries. Replay handles the same fingerprints without a
+recorded exchange: ping returns OK, `SELECT 1` returns one integer row, and the
+c3p0 empty-database probe returns MySQL error 1102.
+
 Redis and Memcached dependencies are semantic `redis_connection`,
 `redis_exchange`, `memcached_connection`, and `memcached_exchange` records.
 Successful Redis authentication/session initialization is handled by replay
@@ -701,13 +733,22 @@ mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe bootstrap replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
 
-Kafka dependencies are semantic `kafka_connection`, `kafka_produce`, and
-`kafka_delivery` records. V1 is a successful-path dependency facade rather than
-a full Kafka broker: use an E2E client profile with
+Semantic MySQL, Redis, Memcached, and Kafka business exchanges also carry
+`outcome` and `duration_ms`. Replay waits the recorded duration before a normal
+response. If `outcome` is `client_terminated`, replay sends no response and
+consumes the exchange only after the SDK closes or resets the same connection
+near the recorded time; replay itself does not initiate that close. Intrinsic
+no-response commands remain `no_response` and are not treated as timeouts.
+
+Kafka dependencies are semantic `kafka_connection`, `kafka_produce`,
+`kafka_fetch`, and `kafka_delivery` records. Each Fetch exchange records its
+requested topics, outcome, duration, and associated deliveries, including
+empty and client-terminated Fetches. V1 is a constrained dependency facade
+rather than a full Kafka broker: use an E2E client profile with
 `security.protocol=PLAINTEXT`, `compression.type=none`,
 `enable.idempotence=false`, and `acks=1`. Replay advertises one broker and one
 partition, synthesizes control-plane responses, matches Produce by exact topic,
-key, headers, and value bytes, and delivers recorded Fetch records once.
+key, headers, and value bytes, and delivers each recorded Fetch result once.
 Transactions, Admin APIs, compression, TLS/SASL, rebalance behavior, retries,
 and Kafka failure injection are unsupported and fail closed. Schema Registry
 remains an ordinary HTTP dependency. Kafka payloads and headers are sensitive

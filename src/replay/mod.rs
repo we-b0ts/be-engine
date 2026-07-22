@@ -25,6 +25,7 @@ mod command_protocol_tests;
 mod control;
 mod dependencies;
 mod dns;
+mod exchange;
 mod http;
 mod kafka;
 #[cfg(test)]
@@ -40,6 +41,7 @@ mod report;
 use control::*;
 use dependencies::*;
 use dns::*;
+use exchange::*;
 use model::*;
 use mysql::*;
 use policy::*;

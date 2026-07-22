@@ -33,37 +33,125 @@ use kafka_protocol::records::{
 };
 use tokio::sync::Mutex;
 
+use crate::dependency::DependencyExchangeOutcome;
 use crate::kafka::{
     DecodedKafkaRequest, KAFKA_NODE_ID, KafkaRecord, REPLAY_API_VERSIONS, records_from_produce,
 };
 
-use super::super::{ReplayState, TargetKey};
+use super::super::{ReplayExchangeTiming, ReplayState, TargetKey};
+use super::matcher::{KafkaFetchReservation, KafkaProduceReservation};
+
+enum KafkaReservation {
+    Produce(KafkaProduceReservation),
+    Fetch(KafkaFetchReservation),
+}
+
+pub(super) struct KafkaReplayPlan {
+    response: Option<ResponseKind>,
+    timing: Option<ReplayExchangeTiming>,
+    reservation: Option<KafkaReservation>,
+}
+
+impl KafkaReplayPlan {
+    fn response(response: ResponseKind) -> Self {
+        Self {
+            response: Some(response),
+            timing: None,
+            reservation: None,
+        }
+    }
+
+    fn exchange(
+        response: Option<ResponseKind>,
+        timing: ReplayExchangeTiming,
+        reservation: KafkaReservation,
+    ) -> Self {
+        Self {
+            response,
+            timing: Some(timing),
+            reservation: Some(reservation),
+        }
+    }
+
+    pub(super) fn response_value(&self) -> Option<&ResponseKind> {
+        self.response.as_ref()
+    }
+
+    pub(super) fn timing(&self) -> Option<ReplayExchangeTiming> {
+        self.timing
+    }
+
+    pub(super) async fn commit(self, state: &Arc<Mutex<ReplayState>>) {
+        let mut state = state.lock().await;
+        match self.reservation {
+            Some(KafkaReservation::Produce(reservation)) => {
+                state.kafka.commit_produce(reservation);
+            }
+            Some(KafkaReservation::Fetch(reservation)) => {
+                state.kafka.commit_fetch(reservation);
+            }
+            None => {}
+        }
+    }
+
+    pub(super) async fn fail(
+        self,
+        state: &Arc<Mutex<ReplayState>>,
+        target: &TargetKey,
+        reason: String,
+    ) {
+        let mut state = state.lock().await;
+        match self.reservation {
+            Some(KafkaReservation::Produce(reservation)) => {
+                state.kafka.fail_produce(reservation, target, reason);
+            }
+            Some(KafkaReservation::Fetch(reservation)) => {
+                state.kafka.fail_fetch(reservation, target, reason);
+            }
+            None => {}
+        }
+    }
+}
 
 pub(super) async fn response_for(
     decoded: &DecodedKafkaRequest,
     target: &TargetKey,
     state: Arc<Mutex<ReplayState>>,
-) -> Result<ResponseKind> {
+) -> Result<KafkaReplayPlan> {
     match &decoded.request {
-        RequestKind::ApiVersions(_) => Ok(api_versions_response()),
+        RequestKind::ApiVersions(_) => Ok(KafkaReplayPlan::response(api_versions_response())),
         RequestKind::Metadata(request) => {
             let topics = state.lock().await.kafka.topics();
-            Ok(metadata_response(request, target, topics))
+            Ok(KafkaReplayPlan::response(metadata_response(
+                request, target, topics,
+            )))
         }
         RequestKind::Produce(_) => produce_response(decoded, target, state).await,
         RequestKind::Fetch(request) => fetch_response(request, target, state).await,
-        RequestKind::ListOffsets(request) => Ok(list_offsets_response(request)),
-        RequestKind::FindCoordinator(request) => Ok(find_coordinator_response(
-            request,
-            target,
-            decoded.header.request_api_version,
+        RequestKind::ListOffsets(request) => {
+            Ok(KafkaReplayPlan::response(list_offsets_response(request)))
+        }
+        RequestKind::FindCoordinator(request) => Ok(KafkaReplayPlan::response(
+            find_coordinator_response(request, target, decoded.header.request_api_version),
         )),
-        RequestKind::JoinGroup(request) => Ok(join_group_response(request)),
-        RequestKind::SyncGroup(request) => Ok(sync_group_response(request)),
-        RequestKind::Heartbeat(_) => Ok(ResponseKind::Heartbeat(HeartbeatResponse::default())),
-        RequestKind::LeaveGroup(_) => Ok(ResponseKind::LeaveGroup(LeaveGroupResponse::default())),
-        RequestKind::OffsetCommit(request) => Ok(offset_commit_response(request)),
-        RequestKind::OffsetFetch(request) => Ok(offset_fetch_response(request)),
+        RequestKind::JoinGroup(request) => {
+            Ok(KafkaReplayPlan::response(join_group_response(request)))
+        }
+        RequestKind::SyncGroup(request) => {
+            Ok(KafkaReplayPlan::response(sync_group_response(request)))
+        }
+        RequestKind::Heartbeat(_) => Ok(KafkaReplayPlan::response(ResponseKind::Heartbeat(
+            HeartbeatResponse::default(),
+        ))),
+        RequestKind::LeaveGroup(_) => Ok(KafkaReplayPlan::response(ResponseKind::LeaveGroup(
+            LeaveGroupResponse::default(),
+        ))),
+        RequestKind::OffsetCommit(request) => {
+            Ok(KafkaReplayPlan::response(offset_commit_response(request)))
+        }
+        RequestKind::OffsetFetch(request) => {
+            Ok(KafkaReplayPlan::response(offset_fetch_response(request)))
+        }
         other => Err(anyhow!("unsupported Kafka request {other:?}")),
     }
 }
@@ -126,21 +214,42 @@ async fn produce_response(
     decoded: &DecodedKafkaRequest,
     target: &TargetKey,
     state: Arc<Mutex<ReplayState>>,
-) -> Result<ResponseKind> {
+) -> Result<KafkaReplayPlan> {
     let records = records_from_produce(&decoded.request)?;
     let active_case_id = state.lock().await.active_case_id.clone();
-    let matched =
-        state
-            .lock()
-            .await
-            .kafka
-            .match_produce(active_case_id.as_deref(), target, &records);
     let RequestKind::Produce(request) = &decoded.request else {
         unreachable!();
     };
+    let reservation = state.lock().await.kafka.reserve_produce(
+        active_case_id.as_deref(),
+        target,
+        &records,
+        request.acks == 0,
+    );
+    let Some(reservation) = reservation else {
+        return Ok(KafkaReplayPlan::response(produce_result(request, 42)));
+    };
+    let timing = reservation.timing;
+    if timing.outcome() != DependencyExchangeOutcome::Response {
+        return Ok(KafkaReplayPlan::exchange(
+            None,
+            timing,
+            KafkaReservation::Produce(reservation),
+        ));
+    }
+    Ok(KafkaReplayPlan::exchange(
+        Some(produce_result(request, 0)),
+        timing,
+        KafkaReservation::Produce(reservation),
+    ))
+}
+
+fn produce_result(
+    request: &kafka_protocol::messages::ProduceRequest,
+    error_code: i16,
+) -> ResponseKind {
     // INVALID_REQUEST is non-retriable for standard clients, so a semantic mismatch
     // fails the E2E promptly instead of entering the SDK retry loop.
-    let error_code = if matched { 0 } else { 42 };
     let responses = request
         .topic_data
         .iter()
@@ -161,27 +270,51 @@ async fn produce_response(
                 )
         })
         .collect();
-    Ok(ResponseKind::Produce(
-        ProduceResponse::default().with_responses(responses),
-    ))
+    ResponseKind::Produce(ProduceResponse::default().with_responses(responses))
 }
 
 async fn fetch_response(
     request: &kafka_protocol::messages::FetchRequest,
     target: &TargetKey,
     state: Arc<Mutex<ReplayState>>,
-) -> Result<ResponseKind> {
+) -> Result<KafkaReplayPlan> {
     let requested_topics = request
         .topics
         .iter()
         .map(|topic| topic.topic.to_string())
         .collect::<BTreeSet<_>>();
     let active_case_id = state.lock().await.active_case_id.clone();
-    let records = state.lock().await.kafka.take_deliveries(
+    let reservation = state.lock().await.kafka.reserve_fetch(
         active_case_id.as_deref(),
         target,
         &requested_topics,
     );
+    let Some(reservation) = reservation else {
+        return Ok(KafkaReplayPlan::response(build_fetch_response(
+            request,
+            Vec::new(),
+        )?));
+    };
+    let timing = reservation.timing;
+    if timing.outcome() == DependencyExchangeOutcome::ClientTerminated {
+        return Ok(KafkaReplayPlan::exchange(
+            None,
+            timing,
+            KafkaReservation::Fetch(reservation),
+        ));
+    }
+    let response = build_fetch_response(request, reservation.records.clone())?;
+    Ok(KafkaReplayPlan::exchange(
+        Some(response),
+        timing,
+        KafkaReservation::Fetch(reservation),
+    ))
+}
+
+fn build_fetch_response(
+    request: &kafka_protocol::messages::FetchRequest,
+    records: Vec<KafkaRecord>,
+) -> Result<ResponseKind> {
     let mut by_topic = BTreeMap::<String, Vec<KafkaRecord>>::new();
     for record in records {
         by_topic

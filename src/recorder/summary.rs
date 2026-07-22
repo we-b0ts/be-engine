@@ -5,13 +5,17 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::mysql::maintenance::is_mysql_maintenance_exchange;
 use crate::recorder::RecorderEvent;
 
 mod kafka;
 mod memcached;
 mod redis;
 mod udp;
-use kafka::{KafkaDependencySummary, record_kafka_connection_summary, record_kafka_record_summary};
+use kafka::{
+    KafkaDependencySummary, record_kafka_connection_summary, record_kafka_fetch_summary,
+    record_kafka_record_summary,
+};
 use memcached::{MemcachedDependencySummary, MemcachedSummaryBuilder};
 use redis::{RedisDependencySummary, RedisSummaryBuilder};
 use udp::{UdpDependencySummary, record_udp_summary};
@@ -284,6 +288,7 @@ fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
             "memcached_exchange" => builder.memcached.record_exchange(&value),
             "kafka_connection" => record_kafka_connection_summary(&mut builder.kafka, &value),
             "kafka_produce" => record_kafka_record_summary(&mut builder.kafka, &value, true),
+            "kafka_fetch" => record_kafka_fetch_summary(&mut builder.kafka, &value),
             "kafka_delivery" => record_kafka_record_summary(&mut builder.kafka, &value, false),
             "http_exchange" => record_http_summary(&mut builder.http, &value),
             "tcp_gateway_connection" => {
@@ -381,7 +386,7 @@ fn record_mysql_summary(summary: &mut MysqlDependencySummary, value: &Value) {
     let username = json_str(value, "username").map(ToOwned::to_owned);
     let failed = status
         .as_deref()
-        .is_some_and(|status| status == "error" || status == "incomplete")
+        .is_some_and(|status| matches!(status, "error" | "incomplete" | "client_terminated"))
         || error_code.is_some()
         || error_message.is_some();
 
@@ -525,7 +530,8 @@ fn record_proxy_error_summary(summary: &mut ProxyErrorSummary, value: &Value) {
 }
 
 fn is_debug_only_mysql_exchange(exchange: &crate::recorder::MysqlExchangeEvent) -> bool {
-    is_successful_stmt_prepare(exchange)
+    is_mysql_maintenance_exchange(exchange.command.as_str(), exchange.sql.as_deref())
+        || is_successful_stmt_prepare(exchange)
         || is_successful_mysql_session_setup(
             exchange.command.as_str(),
             exchange.sql.as_deref(),
@@ -538,7 +544,10 @@ fn is_successful_stmt_prepare(exchange: &crate::recorder::MysqlExchangeEvent) ->
 }
 
 fn is_debug_only_mysql_exchange_value(value: &Value) -> bool {
-    is_successful_stmt_prepare_value(value)
+    is_mysql_maintenance_exchange(
+        json_str(value, "command").unwrap_or_default(),
+        json_str(value, "sql"),
+    ) || is_successful_stmt_prepare_value(value)
         || is_successful_mysql_session_setup(
             json_str(value, "command").unwrap_or_default(),
             json_str(value, "sql"),
@@ -787,5 +796,19 @@ mod tests {
         assert_eq!(summary["memcached"]["hits"], 1);
         let serialized = serde_json::to_string(&summary).unwrap();
         assert!(!serialized.contains("secret"));
+    }
+
+    #[test]
+    fn dependency_summary_tracks_publishable_client_terminations() {
+        let raw = r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SELECT * FROM `user`","outcome":"client_terminated","response":{"status":"client_terminated"}}
+{"event_type":"redis_exchange","command":"GET","outcome":"client_terminated","response_kind":"other","replay_safe":true}
+{"event_type":"memcached_exchange","command":"get","outcome":"client_terminated","response_status":"incomplete","replay_safe":true}"#;
+        let summary = serde_json::to_value(build_dependency_summary(raw)).unwrap();
+
+        assert_eq!(summary["mysql"]["failed"]["total"], 1);
+        assert_eq!(summary["redis"]["client_terminated"], 1);
+        assert_eq!(summary["redis"]["outcomes"]["client_terminated"], 1);
+        assert_eq!(summary["memcached"]["client_terminated"], 1);
+        assert_eq!(summary["memcached"]["outcomes"]["client_terminated"], 1);
     }
 }

@@ -23,6 +23,7 @@ use kafka_protocol::records::{
     Compression, Record, RecordBatchDecoder, RecordBatchEncoder, RecordEncodeOptions, TimestampType,
 };
 use serde_json::Value;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::kafka::{read_frame, write_frame};
@@ -37,6 +38,8 @@ async fn matches_recorded_produce_and_returns_success() {
         &case_dir,
         serde_json::json!({
             "event_type": "kafka_produce",
+            "connection_id": "00000000-0000-0000-0000-000000000001",
+            "request_sequence": 1,
             "target_host": "kafka.internal",
             "target_port": 9092,
             "topic": "orders",
@@ -44,6 +47,8 @@ async fn matches_recorded_produce_and_returns_success() {
             "headers": [],
             "value": capture_json(b"value"),
             "result": "accepted",
+            "outcome": "response",
+            "duration_ms": 25,
             "replay_safe": true
         }),
     )
@@ -74,7 +79,9 @@ async fn matches_recorded_produce_and_returns_success() {
                     .with_records(Some(record_batch(b"key", b"value", 123))),
             ]),
     ]);
+    let started = tokio::time::Instant::now();
     let response: ProduceResponse = send_request(&mut client, ApiKey::Produce, 8, request).await;
+    assert!(started.elapsed() >= std::time::Duration::from_millis(25));
     assert_eq!(response.responses[0].partition_responses[0].error_code, 0);
 
     let report = wait_for_kafka_matches(&report_path, 1).await;
@@ -90,7 +97,24 @@ async fn delivers_recorded_fetch_only_once() {
     write_case(
         &case_dir,
         serde_json::json!({
+            "event_type": "kafka_fetch",
+            "connection_id": "00000000-0000-0000-0000-000000000002",
+            "sequence": 1,
+            "target_host": "kafka.internal",
+            "target_port": 9092,
+            "topics": ["payments"],
+            "outcome": "response",
+            "duration_ms": 0,
+            "replay_safe": true
+        }),
+    )
+    .await;
+    write_case(
+        &case_dir,
+        serde_json::json!({
             "event_type": "kafka_delivery",
+            "connection_id": "00000000-0000-0000-0000-000000000002",
+            "fetch_sequence": 1,
             "target_host": "kafka.internal",
             "target_port": 9092,
             "topic": "payments",
@@ -120,8 +144,57 @@ async fn delivers_recorded_fetch_only_once() {
 
     let second: FetchResponse = send_request(&mut client, ApiKey::Fetch, 11, request).await;
     assert!(second.responses[0].partitions[0].records.is_none());
+    let report = wait_for_kafka_matches(&report_path, 2).await;
+    assert_eq!(report["kafka"]["matched"][0]["operation"], "fetch");
+    assert_eq!(report["kafka"]["matched"][1]["operation"], "delivery");
+    task.abort();
+}
+
+#[tokio::test]
+async fn consumes_recorded_fetch_timeout_when_client_closes_on_schedule() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    write_case(
+        &case_dir,
+        serde_json::json!({
+            "event_type": "kafka_fetch",
+            "connection_id": "00000000-0000-0000-0000-000000000005",
+            "sequence": 1,
+            "target_host": "kafka.internal",
+            "target_port": 9092,
+            "topics": ["payments"],
+            "outcome": "client_terminated",
+            "duration_ms": 80,
+            "replay_safe": true
+        }),
+    )
+    .await;
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, report_path.clone()).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let payload = encode_request(ApiKey::Fetch, 11, fetch_request("payments"));
+    let started = tokio::time::Instant::now();
+    write_frame(&mut client, &payload).await.unwrap();
+
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            read_frame(&mut client, 64 * 1024 * 1024),
+        )
+        .await
+        .is_err()
+    );
+    tokio::time::sleep_until(started + std::time::Duration::from_millis(80)).await;
+    client.shutdown().await.unwrap();
+
     let report = wait_for_kafka_matches(&report_path, 1).await;
-    assert_eq!(report["kafka"]["matched"][0]["operation"], "delivery");
+    assert_eq!(report["kafka"]["matched"][0]["operation"], "fetch");
+    assert!(
+        report["kafka"]["unsafe_events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     task.abort();
 }
 
@@ -133,6 +206,8 @@ async fn wrong_produce_is_unmatched_and_not_accepted() {
         &case_dir,
         serde_json::json!({
             "event_type": "kafka_produce",
+            "connection_id": "00000000-0000-0000-0000-000000000003",
+            "request_sequence": 1,
             "target_host": "kafka.internal",
             "target_port": 9092,
             "topic": "orders",
@@ -140,6 +215,8 @@ async fn wrong_produce_is_unmatched_and_not_accepted() {
             "headers": [],
             "value": capture_json(b"expected"),
             "result": "accepted",
+            "outcome": "response",
+            "duration_ms": 0,
             "replay_safe": true
         }),
     )
@@ -181,6 +258,8 @@ async fn exposes_single_broker_and_single_member_control_plane() {
         &case_dir,
         serde_json::json!({
             "event_type": "kafka_delivery",
+            "connection_id": "00000000-0000-0000-0000-000000000004",
+            "fetch_sequence": 1,
             "target_host": "kafka.internal",
             "target_port": 9092,
             "topic": "payments",
@@ -286,6 +365,20 @@ where
     R: Request + Encodable,
     R::Response: Decodable + HeaderVersion,
 {
+    let payload = encode_request(api_key, version, request);
+    write_frame(stream, &payload).await.unwrap();
+
+    let mut response = read_frame(stream, 64 * 1024 * 1024).await.unwrap().unwrap();
+    let header =
+        ResponseHeader::decode(&mut response, api_key.response_header_version(version)).unwrap();
+    assert_eq!(header.correlation_id, 1);
+    R::Response::decode(&mut response, version).unwrap()
+}
+
+fn encode_request<R>(api_key: ApiKey, version: i16, request: R) -> Bytes
+where
+    R: Request + Encodable,
+{
     let mut payload = BytesMut::new();
     let header = RequestHeader::default()
         .with_request_api_key(api_key as i16)
@@ -294,13 +387,7 @@ where
         .with_client_id(Some(StrBytes::from_static_str("test-client")));
     encode_request_header_into_buffer(&mut payload, &header).unwrap();
     request.encode(&mut payload, version).unwrap();
-    write_frame(stream, &payload).await.unwrap();
-
-    let mut response = read_frame(stream, 64 * 1024 * 1024).await.unwrap().unwrap();
-    let header =
-        ResponseHeader::decode(&mut response, api_key.response_header_version(version)).unwrap();
-    assert_eq!(header.correlation_id, 1);
-    R::Response::decode(&mut response, version).unwrap()
+    payload.freeze()
 }
 
 fn fetch_request(topic_name: &str) -> FetchRequest {
@@ -359,12 +446,16 @@ fn capture_json(bytes: &[u8]) -> Value {
 
 async fn write_case(case_dir: &Path, dependency: Value) {
     tokio::fs::create_dir_all(case_dir).await.unwrap();
-    tokio::fs::write(
-        case_dir.join("dependencies.jsonl"),
-        serde_json::to_string(&dependency).unwrap(),
-    )
-    .await
-    .unwrap();
+    let mut file = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(case_dir.join("dependencies.jsonl"))
+        .await
+        .unwrap();
+    file.write_all(serde_json::to_string(&dependency).unwrap().as_bytes())
+        .await
+        .unwrap();
+    file.write_all(b"\n").await.unwrap();
 }
 
 async fn spawn_replay(

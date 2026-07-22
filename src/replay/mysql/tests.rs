@@ -6,6 +6,177 @@ use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
 
 #[tokio::test]
+async fn delays_response_by_recorded_duration() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-id");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let dependency = serde_json::json!({
+        "event_type": "mysql_exchange",
+        "target_host": "mysql.internal",
+        "target_port": 3306,
+        "target_addr": "mysql.internal:3306",
+        "database": "appdb",
+        "username": "root",
+        "command": "COM_QUERY",
+        "sql": "SELECT delayed_value",
+        "response": {
+            "status": "ok",
+            "affected_rows": 0,
+            "last_insert_id": 0,
+            "columns": [],
+            "rows": []
+        },
+        "duration_ms": 80
+    });
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let (addr, _, task) = spawn_replay(&case_dir).await;
+    let mut client = connect_login(addr).await;
+
+    let started = std::time::Instant::now();
+    write_packet_bytes(
+        &mut client,
+        MysqlPacket {
+            sequence_id: 0,
+            payload: [vec![0x03], b"SELECT delayed_value".to_vec()].concat(),
+        },
+    )
+    .await;
+    let response = read_packet(&mut client).await.unwrap().unwrap();
+    assert_eq!(response.payload[0], 0x00);
+    assert!(started.elapsed() >= std::time::Duration::from_millis(70));
+    task.abort();
+}
+
+#[tokio::test]
+async fn consumes_timeout_only_after_client_close() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-id");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let dependency = serde_json::json!({
+        "event_type": "mysql_exchange",
+        "target_host": "mysql.internal",
+        "target_port": 3306,
+        "target_addr": "mysql.internal:3306",
+        "database": "appdb",
+        "username": "root",
+        "command": "COM_QUERY",
+        "sql": "SELECT timeout_value",
+        "response": {
+            "status": "client_terminated",
+            "columns": [],
+            "rows": []
+        },
+        "outcome": "client_terminated",
+        "duration_ms": 60
+    });
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let (addr, runtime, task) = spawn_replay(&case_dir).await;
+    let mut client = connect_login(addr).await;
+
+    write_packet_bytes(
+        &mut client,
+        MysqlPacket {
+            sequence_id: 0,
+            payload: [vec![0x03], b"SELECT timeout_value".to_vec()].concat(),
+        },
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(
+            std::time::Duration::from_millis(30),
+            read_packet(&mut client)
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        runtime.state.lock().await.mysql.events.matched_query_count,
+        0
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+    client.shutdown().await.unwrap();
+    for _ in 0..50 {
+        if runtime.state.lock().await.mysql.events.matched_query_count == 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let state = runtime.state.lock().await;
+    assert_eq!(state.mysql.events.matched_query_count, 1);
+    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
+    drop(state);
+    task.abort();
+}
+
+#[tokio::test]
+async fn maintenance_queries_use_builtin_responses_without_recorded_exchanges() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-id");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
+        .await
+        .unwrap();
+
+    let (addr, runtime, task) = spawn_replay(&case_dir).await;
+    let mut client = connect_login(addr).await;
+
+    write_packet_bytes(
+        &mut client,
+        MysqlPacket {
+            sequence_id: 0,
+            payload: [vec![0x03], b"SELECT 1;".to_vec()].concat(),
+        },
+    )
+    .await;
+    assert_eq!(
+        read_packet(&mut client).await.unwrap().unwrap().payload,
+        vec![1]
+    );
+    let _column = read_packet(&mut client).await.unwrap().unwrap();
+    let _columns_eof = read_packet(&mut client).await.unwrap().unwrap();
+    assert_eq!(
+        read_packet(&mut client).await.unwrap().unwrap().payload,
+        vec![1, b'1']
+    );
+    let _rows_eof = read_packet(&mut client).await.unwrap().unwrap();
+
+    write_packet_bytes(
+        &mut client,
+        MysqlPacket {
+            sequence_id: 0,
+            payload: [
+                vec![0x03],
+                b"SHOW FULL TABLES FROM `` LIKE 'PROBABLYNOT'".to_vec(),
+            ]
+            .concat(),
+        },
+    )
+    .await;
+    let error = read_packet(&mut client).await.unwrap().unwrap();
+    assert_eq!(error.payload.first(), Some(&0xff));
+    assert_eq!(read_u16_le(&error.payload, 1), Some(1102));
+
+    let state = runtime.state.lock().await;
+    assert_eq!(state.mysql.events.builtin_query_count, 2);
+    assert!(state.mysql.events.unmatched_queries.is_empty());
+    assert!(!super::super::report_is_dirty(&state.snapshot_report()));
+    drop(state);
+    task.abort();
+}
+
+#[tokio::test]
 async fn active_case_exchanges_precede_identical_bootstrap_exchanges() {
     let temp = tempdir().unwrap();
     let case_dir = temp.path().join("case-id");

@@ -76,15 +76,28 @@ forward = false
 enabled = true
 listen = "0.0.0.0:17171"
 matched_upstream = "http://127.0.0.1:7171"
+# "upstream" preserves the existing forwarding behavior. Use
+# "fixed_response" to answer fallback requests inside Recorder without
+# starting a separate fallback service.
+fallback_mode = "upstream"
 fallback_upstream = "http://10.37.254.56:7171"
 preserve_host = true
+
+# Example in-process fallback. Uncomment this table and change fallback_mode
+# to "fixed_response". Status is required; 201 is appropriate only when the
+# response represents resource creation.
+# [http_gateway.fixed_response]
+# status = 200
+# content_type = "application/json"
+# headers = { x-recorder-fallback = "fixed" }
+# body = '{"code":"xxx","msg":"xxx"}'
 
 [http_gateway.ready]
 # The recorder actively probes matched_upstream until this path returns the
 # expected status, then closes the shared bootstrap dependency window. This
 # prevents post-start scheduled jobs from making bootstrap-dependencies.jsonl
 # grow indefinitely. While the service is not ready, matched rule traffic is
-# sent to fallback_upstream and no case is created.
+# handled by the configured fallback strategy and no case is created.
 enabled = true
 path = "/"
 success_status = 200
@@ -92,8 +105,8 @@ interval_ms = 1000
 
 # Limit successfully published cases independently for each resolved case
 # pattern in the current recorder run. Once a pattern reaches its limit,
-# later matching requests go directly to fallback_upstream without creating a
-# case. Static paths use their exact URI path as the pattern.
+# later matching requests use the fallback strategy without creating a case.
+# Static paths use their exact URI path as the pattern.
 [http_gateway.case_limits]
 default = 100
 
@@ -113,9 +126,9 @@ apis = [
 
 # tcpcopy HTTP traffic matching rules. If no rules are configured, all gateway
 # traffic not selected by exclude_rules is eligible for matching. Exclusions
-# always take priority and are sent to fallback_upstream without creating a
-# case. At most one matched case is recorded at a time; overlapping eligible
-# requests are also sent to fallback_upstream.
+# always take priority and use the fallback strategy without creating a case.
+# At most one matched case is recorded at a time; overlapping eligible
+# requests also use the fallback strategy.
 [[http_gateway.exclude_rules]]
 name = "exclude-health"
 methods = ["GET"]

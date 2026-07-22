@@ -10,6 +10,7 @@ pub(super) enum DependencyRecord {
     MemcachedExchange(Box<memcached::RecordedExchange>),
     KafkaConnection(Box<kafka::RecordedKafkaConnection>),
     KafkaProduce(Box<kafka::RecordedKafkaProduce>),
+    KafkaFetch(Box<kafka::RecordedKafkaFetch>),
     KafkaDelivery(Box<kafka::RecordedKafkaDelivery>),
     ProxyError(Box<RecordedProxyError>),
     #[serde(other)]
@@ -104,6 +105,10 @@ pub(super) async fn load_dependency_file(
                 kafka.register_produce(*exchange, source, case_id, targets)?;
                 continue;
             }
+            DependencyRecord::KafkaFetch(exchange) => {
+                kafka.register_fetch(*exchange, source, case_id, targets)?;
+                continue;
+            }
             DependencyRecord::KafkaDelivery(exchange) => {
                 kafka.register_delivery(*exchange, source, case_id, targets)?;
                 continue;
@@ -139,12 +144,14 @@ pub(super) async fn load_dependency_file(
                 )
             })?;
         register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
+        let timing = ReplayExchangeTiming::from_recorded(exchange.duration_ms, exchange.outcome);
         exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
             identity,
             record: *exchange,
-            consumed: false,
+            status: ReplayExchangeStatus::Available,
+            timing,
         });
     }
     Ok(())

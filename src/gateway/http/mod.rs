@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::access_policy::AccessDecision;
-use crate::config::HttpGatewayConfig;
+use crate::config::{HttpGatewayConfig, HttpGatewayFallbackMode};
 use crate::http::access::classify_method;
 use crate::http::rewrite::{self, RewriteInput};
 use crate::recorder::http::case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
@@ -33,8 +33,8 @@ pub(crate) mod transport;
 use admission::try_admit_case;
 use rules::{RuleDecision, evaluate_request, request_authority, resolve_case_group};
 use transport::{
-    GatewayBody, build_downstream_response, build_upstream_request, build_upstream_uri,
-    send_upstream, simple_response,
+    GatewayBody, build_downstream_response, build_fixed_response, build_upstream_request,
+    build_upstream_uri, send_upstream, simple_response,
 };
 
 pub async fn run(state: AppState) -> Result<()> {
@@ -46,6 +46,7 @@ pub async fn run(state: AppState) -> Result<()> {
         listen = %config.listen,
         matched_upstream = %config.matched_upstream,
         fallback_upstream = %config.fallback_upstream,
+        fallback_mode = ?config.fallback_mode,
         "HTTP gateway listening"
     );
 
@@ -198,6 +199,15 @@ async fn handle_gateway_request(
                 .await;
             }
         };
+
+        if !should_record && config.fallback_mode == HttpGatewayFallbackMode::FixedResponse {
+            return build_fixed_response(
+                config
+                    .fixed_response
+                    .as_ref()
+                    .expect("validated fixed response configuration"),
+            );
+        }
 
         let case_request_record = case.as_ref().map(|_| CaseRequestRecord {
             timestamp: Utc::now(),
