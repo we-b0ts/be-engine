@@ -10,14 +10,16 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::DependencyExchangeOutcome;
 use crate::redis::{
     BufferedReader as RedisBufferedReader, RedisCommand, read_frame as read_redis_frame,
     redis_command,
 };
 
 use super::{
-    ReplayProtocol, ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey,
-    normalize_host, push_success_detail, register_replay_target,
+    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
+    ReplayState, ReplayTarget, TargetKey, normalize_host, push_success_detail,
+    register_replay_target,
 };
 
 mod builtins;
@@ -46,6 +48,10 @@ pub(super) struct RecordedExchange {
     args: Vec<RecordedCapture>,
     response_kind: String,
     response: RecordedCapture,
+    #[serde(default)]
+    outcome: DependencyExchangeOutcome,
+    #[serde(default)]
+    duration_ms: u64,
     replay_safe: bool,
 }
 
@@ -64,7 +70,17 @@ struct ReplayExchange {
     record: RecordedExchange,
     args: Vec<Vec<u8>>,
     response: Vec<u8>,
-    consumed: bool,
+    status: ReplayExchangeStatus,
+    timing: ReplayExchangeTiming,
+}
+
+#[derive(Debug, Clone)]
+struct MatchedRedisExchange {
+    index: usize,
+    connection_id: Uuid,
+    response: Vec<u8>,
+    timing: ReplayExchangeTiming,
+    report: CommandMatchedReport,
 }
 
 #[derive(Debug, Default)]
@@ -140,13 +156,15 @@ impl RedisReplayState {
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
         let response = record.response.decode()?;
+        let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
             record,
             args,
             response,
-            consumed: false,
+            status: ReplayExchangeStatus::Available,
+            timing,
         });
         Ok(())
     }
@@ -162,9 +180,9 @@ impl RedisReplayState {
         username: Option<&str>,
         command: &str,
         args: &[Vec<u8>],
-    ) -> Option<(Uuid, Vec<u8>)> {
+    ) -> Option<MatchedRedisExchange> {
         let index = preferred_index(&self.exchanges, active_case_id, |index, exchange| {
-            !exchange.consumed
+            exchange.status.is_available()
                 && is_lane_head(&self.exchanges, index)
                 && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
                 && target_matches(
@@ -180,11 +198,17 @@ impl RedisReplayState {
                 && exchange.args == args
         })?;
         let exchange = &mut self.exchanges[index];
-        exchange.consumed = true;
-        push_success_detail(
-            &mut self.events.matched_count,
-            &mut self.events.matched,
-            CommandMatchedReport {
+        exchange.status = if exchange.timing.outcome().is_client_terminated() {
+            ReplayExchangeStatus::AwaitingClientTermination
+        } else {
+            ReplayExchangeStatus::Responding
+        };
+        Some(MatchedRedisExchange {
+            index,
+            connection_id: exchange.record.connection_id,
+            response: exchange.response.clone(),
+            timing: exchange.timing,
+            report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
                 index,
@@ -193,8 +217,7 @@ impl RedisReplayState {
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
             },
-        );
-        Some((exchange.record.connection_id, exchange.response.clone()))
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -207,9 +230,9 @@ impl RedisReplayState {
         database: i64,
         username: Option<&str>,
         command: &RedisCommand,
-    ) -> Option<(Uuid, Vec<u8>)> {
+    ) -> Option<MatchedRedisExchange> {
         let index = preferred_index(&self.exchanges, active_case_id, |index, exchange| {
-            !exchange.consumed
+            exchange.status.is_available()
                 && is_lane_head(&self.exchanges, index)
                 && exchange.record.response_kind == "error"
                 && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
@@ -227,11 +250,17 @@ impl RedisReplayState {
                     || exchange.args == command.args)
         })?;
         let exchange = &mut self.exchanges[index];
-        exchange.consumed = true;
-        push_success_detail(
-            &mut self.events.matched_count,
-            &mut self.events.matched,
-            CommandMatchedReport {
+        exchange.status = if exchange.timing.outcome().is_client_terminated() {
+            ReplayExchangeStatus::AwaitingClientTermination
+        } else {
+            ReplayExchangeStatus::Responding
+        };
+        Some(MatchedRedisExchange {
+            index,
+            connection_id: exchange.record.connection_id,
+            response: exchange.response.clone(),
+            timing: exchange.timing,
+            report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
                 index,
@@ -240,8 +269,30 @@ impl RedisReplayState {
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
             },
+        })
+    }
+
+    fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
+        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
+            exchange.status = ReplayExchangeStatus::Consumed;
+        }
+        push_success_detail(
+            &mut self.events.matched_count,
+            &mut self.events.matched,
+            matched.report.clone(),
         );
-        Some((exchange.record.connection_id, exchange.response.clone()))
+    }
+
+    fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
+        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
+            exchange.status = ReplayExchangeStatus::Failed;
+        }
+        self.events.unsafe_events.push(CommandRequestReport {
+            case_id: matched.report.case_id.clone(),
+            target: matched.report.target.clone(),
+            command: matched.report.command.clone(),
+            reason,
+        });
     }
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
@@ -344,9 +395,12 @@ pub(super) async fn handle_connection(
         } else {
             None
         };
-        if let Some((connection_id, response)) = recorded_failure {
-            bound_connection.get_or_insert(connection_id);
-            reader.inner.write_all(&response).await?;
+        if let Some(matched) = recorded_failure {
+            bound_connection.get_or_insert(matched.connection_id);
+            if deliver_redis_exchange(&mut reader, &state, &matched).await? {
+                report_writer.request();
+                break;
+            }
             report_writer.request();
             continue;
         }
@@ -373,9 +427,9 @@ pub(super) async fn handle_connection(
                 &command.name,
                 &command.args,
             ) {
-                Some((connection_id, response)) => {
-                    bound_connection.get_or_insert(connection_id);
-                    response
+                Some(matched) => {
+                    bound_connection.get_or_insert(matched.connection_id);
+                    Some(matched)
                 }
                 None => {
                     state.redis.events.unmatched.push(CommandRequestReport {
@@ -385,14 +439,69 @@ pub(super) async fn handle_connection(
                         reason: "no recorded Redis exchange matched target/session/arguments"
                             .to_string(),
                     });
-                    b"-ERR no recorded Redis dependency matched\r\n".to_vec()
+                    None
                 }
             }
         };
-        reader.inner.write_all(&response).await?;
+        if let Some(matched) = response {
+            if deliver_redis_exchange(&mut reader, &state, &matched).await? {
+                report_writer.request();
+                break;
+            }
+        } else {
+            reader
+                .inner
+                .write_all(b"-ERR no recorded Redis dependency matched\r\n")
+                .await?;
+        }
         report_writer.request();
     }
     Ok(())
+}
+
+async fn deliver_redis_exchange(
+    reader: &mut RedisBufferedReader<&mut TcpStream>,
+    state: &Arc<Mutex<ReplayState>>,
+    matched: &MatchedRedisExchange,
+) -> Result<bool> {
+    if matched.timing.outcome().is_client_terminated() {
+        let result = if reader.buffer.is_empty() {
+            matched
+                .timing
+                .await_client_termination(&mut reader.inner)
+                .await
+                .map(|_| ())
+        } else {
+            Err(anyhow!(
+                "client sent another Redis request instead of terminating the connection"
+            ))
+        };
+        match result {
+            Ok(()) => {
+                state.lock().await.redis.complete_exchange(matched);
+                return Ok(true);
+            }
+            Err(error) => {
+                state
+                    .lock()
+                    .await
+                    .redis
+                    .fail_exchange(matched, error.to_string());
+                return Err(error);
+            }
+        }
+    }
+
+    matched.timing.delay_response().await;
+    if let Err(error) = reader.inner.write_all(&matched.response).await {
+        state.lock().await.redis.fail_exchange(
+            matched,
+            format!("failed to deliver recorded Redis response: {error}"),
+        );
+        return Err(error.into());
+    }
+    state.lock().await.redis.complete_exchange(matched);
+    Ok(false)
 }
 
 async fn record_runtime_unsafe(
@@ -499,7 +608,7 @@ where
 fn is_lane_head(exchanges: &[ReplayExchange], candidate: usize) -> bool {
     let exchange = &exchanges[candidate];
     !exchanges.iter().any(|other| {
-        !other.consumed
+        !other.status.is_consumed()
             && other.record.connection_id == exchange.record.connection_id
             && other.record.sequence < exchange.record.sequence
     })
@@ -524,7 +633,7 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
     exchanges
         .iter()
         .enumerate()
-        .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
+        .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
         .map(|(index, exchange)| CommandUnusedReport {
             index,
             case_id: exchange.case_id.clone(),

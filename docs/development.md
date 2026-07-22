@@ -690,13 +690,22 @@ mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe bootstrap replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
 
-Kafka dependencies are semantic `kafka_connection`, `kafka_produce`, and
-`kafka_delivery` records. V1 is a successful-path dependency facade rather than
-a full Kafka broker: use an E2E client profile with
+Semantic MySQL, Redis, Memcached, and Kafka business exchanges also carry
+`outcome` and `duration_ms`. Replay waits the recorded duration before a normal
+response. If `outcome` is `client_terminated`, replay sends no response and
+consumes the exchange only after the SDK closes or resets the same connection
+near the recorded time; replay itself does not initiate that close. Intrinsic
+no-response commands remain `no_response` and are not treated as timeouts.
+
+Kafka dependencies are semantic `kafka_connection`, `kafka_produce`,
+`kafka_fetch`, and `kafka_delivery` records. Each Fetch exchange records its
+requested topics, outcome, duration, and associated deliveries, including
+empty and client-terminated Fetches. V1 is a constrained dependency facade
+rather than a full Kafka broker: use an E2E client profile with
 `security.protocol=PLAINTEXT`, `compression.type=none`,
 `enable.idempotence=false`, and `acks=1`. Replay advertises one broker and one
 partition, synthesizes control-plane responses, matches Produce by exact topic,
-key, headers, and value bytes, and delivers recorded Fetch records once.
+key, headers, and value bytes, and delivers each recorded Fetch result once.
 Transactions, Admin APIs, compression, TLS/SASL, rebalance behavior, retries,
 and Kafka failure injection are unsupported and fail closed. Schema Registry
 remains an ordinary HTTP dependency. Kafka payloads and headers are sensitive

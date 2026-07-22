@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
+use crate::dependency::DependencyExchangeOutcome;
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct BodyCapture {
     pub encoding: &'static str,
@@ -46,6 +48,7 @@ pub enum RecorderEvent {
     MemcachedExchange(MemcachedExchangeEvent),
     KafkaConnection(KafkaConnectionEvent),
     KafkaProduce(KafkaProduceEvent),
+    KafkaFetch(KafkaFetchEvent),
     KafkaDelivery(KafkaDeliveryEvent),
     MysqlConnection(MysqlConnectionEvent),
     MysqlQuery(MysqlQueryEvent),
@@ -70,6 +73,7 @@ impl RecorderEvent {
             Self::MemcachedExchange(_) => "memcached_exchange",
             Self::KafkaConnection(_) => "kafka_connection",
             Self::KafkaProduce(_) => "kafka_produce",
+            Self::KafkaFetch(_) => "kafka_fetch",
             Self::KafkaDelivery(_) => "kafka_delivery",
             Self::MysqlConnection(_) => "mysql_connection",
             Self::MysqlQuery(_) => "mysql_query",
@@ -94,6 +98,7 @@ impl RecorderEvent {
             Self::MemcachedExchange(event) => event.client_process.as_ref(),
             Self::KafkaConnection(event) => event.client_process.as_ref(),
             Self::KafkaProduce(event) => event.client_process.as_ref(),
+            Self::KafkaFetch(event) => event.client_process.as_ref(),
             Self::KafkaDelivery(event) => event.client_process.as_ref(),
             Self::MysqlConnection(event) => event.client_process.as_ref(),
             Self::MysqlQuery(event) => event.client_process.as_ref(),
@@ -216,6 +221,7 @@ pub struct RedisExchangeEvent {
     pub response_kind: String,
     pub response: BodyCapture,
     pub session_setup: bool,
+    pub outcome: DependencyExchangeOutcome,
     pub duration_ms: u128,
     pub replay_safe: bool,
     pub parse_warnings: Vec<String>,
@@ -266,6 +272,7 @@ pub struct MemcachedExchangeEvent {
     pub response_status: String,
     pub response_frames: Vec<BodyCapture>,
     pub no_response: bool,
+    pub outcome: DependencyExchangeOutcome,
     pub duration_ms: u128,
     pub replay_safe: bool,
     pub parse_warnings: Vec<String>,
@@ -300,6 +307,7 @@ pub struct KafkaProduceEvent {
     pub id: Uuid,
     pub connection_id: Uuid,
     pub sequence: u64,
+    pub request_sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
     pub client_process: Option<ProcessInfo>,
@@ -313,6 +321,27 @@ pub struct KafkaProduceEvent {
     pub headers: Vec<KafkaHeaderCapture>,
     pub value: Option<BodyCapture>,
     pub result: String,
+    pub outcome: DependencyExchangeOutcome,
+    pub duration_ms: u128,
+    pub replay_safe: bool,
+    pub parse_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct KafkaFetchEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub target_addr: String,
+    pub upstream_addr: String,
+    pub api_version: i16,
+    pub topics: Vec<String>,
+    pub outcome: DependencyExchangeOutcome,
     pub duration_ms: u128,
     pub replay_safe: bool,
     pub parse_warnings: Vec<String>,
@@ -323,6 +352,7 @@ pub struct KafkaDeliveryEvent {
     pub id: Uuid,
     pub connection_id: Uuid,
     pub sequence: u64,
+    pub fetch_sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
     pub client_process: Option<ProcessInfo>,
@@ -450,6 +480,7 @@ pub struct MysqlExchangeEvent {
     pub statement_id: Option<u32>,
     pub params: Option<Vec<MysqlValue>>,
     pub response: MysqlExchangeResponse,
+    pub outcome: DependencyExchangeOutcome,
     pub duration_ms: u128,
     pub parse_warnings: Vec<String>,
 }

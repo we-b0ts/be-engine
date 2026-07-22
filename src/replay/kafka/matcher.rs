@@ -5,12 +5,14 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
 use serde::Deserialize;
+use uuid::Uuid;
 
+use crate::dependency::DependencyExchangeOutcome;
 use crate::kafka::{KafkaHeader, KafkaRecord};
 
 use super::super::{
-    ReplayProtocol, ReplaySource, ReplayTarget, TargetKey, push_success_detail,
-    register_replay_target,
+    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplaySource, ReplayTarget,
+    TargetKey, push_success_detail, register_replay_target,
 };
 use super::report::{
     KafkaMatchedReport, KafkaProtocolReport, KafkaRequestReport, KafkaUnusedReport,
@@ -25,6 +27,8 @@ pub(in crate::replay) struct RecordedKafkaConnection {
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedKafkaProduce {
+    pub(super) connection_id: Uuid,
+    pub(super) request_sequence: u64,
     pub(super) target_host: String,
     pub(super) target_port: u16,
     pub(super) topic: String,
@@ -33,11 +37,27 @@ pub(in crate::replay) struct RecordedKafkaProduce {
     pub(super) headers: Vec<RecordedKafkaHeader>,
     pub(super) value: Option<RecordedCapture>,
     pub(super) result: String,
+    pub(super) outcome: DependencyExchangeOutcome,
+    pub(super) duration_ms: u64,
+    pub(super) replay_safe: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(in crate::replay) struct RecordedKafkaFetch {
+    pub(super) connection_id: Uuid,
+    pub(super) sequence: u64,
+    pub(super) target_host: String,
+    pub(super) target_port: u16,
+    pub(super) topics: Vec<String>,
+    pub(super) outcome: DependencyExchangeOutcome,
+    pub(super) duration_ms: u64,
     pub(super) replay_safe: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub(in crate::replay) struct RecordedKafkaDelivery {
+    pub(super) connection_id: Uuid,
+    pub(super) fetch_sequence: u64,
     pub(super) target_host: String,
     pub(super) target_port: u16,
     pub(super) topic: String,
@@ -83,8 +103,23 @@ struct ReplayKafkaProduce {
     source: ReplaySource,
     case_id: Option<String>,
     target: TargetKey,
+    connection_id: Uuid,
+    request_sequence: u64,
     record: KafkaRecord,
-    consumed: bool,
+    timing: ReplayExchangeTiming,
+    status: ReplayExchangeStatus,
+}
+
+#[derive(Debug, Clone)]
+struct ReplayKafkaFetch {
+    source: ReplaySource,
+    case_id: Option<String>,
+    target: TargetKey,
+    connection_id: Uuid,
+    sequence: u64,
+    topics: BTreeSet<String>,
+    timing: ReplayExchangeTiming,
+    status: ReplayExchangeStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -92,13 +127,30 @@ struct ReplayKafkaDelivery {
     source: ReplaySource,
     case_id: Option<String>,
     target: TargetKey,
+    connection_id: Uuid,
+    fetch_sequence: u64,
     record: KafkaRecord,
-    consumed: bool,
+    status: ReplayExchangeStatus,
+}
+
+#[derive(Debug)]
+pub(super) struct KafkaProduceReservation {
+    indices: Vec<usize>,
+    pub(super) timing: ReplayExchangeTiming,
+}
+
+#[derive(Debug)]
+pub(super) struct KafkaFetchReservation {
+    fetch_index: usize,
+    delivery_indices: Vec<usize>,
+    pub(super) records: Vec<KafkaRecord>,
+    pub(super) timing: ReplayExchangeTiming,
 }
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct KafkaReplayState {
     produces: Vec<ReplayKafkaProduce>,
+    fetches: Vec<ReplayKafkaFetch>,
     deliveries: Vec<ReplayKafkaDelivery>,
     pub(super) events: KafkaReplayEvents,
 }
@@ -140,10 +192,16 @@ impl KafkaReplayState {
         case_id: Option<&str>,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     ) -> Result<()> {
-        if !record.replay_safe || record.result != "accepted" {
+        let expected_result = match record.outcome {
+            DependencyExchangeOutcome::Response => "accepted",
+            DependencyExchangeOutcome::ClientTerminated => "client_terminated",
+            DependencyExchangeOutcome::NoResponse => "sent",
+        };
+        if !record.replay_safe || record.result != expected_result {
             return Err(anyhow!(
-                "Kafka produce for topic {} is not safe successful-path evidence",
-                record.topic
+                "Kafka produce for topic {} is not replay-safe {:?} evidence",
+                record.topic,
+                record.outcome
             ));
         }
         let target = TargetKey {
@@ -156,8 +214,39 @@ impl KafkaReplayState {
             source,
             case_id: case_id.map(ToOwned::to_owned),
             target,
+            connection_id: record.connection_id,
+            request_sequence: record.request_sequence,
             record: semantic,
-            consumed: false,
+            timing: ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome),
+            status: ReplayExchangeStatus::Available,
+        });
+        Ok(())
+    }
+
+    pub(in crate::replay) fn register_fetch(
+        &mut self,
+        record: RecordedKafkaFetch,
+        source: ReplaySource,
+        case_id: Option<&str>,
+        targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+    ) -> Result<()> {
+        if !record.replay_safe || record.outcome == DependencyExchangeOutcome::NoResponse {
+            return Err(anyhow!("Kafka fetch is not replay-safe response evidence"));
+        }
+        let target = TargetKey {
+            host: record.target_host,
+            port: record.target_port,
+        };
+        register_replay_target(targets, &target, ReplayProtocol::Kafka)?;
+        self.fetches.push(ReplayKafkaFetch {
+            source,
+            case_id: case_id.map(ToOwned::to_owned),
+            target,
+            connection_id: record.connection_id,
+            sequence: record.sequence,
+            topics: record.topics.into_iter().collect(),
+            timing: ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome),
+            status: ReplayExchangeStatus::Available,
         });
         Ok(())
     }
@@ -191,8 +280,10 @@ impl KafkaReplayState {
             source,
             case_id: case_id.map(ToOwned::to_owned),
             target,
+            connection_id: record.connection_id,
+            fetch_sequence: record.fetch_sequence,
             record: semantic,
-            consumed: false,
+            status: ReplayExchangeStatus::Available,
         });
         Ok(())
     }
@@ -209,45 +300,92 @@ impl KafkaReplayState {
             .collect()
     }
 
-    pub(super) fn match_produce(
+    pub(super) fn reserve_produce(
         &mut self,
         active_case_id: Option<&str>,
         target: &TargetKey,
         records: &[KafkaRecord],
-    ) -> bool {
-        let mut selected = Vec::with_capacity(records.len());
-        for record in records {
-            let Some(index) = self
+        no_response: bool,
+    ) -> Option<KafkaProduceReservation> {
+        let first = records.first()?;
+        let candidates = self
+            .produces
+            .iter()
+            .filter(|exchange| {
+                exchange.status.is_available()
+                    && scope_matches(active_case_id, exchange.source, exchange.case_id.as_deref())
+                    && &exchange.target == target
+                    && (exchange.timing.outcome() == DependencyExchangeOutcome::NoResponse)
+                        == no_response
+                    && semantic_record_matches(&exchange.record, first)
+            })
+            .map(|exchange| (exchange.connection_id, exchange.request_sequence))
+            .collect::<Vec<_>>();
+        for (connection_id, request_sequence) in candidates {
+            let group = self
                 .produces
                 .iter()
                 .enumerate()
-                .find_map(|(index, exchange)| {
-                    (!exchange.consumed
+                .filter_map(|(index, exchange)| {
+                    (exchange.status.is_available()
+                        && exchange.connection_id == connection_id
+                        && exchange.request_sequence == request_sequence
                         && scope_matches(
                             active_case_id,
                             exchange.source,
                             exchange.case_id.as_deref(),
                         )
-                        && &exchange.target == target
-                        && semantic_record_matches(&exchange.record, record)
-                        && !selected.contains(&index))
-                    .then_some(index)
+                        && &exchange.target == target)
+                        .then_some(index)
                 })
-            else {
-                self.events.unmatched.push(KafkaRequestReport {
-                    case_id: active_case_id.map(ToOwned::to_owned),
-                    target: target.clone(),
-                    operation: "produce".to_string(),
-                    topic: Some(record.topic.clone()),
-                    reason: "no recorded Kafka produce matched topic/key/headers/value".to_string(),
-                });
-                return false;
-            };
-            selected.push(index);
+                .collect::<Vec<_>>();
+            if group.len() != records.len() {
+                continue;
+            }
+            let mut selected = Vec::with_capacity(records.len());
+            for record in records {
+                let Some(index) = group.iter().copied().find(|index| {
+                    !selected.contains(index)
+                        && semantic_record_matches(&self.produces[*index].record, record)
+                }) else {
+                    selected.clear();
+                    break;
+                };
+                selected.push(index);
+            }
+            if selected.len() != records.len() {
+                continue;
+            }
+            let timing = self.produces[selected[0]].timing;
+            if selected
+                .iter()
+                .any(|index| self.produces[*index].timing.outcome() != timing.outcome())
+            {
+                continue;
+            }
+            let status = reservation_status(timing.outcome());
+            for index in &selected {
+                self.produces[*index].status = status;
+            }
+            return Some(KafkaProduceReservation {
+                indices: selected,
+                timing,
+            });
         }
-        for index in selected {
+        self.events.unmatched.push(KafkaRequestReport {
+            case_id: active_case_id.map(ToOwned::to_owned),
+            target: target.clone(),
+            operation: "produce".to_string(),
+            topic: Some(first.topic.clone()),
+            reason: "no recorded Kafka produce request matched topic/key/headers/value".to_string(),
+        });
+        None
+    }
+
+    pub(super) fn commit_produce(&mut self, reservation: KafkaProduceReservation) {
+        for index in reservation.indices {
             let exchange = &mut self.produces[index];
-            exchange.consumed = true;
+            exchange.status = ReplayExchangeStatus::Consumed;
             push_success_detail(
                 &mut self.events.matched_count,
                 &mut self.events.matched,
@@ -255,52 +393,115 @@ impl KafkaReplayState {
                     case_id: exchange.case_id.clone(),
                     source: exchange.source,
                     index,
-                    target: target.clone(),
+                    target: exchange.target.clone(),
                     operation: "produce".to_string(),
                     topic: exchange.record.topic.clone(),
                 },
             );
         }
-        true
     }
 
-    pub(super) fn take_deliveries(
+    pub(super) fn fail_produce(
+        &mut self,
+        reservation: KafkaProduceReservation,
+        target: &TargetKey,
+        reason: String,
+    ) {
+        for index in reservation.indices {
+            self.produces[index].status = ReplayExchangeStatus::Failed;
+        }
+        self.record_unsafe(target, "produce", reason);
+    }
+
+    pub(super) fn reserve_fetch(
         &mut self,
         active_case_id: Option<&str>,
         target: &TargetKey,
         requested_topics: &BTreeSet<String>,
-    ) -> Vec<KafkaRecord> {
-        let selected = self
+    ) -> Option<KafkaFetchReservation> {
+        let fetch_index = self.fetches.iter().position(|exchange| {
+            exchange.status.is_available()
+                && scope_matches(active_case_id, exchange.source, exchange.case_id.as_deref())
+                && &exchange.target == target
+                && &exchange.topics == requested_topics
+        })?;
+        let fetch = &self.fetches[fetch_index];
+        let delivery_indices = self
             .deliveries
             .iter()
             .enumerate()
-            .filter_map(|(index, exchange)| {
-                (!exchange.consumed
-                    && scope_matches(active_case_id, exchange.source, exchange.case_id.as_deref())
-                    && &exchange.target == target
-                    && requested_topics.contains(&exchange.record.topic))
-                .then_some(index)
+            .filter_map(|(index, delivery)| {
+                (delivery.status.is_available()
+                    && delivery.source == fetch.source
+                    && delivery.case_id == fetch.case_id
+                    && delivery.target == fetch.target
+                    && delivery.connection_id == fetch.connection_id
+                    && delivery.fetch_sequence == fetch.sequence)
+                    .then_some(index)
             })
             .collect::<Vec<_>>();
-        let mut records = Vec::with_capacity(selected.len());
-        for index in selected {
-            let exchange = &mut self.deliveries[index];
-            exchange.consumed = true;
-            records.push(exchange.record.clone());
+        let records = delivery_indices
+            .iter()
+            .map(|index| self.deliveries[*index].record.clone())
+            .collect();
+        let timing = fetch.timing;
+        let status = reservation_status(timing.outcome());
+        self.fetches[fetch_index].status = status;
+        for index in &delivery_indices {
+            self.deliveries[*index].status = status;
+        }
+        Some(KafkaFetchReservation {
+            fetch_index,
+            delivery_indices,
+            records,
+            timing,
+        })
+    }
+
+    pub(super) fn commit_fetch(&mut self, reservation: KafkaFetchReservation) {
+        let fetch = &mut self.fetches[reservation.fetch_index];
+        fetch.status = ReplayExchangeStatus::Consumed;
+        push_success_detail(
+            &mut self.events.matched_count,
+            &mut self.events.matched,
+            KafkaMatchedReport {
+                case_id: fetch.case_id.clone(),
+                source: fetch.source,
+                index: reservation.fetch_index,
+                target: fetch.target.clone(),
+                operation: "fetch".to_string(),
+                topic: fetch.topics.iter().cloned().collect::<Vec<_>>().join(","),
+            },
+        );
+        for index in reservation.delivery_indices {
+            let delivery = &mut self.deliveries[index];
+            delivery.status = ReplayExchangeStatus::Consumed;
             push_success_detail(
                 &mut self.events.matched_count,
                 &mut self.events.matched,
                 KafkaMatchedReport {
-                    case_id: exchange.case_id.clone(),
-                    source: exchange.source,
+                    case_id: delivery.case_id.clone(),
+                    source: delivery.source,
                     index,
-                    target: target.clone(),
+                    target: delivery.target.clone(),
                     operation: "delivery".to_string(),
-                    topic: exchange.record.topic.clone(),
+                    topic: delivery.record.topic.clone(),
                 },
             );
         }
-        records
+    }
+
+    pub(super) fn fail_fetch(
+        &mut self,
+        reservation: KafkaFetchReservation,
+        target: &TargetKey,
+        reason: String,
+    ) {
+        self.fetches[reservation.fetch_index].status = ReplayExchangeStatus::Failed;
+        for index in reservation.delivery_indices {
+            self.deliveries[index].status = ReplayExchangeStatus::Failed;
+        }
+        self.record_unsafe(target, "fetch", reason);
     }
 
     pub(super) fn record_unsupported(
@@ -332,11 +533,21 @@ impl KafkaReplayState {
         }
     }
 
+    fn record_unsafe(&mut self, target: &TargetKey, operation: &str, reason: String) {
+        self.events.unsafe_events.push(KafkaRequestReport {
+            case_id: None,
+            target: target.clone(),
+            operation: operation.to_string(),
+            topic: None,
+            reason,
+        });
+    }
+
     fn unused(&self, source: ReplaySource) -> Vec<KafkaUnusedReport> {
         self.produces
             .iter()
             .enumerate()
-            .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
+            .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
             .map(|(index, exchange)| KafkaUnusedReport {
                 index,
                 case_id: exchange.case_id.clone(),
@@ -346,10 +557,33 @@ impl KafkaReplayState {
                 topic: exchange.record.topic.clone(),
             })
             .chain(
+                self.fetches
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, exchange)| {
+                        exchange.source == source && !exchange.status.is_consumed()
+                    })
+                    .map(|(index, exchange)| KafkaUnusedReport {
+                        index,
+                        case_id: exchange.case_id.clone(),
+                        source,
+                        target: exchange.target.clone(),
+                        operation: "fetch".to_string(),
+                        topic: exchange
+                            .topics
+                            .iter()
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    }),
+            )
+            .chain(
                 self.deliveries
                     .iter()
                     .enumerate()
-                    .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
+                    .filter(|(_, exchange)| {
+                        exchange.source == source && !exchange.status.is_consumed()
+                    })
                     .map(|(index, exchange)| KafkaUnusedReport {
                         index,
                         case_id: exchange.case_id.clone(),
@@ -360,6 +594,14 @@ impl KafkaReplayState {
                     }),
             )
             .collect()
+    }
+}
+
+fn reservation_status(outcome: DependencyExchangeOutcome) -> ReplayExchangeStatus {
+    if outcome.is_client_terminated() {
+        ReplayExchangeStatus::AwaitingClientTermination
+    } else {
+        ReplayExchangeStatus::Responding
     }
 }
 

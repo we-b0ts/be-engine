@@ -2,6 +2,7 @@ mod access_policy;
 mod active_case;
 mod case_group;
 mod config;
+mod dependency;
 mod dns_mock;
 mod e2e_run;
 mod gateway;
@@ -60,6 +61,7 @@ pub use config::{
     ensure_verified_api_exclude, plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback,
     plan_verified_api_exclude,
 };
+pub use dependency::DependencyExchangeOutcome;
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
     E2eApiRunResult, E2eApiVerificationOverride, E2eFocusedApiStatus, E2eRunContext,
@@ -70,9 +72,9 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
     AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
-    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaHeaderCapture,
-    KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent, MysqlColumn,
-    MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
+    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaFetchEvent,
+    KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent,
+    MysqlColumn, MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
     MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
     ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
     RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,

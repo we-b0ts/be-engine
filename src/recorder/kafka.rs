@@ -4,8 +4,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
+use bytes::Bytes;
 use chrono::Utc;
-use kafka_protocol::messages::{ApiKey, RequestKind, ResponseKind};
+use kafka_protocol::messages::{ApiKey, RequestKind};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::{Mutex, Notify};
@@ -13,15 +14,18 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::access_policy::AccessDecision;
+use crate::dependency::DependencyExchangeOutcome;
+use crate::dependency::termination::ConnectionTermination;
 use crate::kafka::access::{classify_api, rejection_response};
-use crate::recorder::{
-    KafkaConnectionEvent, KafkaDeliveryEvent, KafkaHeaderCapture, KafkaProduceEvent, ProcessInfo,
-    ProxyErrorEvent, RecorderEvent, capture_body,
-};
-
 use crate::kafka::{
     KafkaRecord, decode_request, decode_response, encode_response, read_frame, records_from_fetch,
     records_from_produce, replay_supports_api, response_correlation_id, write_frame,
+};
+use crate::recorder::{KafkaConnectionEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent};
+
+mod recording;
+use recording::{
+    FetchCompletion, ProduceCompletion, record_fetch_completion, record_produce_completion,
 };
 
 #[derive(Debug, Clone)]
@@ -43,18 +47,13 @@ struct PendingRequest {
     kind: PendingKind,
 }
 
-struct ProduceCompletion {
-    sequence: u64,
-    api_version: i16,
-    started: Instant,
-    records: Vec<KafkaRecord>,
-    response: ResponseKind,
-}
-
 #[derive(Debug)]
 enum PendingKind {
-    Produce(Vec<KafkaRecord>),
-    Fetch,
+    Produce {
+        record_sequence: u64,
+        records: Vec<KafkaRecord>,
+    },
+    Fetch(Vec<String>),
     Control,
     Unsupported(String),
 }
@@ -69,7 +68,9 @@ pub(crate) async fn handle_connected(
     let started = Instant::now();
     let pending = Arc::new(Mutex::new(HashMap::<i32, PendingRequest>::new()));
     let pending_changed = Arc::new(Notify::new());
+    let client_ended = Arc::new(Notify::new());
     let replay_safe = Arc::new(AtomicBool::new(true));
+    let termination = ConnectionTermination::default();
     record_connection(
         &state,
         connection_id,
@@ -98,112 +99,30 @@ pub(crate) async fn handle_connected(
     let request_context = context.clone();
     let request_client_write = client_write.clone();
     let request_pending_changed = pending_changed.clone();
+    let request_client_ended = client_ended.clone();
+    let request_termination = termination.clone();
     let requests = tokio::spawn(async move {
         let mut bytes = 0_u64;
         let mut request_sequence = 0_u64;
         let mut produce_sequence = 0_u64;
-        'requests: while let Some(payload) = read_frame(&mut client_read, max_frame_bytes).await? {
+        'requests: loop {
+            let payload = match read_frame(&mut client_read, max_frame_bytes).await {
+                Ok(Some(payload)) => payload,
+                Ok(None) => {
+                    request_termination.observe_client_eof();
+                    request_client_ended.notify_one();
+                    break;
+                }
+                Err(error) if request_termination.observe_client_error(&error) => {
+                    request_client_ended.notify_one();
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
             bytes += payload.len() as u64 + 4;
             request_sequence += 1;
-            match decode_request(&payload) {
-                Ok(decoded) => {
-                    let operation_class = classify_api(decoded.api_key);
-                    if request_state.access_decision(operation_class) == AccessDecision::Reject {
-                        request_state
-                            .record_readonly_rejection(
-                                "kafka",
-                                operation_class,
-                                format!("{:?}", decoded.api_key),
-                                request_context.client_addr.clone(),
-                                request_context.client_process.clone(),
-                                Some(request_context.target_addr.clone()),
-                                "Kafka API is classified as a write operation",
-                            )
-                            .await;
-                        if let Some(response) = rejection_response(&decoded.request) {
-                            let payload = encode_response(
-                                decoded.header.correlation_id,
-                                decoded.api_key,
-                                decoded.header.request_api_version,
-                                &response,
-                            )?;
-                            let mut client_write = request_client_write.lock().await;
-                            write_frame(&mut *client_write, &payload).await?;
-                        } else if !matches!(
-                            &decoded.request,
-                            RequestKind::Produce(request) if request.acks == 0
-                        ) {
-                            loop {
-                                let notified = request_pending_changed.notified();
-                                if request_pending.lock().await.is_empty() {
-                                    break;
-                                }
-                                notified.await;
-                            }
-                            break 'requests;
-                        }
-                        continue;
-                    }
-                    let (kind, sequence) = if !replay_supports_api(decoded.api_key) {
-                        let reason = format!(
-                            "Kafka API {:?} is outside the replay V1 profile",
-                            decoded.api_key
-                        );
-                        request_safe.store(false, Ordering::Release);
-                        record_proxy_error(&request_state, &request_context, reason.clone())
-                            .await?;
-                        (PendingKind::Unsupported(reason), request_sequence)
-                    } else {
-                        match decoded.api_key {
-                            ApiKey::Produce => match records_from_produce(&decoded.request) {
-                                Ok(records) => {
-                                    let sequence = produce_sequence + 1;
-                                    produce_sequence += records.len() as u64;
-                                    (PendingKind::Produce(records), sequence)
-                                }
-                                Err(error) => {
-                                    request_safe.store(false, Ordering::Release);
-                                    record_proxy_error(
-                                        &request_state,
-                                        &request_context,
-                                        format!("unsupported Kafka Produce: {error}"),
-                                    )
-                                    .await?;
-                                    (
-                                        PendingKind::Unsupported(error.to_string()),
-                                        request_sequence,
-                                    )
-                                }
-                            },
-                            ApiKey::Fetch => (PendingKind::Fetch, request_sequence),
-                            _ => (PendingKind::Control, request_sequence),
-                        }
-                    };
-                    let request = PendingRequest {
-                        api_key: decoded.api_key,
-                        api_version: decoded.header.request_api_version,
-                        sequence,
-                        started: Instant::now(),
-                        kind,
-                    };
-                    if request_pending
-                        .lock()
-                        .await
-                        .insert(decoded.header.correlation_id, request)
-                        .is_some()
-                    {
-                        request_safe.store(false, Ordering::Release);
-                        record_proxy_error(
-                            &request_state,
-                            &request_context,
-                            format!(
-                                "duplicate in-flight Kafka correlation id {}",
-                                decoded.header.correlation_id
-                            ),
-                        )
-                        .await?;
-                    }
-                }
+            let decoded = match decode_request(&payload) {
+                Ok(decoded) => decoded,
                 Err(error) => {
                     request_safe.store(false, Ordering::Release);
                     record_proxy_error(
@@ -212,9 +131,153 @@ pub(crate) async fn handle_connected(
                         format!("Kafka request parse failed: {error}"),
                     )
                     .await?;
+                    if let Err(error) = write_frame(&mut upstream_write, &payload).await {
+                        if request_termination.observe_server_error(&error) {
+                            break;
+                        }
+                        return Err(error);
+                    }
+                    continue;
                 }
+            };
+
+            let operation_class = classify_api(decoded.api_key);
+            if request_state.access_decision(operation_class) == AccessDecision::Reject {
+                request_state
+                    .record_readonly_rejection(
+                        "kafka",
+                        operation_class,
+                        format!("{:?}", decoded.api_key),
+                        request_context.client_addr.clone(),
+                        request_context.client_process.clone(),
+                        Some(request_context.target_addr.clone()),
+                        "Kafka API is classified as a write operation",
+                    )
+                    .await;
+                if let Some(response) = rejection_response(&decoded.request) {
+                    let payload = encode_response(
+                        decoded.header.correlation_id,
+                        decoded.api_key,
+                        decoded.header.request_api_version,
+                        &response,
+                    )?;
+                    let mut client_write = request_client_write.lock().await;
+                    if let Err(error) = write_frame(&mut *client_write, &payload).await {
+                        if request_termination.observe_client_error(&error) {
+                            break 'requests;
+                        }
+                        return Err(error);
+                    }
+                } else if !matches!(
+                    &decoded.request,
+                    RequestKind::Produce(request) if request.acks == 0
+                ) {
+                    loop {
+                        let notified = request_pending_changed.notified();
+                        if request_pending.lock().await.is_empty() {
+                            break;
+                        }
+                        notified.await;
+                    }
+                    break 'requests;
+                }
+                continue;
             }
-            write_frame(&mut upstream_write, &payload).await?;
+
+            let kind = if !replay_supports_api(decoded.api_key) {
+                let reason = format!(
+                    "Kafka API {:?} is outside the replay V1 profile",
+                    decoded.api_key
+                );
+                request_safe.store(false, Ordering::Release);
+                record_proxy_error(&request_state, &request_context, reason.clone()).await?;
+                PendingKind::Unsupported(reason)
+            } else {
+                match decoded.api_key {
+                    ApiKey::Produce => match records_from_produce(&decoded.request) {
+                        Ok(records) => {
+                            let record_sequence = produce_sequence + 1;
+                            produce_sequence += records.len() as u64;
+                            PendingKind::Produce {
+                                record_sequence,
+                                records,
+                            }
+                        }
+                        Err(error) => {
+                            request_safe.store(false, Ordering::Release);
+                            record_proxy_error(
+                                &request_state,
+                                &request_context,
+                                format!("unsupported Kafka Produce: {error}"),
+                            )
+                            .await?;
+                            PendingKind::Unsupported(error.to_string())
+                        }
+                    },
+                    ApiKey::Fetch => {
+                        let RequestKind::Fetch(request) = &decoded.request else {
+                            unreachable!();
+                        };
+                        let mut topics = request
+                            .topics
+                            .iter()
+                            .map(|topic| topic.topic.to_string())
+                            .collect::<Vec<_>>();
+                        topics.sort();
+                        topics.dedup();
+                        PendingKind::Fetch(topics)
+                    }
+                    _ => PendingKind::Control,
+                }
+            };
+            let request = PendingRequest {
+                api_key: decoded.api_key,
+                api_version: decoded.header.request_api_version,
+                sequence: request_sequence,
+                started: Instant::now(),
+                kind,
+            };
+            let no_response = matches!(
+                &decoded.request,
+                RequestKind::Produce(request) if request.acks == 0
+            );
+            let correlation_id = decoded.header.correlation_id;
+            if no_response {
+                if let Err(error) = write_frame(&mut upstream_write, &payload).await {
+                    if request_termination.observe_server_error(&error) {
+                        break;
+                    }
+                    return Err(error);
+                }
+                record_client_request_without_response(
+                    &request_state,
+                    connection_id,
+                    &request_context,
+                    request,
+                )
+                .await?;
+                continue;
+            }
+            if request_pending
+                .lock()
+                .await
+                .insert(correlation_id, request)
+                .is_some()
+            {
+                request_safe.store(false, Ordering::Release);
+                record_proxy_error(
+                    &request_state,
+                    &request_context,
+                    format!("duplicate in-flight Kafka correlation id {correlation_id}"),
+                )
+                .await?;
+            }
+            if let Err(error) = write_frame(&mut upstream_write, &payload).await {
+                if request_termination.observe_server_error(&error) {
+                    break;
+                }
+                return Err(error);
+            }
         }
         let _ = upstream_write.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
@@ -226,101 +289,89 @@ pub(crate) async fn handle_connected(
     let response_context = context.clone();
     let response_client_write = client_write.clone();
     let response_pending_changed = pending_changed.clone();
+    let response_client_ended = client_ended.clone();
+    let response_termination = termination.clone();
     let responses = tokio::spawn(async move {
         let mut bytes = 0_u64;
         let mut delivery_sequence = 0_u64;
-        while let Some(payload) = read_frame(&mut upstream_read, max_frame_bytes).await? {
+        loop {
+            if response_termination.client_ended_first() {
+                break;
+            }
+            let read = tokio::select! {
+                _ = response_client_ended.notified() => break,
+                read = read_frame(&mut upstream_read, max_frame_bytes) => read,
+            };
+            let payload = match read {
+                Ok(Some(payload)) => payload,
+                Ok(None) => {
+                    response_termination.observe_server_eof();
+                    break;
+                }
+                Err(error) if response_termination.observe_server_error(&error) => break,
+                Err(error) => return Err(error),
+            };
             bytes += payload.len() as u64 + 4;
             let correlation_id = response_correlation_id(&payload)?;
             let request = response_pending.lock().await.remove(&correlation_id);
             response_pending_changed.notify_waiters();
-            match request {
-                Some(request) => {
-                    let PendingRequest {
-                        api_key,
-                        api_version,
-                        sequence,
-                        started,
-                        kind,
-                    } = request;
-                    match kind {
-                        PendingKind::Produce(records) => {
-                            match decode_response(&payload, api_key, api_version) {
-                                Ok(decoded) => {
-                                    record_produce_results(
-                                        &response_state,
-                                        connection_id,
-                                        &response_context,
-                                        ProduceCompletion {
-                                            sequence,
-                                            api_version,
-                                            started,
-                                            records,
-                                            response: decoded.response,
-                                        },
-                                    )
-                                    .await?;
-                                }
-                                Err(error) => {
-                                    response_safe.store(false, Ordering::Release);
-                                    record_proxy_error(
-                                        &response_state,
-                                        &response_context,
-                                        format!("Kafka Produce response parse failed: {error}"),
-                                    )
-                                    .await?;
-                                }
-                            }
-                        }
-                        PendingKind::Fetch => {
-                            match decode_response(&payload, api_key, api_version)
-                                .and_then(|decoded| records_from_fetch(&decoded.response))
-                            {
-                                Ok(records) => {
-                                    for record in records {
-                                        delivery_sequence += 1;
-                                        record_delivery(
-                                            &response_state,
-                                            connection_id,
-                                            delivery_sequence,
-                                            &response_context,
-                                            api_version,
-                                            record,
-                                        )
-                                        .await?;
-                                    }
-                                }
-                                Err(error) => {
-                                    response_safe.store(false, Ordering::Release);
-                                    record_proxy_error(
-                                        &response_state,
-                                        &response_context,
-                                        format!("Kafka Fetch response parse failed: {error}"),
-                                    )
-                                    .await?;
-                                }
-                            }
-                        }
-                        PendingKind::Unsupported(reason) => {
-                            let _ = reason;
-                        }
-                        PendingKind::Control => {}
+            let Some(request) = request else {
+                response_safe.store(false, Ordering::Release);
+                record_proxy_error(
+                    &response_state,
+                    &response_context,
+                    format!(
+                        "Kafka response correlation id {correlation_id} has no pending request"
+                    ),
+                )
+                .await?;
+                continue;
+            };
+            if response_termination.client_ended_first() {
+                record_client_terminated_request(
+                    &response_state,
+                    connection_id,
+                    &mut delivery_sequence,
+                    &response_context,
+                    request,
+                )
+                .await?;
+                break;
+            }
+            let write_result = {
+                let mut client_write = response_client_write.lock().await;
+                write_frame(&mut *client_write, &payload).await
+            };
+            match write_result {
+                Ok(()) => {
+                    if let Err(error) = record_completed_response(
+                        &response_state,
+                        connection_id,
+                        &mut delivery_sequence,
+                        &response_context,
+                        request,
+                        &payload,
+                    )
+                    .await
+                    {
+                        response_safe.store(false, Ordering::Release);
+                        record_proxy_error(&response_state, &response_context, error.to_string())
+                            .await?;
                     }
                 }
-                None => {
-                    response_safe.store(false, Ordering::Release);
-                    record_proxy_error(
+                Err(error) if response_termination.observe_client_error(&error) => {
+                    record_client_terminated_request(
                         &response_state,
+                        connection_id,
+                        &mut delivery_sequence,
                         &response_context,
-                        format!(
-                            "Kafka response correlation id {correlation_id} has no pending request"
-                        ),
+                        request,
                     )
                     .await?;
+                    break;
                 }
+                Err(error) => return Err(error),
             }
-            let mut client_write = response_client_write.lock().await;
-            write_frame(&mut *client_write, &payload).await?;
         }
         let _ = response_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
@@ -342,14 +393,34 @@ pub(crate) async fn handle_connected(
             (0, 0, Some(error.to_string()))
         }
     };
-    if !pending.lock().await.is_empty() {
-        replay_safe.store(false, Ordering::Release);
-        record_proxy_error(
-            &state,
-            &context,
-            "Kafka connection closed with incomplete requests".to_string(),
-        )
-        .await?;
+    let incomplete = pending
+        .lock()
+        .await
+        .drain()
+        .map(|(_, request)| request)
+        .collect::<Vec<_>>();
+    if !incomplete.is_empty() {
+        if termination.client_ended_first() {
+            let mut delivery_sequence = 0;
+            for request in incomplete {
+                record_client_terminated_request(
+                    &state,
+                    connection_id,
+                    &mut delivery_sequence,
+                    &context,
+                    request,
+                )
+                .await?;
+            }
+        } else {
+            replay_safe.store(false, Ordering::Release);
+            record_proxy_error(
+                &state,
+                &context,
+                "Kafka connection closed with incomplete requests".to_string(),
+            )
+            .await?;
+        }
     }
     let safe = replay_safe.load(Ordering::Acquire);
     record_connection(
@@ -370,140 +441,139 @@ pub(crate) async fn handle_connected(
     Ok(())
 }
 
-async fn record_produce_results(
+async fn record_client_request_without_response(
     state: &AppState,
     connection_id: Uuid,
     context: &KafkaConnectionContext,
-    completion: ProduceCompletion,
+    request: PendingRequest,
 ) -> Result<()> {
-    let ResponseKind::Produce(response) = completion.response else {
-        return Err(anyhow!("Kafka Produce response decoded as another API"));
+    let PendingKind::Produce {
+        record_sequence,
+        records,
+    } = request.kind
+    else {
+        return Err(anyhow!("Kafka no-response request was not Produce"));
     };
-    for (index, record) in completion.records.into_iter().enumerate() {
-        let error_code = response
-            .responses
-            .iter()
-            .find(|topic| topic.name.as_str() == record.topic)
-            .and_then(|topic| {
-                topic
-                    .partition_responses
-                    .iter()
-                    .find(|partition| partition.index == record.partition)
-            })
-            .map(|partition| partition.error_code);
-        let replay_safe = error_code == Some(0);
-        let warnings = if replay_safe {
-            Vec::new()
-        } else {
-            vec![format!(
-                "Kafka Produce result is unsupported for replay: error_code={error_code:?}"
-            )]
-        };
-        let captured = capture_record(record, state.config().recording.max_body_bytes);
-        let replay_safe = replay_safe && captured.replay_safe;
-        record_event(
-            state,
-            RecorderEvent::KafkaProduce(KafkaProduceEvent {
-                id: Uuid::new_v4(),
-                connection_id,
-                sequence: completion.sequence + index as u64,
-                timestamp: Utc::now(),
-                client_addr: context.client_addr.clone(),
-                client_process: context.client_process.clone(),
-                target_host: context.target_host.clone(),
-                target_port: context.target_port,
-                target_addr: context.target_addr.clone(),
-                upstream_addr: context.upstream_addr.clone(),
-                api_version: completion.api_version,
-                topic: captured.topic,
-                key: captured.key,
-                headers: captured.headers,
-                value: captured.value,
-                result: if error_code == Some(0) {
-                    "accepted".to_string()
-                } else {
-                    "error".to_string()
-                },
-                duration_ms: completion.started.elapsed().as_millis(),
-                replay_safe,
-                parse_warnings: warnings,
-            }),
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-async fn record_delivery(
-    state: &AppState,
-    connection_id: Uuid,
-    sequence: u64,
-    context: &KafkaConnectionContext,
-    api_version: i16,
-    record: KafkaRecord,
-) -> Result<()> {
-    let timestamp = record.timestamp_ms;
-    let captured = capture_record(record, state.config().recording.max_body_bytes);
-    record_event(
+    record_produce_completion(
         state,
-        RecorderEvent::KafkaDelivery(KafkaDeliveryEvent {
-            id: Uuid::new_v4(),
-            connection_id,
-            sequence,
-            timestamp: Utc::now(),
-            client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
-            target_host: context.target_host.clone(),
-            target_port: context.target_port,
-            target_addr: context.target_addr.clone(),
-            upstream_addr: context.upstream_addr.clone(),
-            api_version,
-            topic: captured.topic,
-            key: captured.key,
-            headers: captured.headers,
-            value: captured.value,
-            message_timestamp_ms: timestamp,
-            replay_safe: captured.replay_safe,
-            parse_warnings: Vec::new(),
-        }),
+        connection_id,
+        context,
+        ProduceCompletion {
+            request_sequence: request.sequence,
+            record_sequence,
+            api_version: request.api_version,
+            started: request.started,
+            records,
+            response: None,
+            outcome: DependencyExchangeOutcome::NoResponse,
+        },
     )
     .await
 }
 
-struct CapturedRecord {
-    topic: String,
-    key: Option<crate::recorder::BodyCapture>,
-    headers: Vec<KafkaHeaderCapture>,
-    value: Option<crate::recorder::BodyCapture>,
-    replay_safe: bool,
+async fn record_completed_response(
+    state: &AppState,
+    connection_id: Uuid,
+    delivery_sequence: &mut u64,
+    context: &KafkaConnectionContext,
+    request: PendingRequest,
+    payload: &Bytes,
+) -> Result<()> {
+    match request.kind {
+        PendingKind::Produce {
+            record_sequence,
+            records,
+        } => {
+            let response = decode_response(payload, request.api_key, request.api_version)?.response;
+            record_produce_completion(
+                state,
+                connection_id,
+                context,
+                ProduceCompletion {
+                    request_sequence: request.sequence,
+                    record_sequence,
+                    api_version: request.api_version,
+                    started: request.started,
+                    records,
+                    response: Some(response),
+                    outcome: DependencyExchangeOutcome::Response,
+                },
+            )
+            .await
+        }
+        PendingKind::Fetch(topics) => {
+            let response = decode_response(payload, request.api_key, request.api_version)?.response;
+            let records = records_from_fetch(&response)?;
+            record_fetch_completion(
+                state,
+                connection_id,
+                delivery_sequence,
+                context,
+                FetchCompletion {
+                    sequence: request.sequence,
+                    api_version: request.api_version,
+                    started: request.started,
+                    topics,
+                    records,
+                    outcome: DependencyExchangeOutcome::Response,
+                },
+            )
+            .await
+        }
+        PendingKind::Control | PendingKind::Unsupported(_) => Ok(()),
+    }
 }
 
-fn capture_record(record: KafkaRecord, max_body_bytes: usize) -> CapturedRecord {
-    let key = record.key.map(|value| capture_body(&value, max_body_bytes));
-    let value = record
-        .value
-        .map(|value| capture_body(&value, max_body_bytes));
-    let headers = record
-        .headers
-        .into_iter()
-        .map(|header| KafkaHeaderCapture {
-            name: header.name,
-            value: header
-                .value
-                .map(|value| capture_body(&value, max_body_bytes)),
-        })
-        .collect::<Vec<_>>();
-    let replay_safe = key.as_ref().is_none_or(|value| !value.truncated)
-        && value.as_ref().is_none_or(|value| !value.truncated)
-        && headers
-            .iter()
-            .all(|header| header.value.as_ref().is_none_or(|value| !value.truncated));
-    CapturedRecord {
-        topic: record.topic,
-        key,
-        headers,
-        value,
-        replay_safe,
+async fn record_client_terminated_request(
+    state: &AppState,
+    connection_id: Uuid,
+    delivery_sequence: &mut u64,
+    context: &KafkaConnectionContext,
+    request: PendingRequest,
+) -> Result<()> {
+    match request.kind {
+        PendingKind::Produce {
+            record_sequence,
+            records,
+        } => {
+            record_produce_completion(
+                state,
+                connection_id,
+                context,
+                ProduceCompletion {
+                    request_sequence: request.sequence,
+                    record_sequence,
+                    api_version: request.api_version,
+                    started: request.started,
+                    records,
+                    response: None,
+                    outcome: DependencyExchangeOutcome::ClientTerminated,
+                },
+            )
+            .await
+        }
+        PendingKind::Fetch(topics) => {
+            record_fetch_completion(
+                state,
+                connection_id,
+                delivery_sequence,
+                context,
+                FetchCompletion {
+                    sequence: request.sequence,
+                    api_version: request.api_version,
+                    started: request.started,
+                    topics,
+                    records: Vec::new(),
+                    outcome: DependencyExchangeOutcome::ClientTerminated,
+                },
+            )
+            .await
+        }
+        PendingKind::Control => Ok(()),
+        PendingKind::Unsupported(reason) => {
+            let _ = reason;
+            Ok(())
+        }
     }
 }
 

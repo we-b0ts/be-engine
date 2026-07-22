@@ -116,6 +116,117 @@ async fn blocked_select_for_update_returns_mysql_error_without_reaching_upstream
     assert_blocked_query("SELECT * FROM users WHERE id = 1 FOR UPDATE").await;
 }
 
+#[tokio::test]
+async fn pending_query_records_client_termination() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    let state = AppState::new(config).await.unwrap();
+
+    let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client_addr = client_listener.local_addr().unwrap();
+    let client = tokio::spawn(TcpStream::connect(client_addr));
+    let (proxy_client, _) = client_listener.accept().await.unwrap();
+    let mut client = client.await.unwrap().unwrap();
+
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream_listener.local_addr().unwrap();
+    let proxy_upstream = tokio::spawn(TcpStream::connect(upstream_addr));
+    let (mut upstream, _) = upstream_listener.accept().await.unwrap();
+    let proxy_upstream = proxy_upstream.await.unwrap().unwrap();
+
+    let handler = tokio::spawn(handle_connected_mysql(
+        proxy_client,
+        proxy_upstream,
+        state.clone(),
+        MysqlConnectionContext {
+            route_name: Some("test".to_string()),
+            listen_addr: client_addr.to_string(),
+            client_addr: None,
+            client_process: None,
+            target_host: Some("mysql.test".to_string()),
+            target_port: Some(3306),
+            target_addr: Some("mysql.test:3306".to_string()),
+            upstream_addr: upstream_addr.to_string(),
+        },
+    ));
+
+    upstream
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 0,
+                payload: vec![0x0a],
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(read_packet(&mut client).await.unwrap().is_some());
+    client
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 1,
+                payload: login_payload("pluto"),
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(read_packet(&mut upstream).await.unwrap().is_some());
+    upstream
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 2,
+                payload: vec![0x00],
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(read_packet(&mut client).await.unwrap().is_some());
+
+    let sql = "SELECT timeout_value";
+    client
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 0,
+                payload: [vec![0x03], sql.as_bytes().to_vec()].concat(),
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    let forwarded = read_packet(&mut upstream).await.unwrap().unwrap();
+    assert_eq!(&forwarded.payload[1..], sql.as_bytes());
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    client.shutdown().await.unwrap();
+    drop(client);
+    assert!(read_packet(&mut upstream).await.unwrap().is_none());
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    let exchange = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|value| value["event_type"] == "mysql_exchange" && value["sql"] == sql)
+        .unwrap();
+    assert_eq!(exchange["outcome"], "client_terminated");
+    assert_eq!(exchange["response"]["status"], "client_terminated");
+    assert!(exchange["parse_warnings"].as_array().unwrap().is_empty());
+    assert!(exchange["duration_ms"].as_u64().unwrap() >= 50);
+}
+
 async fn assert_blocked_query(sql: &str) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();
@@ -329,10 +440,17 @@ async fn allowed_insert_reaches_upstream_and_records_exchange_and_audit() {
     let response = read_packet(&mut client).await.unwrap().unwrap();
     assert_eq!(response.payload[0], 0x00);
 
-    state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let mut traffic = String::new();
+    for _ in 0..100 {
+        state.recorder().flush_traffic().await.unwrap();
+        traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
+        if traffic.contains(r#""event_type":"mysql_exchange""#) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(traffic.contains(r#""event_type":"access_policy_allow""#));
     assert!(traffic.contains(r#""rule":"allow-request-log""#));
     assert!(traffic.contains(r#""resources":["pluto.request_log"]"#));

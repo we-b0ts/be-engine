@@ -116,6 +116,7 @@ impl Recorder {
                     | "memcached_exchange"
                     | "kafka_connection"
                     | "kafka_produce"
+                    | "kafka_fetch"
                     | "kafka_delivery"
             ) && value
                 .get("replay_safe")
@@ -436,6 +437,7 @@ mod tests {
                 row_count: 0,
                 rows_truncated: false,
             },
+            outcome: crate::DependencyExchangeOutcome::Response,
             duration_ms: 1,
             parse_warnings: Vec::new(),
         }

@@ -5,6 +5,7 @@ use chrono::Utc;
 use serde_json::{Number, Value};
 use uuid::Uuid;
 
+use crate::DependencyExchangeOutcome;
 use crate::mysql::wire::{ClientCommand, MysqlPacket};
 use crate::recorder::{
     MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse, MysqlResponseEvent, MysqlValue,
@@ -230,6 +231,11 @@ impl MysqlSemanticTracker {
             statement_id: active.statement_id,
             params: active.params,
             response,
+            outcome: if fallback_status == "client_terminated" {
+                DependencyExchangeOutcome::ClientTerminated
+            } else {
+                DependencyExchangeOutcome::Response
+            },
             duration_ms: duration_ms.unwrap_or_else(|| active.started.elapsed().as_millis()),
             parse_warnings: active.parse_warnings,
         })
@@ -302,9 +308,11 @@ impl MysqlSemanticTracker {
         };
 
         if active.packets.is_empty() {
-            active
-                .parse_warnings
-                .push("no server response packets were captured".to_string());
+            if status != "client_terminated" {
+                active
+                    .parse_warnings
+                    .push("no server response packets were captured".to_string());
+            }
             return response;
         }
 
@@ -332,7 +340,7 @@ impl MysqlSemanticTracker {
                     &mut active.parse_warnings,
                 );
             }
-            "error" | "eof" | "incomplete" => {}
+            "error" | "eof" | "incomplete" | "client_terminated" => {}
             _ => {
                 active
                     .parse_warnings

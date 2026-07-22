@@ -66,9 +66,21 @@ prepared parameters, column schema, or untruncated rows is a recording risk.
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.
 
+For ordinary MySQL, Redis, Memcached, and Kafka Produce/Fetch responses, delay
+delivery by the recorded semantic exchange `duration_ms`; do not collapse
+dependency latency to an immediate response because callers may enforce
+aggregate deadlines, retry budgets, or races above the protocol client. For a recorded
+`client_terminated` outcome, send zero response bytes and wait for EOF, FIN, or
+RST on that same connection. Consume the exchange only after the client
+termination arrives in the recorded timing window. Replay must not proactively
+close the connection to manufacture the outcome; the watchdog may mark replay
+dirty and release test resources only after the client fails to terminate.
+
 For Kafka, use the recorder-supported client profile and semantic produce,
-delivery, and fetch evidence. Match stable topic, key, headers, and value
-semantics. Transactions, authentication, compression, unsupported APIs, unsafe
+fetch, and delivery evidence. Match stable topic, key, headers, and value
+semantics, preserve Fetch-to-delivery association, and reserve an exchange
+until its delayed response is delivered or its expected client termination is
+observed. Transactions, authentication, compression, unsupported APIs, unsafe
 captures, or broker errors remain incomplete unless the recorder explicitly
 supports them.
 

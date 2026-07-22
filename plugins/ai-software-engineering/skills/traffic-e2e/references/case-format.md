@@ -156,13 +156,24 @@ Common semantic records:
   request semantics, CAS/quiet/noreply metadata, and exact response frames
 - `kafka_connection`: business target and replay-safety metadata
 - `kafka_produce`: exact topic, nullable key/value bytes, headers, and accepted
-  result for an outbound Kafka record
+  result for an outbound Kafka record, grouped by connection/request sequence
+- `kafka_fetch`: requested topic set plus response or client-termination timing
 - `kafka_delivery`: exact topic, nullable key/value bytes, headers, and timestamp
-  for a Kafka record delivered to the application
+  for a Kafka record delivered to the application, associated to its Fetch
 - `tcp_gateway_connection`: captured TCP/fake-IP dependency connection metadata
 - `udp_datagram`: captured UDP/fake-IP dependency datagram or push side effect
 - `mysql_tls_rejected`: MySQL TLS rejection event; MySQL TLS MITM is out of scope
 - `proxy_error`: recorder or dependency proxy error
+
+Semantic MySQL, Redis, Memcached, and Kafka Produce/Fetch exchanges carry
+`duration_ms` and an `outcome`. Replay waits the recorded duration before
+delivering a normal response. A replay-safe `client_terminated` exchange sends
+no response bytes and remains unconsumed until the same physical client
+connection closes or resets in the recorded timing window. Replay does not
+proactively close that connection; a missing, early, or late client
+termination is dirty replay evidence. Protocol commands such as MySQL
+statement close/quit, Memcached noreply/quiet, and Kafka Produce with `acks=0`
+remain `no_response` behavior rather than client timeouts.
 
 Case dependency records also include `case_dependency_matched_by`:
 
@@ -257,8 +268,12 @@ Prefer `mysql_exchange` over raw MySQL records. Important fields:
 - `sql`: SQL text, when parsed
 - `statement_id`: prepared statement id; connection-local only
 - `params`: parsed prepared statement parameters, when available
-- `response.status`: `resultset`, `ok`, `error`, `incomplete`, or another parser
-  status
+- `outcome`: `response`, or `client_terminated` when the application ended the
+  connection while waiting for the dependency; protocol commands that
+  intrinsically have no response use `no_response` where applicable
+- `duration_ms`: elapsed time from the complete request to the recorded outcome
+- `response.status`: `resultset`, `ok`, `error`, `client_terminated`,
+  `incomplete`, or another parser status
 - `response.columns`: decoded resultset column schema for replay and target
   adapter type mapping
 - `response.rows`: resultset rows as arrays of MySQL values

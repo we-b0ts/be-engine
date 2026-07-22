@@ -11,9 +11,11 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::{
-    ReplayProtocol, ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey,
-    normalize_host, push_success_detail, register_replay_target,
+    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
+    ReplayState, ReplayTarget, TargetKey, normalize_host, push_success_detail,
+    register_replay_target,
 };
+use crate::DependencyExchangeOutcome;
 use crate::memcached::{
     BufferedReader as MemcachedBufferedReader, MemcachedRequest, MemcachedWireProtocol,
     read_binary_frame, read_text_request,
@@ -52,6 +54,10 @@ pub(super) struct RecordedExchange {
     #[serde(default)]
     response_frames: Vec<RecordedCapture>,
     no_response: bool,
+    #[serde(default)]
+    outcome: DependencyExchangeOutcome,
+    #[serde(default)]
+    duration_ms: u64,
     replay_safe: bool,
 }
 
@@ -73,7 +79,17 @@ struct ReplayExchange {
     value: Option<Vec<u8>>,
     extras: Option<Vec<u8>>,
     response_frames: Vec<Vec<u8>>,
-    consumed: bool,
+    status: ReplayExchangeStatus,
+    timing: ReplayExchangeTiming,
+}
+
+#[derive(Debug, Clone)]
+struct MatchedMemcachedExchange {
+    index: usize,
+    connection_id: Uuid,
+    response_frames: Vec<Vec<u8>>,
+    timing: ReplayExchangeTiming,
+    report: CommandMatchedReport,
 }
 
 #[derive(Debug, Default)]
@@ -182,6 +198,12 @@ impl MemcachedReplayState {
             .iter()
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
+        let outcome = if record.no_response {
+            DependencyExchangeOutcome::NoResponse
+        } else {
+            record.outcome
+        };
+        let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, outcome);
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -191,7 +213,8 @@ impl MemcachedReplayState {
             value,
             extras,
             response_frames,
-            consumed: false,
+            status: ReplayExchangeStatus::Available,
+            timing,
         });
         Ok(())
     }
@@ -203,10 +226,10 @@ impl MemcachedReplayState {
         bound_connection: Option<Uuid>,
         wire_protocol: MemcachedWireProtocol,
         request: &MemcachedRequest,
-    ) -> Option<(Uuid, Vec<Vec<u8>>, bool)> {
+    ) -> Option<MatchedMemcachedExchange> {
         let wire = wire_protocol.as_str();
         let index = preferred_index(&self.exchanges, active_case_id, |index, exchange| {
-            !exchange.consumed
+            exchange.status.is_available()
                 && is_lane_head(&self.exchanges, index)
                 && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
                 && target_matches(
@@ -229,11 +252,17 @@ impl MemcachedReplayState {
                 && exchange.record.noreply == request.noreply
         })?;
         let exchange = &mut self.exchanges[index];
-        exchange.consumed = true;
-        push_success_detail(
-            &mut self.events.matched_count,
-            &mut self.events.matched,
-            CommandMatchedReport {
+        exchange.status = if exchange.timing.outcome().is_client_terminated() {
+            ReplayExchangeStatus::AwaitingClientTermination
+        } else {
+            ReplayExchangeStatus::Responding
+        };
+        Some(MatchedMemcachedExchange {
+            index,
+            connection_id: exchange.record.connection_id,
+            response_frames: exchange.response_frames.clone(),
+            timing: exchange.timing,
+            report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
                 index,
@@ -242,12 +271,30 @@ impl MemcachedReplayState {
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
             },
+        })
+    }
+
+    fn complete_exchange(&mut self, matched: &MatchedMemcachedExchange) {
+        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
+            exchange.status = ReplayExchangeStatus::Consumed;
+        }
+        push_success_detail(
+            &mut self.events.matched_count,
+            &mut self.events.matched,
+            matched.report.clone(),
         );
-        Some((
-            exchange.record.connection_id,
-            exchange.response_frames.clone(),
-            exchange.record.no_response,
-        ))
+    }
+
+    fn fail_exchange(&mut self, matched: &MatchedMemcachedExchange, reason: String) {
+        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
+            exchange.status = ReplayExchangeStatus::Failed;
+        }
+        self.events.unsafe_events.push(CommandRequestReport {
+            case_id: matched.report.case_id.clone(),
+            target: matched.report.target.clone(),
+            command: matched.report.command.clone(),
+            reason,
+        });
     }
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
@@ -317,11 +364,10 @@ pub(super) async fn handle_connection(
                 )
                 .await;
                 match matched {
-                    Some((frames, no_response)) => {
-                        if !no_response {
-                            for frame in frames {
-                                reader.inner.write_all(&frame).await?;
-                            }
+                    Some(matched) => {
+                        if deliver_memcached_exchange(&mut reader, &state, &matched).await? {
+                            report_writer.request();
+                            break;
                         }
                     }
                     None => {
@@ -381,14 +427,15 @@ pub(super) async fn handle_connection(
                 )
                 .await;
                 match matched {
-                    Some((frames, no_response)) => {
-                        if !no_response {
-                            for mut response in frames {
-                                if response.len() >= 16 {
-                                    response[12..16].copy_from_slice(&frame.opaque.to_be_bytes());
-                                }
-                                reader.inner.write_all(&response).await?;
+                    Some(mut matched) => {
+                        for response in &mut matched.response_frames {
+                            if response.len() >= 16 {
+                                response[12..16].copy_from_slice(&frame.opaque.to_be_bytes());
                             }
+                        }
+                        if deliver_memcached_exchange(&mut reader, &state, &matched).await? {
+                            report_writer.request();
+                            break;
                         }
                     }
                     None => {
@@ -403,6 +450,53 @@ pub(super) async fn handle_connection(
         }
     }
     Ok(())
+}
+
+async fn deliver_memcached_exchange(
+    reader: &mut MemcachedBufferedReader<&mut TcpStream>,
+    state: &Arc<Mutex<ReplayState>>,
+    matched: &MatchedMemcachedExchange,
+) -> Result<bool> {
+    if matched.timing.outcome().is_client_terminated() {
+        let result = if reader.buffer.is_empty() {
+            matched
+                .timing
+                .await_client_termination(&mut reader.inner)
+                .await
+                .map(|_| ())
+        } else {
+            Err(anyhow!(
+                "client sent another Memcached request instead of terminating the connection"
+            ))
+        };
+        match result {
+            Ok(()) => {
+                state.lock().await.memcached.complete_exchange(matched);
+                return Ok(true);
+            }
+            Err(error) => {
+                state
+                    .lock()
+                    .await
+                    .memcached
+                    .fail_exchange(matched, error.to_string());
+                return Err(error);
+            }
+        }
+    }
+
+    matched.timing.delay_response().await;
+    for response in &matched.response_frames {
+        if let Err(error) = reader.inner.write_all(response).await {
+            state.lock().await.memcached.fail_exchange(
+                matched,
+                format!("failed to deliver recorded Memcached response: {error}"),
+            );
+            return Err(error.into());
+        }
+    }
+    state.lock().await.memcached.complete_exchange(matched);
+    Ok(false)
 }
 
 async fn record_runtime_unsafe(
@@ -429,7 +523,7 @@ async fn match_memcached_request(
     bound_connection: &mut Option<Uuid>,
     wire: MemcachedWireProtocol,
     request: &MemcachedRequest,
-) -> Option<(Vec<Vec<u8>>, bool)> {
+) -> Option<MatchedMemcachedExchange> {
     let mut state = state.lock().await;
     let active_case_id = state.active_case_id.clone();
     if memcached_is_unsupported(request) {
@@ -452,9 +546,9 @@ async fn match_memcached_request(
         wire,
         request,
     ) {
-        Some((connection_id, frames, no_response)) => {
-            bound_connection.get_or_insert(connection_id);
-            Some((frames, no_response))
+        Some(matched) => {
+            bound_connection.get_or_insert(matched.connection_id);
+            Some(matched)
         }
         None => {
             state.memcached.events.unmatched.push(CommandRequestReport {
@@ -549,7 +643,7 @@ where
 fn is_lane_head(exchanges: &[ReplayExchange], candidate: usize) -> bool {
     let exchange = &exchanges[candidate];
     !exchanges.iter().any(|other| {
-        !other.consumed
+        !other.status.is_consumed()
             && other.record.connection_id == exchange.record.connection_id
             && other.record.sequence < exchange.record.sequence
     })
@@ -574,7 +668,7 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
     exchanges
         .iter()
         .enumerate()
-        .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
+        .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
         .map(|(index, exchange)| CommandUnusedReport {
             index,
             case_id: exchange.case_id.clone(),
