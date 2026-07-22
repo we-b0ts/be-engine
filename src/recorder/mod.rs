@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use self::run::{RecorderRunState, new_run_id};
 use anyhow::{Context, Result};
+use chrono::NaiveDateTime;
 use serde::Serialize;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -57,11 +58,15 @@ impl Recorder {
                 capacity: defaults.jsonl_buffer_capacity_bytes,
                 flush_interval: Duration::from_millis(defaults.jsonl_flush_interval_ms),
             },
+            None,
         )
         .await
     }
 
-    pub(crate) async fn new_with_recording_config(config: &RecordingConfig) -> Result<Self> {
+    pub(crate) async fn new_with_recording_config_and_run_id(
+        config: &RecordingConfig,
+        run_id: Option<String>,
+    ) -> Result<Self> {
         Self::new_with_options(
             &config.output_dir,
             config.access_policy,
@@ -70,8 +75,14 @@ impl Recorder {
                 capacity: config.jsonl_buffer_capacity_bytes,
                 flush_interval: Duration::from_millis(config.jsonl_flush_interval_ms),
             },
+            run_id,
         )
         .await
+    }
+
+    #[cfg(test)]
+    async fn new_with_recording_config(config: &RecordingConfig) -> Result<Self> {
+        Self::new_with_recording_config_and_run_id(config, None).await
     }
 
     async fn new_with_options(
@@ -79,12 +90,19 @@ impl Recorder {
         access_policy: RecordingAccessPolicy,
         traffic_jsonl: TrafficJsonlMode,
         buffer_settings: jsonl::JsonlBufferSettings,
+        run_id: Option<String>,
     ) -> Result<Self> {
         let output_dir = output_dir.as_ref();
         tokio::fs::create_dir_all(output_dir)
             .await
             .with_context(|| format!("failed to create recording dir {}", output_dir.display()))?;
-        let run_id = new_run_id();
+        let run_id = run_id.unwrap_or_else(new_run_id);
+        anyhow::ensure!(
+            run_id.len() == 14
+                && run_id.bytes().all(|byte| byte.is_ascii_digit())
+                && NaiveDateTime::parse_from_str(&run_id, "%Y%m%d%H%M%S").is_ok(),
+            "recording run ID must be a valid 14-digit UTC timestamp"
+        );
         let run_dir = output_dir.join(&run_id);
         tokio::fs::create_dir(&run_dir)
             .await
@@ -386,6 +404,31 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn explicit_run_id_uses_exact_directory_and_rejects_duplicates() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = "20260721153045";
+        let config = RecordingConfig {
+            output_dir: temp.path().to_path_buf(),
+            ..RecordingConfig::default()
+        };
+        let recorder =
+            Recorder::new_with_recording_config_and_run_id(&config, Some(run_id.to_string()))
+                .await
+                .unwrap();
+        assert_eq!(recorder.run_dir.as_ref(), &temp.path().join(run_id));
+        drop(recorder);
+
+        let error =
+            match Recorder::new_with_recording_config_and_run_id(&config, Some(run_id.to_string()))
+                .await
+            {
+                Ok(_) => panic!("duplicate explicit run ID must fail"),
+                Err(error) => error,
+            };
+        assert!(format!("{error:#}").contains("failed to create recording run dir"));
     }
 
     #[tokio::test]

@@ -14,6 +14,9 @@ pub(super) struct RecordArgs {
     /// Recorder TOML configuration.
     #[arg(long)]
     config: PathBuf,
+    /// Explicit 14-digit UTC recording run identifier.
+    #[arg(long, value_parser = parse_run_id)]
+    run_id: Option<String>,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -33,7 +36,7 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
     let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
-    let state = AppState::new(config).await?;
+    let state = AppState::new_with_run_id(config, args.run_id).await?;
     let mut interception = if args.dns && !args.no_dns {
         Some(Guard::enable(
             record_dns_config()?,
@@ -47,6 +50,17 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
         guard.disable();
     }
     result
+}
+
+fn parse_run_id(value: &str) -> std::result::Result<String, String> {
+    if value.len() == 14
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && chrono::NaiveDateTime::parse_from_str(value, "%Y%m%d%H%M%S").is_ok()
+    {
+        Ok(value.to_string())
+    } else {
+        Err("run ID must contain exactly 14 ASCII digits (YYYYMMDDHHMMSS)".to_string())
+    }
 }
 
 fn preflight(config: &AppConfig) -> Result<()> {
@@ -262,6 +276,40 @@ mod tests {
     struct TestCli {
         #[command(flatten)]
         record: RecordArgs,
+    }
+
+    #[test]
+    fn accepts_only_valid_explicit_run_ids() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--config",
+            "recorder.toml",
+            "--run-id",
+            "20260721153045",
+        ])
+        .unwrap();
+        assert_eq!(cli.record.run_id.as_deref(), Some("20260721153045"));
+
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "--config",
+                "recorder.toml",
+                "--run-id",
+                "20260230153045",
+            ])
+            .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "--config",
+                "recorder.toml",
+                "--run-id",
+                "../../recording",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
