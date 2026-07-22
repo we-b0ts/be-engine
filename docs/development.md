@@ -28,6 +28,27 @@ development checks or explicit host trust-store tools only.
 
 ## Running Locally
 
+Run online baseline/candidate mirroring with:
+
+```bash
+traffic-e2e compare --config config/compare.example.toml
+```
+
+Compare mode does not compare responses. It returns the baseline response and
+records the request plus baseline and candidate responses under
+`<recording.output_dir>/comparisons/<run-id>/`. It does not load replay policy,
+record dependencies, install interception rules, or initialize a MITM CA.
+Explicit named HTTP gateway rules and methods are required. Only GET, HEAD, and
+OPTIONS may be mirrored unless `[compare].allow_side_effecting_methods = true`;
+side-effecting methods must still be explicitly listed in a rule. Reaching an
+API case limit suppresses later case files for that API but does not stop
+mirroring.
+
+Compare artifacts carry `case-kind.json` with `kind = online_compare` and are
+not replay inputs. `prepare`, case grouping, and replay reject them explicitly.
+The process creates one run for its lifetime; restart it or provide a new
+`--run-id` to reset case quotas. Archive and remove old runs externally.
+
 Run the service with:
 
 ```bash

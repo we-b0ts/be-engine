@@ -5,25 +5,25 @@ use crate::config::{HttpGatewayRuleConfig, VerifiedApiExcludesConfig};
 use crate::path_pattern::{matches_path_pattern, segments};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Match {
-    pub(super) name: String,
-    pub(super) case_path_patterns: Vec<String>,
+pub(crate) struct Match {
+    pub(crate) name: String,
+    pub(crate) case_path_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CaseGroup {
-    pub(super) pattern: String,
-    pub(super) directory: String,
+pub(crate) struct CaseGroup {
+    pub(crate) pattern: String,
+    pub(crate) directory: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum RuleDecision {
+pub(crate) enum RuleDecision {
     Matched(Match),
     Excluded { name: String },
     Unmatched,
 }
 
-pub(super) fn evaluate_request(
+pub(crate) fn evaluate_request(
     verified_excludes: &VerifiedApiExcludesConfig,
     exclude_rules: &[HttpGatewayRuleConfig],
     rules: &[HttpGatewayRuleConfig],
@@ -70,7 +70,7 @@ pub(super) fn evaluate_request(
         .map_or(RuleDecision::Unmatched, RuleDecision::Matched)
 }
 
-pub(super) fn resolve_case_group(uri: &Uri, patterns: &[String]) -> CaseGroup {
+pub(crate) fn resolve_case_group(uri: &Uri, patterns: &[String]) -> CaseGroup {
     let path = uri.path();
     let pattern = patterns
         .iter()
@@ -84,7 +84,7 @@ pub(super) fn resolve_case_group(uri: &Uri, patterns: &[String]) -> CaseGroup {
     }
 }
 
-pub(super) fn request_authority(uri: &Uri, headers: &HeaderMap) -> Option<String> {
+pub(crate) fn request_authority(uri: &Uri, headers: &HeaderMap) -> Option<String> {
     uri.authority().map(ToString::to_string).or_else(|| {
         headers
             .get(HOST)
