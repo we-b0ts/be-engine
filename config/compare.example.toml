@@ -2,7 +2,7 @@
 # does not compare them and does not initialize any dependency interception.
 [compare]
 baseline_upstream = "http://127.0.0.1:7171"
-candidate_upstream = "http://127.0.0.1:17171"
+candidate_upstream = "http://127.0.0.1:6161"
 upstream_timeout_ms = 30000
 max_in_flight = 256
 summary_flush_interval_ms = 1000
@@ -45,7 +45,7 @@ case_path_patterns = [
 ]
 
 [recording]
-output_dir = "./recordings"
+output_dir = "."
 redact_headers = [
   "authorization",
   "cookie",
