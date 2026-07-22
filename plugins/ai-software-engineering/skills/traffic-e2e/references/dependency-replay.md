@@ -1,4 +1,4 @@
-# Dependency Replay Contract
+# Traffic E2E Dependency Replay Contract
 
 Read this reference when wiring or diagnosing case-owned dependency behavior.
 

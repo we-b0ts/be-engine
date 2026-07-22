@@ -1,5 +1,7 @@
 # Standard Traffic E2E Runner
 
+This reference is owned by the `traffic-e2e` skill.
+
 Use `traffic-e2e` as the only normal AI-facing replay command. Low-level
 grouping, replay-control, aggregate, and verified-exclude commands remain
 recorder-owned implementation details and human diagnostic surfaces.

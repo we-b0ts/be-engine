@@ -1,4 +1,4 @@
-# Case Group Selection
+# Traffic E2E Case Group Selection
 
 Use this workflow before business-implementation analysis when a supplied
 collection or run contains more than one canonical case directory. The goal is

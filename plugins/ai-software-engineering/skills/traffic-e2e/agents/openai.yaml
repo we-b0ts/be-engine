@@ -1,0 +1,4 @@
+interface:
+  display_name: "Traffic E2E"
+  short_description: "Record, replay, and verify traffic E2E cases"
+  default_prompt: "Use $traffic-e2e to record or replay this software contract through genuine dependency traffic and report canonical evidence."

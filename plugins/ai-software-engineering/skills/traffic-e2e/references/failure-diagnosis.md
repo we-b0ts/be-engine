@@ -1,4 +1,4 @@
-# Failure Diagnosis
+# Traffic E2E Failure Diagnosis
 
 Use this reference when a recorded E2E does not pass after the first replay
 attempt.

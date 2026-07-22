@@ -1,4 +1,4 @@
-# Replay And Assertion Policy
+# Traffic E2E Replay And Assertion Policy
 
 Read this reference before creating, changing, or validating replay-time
 response rules.

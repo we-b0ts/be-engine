@@ -1,4 +1,4 @@
-# Replay-Verified API Excludes
+# Traffic E2E Replay-Verified API Excludes
 
 Use this gate only after a terminal API attempt has finalized and its aggregate
 and response assertions exist. `traffic-e2e run` and focused `run-api`

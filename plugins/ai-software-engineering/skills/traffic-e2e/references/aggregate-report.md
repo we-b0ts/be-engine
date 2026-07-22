@@ -1,4 +1,4 @@
-# Aggregate Replay Report
+# Traffic E2E Aggregate Replay Report
 
 Use this reference for every collection/run source, multi-case selection, or
 recording source replayed through several reports/sessions. The only allowed

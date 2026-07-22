@@ -1,4 +1,4 @@
-# Managed Replay Lifecycle
+# Traffic E2E Managed Replay Lifecycle
 
 Read this reference for every replay execution.
 
@@ -8,7 +8,7 @@ Inspect the target E2E entrypoint, startup, config, and dependency endpoints.
 Reuse its existing framework and add only the smallest missing recorded-E2E
 orchestration.
 
-When the target uses `e2e-rewrite-migration`, invoke recorded E2E through
+When the target uses the standard managed workflow, invoke recorded E2E through
 `traffic-e2e run-api` or `traffic-e2e run`. The runner calls the target's
 standard version-two
 `scripts/<project>-cli e2e --case-dir <path> --actual-response <path>` once per
