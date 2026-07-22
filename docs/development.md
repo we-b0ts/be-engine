@@ -83,16 +83,19 @@ later matching requests are sent directly to `fallback_upstream` without
 creating a case. Failed cases do not consume the limit, and restarting Recorder
 starts a new run with fresh counts.
 
-After an upstream HTTP response completes, Recorder keeps the case active until
-captured dependencies are idle for
-`recording.case_dependency_quiet_period_ms`. This captures synchronous
-server-side after-hooks that start dependency requests only after writing the
-response. The quiet timer restarts when dependency activity begins or ends, and
-in-flight MySQL queries retain their original case ownership through the
-semantic exchange. If the case does not become quiet within
-`recording.case_dependency_drain_timeout_ms`, Recorder fails the case instead
-of publishing incomplete dependency evidence. Matching requests continue to
-use the fallback upstream while the previous case drains.
+After an upstream HTTP response completes, Recorder continues accepting new
+case dependencies for the fixed
+`recording.case_dependency_post_response_window_ms` interval. This captures
+synchronous server-side after-hooks that start dependencies only after writing
+the response; set it to `0` when the target completes all relevant work before
+the response. When the interval ends, Recorder closes dependency admission so
+continuous background traffic cannot extend the case, then waits only for
+already accepted in-flight dependencies to complete. In-flight MySQL queries
+retain their original case ownership through the semantic exchange. If those
+dependencies do not complete within
+`recording.case_dependency_drain_timeout_ms` after admission closes, Recorder
+fails the case instead of publishing incomplete dependency evidence. Matching
+requests continue to use the fallback upstream while the previous case drains.
 
 ### Rewriting HTTP Responses
 

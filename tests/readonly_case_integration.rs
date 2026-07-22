@@ -150,7 +150,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
 }
 
 #[tokio::test]
-async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
+async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_does_not() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -164,14 +164,16 @@ async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
         assert_eq!(login.0, 1);
         write_mysql_packet(&mut stream, 2, &[0x00]).await;
 
-        let query = read_mysql_packet(&mut stream).await.unwrap();
-        assert_eq!(query.0, 0);
-        assert_eq!(query.1[0], 0x03);
-        assert_eq!(
-            String::from_utf8_lossy(&query.1[1..]),
-            "INSERT INTO request_log(message) VALUES ('gateway-get')"
-        );
-        write_mysql_packet(&mut stream, 1, &[0x00]).await;
+        for expected in [
+            "INSERT INTO request_log(message) VALUES ('gateway-get')",
+            "INSERT INTO request_log(message) VALUES ('background-after-window')",
+        ] {
+            let query = read_mysql_packet(&mut stream).await.unwrap();
+            assert_eq!(query.0, 0);
+            assert_eq!(query.1[0], 0x03);
+            assert_eq!(String::from_utf8_lossy(&query.1[1..]), expected);
+            write_mysql_packet(&mut stream, 1, &[0x00]).await;
+        }
     });
 
     let matched = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -191,6 +193,13 @@ async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
         write_http_response(&mut stream, r#"{"ok":true}"#).await;
         tokio::time::sleep(Duration::from_millis(50)).await;
         write_mysql_packet(&mut mysql, 0, &query).await;
+        assert_eq!(read_mysql_packet(&mut mysql).await.unwrap().1[0], 0x00);
+
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let background_sql = b"INSERT INTO request_log(message) VALUES ('background-after-window')";
+        let mut background_query = vec![0x03];
+        background_query.extend_from_slice(background_sql);
+        write_mysql_packet(&mut mysql, 0, &background_query).await;
         assert_eq!(read_mysql_packet(&mut mysql).await.unwrap().1[0], 0x00);
     });
 
@@ -263,6 +272,10 @@ async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
             && event["database"] == "pluto"
             && event["sql"] == "INSERT INTO request_log(message) VALUES ('gateway-get')"
     }));
+    assert!(!dependencies.iter().any(|event| {
+        event["event_type"] == "mysql_exchange"
+            && event["sql"] == "INSERT INTO request_log(message) VALUES ('background-after-window')"
+    }));
     assert!(
         !dependencies
             .iter()
@@ -279,6 +292,10 @@ async fn mysql_query_started_after_http_response_stays_with_gateway_case() {
         event["event_type"] == "access_policy_allow"
             && event["rule"] == "allow-request-log"
             && event["resources"] == serde_json::json!(["pluto.request_log"])
+    }));
+    assert!(traffic.iter().any(|event| {
+        event["event_type"] == "mysql_exchange"
+            && event["sql"] == "INSERT INTO request_log(message) VALUES ('background-after-window')"
     }));
     let report: Value =
         serde_json::from_str(&std::fs::read_to_string(run_dir.join("recording-run.json")).unwrap())

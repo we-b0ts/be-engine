@@ -160,11 +160,12 @@ traffic_jsonl = "full"
 # JSONL writes are buffered and flushed at most this long after an active write.
 jsonl_buffer_capacity_bytes = 262144
 jsonl_flush_interval_ms = 1000
-# Keep a completed HTTP case open briefly for synchronous server-side
-# after-hooks that begin dependencies only after writing the response.
-case_dependency_quiet_period_ms = 100
-# A case with dependencies that never become quiet is failed instead of being
-# published with incomplete replay evidence.
+# Keep dependency admission open for a fixed interval after the HTTP response
+# completes so synchronous server-side after-hooks can start. Set to 0 to close
+# admission immediately when the response completes.
+case_dependency_post_response_window_ms = 100
+# After admission closes, wait at most this long for already accepted in-flight
+# dependencies to complete before failing the case.
 case_dependency_drain_timeout_ms = 5000
 # unrestricted keeps existing forwarding behavior. block_known_writes rejects
 # operations that the protocol classifiers identify as writes; unknown commands
