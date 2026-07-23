@@ -118,6 +118,19 @@ dependencies do not complete within
 fails the case instead of publishing incomplete dependency evidence. Matching
 requests continue to use the fallback upstream while the previous case drains.
 
+On recorder shutdown, case matching enters a quiescing phase before run
+finalization. New matching requests use the fallback upstream while the current
+case is allowed to finish for up to
+`recording.shutdown_case_drain_timeout_ms`. If the timeout expires, the
+remaining staging case is retained under `failed/` with
+`recording_incomplete_at_shutdown`.
+
+`recording.max_body_bytes` bounds wire bodies and dependency captures.
+`recording.max_decoded_body_bytes` may independently allow a larger decoded
+HTTP case body, such as compressed JSON; when omitted it inherits
+`max_body_bytes`. Content decoding reads at most the decoded limit plus one
+byte, so highly compressed input cannot cause unbounded decompression.
+
 ### Rewriting HTTP Responses
 
 HTTP response rewriting is an opt-in recording feature for responses that
@@ -676,8 +689,9 @@ dependency contract from missing capture evidence.
 
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`
-with `recording-error.json` instead of being published. On clean shutdown,
-recording exits with an error if the run contains failed cases.
+with `recording-error.json` instead of being published. Successfully published
+cases remain in their normal rule directories when another case fails. On
+clean shutdown, recording exits with an error if the run contains failed cases.
 
 A complete zero-length response body is publishable even when its
 `Content-Type` advertises JSON. Recorder preserves the empty body and replay

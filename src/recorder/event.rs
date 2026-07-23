@@ -18,6 +18,7 @@ pub struct CaseBodyCapture {
     pub encoding: &'static str,
     pub original_len: usize,
     pub stored_len: usize,
+    pub limit_bytes: usize,
     pub truncated: bool,
     pub decoded: bool,
     pub content_encoding: Option<String>,

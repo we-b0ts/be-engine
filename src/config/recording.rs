@@ -11,12 +11,14 @@ use crate::mysql::operation::MysqlWriteOperation;
 pub struct RecordingConfig {
     pub output_dir: PathBuf,
     pub max_body_bytes: usize,
+    pub max_decoded_body_bytes: Option<usize>,
     pub traffic_jsonl: TrafficJsonlMode,
     pub jsonl_buffer_capacity_bytes: usize,
     pub jsonl_flush_interval_ms: u64,
     #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
+    pub shutdown_case_drain_timeout_ms: u64,
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
     pub access_rules: Vec<RecordingAccessRuleConfig>,
@@ -89,7 +91,17 @@ impl RecordingAccessPolicy {
 }
 
 impl RecordingConfig {
+    pub fn decoded_body_limit(&self) -> usize {
+        self.max_decoded_body_bytes.unwrap_or(self.max_body_bytes)
+    }
+
     pub(super) fn validate(&self) -> Result<()> {
+        if self.max_body_bytes == 0 {
+            bail!("recording.max_body_bytes must be greater than zero");
+        }
+        if self.max_decoded_body_bytes == Some(0) {
+            bail!("recording.max_decoded_body_bytes must be greater than zero");
+        }
         if self.jsonl_buffer_capacity_bytes == 0 {
             bail!("recording.jsonl_buffer_capacity_bytes must be greater than zero");
         }
@@ -98,6 +110,9 @@ impl RecordingConfig {
         }
         if self.case_dependency_drain_timeout_ms == 0 {
             bail!("recording.case_dependency_drain_timeout_ms must be greater than zero");
+        }
+        if self.shutdown_case_drain_timeout_ms == 0 {
+            bail!("recording.shutdown_case_drain_timeout_ms must be greater than zero");
         }
         let mut names = HashSet::new();
         for rule in &self.access_rules {
@@ -174,11 +189,13 @@ impl Default for RecordingConfig {
         Self {
             output_dir: PathBuf::from("./recordings"),
             max_body_bytes: 1024 * 1024,
+            max_decoded_body_bytes: None,
             traffic_jsonl: TrafficJsonlMode::Full,
             jsonl_buffer_capacity_bytes: 256 * 1024,
             jsonl_flush_interval_ms: 1_000,
             case_dependency_post_response_window_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,
+            shutdown_case_drain_timeout_ms: 20_000,
             redact_headers: vec![
                 "authorization".to_string(),
                 "cookie".to_string(),
@@ -229,6 +246,23 @@ mod tests {
         config.validate().unwrap();
 
         config.recording.case_dependency_drain_timeout_ms = 0;
+        assert!(config.validate().is_err());
+
+        config.recording.case_dependency_drain_timeout_ms = 1;
+        config.recording.shutdown_case_drain_timeout_ms = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn decoded_body_limit_defaults_to_wire_limit() {
+        let mut config = AppConfig::default();
+        config.recording.max_body_bytes = 1234;
+        assert_eq!(config.recording.decoded_body_limit(), 1234);
+
+        config.recording.max_decoded_body_bytes = Some(5678);
+        assert_eq!(config.recording.decoded_body_limit(), 5678);
+
+        config.recording.max_decoded_body_bytes = Some(0);
         assert!(config.validate().is_err());
     }
 
