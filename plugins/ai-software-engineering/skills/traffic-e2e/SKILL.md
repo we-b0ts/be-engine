@@ -187,6 +187,12 @@ branch, push it, and create a draft PR against the confirmed `pr_base` before
 the final response. An `incomplete` or `blocked` E2E result does not waive this
 delivery requirement; preserve the exact status and blockers in the PR.
 
+Immediately before creating the PR, read
+`<target-root>/.traffic-e2e/e2e.yaml` and use its exact `pr_base` as the target
+branch. Do not substitute the repository default branch. If the standard
+configuration is unavailable, require another explicitly confirmed base rather
+than guessing.
+
 Skip PR creation only when the user explicitly requests no PR or when no
 deliverable target change exists. Keep unrelated pre-existing worktree changes
 out of the commit and PR.

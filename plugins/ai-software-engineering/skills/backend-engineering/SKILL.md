@@ -133,6 +133,12 @@ it, and create a draft PR against the confirmed base before the final response.
 An incomplete or blocked verification result does not waive this requirement;
 preserve the exact status and blockers in the PR.
 
+Before creating the PR, resolve the base from authoritative repository
+instructions or explicit user confirmation. When the target contains
+`.traffic-e2e/e2e.yaml`, use its exact `pr_base`; do not substitute the
+repository default branch. If no authoritative base is available, ask instead
+of guessing.
+
 Skip PR creation only when the user explicitly requests no PR or when no
 deliverable change exists. Keep unrelated pre-existing worktree changes out of
 the commit and PR.
