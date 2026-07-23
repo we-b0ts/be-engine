@@ -179,6 +179,18 @@ MUST NOT claim a selected replay scope passed unless:
 Target scripts, exit codes, summaries, hand-maintained counts, and prose notes
 cannot replace canonical recorder and runner artifacts.
 
+## Change Delivery Gate
+
+When replay or migration work produces deliverable target source, config, test,
+script, or documentation changes, commit the intended changes on the feature
+branch, push it, and create a draft PR against the confirmed `pr_base` before
+the final response. An `incomplete` or `blocked` E2E result does not waive this
+delivery requirement; preserve the exact status and blockers in the PR.
+
+Skip PR creation only when the user explicitly requests no PR or when no
+deliverable target change exists. Keep unrelated pre-existing worktree changes
+out of the commit and PR.
+
 ## Stop And Report
 
 Do not invent requests, responses, rows, cache values, queue messages,
@@ -190,4 +202,5 @@ For design and diagnosis questions, answer normally. When executing replay or
 making a completion claim, report `complete`, `incomplete`, or `blocked` with
 the exact case source and IDs, final session/report, aggregate, policy,
 assertion, pattern, verified-exclude status, verification command, and remaining
-blockers. Never use success wording while an applicable gate is missing.
+blockers. When the change delivery gate applies, also report the branch, commit,
+and PR URL. Never use success wording while an applicable gate is missing.

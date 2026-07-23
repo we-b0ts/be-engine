@@ -124,3 +124,15 @@ Before claiming completion, confirm that:
 If required evidence is unavailable, report the assumption or remaining risk.
 Do not describe the implementation as high-performance, high-throughput,
 scalable, or highly available without corresponding evidence.
+
+## Change Delivery Gate
+
+When the work produces deliverable source, config, test, script, or
+documentation changes, commit the intended changes on the feature branch, push
+it, and create a draft PR against the confirmed base before the final response.
+An incomplete or blocked verification result does not waive this requirement;
+preserve the exact status and blockers in the PR.
+
+Skip PR creation only when the user explicitly requests no PR or when no
+deliverable change exists. Keep unrelated pre-existing worktree changes out of
+the commit and PR.
