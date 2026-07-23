@@ -32,15 +32,11 @@ source code or harmless protocol formatting does not by itself imply a mismatch.
 
 Classify ambiguous dependencies only from source ownership, bootstrap timing,
 recorder metadata, or replay evidence. Required side effects remain required.
-After source inspection proves HTTP polling belongs to an API-independent
-process-level task, add a narrow recorder background rule with exact
-authorities, methods, and path prefixes, then re-record. Matching exchanges no
-longer enter an active case's dependency contract; run-level `traffic.jsonl`
-retention remains controlled separately, and bootstrap-time matches remain
-bootstrap replay evidence. Existing dirty case exchanges are not retroactively
-reclassified.
-`allowed_unused_http_hosts` remains a host-wide compatibility exception for
-older recordings; unmatched or unsupported target calls always remain dirty.
+For source-proven API-independent HTTP work, use the guarded narrow background
+workflow and re-record; existing dirty cases are never retroactively
+reclassified. `allowed_unused_http_hosts` remains a host-wide compatibility
+exception for older recordings. Unmatched or unsupported target calls always
+remain dirty.
 
 ## Coverage
 

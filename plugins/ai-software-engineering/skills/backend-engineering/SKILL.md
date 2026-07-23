@@ -1,9 +1,9 @@
 ---
 name: backend-engineering
-description: "Guide AI whenever designing, implementing, modifying, migrating, or reviewing backend APIs, workers, scheduled jobs, consumers, gateways, or shared runtime components. Apply production engineering standards and context-dependent guidance for architecture, dependency clients, bounded concurrency, timeouts, retries, backpressure, data and memory efficiency, throughput, resilience, observability, and evidence-based verification. Use regardless of current traffic scale; do not invoke for UI-only or documentation-only work."
+description: "Design, implement, modify, migrate, or review backend services using production coding, code-organization, module-ownership, architecture, runtime-safety, and verification standards. Use for backend APIs, workers, scheduled jobs, consumers, gateways, dependency clients, or shared runtime components regardless of current traffic scale; do not invoke for UI-only or documentation-only work."
 ---
 
-# Backend Engineering
+# Backend Service Engineering
 
 Build backend software that remains correct and operable under concurrency,
 dependency failures, large payloads, and sustained load. Treat performance,
@@ -119,22 +119,3 @@ Before claiming completion, confirm that:
 If required evidence is unavailable, report the assumption or remaining risk.
 Do not describe the implementation as high-performance, high-throughput,
 scalable, or highly available without corresponding evidence.
-
-## Change Delivery Gate
-
-When the work produces deliverable source, config, test, script, or
-documentation changes, commit the intended changes on the feature branch, push
-it, and create a draft PR against the confirmed base before the final response.
-An incomplete or blocked verification result does not waive this requirement;
-preserve the exact status and blockers in the PR.
-
-Before creating the PR, resolve the base from an authoritative repository
-instruction that names a specific integration branch or from explicit user
-confirmation. Never infer the base from the repository default branch, remote
-HEAD, branch ancestry, or `main`/`master` conventions. Use `main` or `master`
-only when the user explicitly confirms that exact base. If no confirmed base is
-available, ask instead of guessing.
-
-Skip PR creation only when the user explicitly requests no PR or when no
-deliverable change exists. Keep unrelated pre-existing worktree changes out of
-the commit and PR.

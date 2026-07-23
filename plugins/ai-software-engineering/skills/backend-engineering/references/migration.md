@@ -29,11 +29,11 @@ After behavior first passes, review names, ownership, visibility, dependency
 direction, runtime/test separation, and resource behavior. Refactor only the
 boundary introduced or expanded by the migration, then rerun affected evidence.
 
-When recorded cases are the behavior contract, use the companion `traffic-e2e`
-skill for recording, grouping, replay, dependency coverage, response
-assertions, and completion evidence. Passing one response does not waive
-missing side effects, dirty dependencies, startup differences, or incomplete
-case coverage.
+When recorded cases are the behavior contract, use the supplied canonical
+traffic workflow for recording, grouping, replay, dependency coverage,
+response assertions, and completion evidence. Passing one response does not
+waive missing side effects, dirty dependencies, startup differences, or
+incomplete case coverage.
 
 ## Reusable Memory
 

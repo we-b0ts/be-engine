@@ -37,14 +37,15 @@ surfaces:
 - `traffic-e2e diagnose replay-aggregate` for final multi-case or multi-session
   coverage.
 
-Do not call the low-level commands to assemble a parallel lifecycle during a
-standard migration. They remain available for human diagnostics and recorder
+Do not call the low-level commands to assemble a parallel lifecycle during the
+standard workflow. They remain available for human diagnostics and recorder
 development. Do not generate replacements inside the target project or
 hardcode the recorder repository or skill path.
 
 If the installed recorder or replay tools are incompatible with the published
 cases or required replay configuration, stop and report the exact
-incompatibility. Do not rebuild or replace those tools during migration.
+incompatibility. Do not rebuild or replace those tools while verifying the
+target.
 
 ## Fixed-User Interception
 
@@ -97,12 +98,11 @@ the control socket or call lifecycle commands.
 
 ## Aggregate
 
-After the selected session finalizes, the full runner reads
-[aggregate-report.md](aggregate-report.md) and runs
-`traffic-e2e diagnose replay-aggregate` for every collection or run source,
-multi-case selection, or source replayed through multiple reports or sessions.
-Pass the exact repeated case and session ids and both fail-on-incomplete and
-fail-on-dirty gates.
+After the selected session finalizes, the full runner applies the aggregate
+contract loaded from the main skill and runs `traffic-e2e diagnose
+replay-aggregate` for every collection or run source, multi-case selection, or
+source replayed through multiple reports or sessions. Pass the exact repeated
+case and session ids and both fail-on-incomplete and fail-on-dirty gates.
 
 Focused attempts retain their own aggregate for diagnosis and use it to replace
 the selected API's contribution to the current logical run and update any
@@ -115,9 +115,9 @@ selection, or substitute target test output for recorder evidence.
 
 ## Iteration
 
-After a failure, read [failure-diagnosis.md](failure-diagnosis.md). Continue
-while each cycle adds evidence or fixes a distinct evidenced defect. If the same
-root cause repeats for three consecutive cycles without progress, stop as
-`blocked` or `incomplete`. Always rerun the entire affected group after a
-behavior, wiring, policy, assertion, or lifecycle change; the mandatory final
-verification is never counted as a retry.
+After a failure, apply the failure-diagnosis contract loaded from the main
+skill. Continue while each cycle adds evidence or fixes a distinct evidenced
+defect. If the same root cause repeats for three consecutive cycles without
+progress, stop as `blocked` or `incomplete`. Always rerun the entire affected
+group after a behavior, wiring, policy, assertion, or lifecycle change; the
+mandatory final verification is never counted as a retry.

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Backend Engineering"
-  short_description: "Production backend standards for AI coding"
-  default_prompt: "Use $backend-engineering to design or change this backend with bounded resources, explicit failure behavior, and evidence-based quality."
+  display_name: "Backend Service Engineering"
+  short_description: "Backend coding, organization, and architecture"
+  default_prompt: "Use $backend-engineering to implement or review this backend service with clear module ownership, bounded resources, explicit failure behavior, and evidence-based verification."

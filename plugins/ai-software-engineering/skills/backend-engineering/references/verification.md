@@ -13,7 +13,7 @@ capacity, or stability.
 - Integration tests use genuine client and protocol paths for external
   dependency behavior when practical.
 - Recorded or real-traffic E2E evidence verifies observable compatibility when
-  supplied. Use the companion `traffic-e2e` skill for its canonical workflow.
+  supplied. Follow the supplied traffic tool's canonical workflow.
 - Failure tests cover timeout, cancellation, overload, partial failure, retry,
   and shutdown when those paths are material.
 

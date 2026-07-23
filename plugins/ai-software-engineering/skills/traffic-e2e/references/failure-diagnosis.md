@@ -16,27 +16,6 @@ Classify failures in this order:
 Prefer dependency and environment explanations until the recorded dependency
 evidence is complete and replay is known to be hit.
 
-## Repository Migration Lesson
-
-Before retrying, search the migration notes linked from target `AGENTS.md` for
-the same symptom or root cause. During migration, upsert a concise lesson only
-after the fix passes verification and the lesson applies across multiple APIs,
-cases, or migration scopes. Repetition within one API, case, run, or otherwise
-narrow scenario does not qualify:
-
-```markdown
-## <stable problem title>
-
-- Trigger: <recognizable symptom or context>
-- Avoid: <ineffective action that must not be repeated>
-- Resolved by: <verified diagnostic or fix>
-```
-
-Update an existing lesson rather than adding a duplicate. Keep only durable,
-repository-specific prevention knowledge. Do not include protocol traces,
-absolute machine paths, case or session ids, run counts, secrets, raw logs, or
-generated replay state. The lesson does not prove success or completion.
-
 ## Incomplete Recording Signals
 
 Stop and report a missing-dependency list when any required behavior lacks
@@ -74,15 +53,14 @@ Timing overlap, repetition, polling-like names, a successful response, and an
 unused replay exchange are not ownership evidence. If any ownership fact is
 unclear, keep the dependency case-owned and the replay incomplete.
 
-After source proves independence, use the guarded
-`background-dependencies plan` command documented in
-[e2e-run.md](e2e-run.md). Inspect its narrow selector and matched case IDs
-before `apply`, then create a new recording; the command cannot repair the
-immutable old case. Record the source revision and a single-line file/symbol
-explanation, never raw query values, credentials, headers, or bodies. Use
-host-wide `allowed_unused_http_hosts` only as a compatibility exception when an
-older recording cannot be replaced and source proves the entire host is
-unrelated.
+After source proves independence, use the standard runner reference's guarded
+`background-dependencies plan` command. Inspect its narrow selector and matched
+case IDs before `apply`, then create a new recording; the command cannot repair
+the immutable old case. Record the source revision and a single-line
+file/symbol explanation, never raw query values, credentials, headers, or
+bodies. Use host-wide `allowed_unused_http_hosts` only as a compatibility
+exception when an older recording cannot be replaced and source proves the
+entire host is unrelated.
 
 ## Replay Failure Signals
 
@@ -190,8 +168,8 @@ Report recorder feedback when replay required:
 - filtering substantial unrelated process-wide traffic, such as request-log
   writes, scheduler queries, locks, heartbeats, or background jobs, before the
   case-owned dependencies were clear
-- discovering that a case dependency was intentionally replaced or dropped in a
-  migration and therefore needs user-approved contract-change tracking
+- discovering that a case dependency was intentionally replaced or dropped by
+  a software change and therefore needs user-approved contract-change tracking
 - discovering that a recorded dependency touch has no clear ownership in the
   selected request path and would require hardcoded recorded params to replay
 - attempting to add target-project fixture data that should instead be

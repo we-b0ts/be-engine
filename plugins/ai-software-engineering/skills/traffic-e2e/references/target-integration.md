@@ -98,5 +98,5 @@ edit, merge, repair, copy, stage, commit, or force-add them.
 
 `.traffic-e2e/e2e-progress.yaml` is a runner-generated concise project report
 and may be committed when the repository workflow requires it. Never hand-edit
-or reconstruct its counters. Local evidence, progress, target exit codes, and
-PR delivery each have distinct authority; none can manufacture another.
+or reconstruct its counters. Local evidence, progress, and target exit codes
+each have distinct authority; delivery status remains outside runner evidence.

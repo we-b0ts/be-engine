@@ -1,7 +1,7 @@
 # Traffic E2E Recorded Case Format
 
-Use this reference when parsing recorded case artifacts or translating them into
-target-project E2E inputs and dependency replay config.
+Use this reference when parsing recorded artifacts, driving target requests,
+or diagnosing recorder-owned dependency replay.
 
 ## Directory And Files
 

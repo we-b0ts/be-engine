@@ -44,10 +44,11 @@ behavior.
 inputs. Target product code, E2E code, test support, commands, and application
 config MUST NOT read, parse, copy, or derive dependency results from them. Do
 not create recording-backed or fixture-backed target dependency implementations.
-An offline migration step may inspect dependency request or connection evidence
-to materialize a value only after the source startup path proves it is a direct
-startup input. It must not infer configuration provenance from a downstream
-request or materialize a value that the source loads from a runtime dependency.
+An offline target-preparation step may inspect dependency request or connection
+evidence to materialize a value only after the source startup path proves it is
+a direct startup input. It must not infer configuration provenance from a
+downstream request or materialize a value that the source loads from a runtime
+dependency.
 
 ## Dependency Dynamic Rules
 

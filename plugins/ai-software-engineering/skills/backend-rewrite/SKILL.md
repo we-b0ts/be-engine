@@ -1,12 +1,12 @@
 ---
-name: e2e-rewrite
-description: "Rewrite or migrate backend services while preserving behavior from recorded traffic, genuine dependency replay, and response assertions. Use when Codex must implement a service rewrite, language migration, or compatibility port against traffic-e2e recordings and deliver the resulting target changes through a pull request."
+name: backend-rewrite
+description: "Rewrite or migrate backend services against recorded traffic while applying backend engineering standards and genuine traffic-e2e verification. Use for backend service rewrites, cross-language migrations, compatibility ports, or capability replacements that use traffic-e2e cases as the behavior contract and must deliver the resulting code through a pull request."
 ---
 
-# E2E Rewrite
+# Backend Rewrite And Migration
 
-Coordinate implementation, traffic verification, and delivery without
-duplicating the companion skills' detailed contracts.
+Coordinate backend implementation, traffic verification, and delivery. Keep
+the companion skills authoritative for their own domains.
 
 ## Required Companion Skills
 
@@ -19,13 +19,16 @@ Before modifying target code:
    for recording, grouping, genuine dependency replay, response assertions,
    failure diagnosis, and completion evidence.
 
-Treat both as mandatory. This skill owns their sequencing and target delivery;
-it does not weaken either completion gate.
+Treat both as mandatory. This skill owns sequencing and delivery only; do not
+copy or weaken their detailed contracts here.
 
 ## Workflow
 
 1. Read repository instructions, migration notes, startup paths, and the
-   supplied recording source. Keep unrelated worktree changes out of scope.
+   supplied recording source. Confirm a canonical traffic-e2e case source for
+   the requested scope; if it must be recorded first, complete the traffic
+   skill's recording gate before implementation. Keep unrelated worktree
+   changes out of scope.
 2. Resolve the PR base before substantial implementation. Use the exact
    `pr_base` from `<target-root>/.traffic-e2e/e2e.yaml`. If that generated
    configuration is absent, require an authoritative repository instruction or
@@ -37,17 +40,12 @@ it does not weaken either completion gate.
    recorded contract. Do not read expected responses or recorded dependency
    outputs from target code, fixtures, configuration, or test support.
 5. Run repository-focused checks and the canonical focused traffic replay.
-   Diagnose the first failure from evidence before changing product code,
-   replay policy, or recorder attribution.
-6. For every unused case dependency, inspect its initiating source and classify
-   it as case-owned, source-proven background, or unresolved. Use the
-   traffic-e2e guarded background plan/apply workflow only with explicit
-   process-level ownership and API-independence evidence, then create a new
-   recording.
-7. Repeat focused implementation and verification only until the selected
+   Delegate failure classification, replay policy, recorder attribution, and
+   completion evidence to `traffic-e2e`; do not create parallel rules here.
+6. Repeat focused implementation and verification only until the selected
    group passes. Run the required complete round after shared
    behavior-affecting changes.
-8. Review module boundaries, run all repository-required gates, and preserve
+7. Review module boundaries, run all repository-required gates, and preserve
    the exact traffic-e2e completion status and remaining blockers.
 
 ## Delivery
