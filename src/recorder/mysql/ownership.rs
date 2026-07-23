@@ -5,7 +5,9 @@ use anyhow::Result;
 
 use crate::AppState;
 use crate::active_case::DependencyTargets;
-use crate::recorder::{MysqlExchangeEvent, MysqlResponseEvent, RecorderEvent};
+use crate::recorder::RecorderEvent;
+
+use super::tracker::MysqlQueryCompletion;
 
 #[derive(Clone, Default)]
 pub(super) struct QueryDependencyOwnerships {
@@ -39,14 +41,18 @@ impl QueryDependencyOwnerships {
 pub(super) async fn record_query_completion(
     state: &AppState,
     ownerships: &QueryDependencyOwnerships,
-    response: Option<MysqlResponseEvent>,
-    exchange: Option<MysqlExchangeEvent>,
+    completion: MysqlQueryCompletion,
 ) -> Result<()> {
-    let sequence = response
-        .as_ref()
-        .map(|response| response.query_sequence)
-        .or_else(|| exchange.as_ref().map(|exchange| exchange.query_sequence));
+    let (response_sequence, exchange_sequence) = completion.sequences();
+    anyhow::ensure!(
+        response_sequence.is_none()
+            || exchange_sequence.is_none()
+            || response_sequence == exchange_sequence,
+        "MySQL response/exchange sequence mismatch: response={response_sequence:?}, exchange={exchange_sequence:?}"
+    );
+    let sequence = response_sequence.or(exchange_sequence);
     let ownership = sequence.and_then(|sequence| ownerships.take(sequence));
+    let (response, exchange) = completion.into_parts();
     if let Some(response) = response {
         record_event(
             state,
