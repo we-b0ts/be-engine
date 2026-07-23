@@ -221,6 +221,7 @@ async fn handle_gateway_request(
             body: capture_case_body(
                 &request_body,
                 state.config().recording.max_body_bytes,
+                state.config().recording.decoded_body_limit(),
                 Some(&request_headers),
             ),
         });
@@ -406,6 +407,7 @@ async fn handle_gateway_request(
                             body: Some(capture_case_body(
                                 &body_bytes,
                                 state.config().recording.max_body_bytes,
+                                state.config().recording.decoded_body_limit(),
                                 Some(&response_headers),
                             )),
                             duration_ms: started.elapsed().as_millis(),
@@ -446,7 +448,8 @@ async fn handle_gateway_request(
 
     match (case_guard, active_case_id) {
         (Some(case_guard), Some(case_id)) => {
-            lifecycle::run_matched_request(lifecycle_state, case_id, case_guard, request).await
+            lifecycle::run_matched_request(lifecycle_state, case_id, case_guard, started, request)
+                .await
         }
         _ => request.await,
     }
@@ -492,6 +495,7 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
                 body: capture_case_body(
                     &ctx.request_body,
                     ctx.state.config().recording.max_body_bytes,
+                    ctx.state.config().recording.decoded_body_limit(),
                     None,
                 ),
             },
