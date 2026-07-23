@@ -315,7 +315,9 @@ pub(crate) async fn handle_connected(
     let mut replay_safe = transfer_error.is_none();
     let mut incomplete = pending.lock().await;
     while let Some(exchange) = incomplete.pop_front() {
-        if !client_terminated {
+        let clean_terminal_quit = is_terminal_quit(&exchange.command) && transfer_error.is_none();
+        let exchange_completed = client_terminated || clean_terminal_quit;
+        if !exchange_completed {
             replay_safe = false;
         }
         record_exchange(
@@ -323,8 +325,8 @@ pub(crate) async fn handle_connected(
             connection_id,
             &context,
             PendingRedisExchange {
-                replay_safe: exchange.replay_safe && client_terminated,
-                warnings: if client_terminated {
+                replay_safe: exchange.replay_safe && exchange_completed,
+                warnings: if exchange_completed {
                     exchange.warnings
                 } else {
                     vec!["connection closed before Redis response".to_string()]
@@ -333,7 +335,9 @@ pub(crate) async fn handle_connected(
             },
             RedisFrameKind::Other,
             b"",
-            if client_terminated {
+            if clean_terminal_quit {
+                DependencyExchangeOutcome::NoResponse
+            } else if client_terminated {
                 DependencyExchangeOutcome::ClientTerminated
             } else {
                 DependencyExchangeOutcome::Response
@@ -525,10 +529,13 @@ async fn record_exchange(
         .map(|value| capture_body(value, max_frame_bytes))
         .collect::<Vec<_>>();
     let response = capture_body(response, max_frame_bytes);
+    let terminal_quit = is_terminal_quit(&pending.command);
     let replay_safe = pending.replay_safe
         && !response.truncated
         && args.iter().all(|argument| !argument.truncated)
-        && (response_kind != RedisFrameKind::Other || outcome.is_client_terminated());
+        && (response_kind != RedisFrameKind::Other
+            || outcome.is_client_terminated()
+            || terminal_quit);
     record_event(
         state,
         RecorderEvent::RedisExchange(RedisExchangeEvent {
@@ -557,6 +564,10 @@ async fn record_exchange(
         }),
     )
     .await
+}
+
+fn is_terminal_quit(command: &RedisCommand) -> bool {
+    command.name == "QUIT"
 }
 
 #[allow(clippy::too_many_arguments)]

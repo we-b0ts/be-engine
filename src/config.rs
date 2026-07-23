@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
 
 mod allowed_unused_http;
+mod background_dependencies;
+mod background_feedback;
 mod case_limits;
 mod compare;
 mod dns;
@@ -22,6 +24,11 @@ mod verified_excludes;
 pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     plan_allowed_unused_http_hosts,
+};
+pub use background_dependencies::BackgroundDependencyRuleConfig;
+pub use background_feedback::{
+    BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
+    plan_background_dependency,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use compare::CompareConfig;

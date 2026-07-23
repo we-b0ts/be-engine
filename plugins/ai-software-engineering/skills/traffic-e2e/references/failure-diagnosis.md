@@ -16,27 +16,6 @@ Classify failures in this order:
 Prefer dependency and environment explanations until the recorded dependency
 evidence is complete and replay is known to be hit.
 
-## Repository Migration Lesson
-
-Before retrying, search the migration notes linked from target `AGENTS.md` for
-the same symptom or root cause. During migration, upsert a concise lesson only
-after the fix passes verification and the lesson applies across multiple APIs,
-cases, or migration scopes. Repetition within one API, case, run, or otherwise
-narrow scenario does not qualify:
-
-```markdown
-## <stable problem title>
-
-- Trigger: <recognizable symptom or context>
-- Avoid: <ineffective action that must not be repeated>
-- Resolved by: <verified diagnostic or fix>
-```
-
-Update an existing lesson rather than adding a duplicate. Keep only durable,
-repository-specific prevention knowledge. Do not include protocol traces,
-absolute machine paths, case or session ids, run counts, secrets, raw logs, or
-generated replay state. The lesson does not prove success or completion.
-
 ## Incomplete Recording Signals
 
 Stop and report a missing-dependency list when any required behavior lacks
@@ -60,15 +39,28 @@ evidence:
 Do not infer missing rows, messages, cache entries, or third-party responses
 from `expected-response.json` alone.
 
-For repeated unused HTTP exchanges, group observations by normalized host only
-for diagnosis. A host may be proposed for
-`allowed_unused_http_hosts` when source proves all traffic to it belongs to an
-API-independent process-level task, the target emitted no matching request,
-and the focused API's response assertions and all other dependencies pass.
-Active-case timing is not API ownership evidence for an asynchronous task.
-Plan/apply the host once for the named recording rule and restart focused
-replay. Never include raw query values, credentials, headers, or bodies in the
-plan or diagnosis.
+For every unused case HTTP exchange, group observations by normalized
+authority, method, and path only for diagnosis, then inspect the source that
+initiates the request. Classify the narrow request family as background only
+when all of these facts are explicit in source:
+
+- startup, lifecycle, scheduler, or permanent-worker code owns the trigger;
+- request context, API parameters, and API-scoped state do not control it;
+- the selected API does not await, start, stop, or consume its result;
+- the selected API response and required side effects do not depend on it.
+
+Timing overlap, repetition, polling-like names, a successful response, and an
+unused replay exchange are not ownership evidence. If any ownership fact is
+unclear, keep the dependency case-owned and the replay incomplete.
+
+After source proves independence, use the standard runner reference's guarded
+`background-dependencies plan` command. Inspect its narrow selector and matched
+case IDs before `apply`, then create a new recording; the command cannot repair
+the immutable old case. Record the source revision and a single-line
+file/symbol explanation, never raw query values, credentials, headers, or
+bodies. Use host-wide `allowed_unused_http_hosts` only as a compatibility
+exception when an older recording cannot be replaced and source proves the
+entire host is unrelated.
 
 ## Replay Failure Signals
 
@@ -176,8 +168,8 @@ Report recorder feedback when replay required:
 - filtering substantial unrelated process-wide traffic, such as request-log
   writes, scheduler queries, locks, heartbeats, or background jobs, before the
   case-owned dependencies were clear
-- discovering that a case dependency was intentionally replaced or dropped in a
-  migration and therefore needs user-approved contract-change tracking
+- discovering that a case dependency was intentionally replaced or dropped by
+  a software change and therefore needs user-approved contract-change tracking
 - discovering that a recorded dependency touch has no clear ownership in the
   selected request path and would require hardcoded recorded params to replay
 - attempting to add target-project fixture data that should instead be

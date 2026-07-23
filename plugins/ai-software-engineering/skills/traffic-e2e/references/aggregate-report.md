@@ -59,7 +59,8 @@ The aggregate sums the recorder-owned MySQL, HTTP, Redis, Memcached, and Kafka
 matched, unmatched, unsupported, unsafe, unused-case, and unused-bootstrap
 counters. Unused bootstrap counters are retained as startup diagnostics but do
 not make a report dirty: traffic observed before readiness is outside the
-selected E2E contract and may legitimately be absent from a partial migration.
+selected E2E contract and may legitimately be absent from a partial
+verification scope.
 Unmatched, unsupported, unsafe, and unused case-owned evidence still makes the
 report dirty. Target-specific noise policies or test-runner results remain
 outside this report and must not be silently folded into its numbers.

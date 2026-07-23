@@ -4,11 +4,11 @@ Use this workflow only during replay discovery or replay follow-up. Recording
 remains manually triggered and does not require source-repo scanning.
 `traffic-e2e replay` and all recording artifacts remain read-only.
 
-For a collection or run with multiple canonical input directories, read
-[case-grouping.md](case-grouping.md) first. Route registration analysis may
-produce the candidate used by `traffic-e2e prepare` before business-code
-analysis begins. A grouping result never waives the final managed pattern
-plan/apply/replan gate below.
+For a collection or run with multiple canonical input directories, apply the
+case-grouping contract loaded from the main skill first. Route registration
+analysis may produce the candidate used by `traffic-e2e prepare` before
+business-code analysis begins. A grouping result never waives the final managed
+pattern plan/apply/replan gate below.
 
 ## Inputs
 

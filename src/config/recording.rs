@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
+use super::BackgroundDependencyRuleConfig;
 use crate::mysql::operation::MysqlWriteOperation;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -20,6 +21,7 @@ pub struct RecordingConfig {
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
     pub access_rules: Vec<RecordingAccessRuleConfig>,
+    pub background_dependencies: Vec<BackgroundDependencyRuleConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -136,6 +138,7 @@ impl RecordingConfig {
                 }
             }
         }
+        super::background_dependencies::validate(&self.background_dependencies)?;
         Ok(())
     }
 }
@@ -188,6 +191,7 @@ impl Default for RecordingConfig {
             ],
             access_policy: RecordingAccessPolicy::Unrestricted,
             access_rules: Vec::new(),
+            background_dependencies: Vec::new(),
         }
     }
 }

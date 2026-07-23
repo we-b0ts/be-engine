@@ -19,9 +19,9 @@ recordings.
    that same source route, return the current directory as `group_dir`, and
    record `already_canonical` with its exact case ids. A mixed-route directory
    is `blocked_grouping`.
-4. When the source route is dynamic, derive the candidate recorder pattern by
-   following [route-pattern-feedback.md](route-pattern-feedback.md), then run
-   `traffic-e2e prepare` with the original case source, current directory,
+4. When the source route is dynamic, derive the candidate recorder pattern
+   using the route-pattern feedback contract loaded from the main skill, then
+   run `traffic-e2e prepare` with the original case source, current directory,
    method, confirmed source route, pattern, and source revision. The runner
    supplies managed recorder config and the persisted index path. Use only the
    returned group directory or manifest and exact case ids.
@@ -29,8 +29,8 @@ recordings.
    MUST return the same group with `already_grouped`; process the group exactly
    once. Never infer grouping state from a directory name or hand-written
    marker.
-6. Inspect and migrate the selected group only after grouping reaches a valid
-   terminal result. Focused migration may proceed before every other API is
+6. Inspect or verify the selected group only after grouping reaches a valid
+   terminal result. Focused verification may proceed before every other API is
    grouped, but the full round is blocked until every published case is covered
    exactly once.
 
@@ -41,7 +41,7 @@ group validation.
 ## Required Invocation
 
 Use one runner-owned persisted index for the whole original case source and
-source revision. For a standard migration, run the static form:
+source revision. For the standard workflow, run the static form:
 
 ```bash
 traffic-e2e prepare \

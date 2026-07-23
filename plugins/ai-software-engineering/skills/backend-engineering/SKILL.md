@@ -1,9 +1,9 @@
 ---
 name: backend-engineering
-description: "Guide AI whenever designing, implementing, modifying, migrating, or reviewing backend APIs, workers, scheduled jobs, consumers, gateways, or shared runtime components. Apply production engineering standards and context-dependent guidance for architecture, dependency clients, bounded concurrency, timeouts, retries, backpressure, data and memory efficiency, throughput, resilience, observability, and evidence-based verification. Use regardless of current traffic scale; do not invoke for UI-only or documentation-only work."
+description: "Design, implement, modify, migrate, or review backend services using production coding, code-organization, module-ownership, architecture, runtime-safety, and verification standards. Use for backend APIs, workers, scheduled jobs, consumers, gateways, dependency clients, or shared runtime components regardless of current traffic scale; do not invoke for UI-only or documentation-only work."
 ---
 
-# Backend Engineering
+# Backend Service Engineering
 
 Build backend software that remains correct and operable under concurrency,
 dependency failures, large payloads, and sustained load. Treat performance,
@@ -98,11 +98,6 @@ defects before they become scale defects.
 - Read [migration.md](references/migration.md) when rewriting or migrating an
   existing capability, including cross-language work.
 - Read [rust.md](references/rust.md) only when Rust is the implementation language.
-
-When recorded traffic is supplied or `traffic-e2e` is requested, load the
-companion `traffic-e2e` skill. It exclusively owns recording, case artifacts,
-dependency replay, replay policy, and canonical E2E evidence. Do not duplicate
-those contracts here.
 
 ## Completion Review
 

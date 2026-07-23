@@ -32,14 +32,11 @@ source code or harmless protocol formatting does not by itself imply a mismatch.
 
 Classify ambiguous dependencies only from source ownership, bootstrap timing,
 recorder metadata, or replay evidence. Required side effects remain required.
-Replay-policy version one cannot waive unused case exchanges as background
-noise. The only supported exception is an exact host in the selected named
-recording rule's `allowed_unused_http_hosts`, added through recorder-config
-plan/apply after source inspection proves the entire host belongs to an
-API-independent process-level task. The exception applies only to an
-unconsumed recorded case HTTP exchange; unmatched or unsupported target calls
-remain dirty. Without that evidence and explicit configuration, re-record or
-keep the case incomplete instead of inventing an exception.
+For source-proven API-independent HTTP work, use the guarded narrow background
+workflow and re-record; existing dirty cases are never retroactively
+reclassified. `allowed_unused_http_hosts` remains a host-wide compatibility
+exception for older recordings. Unmatched or unsupported target calls always
+remain dirty.
 
 ## Coverage
 

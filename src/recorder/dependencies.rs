@@ -210,7 +210,7 @@ fn is_debug_event(event: &RecorderEvent) -> bool {
         RecorderEvent::MysqlQuery(_)
             | RecorderEvent::MysqlResponse(_)
             | RecorderEvent::MysqlPacket(_)
-    )
+    ) || matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "QUIT")
 }
 
 fn compact_process_info(value: &mut serde_json::Value) {
@@ -240,7 +240,11 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::recorder::{MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent};
+    use crate::DependencyExchangeOutcome;
+    use crate::recorder::{
+        MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent, RedisExchangeEvent,
+        capture_body,
+    };
 
     #[tokio::test]
     async fn mysql_maintenance_requests_are_kept_in_debug_only() {
@@ -383,6 +387,83 @@ mod tests {
         assert!(bootstrap_debug.contains("SELECT 1"));
     }
 
+    #[tokio::test]
+    async fn redis_quit_is_kept_in_debug_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: None,
+        };
+        let connection_id = Uuid::new_v4();
+        let quit = RecorderEvent::RedisExchange(redis_exchange(
+            connection_id,
+            1,
+            "QUIT",
+            DependencyExchangeOutcome::NoResponse,
+        ));
+        let get = RecorderEvent::RedisExchange(redis_exchange(
+            connection_id,
+            2,
+            "GET",
+            DependencyExchangeOutcome::Response,
+        ));
+
+        for event in [&quit, &get] {
+            recorder
+                .append_case_dependency(&case, event, "process")
+                .await
+                .unwrap();
+        }
+        let case_dir = recorder.case_staging_dir(&case);
+        recorder
+            .flush_case_dependency_files(&case_dir)
+            .await
+            .unwrap();
+
+        let semantic = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+            .await
+            .unwrap();
+        assert!(semantic.contains("\"command\":\"GET\""));
+        assert!(!semantic.contains("\"command\":\"QUIT\""));
+        let debug = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
+            .await
+            .unwrap();
+        assert!(debug.contains("\"command\":\"QUIT\""));
+        assert!(!debug.contains("\"command\":\"GET\""));
+
+        super::super::summary::write_case_dependency_summary(&case_dir)
+            .await
+            .unwrap();
+        let summary = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
+            .await
+            .unwrap();
+        assert!(summary.contains("\"GET\""));
+        assert!(!summary.contains("\"QUIT\""));
+
+        for event in [&quit, &get] {
+            recorder
+                .append_bootstrap_dependency(event, "bootstrap_window")
+                .await
+                .unwrap();
+        }
+        recorder.flush_bootstrap_dependency_files().await.unwrap();
+
+        let semantic =
+            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
+                .await
+                .unwrap();
+        assert!(semantic.contains("\"command\":\"GET\""));
+        assert!(!semantic.contains("\"command\":\"QUIT\""));
+        let debug =
+            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-debug.jsonl"))
+                .await
+                .unwrap();
+        assert!(debug.contains("\"command\":\"QUIT\""));
+        assert!(!debug.contains("\"command\":\"GET\""));
+    }
+
     fn mysql_query(
         connection_id: Uuid,
         sequence: u64,
@@ -439,6 +520,42 @@ mod tests {
             },
             outcome: crate::DependencyExchangeOutcome::Response,
             duration_ms: 1,
+            parse_warnings: Vec::new(),
+        }
+    }
+
+    fn redis_exchange(
+        connection_id: Uuid,
+        sequence: u64,
+        command: &str,
+        outcome: DependencyExchangeOutcome,
+    ) -> RedisExchangeEvent {
+        RedisExchangeEvent {
+            id: Uuid::new_v4(),
+            connection_id,
+            sequence,
+            timestamp: Utc::now(),
+            client_addr: None,
+            client_process: None,
+            target_host: "redis.internal".to_string(),
+            target_port: 6379,
+            target_addr: "redis.internal:6379".to_string(),
+            upstream_addr: "10.0.0.2:6379".to_string(),
+            resp_version: 2,
+            database: 0,
+            username: None,
+            command: command.to_string(),
+            args: Vec::new(),
+            response_kind: if command == "GET" {
+                "bulk_string".to_string()
+            } else {
+                "other".to_string()
+            },
+            response: capture_body(if command == "GET" { b"$-1\r\n" } else { b"" }, 1024),
+            session_setup: false,
+            outcome,
+            duration_ms: 0,
+            replay_safe: true,
             parse_warnings: Vec::new(),
         }
     }
