@@ -3,6 +3,7 @@ use std::io;
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub const CLIENT_SSL: u32 = 0x0000_0800;
+pub const CLIENT_COMPRESS: u32 = 0x0000_0020;
 pub const CLIENT_CONNECT_WITH_DB: u32 = 0x0000_0008;
 pub const CLIENT_SECURE_CONNECTION: u32 = 0x0000_8000;
 pub const CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA: u32 = 0x0020_0000;
@@ -138,6 +139,35 @@ pub fn parse_handshake_response(packet: &MysqlPacket) -> HandshakeResponse {
     }
 }
 
+pub fn clear_client_compression_capability(packet: &mut MysqlPacket) -> bool {
+    let Some(capability_flags) = read_u32_le(&packet.payload, 0) else {
+        return false;
+    };
+    if capability_flags & CLIENT_COMPRESS == 0 {
+        return false;
+    }
+
+    packet.payload[0..4].copy_from_slice(&(capability_flags & !CLIENT_COMPRESS).to_le_bytes());
+    true
+}
+
+pub fn clear_server_compression_capability(packet: &mut MysqlPacket) -> bool {
+    let Some(offset) = server_lower_capability_flags_offset(&packet.payload) else {
+        return false;
+    };
+    let Some(lower_flags) = read_u16_le(&packet.payload, offset) else {
+        return false;
+    };
+    let compression_flag = CLIENT_COMPRESS as u16;
+    if lower_flags & compression_flag == 0 {
+        return false;
+    }
+
+    packet.payload[offset..offset + 2]
+        .copy_from_slice(&(lower_flags & !compression_flag).to_le_bytes());
+    true
+}
+
 pub fn parse_client_command(packet: &MysqlPacket) -> Option<ClientCommand> {
     let command = *packet.payload.first()?;
     let rest = &packet.payload[1..];
@@ -232,6 +262,16 @@ fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
     ]))
 }
 
+fn server_lower_capability_flags_offset(payload: &[u8]) -> Option<usize> {
+    if payload.first() != Some(&0x0a) {
+        return None;
+    }
+    let server_version_len = payload.get(1..)?.iter().position(|byte| *byte == 0)? + 1;
+    let offset = 1 + server_version_len + 4 + 8 + 1;
+    payload.get(offset..offset + 2)?;
+    Some(offset)
+}
+
 fn read_null_string(bytes: &[u8], offset: usize) -> Option<(String, usize)> {
     let rest = bytes.get(offset..)?;
     let end = rest.iter().position(|byte| *byte == 0)?;
@@ -298,6 +338,55 @@ mod tests {
     }
 
     #[test]
+    fn clears_compression_from_client_handshake_response() {
+        let expected_flags = CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
+        let mut packet = MysqlPacket {
+            sequence_id: 1,
+            payload: {
+                let mut payload = vec![0_u8; 32];
+                payload[0..4].copy_from_slice(&(expected_flags | CLIENT_COMPRESS).to_le_bytes());
+                payload
+            },
+        };
+
+        assert!(clear_client_compression_capability(&mut packet));
+        assert_eq!(
+            parse_handshake_response(&packet).capability_flags,
+            expected_flags
+        );
+        assert!(!clear_client_compression_capability(&mut packet));
+    }
+
+    #[test]
+    fn clears_compression_from_protocol_v10_server_handshake() {
+        let expected_flags = CLIENT_SECURE_CONNECTION | CLIENT_CONNECT_WITH_DB;
+        let mut packet = MysqlPacket {
+            sequence_id: 0,
+            payload: server_handshake_payload(expected_flags | CLIENT_COMPRESS),
+        };
+        let offset = server_lower_capability_flags_offset(&packet.payload).unwrap();
+
+        assert!(clear_server_compression_capability(&mut packet));
+        assert_eq!(
+            read_u16_le(&packet.payload, offset).unwrap(),
+            expected_flags as u16
+        );
+        assert!(!clear_server_compression_capability(&mut packet));
+    }
+
+    #[test]
+    fn leaves_unrecognized_server_handshake_unchanged() {
+        let mut packet = MysqlPacket {
+            sequence_id: 0,
+            payload: vec![0x09, 0x20, 0x00],
+        };
+        let original = packet.clone();
+
+        assert!(!clear_server_compression_capability(&mut packet));
+        assert_eq!(packet, original);
+    }
+
+    #[test]
     fn parses_query_command() {
         let packet = MysqlPacket {
             sequence_id: 0,
@@ -331,5 +420,18 @@ mod tests {
             1290
         );
         assert!(packet.payload.windows(5).any(|window| window == b"HY000"));
+    }
+
+    fn server_handshake_payload(capability_flags: u32) -> Vec<u8> {
+        let mut payload = vec![0x0a];
+        payload.extend_from_slice(b"8.0.0-test\0");
+        payload.extend_from_slice(&42_u32.to_le_bytes());
+        payload.extend_from_slice(b"12345678");
+        payload.push(0);
+        payload.extend_from_slice(&(capability_flags as u16).to_le_bytes());
+        payload.push(0x21);
+        payload.extend_from_slice(&0_u16.to_le_bytes());
+        payload.extend_from_slice(&((capability_flags >> 16) as u16).to_le_bytes());
+        payload
     }
 }

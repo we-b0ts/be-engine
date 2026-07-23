@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use anyhow::{Context, Result, bail};
@@ -11,10 +12,12 @@ use tracing::info;
 use crate::config::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
+use crate::dependency::DiscoveredTcpTarget;
 use crate::dns_mock::{FakeDnsRegistry, FakeDnsUpstreamProtocol};
 
 mod kubectl_proxy;
 mod pluto;
+mod vintage;
 
 pub(crate) use kubectl_proxy::KubectlProxyManager;
 use kubectl_proxy::KubectlProxySpec;
@@ -31,6 +34,7 @@ pub(crate) struct RewriteInput<'a> {
 pub(crate) struct RewrittenResponse {
     pub(crate) headers: HeaderMap,
     pub(crate) body: Bytes,
+    pub(crate) discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
 }
 
 trait Plugin: Send + Sync {
@@ -41,17 +45,22 @@ trait Plugin: Send + Sync {
 enum PluginResult {
     Unchanged,
     Rewritten {
-        body: Vec<u8>,
-        target: DiscoveredTarget,
-        kubectl_proxy: KubectlProxySpec,
+        body: Box<RewrittenBody>,
+        targets: Vec<DiscoveredTarget>,
+        kubectl_proxy: Option<KubectlProxySpec>,
     },
+}
+
+enum RewrittenBody {
+    Complete(Vec<u8>),
+    Vintage(vintage::ResponsePlan),
 }
 
 struct DiscoveredTarget {
     alias: String,
     connect_ip: Ipv4Addr,
-    upstream_authority: String,
-    upstream_protocol: FakeDnsUpstreamProtocol,
+    upstream_authority: Option<String>,
+    upstream_protocol: Option<FakeDnsUpstreamProtocol>,
 }
 
 pub(crate) async fn apply(
@@ -78,11 +87,14 @@ pub(crate) async fn apply(
             *proxy_listen,
             recorder_ca_pem,
         )?),
+        HttpResponseRewritePluginConfig::VintageNaming { services, clusters } => {
+            Box::new(vintage::Naming::new(services, clusters))
+        }
     };
 
     let PluginResult::Rewritten {
         body,
-        target,
+        targets,
         kubectl_proxy,
     } = plugin
         .rewrite(&input)
@@ -91,39 +103,66 @@ pub(crate) async fn apply(
         return Ok(None);
     };
 
-    kubectl_proxy_manager
-        .ensure_running(kubectl_proxy)
-        .await
-        .with_context(|| {
-            format!(
-                "HTTP response rewrite plugin {} proxy failed",
-                plugin.name()
-            )
-        })?;
+    if let Some(kubectl_proxy) = kubectl_proxy {
+        kubectl_proxy_manager
+            .ensure_running(kubectl_proxy)
+            .await
+            .with_context(|| {
+                format!(
+                    "HTTP response rewrite plugin {} proxy failed",
+                    plugin.name()
+                )
+            })?;
+    }
 
-    registry
-        .register_response_alias(
-            &target.alias,
-            target.connect_ip,
-            &target.upstream_authority,
-            target.upstream_protocol,
-        )
-        .await
+    let mut registered = BTreeMap::new();
+    for target in targets {
+        let entry = match (&target.upstream_authority, target.upstream_protocol) {
+            (Some(authority), Some(protocol)) => {
+                registry
+                    .register_response_alias(&target.alias, target.connect_ip, authority, protocol)
+                    .await
+            }
+            (None, None) => {
+                registry
+                    .register_raw_tcp_response_alias(&target.alias, target.connect_ip)
+                    .await
+            }
+            _ => bail!(
+                "HTTP response rewrite target {:?} has incomplete upstream metadata",
+                target.alias
+            ),
+        }
         .with_context(|| format!("failed to register response alias {}", target.alias))?;
+        info!(
+            rule = rule.name,
+            plugin = plugin.name(),
+            alias = target.alias,
+            fake_ip = %entry.fake_ip,
+            connect_ip = %target.connect_ip,
+            "registered response-discovered target"
+        );
+        registered.insert(target.connect_ip, entry);
+    }
+    let (body, discovered_tcp_targets) = match *body {
+        RewrittenBody::Complete(body) => (body, Vec::new()),
+        RewrittenBody::Vintage(plan) => plan
+            .render(&registered)
+            .context("failed to render rewritten Vintage naming response")?,
+    };
 
     let mut headers = input.headers.clone();
     normalize_rewritten_headers(&mut headers, body.len())?;
     info!(
         rule = rule.name,
         plugin = plugin.name(),
-        alias = target.alias,
-        connect_ip = %target.connect_ip,
-        upstream_authority = target.upstream_authority,
+        discovered_tcp_targets = discovered_tcp_targets.len(),
         "rewrote HTTP response and registered discovered target"
     );
     Ok(Some(RewrittenResponse {
         headers,
         body: Bytes::from(body),
+        discovered_tcp_targets,
     }))
 }
 

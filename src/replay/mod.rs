@@ -33,6 +33,7 @@ mod kafka;
 mod legacy_tests;
 mod memcached;
 mod model;
+mod motan;
 mod mysql;
 mod policy;
 mod redis;
@@ -186,6 +187,7 @@ impl ReplayRuntime {
         let mut redis = redis::RedisReplayState::default();
         let mut memcached = memcached::MemcachedReplayState::default();
         let mut kafka = kafka::KafkaReplayState::default();
+        let mut motan = motan::MotanReplayState::default();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
         let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
@@ -209,10 +211,14 @@ impl ReplayRuntime {
                 &mut redis,
                 &mut memcached,
                 &mut kafka,
+                &mut motan,
                 &mut targets,
                 &mut connection_identities,
             )
             .await?;
+        }
+        if let Some(path) = find_upward(&root_dir, "bootstrap-dependencies-debug.jsonl") {
+            load_motan_debug_file(&path, &mut motan, &mut targets).await?;
         }
         for (index, case) in cases.values().enumerate() {
             load_dependency_file(
@@ -224,8 +230,15 @@ impl ReplayRuntime {
                 &mut redis,
                 &mut memcached,
                 &mut kafka,
+                &mut motan,
                 &mut targets,
                 &mut connection_identities,
+            )
+            .await?;
+            load_motan_debug_file(
+                &case.dir.join("dependencies-debug.jsonl"),
+                &mut motan,
+                &mut targets,
             )
             .await?;
             let loaded_cases = index + 1;
@@ -297,6 +310,7 @@ impl ReplayRuntime {
             redis,
             memcached,
             kafka,
+            motan,
             http_events: http::HttpReplayEvents::default(),
             report_write_lock: Arc::new(Mutex::new(())),
             ca_cert_path,
@@ -390,6 +404,7 @@ struct ReplayState {
     redis: redis::RedisReplayState,
     memcached: memcached::MemcachedReplayState,
     kafka: kafka::KafkaReplayState,
+    motan: motan::MotanReplayState,
     http_events: http::HttpReplayEvents,
     report_write_lock: Arc<Mutex<()>>,
     ca_cert_path: PathBuf,
@@ -451,6 +466,7 @@ impl ReplayState {
                 redis: self.redis.snapshot(),
                 memcached: self.memcached.snapshot(),
                 kafka: self.kafka.snapshot(),
+                motan: self.motan.snapshot(),
             },
             ca_cert_path: self.ca_cert_path.display().to_string(),
             replay_policy: self.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
@@ -520,6 +536,15 @@ async fn handle_gateway_connection(
             kafka::handle_connection(
                 stream,
                 target.context("Kafka replay connection has no target")?,
+                state,
+                report_writer,
+            )
+            .await
+        }
+        Some(ReplayProtocol::Motan) => {
+            motan::handle_connection(
+                stream,
+                target.context("Motan replay connection has no target")?,
                 state,
                 report_writer,
             )

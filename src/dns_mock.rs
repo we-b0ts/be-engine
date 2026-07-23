@@ -129,6 +129,15 @@ impl FakeDnsRegistry {
         .await
     }
 
+    pub async fn register_raw_tcp_response_alias(
+        &self,
+        alias: &str,
+        real_ip: Ipv4Addr,
+    ) -> Result<FakeDnsEntry> {
+        self.allocate_or_update_entry(alias, vec![real_ip], true, None, None)
+            .await
+    }
+
     async fn allocate_or_update(
         &self,
         domain: &str,
@@ -647,6 +656,23 @@ mod tests {
         assert_eq!(alias.real_ips, vec![Ipv4Addr::LOCALHOST]);
         assert_eq!(alias.upstream_authority.as_deref(), Some("127.0.0.1:8001"));
         assert_eq!(alias.upstream_protocol, Some(FakeDnsUpstreamProtocol::Http));
+    }
+
+    #[tokio::test]
+    async fn registry_allocates_raw_tcp_response_alias() {
+        let registry = FakeDnsRegistry::new("198.18.0.0/15").unwrap();
+        let entry = registry
+            .register_raw_tcp_response_alias(
+                "vintage-node-10-145-1-107.trp.test",
+                Ipv4Addr::new(10, 145, 1, 107),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(entry.real_ips, vec![Ipv4Addr::new(10, 145, 1, 107)]);
+        assert!(entry.response_alias);
+        assert!(entry.upstream_authority.is_none());
+        assert!(entry.upstream_protocol.is_none());
     }
 
     #[tokio::test]

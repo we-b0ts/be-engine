@@ -69,6 +69,7 @@ impl ReplayReport {
             || self.protocols.redis.is_dirty()
             || self.protocols.memcached.is_dirty()
             || self.protocols.kafka.is_dirty()
+            || self.protocols.motan.is_dirty()
             || self
                 .replay_policy
                 .as_ref()
@@ -102,6 +103,7 @@ impl ReplayReport {
             || self.protocols.redis.case_is_dirty(case_id)
             || self.protocols.memcached.case_is_dirty(case_id)
             || self.protocols.kafka.case_is_dirty(case_id)
+            || self.protocols.motan.case_is_dirty(case_id)
     }
 }
 
@@ -117,6 +119,7 @@ pub(in crate::replay) struct ProtocolsReport {
     pub(in crate::replay) redis: report::command::CommandProtocolReport,
     pub(in crate::replay) memcached: report::command::CommandProtocolReport,
     pub(in crate::replay) kafka: kafka::KafkaProtocolReport,
+    pub(in crate::replay) motan: report::command::CommandProtocolReport,
 }
 
 #[derive(Debug, Clone, Serialize)]

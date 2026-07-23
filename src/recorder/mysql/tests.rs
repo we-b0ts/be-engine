@@ -6,6 +6,7 @@ use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::mysql::wire::{CLIENT_COMPRESS, CLIENT_CONNECT_WITH_DB};
 use crate::{
     AppConfig, MysqlWriteOperation, RecordingAccessPolicy, RecordingAccessRuleConfig,
     RecordingAccessRuleEffect,
@@ -117,7 +118,7 @@ async fn blocked_select_for_update_returns_mysql_error_without_reaching_upstream
 }
 
 #[tokio::test]
-async fn pending_query_records_client_termination() {
+async fn pending_query_uses_uncompressed_framing_and_records_client_termination() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();
     let mut config = AppConfig::default();
@@ -158,24 +159,35 @@ async fn pending_query_records_client_termination() {
         .write_all(
             &MysqlPacket {
                 sequence_id: 0,
-                payload: vec![0x0a],
+                payload: server_handshake_payload(CLIENT_COMPRESS),
             }
             .to_wire_bytes(),
         )
         .await
         .unwrap();
-    assert!(read_packet(&mut client).await.unwrap().is_some());
+    let forwarded_handshake = read_packet(&mut client).await.unwrap().unwrap();
+    assert_eq!(
+        server_lower_capability_flags(&forwarded_handshake.payload) & CLIENT_COMPRESS as u16,
+        0
+    );
+    let mut compressed_login_payload = login_payload("pluto");
+    compressed_login_payload[0..4]
+        .copy_from_slice(&(CLIENT_CONNECT_WITH_DB | CLIENT_COMPRESS).to_le_bytes());
     client
         .write_all(
             &MysqlPacket {
                 sequence_id: 1,
-                payload: login_payload("pluto"),
+                payload: compressed_login_payload,
             }
             .to_wire_bytes(),
         )
         .await
         .unwrap();
-    assert!(read_packet(&mut upstream).await.unwrap().is_some());
+    let forwarded_login = read_packet(&mut upstream).await.unwrap().unwrap();
+    assert_eq!(
+        parse_handshake_response(&forwarded_login).capability_flags & CLIENT_COMPRESS,
+        0
+    );
     upstream
         .write_all(
             &MysqlPacket {
@@ -646,6 +658,25 @@ fn login_payload(database: &str) -> Vec<u8> {
     payload.extend_from_slice(database.as_bytes());
     payload.push(0);
     payload
+}
+
+fn server_handshake_payload(capability_flags: u32) -> Vec<u8> {
+    let mut payload = vec![0x0a];
+    payload.extend_from_slice(b"8.0.0-test\0");
+    payload.extend_from_slice(&42_u32.to_le_bytes());
+    payload.extend_from_slice(b"12345678");
+    payload.push(0);
+    payload.extend_from_slice(&(capability_flags as u16).to_le_bytes());
+    payload.push(0x21);
+    payload.extend_from_slice(&0_u16.to_le_bytes());
+    payload.extend_from_slice(&((capability_flags >> 16) as u16).to_le_bytes());
+    payload
+}
+
+fn server_lower_capability_flags(payload: &[u8]) -> u16 {
+    let server_version_len = payload[1..].iter().position(|byte| *byte == 0).unwrap() + 1;
+    let offset = 1 + server_version_len + 4 + 8 + 1;
+    u16::from_le_bytes([payload[offset], payload[offset + 1]])
 }
 
 fn observe_payload(

@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::dependency::DependencyExchangeOutcome;
+use crate::dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct BodyCapture {
@@ -50,6 +50,8 @@ pub enum RecorderEvent {
     KafkaProduce(KafkaProduceEvent),
     KafkaFetch(KafkaFetchEvent),
     KafkaDelivery(KafkaDeliveryEvent),
+    MotanConnection(MotanConnectionEvent),
+    MotanExchange(MotanExchangeEvent),
     MysqlConnection(MysqlConnectionEvent),
     MysqlQuery(MysqlQueryEvent),
     MysqlResponse(MysqlResponseEvent),
@@ -75,6 +77,8 @@ impl RecorderEvent {
             Self::KafkaProduce(_) => "kafka_produce",
             Self::KafkaFetch(_) => "kafka_fetch",
             Self::KafkaDelivery(_) => "kafka_delivery",
+            Self::MotanConnection(_) => "motan_connection",
+            Self::MotanExchange(_) => "motan_exchange",
             Self::MysqlConnection(_) => "mysql_connection",
             Self::MysqlQuery(_) => "mysql_query",
             Self::MysqlResponse(_) => "mysql_response",
@@ -100,6 +104,8 @@ impl RecorderEvent {
             Self::KafkaProduce(event) => event.client_process.as_ref(),
             Self::KafkaFetch(event) => event.client_process.as_ref(),
             Self::KafkaDelivery(event) => event.client_process.as_ref(),
+            Self::MotanConnection(event) => event.client_process.as_ref(),
+            Self::MotanExchange(event) => event.client_process.as_ref(),
             Self::MysqlConnection(event) => event.client_process.as_ref(),
             Self::MysqlQuery(event) => event.client_process.as_ref(),
             Self::MysqlResponse(event) => event.client_process.as_ref(),
@@ -137,6 +143,8 @@ pub struct HttpExchangeEvent {
     pub response_status: Option<u16>,
     pub response_headers: Option<HeaderMapSnapshot>,
     pub response_body: Option<BodyCapture>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
     pub duration_ms: u128,
     pub error: Option<String>,
 }
@@ -366,6 +374,54 @@ pub struct KafkaDeliveryEvent {
     pub headers: Vec<KafkaHeaderCapture>,
     pub value: Option<BodyCapture>,
     pub message_timestamp_ms: i64,
+    pub replay_safe: bool,
+    pub parse_warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MotanConnectionEvent {
+    pub id: Uuid,
+    pub timestamp: DateTime<Utc>,
+    pub phase: String,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub target_addr: String,
+    pub advertised_ip: std::net::Ipv4Addr,
+    pub upstream_addr: String,
+    pub duration_ms: Option<u128>,
+    pub client_to_server_bytes: u64,
+    pub server_to_client_bytes: u64,
+    pub replay_safe: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MotanExchangeEvent {
+    pub id: Uuid,
+    pub connection_id: Uuid,
+    pub sequence: u64,
+    pub timestamp: DateTime<Utc>,
+    pub client_addr: Option<String>,
+    pub client_process: Option<ProcessInfo>,
+    pub target_host: String,
+    pub target_port: u16,
+    pub target_addr: String,
+    pub advertised_ip: std::net::Ipv4Addr,
+    pub upstream_addr: String,
+    pub codec_version: u8,
+    pub interface_name: Option<String>,
+    pub method_name: Option<String>,
+    pub parameter_desc: Option<String>,
+    pub method_sign: Option<String>,
+    pub command: String,
+    pub request: BodyCapture,
+    pub response_status: String,
+    pub response: BodyCapture,
+    pub heartbeat: bool,
+    pub outcome: DependencyExchangeOutcome,
+    pub duration_ms: u128,
     pub replay_safe: bool,
     pub parse_warnings: Vec<String>,
 }

@@ -397,11 +397,12 @@ https_ports = []
 enabled = true
 redis_port_hints = [6379]
 memcached_port_hints = [11211]
+kafka_port_hints = [9092]
 
 [[tcp_gateway.protocol_detection.overrides]]
 host = "cache.internal"
 port = 6380
-protocol = "redis" # redis | memcached | raw
+protocol = "redis" # redis | memcached | kafka | motan | raw
 ```
 
 Set up local DNS capture. This keeps the recorder on non-privileged port
@@ -617,6 +618,12 @@ Records are appended to the current run's `traffic.jsonl`. Event types include:
 - `redis_exchange`
 - `memcached_connection`
 - `memcached_exchange`
+- `kafka_connection`
+- `kafka_produce`
+- `kafka_fetch`
+- `kafka_delivery`
+- `motan_connection`
+- `motan_exchange`
 - `proxy_error`
 
 HTTP/HTTPS bodies and binary-safe cache arguments, values, and response frames

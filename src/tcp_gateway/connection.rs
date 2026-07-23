@@ -20,6 +20,9 @@ use crate::recorder::kafka::{KafkaConnectionContext, handle_connected as handle_
 use crate::recorder::memcached::{
     ConnectionContext as MemcachedConnectionContext, handle_connected as handle_connected_memcached,
 };
+use crate::recorder::motan::{
+    ConnectionContext as MotanConnectionContext, handle_connected as handle_connected_motan,
+};
 use crate::recorder::mysql::{MysqlConnectionContext, handle_connected_mysql};
 use crate::recorder::redis::{
     ConnectionContext as RedisConnectionContext, handle_connected as handle_connected_redis,
@@ -346,6 +349,26 @@ async fn proxy_raw_tcp(
                     target_host: entry.domain.clone(),
                     target_port: fake_addr.port(),
                     target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
+                    upstream_addr: upstream_addr.to_string(),
+                },
+            )
+            .await
+        }
+        DetectedProtocol::Motan => {
+            handle_connected_motan(
+                client,
+                upstream,
+                state,
+                MotanConnectionContext {
+                    client_addr,
+                    client_process,
+                    target_host: entry.domain.clone(),
+                    target_port: fake_addr.port(),
+                    target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
+                    advertised_ip: match fake_addr {
+                        SocketAddr::V4(address) => *address.ip(),
+                        SocketAddr::V6(_) => unreachable!("fake-IP gateway only accepts IPv4"),
+                    },
                     upstream_addr: upstream_addr.to_string(),
                 },
             )

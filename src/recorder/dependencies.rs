@@ -118,6 +118,8 @@ impl Recorder {
                     | "kafka_produce"
                     | "kafka_fetch"
                     | "kafka_delivery"
+                    | "motan_connection"
+                    | "motan_exchange"
             ) && value
                 .get("replay_safe")
                 .and_then(serde_json::Value::as_bool)
@@ -134,7 +136,7 @@ impl Recorder {
             if event_type == "proxy_error"
                 && matches!(
                     value.get("protocol").and_then(serde_json::Value::as_str),
-                    Some("redis" | "memcached" | "kafka")
+                    Some("redis" | "memcached" | "kafka" | "motan")
                 )
             {
                 return Ok(Some(format!(
@@ -211,6 +213,7 @@ fn is_debug_event(event: &RecorderEvent) -> bool {
             | RecorderEvent::MysqlResponse(_)
             | RecorderEvent::MysqlPacket(_)
     ) || matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "QUIT")
+        || matches!(event, RecorderEvent::MotanExchange(exchange) if exchange.heartbeat)
 }
 
 fn compact_process_info(value: &mut serde_json::Value) {
@@ -242,8 +245,8 @@ mod tests {
     use super::*;
     use crate::DependencyExchangeOutcome;
     use crate::recorder::{
-        MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent, RedisExchangeEvent,
-        capture_body,
+        MotanExchangeEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlQueryEvent,
+        RedisExchangeEvent, capture_body,
     };
 
     #[tokio::test]
@@ -464,6 +467,62 @@ mod tests {
         assert!(!debug.contains("\"command\":\"GET\""));
     }
 
+    #[tokio::test]
+    async fn motan_heartbeat_is_kept_in_debug_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: None,
+        };
+        let connection_id = Uuid::new_v4();
+        let heartbeat = RecorderEvent::MotanExchange(motan_exchange(
+            connection_id,
+            1,
+            "com.weibo.api.motan.rpc.heartbeat#heartbeat",
+            true,
+        ));
+        let business = RecorderEvent::MotanExchange(motan_exchange(
+            connection_id,
+            2,
+            "cn.sina.api.data.service.SinaUserService#getUser",
+            false,
+        ));
+
+        for event in [&heartbeat, &business] {
+            recorder
+                .append_case_dependency(&case, event, "process")
+                .await
+                .unwrap();
+        }
+        let case_dir = recorder.case_staging_dir(&case);
+        recorder
+            .flush_case_dependency_files(&case_dir)
+            .await
+            .unwrap();
+
+        let semantic = tokio::fs::read_to_string(case_dir.join("dependencies.jsonl"))
+            .await
+            .unwrap();
+        assert!(semantic.contains("SinaUserService#getUser"));
+        assert!(!semantic.contains("motan.rpc.heartbeat"));
+        let debug = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
+            .await
+            .unwrap();
+        assert!(debug.contains("motan.rpc.heartbeat"));
+        assert!(!debug.contains("SinaUserService#getUser"));
+
+        super::super::summary::write_case_dependency_summary(&case_dir)
+            .await
+            .unwrap();
+        let summary = tokio::fs::read_to_string(case_dir.join("dependencies-summary.json"))
+            .await
+            .unwrap();
+        assert!(summary.contains("SinaUserService#getUser"));
+        assert!(!summary.contains("motan.rpc.heartbeat"));
+    }
+
     fn mysql_query(
         connection_id: Uuid,
         sequence: u64,
@@ -555,6 +614,53 @@ mod tests {
             session_setup: false,
             outcome,
             duration_ms: 0,
+            replay_safe: true,
+            parse_warnings: Vec::new(),
+        }
+    }
+
+    fn motan_exchange(
+        connection_id: Uuid,
+        sequence: u64,
+        command: &str,
+        heartbeat: bool,
+    ) -> MotanExchangeEvent {
+        MotanExchangeEvent {
+            id: Uuid::new_v4(),
+            connection_id,
+            sequence,
+            timestamp: Utc::now(),
+            client_addr: None,
+            client_process: None,
+            target_host: "vintage-node-10-0-0-1.trp.test".to_string(),
+            target_port: 8881,
+            target_addr: "vintage-node-10-0-0-1.trp.test:8881".to_string(),
+            advertised_ip: "198.19.0.20".parse().unwrap(),
+            upstream_addr: "10.0.0.1:8881".to_string(),
+            codec_version: 1,
+            interface_name: Some(if heartbeat {
+                "com.weibo.api.motan.rpc.heartbeat".to_string()
+            } else {
+                "cn.sina.api.data.service.SinaUserService".to_string()
+            }),
+            method_name: Some(if heartbeat {
+                "heartbeat".to_string()
+            } else {
+                "getUser".to_string()
+            }),
+            parameter_desc: Some(if heartbeat {
+                "void".to_string()
+            } else {
+                "long".to_string()
+            }),
+            method_sign: None,
+            command: command.to_string(),
+            request: capture_body(b"request", 1024),
+            response_status: "value".to_string(),
+            response: capture_body(b"response", 1024),
+            heartbeat,
+            outcome: DependencyExchangeOutcome::Response,
+            duration_ms: 1,
             replay_safe: true,
             parse_warnings: Vec::new(),
         }
