@@ -11,6 +11,7 @@ mod gateway;
 mod http;
 mod kafka;
 mod memcached;
+mod motan;
 mod mysql;
 mod path_pattern;
 mod process_lookup;
@@ -66,7 +67,7 @@ pub use config::{
     VerifiedApiVerification, ensure_verified_api_exclude, plan_allowed_unused_http_hosts,
     plan_background_dependency, plan_case_path_pattern_feedback, plan_verified_api_exclude,
 };
-pub use dependency::DependencyExchangeOutcome;
+pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
     E2eApiRunResult, E2eApiVerificationOverride, E2eFocusedApiStatus, E2eRunContext,
@@ -79,11 +80,12 @@ pub use recorder::{
     AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
     HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaFetchEvent,
     KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent,
-    MysqlColumn, MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
-    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
-    ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
-    RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,
-    capture_body_with_original_len, capture_case_body, redact_headers,
+    MotanConnectionEvent, MotanExchangeEvent, MysqlColumn, MysqlConnectionEvent,
+    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
+    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
+    ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
+    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
+    capture_case_body, redact_headers,
 };
 pub use replay::{
     DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
@@ -584,6 +586,7 @@ mod tests {
             response_status: Some(200),
             response_headers: Some(Default::default()),
             response_body: Some(capture_body(&response, response.len())),
+            discovered_tcp_targets: Vec::new(),
             duration_ms: 10,
             error: None,
         })

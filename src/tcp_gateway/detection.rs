@@ -13,6 +13,7 @@ pub(crate) enum DetectedProtocol {
     MemcachedText,
     MemcachedBinary,
     Kafka,
+    Motan,
     Raw,
 }
 
@@ -42,6 +43,7 @@ pub(crate) fn protocol_override(
             TcpApplicationProtocol::Redis => DetectedProtocol::Redis,
             TcpApplicationProtocol::Memcached => DetectedProtocol::MemcachedText,
             TcpApplicationProtocol::Kafka => DetectedProtocol::Kafka,
+            TcpApplicationProtocol::Motan => DetectedProtocol::Motan,
             TcpApplicationProtocol::Raw => DetectedProtocol::Raw,
         })
 }
@@ -49,6 +51,9 @@ pub(crate) fn protocol_override(
 pub(crate) fn detect_client_protocol(bytes: &[u8]) -> Detection {
     if bytes.is_empty() {
         return Detection::NeedMore;
+    }
+    if bytes.starts_with(&[0xF1]) {
+        return detect_motan(bytes);
     }
     if bytes[0] == MEMCACHED_BINARY_REQUEST_MAGIC {
         return detect_memcached_binary(bytes);
@@ -74,6 +79,23 @@ pub(crate) fn detect_client_protocol(bytes: &[u8]) -> Detection {
         };
     }
     detect_text_protocol(bytes)
+}
+
+fn detect_motan(bytes: &[u8]) -> Detection {
+    if bytes.len() < 2 {
+        return Detection::NeedMore;
+    }
+    if bytes[..2] != [0xF1, 0xF1] {
+        return Detection::NoMatch;
+    }
+    if bytes.len() < 18 {
+        return Detection::NeedMore;
+    }
+    if bytes[16..18] == [0xF0, 0xF0] {
+        Detection::Match(DetectedProtocol::Motan)
+    } else {
+        Detection::NoMatch
+    }
 }
 
 fn redis_array_is_command(values: &[redis_protocol::resp2::types::OwnedFrame]) -> bool {
@@ -208,6 +230,13 @@ mod tests {
         assert_eq!(
             detect_client_protocol(b"get key\r\n"),
             Detection::Match(DetectedProtocol::MemcachedText)
+        );
+        let mut motan = vec![0_u8; 18];
+        motan[..2].copy_from_slice(&[0xF1, 0xF1]);
+        motan[16..18].copy_from_slice(&[0xF0, 0xF0]);
+        assert_eq!(
+            detect_client_protocol(&motan),
+            Detection::Match(DetectedProtocol::Motan)
         );
     }
 

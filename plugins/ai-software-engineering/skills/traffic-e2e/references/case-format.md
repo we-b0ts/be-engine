@@ -160,12 +160,15 @@ Common semantic records:
 - `kafka_fetch`: requested topic set plus response or client-termination timing
 - `kafka_delivery`: exact topic, nullable key/value bytes, headers, and timestamp
   for a Kafka record delivered to the application, associated to its Fetch
+- `motan_connection` / `motan_exchange`: legacy Motan target metadata, codec and
+  method identity, exact binary frames, response outcome, and duration; the
+  frames may contain sensitive business objects
 - `tcp_gateway_connection`: captured TCP/fake-IP dependency connection metadata
 - `udp_datagram`: captured UDP/fake-IP dependency datagram or push side effect
 - `mysql_tls_rejected`: MySQL TLS rejection event; MySQL TLS MITM is out of scope
 - `proxy_error`: recorder or dependency proxy error
 
-Semantic MySQL, Redis, Memcached, and Kafka Produce/Fetch exchanges carry
+Semantic MySQL, Redis, Memcached, Kafka Produce/Fetch, and Motan exchanges carry
 `duration_ms` and an `outcome`. Replay waits the recorded duration before
 delivering a normal response. A replay-safe `client_terminated` exchange sends
 no response bytes and remains unconsumed until the same physical client
@@ -189,6 +192,9 @@ tests, commands, and config must never consume them as fixtures.
 `mysql_response`, and `mysql_packet`. Keep these out of normal E2E assertions
 unless the protocol detail itself is under test. Raw MySQL protocol type names,
 type codes, and flags belong in debug records, not normal semantic replay data.
+Recognized legacy Motan heartbeats are also debug-only; replay may reuse their
+exact response frame as protocol-maintenance behavior, but they are not a
+business dependency or acceptance-summary item.
 
 `dependencies-summary.json` is a derived coverage checklist generated from
 `dependencies.jsonl`. It is not the source of dependency data. Use it to see
@@ -231,6 +237,9 @@ First-version summary fields:
 - `kafka`: connection, produced and delivered record counts, topics, targets,
   unsafe evidence, and aggregate key/header/value byte counts. It never lists
   message contents.
+- `motan`: connection/exchange counts, targets, codec versions, methods,
+  exceptions, client terminations, and unsafe evidence. It never lists RPC
+  argument or response contents.
 - `http`: call counts, methods, authorities, status codes, and errors.
 - `tcp_gateway`: connection counts, domains, upstreams, and errors.
 - `udp`: datagram counts, protocols, target hosts/addrs, upstreams, payload

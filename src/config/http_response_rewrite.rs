@@ -33,6 +33,14 @@ pub enum HttpResponseRewritePluginConfig {
         kubectl_binary: String,
         proxy_listen: SocketAddr,
     },
+    VintageNaming {
+        #[serde(default)]
+        services: Vec<String>,
+        #[serde(default)]
+        clusters: Vec<String>,
+        #[serde(default = "default_true")]
+        force_full_lookup: bool,
+    },
 }
 
 impl HttpResponseRewriteConfig {
@@ -91,8 +99,18 @@ impl HttpResponseRewritePluginConfig {
                 }
                 Ok(())
             }
+            Self::VintageNaming {
+                services, clusters, ..
+            } => {
+                validate_values(rule_name, "plugin.services", services)?;
+                validate_values(rule_name, "plugin.clusters", clusters)
+            }
         }
     }
+}
+
+const fn default_true() -> bool {
+    true
 }
 
 fn validate_values(rule_name: &str, field: &str, values: &[String]) -> Result<()> {
@@ -104,6 +122,8 @@ fn validate_values(rule_name: &str, field: &str, values: &[String]) -> Result<()
 
 #[cfg(test)]
 mod tests {
+    use super::HttpResponseRewritePluginConfig;
+
     #[test]
     fn parses_pluto_eci_kubeconfig_rule() {
         let config: crate::AppConfig = toml::from_str(
@@ -152,5 +172,41 @@ mod tests {
         .unwrap();
 
         assert!(config.http_response_rewrite.validate().is_err());
+    }
+
+    #[test]
+    fn parses_vintage_naming_rule_with_refresh_enabled_by_default() {
+        let config: crate::AppConfig = toml::from_str(
+            r#"
+            [http_response_rewrite]
+            enabled = true
+
+            [dns_mock]
+            enabled = true
+
+            [tcp_gateway]
+            enabled = true
+            record_http = true
+
+            [[http_response_rewrite.rules]]
+            name = "vintage-motan"
+            authorities = ["static.config.api.demo.test"]
+            methods = ["GET"]
+            path = "/naming/service"
+            status_codes = [200]
+            content_types = ["application/json"]
+            plugin = { name = "vintage-naming", services = ["yf-rpc"], clusters = ["cn.sina.api.data.service.SinaUserService/service"] }
+            "#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+        let HttpResponseRewritePluginConfig::VintageNaming {
+            force_full_lookup, ..
+        } = &config.http_response_rewrite.rules[0].plugin
+        else {
+            panic!("expected Vintage naming plugin");
+        };
+        assert!(*force_full_lookup);
     }
 }

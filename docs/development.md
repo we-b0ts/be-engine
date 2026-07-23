@@ -143,16 +143,19 @@ requests continue to use the fallback upstream while the previous case drains.
 ### Rewriting HTTP Responses
 
 HTTP response rewriting is an opt-in recording feature for responses that
-publish a later connection target. The first built-in plugin,
-`pluto-eci-kubeconfig`, rewrites the Kubernetes API server in Pluto ECI's
+publish a later connection target. The `pluto-eci-kubeconfig` built-in plugin
+rewrites the Kubernetes API server in Pluto ECI's
 `user_config` JSON response from an IPv4 address to a synthetic `.test` domain.
-That domain is registered in the recorder's fake-DNS registry and routed to a
-local `kubectl proxy`, allowing the later HTTPS traffic to pass through the TCP
-gateway and be recorded. The rewritten kubeconfig uses HTTPS and replaces its
-cluster CA with the Recorder CA so client-go retains the TLS credentials and
-trusts the Recorder-generated certificate for the synthetic domain. The
-original kubeconfig, including its original CA and Kubernetes server IP, is
-passed unchanged to the managed `kubectl proxy`.
+The `vintage-naming` plugin rewrites legacy Motan node addresses published by
+Vintage naming responses.
+
+For Pluto ECI, that synthetic domain is registered in the recorder's fake-DNS
+registry and routed to a local `kubectl proxy`, allowing the later HTTPS traffic
+to pass through the TCP gateway and be recorded. The rewritten kubeconfig uses
+HTTPS and replaces its cluster CA with the Recorder CA so client-go retains the
+TLS credentials and trusts the Recorder-generated certificate for the
+synthetic domain. The original kubeconfig, including its original CA and
+Kubernetes server IP, is passed unchanged to the managed `kubectl proxy`.
 
 The rewrite rule reads the request authority and full path from configuration.
 Its `path` value includes the Pluto ECI cluster ID and is matched exactly, not
@@ -171,6 +174,23 @@ contents and paths are never logged or added as separate recording events.
 The fake-IP gateway terminates the synthetic HTTPS connection and forwards the
 decrypted request over plain HTTP to the managed proxy; the proxy independently
 uses the original kubeconfig for HTTPS and client authentication to Kubernetes.
+
+For Vintage, configure an exact `/naming/service` rule. By default it matches
+every service and cluster; optional `services` and `clusters` filters can
+intentionally limit interception to a known subset. The plugin handles
+`getsign`, `lookup`, and `lookupforupdate`: with `force_full_lookup = true` it changes the selected
+`getsign` response so the SDK performs a full lookup, then replaces every IPv4
+`host` in every `nodes` array with a stable fake IP while preserving the node
+port and all unknown response fields. Empty filters match every service or
+cluster.
+
+Each discovered original IPv4 address receives one stable
+`vintage-node-<address>.trp.test` alias. The rewritten HTTP exchange records the
+alias, original IP, fake IP, port, service, and cluster. Replay reserves the
+same fake IP before assigning any other target, so an SDK that caches the
+recorded naming response still connects to the Motan replay endpoint. A fake-IP
+collision or an address outside the configured replay CIDR fails replay
+startup instead of silently routing to a different target.
 
 Enable the example `[http_response_rewrite]` configuration in
 `config/recorder.example.toml` and ensure the configured `kubectl_binary` is
@@ -794,12 +814,28 @@ mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe bootstrap replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
 
-Semantic MySQL, Redis, Memcached, and Kafka business exchanges also carry
+Semantic MySQL, Redis, Memcached, Kafka, and Motan business exchanges also carry
 `outcome` and `duration_ms`. Replay waits the recorded duration before a normal
 response. If `outcome` is `client_terminated`, replay sends no response and
 consumes the exchange only after the SDK closes or resets the same connection
 near the recorded time; replay itself does not initiate that close. Intrinsic
 no-response commands remain `no_response` and are not treated as timeouts.
+
+Legacy Motan dependencies are semantic `motan_connection` and
+`motan_exchange` records. Recorder recognizes the F1F1 outer frame containing
+the F0F0 inner frame, supports codec versions 1 and 2 (including gzip-compressed
+codec-2 method metadata), correlates responses by request ID, and records exact
+binary request/response frames plus method identity. Replay matches business
+calls by codec, method identity, and recorded connection order, waits the
+recorded duration, and patches both response request IDs to the live request.
+Standard Motan heartbeat exchanges stay in `dependencies-debug.jsonl` and out
+of semantic dependencies and summaries; replay may use a recorded debug
+heartbeat response as a reusable template across nodes in the same pool.
+Motan2 framing is unsupported and fails closed. Recorder deliberately does not
+deserialize arbitrary Java arguments: it preserves exact frame bytes and
+replay uses method identity plus recorded connection order. Those frames may
+contain sensitive business objects, so protect the recording directory as
+production data.
 
 Kafka dependencies are semantic `kafka_connection`, `kafka_produce`,
 `kafka_fetch`, and `kafka_delivery` records. Each Fetch exchange records its
@@ -834,6 +870,7 @@ cargo test redis::
 cargo test memcached::
 cargo test replay::command_protocol_tests
 cargo test kafka::
+cargo test motan
 ```
 
 Network or root-requiring behavior should be covered with isolated unit tests

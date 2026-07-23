@@ -101,6 +101,7 @@ pub enum TcpApplicationProtocol {
     Redis,
     Memcached,
     Kafka,
+    Motan,
     Raw,
 }
 

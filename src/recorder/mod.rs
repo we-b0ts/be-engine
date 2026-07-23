@@ -20,6 +20,7 @@ pub(crate) mod http;
 mod jsonl;
 pub(crate) mod kafka;
 pub(crate) mod memcached;
+pub(crate) mod motan;
 pub(crate) mod mysql;
 pub(crate) mod redis;
 mod run;
@@ -234,10 +235,14 @@ fn should_write_traffic_event(mode: TrafficJsonlMode, event: &RecorderEvent) -> 
             RecorderEvent::RedisConnection(event) => event.error.is_some(),
             RecorderEvent::MemcachedConnection(event) => event.error.is_some(),
             RecorderEvent::KafkaConnection(event) => event.error.is_some(),
+            RecorderEvent::MotanConnection(event) => event.error.is_some(),
             RecorderEvent::MysqlConnection(event) => event.error.is_some(),
             RecorderEvent::MysqlPacket(event) => event.error_code.is_some(),
             RecorderEvent::MysqlResponse(event) => event.error_code.is_some(),
             RecorderEvent::MysqlExchange(event) => event.response.error_code.is_some(),
+            RecorderEvent::MotanExchange(event) => {
+                event.response_status == "exception" || !event.replay_safe
+            }
             RecorderEvent::MysqlTlsRejected(_)
             | RecorderEvent::AccessPolicyAllow(_)
             | RecorderEvent::ReadonlyRejection(_)

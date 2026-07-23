@@ -283,6 +283,7 @@ mod tests {
             response_status: Some(200),
             response_headers: Some(Default::default()),
             response_body: None,
+            discovered_tcp_targets: Vec::new(),
             duration_ms: 10,
             error: None,
         })

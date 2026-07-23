@@ -164,5 +164,14 @@ impl Ipv4Cidr {
         }
         Some(Ipv4Addr::from(self.network + offset))
     }
+
+    pub(super) fn offset_of(&self, ip: Ipv4Addr) -> Option<u32> {
+        let value = u32::from(ip);
+        if value < self.network {
+            return None;
+        }
+        let offset = value - self.network;
+        (offset < self.size).then_some(offset)
+    }
 }
 use super::*;

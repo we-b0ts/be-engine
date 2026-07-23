@@ -10,6 +10,7 @@ use crate::recorder::RecorderEvent;
 
 mod kafka;
 mod memcached;
+mod motan;
 mod redis;
 mod udp;
 use kafka::{
@@ -17,6 +18,7 @@ use kafka::{
     record_kafka_record_summary,
 };
 use memcached::{MemcachedDependencySummary, MemcachedSummaryBuilder};
+use motan::{MotanDependencySummary, MotanSummaryBuilder};
 use redis::{RedisDependencySummary, RedisSummaryBuilder};
 use udp::{UdpDependencySummary, record_udp_summary};
 
@@ -89,6 +91,8 @@ struct DependencySummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     kafka: Option<KafkaDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    motan: Option<MotanDependencySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     http: Option<HttpDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tcp_gateway: Option<TcpGatewayDependencySummary>,
@@ -107,6 +111,7 @@ struct DependencySummaryBuilder {
     redis: RedisSummaryBuilder,
     memcached: MemcachedSummaryBuilder,
     kafka: KafkaDependencySummary,
+    motan: MotanSummaryBuilder,
     http: HttpDependencySummary,
     tcp_gateway: TcpGatewayDependencySummary,
     udp: UdpDependencySummary,
@@ -130,6 +135,7 @@ impl DependencySummaryBuilder {
             redis,
             memcached,
             kafka: self.kafka.has_activity().then_some(self.kafka),
+            motan: self.motan.has_activity().then(|| self.motan.finish()),
             http: (self.http.calls > 0).then_some(self.http),
             tcp_gateway: (self.tcp_gateway.connections > 0).then_some(self.tcp_gateway),
             udp: (self.udp.datagrams > 0).then_some(self.udp),
@@ -290,6 +296,8 @@ fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
             "kafka_produce" => record_kafka_record_summary(&mut builder.kafka, &value, true),
             "kafka_fetch" => record_kafka_fetch_summary(&mut builder.kafka, &value),
             "kafka_delivery" => record_kafka_record_summary(&mut builder.kafka, &value, false),
+            "motan_connection" => builder.motan.record_connection(&value),
+            "motan_exchange" => builder.motan.record_exchange(&value),
             "http_exchange" => record_http_summary(&mut builder.http, &value),
             "tcp_gateway_connection" => {
                 record_tcp_gateway_summary(&mut builder.tcp_gateway, &value);

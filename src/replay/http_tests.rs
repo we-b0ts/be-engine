@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 use hyper::client::conn::http1;
@@ -68,6 +69,58 @@ fn one_fake_ip_is_reused_for_all_ports_on_a_host() {
     .unwrap();
     assert_eq!(targets.len(), 2);
     assert_eq!(targets[0].fake_ip, targets[1].fake_ip);
+}
+
+#[test]
+fn response_discovered_motan_target_reserves_its_recorded_fake_ip() {
+    let record = RecordedHttpExchange {
+        scheme: "http".to_string(),
+        method: "GET".to_string(),
+        uri: "/naming/service?action=lookup&service=yf-rpc&cluster=user/service".to_string(),
+        authority: Some("config.example.test".to_string()),
+        request_body: RecordedBodyCapture {
+            encoding: "utf8".to_string(),
+            truncated: false,
+            data: String::new(),
+        },
+        response_status: Some(200),
+        response_headers: None,
+        response_body: Some(RecordedBodyCapture {
+            encoding: "utf8".to_string(),
+            truncated: false,
+            data: "{}".to_string(),
+        }),
+        discovered_tcp_targets: vec![DiscoveredTcpTarget {
+            protocol: "motan".to_string(),
+            alias: "vintage-node-10-145-1-107.trp.test".to_string(),
+            advertised_ip: "198.19.0.20".parse().unwrap(),
+            upstream_ip: "10.145.1.107".parse().unwrap(),
+            port: 8881,
+            service: Some("yf-rpc".to_string()),
+            cluster: Some("user/service".to_string()),
+        }],
+        error: None,
+    };
+    let mut exchanges = Vec::new();
+    let mut targets = BTreeMap::new();
+
+    register_http_exchange(
+        record,
+        ReplaySource::Case,
+        Some("case"),
+        &mut exchanges,
+        &mut targets,
+    )
+    .unwrap();
+
+    let motan = targets
+        .get(&TargetKey {
+            host: "vintage-node-10-145-1-107.trp.test".to_string(),
+            port: 8881,
+        })
+        .unwrap();
+    assert_eq!(motan.protocol, ReplayProtocol::Motan);
+    assert_eq!(motan.fake_ip, "198.19.0.20".parse::<Ipv4Addr>().unwrap());
 }
 
 #[tokio::test]

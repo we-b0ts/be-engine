@@ -225,6 +225,81 @@ async fn consumes_memcached_timeout_only_after_client_close() {
 }
 
 #[tokio::test]
+async fn replays_motan_response_after_recorded_delay_with_live_request_id() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let recorded_request = motan_request(1);
+    let recorded_response = motan_response(1, b"recorded-response");
+    let dependency = motan_dependency(
+        Uuid::new_v4(),
+        1,
+        &recorded_request,
+        &recorded_response,
+        "response",
+        80,
+    );
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    let started = Instant::now();
+    client.write_all(&motan_request(99)).await.unwrap();
+    let mut response = vec![0_u8; recorded_response.len()];
+    client.read_exact(&mut response).await.unwrap();
+    assert!(started.elapsed() >= Duration::from_millis(70));
+    assert_eq!(u64::from_be_bytes(response[4..12].try_into().unwrap()), 99);
+    assert_eq!(u64::from_be_bytes(response[20..28].try_into().unwrap()), 99);
+
+    let report = wait_for_matched_count(&report_path, "motan", 1).await;
+    assert!(report["motan"]["unmatched"].as_array().unwrap().is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn consumes_motan_timeout_only_after_client_close() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let request = motan_request(1);
+    let dependency = motan_dependency(Uuid::new_v4(), 1, &request, &[], "client_terminated", 60);
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    client.write_all(&motan_request(42)).await.unwrap();
+    let mut probe = [0_u8; 1];
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), client.read(&mut probe))
+            .await
+            .is_err()
+    );
+    tokio::time::sleep(Duration::from_millis(40)).await;
+    client.shutdown().await.unwrap();
+
+    let report = wait_for_matched_count(&report_path, "motan", 1).await;
+    assert!(
+        report["motan"]["unsafe_events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn unsafe_redis_evidence_prevents_replay_startup() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case");
@@ -340,6 +415,74 @@ fn binary_get_request(opaque: u32) -> Vec<u8> {
     request[12..16].copy_from_slice(&opaque.to_be_bytes());
     request.extend_from_slice(b"key");
     request
+}
+
+fn motan_dependency(
+    connection_id: Uuid,
+    sequence: u64,
+    request: &[u8],
+    response: &[u8],
+    outcome: &str,
+    duration_ms: u64,
+) -> Value {
+    serde_json::json!({
+        "event_type": "motan_exchange",
+        "connection_id": connection_id,
+        "sequence": sequence,
+        "target_host": "vintage-node-10-145-1-107.trp.test",
+        "target_port": 8881,
+        "advertised_ip": "198.19.0.20",
+        "codec_version": 1,
+        "interface_name": "cn.sina.api.data.service.SinaUserService",
+        "method_name": "getUser",
+        "parameter_desc": "long",
+        "method_sign": null,
+        "command": "cn.sina.api.data.service.SinaUserService#getUser",
+        "request": capture_json(request),
+        "response": capture_json(response),
+        "heartbeat": false,
+        "outcome": outcome,
+        "duration_ms": duration_ms,
+        "replay_safe": true
+    })
+}
+
+fn motan_request(request_id: u64) -> Vec<u8> {
+    let values = [
+        "cn.sina.api.data.service.SinaUserService",
+        "getUser",
+        "long",
+    ];
+    let mut block = Vec::new();
+    for value in values {
+        block.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        block.extend_from_slice(value.as_bytes());
+    }
+    let mut body = vec![0xAC, 0xED, 0x00, 0x05, 0x77, block.len() as u8];
+    body.extend_from_slice(&block);
+    motan_frame(request_id, true, 0, &body)
+}
+
+fn motan_response(request_id: u64, body: &[u8]) -> Vec<u8> {
+    motan_frame(request_id, false, 1, body)
+}
+
+fn motan_frame(request_id: u64, request: bool, inner_flag: u8, body: &[u8]) -> Vec<u8> {
+    let mut inner = vec![0_u8; 16];
+    inner[..2].copy_from_slice(&[0xF0, 0xF0]);
+    inner[2] = 1;
+    inner[3] = inner_flag;
+    inner[4..12].copy_from_slice(&request_id.to_be_bytes());
+    inner[12..16].copy_from_slice(&(body.len() as u32).to_be_bytes());
+    inner.extend_from_slice(body);
+
+    let mut outer = vec![0_u8; 16];
+    outer[..2].copy_from_slice(&[0xF1, 0xF1]);
+    outer[3] = u8::from(!request);
+    outer[4..12].copy_from_slice(&request_id.to_be_bytes());
+    outer[12..16].copy_from_slice(&(inner.len() as u32).to_be_bytes());
+    outer.extend_from_slice(&inner);
+    outer
 }
 
 async fn wait_for_matched_count(path: &Path, protocol: &str, expected: usize) -> Value {

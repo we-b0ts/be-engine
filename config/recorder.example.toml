@@ -44,7 +44,7 @@ kafka_port_hints = [9092]
 # [[tcp_gateway.protocol_detection.overrides]]
 # host = "cache.internal"
 # port = 6380
-# protocol = "redis" # redis | memcached | kafka | raw
+# protocol = "redis" # redis | memcached | kafka | motan | raw
 
 [http_response_rewrite]
 # Response rewriting is opt-in. Recorder starts and manages kubectl proxy at
@@ -62,6 +62,20 @@ content_types = ["application/json"]
 # The plugin owns the fixed synthetic domain. Recorder starts and manages the
 # configured kubectl binary using the original kubeconfig from this response.
 plugin = { name = "pluto-eci-kubeconfig", kubectl_binary = "kubectl", proxy_listen = "127.0.0.1:8001" }
+
+# Vintage naming responses contain RPC node IPs in a JSON string nested under
+# the outer "body" field. This plugin replaces every selected node IP with a
+# stable fake-DNS address so the later legacy Motan connection reaches the TCP
+# gateway. Omitting services/clusters matches every value; add either field
+# only when recording is intentionally limited to a known subset.
+# [[http_response_rewrite.rules]]
+# name = "vintage-motan"
+# authorities = ["static.config.api.demo.test"]
+# methods = ["GET"]
+# path = "/naming/service"
+# status_codes = [200]
+# content_types = ["application/json"]
+# plugin = { name = "vintage-naming", force_full_lookup = true }
 
 [udp_gateway]
 # Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP

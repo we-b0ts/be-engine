@@ -284,6 +284,7 @@ async fn forward_and_record(
                     .await;
                 }
             };
+            let mut discovered_tcp_targets = Vec::new();
             match rewrite::apply(
                 &state.config().http_response_rewrite,
                 state.dns_registry(),
@@ -303,6 +304,7 @@ async fn forward_and_record(
                 Ok(Some(rewritten)) => {
                     response_headers = rewritten.headers;
                     body_bytes = rewritten.body;
+                    discovered_tcp_targets = rewritten.discovered_tcp_targets;
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -342,6 +344,7 @@ async fn forward_and_record(
                     &body_bytes,
                     state.config().recording.max_body_bytes,
                 )),
+                discovered_tcp_targets,
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
             };
@@ -413,6 +416,7 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
         response_status: None,
         response_headers: None,
         response_body: None,
+        discovered_tcp_targets: Vec::new(),
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),
     };

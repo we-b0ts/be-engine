@@ -25,8 +25,9 @@ use url::form_urlencoded;
 use super::{
     HttpPolicyContext, MitmCa, PolicyDecision, ReplayPolicyRuntime, ReplayProtocol,
     ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey, push_success_detail,
-    register_replay_target,
+    register_replay_target, register_replay_target_at,
 };
+use crate::DiscoveredTcpTarget;
 
 type HeaderSnapshot = BTreeMap<String, Vec<String>>;
 
@@ -40,6 +41,8 @@ pub(super) struct RecordedHttpExchange {
     response_status: Option<u16>,
     response_headers: Option<HeaderSnapshot>,
     response_body: Option<RecordedBodyCapture>,
+    #[serde(default)]
+    discovered_tcp_targets: Vec<DiscoveredTcpTarget>,
     error: Option<String>,
 }
 
@@ -120,6 +123,26 @@ pub(super) fn register_http_exchange(
     exchanges: &mut Vec<ReplayHttpExchange>,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
 ) -> Result<()> {
+    for discovered in &record.discovered_tcp_targets {
+        let protocol = match discovered.protocol.as_str() {
+            "motan" => ReplayProtocol::Motan,
+            other => {
+                return Err(anyhow!(
+                    "http_exchange {} advertises unsupported TCP protocol {other:?}",
+                    record.uri
+                ));
+            }
+        };
+        register_replay_target_at(
+            targets,
+            &TargetKey {
+                host: super::normalize_host(&discovered.alias),
+                port: discovered.port,
+            },
+            protocol,
+            Some(discovered.advertised_ip),
+        )?;
+    }
     let identity = identity_from_record(&record)?;
     let protocol = match identity.scheme {
         HttpReplayScheme::Http => ReplayProtocol::Http,
@@ -224,7 +247,8 @@ pub(super) async fn handle_http_replay_connection(
         ReplayProtocol::Mysql
         | ReplayProtocol::Redis
         | ReplayProtocol::Memcached
-        | ReplayProtocol::Kafka => Err(anyhow!("HTTP replay received a non-HTTP target")),
+        | ReplayProtocol::Kafka
+        | ReplayProtocol::Motan => Err(anyhow!("HTTP replay received a non-HTTP target")),
     }
 }
 
