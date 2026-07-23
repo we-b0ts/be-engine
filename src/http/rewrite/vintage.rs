@@ -11,21 +11,18 @@ use crate::dns_mock::FakeDnsEntry;
 use super::{DiscoveredTarget, Plugin, PluginResult, RewriteInput, RewrittenBody};
 
 const PLUGIN_NAME: &str = "vintage-naming";
-const FORCE_REFRESH_SIGN: &str = "traffic-e2e-force-full-lookup";
 const MAX_DISCOVERED_NODES: usize = 4096;
 
 pub(super) struct Naming {
     services: BTreeSet<String>,
     clusters: BTreeSet<String>,
-    force_full_lookup: bool,
 }
 
 impl Naming {
-    pub(super) fn new(services: &[String], clusters: &[String], force_full_lookup: bool) -> Self {
+    pub(super) fn new(services: &[String], clusters: &[String]) -> Self {
         Self {
             services: services.iter().cloned().collect(),
             clusters: clusters.iter().cloned().collect(),
-            force_full_lookup,
         }
     }
 
@@ -50,25 +47,6 @@ impl Plugin for Naming {
         }
 
         match action {
-            "getsign" if self.force_full_lookup => {
-                let mut outer = parse_outer(input.body)?;
-                ensure_success(&outer)?;
-                let body = outer
-                    .get_mut("body")
-                    .ok_or_else(|| anyhow!("Vintage getsign response has no body field"))?;
-                if !body.is_string() {
-                    bail!("Vintage getsign response body is not a string");
-                }
-                *body = Value::String(FORCE_REFRESH_SIGN.to_string());
-                Ok(PluginResult::Rewritten {
-                    body: Box::new(RewrittenBody::Complete(
-                        serde_json::to_vec(&outer)
-                            .context("failed to serialize Vintage getsign response")?,
-                    )),
-                    targets: Vec::new(),
-                    kubectl_proxy: None,
-                })
-            }
             "lookup" | "lookupforupdate" => {
                 let plan = ResponsePlan::parse(input.body, service, cluster)?;
                 let targets = plan
@@ -283,30 +261,36 @@ mod tests {
         }
     }
 
+    fn lookup_response(service: &str, cluster: &str) -> Vec<u8> {
+        let inner = serde_json::json!({
+            "service": service,
+            "cluster": cluster,
+            "sign": "abc",
+            "nodes": {
+                "working": [{"host": "10.145.1.107:8881", "extInfo": ""}]
+            }
+        });
+        serde_json::to_vec(&serde_json::json!({"code": "200", "body": inner.to_string()})).unwrap()
+    }
+
     #[test]
-    fn forces_getsign_mismatch_for_selected_cluster() {
-        let plugin = Naming::new(&[], &[], true);
+    fn leaves_getsign_unchanged() {
+        let plugin = Naming::new(&[], &[]);
         let uri: Uri = "/naming/service?action=getsign&service=yf-rpc&cluster=user/service"
             .parse()
             .unwrap();
-        let body = br#"{"code":"200","body":"original-sign"}"#;
 
-        let PluginResult::Rewritten { body, targets, .. } =
-            plugin.rewrite(&input(&uri, body)).unwrap()
-        else {
-            panic!("expected rewrite");
-        };
-        let RewrittenBody::Complete(body) = *body else {
-            panic!("expected complete body");
-        };
-        assert!(targets.is_empty());
-        let response: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(response["body"], FORCE_REFRESH_SIGN);
+        assert!(matches!(
+            plugin
+                .rewrite(&input(&uri, br#"{"code":"200","body":"original-sign"}"#))
+                .unwrap(),
+            PluginResult::Unchanged
+        ));
     }
 
     #[test]
     fn rewrites_all_node_sets_and_preserves_unknown_fields() {
-        let plugin = Naming::new(&["yf-rpc".to_string()], &[], true);
+        let plugin = Naming::new(&["yf-rpc".to_string()], &[]);
         let uri: Uri = "/naming/service?action=lookup&service=yf-rpc&cluster=user/service"
             .parse()
             .unwrap();
@@ -364,22 +348,21 @@ mod tests {
 
     #[test]
     fn leaves_unselected_service_unchanged() {
-        let plugin = Naming::new(&["other".to_string()], &[], true);
-        let uri: Uri = "/naming/service?action=getsign&service=yf-rpc&cluster=user/service"
+        let plugin = Naming::new(&["other".to_string()], &[]);
+        let uri: Uri = "/naming/service?action=lookup&service=yf-rpc&cluster=user/service"
             .parse()
             .unwrap();
+        let body = lookup_response("yf-rpc", "user/service");
         assert!(matches!(
-            plugin
-                .rewrite(&input(&uri, br#"{"code":"200","body":"original-sign"}"#))
-                .unwrap(),
+            plugin.rewrite(&input(&uri, &body)).unwrap(),
             PluginResult::Unchanged
         ));
     }
 
     #[test]
     fn rejects_selected_application_error_instead_of_rewriting_it() {
-        let plugin = Naming::new(&["yf-rpc".to_string()], &[], true);
-        let uri: Uri = "/naming/service?action=getsign&service=yf-rpc&cluster=user/service"
+        let plugin = Naming::new(&["yf-rpc".to_string()], &[]);
+        let uri: Uri = "/naming/service?action=lookup&service=yf-rpc&cluster=user/service"
             .parse()
             .unwrap();
 
@@ -395,16 +378,15 @@ mod tests {
 
     #[test]
     fn empty_filters_match_every_service_and_cluster() {
-        let plugin = Naming::new(&[], &[], true);
+        let plugin = Naming::new(&[], &[]);
         let uri: Uri =
-            "/naming/service?action=getsign&service=any-service&cluster=any-cluster/service"
+            "/naming/service?action=lookup&service=any-service&cluster=any-cluster/service"
                 .parse()
                 .unwrap();
+        let body = lookup_response("any-service", "any-cluster/service");
 
         assert!(matches!(
-            plugin
-                .rewrite(&input(&uri, br#"{"code":"200","body":"original-sign"}"#))
-                .unwrap(),
+            plugin.rewrite(&input(&uri, &body)).unwrap(),
             PluginResult::Rewritten { .. }
         ));
     }

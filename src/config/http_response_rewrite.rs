@@ -38,8 +38,6 @@ pub enum HttpResponseRewritePluginConfig {
         services: Vec<String>,
         #[serde(default)]
         clusters: Vec<String>,
-        #[serde(default = "default_true")]
-        force_full_lookup: bool,
     },
 }
 
@@ -109,10 +107,6 @@ impl HttpResponseRewritePluginConfig {
     }
 }
 
-const fn default_true() -> bool {
-    true
-}
-
 fn validate_values(rule_name: &str, field: &str, values: &[String]) -> Result<()> {
     if values.iter().any(|value| value.trim().is_empty()) {
         bail!("HTTP response rewrite rule {rule_name:?} has an empty {field} value");
@@ -175,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_vintage_naming_rule_with_refresh_enabled_by_default() {
+    fn parses_vintage_naming_rule_without_cache_behavior_changes() {
         let config: crate::AppConfig = toml::from_str(
             r#"
             [http_response_rewrite]
@@ -201,12 +195,15 @@ mod tests {
         .unwrap();
 
         config.validate().unwrap();
-        let HttpResponseRewritePluginConfig::VintageNaming {
-            force_full_lookup, ..
-        } = &config.http_response_rewrite.rules[0].plugin
+        let HttpResponseRewritePluginConfig::VintageNaming { services, clusters } =
+            &config.http_response_rewrite.rules[0].plugin
         else {
             panic!("expected Vintage naming plugin");
         };
-        assert!(*force_full_lookup);
+        assert_eq!(services, &["yf-rpc"]);
+        assert_eq!(
+            clusters,
+            &["cn.sina.api.data.service.SinaUserService/service"]
+        );
     }
 }

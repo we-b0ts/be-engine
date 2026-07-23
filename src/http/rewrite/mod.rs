@@ -87,11 +87,9 @@ pub(crate) async fn apply(
             *proxy_listen,
             recorder_ca_pem,
         )?),
-        HttpResponseRewritePluginConfig::VintageNaming {
-            services,
-            clusters,
-            force_full_lookup,
-        } => Box::new(vintage::Naming::new(services, clusters, *force_full_lookup)),
+        HttpResponseRewritePluginConfig::VintageNaming { services, clusters } => {
+            Box::new(vintage::Naming::new(services, clusters))
+        }
     };
 
     let PluginResult::Rewritten {

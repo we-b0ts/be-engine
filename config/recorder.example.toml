@@ -75,7 +75,7 @@ plugin = { name = "pluto-eci-kubeconfig", kubectl_binary = "kubectl", proxy_list
 # path = "/naming/service"
 # status_codes = [200]
 # content_types = ["application/json"]
-# plugin = { name = "vintage-naming", force_full_lookup = true }
+# plugin = { name = "vintage-naming" }
 
 [udp_gateway]
 # Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP

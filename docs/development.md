@@ -178,11 +178,11 @@ uses the original kubeconfig for HTTPS and client authentication to Kubernetes.
 For Vintage, configure an exact `/naming/service` rule. By default it matches
 every service and cluster; optional `services` and `clusters` filters can
 intentionally limit interception to a known subset. The plugin handles
-`getsign`, `lookup`, and `lookupforupdate`: with `force_full_lookup = true` it changes the selected
-`getsign` response so the SDK performs a full lookup, then replaces every IPv4
-`host` in every `nodes` array with a stable fake IP while preserving the node
-port and all unknown response fields. Empty filters match every service or
-cluster.
+`lookup` and `lookupforupdate`, replacing every IPv4 `host` in every `nodes`
+array with a stable fake IP while preserving the node port and all unknown
+response fields. It deliberately leaves `getsign` unchanged, so recording does
+not alter the SDK's local-cache or snapshot decisions. Empty filters match
+every service or cluster.
 
 Each discovered original IPv4 address receives one stable
 `vintage-node-<address>.trp.test` alias. The rewritten HTTP exchange records the
