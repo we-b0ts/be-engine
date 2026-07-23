@@ -398,7 +398,7 @@ struct HttpErrorContext {
 }
 
 async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
-    let error = ctx.err.to_string();
+    let error = format!("{:#}", ctx.err);
     let event = HttpExchangeEvent {
         id: ctx.id,
         timestamp: Utc::now(),

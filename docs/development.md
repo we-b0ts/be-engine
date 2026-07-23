@@ -184,6 +184,13 @@ response fields. It deliberately leaves `getsign` unchanged, so recording does
 not alter the SDK's local-cache or snapshot decisions. Empty filters match
 every service or cluster.
 
+Vintage v1 reports application failures, including a missing service, as HTTP
+200 responses whose outer `code` is not `200`. These responses publish no
+connection targets and pass through unchanged so the SDK retains its normal
+fallback behavior. A successful outer response that is malformed or contains
+an unsafe node address still fails the exchange instead of leaking an
+unrecorded target.
+
 Each discovered original IPv4 address receives one stable
 `vintage-node-<address>.trp.test` alias. The rewritten HTTP exchange records the
 alias, original IP, fake IP, port, service, and cluster. Replay reserves the

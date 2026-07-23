@@ -470,7 +470,7 @@ struct GatewayErrorContext {
 }
 
 async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody> {
-    let error = ctx.err.to_string();
+    let error = format!("{:#}", ctx.err);
     let drain_invalidation = if let Some(case) = &ctx.case {
         ctx.state.drain_active_case_dependencies(case.id).await
     } else {
