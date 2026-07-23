@@ -51,7 +51,8 @@ pub use case_group::{
 pub use compare::run as run_compare;
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
-    AppConfig, BackgroundDependencyRuleConfig, CasePathPatternAuthority, CasePathPatternFeedback,
+    AppConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
+    BackgroundDependencyRuleConfig, CasePathPatternAuthority, CasePathPatternFeedback,
     CasePathPatternPlan, CasePathPatternReport, CompareConfig, DEFAULT_FAKE_CIDR,
     DnsBypassStrategyConfig, DnsMockConfig, HttpConfig, HttpGatewayCaseLimitsConfig,
     HttpGatewayConfig, HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig,
@@ -63,7 +64,7 @@ pub use config::{
     VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
     VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiExcludesConfig,
     VerifiedApiVerification, ensure_verified_api_exclude, plan_allowed_unused_http_hosts,
-    plan_case_path_pattern_feedback, plan_verified_api_exclude,
+    plan_background_dependency, plan_case_path_pattern_feedback, plan_verified_api_exclude,
 };
 pub use dependency::DependencyExchangeOutcome;
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
@@ -599,6 +600,8 @@ mod tests {
             authorities: vec!["config.api.demo.test".to_string()],
             methods: vec!["GET".to_string()],
             path_prefixes: vec!["/1/config/service".to_string()],
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
         }];
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");

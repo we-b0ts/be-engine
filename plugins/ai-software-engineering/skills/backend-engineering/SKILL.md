@@ -99,11 +99,6 @@ defects before they become scale defects.
   existing capability, including cross-language work.
 - Read [rust.md](references/rust.md) only when Rust is the implementation language.
 
-When recorded traffic is supplied or `traffic-e2e` is requested, load the
-companion `traffic-e2e` skill. It exclusively owns recording, case artifacts,
-dependency replay, replay policy, and canonical E2E evidence. Do not duplicate
-those contracts here.
-
 ## Completion Review
 
 Before claiming completion, confirm that:

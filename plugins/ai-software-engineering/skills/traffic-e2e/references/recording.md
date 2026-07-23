@@ -86,12 +86,14 @@ publishing an incoherent contract.
 
 When source inspection proves an HTTP poll belongs to a process-level task and
 not to the triggering API, add a narrow background rule before re-recording.
-Require an exact authority set, method set, and path-prefix set. Matching
-exchanges do not enter an active case's dependencies. The run-level
-`traffic.jsonl` remains controlled by `recording.traffic_jsonl`, and a matching
-exchange observed while bootstrap is open remains bootstrap replay evidence.
-Classification changes attribution only; it does not change forwarding,
-capture limits, or responses.
+Use `background-dependencies plan` and `apply`; do not hand-edit these rules.
+Each rule requires exactly one authority, method, and path prefix plus the
+source revision and a single-line file/symbol explanation proving process-level
+ownership and API independence. Matching exchanges do not enter an active
+case's dependencies. The run-level `traffic.jsonl` remains controlled by
+`recording.traffic_jsonl`, and a matching exchange observed while bootstrap is
+open remains bootstrap replay evidence. Classification changes attribution
+only; it does not change forwarding, capture limits, or responses.
 
 Case limits apply per resolved static path or configured case pattern. Requests
 after the limit use fallback and create no case. Failed cases do not consume the

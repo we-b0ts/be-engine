@@ -14,6 +14,8 @@ pub enum BackgroundDependencyRuleConfig {
         authorities: Vec<String>,
         methods: Vec<String>,
         path_prefixes: Vec<String>,
+        source_revision: String,
+        source_evidence: String,
     },
 }
 
@@ -89,20 +91,90 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 authorities,
                 methods,
                 path_prefixes,
+                source_revision,
+                source_evidence,
                 ..
             } => {
                 validate_authorities(name, authorities)?;
                 validate_methods(name, methods)?;
                 validate_path_prefixes(name, path_prefixes)?;
+                validate_source_metadata(source_revision, source_evidence)?;
+            }
+        }
+    }
+    validate_non_overlapping_rules(rules)?;
+    Ok(())
+}
+
+fn validate_source_metadata(source_revision: &str, source_evidence: &str) -> Result<()> {
+    validate_single_line("background dependency source revision", source_revision, 64)?;
+    if source_revision.len() < 7
+        || !source_revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        bail!(
+            "background dependency source revision must be a 7-64 character lowercase hexadecimal revision"
+        );
+    }
+    validate_single_line(
+        "background dependency source evidence",
+        source_evidence,
+        1_024,
+    )
+}
+
+fn validate_non_overlapping_rules(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
+    for (index, left) in rules.iter().enumerate() {
+        for right in &rules[index + 1..] {
+            if http_rules_overlap(left, right) {
+                bail!(
+                    "background dependency rules {:?} and {:?} have overlapping HTTP selectors",
+                    left.name(),
+                    right.name()
+                );
             }
         }
     }
     Ok(())
 }
 
+fn http_rules_overlap(
+    left: &BackgroundDependencyRuleConfig,
+    right: &BackgroundDependencyRuleConfig,
+) -> bool {
+    let (
+        BackgroundDependencyRuleConfig::Http {
+            authorities: left_authorities,
+            methods: left_methods,
+            path_prefixes: left_paths,
+            ..
+        },
+        BackgroundDependencyRuleConfig::Http {
+            authorities: right_authorities,
+            methods: right_methods,
+            path_prefixes: right_paths,
+            ..
+        },
+    ) = (left, right);
+    left_authorities.iter().any(|left| {
+        right_authorities
+            .iter()
+            .any(|right| normalize_authority(left) == normalize_authority(right))
+    }) && left_methods.iter().any(|left| {
+        right_methods
+            .iter()
+            .any(|right| left.eq_ignore_ascii_case(right))
+    }) && left_paths.iter().any(|left| {
+        right_paths
+            .iter()
+            .any(|right| left.starts_with(right) || right.starts_with(left))
+    })
+}
+
 fn validate_authorities(rule_name: &str, authorities: &[String]) -> Result<()> {
-    if authorities.is_empty() {
-        bail!("HTTP background dependency rule {rule_name:?} must include authorities");
+    if authorities.len() != 1 {
+        bail!("HTTP background dependency rule {rule_name:?} must include exactly one authority");
     }
     let mut unique = HashSet::new();
     for authority in authorities {
@@ -121,8 +193,8 @@ fn validate_authorities(rule_name: &str, authorities: &[String]) -> Result<()> {
 }
 
 fn validate_methods(rule_name: &str, methods: &[String]) -> Result<()> {
-    if methods.is_empty() {
-        bail!("HTTP background dependency rule {rule_name:?} must include methods");
+    if methods.len() != 1 {
+        bail!("HTTP background dependency rule {rule_name:?} must include exactly one method");
     }
     let mut unique = HashSet::new();
     for method in methods {
@@ -140,8 +212,8 @@ fn validate_methods(rule_name: &str, methods: &[String]) -> Result<()> {
 }
 
 fn validate_path_prefixes(rule_name: &str, path_prefixes: &[String]) -> Result<()> {
-    if path_prefixes.is_empty() {
-        bail!("HTTP background dependency rule {rule_name:?} must include path_prefixes");
+    if path_prefixes.len() != 1 {
+        bail!("HTTP background dependency rule {rule_name:?} must include exactly one path prefix");
     }
     let mut unique = HashSet::new();
     for prefix in path_prefixes {
@@ -166,6 +238,19 @@ fn normalize_authority(value: &str) -> Option<String> {
         Some(port) => format!("{host}:{port}"),
         None => host,
     })
+}
+
+fn validate_single_line(label: &str, value: &str, max_len: usize) -> Result<()> {
+    if value.trim().is_empty() {
+        bail!("{label} must not be empty");
+    }
+    if value != value.trim() || value.contains(['\r', '\n']) {
+        bail!("{label} must be a single line without surrounding whitespace");
+    }
+    if value.len() > max_len {
+        bail!("{label} must not exceed {max_len} bytes");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -210,6 +295,8 @@ mod tests {
             authorities: vec!["CONFIG.API.demo.test".to_string()],
             methods: vec!["GET".to_string()],
             path_prefixes: vec!["/1/config/service".to_string()],
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
         };
 
         assert!(rule.matches(&http_event(
@@ -238,9 +325,11 @@ mod tests {
             [[recording.background_dependencies]]
             name = "config-refresh"
             protocol = "http"
-            authorities = ["config.api.demo.test", "static.config.api.demo.test"]
+            authorities = ["config.api.demo.test"]
             methods = ["GET"]
-            path_prefixes = ["/1/config/service", "/naming/service"]
+            path_prefixes = ["/1/config/service"]
+            source_revision = "0123456789abcdef"
+            source_evidence = "src/config/refresh.rs:42 scheduled refresh"
             "#,
         )
         .unwrap();
@@ -262,6 +351,8 @@ mod tests {
             authorities: vec!["config.api.demo.test".to_string()],
             methods: Vec::new(),
             path_prefixes: vec!["/".to_string()],
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
         }];
         assert!(config.validate().is_err());
 
@@ -270,6 +361,21 @@ mod tests {
             authorities: vec!["config.api.demo.test".to_string()],
             methods: vec!["GET".to_string()],
             path_prefixes: vec!["/lookup?group=x".to_string()],
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
+        }];
+        assert!(config.validate().is_err());
+
+        config.recording.background_dependencies = vec![BackgroundDependencyRuleConfig::Http {
+            name: "cross-product".to_string(),
+            authorities: vec![
+                "config.api.demo.test".to_string(),
+                "static.config.api.demo.test".to_string(),
+            ],
+            methods: vec!["GET".to_string()],
+            path_prefixes: vec!["/lookup".to_string()],
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
         }];
         assert!(config.validate().is_err());
     }

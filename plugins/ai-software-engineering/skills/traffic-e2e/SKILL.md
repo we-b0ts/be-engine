@@ -57,7 +57,8 @@ not silently weaken either for convenience.
 - Read [verified-excludes.md](references/verified-excludes.md) only after final
   aggregate and response assertion evidence exists.
 - Read [failure-diagnosis.md](references/failure-diagnosis.md) after the first
-  failed recording or replay attempt.
+  failed recording or replay attempt. This is REQUIRED before changing target,
+  replay policy, or recorder attribution for an unused case dependency.
 
 ## Managed Recording Workflow
 
@@ -116,7 +117,9 @@ not silently weaken either for convenience.
 6. Run `traffic-e2e run-api` only until the complete selected group passes.
    Fix target behavior, target integration, recording quality, or narrowly
    supported replay policy according to evidence. Do not repeat a successful
-   source merely to advance verification counters.
+   source merely to advance verification counters. For every unused case
+   dependency, determine ownership from source before changing configuration:
+   classify it as case-owned, source-proven background, or unresolved.
 7. Compare JSON structurally and non-JSON according to the configured exact
    policy. Preserve field presence, scalar kinds, array semantics, status,
    dependency identity, ordering, errors, and required side effects. A stable

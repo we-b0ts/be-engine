@@ -3,10 +3,11 @@ use std::{io, path::PathBuf};
 use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostReport, CasePathPatternAuthority,
-    CasePathPatternFeedback, CasePathPatternReport, VerifiedApiExcludeEnsureReport,
-    VerifiedApiExcludeFeedback, VerifiedApiExcludeReport, VerifiedApiVerification,
-    ensure_verified_api_exclude, plan_allowed_unused_http_hosts, plan_case_path_pattern_feedback,
+    AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostReport, BackgroundDependencyFeedback,
+    BackgroundDependencyReport, CasePathPatternAuthority, CasePathPatternFeedback,
+    CasePathPatternReport, VerifiedApiExcludeEnsureReport, VerifiedApiExcludeFeedback,
+    VerifiedApiExcludeReport, VerifiedApiVerification, ensure_verified_api_exclude,
+    plan_allowed_unused_http_hosts, plan_background_dependency, plan_case_path_pattern_feedback,
     plan_verified_api_exclude,
 };
 
@@ -22,8 +23,46 @@ pub(super) struct RecorderConfigArgs {
 #[derive(Debug, Subcommand)]
 enum RecorderConfigCommand {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostsArgs),
+    BackgroundDependencies(BackgroundDependenciesArgs),
     CasePathPatterns(CasePathPatternsArgs),
     VerifiedExcludes(VerifiedExcludesArgs),
+}
+
+#[derive(Debug, Args)]
+struct BackgroundDependenciesArgs {
+    #[command(subcommand)]
+    command: BackgroundDependenciesCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum BackgroundDependenciesCommand {
+    Plan(BackgroundDependencyArgs),
+    Apply(BackgroundDependencyArgs),
+}
+
+#[derive(Debug, Args)]
+struct BackgroundDependencyArgs {
+    #[arg(long)]
+    name: String,
+    #[arg(long, value_enum)]
+    protocol: BackgroundProtocolArg,
+    #[arg(long)]
+    authority: String,
+    #[arg(long)]
+    method: String,
+    #[arg(long)]
+    path_prefix: String,
+    #[arg(long)]
+    replay_report: PathBuf,
+    #[arg(long)]
+    source_revision: String,
+    #[arg(
+        long,
+        help = "Single-line source evidence proving process-level ownership and API independence"
+    )]
+    evidence: String,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+    format: OutputFormat,
 }
 
 #[derive(Debug, Args)]
@@ -143,6 +182,11 @@ enum AuthorityArg {
     Authoritative,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BackgroundProtocolArg {
+    Http,
+}
+
 impl From<AuthorityArg> for CasePathPatternAuthority {
     fn from(authority: AuthorityArg) -> Self {
         match authority {
@@ -176,6 +220,21 @@ pub(super) fn run(args: RecorderConfigArgs) -> Result<()> {
                 print_allowed_unused_http_report(&report, format)
             }
         },
+        RecorderConfigCommand::BackgroundDependencies(args) => match args.command {
+            BackgroundDependenciesCommand::Plan(args) => {
+                let format = args.format;
+                let plan =
+                    plan_background_dependency(background_dependency_feedback(config, args))?;
+                print_background_dependency_report(plan.report(), format)
+            }
+            BackgroundDependenciesCommand::Apply(args) => {
+                let format = args.format;
+                let plan =
+                    plan_background_dependency(background_dependency_feedback(config, args))?;
+                let report = plan.apply()?;
+                print_background_dependency_report(&report, format)
+            }
+        },
         RecorderConfigCommand::CasePathPatterns(args) => match args.command {
             CasePathPatternsCommand::Plan(args) => {
                 let format = args.format;
@@ -206,6 +265,24 @@ pub(super) fn run(args: RecorderConfigArgs) -> Result<()> {
                 let report = ensure_verified_api_exclude(verified_exclude_feedback(config, args))?;
                 print_verified_exclude_ensure_report(&report, format)
             }
+        },
+    }
+}
+
+fn background_dependency_feedback(
+    config_path: PathBuf,
+    args: BackgroundDependencyArgs,
+) -> BackgroundDependencyFeedback {
+    match args.protocol {
+        BackgroundProtocolArg::Http => BackgroundDependencyFeedback {
+            config_path,
+            replay_report_path: args.replay_report,
+            name: args.name,
+            authority: args.authority,
+            method: args.method,
+            path_prefix: args.path_prefix,
+            source_revision: args.source_revision,
+            source_evidence: args.evidence,
         },
     }
 }
@@ -299,6 +376,43 @@ fn print_allowed_unused_http_report(
             println!("changed: {}", report.changed);
             println!("applied: {}", report.applied);
             println!("added: {}", report.added.len());
+            if !report.diff.is_empty() {
+                print!("{}", report.diff);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_background_dependency_report(
+    report: &BackgroundDependencyReport,
+    format: OutputFormat,
+) -> Result<()> {
+    match format {
+        OutputFormat::Json => {
+            serde_json::to_writer_pretty(io::stdout(), report)?;
+            println!();
+        }
+        OutputFormat::Human => {
+            println!("config: {}", report.config.display());
+            println!("replay_report: {}", report.replay_report.display());
+            println!("rule: {}", report.name);
+            println!("protocol: {}", report.protocol);
+            println!(
+                "selector: {} {}{}",
+                report.method, report.authority, report.path_prefix
+            );
+            println!("source_revision: {}", report.source_revision);
+            println!("source_evidence: {}", report.source_evidence);
+            println!(
+                "matched_unused_exchanges: {}",
+                report.matched_unused_exchanges
+            );
+            if !report.matched_case_ids.is_empty() {
+                println!("matched_case_ids: {}", report.matched_case_ids.join(","));
+            }
+            println!("changed: {}", report.changed);
+            println!("applied: {}", report.applied);
             if !report.diff.is_empty() {
                 print!("{}", report.diff);
             }

@@ -1,0 +1,4 @@
+interface:
+  display_name: "E2E Rewrite"
+  short_description: "Rewrite services with recorded traffic evidence"
+  default_prompt: "Use $e2e-rewrite to rewrite this service against recorded traffic, verify it through genuine dependency replay, and deliver the changes in a PR."

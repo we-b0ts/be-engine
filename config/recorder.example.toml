@@ -200,9 +200,11 @@ redact_headers = [
 # [[recording.background_dependencies]]
 # name = "config-refresh"
 # protocol = "http"
-# authorities = ["config.api.demo.test", "static.config.api.demo.test"]
+# authorities = ["config.api.demo.test"]
 # methods = ["GET"]
-# path_prefixes = ["/1/config/service", "/3/config/cloud/datamesh/config", "/naming/service"]
+# path_prefixes = ["/1/config/service"]
+# source_revision = "0123456789abcdef"
+# source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
 
 # MySQL-only first version of explicit write allowances. Every field is exact
 # and all configured dimensions must match. operations, databases, and tables

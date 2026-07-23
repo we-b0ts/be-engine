@@ -60,14 +60,29 @@ evidence:
 Do not infer missing rows, messages, cache entries, or third-party responses
 from `expected-response.json` alone.
 
-For repeated unused HTTP exchanges, group observations by normalized authority,
-method, and path only for diagnosis. When source proves that narrow request
-family belongs to an API-independent process-level task, add a
-`recording.background_dependencies` rule and create a new recording. Active-case
-timing alone is not ownership evidence. Use host-wide
-`allowed_unused_http_hosts` only as a compatibility exception for an older
-recording after source proves the entire host is unrelated. Never include raw
-query values, credentials, headers, or bodies in the plan or diagnosis.
+For every unused case HTTP exchange, group observations by normalized
+authority, method, and path only for diagnosis, then inspect the source that
+initiates the request. Classify the narrow request family as background only
+when all of these facts are explicit in source:
+
+- startup, lifecycle, scheduler, or permanent-worker code owns the trigger;
+- request context, API parameters, and API-scoped state do not control it;
+- the selected API does not await, start, stop, or consume its result;
+- the selected API response and required side effects do not depend on it.
+
+Timing overlap, repetition, polling-like names, a successful response, and an
+unused replay exchange are not ownership evidence. If any ownership fact is
+unclear, keep the dependency case-owned and the replay incomplete.
+
+After source proves independence, use the guarded
+`background-dependencies plan` command documented in
+[e2e-run.md](e2e-run.md). Inspect its narrow selector and matched case IDs
+before `apply`, then create a new recording; the command cannot repair the
+immutable old case. Record the source revision and a single-line file/symbol
+explanation, never raw query values, credentials, headers, or bodies. Use
+host-wide `allowed_unused_http_hosts` only as a compatibility exception when an
+older recording cannot be replaced and source proves the entire host is
+unrelated.
 
 ## Replay Failure Signals
 
