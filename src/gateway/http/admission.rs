@@ -4,8 +4,6 @@ use serde::Serialize;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use super::transport::upstream_socket_addr;
-use crate::process_lookup::{lookup_listening_process, process_label};
 use crate::recorder::CaseContext;
 use crate::{ActiveCaseGuard, ActiveCaseRejection, AppState};
 
@@ -31,9 +29,7 @@ pub(super) async fn try_admit_case(
         return None;
     }
 
-    let process = upstream_socket_addr(upstream_base).and_then(lookup_listening_process);
-    match state.try_register_active_case(case.clone(), process.as_ref().map(|process| process.pid))
-    {
+    match state.try_register_active_case(case.clone()) {
         Ok(guard) => {
             let admission = CaseAdmissionRecord {
                 timestamp: Utc::now(),
@@ -43,7 +39,6 @@ pub(super) async fn try_admit_case(
                 case_pattern: case_pattern.to_string(),
                 uri: uri.to_string(),
                 upstream: upstream_base.to_string(),
-                upstream_pid: process.as_ref().map(|process| process.pid),
             };
             if let Err(err) = state
                 .recorder()
@@ -57,27 +52,13 @@ pub(super) async fn try_admit_case(
                 );
                 return None;
             }
-            match &process {
-                Some(process) => {
-                    info!(
-                        case_id = %case.id,
-                        rule = %case.rule_name,
-                        case_pattern,
-                        upstream = %upstream_base,
-                        process = %process_label(process),
-                        "registered active HTTP gateway case"
-                    );
-                }
-                None => {
-                    info!(
-                        case_id = %case.id,
-                        rule = %case.rule_name,
-                        case_pattern,
-                        upstream = %upstream_base,
-                        "registered active HTTP gateway case without upstream process match"
-                    );
-                }
-            }
+            info!(
+                case_id = %case.id,
+                rule = %case.rule_name,
+                case_pattern,
+                upstream = %upstream_base,
+                "registered active HTTP gateway case"
+            );
             Some(guard)
         }
         Err(reason) => {
@@ -102,7 +83,6 @@ struct CaseAdmissionRecord {
     case_pattern: String,
     uri: String,
     upstream: String,
-    upstream_pid: Option<u32>,
 }
 
 fn active_case_rejection_reason(reason: ActiveCaseRejection) -> &'static str {

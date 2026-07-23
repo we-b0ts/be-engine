@@ -327,11 +327,8 @@ events such as `mysql_exchange`,
 `mysql_query`, `mysql_response`, and `mysql_packet` are written to
 `dependencies-debug.jsonl` so raw/base64 payloads do not distract the replay path.
 Each dependency line keeps the original event fields and adds
-`case_dependency_matched_by`: `process` when the dependency process matches the
-upstream process, or `active_window` when it was recorded because it happened
-during the request/response window. Dependency case files compact
-`client_process` to just the process id to keep them small; the global
-`traffic.jsonl` keeps the full process details.
+`case_dependency_matched_by: "active_window"` because dependencies are owned by
+the single active request/response window in the recorder network namespace.
 
 Run the automated readonly gateway/dependency integration test with
 `cargo test --test readonly_case_integration`. For a local two-mock or optional
@@ -527,11 +524,6 @@ common connection initialization are handled by the replay server. Passwords
 from Redis `AUTH`/`HELLO AUTH` and Memcached SASL payloads are never stored.
 Keys and values are required replay evidence and are recorded in full by
 default, so the recording directory must be handled as sensitive data.
-
-For local Linux clients, `tcp_gateway` also tries to attribute intercepted
-connections to a process by scanning `/proc/net/tcp` and `/proc/<pid>/fd`.
-When available, JSONL events include `client_process` with `pid`, `comm`,
-`cmdline`, and `exe`; TLS handshake warnings log the same process label.
 
 ## Optional MySQL Protocol Proxy
 

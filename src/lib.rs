@@ -14,7 +14,6 @@ mod memcached;
 mod motan;
 mod mysql;
 mod path_pattern;
-mod process_lookup;
 mod proxy;
 mod recorder;
 mod redis;
@@ -184,7 +183,6 @@ impl AppState {
         operations: Vec<String>,
         resources: Vec<String>,
         client_addr: Option<String>,
-        client_process: Option<crate::recorder::ProcessInfo>,
         target: Option<String>,
         reason: impl Into<String>,
     ) {
@@ -211,7 +209,6 @@ impl AppState {
             operations,
             resources,
             client_addr,
-            client_process,
             target,
             reason,
         });
@@ -227,7 +224,6 @@ impl AppState {
         operation_class: OperationClass,
         operation: impl Into<String>,
         client_addr: Option<String>,
-        client_process: Option<crate::recorder::ProcessInfo>,
         target: Option<String>,
         reason: impl Into<String>,
     ) {
@@ -268,11 +264,10 @@ impl AppState {
             operation_class: operation_class.as_str().to_string(),
             operation,
             client_addr,
-            client_process,
             target,
             reason,
         });
-        let mut targets = self.capture_dependency_targets(event.client_pid());
+        let mut targets = self.capture_dependency_targets();
         targets.bootstrap_open = false;
         self.record_event_for_targets(event, targets);
     }
@@ -304,10 +299,9 @@ impl AppState {
     pub(crate) fn try_register_active_case(
         &self,
         case: CaseContext,
-        upstream_pid: Option<u32>,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
         let bootstrap_was_open = self.inner.active_cases.is_bootstrap_open();
-        let guard = self.inner.active_cases.try_register(case, upstream_pid)?;
+        let guard = self.inner.active_cases.try_register(case)?;
         if bootstrap_was_open {
             self.schedule_bootstrap_dependency_summary("first active case");
         }
@@ -389,13 +383,12 @@ impl AppState {
         }
     }
 
-    pub(crate) fn capture_dependency_targets(&self, event_pid: Option<u32>) -> DependencyTargets {
-        self.inner.active_cases.current_targets_for_event(event_pid)
+    pub(crate) fn capture_dependency_targets(&self) -> DependencyTargets {
+        self.inner.active_cases.current_targets_for_event()
     }
 
     pub(crate) fn record_event(&self, event: RecorderEvent) {
-        let event_pid = event.client_pid();
-        let targets = self.capture_dependency_targets(event_pid);
+        let targets = self.capture_dependency_targets();
         self.record_event_for_targets(event, targets);
     }
 
@@ -591,7 +584,6 @@ mod tests {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             scheme: "fake_ip_http".to_string(),
             method: "GET".to_string(),
             uri: uri.to_string(),
@@ -631,7 +623,7 @@ mod tests {
             rule_name: "api".to_string(),
             uri_group: None,
         };
-        let guard = state.try_register_active_case(case.clone(), None).unwrap();
+        let guard = state.try_register_active_case(case.clone()).unwrap();
 
         let background = http_dependency(
             "config.api.demo.test",

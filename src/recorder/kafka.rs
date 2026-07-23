@@ -21,7 +21,7 @@ use crate::kafka::{
     KafkaRecord, decode_request, decode_response, encode_response, read_frame, records_from_fetch,
     records_from_produce, replay_supports_api, response_correlation_id, write_frame,
 };
-use crate::recorder::{KafkaConnectionEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent};
+use crate::recorder::{KafkaConnectionEvent, ProxyErrorEvent, RecorderEvent};
 
 mod recording;
 use recording::{
@@ -31,7 +31,6 @@ use recording::{
 #[derive(Debug, Clone)]
 pub(crate) struct KafkaConnectionContext {
     pub(crate) client_addr: Option<String>,
-    pub(crate) client_process: Option<ProcessInfo>,
     pub(crate) target_host: String,
     pub(crate) target_port: u16,
     pub(crate) target_addr: String,
@@ -149,7 +148,6 @@ pub(crate) async fn handle_connected(
                         operation_class,
                         format!("{:?}", decoded.api_key),
                         request_context.client_addr.clone(),
-                        request_context.client_process.clone(),
                         Some(request_context.target_addr.clone()),
                         "Kafka API is classified as a write operation",
                     )
@@ -596,7 +594,6 @@ async fn record_connection(
             timestamp: Utc::now(),
             phase: phase.to_string(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,
             target_addr: context.target_addr.clone(),
@@ -623,7 +620,6 @@ async fn record_proxy_error(
             timestamp: Utc::now(),
             protocol: "kafka".to_string(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target: Some(context.target_addr.clone()),
             error,
         }),

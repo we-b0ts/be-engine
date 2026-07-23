@@ -9,7 +9,7 @@ use crate::DependencyExchangeOutcome;
 use crate::mysql::wire::{ClientCommand, MysqlPacket};
 use crate::recorder::{
     MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse, MysqlResponseEvent, MysqlValue,
-    ProcessInfo, capture_body,
+    capture_body,
 };
 
 mod decode;
@@ -93,7 +93,6 @@ struct ActiveExchange {
     connection_id: Uuid,
     query_sequence: u64,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     command: String,
     sql: Option<String>,
     statement_id: Option<u32>,
@@ -126,7 +125,6 @@ impl MysqlSemanticTracker {
         command: &ClientCommand,
         packet: &MysqlPacket,
         client_addr: Option<String>,
-        client_process: Option<ProcessInfo>,
     ) {
         let (statement_id, params, sql, mut parse_warnings) =
             self.parse_client_input(command, packet);
@@ -134,7 +132,6 @@ impl MysqlSemanticTracker {
             connection_id,
             query_sequence,
             client_addr,
-            client_process,
             command: command.command_name.clone(),
             sql: sql.or_else(|| command.query.clone()),
             statement_id,
@@ -218,7 +215,6 @@ impl MysqlSemanticTracker {
             query_sequence: active.query_sequence,
             timestamp: Utc::now(),
             client_addr: active.client_addr,
-            client_process: active.client_process,
             route_name: self.context.route_name.clone(),
             target_host: self.context.target_host.clone(),
             target_port: self.context.target_port,

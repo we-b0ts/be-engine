@@ -22,7 +22,6 @@ fn test_proxy_error(message: &str) -> RecorderEvent {
         timestamp: Utc::now(),
         protocol: "test".to_string(),
         client_addr: None,
-        client_process: None,
         target: Some("upstream".to_string()),
         error: message.to_string(),
     })
@@ -35,7 +34,6 @@ fn test_mysql_query() -> RecorderEvent {
         sequence: 1,
         timestamp: Utc::now(),
         client_addr: None,
-        client_process: None,
         command: "COM_QUERY".to_string(),
         query: Some("select 1".to_string()),
         payload_len: 8,
@@ -148,7 +146,7 @@ async fn queued_dependencies_hold_bootstrap_reservations_until_persisted() {
 
     for sequence in 0..2_048 {
         let event = test_proxy_error(&format!("{sequence}:{}", "x".repeat(4_096)));
-        let targets = active_cases.current_targets_for_event(event.client_pid());
+        let targets = active_cases.current_targets_for_event();
         recorder.try_record_event(event, targets, None).unwrap();
     }
 
@@ -227,7 +225,6 @@ async fn case_dependency_records_match_reason() {
         timestamp: Utc::now(),
         protocol: "test".to_string(),
         client_addr: None,
-        client_process: None,
         target: Some("upstream".to_string()),
         error: "boom".to_string(),
     });
@@ -271,45 +268,6 @@ async fn case_files_include_uri_group_when_present() {
 }
 
 #[tokio::test]
-async fn case_dependency_compacts_client_process_to_pid() {
-    let temp = tempfile::tempdir().unwrap();
-    let recorder = Recorder::new(temp.path()).await.unwrap();
-    let case = CaseContext {
-        id: Uuid::new_v4(),
-        rule_name: "api".to_string(),
-        uri_group: None,
-    };
-    let event = RecorderEvent::ProxyError(ProxyErrorEvent {
-        id: Uuid::new_v4(),
-        timestamp: Utc::now(),
-        protocol: "test".to_string(),
-        client_addr: None,
-        client_process: Some(ProcessInfo {
-            pid: 42,
-            comm: Some("app".to_string()),
-            cmdline: Some("app --serve".to_string()),
-            exe: Some("/tmp/app".to_string()),
-        }),
-        target: Some("upstream".to_string()),
-        error: "boom".to_string(),
-    });
-
-    recorder
-        .append_case_dependency(&case, &event, "process")
-        .await
-        .unwrap();
-    flush_case_dependencies(&recorder, &case).await;
-
-    let raw =
-        tokio::fs::read_to_string(recorder.case_staging_dir(&case).join("dependencies.jsonl"))
-            .await
-            .unwrap();
-    let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
-    assert_eq!(value["client_process"], 42);
-    assert_eq!(value["case_dependency_matched_by"], "process");
-}
-
-#[tokio::test]
 async fn bootstrap_dependency_writes_run_file_and_summary() {
     let temp = tempfile::tempdir().unwrap();
     let recorder = Recorder::new(temp.path()).await.unwrap();
@@ -318,12 +276,6 @@ async fn bootstrap_dependency_writes_run_file_and_summary() {
         timestamp: Utc::now(),
         protocol: "test".to_string(),
         client_addr: None,
-        client_process: Some(ProcessInfo {
-            pid: 42,
-            comm: Some("app".to_string()),
-            cmdline: Some("app --serve".to_string()),
-            exe: Some("/tmp/app".to_string()),
-        }),
         target: Some("upstream".to_string()),
         error: "boom".to_string(),
     });
@@ -339,7 +291,6 @@ async fn bootstrap_dependency_writes_run_file_and_summary() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "proxy_error");
-    assert_eq!(value["client_process"], 42);
     assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
 
     summary::write_bootstrap_dependency_summary(&recorder.run_dir)
@@ -376,7 +327,7 @@ async fn case_dependency_summary_skips_successful_prepare() {
                 None,
                 None,
             )),
-            "process",
+            "active_window",
         )
         .await
         .unwrap();
@@ -411,7 +362,7 @@ async fn case_dependency_summary_skips_successful_prepare() {
                 None,
                 None,
             )),
-            "process",
+            "active_window",
         )
         .await
         .unwrap();
@@ -428,7 +379,7 @@ async fn case_dependency_summary_skips_successful_prepare() {
                 Some(1146),
                 Some("Table 'pluto_log.request_log_202607' doesn't exist"),
             )),
-            "process",
+            "active_window",
         )
         .await
         .unwrap();
@@ -485,7 +436,7 @@ async fn case_dependency_skips_successful_mysql_session_setup() {
                 None,
                 None,
             )),
-            "process",
+            "active_window",
         )
         .await
         .unwrap();
@@ -506,7 +457,7 @@ async fn case_dependency_skips_successful_mysql_session_setup() {
                 None,
                 None,
             )),
-            "process",
+            "active_window",
         )
         .await
         .unwrap();
@@ -536,19 +487,13 @@ async fn case_dependency_routes_mysql_protocol_details_to_debug_file() {
         sequence: 1,
         timestamp: Utc::now(),
         client_addr: Some("127.0.0.1:12345".to_string()),
-        client_process: Some(ProcessInfo {
-            pid: 42,
-            comm: Some("app".to_string()),
-            cmdline: Some("app --serve".to_string()),
-            exe: Some("/tmp/app".to_string()),
-        }),
         command: "COM_QUERY".to_string(),
         query: Some("select 1".to_string()),
         payload_len: 9,
     });
 
     recorder
-        .append_case_dependency(&case, &event, "process")
+        .append_case_dependency(&case, &event, "active_window")
         .await
         .unwrap();
     flush_case_dependencies(&recorder, &case).await;
@@ -560,8 +505,7 @@ async fn case_dependency_routes_mysql_protocol_details_to_debug_file() {
         .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "mysql_query");
-    assert_eq!(value["client_process"], 42);
-    assert_eq!(value["case_dependency_matched_by"], "process");
+    assert_eq!(value["case_dependency_matched_by"], "active_window");
 }
 
 #[tokio::test]
@@ -621,7 +565,6 @@ async fn finalized_case_ignores_late_dependencies() {
         timestamp: Utc::now(),
         protocol: "test".to_string(),
         client_addr: None,
-        client_process: None,
         target: Some("upstream".to_string()),
         error: "late".to_string(),
     });
@@ -716,12 +659,6 @@ async fn bootstrap_dependency_routes_mysql_protocol_details_to_debug_file() {
         sequence: 1,
         timestamp: Utc::now(),
         client_addr: Some("127.0.0.1:12345".to_string()),
-        client_process: Some(ProcessInfo {
-            pid: 42,
-            comm: Some("app".to_string()),
-            cmdline: Some("app --serve".to_string()),
-            exe: Some("/tmp/app".to_string()),
-        }),
         command: "COM_QUERY".to_string(),
         query: Some("select 1".to_string()),
         payload_len: 9,
@@ -745,7 +682,6 @@ async fn bootstrap_dependency_routes_mysql_protocol_details_to_debug_file() {
             .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "mysql_query");
-    assert_eq!(value["client_process"], 42);
     assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
 }
 
@@ -764,7 +700,6 @@ fn mysql_exchange(
         query_sequence: 1,
         timestamp: Utc::now(),
         client_addr: None,
-        client_process: None,
         route_name: None,
         target_host: Some("mysql.internal".to_string()),
         target_port: Some(3306),

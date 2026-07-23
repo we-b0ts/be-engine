@@ -90,42 +90,6 @@ impl RecorderEvent {
             Self::ProxyError(_) => "proxy_error",
         }
     }
-
-    pub(crate) fn client_pid(&self) -> Option<u32> {
-        let process = match self {
-            Self::HttpExchange(event) => event.client_process.as_ref(),
-            Self::TcpGatewayConnection(event) => event.client_process.as_ref(),
-            Self::UdpDatagram(event) => event.client_process.as_ref(),
-            Self::RedisConnection(event) => event.client_process.as_ref(),
-            Self::RedisExchange(event) => event.client_process.as_ref(),
-            Self::MemcachedConnection(event) => event.client_process.as_ref(),
-            Self::MemcachedExchange(event) => event.client_process.as_ref(),
-            Self::KafkaConnection(event) => event.client_process.as_ref(),
-            Self::KafkaProduce(event) => event.client_process.as_ref(),
-            Self::KafkaFetch(event) => event.client_process.as_ref(),
-            Self::KafkaDelivery(event) => event.client_process.as_ref(),
-            Self::MotanConnection(event) => event.client_process.as_ref(),
-            Self::MotanExchange(event) => event.client_process.as_ref(),
-            Self::MysqlConnection(event) => event.client_process.as_ref(),
-            Self::MysqlQuery(event) => event.client_process.as_ref(),
-            Self::MysqlResponse(event) => event.client_process.as_ref(),
-            Self::MysqlExchange(event) => event.client_process.as_ref(),
-            Self::MysqlPacket(event) => event.client_process.as_ref(),
-            Self::MysqlTlsRejected(event) => event.client_process.as_ref(),
-            Self::AccessPolicyAllow(event) => event.client_process.as_ref(),
-            Self::ReadonlyRejection(event) => event.client_process.as_ref(),
-            Self::ProxyError(event) => event.client_process.as_ref(),
-        };
-        process.map(|process| process.pid)
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ProcessInfo {
-    pub pid: u32,
-    pub comm: Option<String>,
-    pub cmdline: Option<String>,
-    pub exe: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -133,7 +97,6 @@ pub struct HttpExchangeEvent {
     pub id: Uuid,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub scheme: String,
     pub method: String,
     pub uri: String,
@@ -156,7 +119,6 @@ pub struct MysqlConnectionEvent {
     pub route_name: Option<String>,
     pub listen_addr: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -178,7 +140,6 @@ pub struct TcpGatewayConnectionEvent {
     pub id: Uuid,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub domain: Option<String>,
     pub fake_addr: String,
     pub upstream_addr: Option<String>,
@@ -194,7 +155,6 @@ pub struct RedisConnectionEvent {
     pub timestamp: DateTime<Utc>,
     pub phase: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -216,7 +176,6 @@ pub struct RedisExchangeEvent {
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -241,7 +200,6 @@ pub struct MemcachedConnectionEvent {
     pub timestamp: DateTime<Utc>,
     pub phase: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -261,7 +219,6 @@ pub struct MemcachedExchangeEvent {
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -292,7 +249,6 @@ pub struct KafkaConnectionEvent {
     pub timestamp: DateTime<Utc>,
     pub phase: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -318,7 +274,6 @@ pub struct KafkaProduceEvent {
     pub request_sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -342,7 +297,6 @@ pub struct KafkaFetchEvent {
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -363,7 +317,6 @@ pub struct KafkaDeliveryEvent {
     pub fetch_sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -384,7 +337,6 @@ pub struct MotanConnectionEvent {
     pub timestamp: DateTime<Utc>,
     pub phase: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -404,7 +356,6 @@ pub struct MotanExchangeEvent {
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: String,
     pub target_port: u16,
     pub target_addr: String,
@@ -432,7 +383,6 @@ pub struct UdpDatagramEvent {
     pub timestamp: DateTime<Utc>,
     pub listen_addr: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -459,7 +409,6 @@ pub struct MysqlQueryEvent {
     pub sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub command: String,
     pub query: Option<String>,
     pub payload_len: usize,
@@ -472,7 +421,6 @@ pub struct MysqlPacketEvent {
     pub query_sequence: Option<u64>,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub direction: String,
     pub sequence_id: u8,
     pub payload_len: usize,
@@ -489,7 +437,6 @@ pub struct MysqlResponseEvent {
     pub query_sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub status: String,
     pub packet_count: usize,
     pub payload_bytes: usize,
@@ -516,7 +463,6 @@ pub struct MysqlExchangeEvent {
     pub query_sequence: u64,
     pub timestamp: DateTime<Utc>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub route_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -594,7 +540,6 @@ pub struct MysqlTlsRejectedEvent {
     pub route_name: Option<String>,
     pub listen_addr: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_host: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -612,7 +557,6 @@ pub struct ProxyErrorEvent {
     pub timestamp: DateTime<Utc>,
     pub protocol: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target: Option<String>,
     pub error: String,
 }
@@ -626,7 +570,6 @@ pub struct ReadonlyRejectionEvent {
     pub operation_class: String,
     pub operation: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target: Option<String>,
     pub reason: String,
 }
@@ -642,7 +585,6 @@ pub struct AccessPolicyAllowEvent {
     pub operations: Vec<String>,
     pub resources: Vec<String>,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target: Option<String>,
     pub reason: String,
 }

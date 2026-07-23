@@ -14,8 +14,6 @@ use crate::AppState;
 use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::FakeDnsEntry;
 use crate::memcached::MemcachedWireProtocol;
-use crate::process_lookup::lookup_tcp_process;
-use crate::recorder::ProcessInfo;
 use crate::recorder::kafka::{KafkaConnectionContext, handle_connected as handle_connected_kafka};
 use crate::recorder::memcached::{
     ConnectionContext as MemcachedConnectionContext, handle_connected as handle_connected_memcached,
@@ -111,12 +109,6 @@ async fn handle_connection(
         client.local_addr().context("failed to read local_addr")
     })?;
     let client_addr = Some(peer_addr.to_string());
-    let mut process_remote_candidates = vec![fake_addr];
-    if let Ok(gateway_addr) = client.local_addr() {
-        process_remote_candidates.push(gateway_addr);
-    }
-    let client_process = lookup_tcp_process(peer_addr, &process_remote_candidates);
-
     let IpAddr::V4(fake_ip) = fake_addr.ip() else {
         return Err(anyhow!("TCP gateway only supports IPv4 fake IPs"));
     };
@@ -128,7 +120,6 @@ async fn handle_connection(
             &state,
             "tcp_gateway",
             client_addr.clone(),
-            client_process.clone(),
             Some(fake_addr.to_string()),
             error.clone(),
         )
@@ -142,7 +133,6 @@ async fn handle_connection(
             fake_addr,
             entry,
             client_addr,
-            client_process,
             state,
             RawTcpOptions {
                 record_connection: false,
@@ -174,8 +164,7 @@ async fn handle_connection(
     };
 
     if config.record_http && detection == Detection::Match(DetectedProtocol::Http) {
-        return serve_http_connection(client, fake_addr, entry, client_addr, client_process, state)
-            .await;
+        return serve_http_connection(client, fake_addr, entry, client_addr, state).await;
     }
     if detection == Detection::Match(DetectedProtocol::Tls)
         && let Some(protocol) = plaintext_protocol_port_hint(&state, fake_addr.port())
@@ -186,7 +175,6 @@ async fn handle_connection(
             &entry.domain,
             fake_addr,
             client_addr.clone(),
-            client_process.clone(),
             protocol,
         )
         .await?;
@@ -196,15 +184,7 @@ async fn handle_connection(
         && detection == Detection::Match(DetectedProtocol::Tls)
         && (config.https_ports.is_empty() || config.https_ports.contains(&fake_addr.port()))
     {
-        return serve_https_mitm_connection(
-            client,
-            fake_addr,
-            entry,
-            client_addr,
-            client_process,
-            state,
-        )
-        .await;
+        return serve_https_mitm_connection(client, fake_addr, entry, client_addr, state).await;
     }
 
     proxy_raw_tcp(
@@ -212,7 +192,6 @@ async fn handle_connection(
         fake_addr,
         entry,
         client_addr,
-        client_process,
         state,
         RawTcpOptions {
             record_connection: true,
@@ -233,7 +212,6 @@ async fn proxy_raw_tcp(
     fake_addr: SocketAddr,
     entry: FakeDnsEntry,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     state: AppState,
     options: RawTcpOptions,
 ) -> Result<()> {
@@ -249,7 +227,6 @@ async fn proxy_raw_tcp(
                     TcpConnectionRecord {
                         id,
                         client_addr: client_addr.clone(),
-                        client_process: client_process.clone(),
                         domain: Some(entry.domain.clone()),
                         fake_addr,
                         upstream_addr: Some(upstream_addr),
@@ -291,7 +268,6 @@ async fn proxy_raw_tcp(
                 route_name: Some(format!("fake-ip:{}", entry.domain)),
                 listen_addr: state.config().tcp_gateway.listen.to_string(),
                 client_addr,
-                client_process,
                 target_host: Some(entry.domain.clone()),
                 target_port: Some(fake_addr.port()),
                 target_addr: Some(super::format_authority(
@@ -310,7 +286,6 @@ async fn proxy_raw_tcp(
                 &entry.domain,
                 fake_addr,
                 client_addr.clone(),
-                client_process.clone(),
                 "redis",
             )
             .await?;
@@ -318,13 +293,7 @@ async fn proxy_raw_tcp(
                 client,
                 upstream,
                 state,
-                redis_context(
-                    &entry,
-                    fake_addr,
-                    upstream_addr,
-                    client_addr,
-                    client_process,
-                ),
+                redis_context(&entry, fake_addr, upstream_addr, client_addr),
             )
             .await
         }
@@ -335,7 +304,6 @@ async fn proxy_raw_tcp(
                 &entry.domain,
                 fake_addr,
                 client_addr.clone(),
-                client_process.clone(),
                 "memcached",
             )
             .await?;
@@ -348,13 +316,7 @@ async fn proxy_raw_tcp(
                 client,
                 upstream,
                 state,
-                memcached_context(
-                    &entry,
-                    fake_addr,
-                    upstream_addr,
-                    client_addr,
-                    client_process,
-                ),
+                memcached_context(&entry, fake_addr, upstream_addr, client_addr),
                 wire_protocol,
             )
             .await
@@ -366,7 +328,6 @@ async fn proxy_raw_tcp(
                 state,
                 KafkaConnectionContext {
                     client_addr,
-                    client_process,
                     target_host: entry.domain.clone(),
                     target_port: fake_addr.port(),
                     target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
@@ -382,7 +343,6 @@ async fn proxy_raw_tcp(
                 state,
                 MotanConnectionContext {
                     client_addr,
-                    client_process,
                     target_host: entry.domain.clone(),
                     target_port: fake_addr.port(),
                     target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
@@ -408,7 +368,6 @@ async fn proxy_raw_tcp(
                         operation_class,
                         "raw_stream",
                         client_addr.clone(),
-                        client_process.clone(),
                         Some(format!("{}:{}", entry.domain, fake_addr.port())),
                         "unstructured TCP traffic is not allowed by the recording access policy",
                     )
@@ -425,7 +384,6 @@ async fn proxy_raw_tcp(
                     TcpConnectionRecord {
                         id,
                         client_addr,
-                        client_process,
                         domain: Some(entry.domain),
                         fake_addr,
                         upstream_addr: Some(upstream_addr),
@@ -447,11 +405,9 @@ fn redis_context(
     fake_addr: SocketAddr,
     upstream_addr: SocketAddr,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
 ) -> RedisConnectionContext {
     RedisConnectionContext {
         client_addr,
-        client_process,
         target_host: entry.domain.clone(),
         target_port: fake_addr.port(),
         target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
@@ -464,11 +420,9 @@ fn memcached_context(
     fake_addr: SocketAddr,
     upstream_addr: SocketAddr,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
 ) -> MemcachedConnectionContext {
     MemcachedConnectionContext {
         client_addr,
-        client_process,
         target_host: entry.domain.clone(),
         target_port: fake_addr.port(),
         target_addr: format!("{}:{}", entry.domain, fake_addr.port()),
@@ -482,7 +436,6 @@ async fn reject_protocol_tls_if_needed(
     domain: &str,
     fake_addr: SocketAddr,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     protocol: &str,
 ) -> Result<()> {
     let mut prefix = [0_u8; 3];
@@ -497,7 +450,6 @@ async fn reject_protocol_tls_if_needed(
             state,
             protocol,
             client_addr,
-            client_process,
             Some(format!("{domain}:{}", fake_addr.port())),
             error.clone(),
         )

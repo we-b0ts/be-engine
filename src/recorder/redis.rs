@@ -23,7 +23,6 @@ use crate::redis::{BufferedReader, RedisCommand, RedisFrameKind, read_frame, red
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
     pub(crate) client_addr: Option<String>,
-    pub(crate) client_process: Option<crate::recorder::ProcessInfo>,
     pub(crate) target_host: String,
     pub(crate) target_port: u16,
     pub(crate) target_addr: String,
@@ -168,7 +167,6 @@ pub(crate) async fn handle_connected(
                         operation_class,
                         command.name.clone(),
                         c2s_context.client_addr.clone(),
-                        c2s_context.client_process.clone(),
                         Some(c2s_context.target_addr.clone()),
                         "Redis command is classified as a write operation",
                     )
@@ -299,7 +297,6 @@ pub(crate) async fn handle_connected(
                     timestamp: Utc::now(),
                     protocol: "redis".to_string(),
                     client_addr: context.client_addr.clone(),
-                    client_process: context.client_process.clone(),
                     target: Some(context.target_addr.clone()),
                     error: message.clone(),
                 }),
@@ -478,7 +475,6 @@ async fn activate_raw_fallback(
                 timestamp: Utc::now(),
                 protocol: "redis".to_string(),
                 client_addr: context.client_addr.clone(),
-                client_process: context.client_process.clone(),
                 target: Some(context.target_addr.clone()),
                 error: message,
             }),
@@ -543,7 +539,6 @@ async fn record_exchange(
             sequence: pending.sequence,
             timestamp: Utc::now(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,
             target_addr: context.target_addr.clone(),
@@ -589,7 +584,6 @@ async fn record_connection(
             timestamp: Utc::now(),
             phase: phase.to_string(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,
             target_addr: context.target_addr.clone(),

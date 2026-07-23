@@ -4,7 +4,7 @@ use anyhow::{Result, bail, ensure};
 
 use crate::DependencyExchangeOutcome;
 use crate::mysql::wire::{ClientCommand, MysqlPacket, ServerPacketInfo};
-use crate::recorder::{MysqlExchangeEvent, MysqlResponseEvent, ProcessInfo};
+use crate::recorder::{MysqlExchangeEvent, MysqlResponseEvent};
 
 use super::response::MysqlResponseTracker;
 use super::semantic::{MysqlExchangeContext, MysqlSemanticTracker};
@@ -60,7 +60,6 @@ impl MysqlQueryTracker {
         command: &ClientCommand,
         packet: &MysqlPacket,
         client_addr: Option<String>,
-        client_process: Option<ProcessInfo>,
     ) -> Result<()> {
         self.ensure_aligned()?;
         ensure!(
@@ -81,16 +80,9 @@ impl MysqlQueryTracker {
             query_sequence,
             command.command_name.clone(),
             client_addr.clone(),
-            client_process.clone(),
         );
-        self.semantic.start_query(
-            connection_id,
-            query_sequence,
-            command,
-            packet,
-            client_addr,
-            client_process,
-        );
+        self.semantic
+            .start_query(connection_id, query_sequence, command, packet, client_addr);
         self.pending_requests.push_back(PendingRequest {
             query_sequence,
             payload_bytes: packet.payload.len(),
@@ -250,7 +242,7 @@ mod tests {
         let first = query_packet("SET character_set_results = NULL");
         let first_command = parse_client_command(&first).unwrap();
         tracker
-            .start_query(uuid::Uuid::nil(), 5, &first_command, &first, None, None)
+            .start_query(uuid::Uuid::nil(), 5, &first_command, &first, None)
             .unwrap();
 
         let ok = ok_packet();
@@ -262,7 +254,7 @@ mod tests {
         let second = query_packet("SET autocommit=1");
         let second_command = parse_client_command(&second).unwrap();
         tracker
-            .start_query(uuid::Uuid::nil(), 6, &second_command, &second, None, None)
+            .start_query(uuid::Uuid::nil(), 6, &second_command, &second, None)
             .unwrap();
 
         let second_completion = tracker
@@ -282,7 +274,7 @@ mod tests {
         let query = query_packet("SELECT 1");
         let command = parse_client_command(&query).unwrap();
         tracker
-            .start_query(uuid::Uuid::nil(), 1, &command, &query, None, None)
+            .start_query(uuid::Uuid::nil(), 1, &command, &query, None)
             .unwrap();
 
         let ok = ok_packet();
@@ -308,7 +300,7 @@ mod tests {
         let query = query_packet("SELECT 2");
         let query_command = parse_client_command(&query).unwrap();
         tracker
-            .start_query(uuid::Uuid::nil(), 10, &query_command, &query, None, None)
+            .start_query(uuid::Uuid::nil(), 10, &query_command, &query, None)
             .unwrap();
         let ping = MysqlPacket {
             sequence_id: 0,
@@ -316,7 +308,7 @@ mod tests {
         };
         let ping_command = parse_client_command(&ping).unwrap();
         tracker
-            .start_query(uuid::Uuid::nil(), 11, &ping_command, &ping, None, None)
+            .start_query(uuid::Uuid::nil(), 11, &ping_command, &ping, None)
             .unwrap();
 
         for packet in [
@@ -361,7 +353,7 @@ mod tests {
         let query = query_packet("SELECT business_value");
         let query_command = parse_client_command(&query).unwrap();
         tracker
-            .start_query(uuid::Uuid::nil(), 20, &query_command, &query, None, None)
+            .start_query(uuid::Uuid::nil(), 20, &query_command, &query, None)
             .unwrap();
         let close = MysqlPacket {
             sequence_id: 0,
@@ -384,7 +376,7 @@ mod tests {
             let query = query_packet(sql);
             let command = parse_client_command(&query).unwrap();
             tracker
-                .start_query(uuid::Uuid::nil(), sequence, &command, &query, None, None)
+                .start_query(uuid::Uuid::nil(), sequence, &command, &query, None)
                 .unwrap();
         }
 
@@ -412,7 +404,7 @@ mod tests {
         let command = parse_client_command(&ping).unwrap();
         for sequence in 1..=MAX_PENDING_QUERIES as u64 {
             tracker
-                .start_query(uuid::Uuid::nil(), sequence, &command, &ping, None, None)
+                .start_query(uuid::Uuid::nil(), sequence, &command, &ping, None)
                 .unwrap();
         }
 
@@ -422,7 +414,6 @@ mod tests {
                 MAX_PENDING_QUERIES as u64 + 1,
                 &command,
                 &ping,
-                None,
                 None,
             )
             .expect_err("the pending FIFO limit must reject another request");

@@ -29,7 +29,6 @@ pub(super) async fn activate_raw_fallback(
             timestamp: Utc::now(),
             protocol: "memcached".to_string(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target: Some(context.target_addr.clone()),
             error: message,
         });

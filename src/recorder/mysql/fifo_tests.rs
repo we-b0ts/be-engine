@@ -37,7 +37,6 @@ async fn records_pipelined_query_and_ping_responses_in_fifo_order() {
             route_name: Some("test".to_string()),
             listen_addr: client_addr.to_string(),
             client_addr: None,
-            client_process: None,
             target_host: Some("mysql.test".to_string()),
             target_port: Some(3306),
             target_addr: Some("mysql.test:3306".to_string()),

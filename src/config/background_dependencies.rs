@@ -267,7 +267,6 @@ mod tests {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             scheme: "https".to_string(),
             method: method.to_string(),
             uri: uri.to_string(),

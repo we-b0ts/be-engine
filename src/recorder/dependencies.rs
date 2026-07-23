@@ -145,7 +145,6 @@ pub(super) fn dependency_line(
     matched_by: &str,
 ) -> Result<Vec<u8>> {
     let mut value = serde_json::to_value(event).context("failed to serialize dependency event")?;
-    compact_process_info(&mut value);
     if let serde_json::Value::Object(object) = &mut value {
         object.insert(
             matched_by_field.to_string(),
@@ -181,27 +180,6 @@ fn is_debug_event(event: &RecorderEvent) -> bool {
             | RecorderEvent::MysqlPacket(_)
     ) || matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "QUIT")
         || matches!(event, RecorderEvent::MotanExchange(exchange) if exchange.heartbeat)
-}
-
-fn compact_process_info(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            if let Some(process) = object.get_mut("client_process")
-                && let Some(pid) = process.get("pid").and_then(serde_json::Value::as_u64)
-            {
-                *process = serde_json::Value::Number(pid.into());
-            }
-            for child in object.values_mut() {
-                compact_process_info(child);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                compact_process_info(child);
-            }
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]
@@ -241,7 +219,7 @@ mod tests {
                 .append_case_dependency(
                     &case,
                     &RecorderEvent::MysqlQuery(mysql_query(connection_id, sequence, command, sql)),
-                    "process",
+                    "active_window",
                 )
                 .await
                 .unwrap();
@@ -253,7 +231,11 @@ mod tests {
                     .push("no server response packets were captured".to_string());
             }
             recorder
-                .append_case_dependency(&case, &RecorderEvent::MysqlExchange(exchange), "process")
+                .append_case_dependency(
+                    &case,
+                    &RecorderEvent::MysqlExchange(exchange),
+                    "active_window",
+                )
                 .await
                 .unwrap();
         }
@@ -266,7 +248,7 @@ mod tests {
                     "COM_QUERY",
                     Some("SELECT 2"),
                 )),
-                "process",
+                "active_window",
             )
             .await
             .unwrap();
@@ -382,7 +364,7 @@ mod tests {
 
         for event in [&quit, &get] {
             recorder
-                .append_case_dependency(&case, event, "process")
+                .append_case_dependency(&case, event, "active_window")
                 .await
                 .unwrap();
         }
@@ -459,7 +441,7 @@ mod tests {
 
         for event in [&heartbeat, &business] {
             recorder
-                .append_case_dependency(&case, event, "process")
+                .append_case_dependency(&case, event, "active_window")
                 .await
                 .unwrap();
         }
@@ -502,7 +484,6 @@ mod tests {
             sequence,
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             command: command.to_string(),
             query: query.map(ToOwned::to_owned),
             payload_len: query.map_or(1, str::len),
@@ -521,7 +502,6 @@ mod tests {
             query_sequence,
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             route_name: None,
             target_host: Some("mysql.internal".to_string()),
             target_port: Some(3306),
@@ -562,7 +542,6 @@ mod tests {
             sequence,
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             target_host: "redis.internal".to_string(),
             target_port: 6379,
             target_addr: "redis.internal:6379".to_string(),
@@ -598,7 +577,6 @@ mod tests {
             sequence,
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             target_host: "vintage-node-10-0-0-1.trp.test".to_string(),
             target_port: 8881,
             target_addr: "vintage-node-10-0-0-1.trp.test:8881".to_string(),

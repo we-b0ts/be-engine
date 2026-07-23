@@ -1,6 +1,3 @@
-use std::convert::Infallible;
-use std::net::{IpAddr, SocketAddr};
-
 use anyhow::{Context, Result, anyhow};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
@@ -8,6 +5,7 @@ use hyper::body::Incoming;
 use hyper::header::{CONTENT_TYPE, HOST, HeaderName, HeaderValue};
 use hyper::http::uri::{Authority, PathAndQuery, Scheme};
 use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
+use std::convert::Infallible;
 
 use crate::ProxyClient;
 use crate::config::HttpGatewayFixedResponseConfig;
@@ -20,23 +18,6 @@ pub(crate) async fn send_upstream(
     request: Request<Full<Bytes>>,
 ) -> Result<Response<Incoming>, hyper_util::client::legacy::Error> {
     client.request(request).await
-}
-
-pub(super) fn upstream_socket_addr(base: &str) -> Option<SocketAddr> {
-    let uri = base.parse::<Uri>().ok()?;
-    let scheme = uri.scheme_str().unwrap_or("http");
-    let authority = uri.authority()?;
-    let port = authority.port_u16().or(match scheme {
-        "http" => Some(80),
-        "https" => Some(443),
-        _ => None,
-    })?;
-    let ip = if authority.host().eq_ignore_ascii_case("localhost") {
-        IpAddr::from([127, 0, 0, 1])
-    } else {
-        authority.host().parse::<IpAddr>().ok()?
-    };
-    Some(SocketAddr::new(ip, port))
 }
 
 pub(crate) fn build_upstream_uri(base: &str, original_uri: &Uri) -> Result<Uri> {

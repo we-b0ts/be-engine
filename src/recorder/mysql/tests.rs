@@ -15,7 +15,7 @@ use crate::{
 #[test]
 fn aggregates_resultset_packets_into_one_response() {
     let mut tracker = MysqlResponseTracker::new(1024, true);
-    tracker.start_query(Uuid::nil(), 7, "COM_STMT_EXECUTE".to_string(), None, None);
+    tracker.start_query(Uuid::nil(), 7, "COM_STMT_EXECUTE".to_string(), None);
 
     assert!(
         observe_payload(&mut tracker, 1, &[1]).is_none(),
@@ -51,7 +51,7 @@ fn aggregates_resultset_packets_into_one_response() {
 #[test]
 fn response_payload_is_concatenated_and_truncated() {
     let mut tracker = MysqlResponseTracker::new(4, false);
-    tracker.start_query(Uuid::nil(), 8, "COM_STMT_EXECUTE".to_string(), None, None);
+    tracker.start_query(Uuid::nil(), 8, "COM_STMT_EXECUTE".to_string(), None);
 
     assert!(observe_payload(&mut tracker, 1, &[1]).is_none());
     assert!(observe_payload(&mut tracker, 2, b"abc").is_none());
@@ -69,7 +69,7 @@ fn response_payload_is_concatenated_and_truncated() {
 #[test]
 fn raw_packets_can_be_recorded_when_enabled() {
     let mut tracker = MysqlResponseTracker::new(4, true);
-    tracker.start_query(Uuid::nil(), 9, "COM_STMT_EXECUTE".to_string(), None, None);
+    tracker.start_query(Uuid::nil(), 9, "COM_STMT_EXECUTE".to_string(), None);
 
     assert!(observe_payload(&mut tracker, 1, &[1]).is_none());
     assert!(observe_payload(&mut tracker, 2, b"abcdef").is_none());
@@ -87,7 +87,7 @@ fn raw_packets_can_be_recorded_when_enabled() {
 #[test]
 fn aggregates_stmt_prepare_until_expected_eofs() {
     let mut tracker = MysqlResponseTracker::new(1024, false);
-    tracker.start_query(Uuid::nil(), 3, "COM_STMT_PREPARE".to_string(), None, None);
+    tracker.start_query(Uuid::nil(), 3, "COM_STMT_PREPARE".to_string(), None);
 
     let mut prepare_ok = vec![0x00];
     prepare_ok.extend_from_slice(&1_u32.to_le_bytes());
@@ -147,7 +147,6 @@ async fn pending_query_uses_uncompressed_framing_and_records_client_termination(
             route_name: Some("test".to_string()),
             listen_addr: client_addr.to_string(),
             client_addr: None,
-            client_process: None,
             target_host: Some("mysql.test".to_string()),
             target_port: Some(3306),
             target_addr: Some("mysql.test:3306".to_string()),
@@ -269,7 +268,6 @@ async fn assert_blocked_query(sql: &str) {
             route_name: Some("test".to_string()),
             listen_addr: client_addr.to_string(),
             client_addr: None,
-            client_process: None,
             target_host: Some("mysql.test".to_string()),
             target_port: Some(3306),
             target_addr: Some("mysql.test:3306".to_string()),
@@ -379,7 +377,6 @@ async fn allowed_insert_reaches_upstream_and_records_exchange_and_audit() {
             route_name: Some("test".to_string()),
             listen_addr: client_addr.to_string(),
             client_addr: None,
-            client_process: None,
             target_host: Some("mysql.test".to_string()),
             target_port: Some(3306),
             target_addr: Some("mysql.test:3306".to_string()),
@@ -502,7 +499,6 @@ async fn stmt_close_is_forwarded_without_recording_an_incomplete_exchange() {
             route_name: Some("test".to_string()),
             listen_addr: client_addr.to_string(),
             client_addr: None,
-            client_process: None,
             target_host: Some("mysql.test".to_string()),
             target_port: Some(3306),
             target_addr: Some("mysql.test:3306".to_string()),
