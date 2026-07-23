@@ -11,7 +11,7 @@ pub enum DependencyExchangeOutcome {
     Response,
     /// The client ended the connection while it was still waiting for a response.
     ClientTerminated,
-    /// The protocol command intentionally has no response.
+    /// The exchange is expected to complete without response bytes.
     NoResponse,
 }
 
