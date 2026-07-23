@@ -72,6 +72,7 @@ pub struct AppConfig {
 pub struct TcpGatewayConfig {
     pub enabled: bool,
     pub listen: SocketAddr,
+    pub backlog: u32,
     pub record_http: bool,
     pub mitm_https: bool,
     pub https_ports: Vec<u16>,
@@ -235,6 +236,9 @@ impl AppConfig {
         if let Some(compare) = &self.compare {
             compare.validate(&self.http_gateway)?;
         }
+        if self.tcp_gateway.backlog == 0 || self.tcp_gateway.backlog > i32::MAX as u32 {
+            bail!("tcp_gateway.backlog must be between 1 and {}", i32::MAX);
+        }
         if self.http_response_rewrite.enabled
             && (!self.dns_mock.enabled
                 || !self.tcp_gateway.enabled
@@ -266,6 +270,7 @@ impl Default for TcpGatewayConfig {
             listen: "127.0.0.1:15001"
                 .parse()
                 .expect("valid default TCP gateway listen address"),
+            backlog: 65_535,
             record_http: true,
             mitm_https: true,
             https_ports: Vec::new(),
@@ -417,6 +422,7 @@ mod tests {
         assert!(!config.http.enabled);
         assert!(!config.mysql.enabled);
         assert!(!config.mysql.record_raw_packets);
+        assert_eq!(config.tcp_gateway.backlog, 65_535);
         assert_eq!(
             config.http_gateway.case_limits.default,
             case_limits::DEFAULT_MAX_CASES_PER_PATTERN
@@ -488,6 +494,19 @@ mod tests {
         assert_eq!(
             config.tcp_gateway.protocol_detection.overrides[0].protocol,
             TcpApplicationProtocol::Redis
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_tcp_gateway_backlog() {
+        let mut config = AppConfig::default();
+        config.tcp_gateway.backlog = 0;
+
+        let error = config.validate().unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!("tcp_gateway.backlog must be between 1 and {}", i32::MAX)
         );
     }
 
@@ -588,6 +607,7 @@ mod tests {
             [tcp_gateway]
             enabled = true
             listen = "127.0.0.1:15001"
+            backlog = 4096
             record_http = true
             mitm_https = true
             https_ports = [443, 8443]
@@ -603,6 +623,7 @@ mod tests {
         assert!(config.dns_mock.enabled);
         assert!(config.tcp_gateway.enabled);
         assert!(config.udp_gateway.enabled);
+        assert_eq!(config.tcp_gateway.backlog, 4096);
         assert!(config.tcp_gateway.mitm_https);
         assert_eq!(config.tcp_gateway.https_ports, vec![443, 8443]);
         assert_eq!(config.udp_gateway.listen.to_string(), "127.0.0.1:15002");

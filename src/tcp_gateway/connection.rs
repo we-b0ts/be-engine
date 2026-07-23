@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use tokio::io;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::time::{Duration, sleep, timeout};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -42,10 +42,12 @@ const MAX_SNIFF_BYTES: usize = 4096;
 
 pub(crate) async fn run(state: AppState) -> Result<()> {
     let config = state.config().tcp_gateway.clone();
-    let listener = TcpListener::bind(config.listen)
-        .await
-        .with_context(|| format!("failed to bind TCP gateway {}", config.listen))?;
-    info!(listen = %config.listen, "TCP fake-IP gateway listening");
+    let listener = bind_listener(config.listen, config.backlog)?;
+    info!(
+        listen = %config.listen,
+        backlog = config.backlog,
+        "TCP fake-IP gateway listening"
+    );
 
     loop {
         let (client, peer_addr) = listener
@@ -63,6 +65,25 @@ pub(crate) async fn run(state: AppState) -> Result<()> {
             }
         });
     }
+}
+
+fn bind_listener(listen: SocketAddr, backlog: u32) -> Result<TcpListener> {
+    let socket = if listen.is_ipv4() {
+        TcpSocket::new_v4()
+    } else {
+        TcpSocket::new_v6()
+    }
+    .with_context(|| format!("failed to create TCP gateway socket for {listen}"))?;
+    #[cfg(not(windows))]
+    socket
+        .set_reuseaddr(true)
+        .with_context(|| format!("failed to set SO_REUSEADDR for TCP gateway {listen}"))?;
+    socket
+        .bind(listen)
+        .with_context(|| format!("failed to bind TCP gateway {listen}"))?;
+    socket
+        .listen(backlog)
+        .with_context(|| format!("failed to listen on TCP gateway {listen} with backlog {backlog}"))
 }
 
 fn is_expected_connection_end(error: &anyhow::Error) -> bool {
@@ -611,6 +632,18 @@ mod tests {
             protocol_override(&config, "CACHE.INTERNAL.", 6379),
             Some(DetectedProtocol::Raw)
         );
+    }
+
+    #[tokio::test]
+    async fn configured_listener_accepts_connections() {
+        let listener = bind_listener("127.0.0.1:0".parse().unwrap(), 4096).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client_task = tokio::spawn(TcpStream::connect(addr));
+
+        let (_, peer_addr) = listener.accept().await.unwrap();
+
+        assert!(peer_addr.ip().is_loopback());
+        client_task.await.unwrap().unwrap();
     }
 
     #[tokio::test]

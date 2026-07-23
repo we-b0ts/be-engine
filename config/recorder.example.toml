@@ -23,6 +23,9 @@ bypass_domains = [
 [tcp_gateway]
 enabled = true
 listen = "127.0.0.1:15001"
+# Maximum pending connections passed to listen(2); the kernel may cap it at
+# net.core.somaxconn.
+backlog = 65535
 record_http = true
 mitm_https = true
 # Empty means attempt HTTPS MITM for all TLS-looking TCP streams.
