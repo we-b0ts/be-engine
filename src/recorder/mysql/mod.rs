@@ -17,7 +17,8 @@ use crate::access_policy::{AccessDecision, MysqlAccessContext, evaluate_mysql_ac
 use crate::dependency::termination::ConnectionTermination;
 use crate::mysql::access::analyze_command;
 use crate::mysql::wire::{
-    MysqlPacket, ServerPacketInfo, parse_client_command, parse_handshake_response,
+    MysqlPacket, ServerPacketInfo, clear_client_compression_capability,
+    clear_server_compression_capability, parse_client_command, parse_handshake_response,
     parse_server_packet, read_packet, readonly_error_packet,
 };
 use crate::recorder::{
@@ -152,20 +153,24 @@ pub(crate) async fn handle_connected_mysql(
     let mut server_to_client_bytes = 0_u64;
     let mut client_to_server_bytes = 0_u64;
 
-    let handshake = read_packet(&mut upstream)
+    let mut handshake = read_packet(&mut upstream)
         .await
         .context("failed to read MySQL upstream handshake")?
         .context("MySQL upstream closed before handshake")?;
+    // Semantic capture parses ordinary MySQL packets. Negotiate compression
+    // off before either peer can switch to the seven-byte compressed header.
+    clear_server_compression_capability(&mut handshake);
     server_to_client_bytes += handshake.encoded_len() as u64;
     client
         .write_all(&handshake.to_wire_bytes())
         .await
         .context("failed to forward MySQL handshake")?;
 
-    let login_packet = read_packet(&mut client)
+    let mut login_packet = read_packet(&mut client)
         .await
         .context("failed to read MySQL login packet")?
         .context("MySQL client closed before login packet")?;
+    clear_client_compression_capability(&mut login_packet);
     client_to_server_bytes += login_packet.encoded_len() as u64;
     let login = parse_handshake_response(&login_packet);
 
