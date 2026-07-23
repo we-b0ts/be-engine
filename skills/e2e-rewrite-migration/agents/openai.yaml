@@ -1,4 +1,4 @@
 interface:
   display_name: "E2E Rewrite Migration"
-  short_description: "Rewrite services with recorded E2E guardrails"
-  default_prompt: "Use $e2e-rewrite-migration to migrate one API at a time through traffic-e2e, preserve verified cross-scope lessons, and deliver canonical evidence in a focused PR."
+  short_description: "Rewrite services from local or remote E2E cases"
+  default_prompt: "Use $e2e-rewrite-migration with a local case source or remote recorder IPv4 address to migrate one API at a time and deliver canonical traffic-e2e evidence in a focused PR."

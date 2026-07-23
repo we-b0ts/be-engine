@@ -1,6 +1,6 @@
 ---
 name: e2e-rewrite-migration
-description: Use when rewriting or migrating one API, scheduled job, worker, or service capability from a local source repository into another language using recorded E2E cases as the behavior contract. Requires a source repo, target repo or current workspace, target language, published cases, real dependency paths, a standard project CLI facade, final E2E evidence, and PR delivery.
+description: Use when rewriting or migrating one API, scheduled job, worker, or service capability from a local source repository into another language using local recorded E2E cases or recordings fetched from a remote task-service IPv4 address as the behavior contract. Requires a source repo, target repo or current workspace, target language, published cases, real dependency paths, a standard project CLI facade, final E2E evidence, and PR delivery.
 ---
 
 # E2E Rewrite Migration
@@ -40,10 +40,13 @@ force-add `.traffic-e2e/local/`; ignoring it never waives evidence.
 - local source repository path;
 - target repository path, or the current workspace;
 - target language;
-- at least one published recorded case for the selected scope.
+- either a local case source containing at least one published recorded case, or
+  one remote task-service IPv4 address from which to select one recording.
 
-Stop and request a missing source path, target language, or published recording
-before implementation. Source tests may supplement but never replace recordings.
+Stop and request a missing source path, target language, or case-source mode
+before implementation. In remote mode, require only the IPv4 address; derive
+the Admin API as `http://<ipv4>:9090` and use the bundled task helper. Source
+tests may supplement but never replace recordings.
 
 ## Reference Routing
 
@@ -59,19 +62,28 @@ before implementation. Source tests may supplement but never replace recordings.
   delivering, or diagnosing runner-generated state.
 - Read [repository-memory.md](references/repository-memory.md) before the first
   implementation or replay attempt and again before delivery.
+- Read [remote-case-source.md](references/remote-case-source.md) when the user
+  supplies a remote IPv4 address instead of a local case source.
 - Read [logging.md](references/logging.md) only when runnable-service diagnostics
   are absent or changed by the current migration.
 
 ## Workflow
 
-1. Inspect target instructions and conventions, the supplied recordings, source
+1. Resolve the case-source mode. For a local case source, preserve the existing
+   path exactly. For a remote IPv4 address, follow `remote-case-source.md`,
+   invoke this skill's `scripts/pluto-task.sh` by absolute path, and freeze the
+   remote artifact list. Inspect target instructions and conventions, source
    route registrations or job wiring, normal startup, Git state, and declared
    repository migration notes. Before generating migration state, require
    `.traffic-e2e/local/`, `.traffic-e2e/.env`, and the target's local
    application environment file in the target root `.gitignore`, then verify
    them with `git check-ignore`. Resolve the PR base and pass it to
-   `traffic-e2e init`; do not begin prepare or replay with missing or
-   incomplete stable project configuration.
+   `traffic-e2e init`; do not begin prepare, status inspection, or replay with
+   missing or incomplete stable project configuration. In remote mode, then
+   materialize candidates in ascending order and select the oldest clean
+   recording whose canonical case sources do not all have successful runner
+   state. Select at most one recording per invocation and inspect its resolved
+   recordings before implementation.
 2. Use `traffic-e2e prepare` through `recorded-e2e-cases` to select exactly
    one canonical API/function group. If no API is named, select one unprocessed
    complete group from the available source, recording, dependency, and replay
@@ -186,10 +198,18 @@ MUST NOT claim a migration complete or delivered unless all items hold:
    independently verified. The per-run state records, but does not manufacture,
    the exact evidence and delivery identifiers. `.traffic-e2e/local/` is ignored
    and contains no tracked or staged file.
+9. For a remote case source, the final handoff records the remote IPv4 address,
+   selected recording ID, frozen snapshot boundary, cache root, archive
+   fingerprint, and every materialized canonical case source. The archive
+   metadata and published-case count match the remote list entry, and the
+   downloaded cache, helper exit status, or prose ledger is not used as replay
+   completion evidence.
 
 ## Completion Blockers
 
 - missing published cases, ambiguous grouping, or changed recordings;
+- unreachable remote task service, invalid IPv4 input, unsafe or inconsistent
+  downloaded archive, or missing bundled task-helper dependencies;
 - incomplete or dirty `recorded-e2e-cases` evidence;
 - target-side use of recorded dependency files or fixtures, or a version-two
   target facade that reads the expected response;
@@ -214,8 +234,10 @@ hands off partial migration state, or makes a completion/delivery claim. Start
 that output with exactly `complete`, `incomplete`, or `blocked`, then report the
 selected scope, case source and canonical group, recorded-E2E artifact status,
 startup/quality results, branch, commit, PR base/URL, run-state path, and exact
-blockers. Include the resolved project-facade path and commands. For analysis,
-review, or design questions that do not execute a migration, answer normally
-without a synthetic migration status.
+blockers. For remote mode, also report the IPv4 address, recording ID, snapshot
+boundary, cache root, archive fingerprint, and resolved case sources. Include
+the resolved project-facade path and commands. For analysis, review, or design
+questions that do not execute a migration, answer normally without a synthetic
+migration status.
 
 Never use success wording while an applicable gate is missing.
