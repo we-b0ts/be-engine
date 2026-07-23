@@ -208,9 +208,10 @@ Summary rules:
   failures are semantic dependencies and should appear in `dependencies.jsonl`
   and the summary.
 - Dependency coverage should compare response-driving, auth/session, and
-  required side-effect behavior. Unrelated/background classification is useful
-  recorder feedback, but replay-policy version one cannot waive dirty case
-  exchanges; re-record or keep the case incomplete.
+  required side-effect behavior. Exclude source-proven process-level HTTP
+  polling from case attribution with a configured background rule and a new
+  recording. Existing dirty case exchanges are not retroactively reclassified
+  during replay.
 
 First-version summary fields:
 

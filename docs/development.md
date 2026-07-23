@@ -714,6 +714,27 @@ bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.
 
+Source-proven process-level HTTP polling can be classified before recording:
+
+```toml
+[[recording.background_dependencies]]
+name = "config-refresh"
+protocol = "http"
+authorities = ["config.api.demo.test", "static.config.api.demo.test"]
+methods = ["GET"]
+path_prefixes = ["/1/config/service", "/3/config/cloud/datamesh/config", "/naming/service"]
+```
+
+All three dimensions are required. A matching exchange is not attributed to an
+active API case and therefore does not enter that case's `dependencies.jsonl`
+or summary. The ordinary run-level `traffic.jsonl` continues to retain the
+exchange only when `recording.traffic_jsonl` permits it. When the exchange
+occurs while bootstrap is open, it remains normal
+`bootstrap-dependencies.jsonl` replay evidence. The rule changes ownership
+only; it does not alter forwarding, response capture, body limits, or protocol
+debugging. Add a rule only after source inspection proves the traffic is
+independent of the triggering API, then create a new recording run.
+
 Recognized MySQL connection maintenance is not a semantic dependency. The
 strict built-in fingerprints are protocol `COM_PING`, c3p0's exact
 empty-database `SHOW FULL TABLES` probe using the `PROBABLYNOT` sentinel, and exact

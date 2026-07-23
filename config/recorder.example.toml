@@ -192,6 +192,18 @@ redact_headers = [
   "proxy-authenticate",
 ]
 
+# Source-proven process-level HTTP polling can be excluded from whichever API
+# case happened to be active. Classification requires an exact authority,
+# method, and path prefix. The ordinary run-level traffic stream still follows
+# traffic_jsonl; matching traffic observed during bootstrap remains bootstrap
+# replay evidence.
+# [[recording.background_dependencies]]
+# name = "config-refresh"
+# protocol = "http"
+# authorities = ["config.api.demo.test", "static.config.api.demo.test"]
+# methods = ["GET"]
+# path_prefixes = ["/1/config/service", "/3/config/cloud/datamesh/config", "/naming/service"]
+
 # MySQL-only first version of explicit write allowances. Every field is exact
 # and all configured dimensions must match. operations, databases, and tables
 # must be non-empty, and at least one route or target is required.
