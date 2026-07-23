@@ -812,6 +812,15 @@ dependency JSONL and summaries. Replay handles the same fingerprints without a
 recorded exchange: ping returns OK, `SELECT 1` returns one integer row, and the
 c3p0 empty-database probe returns MySQL error 1102.
 
+MySQL has no per-command response correlation ID, so Recorder preserves every
+response-bearing command in a connection-local FIFO and assigns server packets
+only to its oldest pending command. This covers clients that send a query and
+then `COM_PING` before the query result arrives without misclassifying the
+query as incomplete or assigning its resultset to the ping. The FIFO is bounded
+to 64 commands and 16 MiB of retained request payload per connection; exceeding
+either bound fails the connection rather than guessing response ownership.
+Intrinsic no-response commands do not consume or flush the FIFO.
+
 Redis and Memcached dependencies are semantic `redis_connection`,
 `redis_exchange`, `memcached_connection`, and `memcached_exchange` records.
 Successful Redis authentication/session initialization is handled by replay

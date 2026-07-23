@@ -27,6 +27,8 @@ use crate::recorder::{
     capture_body_with_original_len,
 };
 
+#[cfg(test)]
+mod fifo_tests;
 mod ownership;
 mod response;
 mod semantic;
@@ -366,7 +368,7 @@ pub(crate) async fn handle_connected_mysql(
                 if closes_connection {
                     c2s_termination.observe_client_eof();
                 }
-                let flushed_completion = {
+                {
                     let mut tracker = c2s_query_tracker.lock().await;
                     if expects_server_response {
                         tracker.start_query(
@@ -376,13 +378,11 @@ pub(crate) async fn handle_connected_mysql(
                             &packet,
                             c2s_client_addr.clone(),
                             c2s_client_process.clone(),
-                        )
+                        )?;
                     } else {
-                        tracker.observe_no_response_command(&command, &packet, closes_connection)
+                        tracker.observe_no_response_command(&command, &packet);
                     }
-                };
-                record_query_completion(&c2s_state, &c2s_dependency_ownerships, flushed_completion)
-                    .await?;
+                }
                 let query_event = RecorderEvent::MysqlQuery(MysqlQueryEvent {
                     id: Uuid::new_v4(),
                     connection_id: c2s_connection_id,
@@ -439,7 +439,7 @@ pub(crate) async fn handle_connected_mysql(
                 s2c_query_tracker
                     .lock()
                     .await
-                    .observe_server_packet(&packet, packet_info)
+                    .observe_server_packet(&packet, packet_info)?
             } else {
                 Default::default()
             };
@@ -448,7 +448,7 @@ pub(crate) async fn handle_connected_mysql(
                     completion = s2c_query_tracker
                         .lock()
                         .await
-                        .finish_active("client_terminated");
+                        .finish_active("client_terminated")?;
                 } else {
                     completion.mark_client_terminated();
                 }
@@ -472,7 +472,7 @@ pub(crate) async fn handle_connected_mysql(
                         completion = s2c_query_tracker
                             .lock()
                             .await
-                            .finish_active("client_terminated");
+                            .finish_active("client_terminated")?;
                     } else {
                         completion.mark_client_terminated();
                     }
@@ -488,12 +488,11 @@ pub(crate) async fn handle_connected_mysql(
         } else {
             "incomplete"
         };
-        let completion = s2c_query_tracker
-            .lock()
-            .await
-            .finish_active(terminal_status);
-        if !completion.is_empty() {
-            record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
+        let completions = s2c_query_tracker.lock().await.finish_all(terminal_status)?;
+        for completion in completions {
+            if !completion.is_empty() {
+                record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
+            }
         }
         let _ = s2c_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)

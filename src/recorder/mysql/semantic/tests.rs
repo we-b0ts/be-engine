@@ -12,11 +12,7 @@ fn parses_text_resultset_exchange() {
         payload: [vec![0x03], b"select id, name".to_vec()].concat(),
     };
     let command = parse_client_command(&query).unwrap();
-    assert!(
-        tracker
-            .start_query(Uuid::nil(), 1, &command, &query, None, None)
-            .is_none()
-    );
+    tracker.start_query(Uuid::nil(), 1, &command, &query, None, None);
 
     tracker.observe_packet(&MysqlPacket {
         sequence_id: 1,
@@ -304,11 +300,7 @@ fn stmt_close_clears_prepared_statement_without_creating_exchange() {
         payload: [vec![0x19], 9_u32.to_le_bytes().to_vec()].concat(),
     };
     let command = parse_client_command(&close).unwrap();
-    assert!(
-        tracker
-            .observe_no_response_command(&command, &close)
-            .is_none()
-    );
+    tracker.observe_no_response_command(&command, &close);
     assert!(!tracker.statements.contains_key(&9));
     assert!(
         tracker
