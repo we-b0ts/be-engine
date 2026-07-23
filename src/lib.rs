@@ -509,24 +509,64 @@ impl AppState {
             "traffic recorder proxy started"
         );
 
-        let run_result = tokio::select! {
-            result = shutdown_signal() => {
-                result?;
-                info!("shutdown signal received");
-                Ok(())
-            }
-            Some(joined) = tasks.join_next() => {
-                joined.context("proxy task panicked")?
+        let mut registry_flush_interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + dns_mock::REGISTRY_FLUSH_INTERVAL,
+            dns_mock::REGISTRY_FLUSH_INTERVAL,
+        );
+        registry_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let shutdown = shutdown_signal();
+        tokio::pin!(shutdown);
+        let run_result = loop {
+            tokio::select! {
+                result = &mut shutdown => {
+                    result?;
+                    info!("shutdown signal received");
+                    break Ok(());
+                }
+                joined = tasks.join_next(), if !tasks.is_empty() => {
+                    let Some(joined) = joined else {
+                        continue;
+                    };
+                    break joined.context("proxy task panicked")?;
+                }
+                _ = registry_flush_interval.tick() => {
+                    match self.dns_registry().flush_if_dirty().await {
+                        Ok(true) => info!("flushed fake DNS registry"),
+                        Ok(false) => {}
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                "failed to flush fake DNS registry; pending updates will be retried"
+                            );
+                        }
+                    }
+                }
             }
         };
 
+        tasks.abort_all();
+        while let Some(joined) = tasks.join_next().await {
+            if let Err(error) = joined
+                && !error.is_cancelled()
+            {
+                warn!(error = %error, "proxy task failed while shutting down");
+            }
+        }
         self.kubectl_proxy_manager().shutdown().await;
-        let has_failed_cases = self
+        let finish_run_result = self
             .recorder()
             .finish_run()
             .await
-            .context("failed to finalize recording run")?;
+            .context("failed to finalize recording run");
+        let registry_flush_result = self
+            .dns_registry()
+            .flush_if_dirty()
+            .await
+            .context("failed to flush fake DNS registry during shutdown");
+
         run_result?;
+        let has_failed_cases = finish_run_result?;
+        registry_flush_result?;
         if has_failed_cases {
             anyhow::bail!("recording run finished with failed cases");
         }

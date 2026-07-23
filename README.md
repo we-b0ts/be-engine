@@ -466,6 +466,9 @@ Fake DNS mappings are persisted at `registry_path` so recorder restarts can
 continue handling fake IPs that clients already cached. If a cached fake IP now
 belongs to a `bypass_domains` entry, the TCP gateway only forwards it
 transparently and does not record or MITM it while the client cache drains.
+Registry updates are coalesced in memory and atomically flushed at most once
+every 15 seconds, with one final flush during graceful shutdown. A forced
+process kill can lose mappings created since the previous periodic flush.
 
 Port `5353` is intentionally avoided because it is commonly used by mDNS/Avahi
 on UDP. Binding to `127.0.0.153:15353` also avoids the common systemd-resolved
