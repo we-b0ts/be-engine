@@ -425,6 +425,7 @@ mod tests {
         assert_eq!(config.recording.traffic_jsonl, TrafficJsonlMode::Full);
         assert_eq!(config.recording.jsonl_buffer_capacity_bytes, 256 * 1024);
         assert_eq!(config.recording.jsonl_flush_interval_ms, 1_000);
+        assert_eq!(config.recording.writer_queue_capacity, 65_536);
         assert_eq!(
             config.recording.case_dependency_post_response_window_ms,
             100

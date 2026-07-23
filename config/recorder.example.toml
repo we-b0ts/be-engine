@@ -187,6 +187,9 @@ traffic_jsonl = "full"
 # JSONL writes are buffered and flushed at most this long after an active write.
 jsonl_buffer_capacity_bytes = 262144
 jsonl_flush_interval_ms = 1000
+# Completed events move into this bounded queue before JSONL serialization and
+# persistence so dependency writes do not delay dependency responses.
+writer_queue_capacity = 65536
 # Keep dependency admission open for a fixed interval after the HTTP response
 # completes so synchronous server-side after-hooks can start. Set to 0 to close
 # admission immediately when the response completes.

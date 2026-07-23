@@ -395,7 +395,7 @@ pub(crate) async fn handle_connected_mysql(
                     payload_len: packet.payload.len(),
                 });
                 let ownership = c2s_dependency_ownerships.get(sequence);
-                if let Err(err) = record_event(&c2s_state, query_event, ownership.as_ref()).await {
+                if let Err(err) = record_event(&c2s_state, query_event, ownership).await {
                     c2s_dependency_ownerships.take(sequence);
                     return Err(err);
                 }
@@ -602,5 +602,5 @@ fn mysql_target_from_addr(addr: &str) -> (Option<String>, Option<u16>, Option<St
 
 async fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) -> Result<()> {
     let targets = state.capture_dependency_targets(event.client_pid());
-    record_event(state, event, Some(&targets)).await
+    record_event(state, event, Some(targets)).await
 }

@@ -384,12 +384,7 @@ async fn handle_http_request(
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
             };
-            record_event_and_case_dependency(
-                &state,
-                RecorderEvent::HttpExchange(event),
-                "failed to record fake-IP HTTP exchange",
-            )
-            .await;
+            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
 
             build_downstream_response(status, &response_headers, body_bytes)
         }
@@ -655,12 +650,7 @@ async fn handle_https_request(
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
             };
-            record_event_and_case_dependency(
-                &state,
-                RecorderEvent::HttpExchange(event),
-                "failed to record fake-IP HTTPS exchange",
-            )
-            .await;
+            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
 
             build_downstream_response(status, &response_headers, body_bytes)
         }
@@ -743,9 +733,7 @@ async fn record_proxy_error(
             target,
             error,
         }),
-        "failed to record proxy error",
-    )
-    .await;
+    );
 }
 
 struct HttpErrorContext {
@@ -794,12 +782,7 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<GatewayBody> {
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),
     };
-    record_event_and_case_dependency(
-        &ctx.state,
-        RecorderEvent::HttpExchange(event),
-        "failed to record failed fake-IP HTTP exchange",
-    )
-    .await;
+    record_event_and_case_dependency(&ctx.state, RecorderEvent::HttpExchange(event));
     record_proxy_error(
         &ctx.state,
         &ctx.scheme,
@@ -841,20 +824,11 @@ async fn record_tcp_connection(state: &AppState, record: TcpConnectionRecord) {
             duration_ms: record.duration_ms,
             error: record.error,
         }),
-        "failed to record TCP gateway connection",
-    )
-    .await;
+    );
 }
 
-async fn record_event_and_case_dependency(
-    state: &AppState,
-    event: RecorderEvent,
-    warning: &'static str,
-) {
-    if let Err(err) = state.recorder().record(event.clone()).await {
-        warn!(error = %err, "{}", warning);
-    }
-    state.record_dependency_if_relevant(&event).await;
+fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) {
+    state.record_event(event);
 }
 
 fn request_authority(uri: &Uri, headers: &HeaderMap) -> Option<String> {

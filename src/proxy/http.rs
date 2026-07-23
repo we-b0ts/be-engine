@@ -348,12 +348,7 @@ async fn forward_and_record(
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
             };
-            record_event_and_case_dependency(
-                &state,
-                RecorderEvent::HttpExchange(event),
-                "failed to record HTTP exchange",
-            )
-            .await;
+            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
 
             build_downstream_response(status, &response_headers, body_bytes)
         }
@@ -420,12 +415,7 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),
     };
-    record_event_and_case_dependency(
-        &ctx.state,
-        RecorderEvent::HttpExchange(event),
-        "failed to record failed HTTP exchange",
-    )
-    .await;
+    record_event_and_case_dependency(&ctx.state, RecorderEvent::HttpExchange(event));
     record_event_and_case_dependency(
         &ctx.state,
         RecorderEvent::ProxyError(ProxyErrorEvent {
@@ -437,21 +427,12 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
             target: ctx.authority,
             error: error.clone(),
         }),
-        "failed to record proxy error",
-    )
-    .await;
+    );
     simple_response(StatusCode::BAD_GATEWAY, &error)
 }
 
-async fn record_event_and_case_dependency(
-    state: &AppState,
-    event: RecorderEvent,
-    warning: &'static str,
-) {
-    if let Err(err) = state.recorder().record(event.clone()).await {
-        warn!(error = %err, "{}", warning);
-    }
-    state.record_dependency_if_relevant(&event).await;
+fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) {
+    state.record_event(event);
 }
 
 fn build_upstream_request(

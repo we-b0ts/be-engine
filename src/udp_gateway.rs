@@ -140,8 +140,7 @@ async fn handle_datagram(
         duration_ms: started.elapsed().as_millis(),
         error,
     });
-    state.recorder().record(event.clone()).await?;
-    state.record_dependency_if_relevant(&event).await;
+    state.record_event(event);
     Ok(())
 }
 

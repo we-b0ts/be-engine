@@ -32,19 +32,8 @@ impl Recorder {
         }
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
-        if self.finalized_cases.lock().await.contains(&case.id) {
-            return Ok(());
-        }
-        let dir = self.case_staging_dir(case);
-        tokio::fs::create_dir_all(&dir)
-            .await
-            .with_context(|| format!("failed to create case recording dir {}", dir.display()))?;
-        let path = dir.join(case_dependency_filename(event));
-        let line = dependency_line(event, "case_dependency_matched_by", matched_by)?;
-        self.dependency_files
-            .lock()
-            .await
-            .append(&path, &line)
+        self.writer
+            .append_case(case.clone(), event.clone(), matched_by)
             .await
     }
 
@@ -58,20 +47,8 @@ impl Recorder {
         }
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
-        tokio::fs::create_dir_all(&*self.run_dir)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create recording run dir {}",
-                    self.run_dir.display()
-                )
-            })?;
-        let path = self.run_dir.join(bootstrap_dependency_filename(event));
-        let line = dependency_line(event, "bootstrap_dependency_matched_by", matched_by)?;
-        self.dependency_files
-            .lock()
-            .await
-            .append(&path, &line)
+        self.writer
+            .append_bootstrap(event.clone(), matched_by)
             .await
     }
 
@@ -82,10 +59,8 @@ impl Recorder {
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         let path = self.case_staging_dir(case).join("dependencies.jsonl");
-        self.dependency_files
-            .lock()
-            .await
-            .flush_and_remove(&path)
+        self.writer
+            .flush_case(path.parent().expect("case dependency has a parent"))
             .await?;
         let raw = match tokio::fs::read_to_string(&path).await {
             Ok(raw) => raw,
@@ -152,27 +127,19 @@ impl Recorder {
     }
 
     pub(super) async fn flush_case_dependency_files(&self, dir: &Path) -> Result<()> {
-        self.dependency_files
-            .lock()
-            .await
-            .flush_and_remove_under(dir)
-            .await
+        self.writer.flush_case(dir).await
     }
 
     pub(super) async fn flush_bootstrap_dependency_files(&self) -> Result<()> {
-        let semantic = self.run_dir.join("bootstrap-dependencies.jsonl");
-        let debug = self.run_dir.join("bootstrap-dependencies-debug.jsonl");
-        let mut files = self.dependency_files.lock().await;
-        files.flush_and_remove(&semantic).await?;
-        files.flush_and_remove(&debug).await
+        self.writer.flush_bootstrap().await
     }
 
     pub(super) async fn flush_all_dependency_files(&self) -> Result<()> {
-        self.dependency_files.lock().await.flush_all().await
+        self.writer.flush_all().await
     }
 }
 
-fn dependency_line(
+pub(super) fn dependency_line(
     event: &RecorderEvent,
     matched_by_field: &str,
     matched_by: &str,
@@ -190,7 +157,7 @@ fn dependency_line(
     Ok(line)
 }
 
-fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
+pub(super) fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
     if is_debug_event(event) {
         "dependencies-debug.jsonl"
     } else {
@@ -198,7 +165,7 @@ fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
     }
 }
 
-fn bootstrap_dependency_filename(event: &RecorderEvent) -> &'static str {
+pub(super) fn bootstrap_dependency_filename(event: &RecorderEvent) -> &'static str {
     if is_debug_event(event) {
         "bootstrap-dependencies-debug.jsonl"
     } else {

@@ -741,6 +741,15 @@ bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.
 
+Completed protocol events are moved by unique ownership into one asynchronous
+JSONL writer. `recording.writer_queue_capacity` bounds this queue by event count
+(default `65536`); it does not impose a byte budget. Producers never wait for
+free queue capacity. A full or closed queue marks the recording as failed so
+traffic forwarding is not delayed and an incomplete recording cannot be
+published as successful. Case and run finalization send ordered flush commands
+through the same writer, so queued dependency reservations remain in flight
+until their records have been persisted.
+
 Source-proven process-level HTTP polling can be classified before recording:
 
 ```toml

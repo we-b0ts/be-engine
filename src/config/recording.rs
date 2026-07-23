@@ -15,6 +15,7 @@ pub struct RecordingConfig {
     pub traffic_jsonl: TrafficJsonlMode,
     pub jsonl_buffer_capacity_bytes: usize,
     pub jsonl_flush_interval_ms: u64,
+    pub writer_queue_capacity: usize,
     #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
@@ -98,6 +99,9 @@ impl RecordingConfig {
         if self.jsonl_flush_interval_ms == 0 {
             bail!("recording.jsonl_flush_interval_ms must be greater than zero");
         }
+        if self.writer_queue_capacity == 0 {
+            bail!("recording.writer_queue_capacity must be greater than zero");
+        }
         if self.case_dependency_drain_timeout_ms == 0 {
             bail!("recording.case_dependency_drain_timeout_ms must be greater than zero");
         }
@@ -180,6 +184,7 @@ impl Default for RecordingConfig {
             traffic_jsonl: TrafficJsonlMode::Full,
             jsonl_buffer_capacity_bytes: 256 * 1024,
             jsonl_flush_interval_ms: 1_000,
+            writer_queue_capacity: 65_536,
             case_dependency_post_response_window_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,
             redact_headers: vec![
@@ -260,6 +265,7 @@ mod tests {
             traffic_jsonl = "off"
             jsonl_buffer_capacity_bytes = 524288
             jsonl_flush_interval_ms = 250
+            writer_queue_capacity = 8192
             "#,
         )
         .unwrap();
@@ -267,7 +273,24 @@ mod tests {
         assert_eq!(config.recording.traffic_jsonl, TrafficJsonlMode::Off);
         assert_eq!(config.recording.jsonl_buffer_capacity_bytes, 524_288);
         assert_eq!(config.recording.jsonl_flush_interval_ms, 250);
+        assert_eq!(config.recording.writer_queue_capacity, 8_192);
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_zero_writer_queue_capacity() {
+        let config = RecordingConfig {
+            writer_queue_capacity: 0,
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("recording.writer_queue_capacity must be greater than zero")
+        );
     }
 
     #[test]

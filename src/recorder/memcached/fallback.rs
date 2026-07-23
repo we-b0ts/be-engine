@@ -33,8 +33,7 @@ pub(super) async fn activate_raw_fallback(
             target: Some(context.target_addr.clone()),
             error: message,
         });
-        state.recorder().record(event.clone()).await?;
-        state.record_dependency_if_relevant(&event).await;
+        state.record_event(event);
     }
     Ok(())
 }

@@ -1,6 +1,7 @@
 use chrono::Utc;
 
 use super::*;
+use crate::active_case::ActiveCaseRegistry;
 
 async fn flush_case_dependencies(recorder: &Recorder, case: &CaseContext) {
     let _guard = recorder.dependency_write_lock.lock().await;
@@ -131,6 +132,60 @@ async fn traffic_jsonl_flushes_on_the_configured_interval() {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn queued_dependencies_hold_bootstrap_reservations_until_persisted() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = RecordingConfig {
+        output_dir: temp.path().to_path_buf(),
+        traffic_jsonl: TrafficJsonlMode::Off,
+        writer_queue_capacity: 4_096,
+        ..Default::default()
+    };
+    let recorder = Recorder::new_with_recording_config(&config).await.unwrap();
+    let active_cases = ActiveCaseRegistry::default();
+
+    for sequence in 0..2_048 {
+        let event = test_proxy_error(&format!("{sequence}:{}", "x".repeat(4_096)));
+        let targets = active_cases.current_targets_for_event(event.client_pid());
+        recorder.try_record_event(event, targets, None).unwrap();
+    }
+
+    active_cases.close_bootstrap();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        active_cases.wait_for_bootstrap_dependencies(),
+    )
+    .await
+    .expect("queued dependency reservations should drain");
+    recorder.flush_bootstrap_dependency_files().await.unwrap();
+
+    let dependencies =
+        tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
+            .await
+            .unwrap();
+    assert_eq!(dependencies.lines().count(), 2_048);
+}
+
+#[tokio::test]
+async fn full_writer_queue_fails_recording_without_waiting_for_capacity() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = RecordingConfig {
+        output_dir: temp.path().to_path_buf(),
+        writer_queue_capacity: 1,
+        ..Default::default()
+    };
+    let recorder = Recorder::new_with_recording_config(&config).await.unwrap();
+
+    recorder.record(test_proxy_error("first")).await.unwrap();
+    let error = recorder
+        .record(test_proxy_error("second"))
+        .await
+        .unwrap_err();
+
+    assert!(error.to_string().contains("recording writer queue is full"));
+    assert!(recorder.flush_traffic().await.is_err());
 }
 
 #[tokio::test]

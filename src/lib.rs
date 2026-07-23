@@ -272,10 +272,9 @@ impl AppState {
             target,
             reason,
         });
-        if let Err(error) = self.recorder().record(event.clone()).await {
-            warn!(error = %error, "failed to record access policy rejection");
-        }
-        self.record_active_case_dependency_if_relevant(&event).await;
+        let mut targets = self.capture_dependency_targets(event.client_pid());
+        targets.bootstrap_open = false;
+        self.record_event_for_targets(event, targets);
     }
 
     pub fn dns_registry(&self) -> &FakeDnsRegistry {
@@ -394,70 +393,46 @@ impl AppState {
         self.inner.active_cases.current_targets_for_event(event_pid)
     }
 
-    pub(crate) async fn record_dependency_if_relevant(&self, event: &RecorderEvent) {
+    pub(crate) fn record_event(&self, event: RecorderEvent) {
         let event_pid = event.client_pid();
         let targets = self.capture_dependency_targets(event_pid);
-        self.record_dependency_for_targets(event, &targets).await;
+        self.record_event_for_targets(event, targets);
     }
 
-    pub(crate) async fn record_dependency_for_targets(
+    pub(crate) fn record_event_for_targets(
         &self,
-        event: &RecorderEvent,
-        targets: &DependencyTargets,
+        event: RecorderEvent,
+        targets: DependencyTargets,
     ) {
         let background_rule_name = self
             .config()
             .recording
             .background_dependencies
             .iter()
-            .find(|rule| rule.matches(event))
-            .map(|rule| rule.name());
-        if targets.bootstrap_open
-            && let Err(err) = self
-                .recorder()
-                .append_bootstrap_dependency(
-                    event,
-                    background_rule_name.unwrap_or("bootstrap_window"),
-                )
-                .await
+            .find(|rule| rule.matches(&event))
+            .map(|rule| rule.name().to_string());
+        let event_type = event.kind();
+        if let Err(err) = self
+            .recorder()
+            .try_record_event(event, targets, background_rule_name)
         {
             warn!(
                 error = %err,
-                "failed to append bootstrap dependency"
+                event_type,
+                "failed to enqueue recorder event"
             );
-        }
-        if background_rule_name.is_some() {
-            return;
-        }
-        self.record_case_dependencies(event, targets).await;
-    }
-
-    async fn record_active_case_dependency_if_relevant(&self, event: &RecorderEvent) {
-        let event_pid = event.client_pid();
-        let targets = self.capture_dependency_targets(event_pid);
-        self.record_case_dependencies(event, &targets).await;
-    }
-
-    async fn record_case_dependencies(&self, event: &RecorderEvent, targets: &DependencyTargets) {
-        if targets.ambiguous_active_cases > 0 {
-            warn!(
-                active_cases = targets.ambiguous_active_cases,
-                event_type = event.kind(),
-                "skipping case dependency because active case ownership is ambiguous"
-            );
-        }
-        for (case, matched_by) in &targets.cases {
-            if let Err(err) = self
-                .recorder()
-                .append_case_dependency(case, event, matched_by)
-                .await
+            if let Some(case) =
+                self.inner
+                    .active_cases
+                    .invalidate_current_case(CaseInvalidation::new(
+                        "recording_writer_failure",
+                        format!("failed to enqueue {event_type} recorder event: {err}"),
+                    ))
             {
                 warn!(
-                    error = %err,
                     case_id = %case.id,
                     rule = %case.rule_name,
-                    matched_by,
-                    "failed to append case dependency"
+                    "active recording case invalidated by recorder writer failure"
                 );
             }
         }
@@ -662,8 +637,7 @@ mod tests {
             "config.api.demo.test",
             "/1/config/service?action=lookup&group=reload.properties",
         );
-        state.recorder().record(background.clone()).await.unwrap();
-        state.record_dependency_if_relevant(&background).await;
+        state.record_event(background);
         drop(guard);
         state.recorder().publish_case(&case).await.unwrap();
         state.recorder().finish_run().await.unwrap();

@@ -632,8 +632,7 @@ async fn record_proxy_error(
 }
 
 async fn record_event(state: &AppState, event: RecorderEvent) -> Result<()> {
-    state.recorder().record(event.clone()).await?;
-    state.record_dependency_if_relevant(&event).await;
+    state.record_event(event);
     Ok(())
 }
 
