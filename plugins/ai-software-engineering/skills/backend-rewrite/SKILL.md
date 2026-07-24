@@ -30,7 +30,7 @@ copy or weaken their detailed contracts here.
    skill's recording gate before implementation. Keep unrelated worktree
    changes out of scope.
 2. Resolve the PR base before substantial implementation. Use the exact
-   `pr_base` from `<target-root>/.traffic-e2e/e2e.yaml`. If that generated
+   `pr_base` from `<target-root>/.traffic-e2e/project.yaml`. If that generated
    configuration is absent, require an authoritative repository instruction or
    explicit user confirmation. Never infer the base from remote HEAD,
    ancestry, repository defaults, or `main`/`master` conventions.

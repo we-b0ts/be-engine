@@ -133,7 +133,7 @@ default = 100
 # "/api/namespaces/**" = 50
 
 # The traffic E2E runner adds APIs here after both verification thresholds in
-# .traffic-e2e/e2e.yaml are met. This block stores only the add-only result;
+# .traffic-e2e/project.yaml are met. This block stores only the add-only result;
 # replay.yaml never controls capture scope.
 [http_gateway.verified_excludes]
 # BEGIN AI-MANAGED VERIFIED API EXCLUDES

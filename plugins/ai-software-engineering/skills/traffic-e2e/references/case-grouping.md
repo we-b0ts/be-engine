@@ -67,7 +67,7 @@ traffic-e2e prepare \
 ```
 
 The runner reads `recorder_config` and `recording_rule` from
-`.traffic-e2e/e2e.yaml`; they MUST appear together. Omit both only when the
+`.traffic-e2e/project.yaml`; they MUST appear together. Omit both only when the
 managed target config is unavailable, and retain the returned
 `not_applicable_missing_managed_config` outcome. The command applies focused,
 add-only pattern feedback when both are present. This early apply does not waive

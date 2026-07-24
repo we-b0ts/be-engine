@@ -501,7 +501,7 @@ mismatched evidence fails the command. `plan` and `apply` remain available for
 diagnostics, but traffic E2E automation must not reimplement their eligibility
 branching.
 
-Thresholds live in `.traffic-e2e/e2e.yaml`; `.traffic-e2e/recorder.toml` stores only
+Thresholds live in `.traffic-e2e/project.yaml`; `.traffic-e2e/recorder.toml` stores only
 the managed verified exclusions. Neither belongs in `.traffic-e2e/replay.yaml`. See
 [verified-api-excludes.md](verified-api-excludes.md) for the assertion report
 schema, exact case-set gate, and runtime behavior.
@@ -531,7 +531,7 @@ traffic-e2e init \
 The command requires confirmed `project_cli`, `replay_policy`, and
 `pr_base` values, validates that the branch exists locally or as an
 `origin` remote-tracking branch, checks that `.traffic-e2e/local/` is ignored,
-and generates `.traffic-e2e/e2e.yaml`:
+and generates `.traffic-e2e/project.yaml`:
 
 ```yaml
 version: 4

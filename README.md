@@ -222,7 +222,7 @@ evaluated before both rule sets, so exclusion rules do not bypass
 
 `[http_gateway.verified_excludes]` contains recorder-owned, replay-verified API
 exclusions. Traffic E2E verification thresholds belong in
-`.traffic-e2e/e2e.yaml`: an API must satisfy both the configured number of
+`.traffic-e2e/project.yaml`: an API must satisfy both the configured number of
 trailing successful rounds and the successful case executions covered by those
 rounds. Global defaults may be overridden for an exact
 `METHOD + path_pattern`. When an API first becomes verified,
