@@ -9,10 +9,17 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use traffic_e2e::{AppConfig, CompareConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig};
+
+// Config accepts concrete listen addresses, so free_addr() releases its socket
+// before the runtime binds it. Keep these integration tests exclusive to close
+// that port-reuse race while preserving parallelism in the rest of the suite.
+static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
 async fn returns_baseline_without_waiting_for_candidate_and_records_both() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let baseline = spawn_response_upstream("baseline", 1).await;
@@ -54,6 +61,7 @@ async fn returns_baseline_without_waiting_for_candidate_and_records_both() {
 
 #[tokio::test]
 async fn case_limit_suppresses_files_but_keeps_mirroring() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let (baseline, _) = spawn_counting_upstream(StatusCode::OK, "baseline", 2, None).await;
@@ -89,6 +97,7 @@ async fn case_limit_suppresses_files_but_keeps_mirroring() {
 
 #[tokio::test]
 async fn response_limit_preserves_baseline_and_records_partial_response() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let baseline = spawn_response_upstream("baseline-too-large", 1).await;
@@ -122,6 +131,7 @@ async fn response_limit_preserves_baseline_and_records_partial_response() {
 
 #[tokio::test]
 async fn unmatched_request_bypasses_compare_request_limit() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let (baseline, baseline_requests) =
@@ -148,6 +158,7 @@ async fn unmatched_request_bypasses_compare_request_limit() {
 
 #[tokio::test]
 async fn overload_forwards_only_to_baseline() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let (baseline, _) = spawn_counting_upstream(StatusCode::OK, "baseline", 2, None).await;
@@ -181,6 +192,7 @@ async fn overload_forwards_only_to_baseline() {
 
 #[tokio::test]
 async fn request_limit_rejects_before_either_upstream() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let (baseline, baseline_requests) =
@@ -214,6 +226,7 @@ async fn request_limit_rejects_before_either_upstream() {
 
 #[tokio::test]
 async fn unmatched_request_forwards_only_to_baseline() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let (baseline, baseline_requests) =
@@ -241,6 +254,7 @@ async fn unmatched_request_forwards_only_to_baseline() {
 
 #[tokio::test]
 async fn not_ready_request_forwards_only_to_baseline() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let (baseline, baseline_requests) =

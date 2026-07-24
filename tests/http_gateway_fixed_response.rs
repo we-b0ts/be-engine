@@ -5,13 +5,19 @@ use std::time::Duration;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use traffic_e2e::{
     AppConfig, AppState, HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig,
     HttpGatewayReadyConfig, HttpGatewayRuleConfig,
 };
 
+// free_addr() cannot retain the socket while AppState binds the configured
+// address. Keep tests in this binary exclusive during that handoff.
+static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+
 #[tokio::test]
 async fn fixed_response_handles_not_ready_excluded_and_unmatched_requests() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();
     let matched_upstream =
@@ -68,6 +74,7 @@ async fn fixed_response_handles_not_ready_excluded_and_unmatched_requests() {
 
 #[tokio::test]
 async fn fixed_response_handles_concurrent_case_rejection_without_fallback_upstream() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let temp = tempdir().unwrap();
     let matched_upstream =

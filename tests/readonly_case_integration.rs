@@ -6,13 +6,19 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use traffic_e2e::{
     AppConfig, HttpGatewayRuleConfig, MysqlRouteConfig, MysqlWriteOperation, RecordingAccessPolicy,
     RecordingAccessRuleConfig, RecordingAccessRuleEffect,
 };
 
+// free_addr() releases its socket before AppState binds the configured
+// listeners. Serialize these integration tests to prevent port reuse.
+static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+
 #[tokio::test]
 async fn rejected_http_dependency_invalidates_active_gateway_case() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -151,6 +157,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
 
 #[tokio::test]
 async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_does_not() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
