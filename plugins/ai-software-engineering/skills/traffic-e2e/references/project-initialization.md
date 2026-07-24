@@ -124,8 +124,7 @@ Create the smallest source-controlled recording scaffold:
 ├── recorder.toml
 └── replay.yaml
 scripts/
-├── start-recording
-└── <project>-cli
+└── start-recording
 ```
 
 Add only the environment-specific recording adapters that evidence requires,
@@ -171,8 +170,8 @@ creates a broad `record-api` rule for `GET /`, unrestricted source forwarding
 for matched requests, a fixed 404 fallback for unmatched requests, and empty
 AI-managed sections. Replay initialization creates an assertion-only
 version-two policy with no rules. Project initialization uses the standard
-paths, derives `scripts/<project>-cli`, uses `record-api`, and records
-`dev-migration` as the PR base.
+paths, records the future `scripts/<project>-cli` path without requiring that
+file to exist, uses `record-api`, and records `dev-migration` as the PR base.
 
 ## Anchored Recording Network Namespace
 
@@ -241,6 +240,12 @@ and supporting containers join with
 `--publish`. Components in the namespace communicate through their common
 loopback.
 
+Docker may persist a child's requested
+`container:<recording-network-anchor-name>` network mode as
+`container:<recording-network-anchor-id>`. Resolve the anchor's full container
+ID and compare the inspected child mode with `container:<resolved-id>`; do not
+reject a correct namespace join because the original name is absent.
+
 For an explicitly selected bridge-backed anchor, derive the complete mapping
 set before creating it and publish only ports that a host-side operator,
 trigger, readiness check, or control command must reach. Bind published ports
@@ -259,25 +264,37 @@ Use the fixed recording identity `trp-record` with numeric UID/GID `998:998`
 inside the Recorder and every dependency-producing recording image. Resolve
 and verify this identity inside the recording containers, not from the host
 password database. Host account names shown for numeric 998 are irrelevant.
-Ensure writable application bind mounts are owned by numeric `998:998` or
-grant a narrowly equivalent ACL. Never change ownership blindly; inspect the
-original process identity and mount semantics first.
+Do not grant this identity access to the original application bind-mount
+sources.
 
-Preserve stable host mount paths for application `naming`, logs, GC logs, and
-other ordinary runtime data across recording runs. Do not copy or remap these
-directories beneath a per-run identifier. Reuse the authoritative source paths
-from the supplied container mounts by default; for example,
-`/data1/<project>/naming`, `/data1/<project>/logs`, and
-`/data1/<project>/gclogs` remain the recording mounts for that project. Do not
-silently invent a sibling `<project>-recording` directory or a repository-local
-copy for these paths.
+For every writable application directory bind mount, keep the container
+destination unchanged and append the literal `-recording` suffix to the full
+host source path. For example:
 
-Validate numeric `998:998` access or a narrowly equivalent ACL before startup.
-When the original source process is root and evidence shows that numeric
-`998:998` ownership remains compatible, prepare the existing paths for the
-fixed recording identity. If changing access would break the original runtime,
-report the exact conflict and require direction before choosing a different
-stable mount root.
+```text
+host /x/y-recording -> container /x/y
+```
+
+Create these recording host directories once and reuse them across recording
+runs; never place them beneath a run identifier. Own the recording directories
+with numeric `998:998` and verify the required read, write, and traversal
+operations from a `998:998` probe before startup. Never change the ownership,
+mode, or ACL of the original host sources.
+
+Classify each mount from the inspected runtime behavior. Seed a recording
+directory that requires existing input from its original source into the stable
+`-recording` sibling before first use. Preserve the original relative layout,
+then assign the copied tree to numeric `998:998`. Create an output-only
+recording sibling directly instead of copying historical output. If target
+evidence requires refreshing an input on every startup, refresh only that
+recording sibling and make the replacement atomic; never create a per-run
+application mount.
+
+For a read-only bind mount that the recording process can consume without
+changing, retain the original source read-only. If the process must change any
+part of it, use the same stable `-recording` sibling rule. Refuse an existing
+recording sibling that is not provably owned by this recording scaffold rather
+than recursively changing an unrelated directory.
 
 Only Recorder case output, reports, and run-specific diagnostics belong under a
 run identifier. Keep the Recorder CA pair and source truststore in their
@@ -339,8 +356,8 @@ Do not widen interception to root, the developer login, an arbitrary UID, or
 all processes. Do not assume that sharing a network namespace is enough; the
 process identity must still match.
 
-Existing application images often require root for `/etc/hosts`, naming files,
-mount preparation, or port setup. When that is true, create a separate
+Existing application images often require root for `/etc/hosts`, configuration
+preparation, mount setup, or port setup. When that is true, create a separate
 recording image or entrypoint that:
 
 1. performs only the required initialization as root;
@@ -405,11 +422,13 @@ Enable CA handling only when the target will make HTTPS connections through
 MITM or a rewrite plugin requires it.
 
 `traffic-e2e config recorder init` writes only the standard CA paths; it does
-not generate certificate files. The first startup smoke starts Recorder before
-the target so both configured CA files can be generated or validated. Treat the
-certificate and key as an inseparable pair: both missing may be generated; one
-missing is an error. Mount only the public certificate into source containers.
-Never mount, log, or copy the Recorder private key into the target.
+not generate certificate files. The first startup smoke must create and start
+Recorder, then wait until both configured CA files exist, are non-empty, form a
+valid matching pair, and have stable readable permissions before creating any
+source container that mounts the certificate. Treat the certificate and key as
+an inseparable pair: both missing may be generated; one missing is an error.
+Mount only the public certificate into source containers. Never mount, log, or
+copy the Recorder private key into the target.
 
 Do not modify a developer host's global trust store or permanently replace a
 base image's system trust store during repository initialization. Create a
@@ -514,8 +533,10 @@ The script must:
    files, and required environment variable names before changing state;
 4. capture the existence and running state of every managed container;
 5. create or start the inert network-namespace anchor, then start managed
-   Recorder in that namespace before any dependency-producing supporting or
-   source process so startup dependencies can be observed;
+   Recorder in that namespace; when CA trust applies, wait for and validate the
+   complete CA pair before creating a source container that mounts the public
+   certificate; only then start dependency-producing supporting and source
+   processes so startup dependencies can be observed;
 6. wait on recorder listeners, supporting-container readiness, fixed target
    identity, CA trust when applicable, and genuine application readiness;
 7. send only serial controlled trigger requests, or remain attached and print
@@ -550,22 +571,17 @@ recording orchestration. `scripts/start-recording` must not masquerade as
 `scripts/<project>-cli`.
 
 Project initialization records the standard facade path
-`scripts/<project>-cli`. Initialization may create a minimal placeholder at
-that path. It must implement the standard command names but fail `start`,
-`e2e`, `test`, and `check` with an explicit message that the replay target is
-not implemented. `stop` may be idempotent and `status` must report not ready
-with a non-zero exit. Never let a placeholder make replay or project checks
-appear successful.
-
-Replace the placeholder with the repository-native facade when product
-implementation begins.
+`scripts/<project>-cli` without inspecting or creating that file. Recording
+initialization must not generate a placeholder facade merely to satisfy
+configuration initialization. Create the repository-native facade when product
+implementation begins; the standard runner will require it before execution.
 
 ## Validation
 
 Run checks that do not start live recording:
 
 ```bash
-bash -n scripts/start-recording scripts/<project>-cli
+bash -n scripts/start-recording
 git check-ignore .traffic-e2e/local/probe
 scripts/start-recording --check
 ```
