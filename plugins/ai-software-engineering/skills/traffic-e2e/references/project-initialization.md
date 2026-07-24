@@ -260,32 +260,34 @@ Use the fixed recording identity `trp-record` with numeric UID/GID `998:998`
 inside the Recorder and every dependency-producing recording image. Resolve
 and verify this identity inside the recording containers, not from the host
 password database. Host account names shown for numeric 998 are irrelevant.
-Do not grant this identity access to the original application bind-mount
-sources.
 
-For every writable application directory bind mount, keep the container
-destination unchanged and append the literal `-recording` suffix to the full
-host source path. For example:
+Treat the existing host source paths from the inspected writable application
+bind mounts as authoritative. Keep both the host source and container
+destination unchanged. Do not create replacement or `-recording` directories,
+and fail before changing permissions when an expected mount source is missing
+or is not a directory.
+
+Before startup, use a bounded root setup step to recursively assign each exact
+writable bind-mount source and all of its existing descendants to numeric
+`998:998`. A top-level-only ownership change is insufficient because existing
+subdirectories, logs, locks, or generated files may otherwise remain
+unwritable. Use non-symlink-following recursion, never widen the target to a
+parent directory, and grant owner read/write plus directory traversal without
+using world-writable permissions. Verify the resulting read, write, and
+traversal operations from a `998:998` probe before startup. Do not use ACLs as
+a substitute for direct numeric ownership.
+
+On the required Linux hosts, use the equivalent of:
 
 ```text
-host /x/y-recording -> container /x/y
+chown -hR 998:998 -- <exact-writable-bind-source>
+chmod -R u+rwX -- <exact-writable-bind-source>
 ```
 
-Create these recording host directories empty, once, and reuse them across
-recording runs; never place them beneath a run identifier. Do not seed, copy,
-or refresh content from the original host sources: the recording runtime owns
-all content generated in these directories. A bounded root setup step may
-create a missing recording sibling and assign it to numeric `998:998`, but it
-must not recursively take ownership of an unrecognized existing path. Verify
-the required read, write, and traversal operations from a `998:998` probe
-before startup. Never change the ownership, mode, or ACL of the original host
-sources, and never use broad world-writable permissions as a substitute.
-
 For a read-only bind mount that the recording process can consume without
-changing, retain the original source read-only. If the process must change any
-part of it, use the same empty stable `-recording` sibling rule. Refuse an
-existing recording sibling that is not provably owned by this recording
-scaffold rather than recursively changing an unrelated directory.
+changing, retain the source read-only and verify that UID 998 can traverse and
+read it. If the process must change any part of it, classify it as writable and
+apply the direct recursive ownership rule.
 
 Only Recorder case output, reports, and run-specific diagnostics belong under a
 run identifier. Keep the Recorder CA pair and source truststore in their
