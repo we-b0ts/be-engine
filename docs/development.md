@@ -18,6 +18,59 @@ cargo build
 The repository includes `.cargo/config.toml` for the configured crates.io
 mirror. Do not replace that registry configuration unless explicitly asked.
 
+## Shared Recording Images
+
+The repository owns the Dockerfiles for the two project-independent recording
+images:
+
+```text
+docker/network-anchor/Dockerfile
+docker/recorder-runtime/Dockerfile
+```
+
+Published Linux/amd64 references:
+
+```text
+registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
+registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
+```
+
+Build the inert Linux/amd64 network-namespace anchor without network access:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --network none \
+  --load \
+  --file docker/network-anchor/Dockerfile \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1 \
+  docker/network-anchor
+```
+
+Build the Linux/amd64 Recorder runtime through the host network. When the host
+requires a proxy, pass only the standard proxy build arguments that are already
+present in the environment; do not declare them in the Dockerfile or persist
+them as image environment variables:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --network host \
+  --build-arg HTTP_PROXY \
+  --build-arg HTTPS_PROXY \
+  --build-arg ALL_PROXY \
+  --build-arg NO_PROXY \
+  --load \
+  --file docker/recorder-runtime/Dockerfile \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev \
+  docker/recorder-runtime
+```
+
+The `-dev` runtime intentionally contains no `traffic-e2e` binary. Mount the
+exact installed Linux/amd64 binary read-only at
+`/usr/local/bin/traffic-e2e`. Publish only versioned tags, verify the pushed
+manifest digest, and pin consumers to `tag@sha256`.
+
 ## CLI Boundaries
 
 Use `traffic-e2e config ... init` for one-time target configuration and

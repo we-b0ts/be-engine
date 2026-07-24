@@ -128,9 +128,10 @@ scripts/
 ```
 
 Add only the environment-specific recording adapters that evidence requires,
-such as a `Dockerfile.recorder`, `Dockerfile.recording`, an entrypoint wrapper,
-or sidecar startup script. Do not copy another project's application patches,
-ports, service names, routes, or container topology.
+such as an application `Dockerfile.recording`, an entrypoint wrapper, or
+sidecar startup script. Do not generate a project-local Recorder runtime image.
+Do not copy another project's application patches, ports, service names,
+routes, or container topology.
 
 Ensure Git ignores at least:
 
@@ -213,7 +214,9 @@ keeps the namespace alive, such as `sleep infinity`. It must not contain target
 code, Recorder, CA material, credentials, project configuration, or
 project-specific network behavior. Give each project a distinct anchor-container
 name and, when applicable, a distinct Docker network name. A distinct project
-image tag is not required.
+image tag is not required. Do not generate or build a project-local anchor
+image; `scripts/start-recording` creates the named anchor container directly
+from the shared pinned image.
 
 Use this default shared anchor on Linux/amd64:
 
@@ -316,27 +319,24 @@ Container recording requires Recorder itself to run in the anchored recording
 network namespace. Do not invoke a separate host process for a container
 source.
 
-Prefer a versioned common Recorder runtime image only when inspection proves it
-contains the required `traffic-e2e` version, network tools, and
-`trp-record` identity at numeric `998:998`. Until such an image is published,
-generate a minimal `Dockerfile.recorder` from a pinned compatible base. It must:
+Use this default shared Recorder runtime on Linux/amd64:
 
-- install only the required CA, route, and iptables runtime tools;
-- create `trp-record` as numeric `998:998`;
-- use `/usr/local/bin/traffic-e2e` as its entrypoint; and
-- contain no target code, recording data, CA material, credentials, or target
-  configuration.
+```text
+registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
+```
 
-Have `scripts/start-recording` build the local Recorder runtime image
-automatically. Mount the exact installed `traffic-e2e` binary read-only at
-`/usr/local/bin/traffic-e2e`, verify its version and platform inside the image,
-and mount the target recorder configuration plus Git-ignored writable CA,
-state, log, and recording paths. Do not require a separate manual build.
-Image-build networking is separate from the recording runtime boundary. Use
-`--network none` when a derived image needs no downloads; when the Recorder
-runtime must install packages and the host network is the authoritative build
-path, use `docker build --network host` without persisting proxy credentials in
-the image.
+The runtime contains the required CA, route, iptables, process, and ACL tools,
+creates `trp-record` at numeric `998:998`, and uses
+`/usr/local/bin/traffic-e2e` as its entrypoint. The `-dev` image intentionally
+contains no `traffic-e2e` binary, target code, recording data, CA material,
+credentials, or target configuration. Verify the target platform before use
+and do not replace the pinned reference with `latest`.
+
+Have `scripts/start-recording` mount the exact installed Linux/amd64
+`traffic-e2e` binary read-only at `/usr/local/bin/traffic-e2e`, verify its
+version inside the container, and mount the target recorder configuration plus
+Git-ignored writable CA, state, log, and recording paths. The shared runtime
+must not require a target-project image build or package installation.
 
 Start the Recorder container with
 `--network container:<recording-network-anchor>` and only the network
@@ -372,8 +372,9 @@ existing container implicitly. Reuse an existing container only when inspection
 proves that its image, command, mounts, network, fixed identity, and CA behavior
 already satisfy the recording contract.
 
-Build the Recorder, source, and applicable supporting images with the dedicated
-recording namespace's fixed numeric identity. Fail before startup when any
+Run Recorder from the shared runtime image. Build only the source and
+applicable supporting recording images with the dedicated recording
+namespace's fixed numeric identity. Fail before startup when any
 dependency-producing process does not match it.
 
 ## Privileged Ports

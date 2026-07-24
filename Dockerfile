@@ -1,5 +1,5 @@
 ARG RUST_IMAGE=registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.88.0
-ARG RUNTIME_IMAGE=registry.api.demo.test/weibo_rd_if/traffic-e2e-runtime:debian12-iptables
+ARG RUNTIME_IMAGE=registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
 
 FROM ${RUST_IMAGE} AS builder
 
