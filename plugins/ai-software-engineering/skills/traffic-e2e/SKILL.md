@@ -78,11 +78,13 @@ write. Use `plan` only when diagnostic output is useful.
 1. Inspect the target's authoritative recorder config, startup, readiness,
    upstreams, access policy, redaction, limits, enabled protocols, dependency
    timing, and background rules. Do not guess from examples.
-2. For container recording, create a dedicated bridge and network-namespace
-   anchor. Run Recorder, source, and dependency-producing sidecars in that
-   namespace; never use host networking. Confirm their fixed `trp-record`
-   identity and let managed `traffic-e2e record` own DNS, fake-IP interception,
-   recovery, and shutdown inside that boundary.
+2. For container recording, create a network-namespace anchor that uses host
+   networking by default. Run Recorder, source, and dependency-producing
+   sidecars with `--network container:<anchor>` so they share that one
+   namespace. Use another verified Docker network only when explicitly
+   required. Confirm their fixed `trp-record` identity and let managed
+   `traffic-e2e record` own DNS, fake-IP interception, recovery, and shutdown
+   inside that boundary.
 3. Wait for configured readiness. Send only controlled trigger requests and
    avoid overlapping active cases.
 4. Allow post-response dependency admission and bounded drain to finish, then

@@ -16,7 +16,7 @@ completed initialization.
 - [Required Inputs](#required-inputs)
 - [Discovery](#discovery)
 - [Repository Outputs](#repository-outputs)
-- [Dedicated Recording Network Namespace](#dedicated-recording-network-namespace)
+- [Anchored Recording Network Namespace](#anchored-recording-network-namespace)
 - [Recorder Container](#recorder-container)
 - [Recording Execution Boundary](#recording-execution-boundary)
 - [Privileged Ports](#privileged-ports)
@@ -174,35 +174,47 @@ version-two policy with no rules. Project initialization uses the standard
 paths, derives `scripts/<project>-cli`, uses `record-api`, and records
 `dev-migration` as the PR base.
 
-## Dedicated Recording Network Namespace
+## Anchored Recording Network Namespace
 
-Container recording requires one dedicated network namespace. Create an inert
-namespace-anchor container on a dedicated Docker bridge, then start Recorder,
-the source application, and every dependency-producing supporting container
-with:
+Container recording requires one namespace-anchor container. Start the anchor
+with `--network host` by default, then start Recorder, the source application,
+and every dependency-producing supporting container with:
 
 ```text
 --network container:<recording-network-anchor>
 ```
 
-Do not run the anchor, Recorder, source, or supporting containers with
-`--network host`. Do not run Recorder on the host for a container recording.
-If the original containers use host networking, treat that only as source
-startup evidence and recreate their required runtime behavior inside the
-dedicated recording namespace.
+Only the anchor declares the backing network. Recorder, source, and supporting
+containers must join the anchor instead of independently declaring host,
+bridge, or published-port settings. This gives the recording stack one named
+lifecycle boundary while preserving the host routes and internal-service
+reachability commonly required by source systems.
 
-Publish the Recorder gateway and any explicitly required host-facing control or
-readiness ports on the anchor. Child containers that join the anchor namespace
-cannot publish their own ports. Verify that the dedicated bridge provides the
-required egress, DNS, routes, and internal-service reachability; do not fall
-back to host networking when one is missing.
+In the default host-backed mode, do not pass `--publish`: listeners bind host
+ports directly through the shared namespace. Resolve every Recorder, source,
+control, management, and supporting-container listen port before startup.
+Detect collisions with the original containers and unrelated host processes.
+Do not reject this mode merely because the Docker daemon disables its default
+bridge or automatic iptables management; those settings constrain a
+bridge-backed anchor, not a host-backed one.
+Never stop or replace an original container implicitly; require it to be
+stopped or preserve and restore its exact state under an explicitly authorized
+workflow.
+
+Use a project-specific Docker bridge or another Docker network only when the
+user explicitly requests it or authoritative runtime evidence requires it.
+Before choosing that mode, prove the network provides every required egress,
+DNS, route, and internal-service path. Put required host-facing port publishing
+on the anchor because child containers that join its namespace cannot publish
+their own ports.
 
 Prefer one versioned, pinned, organization-owned network-anchor image for all
 projects. The image must be inert: a minimal runtime whose only default process
 keeps the namespace alive, such as `sleep infinity`. It must not contain target
 code, Recorder, CA material, credentials, project configuration, or
-project-specific network behavior. Give each project distinct bridge and
-anchor-container names; a distinct project image tag is not required.
+project-specific network behavior. Give each project a distinct anchor-container
+name and, when applicable, a distinct Docker network name. A distinct project
+image tag is not required.
 
 Use this default shared anchor on Linux/amd64:
 
@@ -213,39 +225,28 @@ registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f3
 Verify the target platform before use. Do not replace the pinned reference with
 `latest`.
 
-Create one project-specific anchor container from that shared image. Put every
-host-facing port mapping on this container's initial `docker run`, for example:
+Create one project-specific host-backed anchor container from that shared image
+by default:
 
 ```text
 docker run --detach \
   --name <project>-recording-network \
-  --network <project>-recording \
-  --publish 127.0.0.1:<gateway-host-port>:<gateway-container-port> \
-  --publish 127.0.0.1:<required-control-host-port>:<control-container-port> \
+  --network host \
   registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
 ```
 
-The image does not define or publish ports by itself; the generated
-`scripts/start-recording` derives the exact mappings from the target and applies
-them to the anchor container. Recorder, source, and supporting containers then
-join that namespace with `--network container:<project>-recording-network` and
-must not use `--publish`.
+The image does not define ports or network behavior itself. Recorder, source,
+and supporting containers join with
+`--network container:<project>-recording-network` and must not use
+`--publish`. Components in the namespace communicate through their common
+loopback.
 
-Publish only ports that a host-side operator, trigger, readiness check, or
-control command must reach. Containers in the shared namespace communicate
-through their common loopback and do not need published ports. Recorder
-interception listeners and supporting-container ports that are consumed only
-inside the namespace remain unpublished. The source application port normally
-remains unpublished so controlled triggers cannot bypass the Recorder gateway.
-Bind published ports to `127.0.0.1` by default; expose another host address
-only when the user explicitly requires remote access.
-
-Because Docker port mappings are fixed when the anchor is created, compute and
-validate the complete mapping set before startup. If the required set changes,
-recreate only the managed anchor after preserving its prior state; do not try
-to add publishing flags to a child container. Check for both internal
-listen-port collisions in the shared namespace and host-port collisions before
-changing state.
+For an explicitly selected bridge-backed anchor, derive the complete mapping
+set before creating it and publish only ports that a host-side operator,
+trigger, readiness check, or control command must reach. Bind published ports
+to `127.0.0.1` by default. Docker port mappings are fixed when the anchor is
+created; if they change, recreate only the managed anchor after preserving its
+prior state.
 
 If the standard image is unavailable in the target environment, generate a
 minimal `Dockerfile.recording-network` from an approved pinned base and build
@@ -283,17 +284,20 @@ run identifier. Keep the Recorder CA pair and source truststore in their
 separate persistent Git-ignored locations; never place the private key in an
 application mount.
 
-The anchor owns only the network namespace and published ports. Recorder owns
-interception within that namespace and receives only the capabilities it needs
-for network rule management. Capture the pre-run state of the anchor and all
-joined containers, start them in the order anchor, Recorder, supporting
-containers, source, and restore only state changed by the session.
+The anchor owns only the shared network lifecycle. Recorder owns interception
+within that namespace and receives only the capabilities it needs for network
+rule management. In the default host-backed mode, those rules affect the host
+network namespace: allow only one managed recording session, detect stale
+Recorder state before startup, and require managed recovery and graceful
+shutdown. Capture the pre-run state of the anchor and all joined containers,
+start them in the order anchor, Recorder, supporting containers, source, and
+restore only state changed by the session.
 
 ## Recorder Container
 
-Container recording requires Recorder itself to run in the dedicated recording
-network namespace. Do not invoke a host-running `traffic-e2e record` process
-for a container source.
+Container recording requires Recorder itself to run in the anchored recording
+network namespace. Do not invoke a separate host process for a container
+source.
 
 Prefer a versioned common Recorder runtime image only when inspection proves it
 contains the required `traffic-e2e` version, network tools, and
@@ -311,6 +315,11 @@ automatically. Mount the exact installed `traffic-e2e` binary read-only at
 `/usr/local/bin/traffic-e2e`, verify its version and platform inside the image,
 and mount the target recorder configuration plus Git-ignored writable CA,
 state, log, and recording paths. Do not require a separate manual build.
+Image-build networking is separate from the recording runtime boundary. Use
+`--network none` when a derived image needs no downloads; when the Recorder
+runtime must install packages and the host network is the authoritative build
+path, use `docker build --network host` without persisting proxy credentials in
+the image.
 
 Start the Recorder container with
 `--network container:<recording-network-anchor>` and only the network
@@ -500,15 +509,13 @@ The script must:
 2. expose `--help`, `--duration-seconds`, a startup-only `--smoke`, and a
    read-only `--check` or `doctor` mode;
 3. verify commands, images, host directories, ports, container conflicts,
-   the pinned or locally built anchor and Recorder images, dedicated bridge and
-   namespace topology, absence of host networking, fixed `998:998` identity,
-   config files, and required environment variable names before changing
-   state;
+   the pinned or locally built anchor and Recorder images, the selected anchor
+   backing network, child namespace topology, fixed `998:998` identity, config
+   files, and required environment variable names before changing state;
 4. capture the existence and running state of every managed container;
-5. create or start the dedicated bridge and inert network-namespace anchor,
-   then start managed Recorder in that namespace before any
-   dependency-producing supporting or source process so startup dependencies
-   can be observed;
+5. create or start the inert network-namespace anchor, then start managed
+   Recorder in that namespace before any dependency-producing supporting or
+   source process so startup dependencies can be observed;
 6. wait on recorder listeners, supporting-container readiness, fixed target
    identity, CA trust when applicable, and genuine application readiness;
 7. send only serial controlled trigger requests, or remain attached and print
@@ -583,8 +590,9 @@ Report `initialization complete` only when:
 - every discovered runtime fact has provenance;
 - `scripts/start-recording --check` has no unresolved route, image, identity,
   CA, readiness, port, mount, network, or sidecar requirement; and
-- the namespace anchor uses the dedicated bridge, every managed recording
-  component joins that anchor, and no managed runtime uses host networking; and
+- the namespace anchor uses the resolved backing network and every managed
+  recording component joins that anchor without independently selecting a
+  network or publishing ports; and
 - a startup-only smoke in the target environment has proved that
   `./scripts/start-recording` starts the genuine source environment and
   Recorder, verifies the recording boundary, and reaches ready-to-record state.

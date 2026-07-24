@@ -65,7 +65,7 @@ private writable work directory, sanitizes inherited environment, verifies the
 fixed identity, and cleans up. It never accepts a user or UID option. Keep
 replay lifecycle commands in the outer developer-owned process.
 
-If a container target shares a dedicated network namespace with supporting
+If a container target shares an anchored network namespace with supporting
 containers, keep dependency-producing execution identity and interception
 scope explicit. Sharing a namespace does not authorize recording unrelated
 support-container traffic. When the target cannot satisfy the fixed identity or
