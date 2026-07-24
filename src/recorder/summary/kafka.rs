@@ -9,7 +9,9 @@ use super::json_str;
 pub(super) struct KafkaDependencySummary {
     connections: usize,
     produced_records: usize,
+    fetch_requests: usize,
     delivered_records: usize,
+    outcomes: BTreeMap<String, usize>,
     topics: BTreeMap<String, usize>,
     targets: BTreeMap<String, usize>,
     key_bytes: usize,
@@ -20,7 +22,10 @@ pub(super) struct KafkaDependencySummary {
 
 impl KafkaDependencySummary {
     pub(super) fn has_activity(&self) -> bool {
-        self.connections > 0 || self.produced_records > 0 || self.delivered_records > 0
+        self.connections > 0
+            || self.produced_records > 0
+            || self.fetch_requests > 0
+            || self.delivered_records > 0
     }
 }
 
@@ -41,6 +46,7 @@ pub(super) fn record_kafka_record_summary(
 ) {
     if produced {
         summary.produced_records += 1;
+        record_outcome(summary, value);
     } else {
         summary.delivered_records += 1;
     }
@@ -62,6 +68,22 @@ pub(super) fn record_kafka_record_summary(
     if value.get("replay_safe").and_then(Value::as_bool) != Some(true) {
         summary.unsafe_events += 1;
     }
+}
+
+pub(super) fn record_kafka_fetch_summary(summary: &mut KafkaDependencySummary, value: &Value) {
+    summary.fetch_requests += 1;
+    record_outcome(summary, value);
+    if let Some(target) = json_str(value, "target_addr") {
+        *summary.targets.entry(target.to_string()).or_default() += 1;
+    }
+    if value.get("replay_safe").and_then(Value::as_bool) != Some(true) {
+        summary.unsafe_events += 1;
+    }
+}
+
+fn record_outcome(summary: &mut KafkaDependencySummary, value: &Value) {
+    let outcome = json_str(value, "outcome").unwrap_or("response");
+    *summary.outcomes.entry(outcome.to_string()).or_default() += 1;
 }
 
 fn capture_stored_len(value: Option<&Value>) -> usize {

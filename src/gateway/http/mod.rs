@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::access_policy::AccessDecision;
-use crate::config::HttpGatewayConfig;
+use crate::config::{HttpGatewayConfig, HttpGatewayFallbackMode};
 use crate::http::access::classify_method;
 use crate::http::rewrite::{self, RewriteInput};
 use crate::recorder::http::case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
@@ -33,8 +33,8 @@ pub(crate) mod transport;
 use admission::try_admit_case;
 use rules::{RuleDecision, evaluate_request, request_authority, resolve_case_group};
 use transport::{
-    GatewayBody, build_downstream_response, build_upstream_request, build_upstream_uri,
-    send_upstream, simple_response,
+    GatewayBody, build_downstream_response, build_fixed_response, build_upstream_request,
+    build_upstream_uri, send_upstream, simple_response,
 };
 
 pub async fn run(state: AppState) -> Result<()> {
@@ -46,6 +46,7 @@ pub async fn run(state: AppState) -> Result<()> {
         listen = %config.listen,
         matched_upstream = %config.matched_upstream,
         fallback_upstream = %config.fallback_upstream,
+        fallback_mode = ?config.fallback_mode,
         "HTTP gateway listening"
     );
 
@@ -108,7 +109,6 @@ async fn handle_gateway_request(
                 operation_class,
                 method.to_string(),
                 client_addr,
-                None,
                 Some(original_uri.to_string()),
                 "HTTP method is classified as a write operation",
             )
@@ -199,6 +199,15 @@ async fn handle_gateway_request(
             }
         };
 
+        if !should_record && config.fallback_mode == HttpGatewayFallbackMode::FixedResponse {
+            return build_fixed_response(
+                config
+                    .fixed_response
+                    .as_ref()
+                    .expect("validated fixed response configuration"),
+            );
+        }
+
         let case_request_record = case.as_ref().map(|_| CaseRequestRecord {
             timestamp: Utc::now(),
             client_addr: client_addr.clone(),
@@ -211,6 +220,7 @@ async fn handle_gateway_request(
             body: capture_case_body(
                 &request_body,
                 state.config().recording.max_body_bytes,
+                state.config().recording.decoded_body_limit(),
                 Some(&request_headers),
             ),
         });
@@ -293,6 +303,7 @@ async fn handle_gateway_request(
                         .await;
                     }
                 };
+                let mut discovered_tcp_targets = Vec::new();
                 match rewrite::apply(
                     &state.config().http_response_rewrite,
                     state.dns_registry(),
@@ -312,6 +323,7 @@ async fn handle_gateway_request(
                     Ok(Some(rewritten)) => {
                         response_headers = rewritten.headers;
                         body_bytes = rewritten.body;
+                        discovered_tcp_targets = rewritten.discovered_tcp_targets;
                     }
                     Ok(None) => {}
                     Err(err) => {
@@ -342,7 +354,6 @@ async fn handle_gateway_request(
                         id,
                         timestamp: Utc::now(),
                         client_addr: client_addr.clone(),
-                        client_process: None,
                         scheme: "http_gateway".to_string(),
                         method: method.to_string(),
                         uri: original_uri.to_string(),
@@ -362,6 +373,7 @@ async fn handle_gateway_request(
                             &body_bytes,
                             state.config().recording.max_body_bytes,
                         )),
+                        discovered_tcp_targets,
                         duration_ms: started.elapsed().as_millis(),
                         error: None,
                     };
@@ -393,6 +405,7 @@ async fn handle_gateway_request(
                             body: Some(capture_case_body(
                                 &body_bytes,
                                 state.config().recording.max_body_bytes,
+                                state.config().recording.decoded_body_limit(),
                                 Some(&response_headers),
                             )),
                             duration_ms: started.elapsed().as_millis(),
@@ -433,7 +446,8 @@ async fn handle_gateway_request(
 
     match (case_guard, active_case_id) {
         (Some(case_guard), Some(case_id)) => {
-            lifecycle::run_matched_request(lifecycle_state, case_id, case_guard, request).await
+            lifecycle::run_matched_request(lifecycle_state, case_id, case_guard, started, request)
+                .await
         }
         _ => request.await,
     }
@@ -457,7 +471,7 @@ struct GatewayErrorContext {
 }
 
 async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody> {
-    let error = ctx.err.to_string();
+    let error = format!("{:#}", ctx.err);
     let drain_invalidation = if let Some(case) = &ctx.case {
         ctx.state.drain_active_case_dependencies(case.id).await
     } else {
@@ -479,6 +493,7 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
                 body: capture_case_body(
                     &ctx.request_body,
                     ctx.state.config().recording.max_body_bytes,
+                    ctx.state.config().recording.decoded_body_limit(),
                     None,
                 ),
             },
@@ -506,7 +521,6 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
             id: ctx.id,
             timestamp: Utc::now(),
             client_addr: ctx.client_addr.clone(),
-            client_process: None,
             scheme: "http_gateway".to_string(),
             method: ctx.method.to_string(),
             uri: ctx.original_uri.to_string(),
@@ -523,6 +537,7 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
             response_status: None,
             response_headers: None,
             response_body: None,
+            discovered_tcp_targets: Vec::new(),
             duration_ms: ctx.started.elapsed().as_millis(),
             error: Some(error.clone()),
         };
@@ -544,7 +559,6 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
             timestamp: Utc::now(),
             protocol: "http_gateway".to_string(),
             client_addr: ctx.client_addr,
-            client_process: None,
             target: ctx.target,
             error: error.clone(),
         }))

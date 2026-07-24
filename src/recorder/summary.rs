@@ -5,21 +5,27 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::mysql::maintenance::is_mysql_maintenance_exchange;
 use crate::recorder::RecorderEvent;
 
 mod kafka;
 mod memcached;
+mod motan;
 mod redis;
 mod udp;
-use kafka::{KafkaDependencySummary, record_kafka_connection_summary, record_kafka_record_summary};
+use kafka::{
+    KafkaDependencySummary, record_kafka_connection_summary, record_kafka_fetch_summary,
+    record_kafka_record_summary,
+};
 use memcached::{MemcachedDependencySummary, MemcachedSummaryBuilder};
+use motan::{MotanDependencySummary, MotanSummaryBuilder};
 use redis::{RedisDependencySummary, RedisSummaryBuilder};
 use udp::{UdpDependencySummary, record_udp_summary};
 
 pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
     !matches!(event, RecorderEvent::MysqlExchange(exchange) if is_debug_only_mysql_exchange(exchange))
         && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.session_setup && exchange.response_kind != "error" && exchange.replay_safe)
-        && !matches!(event, RecorderEvent::RedisExchange(exchange) if matches!(exchange.command.as_str(), "PING" | "QUIT") && exchange.response_kind != "error" && exchange.replay_safe)
+        && !matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "PING" && exchange.response_kind != "error" && exchange.replay_safe)
 }
 
 pub(crate) async fn write_case_dependency_summary(dir: &Path) -> Result<()> {
@@ -85,6 +91,8 @@ struct DependencySummary {
     #[serde(skip_serializing_if = "Option::is_none")]
     kafka: Option<KafkaDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    motan: Option<MotanDependencySummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     http: Option<HttpDependencySummary>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tcp_gateway: Option<TcpGatewayDependencySummary>,
@@ -103,6 +111,7 @@ struct DependencySummaryBuilder {
     redis: RedisSummaryBuilder,
     memcached: MemcachedSummaryBuilder,
     kafka: KafkaDependencySummary,
+    motan: MotanSummaryBuilder,
     http: HttpDependencySummary,
     tcp_gateway: TcpGatewayDependencySummary,
     udp: UdpDependencySummary,
@@ -126,6 +135,7 @@ impl DependencySummaryBuilder {
             redis,
             memcached,
             kafka: self.kafka.has_activity().then_some(self.kafka),
+            motan: self.motan.has_activity().then(|| self.motan.finish()),
             http: (self.http.calls > 0).then_some(self.http),
             tcp_gateway: (self.tcp_gateway.connections > 0).then_some(self.tcp_gateway),
             udp: (self.udp.datagrams > 0).then_some(self.udp),
@@ -284,7 +294,10 @@ fn build_dependency_summary(raw_jsonl: &str) -> DependencySummary {
             "memcached_exchange" => builder.memcached.record_exchange(&value),
             "kafka_connection" => record_kafka_connection_summary(&mut builder.kafka, &value),
             "kafka_produce" => record_kafka_record_summary(&mut builder.kafka, &value, true),
+            "kafka_fetch" => record_kafka_fetch_summary(&mut builder.kafka, &value),
             "kafka_delivery" => record_kafka_record_summary(&mut builder.kafka, &value, false),
+            "motan_connection" => builder.motan.record_connection(&value),
+            "motan_exchange" => builder.motan.record_exchange(&value),
             "http_exchange" => record_http_summary(&mut builder.http, &value),
             "tcp_gateway_connection" => {
                 record_tcp_gateway_summary(&mut builder.tcp_gateway, &value);
@@ -381,7 +394,7 @@ fn record_mysql_summary(summary: &mut MysqlDependencySummary, value: &Value) {
     let username = json_str(value, "username").map(ToOwned::to_owned);
     let failed = status
         .as_deref()
-        .is_some_and(|status| status == "error" || status == "incomplete")
+        .is_some_and(|status| matches!(status, "error" | "incomplete" | "client_terminated"))
         || error_code.is_some()
         || error_message.is_some();
 
@@ -525,11 +538,13 @@ fn record_proxy_error_summary(summary: &mut ProxyErrorSummary, value: &Value) {
 }
 
 fn is_debug_only_mysql_exchange(exchange: &crate::recorder::MysqlExchangeEvent) -> bool {
-    is_successful_stmt_prepare(exchange)
+    is_mysql_maintenance_exchange(exchange.command.as_str(), exchange.sql.as_deref())
+        || is_successful_stmt_prepare(exchange)
         || is_successful_mysql_session_setup(
             exchange.command.as_str(),
             exchange.sql.as_deref(),
             exchange.response.status.as_str(),
+            exchange.query_sequence,
         )
 }
 
@@ -538,7 +553,10 @@ fn is_successful_stmt_prepare(exchange: &crate::recorder::MysqlExchangeEvent) ->
 }
 
 fn is_debug_only_mysql_exchange_value(value: &Value) -> bool {
-    is_successful_stmt_prepare_value(value)
+    is_mysql_maintenance_exchange(
+        json_str(value, "command").unwrap_or_default(),
+        json_str(value, "sql"),
+    ) || is_successful_stmt_prepare_value(value)
         || is_successful_mysql_session_setup(
             json_str(value, "command").unwrap_or_default(),
             json_str(value, "sql"),
@@ -546,6 +564,7 @@ fn is_debug_only_mysql_exchange_value(value: &Value) -> bool {
                 .get("response")
                 .and_then(|response| json_str(response, "status"))
                 .unwrap_or_default(),
+            json_u64(value, "query_sequence").unwrap_or_default(),
         )
 }
 
@@ -557,8 +576,18 @@ fn is_successful_stmt_prepare_value(value: &Value) -> bool {
             == Some("stmt_prepare")
 }
 
-fn is_successful_mysql_session_setup(command: &str, sql: Option<&str>, status: &str) -> bool {
-    command == "COM_QUERY" && status == "ok" && sql.is_some_and(is_mysql_session_setup_sql)
+fn is_successful_mysql_session_setup(
+    command: &str,
+    sql: Option<&str>,
+    status: &str,
+    query_sequence: u64,
+) -> bool {
+    command == "COM_QUERY"
+        && matches!(status, "ok" | "resultset")
+        && sql.is_some_and(|sql| {
+            is_mysql_session_setup_sql(sql)
+                || (query_sequence <= 9 && is_mysql_connector_initialization_sql(sql))
+        })
 }
 
 fn is_mysql_session_setup_sql(sql: &str) -> bool {
@@ -570,7 +599,44 @@ fn is_mysql_session_setup_sql(sql: &str) -> bool {
         || normalized.starts_with("set character_set_results ")
         || normalized.starts_with("set collation_connection ")
         || normalized.starts_with("set time_zone ")
-        || normalized.starts_with("set sql_mode ")
+        || is_mysql_set_assignment(&normalized, "sql_mode")
+        || normalized == "set autocommit=1"
+        || normalized == "set autocommit = 1"
+}
+
+fn is_mysql_set_assignment(sql: &str, variable: &str) -> bool {
+    sql.strip_prefix("set ")
+        .and_then(|remainder| remainder.strip_prefix(variable))
+        .and_then(|remainder| remainder.chars().next())
+        .is_some_and(|separator| separator == '=' || separator.is_whitespace())
+}
+
+fn is_mysql_connector_initialization_sql(sql: &str) -> bool {
+    let normalized = normalize_mysql_control_sql(sql);
+    let normalized = strip_leading_mysql_comment(&normalized);
+    normalized == "show collation"
+        || normalized == "show warnings"
+        || matches!(
+            normalized,
+            "select @@session.auto_increment_increment"
+                | "select @@session.tx_isolation"
+                | "select @@session.transaction_isolation"
+        )
+        || (normalized.starts_with("show variables where ")
+            && normalized.contains("variable_name")
+            && normalized.contains("character_set_client")
+            && normalized.contains("transaction_isolation")
+            && normalized.contains("max_allowed_packet"))
+}
+
+fn strip_leading_mysql_comment(sql: &str) -> &str {
+    let Some(comment) = sql.strip_prefix("/*") else {
+        return sql;
+    };
+    comment
+        .split_once("*/")
+        .map(|(_, remainder)| remainder.trim_start())
+        .unwrap_or(sql)
 }
 
 fn normalize_mysql_control_sql(sql: &str) -> String {
@@ -724,6 +790,60 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_bounded_mysql_connector_initialization_queries() {
+        let connector_comment = "/* mysql-connector-java-5.1.10 ( Revision: ${svn.Revision} ) */";
+        for sql in [
+            "SHOW COLLATION",
+            "SHOW WARNINGS",
+            "SELECT @@session.tx_isolation",
+            &format!("{connector_comment}SELECT @@session.auto_increment_increment"),
+            &format!(
+                "{connector_comment}SHOW VARIABLES WHERE Variable_name = 'character_set_client' \
+                 OR Variable_name = 'transaction_isolation' \
+                 OR Variable_name = 'max_allowed_packet'"
+            ),
+        ] {
+            assert!(
+                is_successful_mysql_session_setup("COM_QUERY", Some(sql), "resultset", 9),
+                "{sql}"
+            );
+            assert!(
+                !is_successful_mysql_session_setup("COM_QUERY", Some(sql), "resultset", 10),
+                "{sql}"
+            );
+        }
+        assert!(is_successful_mysql_session_setup(
+            "COM_QUERY",
+            Some("SET autocommit=1"),
+            "ok",
+            20
+        ));
+        for sql in [
+            "SET sql_mode='NO_AUTO_CREATE_USER,STRICT_TRANS_TABLES'",
+            "SET sql_mode = 'STRICT_TRANS_TABLES'",
+        ] {
+            assert!(is_successful_mysql_session_setup(
+                "COM_QUERY",
+                Some(sql),
+                "ok",
+                20
+            ));
+        }
+        assert!(!is_successful_mysql_session_setup(
+            "COM_QUERY",
+            Some("SET sql_mode_override = 'STRICT_TRANS_TABLES'"),
+            "ok",
+            20
+        ));
+        assert!(!is_successful_mysql_session_setup(
+            "COM_QUERY",
+            Some("SELECT 3"),
+            "resultset",
+            1
+        ));
+    }
+
+    #[test]
     fn dependency_summary_omits_successful_stmt_prepare_lines() {
         let raw = r#"{"event_type":"mysql_exchange","command":"COM_STMT_PREPARE","response":{"status":"stmt_prepare"}}
 {"event_type":"mysql_exchange","command":"COM_STMT_EXECUTE","sql":"SELECT * FROM `user`","response":{"status":"resultset","row_count":0,"columns":[]}}"#;
@@ -738,6 +858,7 @@ mod tests {
     #[test]
     fn dependency_summary_omits_successful_mysql_session_setup_lines() {
         let raw = r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SET NAMES utf8","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}
+{"event_type":"mysql_exchange","query_sequence":4,"command":"COM_QUERY","sql":"SHOW COLLATION","response":{"status":"resultset","row_count":1,"columns":[]}}
 {"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SET @tenant_id = 1","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}
 {"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SELECT * FROM `user`","response":{"status":"resultset","row_count":0,"columns":[]}}"#;
         let summary = serde_json::to_value(build_dependency_summary(raw)).unwrap();
@@ -787,5 +908,19 @@ mod tests {
         assert_eq!(summary["memcached"]["hits"], 1);
         let serialized = serde_json::to_string(&summary).unwrap();
         assert!(!serialized.contains("secret"));
+    }
+
+    #[test]
+    fn dependency_summary_tracks_publishable_client_terminations() {
+        let raw = r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SELECT * FROM `user`","outcome":"client_terminated","response":{"status":"client_terminated"}}
+{"event_type":"redis_exchange","command":"GET","outcome":"client_terminated","response_kind":"other","replay_safe":true}
+{"event_type":"memcached_exchange","command":"get","outcome":"client_terminated","response_status":"incomplete","replay_safe":true}"#;
+        let summary = serde_json::to_value(build_dependency_summary(raw)).unwrap();
+
+        assert_eq!(summary["mysql"]["failed"]["total"], 1);
+        assert_eq!(summary["redis"]["client_terminated"], 1);
+        assert_eq!(summary["redis"]["outcomes"]["client_terminated"], 1);
+        assert_eq!(summary["memcached"]["client_terminated"], 1);
+        assert_eq!(summary["memcached"]["outcomes"]["client_terminated"], 1);
     }
 }

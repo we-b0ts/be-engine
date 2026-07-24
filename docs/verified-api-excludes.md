@@ -113,6 +113,6 @@ entry also references its original recording rule, so that rule's host, header,
 and path-prefix scope still applies.
 
 An applied entry takes effect when the recorder next loads the updated config.
-Matching requests are forwarded to `fallback_upstream` and do not create new
+Matching requests use the configured fallback strategy and do not create new
 cases. Removing or temporarily disabling an exclusion is a separate reviewed
 operation; the managed operation never deletes entries automatically.

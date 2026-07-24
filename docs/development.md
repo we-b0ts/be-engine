@@ -78,10 +78,32 @@ The owner scope cannot be overridden by CLI options, environment variables, or
 recorder configuration.
 
 HTTP gateway recording is intentionally conservative. Until the configured
-ready probe succeeds, matching traffic is sent to `fallback_upstream` and no
-case is created. After ready, only one matched case can be active at a time;
-overlapping matching requests are also sent to fallback so dependencies are not
+ready probe succeeds, matching traffic uses the configured fallback strategy
+and no case is created. After ready, only one matched case can be active at a
+time; overlapping matching requests also use fallback so dependencies are not
 shared across cases.
+
+The default `http_gateway.fallback_mode = "upstream"` forwards those requests
+to `fallback_upstream`. For a fallback that always returns the same payload,
+use an in-process fixed response instead of running another service:
+
+```toml
+[http_gateway]
+fallback_mode = "fixed_response"
+
+[http_gateway.fixed_response]
+status = 200
+content_type = "application/json"
+headers = { x-recorder-fallback = "fixed" }
+body = '{"code":"xxx","msg":"xxx"}'
+```
+
+`status` is required and must be a final HTTP status. Configure `201` only
+when the response semantically represents resource creation. Fixed fallback
+requests are not forwarded, do not create cases, and are not recorded as
+business exchanges. Framing and hop-by-hop headers such as `content-length`,
+`transfer-encoding`, and `connection` are managed by the gateway and cannot be
+configured in `headers`.
 
 The gateway also limits successfully published cases per resolved case pattern
 within one recorder run. The default is
@@ -100,9 +122,9 @@ default = 100
 
 Dynamic override keys must already exist in a recording rule's
 `case_path_patterns`. Once the published count reaches the effective limit,
-later matching requests are sent directly to `fallback_upstream` without
-creating a case. Failed cases do not consume the limit, and restarting Recorder
-starts a new run with fresh counts.
+later matching requests use the configured fallback strategy without creating
+a case. Failed cases do not consume the limit, and restarting Recorder starts
+a new run with fresh counts.
 
 After an upstream HTTP response completes, Recorder continues accepting new
 case dependencies for the fixed
@@ -118,19 +140,35 @@ dependencies do not complete within
 fails the case instead of publishing incomplete dependency evidence. Matching
 requests continue to use the fallback upstream while the previous case drains.
 
+On recorder shutdown, case matching enters a quiescing phase before run
+finalization. New matching requests use the fallback upstream while the current
+case is allowed to finish for up to
+`recording.shutdown_case_drain_timeout_ms`. If the timeout expires, the
+remaining staging case is retained under `failed/` with
+`recording_incomplete_at_shutdown`.
+
+`recording.max_body_bytes` bounds wire bodies and dependency captures.
+`recording.max_decoded_body_bytes` may independently allow a larger decoded
+HTTP case body, such as compressed JSON; when omitted it inherits
+`max_body_bytes`. Content decoding reads at most the decoded limit plus one
+byte, so highly compressed input cannot cause unbounded decompression.
+
 ### Rewriting HTTP Responses
 
 HTTP response rewriting is an opt-in recording feature for responses that
-publish a later connection target. The first built-in plugin,
-`pluto-eci-kubeconfig`, rewrites the Kubernetes API server in Pluto ECI's
+publish a later connection target. The `pluto-eci-kubeconfig` built-in plugin
+rewrites the Kubernetes API server in Pluto ECI's
 `user_config` JSON response from an IPv4 address to a synthetic `.test` domain.
-That domain is registered in the recorder's fake-DNS registry and routed to a
-local `kubectl proxy`, allowing the later HTTPS traffic to pass through the TCP
-gateway and be recorded. The rewritten kubeconfig uses HTTPS and replaces its
-cluster CA with the Recorder CA so client-go retains the TLS credentials and
-trusts the Recorder-generated certificate for the synthetic domain. The
-original kubeconfig, including its original CA and Kubernetes server IP, is
-passed unchanged to the managed `kubectl proxy`.
+The `vintage-naming` plugin rewrites legacy Motan node addresses published by
+Vintage naming responses.
+
+For Pluto ECI, that synthetic domain is registered in the recorder's fake-DNS
+registry and routed to a local `kubectl proxy`, allowing the later HTTPS traffic
+to pass through the TCP gateway and be recorded. The rewritten kubeconfig uses
+HTTPS and replaces its cluster CA with the Recorder CA so client-go retains the
+TLS credentials and trusts the Recorder-generated certificate for the
+synthetic domain. The original kubeconfig, including its original CA and
+Kubernetes server IP, is passed unchanged to the managed `kubectl proxy`.
 
 The rewrite rule reads the request authority and full path from configuration.
 Its `path` value includes the Pluto ECI cluster ID and is matched exactly, not
@@ -149,6 +187,30 @@ contents and paths are never logged or added as separate recording events.
 The fake-IP gateway terminates the synthetic HTTPS connection and forwards the
 decrypted request over plain HTTP to the managed proxy; the proxy independently
 uses the original kubeconfig for HTTPS and client authentication to Kubernetes.
+
+For Vintage, configure an exact `/naming/service` rule. By default it matches
+every service and cluster; optional `services` and `clusters` filters can
+intentionally limit interception to a known subset. The plugin handles
+`lookup` and `lookupforupdate`, replacing every IPv4 `host` in every `nodes`
+array with a stable fake IP while preserving the node port and all unknown
+response fields. It deliberately leaves `getsign` unchanged, so recording does
+not alter the SDK's local-cache or snapshot decisions. Empty filters match
+every service or cluster.
+
+Vintage v1 reports application failures, including a missing service, as HTTP
+200 responses whose outer `code` is not `200`. These responses publish no
+connection targets and pass through unchanged so the SDK retains its normal
+fallback behavior. A successful outer response that is malformed or contains
+an unsafe node address still fails the exchange instead of leaking an
+unrecorded target.
+
+Each discovered original IPv4 address receives one stable
+`vintage-node-<address>.trp.test` alias. The rewritten HTTP exchange records the
+alias, original IP, fake IP, port, service, and cluster. Replay reserves the
+same fake IP before assigning any other target, so an SDK that caches the
+recorded naming response still connects to the Motan replay endpoint. A fake-IP
+collision or an address outside the configured replay CIDR fails replay
+startup instead of silently routing to a different target.
 
 Enable the example `[http_response_rewrite]` configuration in
 `config/recorder.example.toml` and ensure the configured `kubectl_binary` is
@@ -452,7 +514,7 @@ mismatched evidence fails the command. `plan` and `apply` remain available for
 diagnostics, but traffic E2E automation must not reimplement their eligibility
 branching.
 
-Thresholds live in `.traffic-e2e/e2e.yaml`; `.traffic-e2e/recorder.toml` stores only
+Thresholds live in `.traffic-e2e/project.yaml`; `.traffic-e2e/recorder.toml` stores only
 the managed verified exclusions. Neither belongs in `.traffic-e2e/replay.yaml`. See
 [verified-api-excludes.md](verified-api-excludes.md) for the assertion report
 schema, exact case-set gate, and runtime behavior.
@@ -482,7 +544,7 @@ traffic-e2e init \
 The command requires confirmed `project_cli`, `replay_policy`, and
 `pr_base` values, validates that the branch exists locally or as an
 `origin` remote-tracking branch, checks that `.traffic-e2e/local/` is ignored,
-and generates `.traffic-e2e/e2e.yaml`:
+and generates `.traffic-e2e/project.yaml`:
 
 ```yaml
 version: 4
@@ -676,8 +738,9 @@ dependency contract from missing capture evidence.
 
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`
-with `recording-error.json` instead of being published. On clean shutdown,
-recording exits with an error if the run contains failed cases.
+with `recording-error.json` instead of being published. Successfully published
+cases remain in their normal rule directories when another case fails. On
+clean shutdown, recording exits with an error if the run contains failed cases.
 
 A complete zero-length response body is publishable even when its
 `Content-Type` advertises JSON. Recorder preserves the empty body and replay
@@ -692,6 +755,95 @@ bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.
 
+Completed protocol events are moved by unique ownership into one asynchronous
+JSONL writer. `recording.writer_queue_capacity` bounds this queue by event count
+(default `65536`); it does not impose a byte budget. Producers never wait for
+free queue capacity. A full or closed queue marks the recording as failed so
+traffic forwarding is not delayed and an incomplete recording cannot be
+published as successful. Case and run finalization send ordered flush commands
+through the same writer, so queued dependency reservations remain in flight
+until their records have been persisted.
+
+Source-proven process-level HTTP polling can be classified before recording:
+
+```toml
+[[recording.background_dependencies]]
+name = "config-refresh"
+protocol = "http"
+authorities = ["config.api.demo.test"]
+methods = ["GET"]
+path_prefixes = ["/1/config/service"]
+source_revision = "0123456789abcdef"
+source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
+```
+
+All three selector dimensions and both source-evidence fields are required. A
+matching exchange is not attributed to an active API case and therefore does
+not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
+`traffic.jsonl` continues to retain the exchange only when
+`recording.traffic_jsonl` permits it. When the exchange occurs while bootstrap
+is open, it remains normal `bootstrap-dependencies.jsonl` replay evidence. The
+rule changes ownership only; it does not alter forwarding, response capture,
+body limits, or protocol debugging. Add a rule only after source inspection
+proves the traffic is independent of the triggering API, then create a new
+recording run.
+
+Use a finalized replay report to create the AI-managed rule instead of editing
+the table directly:
+
+```bash
+traffic-e2e diagnose recorder-config \
+  --config .traffic-e2e/recorder.toml \
+  background-dependencies plan \
+  --name config-refresh \
+  --protocol http \
+  --authority config.api.demo.test \
+  --method GET \
+  --path-prefix /1/config/service \
+  --replay-report <finalized-replay-report.json> \
+  --source-revision 0123456789abcdef \
+  --evidence 'src/config/refresh.rs:42 process-level scheduled refresh' \
+  --format json
+
+traffic-e2e diagnose recorder-config \
+  --config .traffic-e2e/recorder.toml \
+  background-dependencies apply \
+  --name config-refresh \
+  --protocol http \
+  --authority config.api.demo.test \
+  --method GET \
+  --path-prefix /1/config/service \
+  --replay-report <same-finalized-replay-report.json> \
+  --source-revision 0123456789abcdef \
+  --evidence 'src/config/refresh.rs:42 process-level scheduled refresh' \
+  --format json
+```
+
+`plan` requires at least one matching unused case HTTP exchange and rejects a
+selector that also matches unmatched or unsupported target requests. `apply`
+rechecks the recorder config and replay report bytes so a reviewed plan cannot
+be applied to stale inputs. One rule owns one exact authority, method, and path
+prefix; use separate rules for distinct request families.
+
+Recognized MySQL connection maintenance is not a semantic dependency. The
+strict built-in fingerprints are protocol `COM_PING`, c3p0's exact
+empty-database `SHOW FULL TABLES` probe using the `PROBABLYNOT` sentinel, and exact
+`SELECT 1` with an optional trailing semicolon. Their raw `mysql_query` and
+`mysql_response` records remain in the applicable case or bootstrap debug
+JSONL, while their derived `mysql_exchange` records are omitted from semantic
+dependency JSONL and summaries. Replay handles the same fingerprints without a
+recorded exchange: ping returns OK, `SELECT 1` returns one integer row, and the
+c3p0 empty-database probe returns MySQL error 1102.
+
+MySQL has no per-command response correlation ID, so Recorder preserves every
+response-bearing command in a connection-local FIFO and assigns server packets
+only to its oldest pending command. This covers clients that send a query and
+then `COM_PING` before the query result arrives without misclassifying the
+query as incomplete or assigning its resultset to the ping. The FIFO is bounded
+to 64 commands and 16 MiB of retained request payload per connection; exceeding
+either bound fails the connection rather than guessing response ownership.
+Intrinsic no-response commands do not consume or flush the FIFO.
+
 Redis and Memcached dependencies are semantic `redis_connection`,
 `redis_exchange`, `memcached_connection`, and `memcached_exchange` records.
 Successful Redis authentication/session initialization is handled by replay
@@ -701,13 +853,38 @@ mode, or unsafe cache connection prevents a case from being published and
 prevents unsafe bootstrap replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
 
-Kafka dependencies are semantic `kafka_connection`, `kafka_produce`, and
-`kafka_delivery` records. V1 is a successful-path dependency facade rather than
-a full Kafka broker: use an E2E client profile with
+Semantic MySQL, Redis, Memcached, Kafka, and Motan business exchanges also carry
+`outcome` and `duration_ms`. Replay waits the recorded duration before a normal
+response. If `outcome` is `client_terminated`, replay sends no response and
+consumes the exchange only after the SDK closes or resets the same connection
+near the recorded time; replay itself does not initiate that close. Intrinsic
+no-response commands remain `no_response` and are not treated as timeouts.
+
+Legacy Motan dependencies are semantic `motan_connection` and
+`motan_exchange` records. Recorder recognizes the F1F1 outer frame containing
+the F0F0 inner frame, supports codec versions 1 and 2 (including gzip-compressed
+codec-2 method metadata), correlates responses by request ID, and records exact
+binary request/response frames plus method identity. Replay matches business
+calls by codec, method identity, and recorded connection order, waits the
+recorded duration, and patches both response request IDs to the live request.
+Standard Motan heartbeat exchanges stay in `dependencies-debug.jsonl` and out
+of semantic dependencies and summaries; replay may use a recorded debug
+heartbeat response as a reusable template across nodes in the same pool.
+Motan2 framing is unsupported and fails closed. Recorder deliberately does not
+deserialize arbitrary Java arguments: it preserves exact frame bytes and
+replay uses method identity plus recorded connection order. Those frames may
+contain sensitive business objects, so protect the recording directory as
+production data.
+
+Kafka dependencies are semantic `kafka_connection`, `kafka_produce`,
+`kafka_fetch`, and `kafka_delivery` records. Each Fetch exchange records its
+requested topics, outcome, duration, and associated deliveries, including
+empty and client-terminated Fetches. V1 is a constrained dependency facade
+rather than a full Kafka broker: use an E2E client profile with
 `security.protocol=PLAINTEXT`, `compression.type=none`,
 `enable.idempotence=false`, and `acks=1`. Replay advertises one broker and one
 partition, synthesizes control-plane responses, matches Produce by exact topic,
-key, headers, and value bytes, and delivers recorded Fetch records once.
+key, headers, and value bytes, and delivers each recorded Fetch result once.
 Transactions, Admin APIs, compression, TLS/SASL, rebalance behavior, retries,
 and Kafka failure injection are unsupported and fail closed. Schema Registry
 remains an ordinary HTTP dependency. Kafka payloads and headers are sensitive
@@ -732,6 +909,7 @@ cargo test redis::
 cargo test memcached::
 cargo test replay::command_protocol_tests
 cargo test kafka::
+cargo test motan
 ```
 
 Network or root-requiring behavior should be covered with isolated unit tests

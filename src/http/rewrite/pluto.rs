@@ -8,7 +8,9 @@ use url::Url;
 
 use crate::dns_mock::FakeDnsUpstreamProtocol;
 
-use super::{DiscoveredTarget, KubectlProxySpec, Plugin, PluginResult, RewriteInput};
+use super::{
+    DiscoveredTarget, KubectlProxySpec, Plugin, PluginResult, RewriteInput, RewrittenBody,
+};
 
 const PLUGIN_NAME: &str = "pluto-eci-kubeconfig";
 const PLUTO_ECI_ALIAS: &str = "k8s-c142fe56e07d04a749c1630fb5f1b680b.pluto-eci.trp.test";
@@ -83,18 +85,18 @@ impl Plugin for EciKubeconfig {
             .context("failed to serialize rewritten Pluto response")?;
 
         Ok(PluginResult::Rewritten {
-            body,
-            target: DiscoveredTarget {
+            body: Box::new(RewrittenBody::Complete(body)),
+            targets: vec![DiscoveredTarget {
                 alias: PLUTO_ECI_ALIAS.to_string(),
                 connect_ip: self.connect_ip,
-                upstream_authority: self.proxy_listen.to_string(),
-                upstream_protocol: FakeDnsUpstreamProtocol::Http,
-            },
-            kubectl_proxy: KubectlProxySpec {
+                upstream_authority: Some(self.proxy_listen.to_string()),
+                upstream_protocol: Some(FakeDnsUpstreamProtocol::Http),
+            }],
+            kubectl_proxy: Some(KubectlProxySpec {
                 binary: self.kubectl_binary.clone(),
                 listen: self.proxy_listen,
                 kubeconfig: original_kubeconfig,
-            },
+            }),
         })
     }
 }
@@ -179,12 +181,16 @@ mod tests {
 
         let PluginResult::Rewritten {
             body,
-            target,
+            targets,
             kubectl_proxy,
         } = plugin.rewrite(&input(&uri, &bytes)).unwrap()
         else {
             panic!("expected rewritten response");
         };
+        let RewrittenBody::Complete(body) = *body else {
+            panic!("expected complete body");
+        };
+        let target = &targets[0];
         let response: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let config = response["config"].as_str().unwrap();
         let kubeconfig: YamlValue = serde_yaml::from_str(config).unwrap();
@@ -201,8 +207,12 @@ mod tests {
         );
         assert!(config.contains("client-key-data: REDACTED"));
         assert_eq!(target.connect_ip, Ipv4Addr::LOCALHOST);
-        assert_eq!(target.upstream_authority, "127.0.0.1:8001");
-        assert_eq!(target.upstream_protocol, FakeDnsUpstreamProtocol::Http);
+        assert_eq!(target.upstream_authority.as_deref(), Some("127.0.0.1:8001"));
+        assert_eq!(
+            target.upstream_protocol,
+            Some(FakeDnsUpstreamProtocol::Http)
+        );
+        let kubectl_proxy = kubectl_proxy.unwrap();
         assert_eq!(kubectl_proxy.binary, "kubectl");
         assert!(
             String::from_utf8(kubectl_proxy.kubeconfig)

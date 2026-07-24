@@ -6,6 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{CasePathPatternAuthority, CasePathPatternFeedback, plan_case_path_pattern_feedback};
@@ -83,6 +84,8 @@ pub struct CaseGroupEnsureResult {
 pub struct CanonicalCase {
     pub case_id: String,
     pub case_dir: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recorded_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -284,6 +287,7 @@ fn load_case_group_inventory_impl(
             selected_cases.push(CanonicalCase {
                 case_id: case_id.clone(),
                 case_dir: case.dir.clone(),
+                recorded_at: case.recorded_at,
             });
         }
         groups.push(CanonicalCaseGroup {

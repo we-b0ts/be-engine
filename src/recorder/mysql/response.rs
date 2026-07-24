@@ -1,7 +1,9 @@
+use std::collections::VecDeque;
+
 use super::*;
 
 pub(super) struct MysqlResponseTracker {
-    active: Option<MysqlResponseBuilder>,
+    pending: VecDeque<MysqlResponseBuilder>,
     max_payload_bytes: usize,
     record_raw_packets: bool,
 }
@@ -10,7 +12,6 @@ struct MysqlResponseBuilder {
     connection_id: Uuid,
     query_sequence: u64,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     command: String,
     started: Instant,
     status: String,
@@ -34,10 +35,14 @@ enum MysqlResponsePhase {
 impl MysqlResponseTracker {
     pub(super) fn new(max_payload_bytes: usize, record_raw_packets: bool) -> Self {
         Self {
-            active: None,
+            pending: VecDeque::new(),
             max_payload_bytes,
             record_raw_packets,
         }
+    }
+
+    pub(super) fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 
     pub(super) fn start_query(
@@ -46,14 +51,11 @@ impl MysqlResponseTracker {
         query_sequence: u64,
         command: String,
         client_addr: Option<String>,
-        client_process: Option<ProcessInfo>,
-    ) -> Option<MysqlResponseEvent> {
-        let previous = self.finish_active("incomplete");
-        self.active = Some(MysqlResponseBuilder {
+    ) {
+        self.pending.push_back(MysqlResponseBuilder {
             connection_id,
             query_sequence,
             client_addr,
-            client_process,
             command,
             started: Instant::now(),
             status: "pending".to_string(),
@@ -66,7 +68,6 @@ impl MysqlResponseTracker {
             error_message: None,
             record_raw_packets: self.record_raw_packets,
         });
-        previous
     }
 
     pub(super) fn observe_packet(
@@ -74,14 +75,14 @@ impl MysqlResponseTracker {
         packet: &MysqlPacket,
         info: ServerPacketInfo,
     ) -> Option<MysqlResponseEvent> {
-        let active = self.active.as_mut()?;
+        let active = self.pending.front_mut()?;
         let complete = active.observe_packet(packet, info, self.max_payload_bytes);
         complete.then(|| self.finish_active("incomplete")).flatten()
     }
 
     pub(super) fn finish_active(&mut self, fallback_status: &str) -> Option<MysqlResponseEvent> {
-        self.active
-            .take()
+        self.pending
+            .pop_front()
             .map(|mut active| active.finish(fallback_status))
     }
 }
@@ -198,7 +199,6 @@ impl MysqlResponseBuilder {
             query_sequence: self.query_sequence,
             timestamp: Utc::now(),
             client_addr: self.client_addr.clone(),
-            client_process: self.client_process.clone(),
             status,
             packet_count: self.packet_count,
             payload_bytes: self.payload_bytes,

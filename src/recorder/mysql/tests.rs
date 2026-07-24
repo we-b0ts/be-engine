@@ -6,6 +6,7 @@ use tempfile::tempdir;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::mysql::wire::{CLIENT_COMPRESS, CLIENT_CONNECT_WITH_DB};
 use crate::{
     AppConfig, MysqlWriteOperation, RecordingAccessPolicy, RecordingAccessRuleConfig,
     RecordingAccessRuleEffect,
@@ -14,7 +15,7 @@ use crate::{
 #[test]
 fn aggregates_resultset_packets_into_one_response() {
     let mut tracker = MysqlResponseTracker::new(1024, true);
-    tracker.start_query(Uuid::nil(), 7, "COM_STMT_EXECUTE".to_string(), None, None);
+    tracker.start_query(Uuid::nil(), 7, "COM_STMT_EXECUTE".to_string(), None);
 
     assert!(
         observe_payload(&mut tracker, 1, &[1]).is_none(),
@@ -50,7 +51,7 @@ fn aggregates_resultset_packets_into_one_response() {
 #[test]
 fn response_payload_is_concatenated_and_truncated() {
     let mut tracker = MysqlResponseTracker::new(4, false);
-    tracker.start_query(Uuid::nil(), 8, "COM_STMT_EXECUTE".to_string(), None, None);
+    tracker.start_query(Uuid::nil(), 8, "COM_STMT_EXECUTE".to_string(), None);
 
     assert!(observe_payload(&mut tracker, 1, &[1]).is_none());
     assert!(observe_payload(&mut tracker, 2, b"abc").is_none());
@@ -68,7 +69,7 @@ fn response_payload_is_concatenated_and_truncated() {
 #[test]
 fn raw_packets_can_be_recorded_when_enabled() {
     let mut tracker = MysqlResponseTracker::new(4, true);
-    tracker.start_query(Uuid::nil(), 9, "COM_STMT_EXECUTE".to_string(), None, None);
+    tracker.start_query(Uuid::nil(), 9, "COM_STMT_EXECUTE".to_string(), None);
 
     assert!(observe_payload(&mut tracker, 1, &[1]).is_none());
     assert!(observe_payload(&mut tracker, 2, b"abcdef").is_none());
@@ -86,7 +87,7 @@ fn raw_packets_can_be_recorded_when_enabled() {
 #[test]
 fn aggregates_stmt_prepare_until_expected_eofs() {
     let mut tracker = MysqlResponseTracker::new(1024, false);
-    tracker.start_query(Uuid::nil(), 3, "COM_STMT_PREPARE".to_string(), None, None);
+    tracker.start_query(Uuid::nil(), 3, "COM_STMT_PREPARE".to_string(), None);
 
     let mut prepare_ok = vec![0x00];
     prepare_ok.extend_from_slice(&1_u32.to_le_bytes());
@@ -114,6 +115,127 @@ async fn blocked_query_returns_mysql_error_without_reaching_upstream() {
 #[tokio::test]
 async fn blocked_select_for_update_returns_mysql_error_without_reaching_upstream() {
     assert_blocked_query("SELECT * FROM users WHERE id = 1 FOR UPDATE").await;
+}
+
+#[tokio::test]
+async fn pending_query_uses_uncompressed_framing_and_records_client_termination() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    let state = AppState::new(config).await.unwrap();
+
+    let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client_addr = client_listener.local_addr().unwrap();
+    let client = tokio::spawn(TcpStream::connect(client_addr));
+    let (proxy_client, _) = client_listener.accept().await.unwrap();
+    let mut client = client.await.unwrap().unwrap();
+
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream_listener.local_addr().unwrap();
+    let proxy_upstream = tokio::spawn(TcpStream::connect(upstream_addr));
+    let (mut upstream, _) = upstream_listener.accept().await.unwrap();
+    let proxy_upstream = proxy_upstream.await.unwrap().unwrap();
+
+    let handler = tokio::spawn(handle_connected_mysql(
+        proxy_client,
+        proxy_upstream,
+        state.clone(),
+        MysqlConnectionContext {
+            route_name: Some("test".to_string()),
+            listen_addr: client_addr.to_string(),
+            client_addr: None,
+            target_host: Some("mysql.test".to_string()),
+            target_port: Some(3306),
+            target_addr: Some("mysql.test:3306".to_string()),
+            upstream_addr: upstream_addr.to_string(),
+        },
+    ));
+
+    upstream
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 0,
+                payload: server_handshake_payload(CLIENT_COMPRESS),
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    let forwarded_handshake = read_packet(&mut client).await.unwrap().unwrap();
+    assert_eq!(
+        server_lower_capability_flags(&forwarded_handshake.payload) & CLIENT_COMPRESS as u16,
+        0
+    );
+    let mut compressed_login_payload = login_payload("pluto");
+    compressed_login_payload[0..4]
+        .copy_from_slice(&(CLIENT_CONNECT_WITH_DB | CLIENT_COMPRESS).to_le_bytes());
+    client
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 1,
+                payload: compressed_login_payload,
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    let forwarded_login = read_packet(&mut upstream).await.unwrap().unwrap();
+    assert_eq!(
+        parse_handshake_response(&forwarded_login).capability_flags & CLIENT_COMPRESS,
+        0
+    );
+    upstream
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 2,
+                payload: vec![0x00],
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    assert!(read_packet(&mut client).await.unwrap().is_some());
+
+    let sql = "SELECT timeout_value";
+    client
+        .write_all(
+            &MysqlPacket {
+                sequence_id: 0,
+                payload: [vec![0x03], sql.as_bytes().to_vec()].concat(),
+            }
+            .to_wire_bytes(),
+        )
+        .await
+        .unwrap();
+    let forwarded = read_packet(&mut upstream).await.unwrap().unwrap();
+    assert_eq!(&forwarded.payload[1..], sql.as_bytes());
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    client.shutdown().await.unwrap();
+    drop(client);
+    assert!(read_packet(&mut upstream).await.unwrap().is_none());
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    let exchange = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|value| value["event_type"] == "mysql_exchange" && value["sql"] == sql)
+        .unwrap();
+    assert_eq!(exchange["outcome"], "client_terminated");
+    assert_eq!(exchange["response"]["status"], "client_terminated");
+    assert!(exchange["parse_warnings"].as_array().unwrap().is_empty());
+    assert!(exchange["duration_ms"].as_u64().unwrap() >= 50);
 }
 
 async fn assert_blocked_query(sql: &str) {
@@ -146,7 +268,6 @@ async fn assert_blocked_query(sql: &str) {
             route_name: Some("test".to_string()),
             listen_addr: client_addr.to_string(),
             client_addr: None,
-            client_process: None,
             target_host: Some("mysql.test".to_string()),
             target_port: Some(3306),
             target_addr: Some("mysql.test:3306".to_string()),
@@ -256,7 +377,6 @@ async fn allowed_insert_reaches_upstream_and_records_exchange_and_audit() {
             route_name: Some("test".to_string()),
             listen_addr: client_addr.to_string(),
             client_addr: None,
-            client_process: None,
             target_host: Some("mysql.test".to_string()),
             target_port: Some(3306),
             target_addr: Some("mysql.test:3306".to_string()),
@@ -329,10 +449,17 @@ async fn allowed_insert_reaches_upstream_and_records_exchange_and_audit() {
     let response = read_packet(&mut client).await.unwrap().unwrap();
     assert_eq!(response.payload[0], 0x00);
 
-    state.recorder().flush_traffic().await.unwrap();
-    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
-        .await
-        .unwrap();
+    let mut traffic = String::new();
+    for _ in 0..100 {
+        state.recorder().flush_traffic().await.unwrap();
+        traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
+        if traffic.contains(r#""event_type":"mysql_exchange""#) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     assert!(traffic.contains(r#""event_type":"access_policy_allow""#));
     assert!(traffic.contains(r#""rule":"allow-request-log""#));
     assert!(traffic.contains(r#""resources":["pluto.request_log"]"#));
@@ -372,7 +499,6 @@ async fn stmt_close_is_forwarded_without_recording_an_incomplete_exchange() {
             route_name: Some("test".to_string()),
             listen_addr: client_addr.to_string(),
             client_addr: None,
-            client_process: None,
             target_host: Some("mysql.test".to_string()),
             target_port: Some(3306),
             target_addr: Some("mysql.test:3306".to_string()),
@@ -528,6 +654,25 @@ fn login_payload(database: &str) -> Vec<u8> {
     payload.extend_from_slice(database.as_bytes());
     payload.push(0);
     payload
+}
+
+fn server_handshake_payload(capability_flags: u32) -> Vec<u8> {
+    let mut payload = vec![0x0a];
+    payload.extend_from_slice(b"8.0.0-test\0");
+    payload.extend_from_slice(&42_u32.to_le_bytes());
+    payload.extend_from_slice(b"12345678");
+    payload.push(0);
+    payload.extend_from_slice(&(capability_flags as u16).to_le_bytes());
+    payload.push(0x21);
+    payload.extend_from_slice(&0_u16.to_le_bytes());
+    payload.extend_from_slice(&((capability_flags >> 16) as u16).to_le_bytes());
+    payload
+}
+
+fn server_lower_capability_flags(payload: &[u8]) -> u16 {
+    let server_version_len = payload[1..].iter().position(|byte| *byte == 0).unwrap() + 1;
+    let offset = 1 + server_version_len + 4 + 8 + 1;
+    u16::from_le_bytes([payload[offset], payload[offset + 1]])
 }
 
 fn observe_payload(

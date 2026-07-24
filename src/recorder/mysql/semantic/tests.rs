@@ -12,11 +12,7 @@ fn parses_text_resultset_exchange() {
         payload: [vec![0x03], b"select id, name".to_vec()].concat(),
     };
     let command = parse_client_command(&query).unwrap();
-    assert!(
-        tracker
-            .start_query(Uuid::nil(), 1, &command, &query, None, None)
-            .is_none()
-    );
+    tracker.start_query(Uuid::nil(), 1, &command, &query, None);
 
     tracker.observe_packet(&MysqlPacket {
         sequence_id: 1,
@@ -70,7 +66,7 @@ fn changes_database_only_after_successful_init_db_response() {
         payload: [vec![0x02], b"pluto".to_vec()].concat(),
     };
     let command = parse_client_command(&init_db).unwrap();
-    tracker.start_query(Uuid::nil(), 1, &command, &init_db, None, None);
+    tracker.start_query(Uuid::nil(), 1, &command, &init_db, None);
     assert_eq!(tracker.database(), Some("original"));
 
     let response = MysqlResponseEvent {
@@ -79,7 +75,6 @@ fn changes_database_only_after_successful_init_db_response() {
         query_sequence: 1,
         timestamp: Utc::now(),
         client_addr: None,
-        client_process: None,
         status: "ok".to_string(),
         packet_count: 1,
         payload_bytes: 1,
@@ -211,7 +206,7 @@ fn parses_prepare_and_execute_binary_resultset() {
         payload: [vec![0x16], b"select name from user where id=?".to_vec()].concat(),
     };
     let command = parse_client_command(&prepare).unwrap();
-    tracker.start_query(Uuid::nil(), 1, &command, &prepare, None, None);
+    tracker.start_query(Uuid::nil(), 1, &command, &prepare, None);
     tracker.observe_packet(&MysqlPacket {
         sequence_id: 1,
         payload: prepare_ok(9, 1, 1),
@@ -242,7 +237,7 @@ fn parses_prepare_and_execute_binary_resultset() {
         payload: stmt_execute_long_param(9, 42),
     };
     let command = parse_client_command(&execute).unwrap();
-    tracker.start_query(Uuid::nil(), 2, &command, &execute, None, None);
+    tracker.start_query(Uuid::nil(), 2, &command, &execute, None);
     tracker.observe_packet(&MysqlPacket {
         sequence_id: 1,
         payload: vec![1],
@@ -289,7 +284,7 @@ fn stmt_close_clears_prepared_statement_without_creating_exchange() {
         payload: [vec![0x16], b"select name from user".to_vec()].concat(),
     };
     let command = parse_client_command(&prepare).unwrap();
-    tracker.start_query(Uuid::nil(), 1, &command, &prepare, None, None);
+    tracker.start_query(Uuid::nil(), 1, &command, &prepare, None);
     tracker.observe_packet(&MysqlPacket {
         sequence_id: 1,
         payload: prepare_ok(9, 0, 0),
@@ -304,11 +299,7 @@ fn stmt_close_clears_prepared_statement_without_creating_exchange() {
         payload: [vec![0x19], 9_u32.to_le_bytes().to_vec()].concat(),
     };
     let command = parse_client_command(&close).unwrap();
-    assert!(
-        tracker
-            .observe_no_response_command(&command, &close)
-            .is_none()
-    );
+    tracker.observe_no_response_command(&command, &close);
     assert!(!tracker.statements.contains_key(&9));
     assert!(
         tracker

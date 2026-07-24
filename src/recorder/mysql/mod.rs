@@ -14,33 +14,39 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::MysqlRouteConfig;
 use crate::access_policy::{AccessDecision, MysqlAccessContext, evaluate_mysql_access};
+use crate::dependency::termination::ConnectionTermination;
 use crate::mysql::access::analyze_command;
 use crate::mysql::wire::{
-    MysqlPacket, ServerPacketInfo, parse_client_command, parse_handshake_response,
+    MysqlPacket, ServerPacketInfo, clear_client_compression_capability,
+    clear_server_compression_capability, parse_client_command, parse_handshake_response,
     parse_server_packet, read_packet, readonly_error_packet,
 };
 use crate::recorder::{
     MysqlConnectionEvent, MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket,
-    MysqlTlsRejectedEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent, capture_body,
+    MysqlTlsRejectedEvent, ProxyErrorEvent, RecorderEvent, capture_body,
     capture_body_with_original_len,
 };
 
+#[cfg(test)]
+mod fifo_tests;
 mod ownership;
 mod response;
 mod semantic;
 #[cfg(test)]
 mod tests;
+mod tracker;
 
 use ownership::{QueryDependencyOwnerships, record_event, record_query_completion};
+#[cfg(test)]
 use response::MysqlResponseTracker;
-use semantic::{MysqlExchangeContext, MysqlSemanticTracker};
+use semantic::MysqlExchangeContext;
+use tracker::MysqlQueryTracker;
 
 #[derive(Debug, Clone)]
 pub(crate) struct MysqlConnectionContext {
     pub route_name: Option<String>,
     pub listen_addr: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: Option<String>,
     pub target_port: Option<u16>,
     pub target_addr: Option<String>,
@@ -86,7 +92,6 @@ async fn run_route(state: AppState, route: MysqlRouteConfig) -> Result<()> {
                 route_name: route.name.clone(),
                 listen_addr: route.listen.to_string(),
                 client_addr: Some(peer_addr.to_string()),
-                client_process: None,
                 target_host,
                 target_port,
                 target_addr,
@@ -115,7 +120,6 @@ async fn handle_mysql_connection(
                     timestamp: Utc::now(),
                     protocol: "mysql".to_string(),
                     client_addr: context.client_addr.clone(),
-                    client_process: context.client_process.clone(),
                     target: Some(upstream_addr),
                     error: err.to_string(),
                 }),
@@ -139,7 +143,6 @@ pub(crate) async fn handle_connected_mysql(
     let route_name = context.route_name.clone();
     let listen_addr = context.listen_addr.clone();
     let client_addr = context.client_addr.clone();
-    let client_process = context.client_process.clone();
     let target_host = context.target_host.clone();
     let target_port = context.target_port;
     let target_addr = context.target_addr.clone();
@@ -148,20 +151,24 @@ pub(crate) async fn handle_connected_mysql(
     let mut server_to_client_bytes = 0_u64;
     let mut client_to_server_bytes = 0_u64;
 
-    let handshake = read_packet(&mut upstream)
+    let mut handshake = read_packet(&mut upstream)
         .await
         .context("failed to read MySQL upstream handshake")?
         .context("MySQL upstream closed before handshake")?;
+    // Semantic capture parses ordinary MySQL packets. Negotiate compression
+    // off before either peer can switch to the seven-byte compressed header.
+    clear_server_compression_capability(&mut handshake);
     server_to_client_bytes += handshake.encoded_len() as u64;
     client
         .write_all(&handshake.to_wire_bytes())
         .await
         .context("failed to forward MySQL handshake")?;
 
-    let login_packet = read_packet(&mut client)
+    let mut login_packet = read_packet(&mut client)
         .await
         .context("failed to read MySQL login packet")?
         .context("MySQL client closed before login packet")?;
+    clear_client_compression_capability(&mut login_packet);
     client_to_server_bytes += login_packet.encoded_len() as u64;
     let login = parse_handshake_response(&login_packet);
 
@@ -173,7 +180,6 @@ pub(crate) async fn handle_connected_mysql(
             route_name: route_name.clone(),
             listen_addr: listen_addr.clone(),
             client_addr: client_addr.clone(),
-            client_process: client_process.clone(),
             upstream_addr: upstream_addr.clone(),
             target_host: target_host.clone(),
             target_port,
@@ -188,7 +194,6 @@ pub(crate) async fn handle_connected_mysql(
             route_name,
             listen_addr,
             client_addr,
-            client_process,
             target_host,
             target_port,
             target_addr,
@@ -216,7 +221,6 @@ pub(crate) async fn handle_connected_mysql(
         route_name: route_name.clone(),
         listen_addr: listen_addr.clone(),
         client_addr: client_addr.clone(),
-        client_process: client_process.clone(),
         upstream_addr: upstream_addr.clone(),
         target_host: target_host.clone(),
         target_port,
@@ -234,12 +238,9 @@ pub(crate) async fn handle_connected_mysql(
 
     let authenticated = Arc::new(AtomicBool::new(false));
     let query_sequence = Arc::new(AtomicU64::new(0));
-    let response_tracker = Arc::new(Mutex::new(MysqlResponseTracker::new(
+    let query_tracker = Arc::new(Mutex::new(MysqlQueryTracker::new(
         state.config().recording.max_body_bytes,
         state.config().mysql.record_raw_packets,
-    )));
-    let semantic_tracker = Arc::new(Mutex::new(MysqlSemanticTracker::new(
-        state.config().recording.max_body_bytes,
         MysqlExchangeContext {
             route_name: route_name.clone(),
             target_host: target_host.clone(),
@@ -251,18 +252,17 @@ pub(crate) async fn handle_connected_mysql(
         },
     )));
     let dependency_ownerships = QueryDependencyOwnerships::default();
+    let termination = ConnectionTermination::default();
     let (mut client_read, client_write) = client.into_split();
     let (mut upstream_read, mut upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
 
     let c2s_state = state.clone();
     let c2s_client_addr = client_addr.clone();
-    let c2s_client_process = client_process.clone();
     let c2s_authenticated = authenticated.clone();
     let c2s_query_sequence = query_sequence.clone();
     let c2s_connection_id = connection_id;
-    let c2s_response_tracker = response_tracker.clone();
-    let c2s_semantic_tracker = semantic_tracker.clone();
+    let c2s_query_tracker = query_tracker.clone();
     let c2s_dependency_ownerships = dependency_ownerships.clone();
     let c2s_client_write = client_write.clone();
     let c2s_route_name = route_name.clone();
@@ -272,22 +272,26 @@ pub(crate) async fn handle_connected_mysql(
         .clone()
         .or_else(|| target_host.clone())
         .or_else(|| Some(upstream_addr.clone()));
+    let c2s_termination = termination.clone();
     let client_to_server = tokio::spawn(async move {
         let mut bytes = 0_u64;
         loop {
-            let packet = match read_packet(&mut client_read).await? {
-                Some(packet) => packet,
-                None => break,
+            let packet = match read_packet(&mut client_read).await {
+                Ok(Some(packet)) => packet,
+                Ok(None) => {
+                    c2s_termination.observe_client_eof();
+                    break;
+                }
+                Err(error) if c2s_termination.observe_client_io_error(&error) => break,
+                Err(error) => return Err(error.into()),
             };
             bytes += packet.encoded_len() as u64;
             if c2s_authenticated.load(Ordering::SeqCst)
                 && let Some(command) = parse_client_command(&packet)
             {
-                let dependency_ownership = c2s_state.capture_dependency_targets(
-                    c2s_client_process.as_ref().map(|process| process.pid),
-                );
+                let dependency_ownership = c2s_state.capture_dependency_targets();
                 let (prepared_sql, current_database) = {
-                    let tracker = c2s_semantic_tracker.lock().await;
+                    let tracker = c2s_query_tracker.lock().await;
                     let prepared_sql = if command.command_name == "COM_STMT_EXECUTE" {
                         tracker
                             .prepared_sql_for_packet(&packet)
@@ -316,7 +320,6 @@ pub(crate) async fn handle_connected_mysql(
                             analysis.class,
                             command.command_name,
                             c2s_client_addr.clone(),
-                            c2s_client_process.clone(),
                             c2s_target.clone(),
                             "MySQL command is classified as a write operation",
                         )
@@ -341,7 +344,6 @@ pub(crate) async fn handle_connected_mysql(
                             analysis.operation_names(),
                             analysis.resource_names(current_database.as_deref()),
                             c2s_client_addr.clone(),
-                            c2s_client_process.clone(),
                             c2s_target.clone(),
                             "MySQL write matched a configured recording access rule",
                         )
@@ -350,22 +352,12 @@ pub(crate) async fn handle_connected_mysql(
                 let sequence = c2s_query_sequence.fetch_add(1, Ordering::SeqCst) + 1;
                 c2s_dependency_ownerships.insert(sequence, dependency_ownership);
                 let expects_server_response = command.expects_server_response();
-                let flushed_response = {
-                    let mut tracker = c2s_response_tracker.lock().await;
-                    if expects_server_response {
-                        tracker.start_query(
-                            c2s_connection_id,
-                            sequence,
-                            command.command_name.clone(),
-                            c2s_client_addr.clone(),
-                            c2s_client_process.clone(),
-                        )
-                    } else {
-                        tracker.finish_active("incomplete")
-                    }
-                };
-                let flushed_exchange = {
-                    let mut tracker = c2s_semantic_tracker.lock().await;
+                let closes_connection = command.command_name == "COM_QUIT";
+                if closes_connection {
+                    c2s_termination.observe_client_eof();
+                }
+                {
+                    let mut tracker = c2s_query_tracker.lock().await;
                     if expects_server_response {
                         tracker.start_query(
                             c2s_connection_id,
@@ -373,32 +365,23 @@ pub(crate) async fn handle_connected_mysql(
                             &command,
                             &packet,
                             c2s_client_addr.clone(),
-                            c2s_client_process.clone(),
-                        )
+                        )?;
                     } else {
-                        tracker.observe_no_response_command(&command, &packet)
+                        tracker.observe_no_response_command(&command, &packet);
                     }
-                };
-                record_query_completion(
-                    &c2s_state,
-                    &c2s_dependency_ownerships,
-                    flushed_response,
-                    flushed_exchange,
-                )
-                .await?;
+                }
                 let query_event = RecorderEvent::MysqlQuery(MysqlQueryEvent {
                     id: Uuid::new_v4(),
                     connection_id: c2s_connection_id,
                     sequence,
                     timestamp: Utc::now(),
                     client_addr: c2s_client_addr.clone(),
-                    client_process: c2s_client_process.clone(),
                     command: command.command_name,
                     query: command.query,
                     payload_len: packet.payload.len(),
                 });
                 let ownership = c2s_dependency_ownerships.get(sequence);
-                if let Err(err) = record_event(&c2s_state, query_event, ownership.as_ref()).await {
+                if let Err(err) = record_event(&c2s_state, query_event, ownership).await {
                     c2s_dependency_ownerships.take(sequence);
                     return Err(err);
                 }
@@ -414,80 +397,87 @@ pub(crate) async fn handle_connected_mysql(
 
     let s2c_state = state.clone();
     let s2c_authenticated = authenticated.clone();
-    let s2c_response_tracker = response_tracker.clone();
-    let s2c_semantic_tracker = semantic_tracker.clone();
+    let s2c_query_tracker = query_tracker.clone();
     let s2c_dependency_ownerships = dependency_ownerships.clone();
     let s2c_client_write = client_write.clone();
+    let s2c_termination = termination.clone();
     let server_to_client = tokio::spawn(async move {
         let mut bytes = 0_u64;
         loop {
-            let packet = match read_packet(&mut upstream_read).await? {
-                Some(packet) => packet,
-                None => break,
+            let packet = match read_packet(&mut upstream_read).await {
+                Ok(Some(packet)) => packet,
+                Ok(None) => {
+                    s2c_termination.observe_server_eof();
+                    break;
+                }
+                Err(error) => {
+                    let error = anyhow::Error::from(error);
+                    s2c_termination.observe_server_error(&error);
+                    return Err(error);
+                }
             };
             bytes += packet.encoded_len() as u64;
             let packet_info = parse_server_packet(&packet);
             if !s2c_authenticated.load(Ordering::SeqCst) && packet_info.kind == "ok" {
                 s2c_authenticated.store(true, Ordering::SeqCst);
             }
-            if s2c_authenticated.load(Ordering::SeqCst) {
-                {
-                    let mut tracker = s2c_semantic_tracker.lock().await;
-                    tracker.observe_packet(&packet);
+            let mut completion = if s2c_authenticated.load(Ordering::SeqCst) {
+                s2c_query_tracker
+                    .lock()
+                    .await
+                    .observe_server_packet(&packet, packet_info)?
+            } else {
+                Default::default()
+            };
+            if s2c_termination.client_ended_first() {
+                if completion.is_empty() {
+                    completion = s2c_query_tracker
+                        .lock()
+                        .await
+                        .finish_active("client_terminated")?;
+                } else {
+                    completion.mark_client_terminated();
                 }
-                let response = {
-                    let mut tracker = s2c_response_tracker.lock().await;
-                    tracker.observe_packet(&packet, packet_info)
-                };
-                if let Some(response) = response {
-                    let exchange = {
-                        let mut tracker = s2c_semantic_tracker.lock().await;
-                        tracker.finish_from_response(&response)
-                    };
-                    record_query_completion(
-                        &s2c_state,
-                        &s2c_dependency_ownerships,
-                        Some(response),
-                        exchange,
-                    )
-                    .await?;
-                }
+                record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
+                break;
             }
-            s2c_client_write
+            let write_result = s2c_client_write
                 .lock()
                 .await
                 .write_all(&packet.to_wire_bytes())
-                .await?;
+                .await;
+            match write_result {
+                Ok(()) => {
+                    if !completion.is_empty() {
+                        record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion)
+                            .await?;
+                    }
+                }
+                Err(error) if s2c_termination.observe_client_io_error(&error) => {
+                    if completion.is_empty() {
+                        completion = s2c_query_tracker
+                            .lock()
+                            .await
+                            .finish_active("client_terminated")?;
+                    } else {
+                        completion.mark_client_terminated();
+                    }
+                    record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion)
+                        .await?;
+                    break;
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
-        let response = {
-            let mut tracker = s2c_response_tracker.lock().await;
-            tracker.finish_active("incomplete")
-        };
-        if let Some(response) = response {
-            let exchange = {
-                let mut tracker = s2c_semantic_tracker.lock().await;
-                tracker.finish_from_response(&response)
-            };
-            record_query_completion(
-                &s2c_state,
-                &s2c_dependency_ownerships,
-                Some(response),
-                exchange,
-            )
-            .await?;
+        let terminal_status = if s2c_termination.client_ended_first() {
+            "client_terminated"
         } else {
-            let exchange = {
-                let mut tracker = s2c_semantic_tracker.lock().await;
-                tracker.finish_active("incomplete", None, None, None)
-            };
-            if let Some(exchange) = exchange {
-                record_query_completion(
-                    &s2c_state,
-                    &s2c_dependency_ownerships,
-                    None,
-                    Some(exchange),
-                )
-                .await?;
+            "incomplete"
+        };
+        let completions = s2c_query_tracker.lock().await.finish_all(terminal_status)?;
+        for completion in completions {
+            if !completion.is_empty() {
+                record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
             }
         }
         let _ = s2c_client_write.lock().await.shutdown().await;
@@ -506,7 +496,6 @@ pub(crate) async fn handle_connected_mysql(
         route_name,
         listen_addr,
         client_addr,
-        client_process,
         target_host,
         target_port,
         target_addr,
@@ -530,7 +519,6 @@ async fn record_connection(
     route_name: Option<String>,
     listen_addr: String,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     target_host: Option<String>,
     target_port: Option<u16>,
     target_addr: Option<String>,
@@ -551,7 +539,6 @@ async fn record_connection(
             route_name,
             listen_addr,
             client_addr,
-            client_process,
             target_host,
             target_port,
             target_addr,
@@ -597,6 +584,6 @@ fn mysql_target_from_addr(addr: &str) -> (Option<String>, Option<u16>, Option<St
 }
 
 async fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) -> Result<()> {
-    let targets = state.capture_dependency_targets(event.client_pid());
-    record_event(state, event, Some(&targets)).await
+    let targets = state.capture_dependency_targets();
+    record_event(state, event, Some(targets)).await
 }

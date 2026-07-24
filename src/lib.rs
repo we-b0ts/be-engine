@@ -4,15 +4,16 @@ mod case_group;
 mod case_kind;
 mod compare;
 mod config;
+mod dependency;
 mod dns_mock;
 mod e2e_run;
 mod gateway;
 mod http;
 mod kafka;
 mod memcached;
+mod motan;
 mod mysql;
 mod path_pattern;
-mod process_lookup;
 mod proxy;
 mod recorder;
 mod redis;
@@ -50,9 +51,11 @@ pub use case_group::{
 pub use compare::run as run_compare;
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
-    AppConfig, CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan,
-    CasePathPatternReport, CompareConfig, DEFAULT_FAKE_CIDR, DnsBypassStrategyConfig,
-    DnsMockConfig, HttpConfig, HttpGatewayCaseLimitsConfig, HttpGatewayConfig,
+    AppConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
+    BackgroundDependencyRuleConfig, CasePathPatternAuthority, CasePathPatternFeedback,
+    CasePathPatternPlan, CasePathPatternReport, CompareConfig, DEFAULT_FAKE_CIDR,
+    DnsBypassStrategyConfig, DnsMockConfig, HttpConfig, HttpGatewayCaseLimitsConfig,
+    HttpGatewayConfig, HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig,
     HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
     HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlConfig, MysqlRouteConfig,
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
@@ -61,8 +64,9 @@ pub use config::{
     VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
     VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiExcludesConfig,
     VerifiedApiVerification, ensure_verified_api_exclude, plan_allowed_unused_http_hosts,
-    plan_case_path_pattern_feedback, plan_verified_api_exclude,
+    plan_background_dependency, plan_case_path_pattern_feedback, plan_verified_api_exclude,
 };
+pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
     E2eApiRunResult, E2eApiVerificationOverride, E2eFocusedApiStatus, E2eRunContext,
@@ -73,13 +77,14 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
     AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
-    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaHeaderCapture,
-    KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent, MysqlColumn,
-    MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
-    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
-    ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
-    RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,
-    capture_body_with_original_len, capture_case_body, redact_headers,
+    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaFetchEvent,
+    KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent,
+    MotanConnectionEvent, MotanExchangeEvent, MysqlColumn, MysqlConnectionEvent,
+    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
+    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
+    ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
+    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
+    capture_case_body, redact_headers,
 };
 pub use replay::{
     DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
@@ -178,7 +183,6 @@ impl AppState {
         operations: Vec<String>,
         resources: Vec<String>,
         client_addr: Option<String>,
-        client_process: Option<crate::recorder::ProcessInfo>,
         target: Option<String>,
         reason: impl Into<String>,
     ) {
@@ -205,7 +209,6 @@ impl AppState {
             operations,
             resources,
             client_addr,
-            client_process,
             target,
             reason,
         });
@@ -221,7 +224,6 @@ impl AppState {
         operation_class: OperationClass,
         operation: impl Into<String>,
         client_addr: Option<String>,
-        client_process: Option<crate::recorder::ProcessInfo>,
         target: Option<String>,
         reason: impl Into<String>,
     ) {
@@ -262,14 +264,12 @@ impl AppState {
             operation_class: operation_class.as_str().to_string(),
             operation,
             client_addr,
-            client_process,
             target,
             reason,
         });
-        if let Err(error) = self.recorder().record(event.clone()).await {
-            warn!(error = %error, "failed to record access policy rejection");
-        }
-        self.record_active_case_dependency_if_relevant(&event).await;
+        let mut targets = self.capture_dependency_targets();
+        targets.bootstrap_open = false;
+        self.record_event_for_targets(event, targets);
     }
 
     pub fn dns_registry(&self) -> &FakeDnsRegistry {
@@ -299,10 +299,9 @@ impl AppState {
     pub(crate) fn try_register_active_case(
         &self,
         case: CaseContext,
-        upstream_pid: Option<u32>,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
         let bootstrap_was_open = self.inner.active_cases.is_bootstrap_open();
-        let guard = self.inner.active_cases.try_register(case, upstream_pid)?;
+        let guard = self.inner.active_cases.try_register(case)?;
         if bootstrap_was_open {
             self.schedule_bootstrap_dependency_summary("first active case");
         }
@@ -331,6 +330,27 @@ impl AppState {
 
     pub(crate) fn is_bootstrap_open(&self) -> bool {
         self.inner.active_cases.is_bootstrap_open()
+    }
+
+    pub(crate) fn begin_case_quiescing(&self) -> bool {
+        self.inner.active_cases.begin_quiescing()
+    }
+
+    pub(crate) fn recording_lifecycle_phase(&self) -> &'static str {
+        if self.inner.active_cases.is_quiescing() {
+            "quiescing"
+        } else {
+            "running"
+        }
+    }
+
+    pub(crate) async fn wait_for_active_case_shutdown_drain(&self) -> bool {
+        self.inner
+            .active_cases
+            .wait_for_no_active_case(Duration::from_millis(
+                self.config().recording.shutdown_case_drain_timeout_ms,
+            ))
+            .await
     }
 
     pub(crate) fn active_case_invalidation(&self, case_id: Uuid) -> Option<CaseInvalidation> {
@@ -384,61 +404,49 @@ impl AppState {
         }
     }
 
-    pub(crate) fn capture_dependency_targets(&self, event_pid: Option<u32>) -> DependencyTargets {
-        self.inner.active_cases.current_targets_for_event(event_pid)
+    pub(crate) fn capture_dependency_targets(&self) -> DependencyTargets {
+        self.inner.active_cases.current_targets_for_event()
     }
 
-    pub(crate) async fn record_dependency_if_relevant(&self, event: &RecorderEvent) {
-        let event_pid = event.client_pid();
-        let targets = self.capture_dependency_targets(event_pid);
-        self.record_dependency_for_targets(event, &targets).await;
+    pub(crate) fn record_event(&self, event: RecorderEvent) {
+        let targets = self.capture_dependency_targets();
+        self.record_event_for_targets(event, targets);
     }
 
-    pub(crate) async fn record_dependency_for_targets(
+    pub(crate) fn record_event_for_targets(
         &self,
-        event: &RecorderEvent,
-        targets: &DependencyTargets,
+        event: RecorderEvent,
+        targets: DependencyTargets,
     ) {
-        if targets.bootstrap_open
-            && let Err(err) = self
-                .recorder()
-                .append_bootstrap_dependency(event, "bootstrap_window")
-                .await
+        let background_rule_name = self
+            .config()
+            .recording
+            .background_dependencies
+            .iter()
+            .find(|rule| rule.matches(&event))
+            .map(|rule| rule.name().to_string());
+        let event_type = event.kind();
+        if let Err(err) = self
+            .recorder()
+            .try_record_event(event, targets, background_rule_name)
         {
             warn!(
                 error = %err,
-                "failed to append bootstrap dependency"
+                event_type,
+                "failed to enqueue recorder event"
             );
-        }
-        self.record_case_dependencies(event, targets).await;
-    }
-
-    async fn record_active_case_dependency_if_relevant(&self, event: &RecorderEvent) {
-        let event_pid = event.client_pid();
-        let targets = self.capture_dependency_targets(event_pid);
-        self.record_case_dependencies(event, &targets).await;
-    }
-
-    async fn record_case_dependencies(&self, event: &RecorderEvent, targets: &DependencyTargets) {
-        if targets.ambiguous_active_cases > 0 {
-            warn!(
-                active_cases = targets.ambiguous_active_cases,
-                event_type = event.kind(),
-                "skipping case dependency because active case ownership is ambiguous"
-            );
-        }
-        for (case, matched_by) in &targets.cases {
-            if let Err(err) = self
-                .recorder()
-                .append_case_dependency(case, event, matched_by)
-                .await
+            if let Some(case) =
+                self.inner
+                    .active_cases
+                    .invalidate_current_case(CaseInvalidation::new(
+                        "recording_writer_failure",
+                        format!("failed to enqueue {event_type} recorder event: {err}"),
+                    ))
             {
                 warn!(
-                    error = %err,
                     case_id = %case.id,
                     rule = %case.rule_name,
-                    matched_by,
-                    "failed to append case dependency"
+                    "active recording case invalidated by recorder writer failure"
                 );
             }
         }
@@ -490,24 +498,78 @@ impl AppState {
             "traffic recorder proxy started"
         );
 
-        let run_result = tokio::select! {
-            result = shutdown_signal() => {
-                result?;
-                info!("shutdown signal received");
-                Ok(())
-            }
-            Some(joined) = tasks.join_next() => {
-                joined.context("proxy task panicked")?
+        let mut registry_flush_interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + dns_mock::REGISTRY_FLUSH_INTERVAL,
+            dns_mock::REGISTRY_FLUSH_INTERVAL,
+        );
+        registry_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let shutdown = shutdown_signal();
+        tokio::pin!(shutdown);
+        let run_result = loop {
+            tokio::select! {
+                result = &mut shutdown => {
+                    result?;
+                    let newly_quiescing = self.begin_case_quiescing();
+                    let timeout_ms = self.config().recording.shutdown_case_drain_timeout_ms;
+                    info!(
+                        newly_quiescing,
+                        timeout_ms,
+                        "shutdown signal received; draining active recording case"
+                    );
+                    if self.wait_for_active_case_shutdown_drain().await {
+                        info!("active recording case shutdown drain completed");
+                    } else {
+                        warn!(
+                            timeout_ms,
+                            "active recording case shutdown drain timed out"
+                        );
+                    }
+                    break Ok(());
+                }
+                joined = tasks.join_next(), if !tasks.is_empty() => {
+                    let Some(joined) = joined else {
+                        continue;
+                    };
+                    break joined.context("proxy task panicked")?;
+                }
+                _ = registry_flush_interval.tick() => {
+                    match self.dns_registry().flush_if_dirty().await {
+                        Ok(true) => info!("flushed fake DNS registry"),
+                        Ok(false) => {}
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                "failed to flush fake DNS registry; pending updates will be retried"
+                            );
+                        }
+                    }
+                }
             }
         };
 
+        tasks.abort_all();
+        while let Some(joined) = tasks.join_next().await {
+            if let Err(error) = joined
+                && !error.is_cancelled()
+            {
+                warn!(error = %error, "proxy task failed while shutting down");
+            }
+        }
         self.kubectl_proxy_manager().shutdown().await;
-        let has_failed_cases = self
+        let finish_run_result = self
             .recorder()
             .finish_run()
             .await
-            .context("failed to finalize recording run")?;
+            .context("failed to finalize recording run");
+        let registry_flush_result = self
+            .dns_registry()
+            .flush_if_dirty()
+            .await
+            .context("failed to flush fake DNS registry during shutdown");
+
         run_result?;
+        let has_failed_cases = finish_run_result?;
+        registry_flush_result?;
         if has_failed_cases {
             anyhow::bail!("recording run finished with failed cases");
         }
@@ -543,4 +605,79 @@ fn build_upstream_tls_config(ca: &MitmCa) -> Result<Arc<ClientConfig>> {
             .with_root_certificates(roots)
             .with_no_client_auth(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::*;
+
+    fn http_dependency(authority: &str, uri: &str) -> RecorderEvent {
+        let response = vec![b'x'; 314_066];
+        RecorderEvent::HttpExchange(HttpExchangeEvent {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            client_addr: None,
+            scheme: "fake_ip_http".to_string(),
+            method: "GET".to_string(),
+            uri: uri.to_string(),
+            authority: Some(authority.to_string()),
+            request_headers: Default::default(),
+            request_body: capture_body(&[], 1),
+            response_status: Some(200),
+            response_headers: Some(Default::default()),
+            response_body: Some(capture_body(&response, response.len())),
+            discovered_tcp_targets: Vec::new(),
+            duration_ms: 10,
+            error: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn background_http_stays_in_traffic_but_not_case_dependencies() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.recording.output_dir = temp.path().join("recordings");
+        config.recording.traffic_jsonl = TrafficJsonlMode::Full;
+        config.recording.background_dependencies = vec![BackgroundDependencyRuleConfig::Http {
+            name: "config-refresh".to_string(),
+            authorities: vec!["config.api.demo.test".to_string()],
+            methods: vec!["GET".to_string()],
+            path_prefixes: vec!["/1/config/service".to_string()],
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
+        }];
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+        config.dns_mock.registry_path = temp.path().join("fake-dns.json");
+        config.http_gateway.ready.enabled = false;
+        let state = AppState::new(config).await.unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: None,
+        };
+        let guard = state.try_register_active_case(case.clone()).unwrap();
+
+        let background = http_dependency(
+            "config.api.demo.test",
+            "/1/config/service?action=lookup&group=reload.properties",
+        );
+        state.record_event(background);
+        drop(guard);
+        state.recorder().publish_case(&case).await.unwrap();
+        state.recorder().finish_run().await.unwrap();
+
+        let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+            .await
+            .unwrap();
+        assert!(traffic.contains("config.api.demo.test"));
+        assert!(traffic.contains("\"stored_len\":314066"));
+        let dependencies =
+            tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
+                .await
+                .unwrap();
+        assert!(dependencies.is_empty());
+    }
 }

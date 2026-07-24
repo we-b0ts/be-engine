@@ -1,4 +1,5 @@
 use super::*;
+use crate::DependencyExchangeOutcome;
 
 #[derive(Debug, Default)]
 pub(in crate::replay) struct ReplayEvents {
@@ -19,7 +20,8 @@ pub(in crate::replay) struct ReplayExchange {
     pub(in crate::replay) case_id: Option<String>,
     pub(in crate::replay) identity: MysqlDependencyIdentity,
     pub(in crate::replay) record: RecordedMysqlExchange,
-    pub(in crate::replay) consumed: bool,
+    pub(in crate::replay) status: ReplayExchangeStatus,
+    pub(in crate::replay) timing: ReplayExchangeTiming,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +31,8 @@ pub(in crate::replay) struct MatchedExchange {
     #[allow(dead_code)]
     pub(in crate::replay) index: usize,
     pub(in crate::replay) record: RecordedMysqlExchange,
+    pub(in crate::replay) timing: ReplayExchangeTiming,
+    pub(in crate::replay) report: MatchedQueryReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,6 +71,10 @@ pub(in crate::replay) struct RecordedMysqlExchange {
     pub(in crate::replay) sql: Option<String>,
     pub(in crate::replay) params: Option<Vec<RecordedMysqlValue>>,
     pub(in crate::replay) response: RecordedMysqlResponse,
+    #[serde(default)]
+    pub(in crate::replay) outcome: DependencyExchangeOutcome,
+    #[serde(default)]
+    pub(in crate::replay) duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]

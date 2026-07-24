@@ -97,6 +97,118 @@ async fn completed_exchange_accepts_abortive_client_close() {
 }
 
 #[tokio::test]
+async fn pending_exchange_records_client_termination_as_replay_safe() {
+    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let upstream_addr = upstream.peer_addr().unwrap();
+    let handler = spawn_handler(proxy_client, proxy_upstream, state.clone(), upstream_addr);
+
+    let request = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
+    client.write_all(request).await.unwrap();
+    let mut received_request = vec![0_u8; request.len()];
+    upstream.read_exact(&mut received_request).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    client.shutdown().await.unwrap();
+    drop(client);
+
+    let mut eof = [0_u8; 1];
+    assert_eq!(upstream.read(&mut eof).await.unwrap(), 0);
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    let exchange = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find(|value| value["event_type"] == "redis_exchange")
+        .unwrap();
+    assert_eq!(exchange["outcome"], "client_terminated");
+    assert_eq!(exchange["response"]["original_len"], 0);
+    assert_eq!(exchange["replay_safe"], true);
+    assert!(exchange["duration_ms"].as_u64().unwrap() >= 50);
+}
+
+#[tokio::test]
+async fn pending_quit_is_a_safe_debug_only_terminal_exchange() {
+    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let upstream_addr = upstream.peer_addr().unwrap();
+    let handler = spawn_handler(proxy_client, proxy_upstream, state.clone(), upstream_addr);
+
+    let request = b"*1\r\n$4\r\nQUIT\r\n";
+    client.write_all(request).await.unwrap();
+    let mut received_request = vec![0_u8; request.len()];
+    upstream.read_exact(&mut received_request).await.unwrap();
+    assert_eq!(received_request, request);
+
+    drop(upstream);
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    client.shutdown().await.unwrap();
+    drop(client);
+
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    let events = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .collect::<Vec<_>>();
+    let exchange = events
+        .iter()
+        .find(|value| value["event_type"] == "redis_exchange")
+        .unwrap();
+    assert_eq!(exchange["command"], "QUIT");
+    assert_eq!(exchange["outcome"], "no_response");
+    assert_eq!(exchange["replay_safe"], true);
+    assert_eq!(exchange["parse_warnings"], serde_json::json!([]));
+    let closed = events
+        .iter()
+        .find(|value| value["event_type"] == "redis_connection" && value["phase"] == "closed")
+        .unwrap();
+    assert_eq!(closed["replay_safe"], true);
+
+    state
+        .recorder()
+        .flush_bootstrap_dependency_files()
+        .await
+        .unwrap();
+    let semantic = tokio::fs::read_to_string(
+        state
+            .recorder()
+            .run_dir
+            .join("bootstrap-dependencies.jsonl"),
+    )
+    .await
+    .unwrap();
+    assert!(!semantic.contains("\"command\":\"QUIT\""));
+    let debug = tokio::fs::read_to_string(
+        state
+            .recorder()
+            .run_dir
+            .join("bootstrap-dependencies-debug.jsonl"),
+    )
+    .await
+    .unwrap();
+    assert!(debug.contains("\"command\":\"QUIT\""));
+}
+
+#[tokio::test]
 async fn partial_request_rejects_abortive_client_close() {
     let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
     let (mut client, proxy_client) = tcp_pair().await;
@@ -154,7 +266,6 @@ fn spawn_handler(
         state,
         ConnectionContext {
             client_addr: None,
-            client_process: None,
             target_host: "redis.test".to_string(),
             target_port: 6379,
             target_addr: "redis.test:6379".to_string(),

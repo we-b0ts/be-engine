@@ -9,12 +9,14 @@ pub(super) struct MemcachedDependencySummary {
     exchanges: usize,
     unsafe_exchanges: usize,
     errors: usize,
+    client_terminated: usize,
     no_response: usize,
     quiet: usize,
     noreply: usize,
     hits: usize,
     misses: usize,
     commands: BTreeMap<String, usize>,
+    outcomes: BTreeMap<String, usize>,
     response_statuses: BTreeMap<String, usize>,
     wire_protocols: BTreeMap<String, usize>,
     targets: BTreeMap<String, usize>,
@@ -54,9 +56,13 @@ impl MemcachedSummaryBuilder {
         if json_bool(value, "noreply").unwrap_or(false) {
             self.summary.noreply += 1;
         }
+        if json_str(value, "outcome") == Some("client_terminated") {
+            self.summary.client_terminated += 1;
+        }
         let command = json_str(value, "command");
         let status = json_str(value, "response_status").map(normalize_response_status);
         increment_string(&mut self.summary.commands, command);
+        increment_string(&mut self.summary.outcomes, json_str(value, "outcome"));
         increment_string(&mut self.summary.response_statuses, status.as_deref());
         increment_string(
             &mut self.summary.wire_protocols,

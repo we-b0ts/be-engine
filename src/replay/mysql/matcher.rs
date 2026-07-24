@@ -112,7 +112,7 @@ impl ReplayState {
             for index in 0..self.mysql.exchanges.len() {
                 let exchange = &self.mysql.exchanges[index];
                 if exchange.source != source
-                    || exchange.consumed
+                    || !exchange.status.is_available()
                     || exchange.record.command != command
                 {
                     continue;
@@ -153,7 +153,12 @@ impl ReplayState {
                     continue;
                 };
                 let exchange = self.mysql.exchanges[index].clone();
-                self.mysql.exchanges[index].consumed = true;
+                self.mysql.exchanges[index].status =
+                    if exchange.record.outcome.is_client_terminated() {
+                        ReplayExchangeStatus::AwaitingClientTermination
+                    } else {
+                        ReplayExchangeStatus::Responding
+                    };
                 if let Some(policy) = &mut self.replay_policy {
                     policy.commit(active_case_id.as_deref(), policy_decision);
                 }
@@ -169,15 +174,12 @@ impl ReplayState {
                     params: params.map(ToOwned::to_owned),
                     status: exchange.record.response.status.clone(),
                 };
-                push_success_detail(
-                    &mut self.mysql.events.matched_query_count,
-                    &mut self.mysql.events.matched_queries,
-                    matched,
-                );
                 return Some(MatchedExchange {
                     source: exchange.source,
                     index,
                     record: exchange.record.clone(),
+                    timing: exchange.timing,
+                    report: matched,
                 });
             }
         }
@@ -195,7 +197,7 @@ impl ReplayState {
         for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
             for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
                 if exchange.source != source
-                    || exchange.consumed
+                    || !exchange.status.is_available()
                     || exchange.record.command != command
                 {
                     continue;
@@ -210,7 +212,7 @@ impl ReplayState {
                 if recorded_sql != normalized_sql {
                     continue;
                 }
-                exchange.consumed = true;
+                exchange.status = ReplayExchangeStatus::Consumed;
                 return Some((exchange.source, index));
             }
         }
@@ -265,7 +267,7 @@ impl ReplayState {
             .exchanges
             .iter()
             .enumerate()
-            .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
+            .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
             .map(|(index, exchange)| RecordedExchangeSummary {
                 index,
                 case_id: exchange.case_id.clone(),
@@ -281,5 +283,35 @@ impl ReplayState {
 
     fn active_case_matches(&self, exchange: &ReplayExchange) -> bool {
         active_case_matches(self.active_case_id.as_deref(), exchange)
+    }
+
+    pub(in crate::replay) fn complete_exchange(&mut self, matched: &MatchedExchange) {
+        let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) else {
+            return;
+        };
+        exchange.status = ReplayExchangeStatus::Consumed;
+        push_success_detail(
+            &mut self.mysql.events.matched_query_count,
+            &mut self.mysql.events.matched_queries,
+            matched.report.clone(),
+        );
+    }
+
+    pub(in crate::replay) fn fail_exchange(
+        &mut self,
+        matched: &MatchedExchange,
+        identity: &ReplaySessionIdentity,
+        reason: &str,
+    ) {
+        if let Some(exchange) = self.mysql.exchanges.get_mut(matched.index) {
+            exchange.status = ReplayExchangeStatus::Failed;
+        }
+        self.record_unmatched(
+            identity,
+            &matched.record.command,
+            matched.record.sql.as_deref(),
+            matched.record.params.as_deref(),
+            reason,
+        );
     }
 }

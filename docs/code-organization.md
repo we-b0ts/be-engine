@@ -165,8 +165,9 @@ backstop, not a replacement for the ownership and cohesion review.
 ## Current Boundaries
 
 - supported dependency protocols are peer domains: MySQL, Redis, Memcached,
-  and Kafka; do not group protocols by a presumed business use such as cache
-- top-level `mysql`, `redis`, `memcached`, and `kafka` modules own reusable
+  Kafka, and Motan; do not group protocols by a presumed business use such as
+  cache or RPC
+- top-level `mysql`, `redis`, `memcached`, `kafka`, and `motan` modules own reusable
   protocol parsing and encoding only; they do not own recording or replay
 - top-level `http` owns reusable HTTP forwarding policy; `proxy/http` and
   `gateway/http` own their respective runtimes, while `recorder/http` owns

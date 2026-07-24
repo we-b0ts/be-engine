@@ -9,7 +9,9 @@ pub(super) struct RedisDependencySummary {
     exchanges: usize,
     unsafe_exchanges: usize,
     errors: usize,
+    client_terminated: usize,
     commands: BTreeMap<String, usize>,
+    outcomes: BTreeMap<String, usize>,
     response_kinds: BTreeMap<String, usize>,
     targets: BTreeMap<String, usize>,
     resp_versions: BTreeMap<String, usize>,
@@ -39,7 +41,11 @@ impl RedisSummaryBuilder {
         if json_str(value, "response_kind") == Some("error") {
             self.summary.errors += 1;
         }
+        if json_str(value, "outcome") == Some("client_terminated") {
+            self.summary.client_terminated += 1;
+        }
         increment_string(&mut self.summary.commands, json_str(value, "command"));
+        increment_string(&mut self.summary.outcomes, json_str(value, "outcome"));
         increment_string(
             &mut self.summary.response_kinds,
             json_str(value, "response_kind"),

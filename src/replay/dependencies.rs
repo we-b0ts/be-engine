@@ -10,7 +10,10 @@ pub(super) enum DependencyRecord {
     MemcachedExchange(Box<memcached::RecordedExchange>),
     KafkaConnection(Box<kafka::RecordedKafkaConnection>),
     KafkaProduce(Box<kafka::RecordedKafkaProduce>),
+    KafkaFetch(Box<kafka::RecordedKafkaFetch>),
     KafkaDelivery(Box<kafka::RecordedKafkaDelivery>),
+    MotanConnection(Box<motan::RecordedConnection>),
+    MotanExchange(Box<motan::RecordedExchange>),
     ProxyError(Box<RecordedProxyError>),
     #[serde(other)]
     Other,
@@ -32,6 +35,7 @@ pub(super) async fn load_dependency_file(
     redis: &mut redis::RedisReplayState,
     memcached: &mut memcached::MemcachedReplayState,
     kafka: &mut kafka::KafkaReplayState,
+    motan: &mut motan::MotanReplayState,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
 ) -> Result<()> {
@@ -72,9 +76,13 @@ pub(super) async fn load_dependency_file(
             DependencyRecord::KafkaConnection(connection) => {
                 kafka.register_connection((**connection).clone(), targets)?;
             }
+            DependencyRecord::MotanConnection(connection) => {
+                motan.register_connection((**connection).clone(), targets)?;
+            }
             DependencyRecord::ProxyError(error) => {
                 redis::RedisReplayState::reject_proxy_error(error)?;
                 memcached::MemcachedReplayState::reject_proxy_error(error)?;
+                motan::MotanReplayState::reject_proxy_error(error)?;
                 if error.protocol == "kafka" {
                     return Err(anyhow!(
                         "unsafe Kafka dependency proxy error: {}",
@@ -104,14 +112,23 @@ pub(super) async fn load_dependency_file(
                 kafka.register_produce(*exchange, source, case_id, targets)?;
                 continue;
             }
+            DependencyRecord::KafkaFetch(exchange) => {
+                kafka.register_fetch(*exchange, source, case_id, targets)?;
+                continue;
+            }
             DependencyRecord::KafkaDelivery(exchange) => {
                 kafka.register_delivery(*exchange, source, case_id, targets)?;
+                continue;
+            }
+            DependencyRecord::MotanExchange(exchange) => {
+                motan.register_exchange(*exchange, source, case_id, targets)?;
                 continue;
             }
             DependencyRecord::MysqlConnection(_)
             | DependencyRecord::RedisConnection(_)
             | DependencyRecord::MemcachedConnection(_)
             | DependencyRecord::KafkaConnection(_)
+            | DependencyRecord::MotanConnection(_)
             | DependencyRecord::ProxyError(_)
             | DependencyRecord::Other => continue,
             DependencyRecord::MysqlExchange(_) => {}
@@ -139,13 +156,59 @@ pub(super) async fn load_dependency_file(
                 )
             })?;
         register_replay_target(targets, &identity.target, ReplayProtocol::Mysql)?;
+        let timing = ReplayExchangeTiming::from_recorded(exchange.duration_ms, exchange.outcome);
         exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
             identity,
             record: *exchange,
-            consumed: false,
+            status: ReplayExchangeStatus::Available,
+            timing,
         });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "event_type", rename_all = "snake_case")]
+enum DebugDependencyRecord {
+    MotanExchange(Box<motan::RecordedExchange>),
+    #[serde(other)]
+    Other,
+}
+
+pub(super) async fn load_motan_debug_file(
+    path: &Path,
+    motan: &mut motan::MotanReplayState,
+    targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+) -> Result<()> {
+    let raw = match tokio::fs::read_to_string(path).await {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to read dependency debug replay file {}",
+                    path.display()
+                )
+            });
+        }
+    };
+    for (line_index, line) in raw.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let record: DebugDependencyRecord = serde_json::from_str(line).with_context(|| {
+            format!(
+                "failed to parse dependency debug replay line {} in {}",
+                line_index + 1,
+                path.display()
+            )
+        })?;
+        if let DebugDependencyRecord::MotanExchange(exchange) = record {
+            motan.register_heartbeat(*exchange, targets)?;
+        }
     }
     Ok(())
 }

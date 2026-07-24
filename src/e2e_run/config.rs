@@ -17,6 +17,7 @@ use crate::replay::validate_replay_policy;
 
 const CONFIG_VERSION: u32 = 4;
 const DEFAULT_LOCAL_ROOT: &str = "local";
+const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
 pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
     let target_root = fs::canonicalize(&options.target_root).with_context(|| {
@@ -36,7 +37,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     }
 
     let traffic_e2e_dir = target_root.join(".traffic-e2e");
-    let config_path = traffic_e2e_dir.join("e2e.yaml");
+    let config_path = traffic_e2e_dir.join(PROJECT_CONFIG_FILE);
     let existing = match fs::symlink_metadata(&config_path) {
         Ok(metadata) => Some(metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -134,7 +135,7 @@ pub(super) fn resolve_layout(
     let target_root = fs::canonicalize(target_root)
         .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
     let traffic_e2e_dir = target_root.join(".traffic-e2e");
-    let config_path = traffic_e2e_dir.join("e2e.yaml");
+    let config_path = traffic_e2e_dir.join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
     let case_source = fs::canonicalize(case_source)
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
@@ -443,7 +444,11 @@ mod tests {
 
         assert!(!result.replaced);
         assert!(!result.recorder_feedback);
-        assert_eq!(result.config, target.path().join(".traffic-e2e/e2e.yaml"));
+        assert_eq!(
+            result.config,
+            target.path().join(".traffic-e2e/project.yaml")
+        );
+        assert!(!target.path().join(".traffic-e2e/e2e.yaml").exists());
         let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
         assert_eq!(config.version, CONFIG_VERSION);
         assert_eq!(config.project_cli, PathBuf::from("scripts/project-cli"));
@@ -566,7 +571,7 @@ mod tests {
     fn config_rejects_zero_replay_startup_timeout() {
         let target = target();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/e2e.yaml");
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
         let yaml = fs::read_to_string(&config_path).unwrap().replace(
             "replay_startup_timeout_seconds: 60",
             "replay_startup_timeout_seconds: 0",
@@ -587,7 +592,7 @@ mod tests {
     fn config_rejects_zero_api_verification_thresholds() {
         let target = target();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/e2e.yaml");
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
         let yaml = fs::read_to_string(&config_path).unwrap().replace(
             "consecutive_successful_runs: 3",
             "consecutive_successful_runs: 0",
@@ -648,7 +653,7 @@ overrides:
     fn config_defaults_replay_startup_timeout_when_field_is_missing() {
         let target = target();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/e2e.yaml");
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
         let yaml = fs::read_to_string(&config_path)
             .unwrap()
             .lines()
@@ -671,7 +676,7 @@ overrides:
     fn config_defaults_api_verification_when_field_is_missing() {
         let target = target();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/e2e.yaml");
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
         let yaml = fs::read_to_string(&config_path).unwrap().replace(
             "api_verification:\n  consecutive_successful_runs: 3\n  successful_cases: 3\n",
             "",
@@ -705,7 +710,7 @@ overrides:
                 .to_string()
                 .contains("does not exist as a local branch or origin remote-tracking branch")
         );
-        assert!(!target.path().join(".traffic-e2e/e2e.yaml").exists());
+        assert!(!target.path().join(".traffic-e2e/project.yaml").exists());
     }
 
     #[test]
@@ -736,7 +741,7 @@ overrides:
         let target = target();
         initialize(options(target.path())).unwrap();
         fs::write(
-            target.path().join(".traffic-e2e/e2e.yaml"),
+            target.path().join(".traffic-e2e/project.yaml"),
             "version: 2\n\
              project_cli: scripts/project-cli\n\
              replay_policy: config/replay.yaml\n\
@@ -764,17 +769,20 @@ overrides:
                 .to_string()
                 .contains("must be ignored by the target repository")
         );
-        assert!(!target.path().join(".traffic-e2e/e2e.yaml").exists());
+        assert!(!target.path().join(".traffic-e2e/project.yaml").exists());
     }
 
     #[test]
     fn missing_config_points_to_init_command() {
         let target = target();
+        fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
+        fs::write(target.path().join(".traffic-e2e/e2e.yaml"), "version: 4\n").unwrap();
         let cases = target.path().join("cases/run");
         fs::create_dir_all(&cases).unwrap();
 
         let error = resolve_layout(target.path(), &cases, None).unwrap_err();
 
+        assert!(error.to_string().contains("project.yaml"));
         assert!(error.to_string().contains("traffic-e2e init"));
         assert!(error.to_string().contains("--project-cli"));
         assert!(error.to_string().contains("--replay-policy"));

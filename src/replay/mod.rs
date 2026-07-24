@@ -20,11 +20,13 @@ use uuid::Uuid;
 
 use crate::MitmCa;
 mod assertion;
+mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
 mod control;
 mod dependencies;
 mod dns;
+mod exchange;
 mod http;
 mod kafka;
 #[cfg(test)]
@@ -32,6 +34,7 @@ mod kafka;
 mod legacy_tests;
 mod memcached;
 mod model;
+mod motan;
 mod mysql;
 mod policy;
 mod redis;
@@ -40,6 +43,7 @@ mod report;
 use control::*;
 use dependencies::*;
 use dns::*;
+use exchange::*;
 use model::*;
 use mysql::*;
 use policy::*;
@@ -184,6 +188,7 @@ impl ReplayRuntime {
         let mut redis = redis::RedisReplayState::default();
         let mut memcached = memcached::MemcachedReplayState::default();
         let mut kafka = kafka::KafkaReplayState::default();
+        let mut motan = motan::MotanReplayState::default();
         let mut targets = BTreeMap::new();
         let mut connection_identities = HashMap::new();
         let fake_cidr = Ipv4Cidr::parse(&config.fake_cidr)?;
@@ -207,10 +212,14 @@ impl ReplayRuntime {
                 &mut redis,
                 &mut memcached,
                 &mut kafka,
+                &mut motan,
                 &mut targets,
                 &mut connection_identities,
             )
             .await?;
+        }
+        if let Some(path) = find_upward(&root_dir, "bootstrap-dependencies-debug.jsonl") {
+            load_motan_debug_file(&path, &mut motan, &mut targets).await?;
         }
         for (index, case) in cases.values().enumerate() {
             load_dependency_file(
@@ -222,8 +231,15 @@ impl ReplayRuntime {
                 &mut redis,
                 &mut memcached,
                 &mut kafka,
+                &mut motan,
                 &mut targets,
                 &mut connection_identities,
+            )
+            .await?;
+            load_motan_debug_file(
+                &case.dir.join("dependencies-debug.jsonl"),
+                &mut motan,
+                &mut targets,
             )
             .await?;
             let loaded_cases = index + 1;
@@ -295,6 +311,7 @@ impl ReplayRuntime {
             redis,
             memcached,
             kafka,
+            motan,
             http_events: http::HttpReplayEvents::default(),
             report_write_lock: Arc::new(Mutex::new(())),
             ca_cert_path,
@@ -388,6 +405,7 @@ struct ReplayState {
     redis: redis::RedisReplayState,
     memcached: memcached::MemcachedReplayState,
     kafka: kafka::KafkaReplayState,
+    motan: motan::MotanReplayState,
     http_events: http::HttpReplayEvents,
     report_write_lock: Arc<Mutex<()>>,
     ca_cert_path: PathBuf,
@@ -449,6 +467,7 @@ impl ReplayState {
                 redis: self.redis.snapshot(),
                 memcached: self.memcached.snapshot(),
                 kafka: self.kafka.snapshot(),
+                motan: self.motan.snapshot(),
             },
             ca_cert_path: self.ca_cert_path.display().to_string(),
             replay_policy: self.replay_policy.as_ref().map(ReplayPolicyRuntime::report),
@@ -523,12 +542,35 @@ async fn handle_gateway_connection(
             )
             .await
         }
-        Some(ReplayProtocol::Mysql) | None => {
+        Some(ReplayProtocol::Motan) => {
+            motan::handle_connection(
+                stream,
+                target.context("Motan replay connection has no target")?,
+                state,
+                report_writer,
+            )
+            .await
+        }
+        Some(ReplayProtocol::Mysql) => {
             let target = target.map(|target| TargetKey {
                 host: target.host,
                 port: target.port,
             });
             mysql::handle_connection(stream, peer_addr, target, state, report_writer).await
+        }
+        None => {
+            let registered_targets = state.lock().await.targets.len();
+            if registered_targets == 0 {
+                return mysql::handle_connection(stream, peer_addr, None, state, report_writer)
+                    .await;
+            }
+            let original = original_dst(&stream)
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|error| format!("unavailable ({error})"));
+            Err(anyhow!(
+                "no replay target is registered for intercepted destination {original}; \
+                 loaded {registered_targets} target mappings"
+            ))
         }
     }
 }
@@ -539,19 +581,25 @@ async fn replay_target_for_stream(
 ) -> Option<ReplayTarget> {
     let original = original_dst(stream).ok();
     let state = state.lock().await;
+    replay_target_for_original(original, &state.targets)
+}
+
+fn replay_target_for_original(
+    original: Option<SocketAddr>,
+    targets: &[ReplayTarget],
+) -> Option<ReplayTarget> {
     if let Some(SocketAddr::V4(addr)) = original {
         let ip = *addr.ip();
         let port = addr.port();
-        if let Some(target) = state
-            .targets
+        if let Some(target) = targets
             .iter()
             .find(|target| target.fake_ip == ip && target.port == port)
         {
             return Some(target.clone());
         }
     }
-    if state.targets.len() == 1 {
-        let target = &state.targets[0];
+    if targets.len() == 1 {
+        let target = &targets[0];
         return Some(target.clone());
     }
     None

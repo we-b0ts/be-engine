@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
+use super::BackgroundDependencyRuleConfig;
 use crate::mysql::operation::MysqlWriteOperation;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -11,15 +12,19 @@ use crate::mysql::operation::MysqlWriteOperation;
 pub struct RecordingConfig {
     pub output_dir: PathBuf,
     pub max_body_bytes: usize,
+    pub max_decoded_body_bytes: Option<usize>,
     pub traffic_jsonl: TrafficJsonlMode,
     pub jsonl_buffer_capacity_bytes: usize,
     pub jsonl_flush_interval_ms: u64,
+    pub writer_queue_capacity: usize,
     #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
+    pub shutdown_case_drain_timeout_ms: u64,
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
     pub access_rules: Vec<RecordingAccessRuleConfig>,
+    pub background_dependencies: Vec<BackgroundDependencyRuleConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -89,15 +94,31 @@ impl RecordingAccessPolicy {
 }
 
 impl RecordingConfig {
+    pub fn decoded_body_limit(&self) -> usize {
+        self.max_decoded_body_bytes.unwrap_or(self.max_body_bytes)
+    }
+
     pub(super) fn validate(&self) -> Result<()> {
+        if self.max_body_bytes == 0 {
+            bail!("recording.max_body_bytes must be greater than zero");
+        }
+        if self.max_decoded_body_bytes == Some(0) {
+            bail!("recording.max_decoded_body_bytes must be greater than zero");
+        }
         if self.jsonl_buffer_capacity_bytes == 0 {
             bail!("recording.jsonl_buffer_capacity_bytes must be greater than zero");
         }
         if self.jsonl_flush_interval_ms == 0 {
             bail!("recording.jsonl_flush_interval_ms must be greater than zero");
         }
+        if self.writer_queue_capacity == 0 {
+            bail!("recording.writer_queue_capacity must be greater than zero");
+        }
         if self.case_dependency_drain_timeout_ms == 0 {
             bail!("recording.case_dependency_drain_timeout_ms must be greater than zero");
+        }
+        if self.shutdown_case_drain_timeout_ms == 0 {
+            bail!("recording.shutdown_case_drain_timeout_ms must be greater than zero");
         }
         let mut names = HashSet::new();
         for rule in &self.access_rules {
@@ -136,6 +157,7 @@ impl RecordingConfig {
                 }
             }
         }
+        super::background_dependencies::validate(&self.background_dependencies)?;
         Ok(())
     }
 }
@@ -174,11 +196,14 @@ impl Default for RecordingConfig {
         Self {
             output_dir: PathBuf::from("./recordings"),
             max_body_bytes: 1024 * 1024,
+            max_decoded_body_bytes: None,
             traffic_jsonl: TrafficJsonlMode::Full,
             jsonl_buffer_capacity_bytes: 256 * 1024,
             jsonl_flush_interval_ms: 1_000,
+            writer_queue_capacity: 65_536,
             case_dependency_post_response_window_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,
+            shutdown_case_drain_timeout_ms: 20_000,
             redact_headers: vec![
                 "authorization".to_string(),
                 "cookie".to_string(),
@@ -188,6 +213,7 @@ impl Default for RecordingConfig {
             ],
             access_policy: RecordingAccessPolicy::Unrestricted,
             access_rules: Vec::new(),
+            background_dependencies: Vec::new(),
         }
     }
 }
@@ -230,6 +256,23 @@ mod tests {
 
         config.recording.case_dependency_drain_timeout_ms = 0;
         assert!(config.validate().is_err());
+
+        config.recording.case_dependency_drain_timeout_ms = 1;
+        config.recording.shutdown_case_drain_timeout_ms = 0;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn decoded_body_limit_defaults_to_wire_limit() {
+        let mut config = AppConfig::default();
+        config.recording.max_body_bytes = 1234;
+        assert_eq!(config.recording.decoded_body_limit(), 1234);
+
+        config.recording.max_decoded_body_bytes = Some(5678);
+        assert_eq!(config.recording.decoded_body_limit(), 5678);
+
+        config.recording.max_decoded_body_bytes = Some(0);
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -256,6 +299,7 @@ mod tests {
             traffic_jsonl = "off"
             jsonl_buffer_capacity_bytes = 524288
             jsonl_flush_interval_ms = 250
+            writer_queue_capacity = 8192
             "#,
         )
         .unwrap();
@@ -263,7 +307,24 @@ mod tests {
         assert_eq!(config.recording.traffic_jsonl, TrafficJsonlMode::Off);
         assert_eq!(config.recording.jsonl_buffer_capacity_bytes, 524_288);
         assert_eq!(config.recording.jsonl_flush_interval_ms, 250);
+        assert_eq!(config.recording.writer_queue_capacity, 8_192);
         config.validate().unwrap();
+    }
+
+    #[test]
+    fn rejects_zero_writer_queue_capacity() {
+        let config = RecordingConfig {
+            writer_queue_capacity: 0,
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("recording.writer_queue_capacity must be greater than zero")
+        );
     }
 
     #[test]

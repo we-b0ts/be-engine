@@ -437,6 +437,9 @@ async fn http_gateway_keeps_matched_case_active_after_downstream_disconnect() {
     )
     .unwrap();
     assert_eq!(error["reason"], "downstream_disconnected");
+    assert_eq!(error["context"]["category"], "client_or_network_disconnect");
+    assert_eq!(error["context"]["recorder_phase"], "running");
+    assert!(error["context"]["elapsed_ms"].as_u64().is_some());
     let admission: Value = serde_json::from_str(
         &std::fs::read_to_string(failed_cases[0].join("admission.json")).unwrap(),
     )

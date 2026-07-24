@@ -8,11 +8,14 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
 
 mod allowed_unused_http;
+mod background_dependencies;
+mod background_feedback;
 mod case_limits;
 mod compare;
 mod dns;
 pub(crate) mod edit;
 mod feedback;
+mod http_gateway;
 mod http_response_rewrite;
 mod recording;
 mod rule_document;
@@ -22,6 +25,11 @@ pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     plan_allowed_unused_http_hosts,
 };
+pub use background_dependencies::BackgroundDependencyRuleConfig;
+pub use background_feedback::{
+    BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
+    plan_background_dependency,
+};
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use compare::CompareConfig;
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
@@ -29,6 +37,7 @@ pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
     plan_case_path_pattern_feedback,
 };
+pub use http_gateway::{HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig};
 pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
@@ -63,6 +72,7 @@ pub struct AppConfig {
 pub struct TcpGatewayConfig {
     pub enabled: bool,
     pub listen: SocketAddr,
+    pub backlog: u32,
     pub record_http: bool,
     pub mitm_https: bool,
     pub https_ports: Vec<u16>,
@@ -92,6 +102,7 @@ pub enum TcpApplicationProtocol {
     Redis,
     Memcached,
     Kafka,
+    Motan,
     Raw,
 }
 
@@ -117,6 +128,9 @@ pub struct HttpGatewayConfig {
     pub listen: SocketAddr,
     pub matched_upstream: String,
     pub fallback_upstream: String,
+    pub fallback_mode: HttpGatewayFallbackMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fixed_response: Option<HttpGatewayFixedResponseConfig>,
     pub preserve_host: bool,
     pub ready: HttpGatewayReadyConfig,
     pub case_limits: HttpGatewayCaseLimitsConfig,
@@ -211,6 +225,7 @@ impl AppConfig {
         self.dns_mock.validate()?;
         self.recording.validate()?;
         self.http_response_rewrite.validate()?;
+        http_gateway::validate_config(&self.http_gateway)?;
         allowed_unused_http::validate_config(&self.http_gateway)?;
         self.http_gateway
             .case_limits
@@ -220,6 +235,9 @@ impl AppConfig {
             .validate(&self.http_gateway.rules)?;
         if let Some(compare) = &self.compare {
             compare.validate(&self.http_gateway)?;
+        }
+        if self.tcp_gateway.backlog == 0 || self.tcp_gateway.backlog > i32::MAX as u32 {
+            bail!("tcp_gateway.backlog must be between 1 and {}", i32::MAX);
         }
         if self.http_response_rewrite.enabled
             && (!self.dns_mock.enabled
@@ -252,6 +270,7 @@ impl Default for TcpGatewayConfig {
             listen: "127.0.0.1:15001"
                 .parse()
                 .expect("valid default TCP gateway listen address"),
+            backlog: 65_535,
             record_http: true,
             mitm_https: true,
             https_ports: Vec::new(),
@@ -293,6 +312,8 @@ impl Default for HttpGatewayConfig {
                 .expect("valid default HTTP gateway listen address"),
             matched_upstream: "http://127.0.0.1:8081".to_string(),
             fallback_upstream: "http://127.0.0.1:8082".to_string(),
+            fallback_mode: HttpGatewayFallbackMode::Upstream,
+            fixed_response: None,
             preserve_host: true,
             ready: HttpGatewayReadyConfig::default(),
             case_limits: HttpGatewayCaseLimitsConfig::default(),
@@ -401,6 +422,7 @@ mod tests {
         assert!(!config.http.enabled);
         assert!(!config.mysql.enabled);
         assert!(!config.mysql.record_raw_packets);
+        assert_eq!(config.tcp_gateway.backlog, 65_535);
         assert_eq!(
             config.http_gateway.case_limits.default,
             case_limits::DEFAULT_MAX_CASES_PER_PATTERN
@@ -409,6 +431,7 @@ mod tests {
         assert_eq!(config.recording.traffic_jsonl, TrafficJsonlMode::Full);
         assert_eq!(config.recording.jsonl_buffer_capacity_bytes, 256 * 1024);
         assert_eq!(config.recording.jsonl_flush_interval_ms, 1_000);
+        assert_eq!(config.recording.writer_queue_capacity, 65_536);
         assert_eq!(
             config.recording.case_dependency_post_response_window_ms,
             100
@@ -471,6 +494,19 @@ mod tests {
         assert_eq!(
             config.tcp_gateway.protocol_detection.overrides[0].protocol,
             TcpApplicationProtocol::Redis
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_tcp_gateway_backlog() {
+        let mut config = AppConfig::default();
+        config.tcp_gateway.backlog = 0;
+
+        let error = config.validate().unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            format!("tcp_gateway.backlog must be between 1 and {}", i32::MAX)
         );
     }
 
@@ -571,6 +607,7 @@ mod tests {
             [tcp_gateway]
             enabled = true
             listen = "127.0.0.1:15001"
+            backlog = 4096
             record_http = true
             mitm_https = true
             https_ports = [443, 8443]
@@ -586,6 +623,7 @@ mod tests {
         assert!(config.dns_mock.enabled);
         assert!(config.tcp_gateway.enabled);
         assert!(config.udp_gateway.enabled);
+        assert_eq!(config.tcp_gateway.backlog, 4096);
         assert!(config.tcp_gateway.mitm_https);
         assert_eq!(config.tcp_gateway.https_ports, vec![443, 8443]);
         assert_eq!(config.udp_gateway.listen.to_string(), "127.0.0.1:15002");

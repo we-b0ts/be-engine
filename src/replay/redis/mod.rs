@@ -10,19 +10,26 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::DependencyExchangeOutcome;
 use crate::redis::{
     BufferedReader as RedisBufferedReader, RedisCommand, read_frame as read_redis_frame,
     redis_command,
 };
 
 use super::{
-    ReplayProtocol, ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey,
-    normalize_host, push_success_detail, register_replay_target,
+    ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
+    ReplayState, ReplayTarget, TargetKey, normalize_host, push_success_detail,
+    register_replay_target,
 };
 
 mod builtins;
+use super::command_matching::{
+    CaseConnectionBinding, CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic,
+    preferred_match, unmatched_diagnostic,
+};
 use super::report::command::{
-    CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
+    CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
+    CommandUnusedReport,
 };
 use builtins::{redis_builtin, redis_is_builtin, redis_is_unsupported};
 
@@ -46,6 +53,10 @@ pub(super) struct RecordedExchange {
     args: Vec<RecordedCapture>,
     response_kind: String,
     response: RecordedCapture,
+    #[serde(default)]
+    outcome: DependencyExchangeOutcome,
+    #[serde(default)]
+    duration_ms: u64,
     replay_safe: bool,
 }
 
@@ -64,7 +75,17 @@ struct ReplayExchange {
     record: RecordedExchange,
     args: Vec<Vec<u8>>,
     response: Vec<u8>,
-    consumed: bool,
+    status: ReplayExchangeStatus,
+    timing: ReplayExchangeTiming,
+}
+
+#[derive(Debug, Clone)]
+struct MatchedRedisExchange {
+    index: usize,
+    connection_id: Uuid,
+    response: Vec<u8>,
+    timing: ReplayExchangeTiming,
+    report: CommandMatchedReport,
 }
 
 #[derive(Debug, Default)]
@@ -140,13 +161,15 @@ impl RedisReplayState {
             .map(RecordedCapture::decode)
             .collect::<Result<Vec<_>>>()?;
         let response = record.response.decode()?;
+        let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
             record,
             args,
             response,
-            consumed: false,
+            status: ReplayExchangeStatus::Available,
+            timing,
         });
         Ok(())
     }
@@ -162,10 +185,9 @@ impl RedisReplayState {
         username: Option<&str>,
         command: &str,
         args: &[Vec<u8>],
-    ) -> Option<(Uuid, Vec<u8>)> {
-        let index = preferred_index(&self.exchanges, active_case_id, |index, exchange| {
-            !exchange.consumed
-                && is_lane_head(&self.exchanges, index)
+    ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
+        let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
+            exchange.status.is_available()
                 && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
                 && target_matches(
                     target,
@@ -178,13 +200,43 @@ impl RedisReplayState {
                     == normalize_optional(exchange.record.username.as_deref())
                 && exchange.record.command.eq_ignore_ascii_case(command)
                 && exchange.args == args
-        })?;
+        });
+        let index = match matched {
+            PreferredMatch::Matched(index) => index,
+            PreferredMatch::LaneBlocked { candidate, blocker } => {
+                return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
+            }
+            PreferredMatch::NotFound => {
+                return Err(unmatched_diagnostic(
+                    &self.exchanges,
+                    active_case_id,
+                    |exchange| {
+                        redis_mismatch_fields(
+                            exchange,
+                            target,
+                            bound_connection,
+                            resp_version,
+                            database,
+                            username,
+                            command,
+                            args,
+                        )
+                    },
+                ));
+            }
+        };
         let exchange = &mut self.exchanges[index];
-        exchange.consumed = true;
-        push_success_detail(
-            &mut self.events.matched_count,
-            &mut self.events.matched,
-            CommandMatchedReport {
+        exchange.status = if exchange.timing.outcome().is_client_terminated() {
+            ReplayExchangeStatus::AwaitingClientTermination
+        } else {
+            ReplayExchangeStatus::Responding
+        };
+        Ok(MatchedRedisExchange {
+            index,
+            connection_id: exchange.record.connection_id,
+            response: exchange.response.clone(),
+            timing: exchange.timing,
+            report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
                 index,
@@ -193,8 +245,7 @@ impl RedisReplayState {
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
             },
-        );
-        Some((exchange.record.connection_id, exchange.response.clone()))
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -207,10 +258,9 @@ impl RedisReplayState {
         database: i64,
         username: Option<&str>,
         command: &RedisCommand,
-    ) -> Option<(Uuid, Vec<u8>)> {
-        let index = preferred_index(&self.exchanges, active_case_id, |index, exchange| {
-            !exchange.consumed
-                && is_lane_head(&self.exchanges, index)
+    ) -> Option<MatchedRedisExchange> {
+        let index = match preferred_match(&self.exchanges, active_case_id, |exchange| {
+            exchange.status.is_available()
                 && exchange.record.response_kind == "error"
                 && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
                 && target_matches(
@@ -225,13 +275,22 @@ impl RedisReplayState {
                 && exchange.record.command.eq_ignore_ascii_case(&command.name)
                 && (matches!(command.name.as_str(), "AUTH" | "HELLO")
                     || exchange.args == command.args)
-        })?;
+        }) {
+            PreferredMatch::Matched(index) => index,
+            PreferredMatch::LaneBlocked { .. } | PreferredMatch::NotFound => return None,
+        };
         let exchange = &mut self.exchanges[index];
-        exchange.consumed = true;
-        push_success_detail(
-            &mut self.events.matched_count,
-            &mut self.events.matched,
-            CommandMatchedReport {
+        exchange.status = if exchange.timing.outcome().is_client_terminated() {
+            ReplayExchangeStatus::AwaitingClientTermination
+        } else {
+            ReplayExchangeStatus::Responding
+        };
+        Some(MatchedRedisExchange {
+            index,
+            connection_id: exchange.record.connection_id,
+            response: exchange.response.clone(),
+            timing: exchange.timing,
+            report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
                 index,
@@ -240,8 +299,31 @@ impl RedisReplayState {
                 sequence: exchange.record.sequence,
                 command: exchange.record.command.clone(),
             },
+        })
+    }
+
+    fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
+        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
+            exchange.status = ReplayExchangeStatus::Consumed;
+        }
+        push_success_detail(
+            &mut self.events.matched_count,
+            &mut self.events.matched,
+            matched.report.clone(),
         );
-        Some((exchange.record.connection_id, exchange.response.clone()))
+    }
+
+    fn fail_exchange(&mut self, matched: &MatchedRedisExchange, reason: String) {
+        if let Some(exchange) = self.exchanges.get_mut(matched.index) {
+            exchange.status = ReplayExchangeStatus::Failed;
+        }
+        self.events.unsafe_events.push(CommandRequestReport {
+            case_id: matched.report.case_id.clone(),
+            target: matched.report.target.clone(),
+            command: matched.report.command.clone(),
+            reason,
+            diagnostic: None,
+        });
     }
 
     pub(super) fn snapshot(&self) -> CommandProtocolReport {
@@ -275,7 +357,7 @@ pub(super) async fn handle_connection(
     let mut resp_version = 2_u8;
     let mut database = 0_i64;
     let mut username: Option<String> = None;
-    let mut bound_connection = None;
+    let mut connection_binding = CaseConnectionBinding::default();
     loop {
         let frame = match read_redis_frame(&mut reader).await {
             Ok(Some(frame)) => frame,
@@ -320,6 +402,7 @@ pub(super) async fn handle_connection(
                     target: target_key.clone(),
                     command: command.name.clone(),
                     reason: "Redis command mode is unsupported for replay".to_string(),
+                    diagnostic: None,
                 });
             drop(replay_state);
             reader
@@ -329,10 +412,11 @@ pub(super) async fn handle_connection(
             report_writer.request();
             continue;
         }
-        let recorded_failure = if redis_is_builtin(&command.name) {
+        let (recorded_failure_case_id, recorded_failure) = if redis_is_builtin(&command.name) {
             let mut state = state.lock().await;
             let active_case_id = state.active_case_id.clone();
-            state.redis.match_redis_builtin_failure(
+            let bound_connection = connection_binding.connection(active_case_id.as_deref());
+            let matched = state.redis.match_redis_builtin_failure(
                 active_case_id.as_deref(),
                 &target_key,
                 bound_connection,
@@ -340,13 +424,17 @@ pub(super) async fn handle_connection(
                 database,
                 username.as_deref(),
                 &command,
-            )
+            );
+            (active_case_id, matched)
         } else {
-            None
+            (None, None)
         };
-        if let Some((connection_id, response)) = recorded_failure {
-            bound_connection.get_or_insert(connection_id);
-            reader.inner.write_all(&response).await?;
+        if let Some(matched) = recorded_failure {
+            connection_binding.bind(recorded_failure_case_id.as_deref(), matched.connection_id);
+            if deliver_redis_exchange(&mut reader, &state, &matched).await? {
+                report_writer.request();
+                break;
+            }
             report_writer.request();
             continue;
         }
@@ -363,6 +451,7 @@ pub(super) async fn handle_connection(
         let response = {
             let mut state = state.lock().await;
             let active_case_id = state.active_case_id.clone();
+            let bound_connection = connection_binding.connection(active_case_id.as_deref());
             match state.redis.match_redis(
                 active_case_id.as_deref(),
                 &target_key,
@@ -373,26 +462,82 @@ pub(super) async fn handle_connection(
                 &command.name,
                 &command.args,
             ) {
-                Some((connection_id, response)) => {
-                    bound_connection.get_or_insert(connection_id);
-                    response
+                Ok(matched) => {
+                    connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
+                    Some(matched)
                 }
-                None => {
+                Err(diagnostic) => {
                     state.redis.events.unmatched.push(CommandRequestReport {
                         case_id: active_case_id,
                         target: target_key.clone(),
                         command: command.name.clone(),
                         reason: "no recorded Redis exchange matched target/session/arguments"
                             .to_string(),
+                        diagnostic: Some(diagnostic),
                     });
-                    b"-ERR no recorded Redis dependency matched\r\n".to_vec()
+                    None
                 }
             }
         };
-        reader.inner.write_all(&response).await?;
+        if let Some(matched) = response {
+            if deliver_redis_exchange(&mut reader, &state, &matched).await? {
+                report_writer.request();
+                break;
+            }
+        } else {
+            reader
+                .inner
+                .write_all(b"-ERR no recorded Redis dependency matched\r\n")
+                .await?;
+        }
         report_writer.request();
     }
     Ok(())
+}
+
+async fn deliver_redis_exchange(
+    reader: &mut RedisBufferedReader<&mut TcpStream>,
+    state: &Arc<Mutex<ReplayState>>,
+    matched: &MatchedRedisExchange,
+) -> Result<bool> {
+    if matched.timing.outcome().is_client_terminated() {
+        let result = if reader.buffer.is_empty() {
+            matched
+                .timing
+                .await_client_termination(&mut reader.inner)
+                .await
+                .map(|_| ())
+        } else {
+            Err(anyhow!(
+                "client sent another Redis request instead of terminating the connection"
+            ))
+        };
+        match result {
+            Ok(()) => {
+                state.lock().await.redis.complete_exchange(matched);
+                return Ok(true);
+            }
+            Err(error) => {
+                state
+                    .lock()
+                    .await
+                    .redis
+                    .fail_exchange(matched, error.to_string());
+                return Err(error);
+            }
+        }
+    }
+
+    matched.timing.delay_response().await;
+    if let Err(error) = reader.inner.write_all(&matched.response).await {
+        state.lock().await.redis.fail_exchange(
+            matched,
+            format!("failed to deliver recorded Redis response: {error}"),
+        );
+        return Err(error.into());
+    }
+    state.lock().await.redis.complete_exchange(matched);
+    Ok(false)
 }
 
 async fn record_runtime_unsafe(
@@ -408,6 +553,7 @@ async fn record_runtime_unsafe(
         target: target.clone(),
         command: command.to_string(),
         reason,
+        diagnostic: None,
     };
     state.redis.events.unsafe_events.push(request);
 }
@@ -468,49 +614,7 @@ fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(|value| value.to_ascii_lowercase())
 }
 
-fn preferred_index<T>(
-    exchanges: &[T],
-    active_case_id: Option<&str>,
-    matches: impl Fn(usize, &T) -> bool,
-) -> Option<usize>
-where
-    T: ExchangeScope,
-{
-    exchanges
-        .iter()
-        .enumerate()
-        .find(|(index, exchange)| {
-            exchange.source() == ReplaySource::Case
-                && exchange.case_id() == active_case_id
-                && matches(*index, exchange)
-        })
-        .map(|(index, _)| index)
-        .or_else(|| {
-            exchanges
-                .iter()
-                .enumerate()
-                .find(|(index, exchange)| {
-                    exchange.source() == ReplaySource::Bootstrap && matches(*index, exchange)
-                })
-                .map(|(index, _)| index)
-        })
-}
-
-fn is_lane_head(exchanges: &[ReplayExchange], candidate: usize) -> bool {
-    let exchange = &exchanges[candidate];
-    !exchanges.iter().any(|other| {
-        !other.consumed
-            && other.record.connection_id == exchange.record.connection_id
-            && other.record.sequence < exchange.record.sequence
-    })
-}
-
-trait ExchangeScope {
-    fn source(&self) -> ReplaySource;
-    fn case_id(&self) -> Option<&str>;
-}
-
-impl ExchangeScope for ReplayExchange {
+impl CommandExchangeScope for ReplayExchange {
     fn source(&self) -> ReplaySource {
         self.source
     }
@@ -518,13 +622,70 @@ impl ExchangeScope for ReplayExchange {
     fn case_id(&self) -> Option<&str> {
         self.case_id.as_deref()
     }
+
+    fn connection_id(&self) -> Uuid {
+        self.record.connection_id
+    }
+
+    fn sequence(&self) -> u64 {
+        self.record.sequence
+    }
+
+    fn command(&self) -> &str {
+        &self.record.command
+    }
+
+    fn is_available(&self) -> bool {
+        self.status.is_available()
+    }
+
+    fn is_consumed(&self) -> bool {
+        self.status.is_consumed()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn redis_mismatch_fields(
+    exchange: &ReplayExchange,
+    target: &TargetKey,
+    bound_connection: Option<Uuid>,
+    resp_version: u8,
+    database: i64,
+    username: Option<&str>,
+    command: &str,
+    args: &[Vec<u8>],
+) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if bound_connection.is_some_and(|id| exchange.record.connection_id != id) {
+        fields.push("connection");
+    }
+    if !target_matches(
+        target,
+        &exchange.record.target_host,
+        exchange.record.target_port,
+    ) {
+        fields.push("target");
+    }
+    if exchange.record.resp_version != resp_version
+        || exchange.record.database != database
+        || normalize_optional(username) != normalize_optional(exchange.record.username.as_deref())
+    {
+        fields.push("session");
+    }
+    if !exchange.record.command.eq_ignore_ascii_case(command) {
+        fields.push("command");
+    }
+    if exchange.args != args {
+        fields.push("arguments");
+    }
+    fields
 }
 
 fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {
     exchanges
         .iter()
         .enumerate()
-        .filter(|(_, exchange)| exchange.source == source && !exchange.consumed)
+        .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
         .map(|(index, exchange)| CommandUnusedReport {
             index,
             case_id: exchange.case_id.clone(),

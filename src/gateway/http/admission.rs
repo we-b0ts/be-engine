@@ -4,8 +4,6 @@ use serde::Serialize;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use super::transport::upstream_socket_addr;
-use crate::process_lookup::{lookup_listening_process, process_label};
 use crate::recorder::CaseContext;
 use crate::{ActiveCaseGuard, ActiveCaseRejection, AppState};
 
@@ -31,9 +29,7 @@ pub(super) async fn try_admit_case(
         return None;
     }
 
-    let process = upstream_socket_addr(upstream_base).and_then(lookup_listening_process);
-    match state.try_register_active_case(case.clone(), process.as_ref().map(|process| process.pid))
-    {
+    match state.try_register_active_case(case.clone()) {
         Ok(guard) => {
             let admission = CaseAdmissionRecord {
                 timestamp: Utc::now(),
@@ -43,7 +39,6 @@ pub(super) async fn try_admit_case(
                 case_pattern: case_pattern.to_string(),
                 uri: uri.to_string(),
                 upstream: upstream_base.to_string(),
-                upstream_pid: process.as_ref().map(|process| process.pid),
             };
             if let Err(err) = state
                 .recorder()
@@ -57,27 +52,13 @@ pub(super) async fn try_admit_case(
                 );
                 return None;
             }
-            match &process {
-                Some(process) => {
-                    info!(
-                        case_id = %case.id,
-                        rule = %case.rule_name,
-                        case_pattern,
-                        upstream = %upstream_base,
-                        process = %process_label(process),
-                        "registered active HTTP gateway case"
-                    );
-                }
-                None => {
-                    info!(
-                        case_id = %case.id,
-                        rule = %case.rule_name,
-                        case_pattern,
-                        upstream = %upstream_base,
-                        "registered active HTTP gateway case without upstream process match"
-                    );
-                }
-            }
+            info!(
+                case_id = %case.id,
+                rule = %case.rule_name,
+                case_pattern,
+                upstream = %upstream_base,
+                "registered active HTTP gateway case"
+            );
             Some(guard)
         }
         Err(reason) => {
@@ -102,12 +83,79 @@ struct CaseAdmissionRecord {
     case_pattern: String,
     uri: String,
     upstream: String,
-    upstream_pid: Option<u32>,
 }
 
 fn active_case_rejection_reason(reason: ActiveCaseRejection) -> &'static str {
     match reason {
         ActiveCaseRejection::NotReady => "not_ready",
         ActiveCaseRejection::Busy => "busy",
+        ActiveCaseRejection::Quiescing => "quiescing",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::config::AppConfig;
+
+    #[tokio::test]
+    async fn quiescing_stops_new_case_admission_and_drains_the_active_case() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let temp = tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.mysql.enabled = false;
+        config.recording.output_dir = temp.path().join("recordings");
+        config.recording.shutdown_case_drain_timeout_ms = 1_000;
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+        let state = AppState::new(config).await.unwrap();
+        let uri = "/api/resource/isok".parse().unwrap();
+        let first = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some("api-resource-isok".to_string()),
+        };
+        let guard = try_admit_case(
+            &state,
+            &first,
+            "/api/resource/isok",
+            50,
+            "http://127.0.0.1:7171",
+            &uri,
+        )
+        .await
+        .unwrap();
+
+        assert!(state.begin_case_quiescing());
+        assert_eq!(state.recording_lifecycle_phase(), "quiescing");
+        let second = CaseContext {
+            id: Uuid::new_v4(),
+            ..first
+        };
+        assert!(
+            try_admit_case(
+                &state,
+                &second,
+                "/api/resource/isok",
+                50,
+                "http://127.0.0.1:7171",
+                &uri,
+            )
+            .await
+            .is_none()
+        );
+
+        let drain = {
+            let state = state.clone();
+            tokio::spawn(async move { state.wait_for_active_case_shutdown_drain().await })
+        };
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!drain.is_finished());
+        drop(guard);
+        assert!(drain.await.unwrap());
     }
 }

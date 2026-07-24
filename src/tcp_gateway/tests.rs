@@ -55,7 +55,6 @@ async fn mitms_fake_ip_https_and_records_exchange() {
             fake_addr,
             entry,
             Some(peer.to_string()),
-            None,
             state_for_gateway,
         )
         .await
@@ -142,7 +141,6 @@ async fn terminates_alias_https_and_forwards_plain_http_to_managed_proxy() {
             fake_addr,
             entry,
             Some(peer.to_string()),
-            None,
             state_for_gateway,
         )
         .await

@@ -55,7 +55,7 @@ pub(super) struct InitArgs {
     /// Managed recording rule; requires --recorder-config.
     #[arg(long, requires = "recorder_config")]
     recording_rule: Option<String>,
-    /// Replace an existing generated .traffic-e2e/e2e.yaml.
+    /// Replace an existing generated .traffic-e2e/project.yaml.
     #[arg(long)]
     force: bool,
 }

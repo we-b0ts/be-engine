@@ -22,9 +22,8 @@ use crate::access_policy::AccessDecision;
 use crate::dns_mock::{FakeDnsEntry, FakeDnsUpstreamProtocol};
 use crate::http::access::classify_method;
 use crate::http::rewrite::{self, RewriteInput};
-use crate::process_lookup::process_label;
 use crate::recorder::{
-    HeaderMapSnapshot, HttpExchangeEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent,
+    HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
     TcpGatewayConnectionEvent, capture_body, redact_headers,
 };
 use crate::{AppState, ProxyClient};
@@ -54,7 +53,6 @@ async fn serve_http_connection(
     fake_addr: SocketAddr,
     entry: FakeDnsEntry,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     state: AppState,
 ) -> Result<()> {
     let upstream_addr = upstream_addr(&entry, fake_addr.port())?;
@@ -63,19 +61,9 @@ async fn serve_http_connection(
         let state = state.clone();
         let entry = entry.clone();
         let client_addr = client_addr.clone();
-        let client_process = client_process.clone();
         async move {
             Ok::<_, Infallible>(
-                handle_http_request(
-                    req,
-                    state,
-                    entry,
-                    fake_addr,
-                    upstream_addr,
-                    client_addr,
-                    client_process,
-                )
-                .await,
+                handle_http_request(req, state, entry, fake_addr, upstream_addr, client_addr).await,
             )
         }
     });
@@ -94,7 +82,6 @@ async fn serve_https_mitm_connection(
     fake_addr: SocketAddr,
     entry: FakeDnsEntry,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     state: AppState,
 ) -> Result<()> {
     let upstream_addr = upstream_addr(&entry, fake_addr.port())?;
@@ -108,11 +95,9 @@ async fn serve_https_mitm_connection(
         Ok(tls) => tls,
         Err(err) => {
             let error = err.to_string();
-            let client_process_label = client_process.as_ref().map(process_label);
             warn!(
                 protocol = "fake_ip_https",
                 client_addr = client_addr.as_deref(),
-                client_process = client_process_label.as_deref(),
                 target = %authority,
                 fake_addr = %fake_addr,
                 upstream_addr = %upstream_addr,
@@ -123,7 +108,6 @@ async fn serve_https_mitm_connection(
                 &state,
                 "fake_ip_https",
                 client_addr.clone(),
-                client_process,
                 Some(authority),
                 error,
             )
@@ -137,7 +121,6 @@ async fn serve_https_mitm_connection(
         let state = state.clone();
         let entry = entry.clone();
         let client_addr = client_addr.clone();
-        let client_process = client_process.clone();
         let authority = authority.clone();
         async move {
             Ok::<_, Infallible>(
@@ -149,7 +132,6 @@ async fn serve_https_mitm_connection(
                     upstream_addr,
                     HttpsRequestContext {
                         client_addr,
-                        client_process,
                         fallback_authority: authority,
                     },
                 )
@@ -174,7 +156,6 @@ async fn handle_http_request(
     fake_addr: SocketAddr,
     upstream_addr: SocketAddr,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
 ) -> Response<GatewayBody> {
     let id = Uuid::new_v4();
     let started = Instant::now();
@@ -188,7 +169,6 @@ async fn handle_http_request(
                 operation_class,
                 method.to_string(),
                 client_addr,
-                client_process,
                 Some(format!("{}:{}", entry.domain, fake_addr.port())),
                 "HTTP method is classified as a write operation",
             )
@@ -211,7 +191,6 @@ async fn handle_http_request(
                 state,
                 id,
                 client_addr,
-                client_process,
                 scheme: "fake_ip_http".to_string(),
                 method,
                 original_uri,
@@ -235,7 +214,6 @@ async fn handle_http_request(
                 state,
                 id,
                 client_addr,
-                client_process,
                 scheme: "fake_ip_http".to_string(),
                 method,
                 original_uri,
@@ -267,7 +245,6 @@ async fn handle_http_request(
                 state,
                 id,
                 client_addr,
-                client_process,
                 scheme: "fake_ip_http".to_string(),
                 method,
                 original_uri,
@@ -295,7 +272,6 @@ async fn handle_http_request(
                         state,
                         id,
                         client_addr,
-                        client_process,
                         scheme: "fake_ip_http".to_string(),
                         method,
                         original_uri,
@@ -311,6 +287,7 @@ async fn handle_http_request(
                     .await;
                 }
             };
+            let mut discovered_tcp_targets = Vec::new();
             match rewrite::apply(
                 &state.config().http_response_rewrite,
                 state.dns_registry(),
@@ -330,6 +307,7 @@ async fn handle_http_request(
                 Ok(Some(rewritten)) => {
                     response_headers = rewritten.headers;
                     body_bytes = rewritten.body;
+                    discovered_tcp_targets = rewritten.discovered_tcp_targets;
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -337,7 +315,6 @@ async fn handle_http_request(
                         state,
                         id,
                         client_addr,
-                        client_process,
                         scheme: "fake_ip_http".to_string(),
                         method,
                         original_uri,
@@ -360,7 +337,6 @@ async fn handle_http_request(
                 id,
                 timestamp: Utc::now(),
                 client_addr,
-                client_process,
                 scheme: "fake_ip_http".to_string(),
                 method: method.to_string(),
                 uri: original_uri.to_string(),
@@ -378,15 +354,11 @@ async fn handle_http_request(
                     &body_bytes,
                     state.config().recording.max_body_bytes,
                 )),
+                discovered_tcp_targets,
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
             };
-            record_event_and_case_dependency(
-                &state,
-                RecorderEvent::HttpExchange(event),
-                "failed to record fake-IP HTTP exchange",
-            )
-            .await;
+            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
 
             build_downstream_response(status, &response_headers, body_bytes)
         }
@@ -395,7 +367,6 @@ async fn handle_http_request(
                 state,
                 id,
                 client_addr,
-                client_process,
                 scheme: "fake_ip_http".to_string(),
                 method,
                 original_uri,
@@ -415,7 +386,6 @@ async fn handle_http_request(
 
 struct HttpsRequestContext {
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     fallback_authority: String,
 }
 
@@ -429,7 +399,6 @@ async fn handle_https_request(
 ) -> Response<GatewayBody> {
     let HttpsRequestContext {
         client_addr,
-        client_process,
         fallback_authority,
     } = client;
     let id = Uuid::new_v4();
@@ -444,7 +413,6 @@ async fn handle_https_request(
                 operation_class,
                 method.to_string(),
                 client_addr.clone(),
-                client_process.clone(),
                 Some(fallback_authority.clone()),
                 "HTTP method is classified as a write operation",
             )
@@ -467,7 +435,6 @@ async fn handle_https_request(
                 state,
                 id,
                 client_addr,
-                client_process,
                 scheme: "fake_ip_https".to_string(),
                 method,
                 original_uri,
@@ -496,7 +463,6 @@ async fn handle_https_request(
                 state,
                 id,
                 client_addr,
-                client_process,
                 scheme: "fake_ip_https".to_string(),
                 method,
                 original_uri,
@@ -528,7 +494,6 @@ async fn handle_https_request(
                 state,
                 id,
                 client_addr,
-                client_process,
                 scheme: "fake_ip_https".to_string(),
                 method,
                 original_uri,
@@ -563,7 +528,6 @@ async fn handle_https_request(
                         state,
                         id,
                         client_addr,
-                        client_process,
                         scheme: "fake_ip_https".to_string(),
                         method,
                         original_uri,
@@ -579,6 +543,7 @@ async fn handle_https_request(
                     .await;
                 }
             };
+            let mut discovered_tcp_targets = Vec::new();
             match rewrite::apply(
                 &state.config().http_response_rewrite,
                 state.dns_registry(),
@@ -598,6 +563,7 @@ async fn handle_https_request(
                 Ok(Some(rewritten)) => {
                     response_headers = rewritten.headers;
                     body_bytes = rewritten.body;
+                    discovered_tcp_targets = rewritten.discovered_tcp_targets;
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -605,7 +571,6 @@ async fn handle_https_request(
                         state,
                         id,
                         client_addr,
-                        client_process,
                         scheme: "fake_ip_https".to_string(),
                         method,
                         original_uri,
@@ -628,7 +593,6 @@ async fn handle_https_request(
                 id,
                 timestamp: Utc::now(),
                 client_addr,
-                client_process,
                 scheme: "fake_ip_https".to_string(),
                 method: method.to_string(),
                 uri: original_uri.to_string(),
@@ -646,15 +610,11 @@ async fn handle_https_request(
                     &body_bytes,
                     state.config().recording.max_body_bytes,
                 )),
+                discovered_tcp_targets,
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
             };
-            record_event_and_case_dependency(
-                &state,
-                RecorderEvent::HttpExchange(event),
-                "failed to record fake-IP HTTPS exchange",
-            )
-            .await;
+            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
 
             build_downstream_response(status, &response_headers, body_bytes)
         }
@@ -663,7 +623,6 @@ async fn handle_https_request(
                 state,
                 id,
                 client_addr,
-                client_process,
                 scheme: "fake_ip_https".to_string(),
                 method,
                 original_uri,
@@ -722,7 +681,6 @@ async fn record_proxy_error(
     state: &AppState,
     protocol: &str,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     target: Option<String>,
     error: String,
 ) {
@@ -733,20 +691,16 @@ async fn record_proxy_error(
             timestamp: Utc::now(),
             protocol: protocol.to_string(),
             client_addr,
-            client_process,
             target,
             error,
         }),
-        "failed to record proxy error",
-    )
-    .await;
+    );
 }
 
 struct HttpErrorContext {
     state: AppState,
     id: Uuid,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     scheme: String,
     method: Method,
     original_uri: Uri,
@@ -766,7 +720,6 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<GatewayBody> {
         id: ctx.id,
         timestamp: Utc::now(),
         client_addr: ctx.client_addr.clone(),
-        client_process: ctx.client_process.clone(),
         scheme: ctx.scheme.clone(),
         method: ctx.method.to_string(),
         uri: ctx.original_uri.to_string(),
@@ -784,20 +737,15 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<GatewayBody> {
         response_status: None,
         response_headers: None,
         response_body: None,
+        discovered_tcp_targets: Vec::new(),
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),
     };
-    record_event_and_case_dependency(
-        &ctx.state,
-        RecorderEvent::HttpExchange(event),
-        "failed to record failed fake-IP HTTP exchange",
-    )
-    .await;
+    record_event_and_case_dependency(&ctx.state, RecorderEvent::HttpExchange(event));
     record_proxy_error(
         &ctx.state,
         &ctx.scheme,
         ctx.client_addr,
-        ctx.client_process,
         ctx.upstream_addr.map(|addr| addr.to_string()),
         error.clone(),
     )
@@ -808,7 +756,6 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<GatewayBody> {
 struct TcpConnectionRecord {
     id: Uuid,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     domain: Option<String>,
     fake_addr: SocketAddr,
     upstream_addr: Option<SocketAddr>,
@@ -825,7 +772,6 @@ async fn record_tcp_connection(state: &AppState, record: TcpConnectionRecord) {
             id: record.id,
             timestamp: Utc::now(),
             client_addr: record.client_addr,
-            client_process: record.client_process,
             domain: record.domain,
             fake_addr: record.fake_addr.to_string(),
             upstream_addr: record.upstream_addr.map(|addr| addr.to_string()),
@@ -834,20 +780,11 @@ async fn record_tcp_connection(state: &AppState, record: TcpConnectionRecord) {
             duration_ms: record.duration_ms,
             error: record.error,
         }),
-        "failed to record TCP gateway connection",
-    )
-    .await;
+    );
 }
 
-async fn record_event_and_case_dependency(
-    state: &AppState,
-    event: RecorderEvent,
-    warning: &'static str,
-) {
-    if let Err(err) = state.recorder().record(event.clone()).await {
-        warn!(error = %err, "{}", warning);
-    }
-    state.record_dependency_if_relevant(&event).await;
+fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) {
+    state.record_event(event);
 }
 
 fn request_authority(uri: &Uri, headers: &HeaderMap) -> Option<String> {

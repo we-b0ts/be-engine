@@ -21,10 +21,10 @@ are development or manual host-trust tools only.
 - Pre-change module review, naming, cohesion, dependency direction, and
   refactoring rules:
   [docs/code-organization.md](docs/code-organization.md)
-- Recorded E2E replay skill:
-  [skills/recorded-e2e-cases/SKILL.md](skills/recorded-e2e-cases/SKILL.md)
-- Cross-language E2E rewrite migration skill:
-  [skills/e2e-rewrite-migration/SKILL.md](skills/e2e-rewrite-migration/SKILL.md)
+- Backend engineering standards for AI coding work:
+  [plugins/ai-software-engineering/skills/backend-engineering/SKILL.md](plugins/ai-software-engineering/skills/backend-engineering/SKILL.md)
+- Traffic recording, replay, and verification skill:
+  [plugins/ai-software-engineering/skills/traffic-e2e/SKILL.md](plugins/ai-software-engineering/skills/traffic-e2e/SKILL.md)
 
 ## Essential Commands
 
