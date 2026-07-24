@@ -169,12 +169,17 @@ Docker may store a namespace join as `container:<anchor-id>` rather than
 `container:<anchor-name>`. Validate it against the anchor's resolved full
 container ID.
 
-Mount the exact installed Linux/amd64 `traffic-e2e` binary read-only into the
-Recorder runtime:
+Resolve the installed binary through `PATH`, then canonicalize every symlink:
 
-```text
-<installed-traffic-e2e>:/usr/local/bin/traffic-e2e:ro
+```bash
+traffic_e2e_command="$(command -v traffic-e2e)"
+traffic_e2e_binary="$(readlink -f -- "$traffic_e2e_command")"
 ```
+
+Require the resolved path to be an executable Linux/amd64 file. Mount that
+final file, not the PATH entry, read-only at
+`/usr/local/bin/traffic-e2e`, and run `traffic-e2e --version` inside the shared
+Recorder runtime before startup.
 
 Mount the generated recorder configuration and Git-ignored CA, log, state, and
 recording paths. Start Recorder with `NET_ADMIN` and `NET_RAW`, not
