@@ -332,6 +332,27 @@ impl AppState {
         self.inner.active_cases.is_bootstrap_open()
     }
 
+    pub(crate) fn begin_case_quiescing(&self) -> bool {
+        self.inner.active_cases.begin_quiescing()
+    }
+
+    pub(crate) fn recording_lifecycle_phase(&self) -> &'static str {
+        if self.inner.active_cases.is_quiescing() {
+            "quiescing"
+        } else {
+            "running"
+        }
+    }
+
+    pub(crate) async fn wait_for_active_case_shutdown_drain(&self) -> bool {
+        self.inner
+            .active_cases
+            .wait_for_no_active_case(Duration::from_millis(
+                self.config().recording.shutdown_case_drain_timeout_ms,
+            ))
+            .await
+    }
+
     pub(crate) fn active_case_invalidation(&self, case_id: Uuid) -> Option<CaseInvalidation> {
         self.inner.active_cases.invalidation_for(case_id)
     }
@@ -488,7 +509,21 @@ impl AppState {
             tokio::select! {
                 result = &mut shutdown => {
                     result?;
-                    info!("shutdown signal received");
+                    let newly_quiescing = self.begin_case_quiescing();
+                    let timeout_ms = self.config().recording.shutdown_case_drain_timeout_ms;
+                    info!(
+                        newly_quiescing,
+                        timeout_ms,
+                        "shutdown signal received; draining active recording case"
+                    );
+                    if self.wait_for_active_case_shutdown_drain().await {
+                        info!("active recording case shutdown drain completed");
+                    } else {
+                        warn!(
+                            timeout_ms,
+                            "active recording case shutdown drain timed out"
+                        );
+                    }
                     break Ok(());
                 }
                 joined = tasks.join_next(), if !tasks.is_empty() => {

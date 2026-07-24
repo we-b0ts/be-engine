@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::recorder::CaseContext;
@@ -13,6 +14,7 @@ use activity::{DependencyActivity, DependencyReservation};
 #[derive(Clone)]
 pub(crate) struct ActiveCaseRegistry {
     state: Arc<Mutex<ActiveCaseState>>,
+    active_count: watch::Sender<usize>,
 }
 
 struct ActiveCaseState {
@@ -20,6 +22,7 @@ struct ActiveCaseState {
     bootstrap_open: bool,
     bootstrap_dependencies: Arc<DependencyActivity>,
     case_matching_ready: bool,
+    quiescing: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +42,7 @@ pub(crate) struct ActiveCaseGuard {
 pub(crate) enum ActiveCaseRejection {
     NotReady,
     Busy,
+    Quiescing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,13 +73,16 @@ impl Default for ActiveCaseRegistry {
 
 impl ActiveCaseRegistry {
     pub(crate) fn new(case_matching_ready: bool) -> Self {
+        let (active_count, _) = watch::channel(0);
         Self {
             state: Arc::new(Mutex::new(ActiveCaseState {
                 active: Vec::new(),
                 bootstrap_open: true,
                 bootstrap_dependencies: Arc::new(DependencyActivity::default()),
                 case_matching_ready,
+                quiescing: false,
             })),
+            active_count,
         }
     }
 
@@ -84,6 +91,9 @@ impl ActiveCaseRegistry {
         case: CaseContext,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
         let mut state = self.state.lock().expect("active case registry poisoned");
+        if state.quiescing {
+            return Err(ActiveCaseRejection::Quiescing);
+        }
         if !state.case_matching_ready {
             return Err(ActiveCaseRejection::NotReady);
         }
@@ -97,6 +107,7 @@ impl ActiveCaseRegistry {
             accepting_dependencies: true,
             dependencies: Arc::new(DependencyActivity::default()),
         });
+        self.active_count.send_replace(state.active.len());
         Ok(ActiveCaseGuard {
             registry: self.clone(),
             case_id: case.id,
@@ -108,14 +119,46 @@ impl ActiveCaseRegistry {
         state
             .active
             .retain(|registration| registration.case.id != case_id);
+        self.active_count.send_replace(state.active.len());
     }
 
     pub(crate) fn close_bootstrap(&self) -> bool {
         let mut state = self.state.lock().expect("active case registry poisoned");
         let was_open = state.bootstrap_open;
         state.bootstrap_open = false;
-        state.case_matching_ready = true;
+        if !state.quiescing {
+            state.case_matching_ready = true;
+        }
         was_open
+    }
+
+    pub(crate) fn begin_quiescing(&self) -> bool {
+        let mut state = self.state.lock().expect("active case registry poisoned");
+        let changed = !state.quiescing;
+        state.quiescing = true;
+        state.case_matching_ready = false;
+        state.bootstrap_open = false;
+        changed
+    }
+
+    pub(crate) fn is_quiescing(&self) -> bool {
+        self.state
+            .lock()
+            .expect("active case registry poisoned")
+            .quiescing
+    }
+
+    pub(crate) async fn wait_for_no_active_case(&self, timeout: Duration) -> bool {
+        let mut active_count = self.active_count.subscribe();
+        tokio::time::timeout(timeout, async {
+            while *active_count.borrow_and_update() != 0 {
+                if active_count.changed().await.is_err() {
+                    return;
+                }
+            }
+        })
+        .await
+        .is_ok()
     }
 
     pub(crate) async fn wait_for_bootstrap_dependencies(&self) {
@@ -323,6 +366,45 @@ mod tests {
         let active = registry.current_targets_for_event();
         assert_eq!(active.cases, vec![(case, "active_window")]);
         drop(guard);
+    }
+
+    #[tokio::test]
+    async fn quiescing_rejects_new_cases_and_waits_for_active_case() {
+        let registry = ActiveCaseRegistry::default();
+        let guard = registry.try_register(case()).unwrap();
+        assert!(registry.begin_quiescing());
+        assert!(!registry.begin_quiescing());
+        assert!(registry.is_quiescing());
+        assert!(matches!(
+            registry.try_register(case()),
+            Err(ActiveCaseRejection::Quiescing)
+        ));
+
+        let waiting = {
+            let registry = registry.clone();
+            tokio::spawn(async move {
+                registry
+                    .wait_for_no_active_case(Duration::from_secs(1))
+                    .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        drop(guard);
+        assert!(waiting.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn active_case_shutdown_drain_can_time_out() {
+        let registry = ActiveCaseRegistry::default();
+        let _guard = registry.try_register(case()).unwrap();
+        registry.begin_quiescing();
+
+        assert!(
+            !registry
+                .wait_for_no_active_case(Duration::from_millis(1))
+                .await
+        );
     }
 
     #[test]

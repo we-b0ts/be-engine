@@ -8,6 +8,14 @@ use crate::recorder::{CaseBodyCapture, CaseContext, HeaderMapSnapshot, Recorder}
 pub(crate) struct CaseInvalidation {
     reason: String,
     message: String,
+    context: Option<CaseInvalidationContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct CaseInvalidationContext {
+    pub(crate) category: String,
+    pub(crate) elapsed_ms: u128,
+    pub(crate) recorder_phase: String,
 }
 
 impl CaseInvalidation {
@@ -15,7 +23,13 @@ impl CaseInvalidation {
         Self {
             reason: reason.into(),
             message: message.into(),
+            context: None,
         }
+    }
+
+    pub(crate) fn with_context(mut self, context: CaseInvalidationContext) -> Self {
+        self.context = Some(context);
+        self
     }
 }
 
@@ -59,7 +73,12 @@ pub(crate) async fn finalize_http_case(
             .write_case_json(case, "expected-response.json.invalid", &response)
             .await?;
         return recorder
-            .fail_case(case, invalidation.reason, invalidation.message)
+            .fail_case_with_context(
+                case,
+                invalidation.reason,
+                invalidation.message,
+                invalidation.context,
+            )
             .await;
     }
     if let Some((reason, message)) = invalid_case_reason(&request, &response) {
@@ -106,8 +125,8 @@ fn invalid_case_reason(
         return Some((
             "request_body_truncated",
             format!(
-                "request body exceeded recording limit: original_len={} stored_len={}",
-                request.body.original_len, request.body.stored_len
+                "request body exceeded recording limit: wire_len={} stored_len={} limit_bytes={}",
+                request.body.original_len, request.body.stored_len, request.body.limit_bytes
             ),
         ));
     }
@@ -127,8 +146,8 @@ fn invalid_case_reason(
         return Some((
             "expected_response_body_truncated",
             format!(
-                "expected response body exceeded recording limit: original_len={} stored_len={}",
-                body.original_len, body.stored_len
+                "decoded response body exceeded recording limit: wire_len={} stored_decoded_len={} decoded_limit_bytes={}",
+                body.original_len, body.stored_len, body.limit_bytes
             ),
         ));
     }
@@ -178,7 +197,7 @@ mod tests {
             matched_rule: Some("api".to_string()),
             upstream: "http://127.0.0.1:7171".to_string(),
             headers: HeaderMapSnapshot::new(),
-            body: capture_case_body(b"", 1024, None),
+            body: capture_case_body(b"", 1024, 1024, None),
         }
     }
 
@@ -195,7 +214,7 @@ mod tests {
             upstream: "http://127.0.0.1:7171".to_string(),
             status: Some(200),
             headers: Some(headers),
-            body: Some(capture_case_body(body, 1024, None)),
+            body: Some(capture_case_body(body, 1024, 1024, None)),
             duration_ms: 1,
             error: None,
         }

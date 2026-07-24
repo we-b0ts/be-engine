@@ -185,6 +185,9 @@ record_raw_packets = false
 [recording]
 output_dir = "./recordings"
 max_body_bytes = 10485760
+# Decoded HTTP case bodies may be larger than their compressed wire form.
+# Omit this value to reuse max_body_bytes.
+max_decoded_body_bytes = 33554432
 # full: all run-level events; errors: diagnostic/audit events only; off: no traffic.jsonl.
 traffic_jsonl = "full"
 # JSONL writes are buffered and flushed at most this long after an active write.
@@ -200,6 +203,9 @@ case_dependency_post_response_window_ms = 100
 # After admission closes, wait at most this long for already accepted in-flight
 # dependencies to complete before failing the case.
 case_dependency_drain_timeout_ms = 5000
+# On shutdown, stop admitting new cases and allow the active case to finish
+# before any remaining staging case is failed.
+shutdown_case_drain_timeout_ms = 20000
 # unrestricted keeps existing forwarding behavior. block_known_writes rejects
 # operations that the protocol classifiers identify as writes; unknown commands
 # are still forwarded for compatibility.

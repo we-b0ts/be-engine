@@ -9,6 +9,7 @@ use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use super::dependencies::ensure_case_dependency_file;
+use super::http::case::CaseInvalidationContext;
 use super::summary::{write_bootstrap_dependency_summary, write_case_dependency_summary};
 use super::{CaseContext, Recorder, sanitize_path_component};
 
@@ -54,6 +55,8 @@ struct RecordingErrorDetail {
     case_id: Uuid,
     reason: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<CaseInvalidationContext>,
 }
 
 impl Recorder {
@@ -130,13 +133,24 @@ impl Recorder {
         reason: impl Into<String>,
         message: impl Into<String>,
     ) -> Result<()> {
+        self.fail_case_with_context(case, reason, message, None)
+            .await
+    }
+
+    pub(crate) async fn fail_case_with_context(
+        &self,
+        case: &CaseContext,
+        reason: impl Into<String>,
+        message: impl Into<String>,
+        context: Option<CaseInvalidationContext>,
+    ) -> Result<()> {
         let reason = reason.into();
         let message = message.into();
         self.flush_traffic().await?;
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         let failed_dir = self.move_case_to_failed(case).await?;
-        self.record_case_failure(case, reason, message, failed_dir)
+        self.record_case_failure(case, reason, message, context, failed_dir)
             .await
     }
 
@@ -145,6 +159,7 @@ impl Recorder {
         case: &CaseContext,
         reason: String,
         message: String,
+        context: Option<CaseInvalidationContext>,
         failed_dir: PathBuf,
     ) -> Result<()> {
         let timestamp = Utc::now();
@@ -155,6 +170,7 @@ impl Recorder {
             case_id: case.id,
             reason: reason.clone(),
             message,
+            context,
         };
         let detail_path = failed_dir.join("recording-error.json");
         write_pretty_json(&detail_path, &detail).await?;
@@ -197,6 +213,7 @@ impl Recorder {
                 &case,
                 "recording_incomplete_at_shutdown".to_string(),
                 "case remained in staging when the recording run finished".to_string(),
+                None,
                 failed_dir,
             )
             .await?;
@@ -462,6 +479,19 @@ mod tests {
 
         assert_eq!(recorder.published_case_count(&first).await, 2);
         assert_eq!(recorder.published_case_count(&other).await, 1);
+        assert!(recorder.case_dir(&first).is_dir());
+        assert!(recorder.case_dir(&second).is_dir());
+        assert!(recorder.case_dir(&other).is_dir());
+        assert!(recorder.case_failed_dir(&failed).is_dir());
+        assert!(!recorder.case_dir(&failed).is_dir());
+
+        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
+            .await
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["published_cases"], 3);
+        assert_eq!(report["failed_cases"], 1);
     }
 
     #[tokio::test]
