@@ -17,6 +17,7 @@ pub(crate) mod edit;
 mod feedback;
 mod http_gateway;
 mod http_response_rewrite;
+mod initialization;
 mod recording;
 mod rule_document;
 mod verified_excludes;
@@ -40,6 +41,10 @@ pub use feedback::{
 pub use http_gateway::{HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig};
 pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
+};
+pub use initialization::{
+    DEFAULT_RECORDING_RULE, RecorderConfigInitOptions, RecorderConfigInitResult,
+    initialize_recorder_config,
 };
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,

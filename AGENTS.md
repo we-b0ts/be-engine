@@ -8,9 +8,10 @@ Kafka traffic to JSONL files, then groups, replays, and verifies recorded
 contracts.
 
 The primary crate is in `src/` and builds the `traffic-e2e` binary. Standard
-workflow commands are `init`, `prepare`, `run-api`, `run`, `status`, `recover`,
-and `abort`; managed recording, replay, and target isolation are also provided
-by the same binary, while low-level tooling is under `diagnose`. Recorder
+workflow commands are `config ... init`, `prepare`, `run-api`, `run`, `status`,
+`recover`, and `abort`; managed recording, replay, and target isolation are
+also provided by the same binary, while low-level tooling is under `diagnose`.
+Recorder
 configuration starts from `config/recorder.example.toml`. Repository scripts
 are development or manual host-trust tools only.
 

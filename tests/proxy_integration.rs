@@ -11,14 +11,21 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use traffic_e2e::{
     AppConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
     HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlRouteConfig,
     RecordingAccessPolicy, VerifiedApiExclude, VerifiedApiExcludesConfig,
 };
 
+// Config accepts concrete listen addresses, so free_addr() releases its socket
+// before AppState binds it. Serialize this file's integration tests to prevent
+// another test from claiming that address during the handoff.
+static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+
 #[tokio::test]
 async fn records_http_proxy_exchange() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -71,6 +78,7 @@ async fn records_http_proxy_exchange() {
 
 #[tokio::test]
 async fn recording_policy_blocks_http_write_before_upstream_and_audits_it() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -129,6 +137,7 @@ async fn recording_policy_blocks_http_write_before_upstream_and_audits_it() {
 
 #[tokio::test]
 async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -189,6 +198,7 @@ async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
 
 #[tokio::test]
 async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -257,6 +267,7 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
 
 #[tokio::test]
 async fn http_gateway_falls_back_before_ready() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -303,6 +314,7 @@ async fn http_gateway_falls_back_before_ready() {
 
 #[tokio::test]
 async fn http_gateway_allows_only_one_active_matched_case() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -363,6 +375,7 @@ async fn http_gateway_allows_only_one_active_matched_case() {
 
 #[tokio::test]
 async fn http_gateway_keeps_matched_case_active_after_downstream_disconnect() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -450,6 +463,7 @@ async fn http_gateway_keeps_matched_case_active_after_downstream_disconnect() {
 
 #[tokio::test]
 async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -535,6 +549,7 @@ async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
 
 #[tokio::test]
 async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -592,6 +607,7 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
 
 #[tokio::test]
 async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -736,6 +752,7 @@ async fn http_gateway_rewrites_pluto_eci_kubeconfig_and_registers_alias() {
 
 #[tokio::test]
 async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -810,6 +827,7 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
 
 #[tokio::test]
 async fn records_and_rejects_mysql_tls_request() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
@@ -869,6 +887,7 @@ async fn records_and_rejects_mysql_tls_request() {
 
 #[tokio::test]
 async fn supports_multiple_mysql_routes_on_same_port_with_different_ips() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();

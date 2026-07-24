@@ -35,31 +35,48 @@ another task-service action.
 
 ## Workflow
 
-1. Read repository instructions, migration notes, startup paths, and the
-   supplied recording source. Preserve an explicit local case-source path
-   exactly. For a remote IPv4 source, follow the remote-case-source reference,
-   materialize candidates in ascending order, select at most one recording for
-   the invocation, and inspect its resolved canonical sources before
-   implementation. Otherwise, if cases must be recorded first, complete the
-   traffic skill's recording gate. Keep unrelated worktree changes out of
-   scope.
-2. Resolve the PR base before substantial implementation. Use the exact
-   `pr_base` from `<target-root>/.traffic-e2e/project.yaml`. If that generated
-   configuration is absent, require an authoritative repository instruction or
-   explicit user confirmation. Never infer the base from remote HEAD,
-   ancestry, repository defaults, or `main`/`master` conventions.
-3. Confirm the source route, target facade, replay policy, dependency wiring,
-   and genuine runtime clients. Prepare one canonical API group at a time.
-4. Implement the smallest cohesive production change that preserves the
+1. Read repository instructions, migration notes, startup paths, and any
+   supplied recording source. Determine whether the request is recording
+   initialization, case recording, or implementation. When the user asks to
+   initialize recording, or no recording setup exists yet, follow
+   `traffic-e2e`'s project-initialization reference before requiring cases or
+   modifying product code. Under an explicit `backend-rewrite` invocation,
+   interpret a concise `<repo> repo init` request as this recording-
+   initialization phase unless the user names another initialization scope.
+   Keep unrelated worktree changes out of scope.
+2. Resolve the PR base before substantial work. If
+   `<target-root>/.traffic-e2e/project.yaml` exists, use its exact `pr_base`.
+   Otherwise use `dev-migration` unless the user explicitly requires another
+   base; never infer a different base from remote HEAD, ancestry, repository
+   defaults, or `main`/`master` conventions. Ensure the resolved branch exists
+   locally or on `origin`; if it exists nowhere, create it from the confirmed
+   source baseline and publish it. Create a named initialization or
+   implementation feature branch from that base. Branch creation, commits,
+   pushes, and PR delivery belong to this orchestration skill; the traffic-e2e
+   configuration initializers never switch or create branches.
+3. Run recording initialization on the feature branch. The standard project
+   initializer records the resolved base as `pr_base`; require the generated
+   value to match. Commit and push the generated initialization, then create a
+   draft PR targeting that base. If project configuration already exists,
+   validate its `pr_base` instead of silently replacing it.
+4. Confirm a canonical traffic-e2e case source for implementation. Preserve an
+   explicit local case-source path exactly. For a remote IPv4 source, follow
+   the remote-case-source reference, materialize candidates in ascending order,
+   select at most one recording for the invocation, and inspect its resolved
+   canonical sources before implementation. Otherwise, if cases must be
+   recorded first, complete the traffic skill's recording gate. Then confirm
+   the source route, target facade, replay policy, dependency wiring, and
+   genuine runtime clients. Prepare one canonical API group at a time.
+5. Implement the smallest cohesive production change that preserves the
    recorded contract. Do not read expected responses or recorded dependency
    outputs from target code, fixtures, configuration, or test support.
-5. Run repository-focused checks and the canonical focused traffic replay.
+6. Run repository-focused checks and the canonical focused traffic replay.
    Delegate failure classification, replay policy, recorder attribution, and
    completion evidence to `traffic-e2e`; do not create parallel rules here.
-6. Repeat focused implementation and verification only until the selected
+7. Repeat focused implementation and verification only until the selected
    group passes. Run the required complete round after shared
    behavior-affecting changes.
-7. Review module boundaries, run all repository-required gates, and preserve
+8. Review module boundaries, run all repository-required gates, and preserve
    the exact traffic-e2e completion status and remaining blockers.
 
 ## Delivery

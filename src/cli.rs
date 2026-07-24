@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
 mod compare;
+mod config;
 mod diagnose;
 mod interception;
 mod output;
@@ -45,8 +46,8 @@ enum Command {
     Replay(replay::ReplayArgs),
     /// Execute a prebuilt target command as the fixed interception user.
     Target(target::TargetArgs),
-    /// Generate and validate the target repository's traffic E2E configuration.
-    Init(workflow::InitArgs),
+    /// Initialize and maintain target repository traffic E2E configuration.
+    Config(config::ConfigArgs),
     /// Persist one canonical static or dynamic API case group.
     Prepare(workflow::PrepareArgs),
     /// Run one API's complete focused case group.
@@ -81,7 +82,7 @@ pub(crate) async fn run() -> Result<()> {
         Command::Record(args) => record::run(args).await,
         Command::Replay(args) => replay::run(args).await,
         Command::Target(args) => target::run(args).await,
-        Command::Init(args) => workflow::run(workflow::WorkflowCommand::Init(args)).await,
+        Command::Config(args) => config::run(args),
         Command::Prepare(args) => workflow::run(workflow::WorkflowCommand::Prepare(args)).await,
         Command::RunApi(args) => workflow::run(workflow::WorkflowCommand::RunApi(args)).await,
         Command::Run(args) => workflow::run(workflow::WorkflowCommand::Run(args)).await,
@@ -118,30 +119,73 @@ mod tests {
         assert_eq!(
             names,
             [
-                "compare", "record", "replay", "target", "init", "prepare", "run-api", "run",
+                "compare", "record", "replay", "target", "config", "prepare", "run-api", "run",
                 "status", "recover", "abort", "diagnose"
             ]
         );
     }
 
     #[test]
-    fn nests_low_level_commands_under_diagnose() {
+    fn exposes_repository_configuration_at_the_top_level() {
         let parsed = Cli::try_parse_from([
             "traffic-e2e",
-            "diagnose",
-            "replay-policy",
-            "validate",
-            "--policy",
-            ".traffic-e2e/replay.yaml",
+            "config",
+            "replay",
+            "init",
+            "--target-root",
+            ".",
         ])
         .unwrap();
 
-        assert!(matches!(parsed.command, Command::Diagnose(_)));
+        assert!(matches!(parsed.command, Command::Config(_)));
     }
 
     #[test]
     fn rejects_the_removed_e2e_run_facade_shape() {
         assert!(Cli::try_parse_from(["traffic-e2e", "e2e-run", "status"]).is_err());
+    }
+
+    #[test]
+    fn exposes_action_first_config_strategy_commands() {
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "config",
+                "recorder",
+                "plan",
+                "allowed-unused-http-hosts",
+                "--host",
+                "config.example.test",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "config",
+                "replay",
+                "plan",
+                "response-rule",
+                "--kind",
+                "dynamic",
+                "--api",
+                "GET /api/token",
+                "--json-pointer",
+                "/token",
+                "--assertion-report",
+                "assertions.json",
+                "--aggregate-report",
+                "aggregate.json",
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn rejects_removed_configuration_entrypoints() {
+        assert!(Cli::try_parse_from(["traffic-e2e", "init"]).is_err());
+        assert!(Cli::try_parse_from(["traffic-e2e", "diagnose", "recorder-config"]).is_err());
+        assert!(Cli::try_parse_from(["traffic-e2e", "diagnose", "replay-policy"]).is_err());
     }
 
     #[test]

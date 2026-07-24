@@ -68,14 +68,13 @@ Dirty or incomplete replay never qualifies. The traffic E2E runner supplies the
 cumulative streak counters from its run index; the recorder does not maintain a
 competing threshold.
 
-## Ensure
+## Apply
 
 After both final evidence artifacts exist, run one deterministic command:
 
 ```bash
-traffic-e2e diagnose recorder-config \
-  --config ../target/.traffic-e2e/recorder.toml \
-  verified-excludes ensure \
+traffic-e2e config recorder apply verified-excludes \
+  --target-root ../target \
   --rule record-api \
   --method GET \
   --pattern '/api/users/*' \
@@ -84,25 +83,23 @@ traffic-e2e diagnose recorder-config \
   --consecutive-successful-runs 3 \
   --consecutive-successful-cases 9 \
   --required-consecutive-successful-runs 3 \
-  --required-successful-cases 3 \
-  --format json
+  --required-successful-cases 3
 ```
 
 `traffic-e2e` calls this operation automatically only after updating its
-runner-owned counters. The low-level command above is for diagnostics and
-requires those counters explicitly.
+runner-owned counters. A standalone call requires those counters explicitly.
 
 The command returns `below_threshold` without writing, `already_present` when
 the exact entry exists, or `applied` after it atomically updates the managed
-block and reruns the plan to prove there is no remaining diff. Dirty,
+block. Dirty,
 incomplete, mismatched, or non-assertion-only evidence fails instead of being
-treated as below threshold. The JSON output embeds the initial plan, apply
-result, and verification result when applicable.
+treated as below threshold. The JSON output includes the evidence-backed
+decision and apply result.
 
-`plan` and `apply` remain available for diagnostics. Normal automation must
-call `ensure`; the AI supplies the source-resolved `rule + method +
-path_pattern` and evidence paths but does not decide eligibility or whether to
-apply.
+`plan` with the same strategy and arguments is optional diagnostics. Normal
+automation calls `apply`; it replans and decides eligibility before writing.
+The AI supplies the source-resolved `rule + method + path_pattern` and evidence
+paths but does not reimplement eligibility.
 
 The command only adds entries inside the explicit managed block, validates the
 entire TOML, rejects config or evidence artifacts changed after planning, and

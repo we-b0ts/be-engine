@@ -28,10 +28,10 @@ response_rules:
   unordered: {}
 ```
 
-Validate it with `traffic-e2e diagnose replay-policy validate` before replay.
-Retain its
-canonical path, fingerprint, applicable rules, usage, and unused applicable
-rules from the final report.
+`traffic-e2e config replay init` validates the initial policy, every
+evidence-driven `apply` validates the resulting policy, and the runner validates
+it again before replay. Retain its canonical path, fingerprint, applicable
+rules, usage, and unused applicable rules from the final report.
 
 ## Assertion And Dependency Boundaries
 
@@ -168,19 +168,13 @@ real-traffic integration tests.
 On an exact scalar mismatch the assertion report may expose the pointer as a
 diagnostic candidate. That mechanical candidate is not authorization to weaken
 the assertion. Inspect source and target behavior first. If the difference is
-intentional and dependency evidence is complete and clean, plan and apply it:
+intentional and dependency evidence is complete and clean, apply it. The
+command replans from the current evidence before writing; `plan` is available
+with the same arguments for optional diagnostics:
 
 ```bash
-traffic-e2e diagnose replay-policy response-rule plan \
-  --policy .traffic-e2e/replay.yaml \
-  --kind dynamic \
-  --api 'GET /api/resource/token' \
-  --json-pointer /content \
-  --assertion-report .traffic-e2e/local/.../assertions.json \
-  --aggregate-report .traffic-e2e/local/.../aggregate.json
-
-traffic-e2e diagnose replay-policy response-rule apply \
-  --policy .traffic-e2e/replay.yaml \
+traffic-e2e config replay apply response-rule \
+  --target-root <target> \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
@@ -207,19 +201,11 @@ Dynamic and unordered rules cannot overlap the same JSON subtree.
 
 An exact reorder-only mismatch may expose an `unordered_candidates` diagnostic.
 It does not prove that order is irrelevant. Inspect source behavior, target
-behavior, and consumers before planning:
+behavior, and consumers before applying:
 
 ```bash
-traffic-e2e diagnose replay-policy response-rule plan \
-  --policy .traffic-e2e/replay.yaml \
-  --kind unordered \
-  --api 'GET /api/config/ansible_facts' \
-  --json-pointer /general/sudo_users \
-  --assertion-report .traffic-e2e/local/.../assertions.json \
-  --aggregate-report .traffic-e2e/local/.../aggregate.json
-
-traffic-e2e diagnose replay-policy response-rule apply \
-  --policy .traffic-e2e/replay.yaml \
+traffic-e2e config replay apply response-rule \
+  --target-root <target> \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
@@ -227,11 +213,11 @@ traffic-e2e diagnose replay-policy response-rule apply \
   --aggregate-report .traffic-e2e/local/.../aggregate.json
 ```
 
-Planning requires runner-owned structural assertion evidence using the current
-policy fingerprint and complete, clean aggregate evidence. It accepts only the
-difference kind selected by `--kind` and rejects status, shape, type, non-JSON,
-content, or undeclared field differences. Apply is additive, sorted, atomic,
-and rejects a policy changed after planning.
+Both actions require runner-owned structural assertion evidence using the
+current policy fingerprint and complete, clean aggregate evidence. They accept
+only the difference kind selected by `--kind` and reject status, shape, type,
+non-JSON, content, or undeclared field differences. Apply is additive, sorted,
+and atomic.
 
 After every policy change, revalidate and rerun the entire affected API group.
 Earlier replay and aggregate artifacts are stale. Completion requires zero
