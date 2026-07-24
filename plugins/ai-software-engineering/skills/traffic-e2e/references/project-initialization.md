@@ -263,9 +263,8 @@ password database. Host account names shown for numeric 998 are irrelevant.
 
 Treat the existing host source paths from the inspected writable application
 bind mounts as authoritative. Keep both the host source and container
-destination unchanged. Do not create replacement or `-recording` directories,
-and fail before changing permissions when an expected mount source is missing
-or is not a directory.
+destination unchanged. Require every expected writable mount source to exist
+and be a directory before changing permissions.
 
 Before startup, use a bounded root setup step to recursively assign each exact
 writable bind-mount source and all of its existing descendants to numeric
