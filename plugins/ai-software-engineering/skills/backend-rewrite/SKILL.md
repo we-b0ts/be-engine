@@ -1,6 +1,6 @@
 ---
 name: backend-rewrite
-description: "Rewrite or migrate backend services against recorded traffic while applying backend engineering standards and genuine traffic-e2e verification. Use for backend service rewrites, cross-language migrations, compatibility ports, or capability replacements that use traffic-e2e cases as the behavior contract and must deliver the resulting code through a pull request."
+description: "Rewrite or migrate backend services against local recorded traffic or recordings fetched from a remote task-service IPv4 address while applying backend engineering standards and genuine traffic-e2e verification. Use for backend service rewrites, cross-language migrations, compatibility ports, or capability replacements that use traffic-e2e cases as the behavior contract and must deliver the resulting code through a pull request."
 ---
 
 # Backend Rewrite And Migration
@@ -22,13 +22,27 @@ Before modifying target code:
 Treat both as mandatory. This skill owns sequencing and delivery only; do not
 copy or weaken their detailed contracts here.
 
+## Remote Case Sources
+
+When the user supplies a remote task-service IPv4 address instead of a local
+case source, read [remote-case-source.md](references/remote-case-source.md)
+before contacting the service. Use this skill's bundled
+`scripts/pluto-task.sh` by absolute path, freeze one remote snapshot, safely
+materialize at most one oldest unprocessed recording, and preserve every
+downloaded recording unchanged. Remote acquisition may use only the helper's
+`recordings` and `download` operations unless the user separately authorizes
+another task-service action.
+
 ## Workflow
 
 1. Read repository instructions, migration notes, startup paths, and the
-   supplied recording source. Confirm a canonical traffic-e2e case source for
-   the requested scope; if it must be recorded first, complete the traffic
-   skill's recording gate before implementation. Keep unrelated worktree
-   changes out of scope.
+   supplied recording source. Preserve an explicit local case-source path
+   exactly. For a remote IPv4 source, follow the remote-case-source reference,
+   materialize candidates in ascending order, select at most one recording for
+   the invocation, and inspect its resolved canonical sources before
+   implementation. Otherwise, if cases must be recorded first, complete the
+   traffic skill's recording gate. Keep unrelated worktree changes out of
+   scope.
 2. Resolve the PR base before substantial implementation. Use the exact
    `pr_base` from `<target-root>/.traffic-e2e/project.yaml`. If that generated
    configuration is absent, require an authoritative repository instruction or
@@ -59,3 +73,9 @@ blockers in the PR.
 Skip PR creation only when the user explicitly requests no PR or when no
 deliverable target change exists. A project/task association is not required
 unless repository instructions or the user separately require one.
+
+For a remote case source, the final handoff must also identify the IPv4
+address, frozen snapshot boundary, selected recording ID, cache root, archive
+SHA-256, every resolved canonical case source, and their exact runner states.
+Downloaded artifacts or helper success never substitute for replay completion
+evidence.

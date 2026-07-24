@@ -1,4 +1,4 @@
 interface:
   display_name: "Backend Rewrite & Migration"
   short_description: "Rewrite backends with traffic E2E evidence"
-  default_prompt: "Use $backend-rewrite to rewrite or migrate this backend under $backend-engineering standards, verify it with $traffic-e2e, and deliver the changes in a PR."
+  default_prompt: "Use $backend-rewrite to rewrite or migrate this backend from a local case source or remote task-service IPv4 address under $backend-engineering standards, verify it with $traffic-e2e, and deliver the changes in a PR."
