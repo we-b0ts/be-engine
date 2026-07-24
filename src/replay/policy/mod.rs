@@ -1,5 +1,6 @@
 mod config;
 mod feedback;
+mod initialization;
 mod matcher;
 mod pattern;
 mod report;
@@ -15,6 +16,9 @@ pub use feedback::{
     DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
     ResponseRuleFeedback, ResponseRulePlan, ResponseRuleReport, plan_dynamic_response_rule,
     plan_response_rule,
+};
+pub use initialization::{
+    ReplayPolicyInitOptions, ReplayPolicyInitResult, initialize_replay_policy,
 };
 pub(in crate::replay) use matcher::{
     HttpPolicyContext, MysqlPolicyContext, PolicyDecision, ReplayPolicyRuntime,

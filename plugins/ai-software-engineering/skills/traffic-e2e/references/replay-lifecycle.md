@@ -31,7 +31,8 @@ surfaces:
 
 - `traffic-e2e replay` for the replay session;
 - `traffic-e2e target exec` for a prebuilt in-process target command;
-- `traffic-e2e diagnose replay-policy` for policy validation;
+- `traffic-e2e config replay plan|apply response-rule` for evidence-driven
+  policy maintenance;
 - `traffic-e2e diagnose replay-control` for readiness, case lifecycle,
   finalization, and cleanup;
 - `traffic-e2e diagnose replay-aggregate` for final multi-case or multi-session

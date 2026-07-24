@@ -4,9 +4,12 @@ Each target repository owns one source-controlled `.traffic-e2e/replay.yaml`.
 Pass it explicitly to every recorded replay:
 
 ```bash
+traffic-e2e config replay init --target-root .
 traffic-e2e replay --policy .traffic-e2e/replay.yaml /path/to/case-group
-traffic-e2e diagnose replay-policy validate --policy .traffic-e2e/replay.yaml
 ```
+
+Initialization, evidence-driven application, and replay each validate the
+policy.
 
 This policy is independent of recorder `case_path_patterns`:
 
@@ -169,19 +172,13 @@ bodies stay exact. The comparator does not decide whether the value is a UUID,
 random token, timestamp, or another generated value. Verify those semantics in
 source review, unit tests, or real-traffic integration tests.
 
-Use evidence-backed plan/apply after diagnosing the source and target:
+Use evidence-backed apply after diagnosing the source and target. It replans
+against current evidence before writing; `plan` is optional diagnostics with
+the same strategy and arguments:
 
 ```bash
-traffic-e2e diagnose replay-policy response-rule plan \
-  --policy .traffic-e2e/replay.yaml \
-  --kind dynamic \
-  --api 'GET /api/resource/token' \
-  --json-pointer /content \
-  --assertion-report .traffic-e2e/local/.../assertions.json \
-  --aggregate-report .traffic-e2e/local/.../aggregate.json
-
-traffic-e2e diagnose replay-policy response-rule apply \
-  --policy .traffic-e2e/replay.yaml \
+traffic-e2e config replay apply response-rule \
+  --target-root . \
   --kind dynamic \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
@@ -209,16 +206,8 @@ After source and target review proves the array is semantically unordered, use
 the same evidence-backed workflow:
 
 ```bash
-traffic-e2e diagnose replay-policy response-rule plan \
-  --policy .traffic-e2e/replay.yaml \
-  --kind unordered \
-  --api 'GET /api/config/ansible_facts' \
-  --json-pointer /general/sudo_users \
-  --assertion-report .traffic-e2e/local/.../assertions.json \
-  --aggregate-report .traffic-e2e/local/.../aggregate.json
-
-traffic-e2e diagnose replay-policy response-rule apply \
-  --policy .traffic-e2e/replay.yaml \
+traffic-e2e config replay apply response-rule \
+  --target-root . \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
@@ -226,8 +215,8 @@ traffic-e2e diagnose replay-policy response-rule apply \
   --aggregate-report .traffic-e2e/local/.../aggregate.json
 ```
 
-Planning accepts only the difference kind selected by `--kind`, runner-owned
-assertions using the current policy fingerprint, exact focused-case coverage,
-and complete, clean aggregate evidence. Apply is additive, sorted, atomic, and
-rejects a policy changed after planning. Revalidate and rerun the entire
-affected API group after every policy change.
+Both actions accept only the difference kind selected by `--kind`,
+runner-owned assertions using the current policy fingerprint, exact
+focused-case coverage, and complete, clean aggregate evidence. Apply is
+additive, sorted, and atomic. Rerun the entire affected API group after every
+policy change.

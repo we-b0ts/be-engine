@@ -67,13 +67,12 @@ selected-case omission cannot satisfy the gate.
 
 ## Gate
 
-The standard runner persists the JSON ensure report after both evidence views
-exist. The equivalent low-level diagnostic command is:
+The standard runner owns this update after both evidence views exist. For
+standalone evidence-driven maintenance, use:
 
 ```bash
-traffic-e2e diagnose recorder-config \
-  --config .traffic-e2e/recorder.toml \
-  verified-excludes ensure \
+traffic-e2e config recorder apply verified-excludes \
+  --target-root <target> \
   --rule <recording-rule> \
   --method <METHOD> \
   --pattern '<exact-or-recorder-path-pattern>' \
@@ -82,24 +81,22 @@ traffic-e2e diagnose recorder-config \
   --consecutive-successful-runs <actual-runs> \
   --consecutive-successful-cases <actual-cases> \
   --required-consecutive-successful-runs <required-runs> \
-  --required-successful-cases <required-cases> \
-  --format json
+  --required-successful-cases <required-cases>
 ```
 
 - `below_threshold`: retain the runner-supplied threshold/count evidence; no
   config write occurs.
-- `applied`: require the embedded apply report and a verification plan with
-  `changed: false`.
+- `applied`: require the atomic apply report.
 - `already_present`: the initial plan already proves no diff.
 - incomplete/dirty/mismatched evidence or an assertion-only violation fails
   the command and is blocked.
 - missing managed config is
   `not_applicable_missing_verified_excludes_config`, never generic skipped.
 
-MUST NOT parse `eligible` and choose whether to call `apply` in AI logic,
-shell, or target-language code. The runner owns counters and calls `ensure`;
-`ensure` validates the supplied gate, owns atomic apply, and verifies final
-convergence. Keep `plan` and `apply` only for human diagnostics.
+MUST NOT parse `eligible` and implement the update in shell or target-language
+code. The runner owns its counters and update. The standalone `apply` command
+replans from the supplied evidence before writing; `plan` is optional
+diagnostics.
 
 An applied entry is keyed by recording rule, method, and path pattern. Exact
 paths, whole-segment `*`, and a final `**` catch-all are supported with the same

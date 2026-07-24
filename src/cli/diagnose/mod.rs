@@ -3,16 +3,13 @@ use std::path::PathBuf;
 use std::{env, io};
 
 use anyhow::Result;
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 use traffic_e2e::{
     AppConfig, AppState, CaseGroupOptions, ReplayAggregateOptions, ReplayAllowedUnusedHttpConfig,
-    ReplayConfig, ReplayControlConfig, ResponseRuleFeedback, ResponseRuleKind,
-    aggregate_replay_reports_with_options, ensure_case_group, plan_response_rule, run_replay,
-    run_replay_control, validate_replay_policy,
+    ReplayConfig, ReplayControlConfig, aggregate_replay_reports_with_options, ensure_case_group,
+    run_replay, run_replay_control,
 };
 use uuid::Uuid;
-
-mod recorder_config;
 
 #[derive(Debug, Args)]
 pub(super) struct DiagnoseArgs {
@@ -32,10 +29,6 @@ enum DiagnoseCommand {
     ReplayControl(ReplayControlArgs),
     /// Aggregate exact replay reports for selected cases and sessions.
     ReplayAggregate(ReplayAggregateArgs),
-    /// Validate or update narrowly scoped replay policy rules.
-    ReplayPolicy(ReplayPolicyArgs),
-    /// Inspect or update recorder-owned target configuration.
-    RecorderConfig(recorder_config::RecorderConfigArgs),
     /// Persist and validate canonical case grouping evidence.
     CaseGroup(CaseGroupArgs),
 }
@@ -138,61 +131,6 @@ struct ReplayAggregateArgs {
     session_ids: Vec<Uuid>,
 }
 
-#[derive(Debug, Args)]
-struct ReplayPolicyArgs {
-    #[command(subcommand)]
-    command: ReplayPolicyCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum ReplayPolicyCommand {
-    Validate {
-        #[arg(long)]
-        policy: PathBuf,
-    },
-    ResponseRule {
-        #[command(subcommand)]
-        command: ResponseRuleCommand,
-    },
-}
-
-#[derive(Debug, Subcommand)]
-enum ResponseRuleCommand {
-    Plan(ResponseRuleArgs),
-    Apply(ResponseRuleArgs),
-}
-
-#[derive(Debug, Args)]
-struct ResponseRuleArgs {
-    #[arg(long)]
-    policy: PathBuf,
-    #[arg(long, value_enum)]
-    kind: ResponseRuleKindArg,
-    #[arg(long)]
-    api: String,
-    #[arg(long = "json-pointer", required = true)]
-    json_pointers: Vec<String>,
-    #[arg(long)]
-    assertion_report: PathBuf,
-    #[arg(long)]
-    aggregate_report: PathBuf,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum ResponseRuleKindArg {
-    Dynamic,
-    Unordered,
-}
-
-impl From<ResponseRuleKindArg> for ResponseRuleKind {
-    fn from(value: ResponseRuleKindArg) -> Self {
-        match value {
-            ResponseRuleKindArg::Dynamic => Self::Dynamic,
-            ResponseRuleKindArg::Unordered => Self::Unordered,
-        }
-    }
-}
-
 #[derive(Debug, Subcommand)]
 enum ReplayControlCommand {
     WaitReady,
@@ -228,41 +166,7 @@ pub(super) async fn run(args: DiagnoseArgs) -> Result<()> {
         DiagnoseCommand::Replay(args) => run_replay_command(args).await,
         DiagnoseCommand::ReplayControl(args) => run_replay_control_command(args).await,
         DiagnoseCommand::ReplayAggregate(args) => run_replay_aggregate_command(args),
-        DiagnoseCommand::ReplayPolicy(args) => run_replay_policy_command(args),
-        DiagnoseCommand::RecorderConfig(args) => recorder_config::run(args),
         DiagnoseCommand::CaseGroup(args) => run_case_group(args),
-    }
-}
-
-fn run_replay_policy_command(args: ReplayPolicyArgs) -> Result<()> {
-    match args.command {
-        ReplayPolicyCommand::Validate { policy } => {
-            let report = validate_replay_policy(&policy)?;
-            serde_json::to_writer_pretty(io::stdout(), &report)?;
-            println!();
-            Ok(())
-        }
-        ReplayPolicyCommand::ResponseRule { command } => {
-            let (args, apply) = match command {
-                ResponseRuleCommand::Plan(args) => (args, false),
-                ResponseRuleCommand::Apply(args) => (args, true),
-            };
-            let plan = plan_response_rule(ResponseRuleFeedback {
-                policy_path: args.policy,
-                kind: args.kind.into(),
-                api: args.api,
-                json_pointers: args.json_pointers,
-                assertion_report: args.assertion_report,
-                aggregate_report: args.aggregate_report,
-            })?;
-            if apply {
-                serde_json::to_writer_pretty(io::stdout(), &plan.apply()?)?;
-            } else {
-                serde_json::to_writer_pretty(io::stdout(), plan.report())?;
-            }
-            println!();
-            Ok(())
-        }
     }
 }
 

@@ -92,8 +92,10 @@ pub use assertion::{
 };
 pub use policy::{
     DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
-    ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
-    ResponseRuleReport, plan_dynamic_response_rule, plan_response_rule, validate_replay_policy,
+    ReplayPolicyInitOptions, ReplayPolicyInitResult, ReplayPolicyValidationReport,
+    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport,
+    initialize_replay_policy, plan_dynamic_response_rule, plan_response_rule,
+    validate_replay_policy,
 };
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,

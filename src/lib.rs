@@ -18,6 +18,7 @@ mod proxy;
 mod recorder;
 mod redis;
 mod replay;
+mod repository;
 mod tcp_gateway;
 mod tls;
 mod udp_gateway;
@@ -54,25 +55,27 @@ pub use config::{
     AppConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
     BackgroundDependencyRuleConfig, CasePathPatternAuthority, CasePathPatternFeedback,
     CasePathPatternPlan, CasePathPatternReport, CompareConfig, DEFAULT_FAKE_CIDR,
-    DnsBypassStrategyConfig, DnsMockConfig, HttpConfig, HttpGatewayCaseLimitsConfig,
-    HttpGatewayConfig, HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig,
-    HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
-    HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlConfig, MysqlRouteConfig,
+    DEFAULT_RECORDING_RULE, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
+    HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
+    HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
+    HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
+    MysqlConfig, MysqlRouteConfig, RecorderConfigInitOptions, RecorderConfigInitResult,
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
     TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode, UdpGatewayConfig, VerifiedApiExclude,
     VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
     VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiExcludesConfig,
-    VerifiedApiVerification, ensure_verified_api_exclude, plan_allowed_unused_http_hosts,
-    plan_background_dependency, plan_case_path_pattern_feedback, plan_verified_api_exclude,
+    VerifiedApiVerification, ensure_verified_api_exclude, initialize_recorder_config,
+    plan_allowed_unused_http_hosts, plan_background_dependency, plan_case_path_pattern_feedback,
+    plan_verified_api_exclude,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
     E2eApiRunResult, E2eApiVerificationOverride, E2eFocusedApiStatus, E2eRunContext,
     E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult,
-    E2eRunStatus, abort_e2e_run, initialize_e2e_run, prepare_e2e_run, recover_e2e_run, run_e2e_api,
-    run_e2e_round, status_e2e_run,
+    E2eRunStatus, abort_e2e_run, initialize_e2e_run, initialize_standard_e2e_project,
+    prepare_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
@@ -89,9 +92,10 @@ pub use recorder::{
 pub use replay::{
     DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,
-    ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayPolicyValidationReport,
-    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport,
-    aggregate_replay_reports, aggregate_replay_reports_with_options, plan_dynamic_response_rule,
+    ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayPolicyInitOptions,
+    ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, ResponseRuleReport, aggregate_replay_reports,
+    aggregate_replay_reports_with_options, initialize_replay_policy, plan_dynamic_response_rule,
     plan_response_rule, run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
     validate_replay_policy,
 };

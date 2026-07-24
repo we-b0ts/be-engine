@@ -50,7 +50,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     if let Some(metadata) = existing {
         ensure!(
             options.force,
-            "{} already exists; use --force to replace it explicitly",
+            "{} already exists; refusing to replace it",
             config_path.display()
         );
         ensure!(
@@ -75,6 +75,21 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
             recorder_config.is_file(),
             "recorder config does not exist: {}",
             recorder_config.display()
+        );
+        let recorder = crate::config::AppConfig::load(&recorder_config)?;
+        let recording_rule = options
+            .recording_rule
+            .as_deref()
+            .context("recording_rule is required with recorder_config")?;
+        let matching_rules = recorder
+            .http_gateway
+            .rules
+            .iter()
+            .filter(|rule| rule.name.as_deref() == Some(recording_rule))
+            .count();
+        ensure!(
+            matching_rules == 1,
+            "expected exactly one recorder HTTP rule named {recording_rule:?}, found {matching_rules}"
         );
     }
 
@@ -115,7 +130,15 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         _legacy_required_consecutive_successful_runs: None,
     };
     validate_project_config(&project_config)?;
-    store::write_yaml(&config_path, &project_config)?;
+    if options.force {
+        store::write_yaml(&config_path, &project_config)?;
+    } else {
+        let mut payload = serde_yaml::to_string(&project_config)?.into_bytes();
+        if !payload.ends_with(b"\n") {
+            payload.push(b'\n');
+        }
+        crate::config::edit::create_atomic(&config_path, &payload)?;
+    }
     let persisted = load_project_config(&target_root, &config_path)?;
 
     Ok(E2eRunInitResult {
@@ -205,23 +228,22 @@ pub(super) fn require_local_ignored(target_root: &Path, local_root: &Path) -> Re
 fn load_project_config(target_root: &Path, config_path: &Path) -> Result<ProjectConfig> {
     if !config_path.exists() {
         bail!(
-            "{} is missing; run `traffic-e2e init --target-root <target> \
-             --project-cli <path> --replay-policy <path> \
-             --pr-base <branch>` with confirmed project settings",
+            "{} is missing; run `traffic-e2e config project init \
+             --target-root <target>` after recorder and replay initialization",
             config_path.display()
         );
     }
     let config: ProjectConfig = store::read_yaml(config_path).with_context(|| {
         format!(
-            "{} is incomplete or obsolete; rerun `traffic-e2e init --force` \
-             with confirmed project settings",
+            "{} is incomplete or obsolete; regenerate it with \
+             `traffic-e2e config project init --target-root <target>`",
             config_path.display()
         )
     })?;
     validate_project_config(&config).with_context(|| {
         format!(
-            "{} is incomplete or obsolete; rerun `traffic-e2e init --force` \
-             with confirmed project settings",
+            "{} is incomplete or obsolete; regenerate it with \
+             `traffic-e2e config project init --target-root <target>`",
             config_path.display()
         )
     })?;
@@ -473,6 +495,59 @@ mod tests {
     }
 
     #[test]
+    fn standard_initialization_uses_repository_conventions() {
+        let target = target();
+        let root = target.path();
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(root)
+                .args(["branch", "dev-migration"])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let repository_name = crate::repository::directory_name(root).unwrap();
+        let project_cli = root.join(format!("scripts/{repository_name}-cli"));
+        fs::copy(root.join("scripts/project-cli"), &project_cli).unwrap();
+        fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
+        fs::write(
+            root.join(".traffic-e2e/replay.yaml"),
+            "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".traffic-e2e/recorder.toml"),
+            format!(
+                "[[http_gateway.rules]]\nname = {:?}\nmethods = [\"GET\"]\npath_prefixes = [\"/\"]\n",
+                crate::config::DEFAULT_RECORDING_RULE
+            ),
+        )
+        .unwrap();
+
+        let result = crate::e2e_run::initialize_standard_e2e_project(root.to_path_buf()).unwrap();
+        let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
+
+        assert_eq!(
+            config.project_cli,
+            PathBuf::from(format!("scripts/{repository_name}-cli"))
+        );
+        assert_eq!(
+            config.replay_policy,
+            PathBuf::from(".traffic-e2e/replay.yaml")
+        );
+        assert_eq!(config.pr_base, "dev-migration");
+        assert_eq!(
+            config.recorder_config,
+            Some(PathBuf::from(".traffic-e2e/recorder.toml"))
+        );
+        assert_eq!(
+            config.recording_rule.as_deref(),
+            Some(crate::config::DEFAULT_RECORDING_RULE)
+        );
+    }
+
+    #[test]
     fn initialize_persists_api_verification_overrides() {
         let target = target();
         let mut options = options(target.path());
@@ -518,13 +593,13 @@ mod tests {
     }
 
     #[test]
-    fn initialize_refuses_overwrite_without_force() {
+    fn initialize_refuses_overwrite_without_explicit_replacement() {
         let target = target();
         initialize(options(target.path())).unwrap();
 
         let error = initialize(options(target.path())).unwrap_err();
 
-        assert!(error.to_string().contains("use --force"));
+        assert!(error.to_string().contains("refusing to replace it"));
         let mut replacement = options(target.path());
         replacement.force = true;
         let result = initialize(replacement).unwrap();
@@ -754,7 +829,11 @@ overrides:
         let error = resolve_layout(target.path(), &cases, None).unwrap_err();
 
         assert!(error.to_string().contains("incomplete or obsolete"));
-        assert!(error.to_string().contains("traffic-e2e init --force"));
+        assert!(
+            error
+                .to_string()
+                .contains("traffic-e2e config project init")
+        );
     }
 
     #[test]
@@ -783,9 +862,10 @@ overrides:
         let error = resolve_layout(target.path(), &cases, None).unwrap_err();
 
         assert!(error.to_string().contains("project.yaml"));
-        assert!(error.to_string().contains("traffic-e2e init"));
-        assert!(error.to_string().contains("--project-cli"));
-        assert!(error.to_string().contains("--replay-policy"));
-        assert!(error.to_string().contains("--pr-base"));
+        assert!(
+            error
+                .to_string()
+                .contains("traffic-e2e config project init")
+        );
     }
 }

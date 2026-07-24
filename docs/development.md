@@ -20,11 +20,14 @@ mirror. Do not replace that registry configuration unless explicitly asked.
 
 ## CLI Boundaries
 
-Use `traffic-e2e init|prepare|run-api|run|status|recover|abort` for the standard
-workflow. Use `traffic-e2e diagnose ...` only for recorder development or
-focused low-level diagnosis. Managed record, replay, target isolation, and host
-interception are implemented in the Rust binary. Repository scripts are
-development checks or explicit host trust-store tools only.
+Use `traffic-e2e config ... init` for one-time target configuration and
+`traffic-e2e prepare|run-api|run|status|recover|abort` for the standard
+workflow. Use `traffic-e2e config recorder|replay plan|apply` for
+evidence-driven managed changes. Use `traffic-e2e diagnose ...` only for
+recorder development or focused low-level diagnosis. Managed record, replay,
+target isolation, and host interception are implemented in the Rust binary.
+Repository scripts are development checks or explicit host trust-store tools
+only.
 
 ## Running Locally
 
@@ -253,10 +256,10 @@ traffic-e2e replay --no-intercept path/to/case-dir
 
 Target-specific dynamic UUID, timestamp, and signed-query matching belongs in
 a source-controlled `.traffic-e2e/replay.yaml`, not product code or recorded fixture
-overrides. Validate and load it explicitly:
+overrides. Initialize it once and load it explicitly:
 
 ```bash
-traffic-e2e diagnose replay-policy validate --policy ../target/.traffic-e2e/replay.yaml
+traffic-e2e config replay init --target-root ../target
 traffic-e2e replay --policy ../target/.traffic-e2e/replay.yaml path/to/case-dir
 ```
 
@@ -267,32 +270,24 @@ behavior.
 
 Recorder-owned host exceptions for API-independent process-level tasks remain
 in the target repository's `.traffic-e2e/recorder.toml`, not
-`.traffic-e2e/replay.yaml`. Preview and apply an add-only host after source
-inspection proves that all traffic to that host belongs to a task that is
-unrelated to API handlers:
+`.traffic-e2e/replay.yaml`. Apply an add-only host after source inspection
+proves that all traffic to that host belongs to a task that is unrelated to API
+handlers:
 
 ```bash
-traffic-e2e diagnose recorder-config \
-  --config ../target/.traffic-e2e/recorder.toml \
-  allowed-unused-http-hosts plan \
+traffic-e2e config recorder apply allowed-unused-http-hosts \
+  --target-root ../target \
   --rule record-api \
-  --host cs.aliyuncs.com \
-  --format json
-
-traffic-e2e diagnose recorder-config \
-  --config ../target/.traffic-e2e/recorder.toml \
-  allowed-unused-http-hosts apply \
-  --rule record-api \
-  --host cs.aliyuncs.com \
-  --format json
+  --host cs.aliyuncs.com
 ```
 
 The tool bootstraps and then owns an
 `AI-MANAGED ALLOWED UNUSED HTTP HOSTS` block inside the selected named
-`[[http_gateway.rules]]` entry. Plans are add-only, sorted, deduplicated, and
-safe against concurrent config changes. One host applies to every case selected
-by that recording rule, independent of which active API window happened to
-capture the process-level task.
+`[[http_gateway.rules]]` entry. Apply replans against current evidence and is
+add-only, sorted, deduplicated, atomic, and safe against concurrent config
+changes. One host applies to every case selected by that recording rule,
+independent of which active API window happened to capture the process-level
+task.
 
 Pass the config and rule together for direct replay:
 
@@ -422,21 +417,12 @@ the canonical case source. Mixed directories, duplicate case ids, overlapping
 groups, a changed source revision, or a changed case inventory fail the command.
 
 Replay-time route discovery can produce safe `case_path_patterns` feedback for
-a target repository. Preview focused, add-only feedback before applying it:
+a target repository. Apply focused, add-only feedback through the managed
+configuration interface:
 
 ```bash
-traffic-e2e diagnose recorder-config \
-  --config ../target/.traffic-e2e/recorder.toml \
-  case-path-patterns plan \
-  --rule record-api \
-  --authority focused \
-  --source-revision "$(git -C ../source rev-parse HEAD)" \
-  --case-source /path/to/focused-cases \
-  --pattern '/api/users/*/xxx'
-
-traffic-e2e diagnose recorder-config \
-  --config ../target/.traffic-e2e/recorder.toml \
-  case-path-patterns apply \
+traffic-e2e config recorder apply case-path-patterns \
+  --target-root ../target \
   --rule record-api \
   --authority focused \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
@@ -452,23 +438,12 @@ add-only: a full case source or full replay does not authorize deleting patterns
 that were not observed.
 
 Delete only a specifically proven-invalid entry already inside the AI-managed
-block. Name it explicitly, attach single-line source-route evidence, inspect
-and show the plan diff, then apply the same correction with `--allow-delete`
-only after the user requested or approved it:
+block. Name it explicitly, attach single-line source-route evidence, and include
+`--allow-delete`:
 
 ```bash
-traffic-e2e diagnose recorder-config \
-  --config ../target/.traffic-e2e/recorder.toml \
-  case-path-patterns plan \
-  --rule record-api \
-  --source-revision "$(git -C ../source rev-parse HEAD)" \
-  --case-source /path/to/cases \
-  --remove-incorrect-pattern '/api/incorrect/*' \
-  --correction-evidence 'router.go@<revision>: route is static /api/incorrect'
-
-traffic-e2e diagnose recorder-config \
-  --config ../target/.traffic-e2e/recorder.toml \
-  case-path-patterns apply \
+traffic-e2e config recorder apply case-path-patterns \
+  --target-root ../target \
   --rule record-api \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --case-source /path/to/cases \
@@ -478,23 +453,19 @@ traffic-e2e diagnose recorder-config \
 ```
 
 Omission from recordings, including an authoritative or full case source, is
-never correction evidence. On the initial correction plan, every named pattern
-must appear in `removed`. Replanning the same correction after apply reports it
-under `corrections_already_absent` with an empty diff. Use `--format json` for
-machine-readable feedback. The command never modifies recordings or existing
-case directories.
+never correction evidence. Every named pattern must appear in the internally
+computed removal plan before deletion. The command always emits JSON and never
+modifies recordings or existing case directories.
 
-A focused plan with no `--pattern` is valid and returns `no_candidates: true`
-with no config diff. This provides mandatory no-change evidence without
-rewriting the managed block or its source revision.
+A focused action with no `--pattern` is valid and returns
+`no_candidates: true` with no config diff.
 
-After the final aggregate and target response-assertion report exist, ensure
-the recorder exclusion deterministically:
+After the final aggregate and target response-assertion report exist, apply the
+recorder exclusion deterministically:
 
 ```bash
-traffic-e2e diagnose recorder-config \
-  --config ../target/.traffic-e2e/recorder.toml \
-  verified-excludes ensure \
+traffic-e2e config recorder apply verified-excludes \
+  --target-root ../target \
   --rule record-api \
   --method GET \
   --pattern '/api/users/*' \
@@ -503,16 +474,14 @@ traffic-e2e diagnose recorder-config \
   --consecutive-successful-runs 3 \
   --consecutive-successful-cases 9 \
   --required-consecutive-successful-runs 3 \
-  --required-successful-cases 3 \
-  --format json
+  --required-successful-cases 3
 ```
 
-`ensure` returns `below_threshold` without changing the config, returns
+The action returns `below_threshold` without changing the config,
 `already_present` for an existing exact entry, or atomically applies an
-eligible entry and replans before returning `applied`. Dirty, incomplete, or
-mismatched evidence fails the command. `plan` and `apply` remain available for
-diagnostics, but traffic E2E automation must not reimplement their eligibility
-branching.
+eligible entry. Dirty, incomplete, or mismatched evidence fails the command.
+Use `plan` with the same strategy and arguments only for optional diagnostics;
+automation must not reimplement eligibility branching or edit the file.
 
 Thresholds live in `.traffic-e2e/project.yaml`; `.traffic-e2e/recorder.toml` stores only
 the managed verified exclusions. Neither belongs in `.traffic-e2e/replay.yaml`. See
@@ -526,25 +495,15 @@ failures, not product behavior evidence.
 ## Migration E2E Runner
 
 Use `traffic-e2e` as the high-level migration replay command. Initialize the
-target repository once:
+target project configuration after the recorder and replay documents, project
+facade, ignored local root, and `dev-migration` branch exist:
 
 ```bash
-traffic-e2e init \
-  --target-root ../target \
-  --project-cli scripts/<project>-cli \
-  --replay-policy .traffic-e2e/replay.yaml \
-  --api-verification-consecutive-successful-runs 3 \
-  --api-verification-successful-cases 3 \
-  --api-verification-override 'GET /api/widgets/*=5,200' \
-  --pr-base <confirmed-base-branch> \
-  --recorder-config .traffic-e2e/recorder.toml \
-  --recording-rule record-api
+traffic-e2e config project init --target-root ../target
 ```
 
-The command requires confirmed `project_cli`, `replay_policy`, and
-`pr_base` values, validates that the branch exists locally or as an
-`origin` remote-tracking branch, checks that `.traffic-e2e/local/` is ignored,
-and generates `.traffic-e2e/project.yaml`:
+The command validates the conventional inputs and generates
+`.traffic-e2e/project.yaml`:
 
 ```yaml
 version: 4
@@ -554,11 +513,8 @@ replay_startup_timeout_seconds: 60
 api_verification:
   consecutive_successful_runs: 3
   successful_cases: 3
-  overrides:
-    GET /api/widgets/*:
-      consecutive_successful_runs: 5
-      successful_cases: 200
-pr_base: <confirmed-base-branch>
+  overrides: {}
+pr_base: dev-migration
 recorder_config: .traffic-e2e/recorder.toml
 recording_rule: record-api
 local_root: local
@@ -570,24 +526,18 @@ omitted from an older config. The runner prints `loaded_cases=0` when dependency
 loading starts, then relays progress about every 5% by loaded case count while
 retaining the complete replay log in the run reports directory.
 
-`api_verification` owns both verification thresholds. The top-level values are
-defaults. `overrides` uses the canonical runner API id
-`METHOD path_pattern`; each entry replaces both defaults for that exact API.
-The repeated `--api-verification-override` flag uses
-`METHOD path_pattern=successful-runs,successful-cases`. The successful-case
+`api_verification` owns both verification thresholds. The successful-case
 threshold counts canonical cases covered by trailing successful distinct
 published runs. Replaying one run does not advance either threshold. Once an
-API's effective thresholds are met, the runner synchronizes it into the managed
-recorder exclusion list; `.traffic-e2e/recorder.toml` does not own another
-threshold.
+API's thresholds are met, the runner synchronizes it into the managed recorder
+exclusion list; `.traffic-e2e/recorder.toml` does not own another threshold.
 
-The recorder flags are optional only as a pair. Existing configuration is not
-overwritten unless `--force` is explicit. If the file is missing, every other
-runner command points back to `init`; if any required field is missing or the
-configured PR base no longer resolves, every command fails before using
-traffic E2E state. `prepare`, `run-api`, and `run` require a named feature branch
-different from `pr_base`. Do not hand-write it. Prepare each API only after
-confirming whether its source URI is static or dynamic:
+Existing configuration is never overwritten. If the file is missing, every
+other runner command points back to `config project init`; if any required
+field is missing or the configured PR base no longer resolves, every command
+fails before using traffic E2E state. `prepare`, `run-api`, and `run` require a
+named feature branch different from `pr_base`. Do not hand-write it. Prepare
+each API only after confirming whether its source URI is static or dynamic:
 
 ```bash
 traffic-e2e prepare \
@@ -792,37 +742,21 @@ Use a finalized replay report to create the AI-managed rule instead of editing
 the table directly:
 
 ```bash
-traffic-e2e diagnose recorder-config \
-  --config .traffic-e2e/recorder.toml \
-  background-dependencies plan \
+traffic-e2e config recorder apply background-dependencies \
+  --target-root . \
   --name config-refresh \
-  --protocol http \
-  --authority config.api.demo.test \
-  --method GET \
-  --path-prefix /1/config/service \
-  --replay-report <finalized-replay-report.json> \
-  --source-revision 0123456789abcdef \
-  --evidence 'src/config/refresh.rs:42 process-level scheduled refresh' \
-  --format json
-
-traffic-e2e diagnose recorder-config \
-  --config .traffic-e2e/recorder.toml \
-  background-dependencies apply \
-  --name config-refresh \
-  --protocol http \
   --authority config.api.demo.test \
   --method GET \
   --path-prefix /1/config/service \
   --replay-report <same-finalized-replay-report.json> \
   --source-revision 0123456789abcdef \
-  --evidence 'src/config/refresh.rs:42 process-level scheduled refresh' \
-  --format json
+  --evidence 'src/config/refresh.rs:42 process-level scheduled refresh'
 ```
 
-`plan` requires at least one matching unused case HTTP exchange and rejects a
-selector that also matches unmatched or unsupported target requests. `apply`
-rechecks the recorder config and replay report bytes so a reviewed plan cannot
-be applied to stale inputs. One rule owns one exact authority, method, and path
+The action requires at least one matching unused case HTTP exchange and rejects
+a selector that also matches unmatched or unsupported target requests. It
+replans against the current recorder config and replay report immediately
+before its atomic write. One rule owns one exact authority, method, and path
 prefix; use separate rules for distinct request families.
 
 Recognized MySQL connection maintenance is not a semantic dependency. The

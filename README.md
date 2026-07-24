@@ -41,7 +41,9 @@ cargo build --release
 Use the binary directly for the standard traffic E2E workflow:
 
 ```bash
-traffic-e2e init ...
+traffic-e2e config recorder init ...
+traffic-e2e config replay init ...
+traffic-e2e config project init ...
 traffic-e2e prepare ...
 traffic-e2e run-api ...
 traffic-e2e run ...
@@ -50,9 +52,10 @@ traffic-e2e recover ...
 traffic-e2e abort ...
 ```
 
-Low-level recorder, replay, grouping, policy, and report commands live under
-`traffic-e2e diagnose`. Managed recording, replay, fixed-user target isolation,
-and host interception are implemented by the same Rust binary.
+Evidence-driven recorder and replay configuration changes live under
+`traffic-e2e config ... plan|apply`; low-level grouping and report commands live
+under `traffic-e2e diagnose`. Managed recording, replay, fixed-user target
+isolation, and host interception are implemented by the same Rust binary.
 
 ## Run
 
@@ -107,8 +110,9 @@ traffic-e2e replay path/to/recordings/<run-id>
 
 For runtime-generated UUIDs, timestamps, and signed query fields, keep a
 source-controlled `.traffic-e2e/replay.yaml` in the target project and pass it with
-`--policy`. Validate it with `traffic-e2e diagnose replay-policy validate --policy
-.traffic-e2e/replay.yaml`. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
+`--policy`. Initialize it with `traffic-e2e config replay init --target-root
+<target>`; initialization, strategy application, and replay each validate the
+policy. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
 
 `traffic-e2e replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
@@ -212,7 +216,7 @@ headers = { "x-record" = "yes" }
 
 `[[http_gateway.exclude_rules]]` uses the same host, method, path-prefix, and
 exact-header conditions as ordinary rules. Exclusions are evaluated first;
-matching traffic is sent to `fallback_upstream` and does not create a case. If
+matching traffic uses the configured fallback and does not create a case. If
 no `[[http_gateway.rules]]` entries are configured, all non-excluded gateway
 traffic is treated as matched and recorded. Within a rule, values in one list
 are alternatives while different fields must all match. `preserve_host = true`
@@ -230,7 +234,7 @@ rounds. Global defaults may be overridden for an exact
 verifies convergence.
 The path pattern may be exact, use whole-segment `*`, or end in a `**`
 catch-all matching one or more remaining segments.
-On the next recorder start, matching traffic goes to `fallback_upstream`
+On the next recorder start, matching traffic uses the configured fallback
 without creating a case.
 See [Verified API Excludes](docs/verified-api-excludes.md).
 
@@ -269,9 +273,9 @@ example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
 `case_path_patterns = ["/api/users/*/xxx"]`.
 
 For replay-time AI feedback, keep patterns inside the explicit managed block
-shown above. Use
-`traffic-e2e diagnose recorder-config case-path-patterns plan` to inspect the
-proposed diff, then rerun it with `apply`. Feedback is add-only even for a
+shown above. Use `traffic-e2e config recorder apply case-path-patterns`; the
+command plans and validates against the current evidence before updating the
+standard target config atomically. Feedback is add-only even for a
 collection-wide case source; an existing pattern is never deleted merely
 because current cases omit it. Correct a specifically proven-invalid
 AI-managed pattern only through the explicit correction flags described in

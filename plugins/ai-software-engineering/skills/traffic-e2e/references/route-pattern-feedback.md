@@ -84,23 +84,21 @@ case_path_patterns = [
   If the source repo or managed target config is absent, record exactly
   `not_applicable_missing_source_repo` or
   `not_applicable_missing_managed_config`; generic `not-applicable` is invalid.
-- Preview feedback first. The plan command is mandatory whenever the source
-  repo and managed target config exist, including when no pattern or no diff is
-  expected. A focused plan with no candidate patterns omits `--pattern` and
-  MUST return `no_candidates: true`, `changed: false`, and an empty diff.
-  Persist its JSON output as evidence. Supply the target config, rule
-  name, source revision, case source, authority mode, and every accepted pattern:
+- Use `apply` for the normal automated update; it performs the same validation
+  and planning before writing atomically. Use `plan` only when a diagnostic
+  preview is useful. A focused call with no candidate patterns omits
+  `--pattern` and MUST return `no_candidates: true`, `changed: false`, and an
+  empty diff. Supply the target root, rule name, source revision, case source,
+  authority mode, and every accepted pattern:
 
 ```bash
-traffic-e2e diagnose recorder-config \
-  --config path/to/recorder.toml \
-  case-path-patterns plan \
+traffic-e2e config recorder apply case-path-patterns \
+  --target-root <target> \
   --rule record-api \
   --authority focused \
   --source-revision <revision> \
   --case-source path/to/cases \
-  --pattern '/api/example/*' \
-  --format json
+  --pattern '/api/example/*'
 ```
 
 - Inspect `added`, `removed`, and `diff`. Normal feedback under every authority
@@ -117,21 +115,14 @@ traffic-e2e diagnose recorder-config \
   `--remove-incorrect-pattern` and provide single-line source file, revision,
   and route evidence with `--correction-evidence`. The tool must reject an
   implicit removal or correction evidence without a named removal. On the
-  initial plan, require every named correction to appear in `removed`; an
-  already absent name is a no-op and must not authorize apply. Show the deletion
-  diff to the user before applying it. Apply only when the user requested that
-  correction or explicitly approved the shown diff, and include
-  `--allow-delete`.
-- When a reviewed plan contains a confirmed safe addition or approved
-  correction, running the same command with `apply` is mandatory. Persist the
-  JSON apply report, then rerun and persist `plan` with the same inputs. Its
-  final `diff` MUST be empty; a corrected pattern appears in
-  `corrections_already_absent`. Record `confirmed_no_change` only when the
-  initial plan has no diff, and `applied` only after this apply-and-replan
-  verification closes the loop.
+  validated plan, require every named correction to appear in `removed`; an
+  already absent name is a no-op and must not authorize deletion. Include
+  `--allow-delete` only with that evidence.
+- Persist the JSON apply report. Record `confirmed_no_change` when it has no
+  diff and `applied` only when the atomic update succeeds.
 - Never copy recorded parameter values into product config or product code.
 - The CLI must validate the complete TOML, preserve text outside the managed
-  block, and show the config diff. Show that diff to the user.
+  block, and include the config diff in its report.
 - Do not move or rename existing case directories; new patterns affect only
   future manual recordings.
 

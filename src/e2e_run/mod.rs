@@ -104,6 +104,25 @@ pub fn initialize_e2e_run(options: E2eRunInitOptions) -> Result<E2eRunInitResult
     config::initialize(options)
 }
 
+pub fn initialize_standard_e2e_project(target_root: PathBuf) -> Result<E2eRunInitResult> {
+    let resolved_root = std::fs::canonicalize(&target_root)
+        .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
+    let repository_name = crate::repository::directory_name(&resolved_root)?;
+    initialize_e2e_run(E2eRunInitOptions {
+        target_root,
+        project_cli: PathBuf::from(format!("scripts/{repository_name}-cli")),
+        replay_policy: PathBuf::from(".traffic-e2e/replay.yaml"),
+        replay_startup_timeout_seconds: 60,
+        api_verification_consecutive_successful_runs: 3,
+        api_verification_successful_cases: 3,
+        api_verification_overrides: Vec::new(),
+        pr_base: "dev-migration".to_string(),
+        recorder_config: Some(PathBuf::from(".traffic-e2e/recorder.toml")),
+        recording_rule: Some(crate::config::DEFAULT_RECORDING_RULE.to_string()),
+        force: false,
+    })
+}
+
 pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareResult> {
     let (config, layout) = config::resolve_layout(
         &options.context.target_root,
