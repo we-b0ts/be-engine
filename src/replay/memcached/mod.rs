@@ -22,10 +22,17 @@ use crate::memcached::{
 };
 
 mod builtins;
-use super::report::command::{
-    CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
+use super::command_matching::{
+    CaseConnectionBinding, CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic,
+    preferred_match, unmatched_diagnostic,
 };
-use builtins::{binary_error, memcached_is_unsupported};
+use super::report::command::{
+    CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
+    CommandUnusedReport,
+};
+use builtins::{
+    adapt_binary_get_responses, binary_error, binary_get_opcodes_match, memcached_is_unsupported,
+};
 
 #[derive(Debug, Clone, Deserialize)]
 pub(super) struct RecordedConnection {
@@ -226,11 +233,10 @@ impl MemcachedReplayState {
         bound_connection: Option<Uuid>,
         wire_protocol: MemcachedWireProtocol,
         request: &MemcachedRequest,
-    ) -> Option<MatchedMemcachedExchange> {
+    ) -> std::result::Result<MatchedMemcachedExchange, CommandMatchDiagnostic> {
         let wire = wire_protocol.as_str();
-        let index = preferred_index(&self.exchanges, active_case_id, |index, exchange| {
+        let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
-                && is_lane_head(&self.exchanges, index)
                 && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
                 && target_matches(
                     target,
@@ -242,22 +248,38 @@ impl MemcachedReplayState {
                     .record
                     .command
                     .eq_ignore_ascii_case(&request.command)
-                && exchange.record.opcode == request.opcode
+                && binary_get_opcodes_match(exchange.record.opcode, request.opcode)
                 && exchange.key == request.key
                 && exchange.args == request.args
                 && exchange.value == request.value
                 && exchange.extras == request.extras
                 && exchange.record.cas == request.cas
-                && exchange.record.quiet == request.quiet
+                && (exchange.record.quiet == request.quiet
+                    || binary_get_opcodes_match(exchange.record.opcode, request.opcode))
                 && exchange.record.noreply == request.noreply
-        })?;
+        });
+        let index = match matched {
+            PreferredMatch::Matched(index) => index,
+            PreferredMatch::LaneBlocked { candidate, blocker } => {
+                return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
+            }
+            PreferredMatch::NotFound => {
+                return Err(unmatched_diagnostic(
+                    &self.exchanges,
+                    active_case_id,
+                    |exchange| {
+                        memcached_mismatch_fields(exchange, target, bound_connection, wire, request)
+                    },
+                ));
+            }
+        };
         let exchange = &mut self.exchanges[index];
         exchange.status = if exchange.timing.outcome().is_client_terminated() {
             ReplayExchangeStatus::AwaitingClientTermination
         } else {
             ReplayExchangeStatus::Responding
         };
-        Some(MatchedMemcachedExchange {
+        Ok(MatchedMemcachedExchange {
             index,
             connection_id: exchange.record.connection_id,
             response_frames: exchange.response_frames.clone(),
@@ -294,6 +316,7 @@ impl MemcachedReplayState {
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
             reason,
+            diagnostic: None,
         });
     }
 
@@ -334,7 +357,7 @@ pub(super) async fn handle_connection(
     } else {
         MemcachedWireProtocol::Text
     };
-    let mut bound_connection = None;
+    let mut connection_binding = CaseConnectionBinding::default();
     match wire {
         MemcachedWireProtocol::Text => {
             let mut reader = MemcachedBufferedReader::new(&mut stream, 64 * 1024 * 1024);
@@ -358,7 +381,7 @@ pub(super) async fn handle_connection(
                 let matched = match_memcached_request(
                     &state,
                     &target_key,
-                    &mut bound_connection,
+                    &mut connection_binding,
                     wire,
                     &request,
                 )
@@ -421,17 +444,26 @@ pub(super) async fn handle_connection(
                 let matched = match_memcached_request(
                     &state,
                     &target_key,
-                    &mut bound_connection,
+                    &mut connection_binding,
                     wire,
                     &request,
                 )
                 .await;
                 match matched {
                     Some(mut matched) => {
-                        for response in &mut matched.response_frames {
-                            if response.len() >= 16 {
-                                response[12..16].copy_from_slice(&frame.opaque.to_be_bytes());
-                            }
+                        if let Err(reason) = adapt_binary_get_responses(
+                            &mut matched.response_frames,
+                            frame.opcode,
+                            frame.opaque,
+                            request.key.as_deref(),
+                            matched.timing.outcome() == DependencyExchangeOutcome::NoResponse,
+                        ) {
+                            state
+                                .lock()
+                                .await
+                                .memcached
+                                .fail_exchange(&matched, reason.to_string());
+                            return Err(anyhow!(reason));
                         }
                         if deliver_memcached_exchange(&mut reader, &state, &matched).await? {
                             report_writer.request();
@@ -512,6 +544,7 @@ async fn record_runtime_unsafe(
         target: target.clone(),
         command: command.to_string(),
         reason,
+        diagnostic: None,
     };
     let _ = protocol;
     state.memcached.events.unsafe_events.push(request);
@@ -520,7 +553,7 @@ async fn record_runtime_unsafe(
 async fn match_memcached_request(
     state: &Arc<Mutex<ReplayState>>,
     target: &TargetKey,
-    bound_connection: &mut Option<Uuid>,
+    connection_binding: &mut CaseConnectionBinding,
     wire: MemcachedWireProtocol,
     request: &MemcachedRequest,
 ) -> Option<MatchedMemcachedExchange> {
@@ -536,27 +569,30 @@ async fn match_memcached_request(
                 target: target.clone(),
                 command: request.command.clone(),
                 reason: "Memcached command mode is unsupported for replay".to_string(),
+                diagnostic: None,
             });
         return None;
     }
+    let bound_connection = connection_binding.connection(active_case_id.as_deref());
     match state.memcached.match_memcached(
         active_case_id.as_deref(),
         target,
-        *bound_connection,
+        bound_connection,
         wire,
         request,
     ) {
-        Some(matched) => {
-            bound_connection.get_or_insert(matched.connection_id);
+        Ok(matched) => {
+            connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
             Some(matched)
         }
-        None => {
+        Err(diagnostic) => {
             state.memcached.events.unmatched.push(CommandRequestReport {
                 case_id: active_case_id,
                 target: target.clone(),
                 command: request.command.clone(),
                 reason: "no recorded Memcached exchange matched target/protocol/arguments"
                     .to_string(),
+                diagnostic: Some(diagnostic),
             });
             None
         }
@@ -612,49 +648,7 @@ fn target_matches(target: &TargetKey, host: &str, port: u16) -> bool {
     target.host == normalize_host(host) && target.port == port
 }
 
-fn preferred_index<T>(
-    exchanges: &[T],
-    active_case_id: Option<&str>,
-    matches: impl Fn(usize, &T) -> bool,
-) -> Option<usize>
-where
-    T: ExchangeScope,
-{
-    exchanges
-        .iter()
-        .enumerate()
-        .find(|(index, exchange)| {
-            exchange.source() == ReplaySource::Case
-                && exchange.case_id() == active_case_id
-                && matches(*index, exchange)
-        })
-        .map(|(index, _)| index)
-        .or_else(|| {
-            exchanges
-                .iter()
-                .enumerate()
-                .find(|(index, exchange)| {
-                    exchange.source() == ReplaySource::Bootstrap && matches(*index, exchange)
-                })
-                .map(|(index, _)| index)
-        })
-}
-
-fn is_lane_head(exchanges: &[ReplayExchange], candidate: usize) -> bool {
-    let exchange = &exchanges[candidate];
-    !exchanges.iter().any(|other| {
-        !other.status.is_consumed()
-            && other.record.connection_id == exchange.record.connection_id
-            && other.record.sequence < exchange.record.sequence
-    })
-}
-
-trait ExchangeScope {
-    fn source(&self) -> ReplaySource;
-    fn case_id(&self) -> Option<&str>;
-}
-
-impl ExchangeScope for ReplayExchange {
+impl CommandExchangeScope for ReplayExchange {
     fn source(&self) -> ReplaySource {
         self.source
     }
@@ -662,6 +656,69 @@ impl ExchangeScope for ReplayExchange {
     fn case_id(&self) -> Option<&str> {
         self.case_id.as_deref()
     }
+
+    fn connection_id(&self) -> Uuid {
+        self.record.connection_id
+    }
+
+    fn sequence(&self) -> u64 {
+        self.record.sequence
+    }
+
+    fn command(&self) -> &str {
+        &self.record.command
+    }
+
+    fn is_available(&self) -> bool {
+        self.status.is_available()
+    }
+
+    fn is_consumed(&self) -> bool {
+        self.status.is_consumed()
+    }
+}
+
+fn memcached_mismatch_fields(
+    exchange: &ReplayExchange,
+    target: &TargetKey,
+    bound_connection: Option<Uuid>,
+    wire: &str,
+    request: &MemcachedRequest,
+) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if bound_connection.is_some_and(|id| exchange.record.connection_id != id) {
+        fields.push("connection");
+    }
+    if !target_matches(
+        target,
+        &exchange.record.target_host,
+        exchange.record.target_port,
+    ) {
+        fields.push("target");
+    }
+    if exchange.record.wire_protocol != wire {
+        fields.push("wire_protocol");
+    }
+    if !exchange
+        .record
+        .command
+        .eq_ignore_ascii_case(&request.command)
+        || !binary_get_opcodes_match(exchange.record.opcode, request.opcode)
+    {
+        fields.push("command");
+    }
+    if exchange.key != request.key
+        || exchange.args != request.args
+        || exchange.value != request.value
+        || exchange.extras != request.extras
+        || exchange.record.cas != request.cas
+        || (exchange.record.quiet != request.quiet
+            && !binary_get_opcodes_match(exchange.record.opcode, request.opcode))
+        || exchange.record.noreply != request.noreply
+    {
+        fields.push("arguments");
+    }
+    fields
 }
 
 fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {

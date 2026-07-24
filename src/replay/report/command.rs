@@ -20,6 +20,30 @@ pub(in crate::replay) struct CommandRequestReport {
     pub(in crate::replay) target: TargetKey,
     pub(in crate::replay) command: String,
     pub(in crate::replay) reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) diagnostic: Option<CommandMatchDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(in crate::replay) enum CommandMatchDiagnostic {
+    NoScopedCandidate,
+    Mismatch {
+        fields: Vec<String>,
+    },
+    LaneBlocked {
+        candidate: Box<CommandExchangeRefReport>,
+        blocked_by: Box<CommandExchangeRefReport>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(in crate::replay) struct CommandExchangeRefReport {
+    pub(in crate::replay) case_id: Option<String>,
+    pub(in crate::replay) source: ReplaySource,
+    pub(in crate::replay) connection_id: Uuid,
+    pub(in crate::replay) sequence: u64,
+    pub(in crate::replay) command: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

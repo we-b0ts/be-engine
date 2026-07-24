@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::MitmCa;
 mod assertion;
+mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
 mod control;
@@ -550,12 +551,26 @@ async fn handle_gateway_connection(
             )
             .await
         }
-        Some(ReplayProtocol::Mysql) | None => {
+        Some(ReplayProtocol::Mysql) => {
             let target = target.map(|target| TargetKey {
                 host: target.host,
                 port: target.port,
             });
             mysql::handle_connection(stream, peer_addr, target, state, report_writer).await
+        }
+        None => {
+            let registered_targets = state.lock().await.targets.len();
+            if registered_targets == 0 {
+                return mysql::handle_connection(stream, peer_addr, None, state, report_writer)
+                    .await;
+            }
+            let original = original_dst(&stream)
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|error| format!("unavailable ({error})"));
+            Err(anyhow!(
+                "no replay target is registered for intercepted destination {original}; \
+                 loaded {registered_targets} target mappings"
+            ))
         }
     }
 }
@@ -566,19 +581,25 @@ async fn replay_target_for_stream(
 ) -> Option<ReplayTarget> {
     let original = original_dst(stream).ok();
     let state = state.lock().await;
+    replay_target_for_original(original, &state.targets)
+}
+
+fn replay_target_for_original(
+    original: Option<SocketAddr>,
+    targets: &[ReplayTarget],
+) -> Option<ReplayTarget> {
     if let Some(SocketAddr::V4(addr)) = original {
         let ip = *addr.ip();
         let port = addr.port();
-        if let Some(target) = state
-            .targets
+        if let Some(target) = targets
             .iter()
             .find(|target| target.fake_ip == ip && target.port == port)
         {
             return Some(target.clone());
         }
     }
-    if state.targets.len() == 1 {
-        let target = &state.targets[0];
+    if targets.len() == 1 {
+        let target = &targets[0];
         return Some(target.clone());
     }
     None

@@ -213,6 +213,7 @@ mod tests {
                 Some("SHOW FULL TABLES FROM `` LIKE 'PROBABLYNOT'"),
             ),
             (3, "COM_QUERY", Some("SELECT 1;")),
+            (4, "COM_QUERY", Some("SELECT 2")),
         ];
         for (sequence, command, sql) in maintenance {
             recorder
@@ -244,9 +245,9 @@ mod tests {
                 &case,
                 &RecorderEvent::MysqlExchange(mysql_exchange(
                     connection_id,
-                    4,
+                    5,
                     "COM_QUERY",
-                    Some("SELECT 2"),
+                    Some("SELECT 3"),
                 )),
                 "active_window",
             )
@@ -263,10 +264,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(semantic.lines().count(), 1);
-        assert!(semantic.contains("SELECT 2"));
+        assert!(semantic.contains("SELECT 3"));
         assert!(!semantic.contains("COM_PING"));
         assert!(!semantic.contains("PROBABLYNOT"));
         assert!(!semantic.contains("SELECT 1"));
+        assert!(!semantic.contains("SELECT 2"));
 
         let debug = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
             .await
@@ -274,6 +276,7 @@ mod tests {
         assert!(debug.contains("COM_PING"));
         assert!(debug.contains("PROBABLYNOT"));
         assert!(debug.contains("SELECT 1"));
+        assert!(debug.contains("SELECT 2"));
 
         super::super::summary::write_case_dependency_summary(&case_dir)
             .await
@@ -284,6 +287,7 @@ mod tests {
         assert!(!summary.contains("COM_PING"));
         assert!(!summary.contains("PROBABLYNOT"));
         assert!(!summary.contains("SELECT 1"));
+        assert!(!summary.contains("SELECT 2"));
 
         for (sequence, command, sql) in maintenance {
             recorder
@@ -310,9 +314,9 @@ mod tests {
             .append_bootstrap_dependency(
                 &RecorderEvent::MysqlExchange(mysql_exchange(
                     connection_id,
-                    4,
+                    5,
                     "COM_QUERY",
-                    Some("SELECT 2"),
+                    Some("SELECT 3"),
                 )),
                 "bootstrap_window",
             )
@@ -325,10 +329,11 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(bootstrap_semantic.lines().count(), 1);
-        assert!(bootstrap_semantic.contains("SELECT 2"));
+        assert!(bootstrap_semantic.contains("SELECT 3"));
         assert!(!bootstrap_semantic.contains("COM_PING"));
         assert!(!bootstrap_semantic.contains("PROBABLYNOT"));
         assert!(!bootstrap_semantic.contains("SELECT 1"));
+        assert!(!bootstrap_semantic.contains("SELECT 2"));
 
         let bootstrap_debug =
             tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-debug.jsonl"))
@@ -337,6 +342,7 @@ mod tests {
         assert!(bootstrap_debug.contains("COM_PING"));
         assert!(bootstrap_debug.contains("PROBABLYNOT"));
         assert!(bootstrap_debug.contains("SELECT 1"));
+        assert!(bootstrap_debug.contains("SELECT 2"));
     }
 
     #[tokio::test]

@@ -39,6 +39,30 @@ fn write_case_files(directory: &Path, method: &str, uri: &str) {
     fs::write(directory.join("expected-response.json"), b"{}\n").unwrap();
 }
 
+fn write_case_at(
+    root: &Path,
+    group: &str,
+    case_id: &str,
+    method: &str,
+    uri: &str,
+    timestamp: &str,
+) -> PathBuf {
+    let directory = root.join(group).join(case_id);
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("request.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "timestamp": timestamp,
+            "method": method,
+            "uri": uri,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(directory.join("expected-response.json"), b"{}\n").unwrap();
+    directory
+}
+
 fn options(
     case_source: &Path,
     case_dir: &Path,
@@ -184,6 +208,40 @@ fn static_route_uses_the_existing_directory_as_the_group() {
         result.pattern_outcome.status,
         PatternOutcomeStatus::NotRequiredStatic
     );
+}
+
+#[test]
+fn cases_are_ordered_by_recording_timestamp_instead_of_case_id() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("cases");
+    let group = source.join("list");
+    write_case_at(
+        &source,
+        "list",
+        "case-a",
+        "GET",
+        "/api/widgets/list?page=2",
+        "2026-07-24T02:00:02Z",
+    );
+    write_case_at(
+        &source,
+        "list",
+        "case-z",
+        "GET",
+        "/api/widgets/list?page=1",
+        "2026-07-24T02:00:01Z",
+    );
+
+    let result = ensure_case_group(options(
+        &source,
+        &group,
+        &temporary.path().join("case-groups.json"),
+        "/api/widgets/list",
+        None,
+    ))
+    .unwrap();
+
+    assert_eq!(result.case_ids, vec!["case-z", "case-a"]);
 }
 
 #[test]

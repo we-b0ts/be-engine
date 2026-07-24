@@ -424,22 +424,47 @@ async fn case_dependency_skips_successful_mysql_session_setup() {
         uri_group: None,
     };
 
-    recorder
-        .append_case_dependency(
-            &case,
-            &RecorderEvent::MysqlExchange(mysql_exchange(
-                "COM_QUERY",
-                Some("SET NAMES utf8"),
-                "ok",
-                Vec::new(),
-                Vec::new(),
-                None,
-                None,
-            )),
-            "active_window",
-        )
-        .await
-        .unwrap();
+    for (sql, status) in [
+        ("SET NAMES utf8", "ok"),
+        (
+            "SET sql_mode='NO_AUTO_CREATE_USER,STRICT_TRANS_TABLES'",
+            "ok",
+        ),
+        ("SET autocommit=1", "ok"),
+        ("SELECT 2", "resultset"),
+        ("SHOW COLLATION", "resultset"),
+        ("SHOW WARNINGS", "resultset"),
+        ("SELECT @@session.tx_isolation", "resultset"),
+        (
+            "/* mysql-connector-java-5.1.10 ( Revision: ${svn.Revision} ) */\
+             SELECT @@session.auto_increment_increment",
+            "resultset",
+        ),
+        (
+            "/* mysql-connector-java-5.1.10 ( Revision: ${svn.Revision} ) */\
+             SHOW VARIABLES WHERE Variable_name = 'character_set_client' \
+             OR Variable_name = 'transaction_isolation' \
+             OR Variable_name = 'max_allowed_packet'",
+            "resultset",
+        ),
+    ] {
+        recorder
+            .append_case_dependency(
+                &case,
+                &RecorderEvent::MysqlExchange(mysql_exchange(
+                    "COM_QUERY",
+                    Some(sql),
+                    status,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                )),
+                "active_window",
+            )
+            .await
+            .unwrap();
+    }
 
     let case_dir = recorder.case_staging_dir(&case);
     assert!(!case_dir.join("dependencies.jsonl").exists());
@@ -470,6 +495,10 @@ async fn case_dependency_skips_successful_mysql_session_setup() {
     assert_eq!(raw.lines().count(), 1);
     assert!(raw.contains("SET @tenant_id = 1"));
     assert!(!raw.contains("SET NAMES utf8"));
+    assert!(!raw.contains("SET sql_mode"));
+    assert!(!raw.contains("SELECT 2"));
+    assert!(!raw.contains("SHOW COLLATION"));
+    assert!(!raw.contains("auto_increment_increment"));
 }
 
 #[tokio::test]

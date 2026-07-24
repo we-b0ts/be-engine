@@ -9,6 +9,32 @@ mod tests {
     use tokio::io::AsyncWriteExt;
 
     #[test]
+    fn replay_target_requires_the_recorded_port_when_multiple_targets_are_loaded() {
+        let targets = vec![
+            ReplayTarget {
+                host: "cache.internal".to_string(),
+                port: 9447,
+                fake_ip: "198.19.0.2".parse().unwrap(),
+                protocol: ReplayProtocol::Memcached,
+            },
+            ReplayTarget {
+                host: "redis.internal".to_string(),
+                port: 9352,
+                fake_ip: "198.19.0.2".parse().unwrap(),
+                protocol: ReplayProtocol::Redis,
+            },
+        ];
+
+        let matched =
+            replay_target_for_original(Some("198.19.0.2:9352".parse().unwrap()), &targets).unwrap();
+        assert_eq!(matched.protocol, ReplayProtocol::Redis);
+        assert!(
+            replay_target_for_original(Some("198.19.0.2:9351".parse().unwrap()), &targets)
+                .is_none()
+        );
+    }
+
+    #[test]
     fn handshake_packet_auth_plugin_is_sqlx_compatible() {
         let packet = handshake_packet(7);
         assert_eq!(packet.sequence_id, 0);
