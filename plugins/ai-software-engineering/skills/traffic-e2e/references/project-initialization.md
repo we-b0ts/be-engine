@@ -256,13 +256,6 @@ to `127.0.0.1` by default. Docker port mappings are fixed when the anchor is
 created; if they change, recreate only the managed anchor after preserving its
 prior state.
 
-If the standard image is unavailable in the target environment, generate a
-minimal `Dockerfile.recording-network` from an approved pinned base and build
-`<project>-recording-network:local` automatically from
-`scripts/start-recording`. Do not require the user to run a separate build
-command. Keep this a fallback only, verify the resulting image before creating
-the anchor, and do not copy repository contents into it.
-
 Use the fixed recording identity `trp-record` with numeric UID/GID `998:998`
 inside the Recorder and every dependency-producing recording image. Resolve
 and verify this identity inside the recording containers, not from the host
@@ -278,26 +271,21 @@ host source path. For example:
 host /x/y-recording -> container /x/y
 ```
 
-Create these recording host directories once and reuse them across recording
-runs; never place them beneath a run identifier. Own the recording directories
-with numeric `998:998` and verify the required read, write, and traversal
-operations from a `998:998` probe before startup. Never change the ownership,
-mode, or ACL of the original host sources.
-
-Classify each mount from the inspected runtime behavior. Seed a recording
-directory that requires existing input from its original source into the stable
-`-recording` sibling before first use. Preserve the original relative layout,
-then assign the copied tree to numeric `998:998`. Create an output-only
-recording sibling directly instead of copying historical output. If target
-evidence requires refreshing an input on every startup, refresh only that
-recording sibling and make the replacement atomic; never create a per-run
-application mount.
+Create these recording host directories empty, once, and reuse them across
+recording runs; never place them beneath a run identifier. Do not seed, copy,
+or refresh content from the original host sources: the recording runtime owns
+all content generated in these directories. A bounded root setup step may
+create a missing recording sibling and assign it to numeric `998:998`, but it
+must not recursively take ownership of an unrecognized existing path. Verify
+the required read, write, and traversal operations from a `998:998` probe
+before startup. Never change the ownership, mode, or ACL of the original host
+sources, and never use broad world-writable permissions as a substitute.
 
 For a read-only bind mount that the recording process can consume without
 changing, retain the original source read-only. If the process must change any
-part of it, use the same stable `-recording` sibling rule. Refuse an existing
-recording sibling that is not provably owned by this recording scaffold rather
-than recursively changing an unrelated directory.
+part of it, use the same empty stable `-recording` sibling rule. Refuse an
+existing recording sibling that is not provably owned by this recording
+scaffold rather than recursively changing an unrelated directory.
 
 Only Recorder case output, reports, and run-specific diagnostics belong under a
 run identifier. Keep the Recorder CA pair and source truststore in their
@@ -529,9 +517,9 @@ The script must:
 2. expose `--help`, `--duration-seconds`, a startup-only `--smoke`, and a
    read-only `--check` or `doctor` mode;
 3. verify commands, images, host directories, ports, container conflicts,
-   the pinned or locally built anchor and Recorder images, the selected anchor
-   backing network, child namespace topology, fixed `998:998` identity, config
-   files, and required environment variable names before changing state;
+   the pinned shared anchor and Recorder images, the selected anchor backing
+   network, child namespace topology, fixed `998:998` identity, config files,
+   and required environment variable names before changing state;
 4. capture the existence and running state of every managed container;
 5. create or start the inert network-namespace anchor, then start managed
    Recorder in that namespace; when CA trust applies, wait for and validate the
