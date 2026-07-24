@@ -93,6 +93,7 @@ pub struct ReplayEventCounts {
     pub redis: CommandProtocolCounts,
     pub memcached: CommandProtocolCounts,
     pub kafka: CommandProtocolCounts,
+    pub motan: CommandProtocolCounts,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -614,6 +615,7 @@ impl ReplayEventCounts {
         self.redis.add(&other.redis);
         self.memcached.add(&other.memcached);
         self.kafka.add(&other.kafka);
+        self.motan.add(&other.motan);
     }
 
     fn is_dirty(&self) -> bool {
@@ -622,6 +624,7 @@ impl ReplayEventCounts {
             || self.redis.is_dirty()
             || self.memcached.is_dirty()
             || self.kafka.is_dirty()
+            || self.motan.is_dirty()
     }
 }
 

@@ -71,6 +71,7 @@ pub(super) fn read(report: &Value, version: u64, path: &Path) -> Result<ReplayEv
             path,
         )?,
         kafka: protocol_counts(report, "kafka", version >= 3, success_detail_limit, path)?,
+        motan: protocol_counts(report, "motan", false, success_detail_limit, path)?,
     })
 }
 

@@ -120,6 +120,7 @@ fn retains_unused_bootstrap_as_diagnostic_without_marking_dirty() {
     report["redis"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
     report["memcached"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
     report["kafka"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
+    report["motan"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
     write_report(&source, "api", report);
 
     let aggregate = aggregate_replay_reports(&source).unwrap();
@@ -131,6 +132,30 @@ fn retains_unused_bootstrap_as_diagnostic_without_marking_dirty() {
     assert_eq!(aggregate.counts.events.redis.unused_bootstrap, 1);
     assert_eq!(aggregate.counts.events.memcached.unused_bootstrap, 1);
     assert_eq!(aggregate.counts.events.kafka.unused_bootstrap, 1);
+    assert_eq!(aggregate.counts.events.motan.unused_bootstrap, 1);
+}
+
+#[test]
+fn aggregates_motan_counts_and_marks_unused_case_dirty() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v4(
+        &source.join("api"),
+        &[("case-a", "ended")],
+        "00000000-0000-4000-8000-000000000087",
+        true,
+    );
+    report["motan"] = protocol_value(2, 3, 1, 0, 0, 1, 1);
+    write_report(&source, "api", report);
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(aggregate.is_dirty());
+    assert_eq!(aggregate.counts.events.motan.connections, 2);
+    assert_eq!(aggregate.counts.events.motan.matched, 3);
+    assert_eq!(aggregate.counts.events.motan.unmatched, 1);
+    assert_eq!(aggregate.counts.events.motan.unused_case, 1);
+    assert_eq!(aggregate.counts.events.motan.unused_bootstrap, 1);
 }
 
 #[test]
@@ -320,9 +345,11 @@ fn version_five_uses_total_success_counts_beyond_retained_details() {
     report["matched_query_count"] = json!(2_295);
     report["matched_http_exchanges"] = json!([{"index": 0}]);
     report["matched_http_exchange_count"] = json!(202);
-    for protocol in ["redis", "memcached", "kafka"] {
+    report["motan"] = protocol_value(0, 1, 0, 0, 0, 0, 0);
+    for protocol in ["redis", "memcached", "kafka", "motan"] {
         report[protocol]["matched_count"] = json!(0);
     }
+    report["motan"]["matched_count"] = json!(7);
     write_session_report(&source, "api", "v5", report);
 
     let aggregate = aggregate_replay_reports(&source).unwrap();
@@ -331,6 +358,7 @@ fn version_five_uses_total_success_counts_beyond_retained_details() {
     assert_eq!(aggregate.counts.events.mysql.builtin_queries, 6_592);
     assert_eq!(aggregate.counts.events.mysql.matched_queries, 2_295);
     assert_eq!(aggregate.counts.events.http.matched_exchanges, 202);
+    assert_eq!(aggregate.counts.events.motan.matched, 7);
 }
 
 #[test]
