@@ -15,7 +15,6 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::FakeDnsEntry;
-use crate::process_lookup::lookup_udp_process;
 use crate::recorder::{BodyCapture, RecorderEvent, UdpDatagramEvent, capture_body};
 
 const UDP_RECV_BUFFER_BYTES: usize = 65_535;
@@ -74,9 +73,6 @@ async fn handle_datagram(
     let started = Instant::now();
     let fake_addr = datagram.original_dst.unwrap_or(listen_addr);
     let client_addr = Some(datagram.peer.to_string());
-    let mut process_remote_candidates = vec![fake_addr, listen_addr];
-    process_remote_candidates.dedup();
-    let client_process = lookup_udp_process(datagram.peer, &process_remote_candidates);
     let target = target_from_fake_addr(state, fake_addr).await;
     let payload = &datagram.payload;
     let upstream_addr = target
@@ -94,7 +90,6 @@ async fn handle_datagram(
                 operation_class,
                 "datagram",
                 client_addr.clone(),
-                client_process.clone(),
                 Some(match &target {
                     Some(target) => format!("{}:{}", target.entry.domain, fake_addr.port()),
                     None => fake_addr.to_string(),
@@ -124,7 +119,6 @@ async fn handle_datagram(
         timestamp: Utc::now(),
         listen_addr: listen_addr.to_string(),
         client_addr,
-        client_process,
         target_host: target.as_ref().map(|target| target.entry.domain.clone()),
         target_port: Some(fake_addr.port()),
         target_addr: Some(match &target {
@@ -140,8 +134,7 @@ async fn handle_datagram(
         duration_ms: started.elapsed().as_millis(),
         error,
     });
-    state.recorder().record(event.clone()).await?;
-    state.record_dependency_if_relevant(&event).await;
+    state.record_event(event);
     Ok(())
 }
 

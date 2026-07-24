@@ -42,7 +42,6 @@ async fn records_successful_produce_as_semantic_event() {
             handler_state,
             KafkaConnectionContext {
                 client_addr: None,
-                client_process: None,
                 target_host: "kafka.internal".to_string(),
                 target_port: 9092,
                 target_addr: "kafka.internal:9092".to_string(),
@@ -146,7 +145,6 @@ async fn records_client_terminated_produce_as_replay_safe_timeout() {
             handler_state,
             KafkaConnectionContext {
                 client_addr: None,
-                client_process: None,
                 target_host: "kafka.internal".to_string(),
                 target_port: 9092,
                 target_addr: "kafka.internal:9092".to_string(),

@@ -7,7 +7,7 @@ thresholds.
 
 ## Ownership
 
-Keep the API verification policy in target `.traffic-e2e/e2e.yaml`:
+Keep the API verification policy in target `.traffic-e2e/project.yaml`:
 
 ```yaml
 api_verification:

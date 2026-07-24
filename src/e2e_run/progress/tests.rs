@@ -94,6 +94,7 @@ fn inventory() -> CaseGroupInventory {
                     .map(|index| CanonicalCase {
                         case_id: format!("passed-{index}"),
                         case_dir: PathBuf::from("/cases"),
+                        recorded_at: None,
                     })
                     .collect(),
             },
@@ -106,6 +107,7 @@ fn inventory() -> CaseGroupInventory {
                 cases: vec![CanonicalCase {
                     case_id: "payment-passed".to_string(),
                     case_dir: PathBuf::from("/cases"),
+                    recorded_at: None,
                 }],
             },
         ],

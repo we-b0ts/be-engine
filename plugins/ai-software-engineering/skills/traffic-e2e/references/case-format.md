@@ -180,13 +180,12 @@ remain `no_response` behavior rather than client timeouts.
 
 Case dependency records also include `case_dependency_matched_by`:
 
-- `process`: dependency process matched the active upstream process
-- `active_window`: dependency occurred during the active request/response window
+- `active_window`: dependency occurred during the single active
+  request/response window in the recorder network namespace
 
-Case dependency records compact `client_process` to the process id. The global
-`traffic.jsonl` may contain full process details, but normal replay should rely
-on recorder-owned consumption of the case-local dependency files. Target code,
-tests, commands, and config must never consume them as fixtures.
+Normal replay should rely on recorder-owned consumption of the case-local
+dependency files. Target code, tests, commands, and config must never consume
+them as fixtures.
 
 `dependencies-debug.jsonl` contains raw/protocol records such as `mysql_query`,
 `mysql_response`, and `mysql_packet`. Keep these out of normal E2E assertions

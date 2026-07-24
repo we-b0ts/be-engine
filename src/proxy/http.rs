@@ -101,7 +101,6 @@ async fn handle_connect(
                             timestamp: Utc::now(),
                             protocol: "https".to_string(),
                             client_addr,
-                            client_process: None,
                             target: Some(target),
                             error: err.to_string(),
                         }))
@@ -171,7 +170,6 @@ async fn forward_and_record(
                 operation_class,
                 method.to_string(),
                 client_addr,
-                None,
                 Some(original_uri.to_string()),
                 "HTTP method is classified as a write operation",
             )
@@ -331,7 +329,6 @@ async fn forward_and_record(
                 id,
                 timestamp: Utc::now(),
                 client_addr,
-                client_process: None,
                 scheme: scheme.to_string(),
                 method: method.to_string(),
                 uri: original_uri.to_string(),
@@ -348,12 +345,7 @@ async fn forward_and_record(
                 duration_ms: started.elapsed().as_millis(),
                 error: None,
             };
-            record_event_and_case_dependency(
-                &state,
-                RecorderEvent::HttpExchange(event),
-                "failed to record HTTP exchange",
-            )
-            .await;
+            record_event_and_case_dependency(&state, RecorderEvent::HttpExchange(event));
 
             build_downstream_response(status, &response_headers, body_bytes)
         }
@@ -398,12 +390,11 @@ struct HttpErrorContext {
 }
 
 async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
-    let error = ctx.err.to_string();
+    let error = format!("{:#}", ctx.err);
     let event = HttpExchangeEvent {
         id: ctx.id,
         timestamp: Utc::now(),
         client_addr: ctx.client_addr.clone(),
-        client_process: None,
         scheme: ctx.scheme.clone(),
         method: ctx.method.to_string(),
         uri: ctx.original_uri.to_string(),
@@ -420,12 +411,7 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
         duration_ms: ctx.started.elapsed().as_millis(),
         error: Some(error.clone()),
     };
-    record_event_and_case_dependency(
-        &ctx.state,
-        RecorderEvent::HttpExchange(event),
-        "failed to record failed HTTP exchange",
-    )
-    .await;
+    record_event_and_case_dependency(&ctx.state, RecorderEvent::HttpExchange(event));
     record_event_and_case_dependency(
         &ctx.state,
         RecorderEvent::ProxyError(ProxyErrorEvent {
@@ -433,25 +419,15 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
             timestamp: Utc::now(),
             protocol: ctx.scheme,
             client_addr: ctx.client_addr,
-            client_process: None,
             target: ctx.authority,
             error: error.clone(),
         }),
-        "failed to record proxy error",
-    )
-    .await;
+    );
     simple_response(StatusCode::BAD_GATEWAY, &error)
 }
 
-async fn record_event_and_case_dependency(
-    state: &AppState,
-    event: RecorderEvent,
-    warning: &'static str,
-) {
-    if let Err(err) = state.recorder().record(event.clone()).await {
-        warn!(error = %err, "{}", warning);
-    }
-    state.record_dependency_if_relevant(&event).await;
+fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) {
+    state.record_event(event);
 }
 
 fn build_upstream_request(

@@ -123,7 +123,6 @@ pub(super) async fn record_exchange(
             sequence: pending.sequence,
             timestamp: Utc::now(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,
             target_addr: context.target_addr.clone(),
@@ -171,7 +170,6 @@ pub(super) async fn record_connection(
             timestamp: Utc::now(),
             phase: phase.to_string(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,
             target_addr: context.target_addr.clone(),
@@ -188,7 +186,6 @@ pub(super) async fn record_connection(
 }
 
 async fn record_event(state: &AppState, event: RecorderEvent) -> Result<()> {
-    state.recorder().record(event.clone()).await?;
-    state.record_dependency_if_relevant(&event).await;
+    state.record_event(event);
     Ok(())
 }

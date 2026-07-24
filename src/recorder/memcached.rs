@@ -31,7 +31,6 @@ use recording::{finish_pending, record_connection, record_exchange};
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
     pub(crate) client_addr: Option<String>,
-    pub(crate) client_process: Option<crate::recorder::ProcessInfo>,
     pub(crate) target_host: String,
     pub(crate) target_port: u16,
     pub(crate) target_addr: String,
@@ -177,7 +176,6 @@ async fn proxy_text(
                         operation_class,
                         request.command.clone(),
                         c2s_context.client_addr.clone(),
-                        c2s_context.client_process.clone(),
                         Some(c2s_context.target_addr.clone()),
                         "Memcached command is classified as a write operation",
                     )
@@ -480,7 +478,6 @@ async fn proxy_binary(
                         operation_class,
                         request.command.clone(),
                         c2s_context.client_addr.clone(),
-                        c2s_context.client_process.clone(),
                         Some(c2s_context.target_addr.clone()),
                         "Memcached command is classified as a write operation",
                     )

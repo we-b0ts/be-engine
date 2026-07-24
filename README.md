@@ -222,7 +222,7 @@ evaluated before both rule sets, so exclusion rules do not bypass
 
 `[http_gateway.verified_excludes]` contains recorder-owned, replay-verified API
 exclusions. Traffic E2E verification thresholds belong in
-`.traffic-e2e/e2e.yaml`: an API must satisfy both the configured number of
+`.traffic-e2e/project.yaml`: an API must satisfy both the configured number of
 trailing successful rounds and the successful case executions covered by those
 rounds. Global defaults may be overridden for an exact
 `METHOD + path_pattern`. When an API first becomes verified,
@@ -327,11 +327,8 @@ events such as `mysql_exchange`,
 `mysql_query`, `mysql_response`, and `mysql_packet` are written to
 `dependencies-debug.jsonl` so raw/base64 payloads do not distract the replay path.
 Each dependency line keeps the original event fields and adds
-`case_dependency_matched_by`: `process` when the dependency process matches the
-upstream process, or `active_window` when it was recorded because it happened
-during the request/response window. Dependency case files compact
-`client_process` to just the process id to keep them small; the global
-`traffic.jsonl` keeps the full process details.
+`case_dependency_matched_by: "active_window"` because dependencies are owned by
+the single active request/response window in the recorder network namespace.
 
 Run the automated readonly gateway/dependency integration test with
 `cargo test --test readonly_case_integration`. For a local two-mock or optional
@@ -388,6 +385,9 @@ bypass_domains = [
 [tcp_gateway]
 enabled = true
 listen = "127.0.0.1:15001"
+# Maximum pending connections passed to listen(2); the kernel may cap it at
+# net.core.somaxconn.
+backlog = 65535
 record_http = true
 mitm_https = true
 # Empty means attempt HTTPS MITM for all TLS-looking TCP streams.
@@ -466,6 +466,9 @@ Fake DNS mappings are persisted at `registry_path` so recorder restarts can
 continue handling fake IPs that clients already cached. If a cached fake IP now
 belongs to a `bypass_domains` entry, the TCP gateway only forwards it
 transparently and does not record or MITM it while the client cache drains.
+Registry updates are coalesced in memory and atomically flushed at most once
+every 15 seconds, with one final flush during graceful shutdown. A forced
+process kill can lose mappings created since the previous periodic flush.
 
 Port `5353` is intentionally avoided because it is commonly used by mDNS/Avahi
 on UDP. Binding to `127.0.0.153:15353` also avoids the common systemd-resolved
@@ -521,11 +524,6 @@ common connection initialization are handled by the replay server. Passwords
 from Redis `AUTH`/`HELLO AUTH` and Memcached SASL payloads are never stored.
 Keys and values are required replay evidence and are recorded in full by
 default, so the recording directory must be handled as sensitive data.
-
-For local Linux clients, `tcp_gateway` also tries to attribute intercepted
-connections to a process by scanning `/proc/net/tcp` and `/proc/<pid>/fd`.
-When available, JSONL events include `client_process` with `pid`, `comm`,
-`cmdline`, and `exe`; TLS handshake warnings log the same process label.
 
 ## Optional MySQL Protocol Proxy
 

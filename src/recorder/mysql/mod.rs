@@ -23,10 +23,12 @@ use crate::mysql::wire::{
 };
 use crate::recorder::{
     MysqlConnectionEvent, MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket,
-    MysqlTlsRejectedEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent, capture_body,
+    MysqlTlsRejectedEvent, ProxyErrorEvent, RecorderEvent, capture_body,
     capture_body_with_original_len,
 };
 
+#[cfg(test)]
+mod fifo_tests;
 mod ownership;
 mod response;
 mod semantic;
@@ -45,7 +47,6 @@ pub(crate) struct MysqlConnectionContext {
     pub route_name: Option<String>,
     pub listen_addr: String,
     pub client_addr: Option<String>,
-    pub client_process: Option<ProcessInfo>,
     pub target_host: Option<String>,
     pub target_port: Option<u16>,
     pub target_addr: Option<String>,
@@ -91,7 +92,6 @@ async fn run_route(state: AppState, route: MysqlRouteConfig) -> Result<()> {
                 route_name: route.name.clone(),
                 listen_addr: route.listen.to_string(),
                 client_addr: Some(peer_addr.to_string()),
-                client_process: None,
                 target_host,
                 target_port,
                 target_addr,
@@ -120,7 +120,6 @@ async fn handle_mysql_connection(
                     timestamp: Utc::now(),
                     protocol: "mysql".to_string(),
                     client_addr: context.client_addr.clone(),
-                    client_process: context.client_process.clone(),
                     target: Some(upstream_addr),
                     error: err.to_string(),
                 }),
@@ -144,7 +143,6 @@ pub(crate) async fn handle_connected_mysql(
     let route_name = context.route_name.clone();
     let listen_addr = context.listen_addr.clone();
     let client_addr = context.client_addr.clone();
-    let client_process = context.client_process.clone();
     let target_host = context.target_host.clone();
     let target_port = context.target_port;
     let target_addr = context.target_addr.clone();
@@ -182,7 +180,6 @@ pub(crate) async fn handle_connected_mysql(
             route_name: route_name.clone(),
             listen_addr: listen_addr.clone(),
             client_addr: client_addr.clone(),
-            client_process: client_process.clone(),
             upstream_addr: upstream_addr.clone(),
             target_host: target_host.clone(),
             target_port,
@@ -197,7 +194,6 @@ pub(crate) async fn handle_connected_mysql(
             route_name,
             listen_addr,
             client_addr,
-            client_process,
             target_host,
             target_port,
             target_addr,
@@ -225,7 +221,6 @@ pub(crate) async fn handle_connected_mysql(
         route_name: route_name.clone(),
         listen_addr: listen_addr.clone(),
         client_addr: client_addr.clone(),
-        client_process: client_process.clone(),
         upstream_addr: upstream_addr.clone(),
         target_host: target_host.clone(),
         target_port,
@@ -264,7 +259,6 @@ pub(crate) async fn handle_connected_mysql(
 
     let c2s_state = state.clone();
     let c2s_client_addr = client_addr.clone();
-    let c2s_client_process = client_process.clone();
     let c2s_authenticated = authenticated.clone();
     let c2s_query_sequence = query_sequence.clone();
     let c2s_connection_id = connection_id;
@@ -295,9 +289,7 @@ pub(crate) async fn handle_connected_mysql(
             if c2s_authenticated.load(Ordering::SeqCst)
                 && let Some(command) = parse_client_command(&packet)
             {
-                let dependency_ownership = c2s_state.capture_dependency_targets(
-                    c2s_client_process.as_ref().map(|process| process.pid),
-                );
+                let dependency_ownership = c2s_state.capture_dependency_targets();
                 let (prepared_sql, current_database) = {
                     let tracker = c2s_query_tracker.lock().await;
                     let prepared_sql = if command.command_name == "COM_STMT_EXECUTE" {
@@ -328,7 +320,6 @@ pub(crate) async fn handle_connected_mysql(
                             analysis.class,
                             command.command_name,
                             c2s_client_addr.clone(),
-                            c2s_client_process.clone(),
                             c2s_target.clone(),
                             "MySQL command is classified as a write operation",
                         )
@@ -353,7 +344,6 @@ pub(crate) async fn handle_connected_mysql(
                             analysis.operation_names(),
                             analysis.resource_names(current_database.as_deref()),
                             c2s_client_addr.clone(),
-                            c2s_client_process.clone(),
                             c2s_target.clone(),
                             "MySQL write matched a configured recording access rule",
                         )
@@ -366,7 +356,7 @@ pub(crate) async fn handle_connected_mysql(
                 if closes_connection {
                     c2s_termination.observe_client_eof();
                 }
-                let flushed_completion = {
+                {
                     let mut tracker = c2s_query_tracker.lock().await;
                     if expects_server_response {
                         tracker.start_query(
@@ -375,27 +365,23 @@ pub(crate) async fn handle_connected_mysql(
                             &command,
                             &packet,
                             c2s_client_addr.clone(),
-                            c2s_client_process.clone(),
-                        )
+                        )?;
                     } else {
-                        tracker.observe_no_response_command(&command, &packet, closes_connection)
+                        tracker.observe_no_response_command(&command, &packet);
                     }
-                };
-                record_query_completion(&c2s_state, &c2s_dependency_ownerships, flushed_completion)
-                    .await?;
+                }
                 let query_event = RecorderEvent::MysqlQuery(MysqlQueryEvent {
                     id: Uuid::new_v4(),
                     connection_id: c2s_connection_id,
                     sequence,
                     timestamp: Utc::now(),
                     client_addr: c2s_client_addr.clone(),
-                    client_process: c2s_client_process.clone(),
                     command: command.command_name,
                     query: command.query,
                     payload_len: packet.payload.len(),
                 });
                 let ownership = c2s_dependency_ownerships.get(sequence);
-                if let Err(err) = record_event(&c2s_state, query_event, ownership.as_ref()).await {
+                if let Err(err) = record_event(&c2s_state, query_event, ownership).await {
                     c2s_dependency_ownerships.take(sequence);
                     return Err(err);
                 }
@@ -439,7 +425,7 @@ pub(crate) async fn handle_connected_mysql(
                 s2c_query_tracker
                     .lock()
                     .await
-                    .observe_server_packet(&packet, packet_info)
+                    .observe_server_packet(&packet, packet_info)?
             } else {
                 Default::default()
             };
@@ -448,7 +434,7 @@ pub(crate) async fn handle_connected_mysql(
                     completion = s2c_query_tracker
                         .lock()
                         .await
-                        .finish_active("client_terminated");
+                        .finish_active("client_terminated")?;
                 } else {
                     completion.mark_client_terminated();
                 }
@@ -472,7 +458,7 @@ pub(crate) async fn handle_connected_mysql(
                         completion = s2c_query_tracker
                             .lock()
                             .await
-                            .finish_active("client_terminated");
+                            .finish_active("client_terminated")?;
                     } else {
                         completion.mark_client_terminated();
                     }
@@ -488,12 +474,11 @@ pub(crate) async fn handle_connected_mysql(
         } else {
             "incomplete"
         };
-        let completion = s2c_query_tracker
-            .lock()
-            .await
-            .finish_active(terminal_status);
-        if !completion.is_empty() {
-            record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
+        let completions = s2c_query_tracker.lock().await.finish_all(terminal_status)?;
+        for completion in completions {
+            if !completion.is_empty() {
+                record_query_completion(&s2c_state, &s2c_dependency_ownerships, completion).await?;
+            }
         }
         let _ = s2c_client_write.lock().await.shutdown().await;
         Ok::<u64, anyhow::Error>(bytes)
@@ -511,7 +496,6 @@ pub(crate) async fn handle_connected_mysql(
         route_name,
         listen_addr,
         client_addr,
-        client_process,
         target_host,
         target_port,
         target_addr,
@@ -535,7 +519,6 @@ async fn record_connection(
     route_name: Option<String>,
     listen_addr: String,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     target_host: Option<String>,
     target_port: Option<u16>,
     target_addr: Option<String>,
@@ -556,7 +539,6 @@ async fn record_connection(
             route_name,
             listen_addr,
             client_addr,
-            client_process,
             target_host,
             target_port,
             target_addr,
@@ -602,6 +584,6 @@ fn mysql_target_from_addr(addr: &str) -> (Option<String>, Option<u16>, Option<St
 }
 
 async fn record_event_and_case_dependency(state: &AppState, event: RecorderEvent) -> Result<()> {
-    let targets = state.capture_dependency_targets(event.client_pid());
-    record_event(state, event, Some(&targets)).await
+    let targets = state.capture_dependency_targets();
+    record_event(state, event, Some(targets)).await
 }

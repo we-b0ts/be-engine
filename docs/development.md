@@ -197,6 +197,13 @@ response fields. It deliberately leaves `getsign` unchanged, so recording does
 not alter the SDK's local-cache or snapshot decisions. Empty filters match
 every service or cluster.
 
+Vintage v1 reports application failures, including a missing service, as HTTP
+200 responses whose outer `code` is not `200`. These responses publish no
+connection targets and pass through unchanged so the SDK retains its normal
+fallback behavior. A successful outer response that is malformed or contains
+an unsafe node address still fails the exchange instead of leaking an
+unrecorded target.
+
 Each discovered original IPv4 address receives one stable
 `vintage-node-<address>.trp.test` alias. The rewritten HTTP exchange records the
 alias, original IP, fake IP, port, service, and cluster. Replay reserves the
@@ -507,7 +514,7 @@ mismatched evidence fails the command. `plan` and `apply` remain available for
 diagnostics, but traffic E2E automation must not reimplement their eligibility
 branching.
 
-Thresholds live in `.traffic-e2e/e2e.yaml`; `.traffic-e2e/recorder.toml` stores only
+Thresholds live in `.traffic-e2e/project.yaml`; `.traffic-e2e/recorder.toml` stores only
 the managed verified exclusions. Neither belongs in `.traffic-e2e/replay.yaml`. See
 [verified-api-excludes.md](verified-api-excludes.md) for the assertion report
 schema, exact case-set gate, and runtime behavior.
@@ -537,7 +544,7 @@ traffic-e2e init \
 The command requires confirmed `project_cli`, `replay_policy`, and
 `pr_base` values, validates that the branch exists locally or as an
 `origin` remote-tracking branch, checks that `.traffic-e2e/local/` is ignored,
-and generates `.traffic-e2e/e2e.yaml`:
+and generates `.traffic-e2e/project.yaml`:
 
 ```yaml
 version: 4
@@ -748,6 +755,15 @@ bootstrap dependency files capture replay-oriented dependencies observed before
 the service is ready, or before the first case starts when no ready probe is
 configured. Replay discovers them by walking upward from a case directory.
 
+Completed protocol events are moved by unique ownership into one asynchronous
+JSONL writer. `recording.writer_queue_capacity` bounds this queue by event count
+(default `65536`); it does not impose a byte budget. Producers never wait for
+free queue capacity. A full or closed queue marks the recording as failed so
+traffic forwarding is not delayed and an incomplete recording cannot be
+published as successful. Case and run finalization send ordered flush commands
+through the same writer, so queued dependency reservations remain in flight
+until their records have been persisted.
+
 Source-proven process-level HTTP polling can be classified before recording:
 
 ```toml
@@ -818,6 +834,15 @@ JSONL, while their derived `mysql_exchange` records are omitted from semantic
 dependency JSONL and summaries. Replay handles the same fingerprints without a
 recorded exchange: ping returns OK, `SELECT 1` returns one integer row, and the
 c3p0 empty-database probe returns MySQL error 1102.
+
+MySQL has no per-command response correlation ID, so Recorder preserves every
+response-bearing command in a connection-local FIFO and assigns server packets
+only to its oldest pending command. This covers clients that send a query and
+then `COM_PING` before the query result arrives without misclassifying the
+query as incomplete or assigning its resultset to the ping. The FIFO is bounded
+to 64 commands and 16 MiB of retained request payload per connection; exceeding
+either bound fails the connection rather than guessing response ownership.
+Intrinsic no-response commands do not consume or flush the FIFO.
 
 Redis and Memcached dependencies are semantic `redis_connection`,
 `redis_exchange`, `memcached_connection`, and `memcached_exchange` records.

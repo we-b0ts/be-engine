@@ -45,6 +45,47 @@ async fn replays_redis_pipeline_in_recorded_lane_order() {
 }
 
 #[tokio::test]
+async fn reports_redis_lane_blocker_without_exposing_arguments() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let connection_id = Uuid::new_v4();
+    let dependencies = [
+        redis_dependency(connection_id, 1, "private-key-one", b"$1\r\n1\r\n"),
+        redis_dependency(connection_id, 2, "private-key-two", b"$1\r\n2\r\n"),
+    ]
+    .map(|value| serde_json::to_string(&value).unwrap())
+    .join("\n");
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), dependencies)
+        .await
+        .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    client
+        .write_all(b"*2\r\n$3\r\nGET\r\n$15\r\nprivate-key-two\r\n")
+        .await
+        .unwrap();
+    let mut response = vec![0_u8; 46];
+    let response_len = client.read(&mut response).await.unwrap();
+    assert_eq!(
+        &response[..response_len],
+        b"-ERR no recorded Redis dependency matched\r\n"
+    );
+
+    let report = wait_for_unmatched_count(&report_path, "redis", 1).await;
+    let diagnostic = &report["redis"]["unmatched"][0]["diagnostic"];
+    assert_eq!(diagnostic["kind"], "lane_blocked");
+    assert_eq!(diagnostic["candidate"]["sequence"], 2);
+    assert_eq!(diagnostic["blocked_by"]["sequence"], 1);
+    let serialized = serde_json::to_string(&report["redis"]["unmatched"][0]).unwrap();
+    assert!(!serialized.contains("private-key-one"));
+    assert!(!serialized.contains("private-key-two"));
+    task.abort();
+}
+
+#[tokio::test]
 async fn delays_redis_response_by_recorded_duration() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case");
@@ -162,6 +203,69 @@ async fn replays_memcached_binary_with_live_opaque() {
 
     let report = wait_for_matched_count(&report_path, "memcached", 1).await;
     assert_eq!(report["memcached"]["matched"].as_array().unwrap().len(), 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn replays_recorded_memcached_getkq_as_regular_get() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let mut recorded_response = vec![0_u8; 24];
+    recorded_response[0] = 0x81;
+    recorded_response[1] = 0x0d;
+    recorded_response[2..4].copy_from_slice(&3_u16.to_be_bytes());
+    recorded_response[4] = 4;
+    recorded_response[8..12].copy_from_slice(&12_u32.to_be_bytes());
+    recorded_response.extend_from_slice(&0_u32.to_be_bytes());
+    recorded_response.extend_from_slice(b"keyvalue");
+    let dependency = serde_json::json!({
+        "event_type": "memcached_exchange",
+        "connection_id": Uuid::new_v4(),
+        "sequence": 1,
+        "target_host": "cache.internal",
+        "target_port": 11211,
+        "wire_protocol": "binary",
+        "command": "get",
+        "opcode": 13,
+        "key": capture_json(b"key"),
+        "args": [],
+        "value": null,
+        "extras": null,
+        "cas": null,
+        "quiet": true,
+        "noreply": false,
+        "response_status": "0",
+        "response_frames": [capture_json(&recorded_response)],
+        "no_response": false,
+        "replay_safe": true
+    });
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    client.write_all(&binary_get_request(42)).await.unwrap();
+    let mut response = vec![0_u8; 33];
+    client.read_exact(&mut response).await.unwrap();
+    assert_eq!(response[1], 0x00);
+    assert_eq!(u16::from_be_bytes(response[2..4].try_into().unwrap()), 0);
+    assert_eq!(u32::from_be_bytes(response[8..12].try_into().unwrap()), 9);
+    assert_eq!(u32::from_be_bytes(response[12..16].try_into().unwrap()), 42);
+    assert_eq!(&response[28..], b"value");
+
+    let report = wait_for_matched_count(&report_path, "memcached", 1).await;
+    assert!(
+        report["memcached"]["unmatched"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     task.abort();
 }
 
@@ -498,4 +602,19 @@ async fn wait_for_matched_count(path: &Path, protocol: &str, expected: usize) ->
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     panic!("replay report did not reach {expected} {protocol} matches");
+}
+
+async fn wait_for_unmatched_count(path: &Path, protocol: &str, expected: usize) -> Value {
+    for _ in 0..150 {
+        if let Ok(raw) = tokio::fs::read_to_string(path).await
+            && let Ok(report) = serde_json::from_str::<Value>(&raw)
+            && report[protocol]["unmatched"]
+                .as_array()
+                .is_some_and(|unmatched| unmatched.len() == expected)
+        {
+            return report;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    panic!("replay report did not reach {expected} {protocol} unmatched requests");
 }

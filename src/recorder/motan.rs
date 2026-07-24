@@ -16,14 +16,12 @@ use crate::dependency::DependencyExchangeOutcome;
 use crate::dependency::termination::ConnectionTermination;
 use crate::motan::{Frame, RequestIdentity, read_frame, response_status};
 use crate::recorder::{
-    MotanConnectionEvent, MotanExchangeEvent, ProcessInfo, ProxyErrorEvent, RecorderEvent,
-    capture_body,
+    MotanConnectionEvent, MotanExchangeEvent, ProxyErrorEvent, RecorderEvent, capture_body,
 };
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
     pub(crate) client_addr: Option<String>,
-    pub(crate) client_process: Option<ProcessInfo>,
     pub(crate) target_host: String,
     pub(crate) target_port: u16,
     pub(crate) target_addr: String,
@@ -318,7 +316,6 @@ async fn record_exchange(
             sequence: request.sequence,
             timestamp: Utc::now(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,
             target_addr: context.target_addr.clone(),
@@ -364,7 +361,6 @@ async fn record_connection(
             timestamp: Utc::now(),
             phase: phase.to_string(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target_host: context.target_host.clone(),
             target_port: context.target_port,
             target_addr: context.target_addr.clone(),
@@ -392,7 +388,6 @@ async fn record_proxy_error(
             timestamp: Utc::now(),
             protocol: "motan".to_string(),
             client_addr: context.client_addr.clone(),
-            client_process: context.client_process.clone(),
             target: Some(context.target_addr.clone()),
             error,
         }),
@@ -401,8 +396,7 @@ async fn record_proxy_error(
 }
 
 async fn record_event(state: &AppState, event: RecorderEvent) -> Result<()> {
-    state.recorder().record(event.clone()).await?;
-    state.record_dependency_if_relevant(&event).await;
+    state.record_event(event);
     Ok(())
 }
 

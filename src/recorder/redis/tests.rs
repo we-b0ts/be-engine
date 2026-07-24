@@ -266,7 +266,6 @@ fn spawn_handler(
         state,
         ConnectionContext {
             client_addr: None,
-            client_process: None,
             target_host: "redis.test".to_string(),
             target_port: 6379,
             target_addr: "redis.test:6379".to_string(),

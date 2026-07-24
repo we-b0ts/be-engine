@@ -8,7 +8,6 @@ use anyhow::{Context, Result};
 use chrono::NaiveDateTime;
 use serde::Serialize;
 use tokio::sync::Mutex;
-use tracing::warn;
 use uuid::Uuid;
 
 use crate::config::{RecordingAccessPolicy, RecordingConfig, TrafficJsonlMode};
@@ -25,15 +24,15 @@ pub(crate) mod mysql;
 pub(crate) mod redis;
 mod run;
 mod summary;
+mod writer;
 
 pub use capture::*;
 pub use event::*;
 
 #[derive(Clone)]
 pub struct Recorder {
-    traffic_file: Arc<Mutex<Option<jsonl::BufferedJsonlWriter>>>,
     traffic_jsonl: TrafficJsonlMode,
-    dependency_files: Arc<Mutex<jsonl::JsonlWriterPool>>,
+    writer: writer::RecorderWriter,
     pub(crate) run_dir: Arc<PathBuf>,
     pub(crate) run_state: Arc<Mutex<RecorderRunState>>,
     pub(crate) dependency_write_lock: Arc<Mutex<()>>,
@@ -59,6 +58,7 @@ impl Recorder {
                 capacity: defaults.jsonl_buffer_capacity_bytes,
                 flush_interval: Duration::from_millis(defaults.jsonl_flush_interval_ms),
             },
+            defaults.writer_queue_capacity,
             None,
         )
         .await
@@ -76,6 +76,7 @@ impl Recorder {
                 capacity: config.jsonl_buffer_capacity_bytes,
                 flush_interval: Duration::from_millis(config.jsonl_flush_interval_ms),
             },
+            config.writer_queue_capacity,
             run_id,
         )
         .await
@@ -91,6 +92,7 @@ impl Recorder {
         access_policy: RecordingAccessPolicy,
         traffic_jsonl: TrafficJsonlMode,
         buffer_settings: jsonl::JsonlBufferSettings,
+        writer_queue_capacity: usize,
         run_id: Option<String>,
     ) -> Result<Self> {
         let output_dir = output_dir.as_ref();
@@ -108,32 +110,28 @@ impl Recorder {
         tokio::fs::create_dir(&run_dir)
             .await
             .with_context(|| format!("failed to create recording run dir {}", run_dir.display()))?;
-        let traffic_file = if traffic_jsonl == TrafficJsonlMode::Off {
-            None
-        } else {
-            Some(
-                jsonl::BufferedJsonlWriter::open(&run_dir.join("traffic.jsonl"), buffer_settings)
-                    .await?,
-            )
-        };
-        let recorder = Self {
-            traffic_file: Arc::new(Mutex::new(traffic_file)),
+        let run_dir = Arc::new(run_dir);
+        let finalized_cases = Arc::new(Mutex::new(HashSet::new()));
+        let writer = writer::RecorderWriter::start(
+            run_dir.clone(),
             traffic_jsonl,
-            dependency_files: Arc::new(Mutex::new(jsonl::JsonlWriterPool::new(buffer_settings))),
-            run_dir: Arc::new(run_dir),
+            buffer_settings,
+            writer_queue_capacity,
+            finalized_cases.clone(),
+        )
+        .await?;
+        let recorder = Self {
+            traffic_jsonl,
+            writer,
+            run_dir,
             run_state: Arc::new(Mutex::new(RecorderRunState {
                 run_id,
                 ..Default::default()
             })),
             dependency_write_lock: Arc::new(Mutex::new(())),
-            finalized_cases: Arc::new(Mutex::new(HashSet::new())),
+            finalized_cases,
             access_policy,
         };
-        spawn_jsonl_flush_task(
-            &recorder.traffic_file,
-            &recorder.dependency_files,
-            buffer_settings.flush_interval,
-        );
         recorder.write_run_report("running").await?;
         Ok(recorder)
     }
@@ -142,23 +140,25 @@ impl Recorder {
         if !should_write_traffic_event(self.traffic_jsonl, &event) {
             return Ok(());
         }
-        let mut line = serde_json::to_vec(&event).context("failed to serialize recorder event")?;
-        line.push(b'\n');
+        self.writer.try_record_traffic(event)
+    }
 
-        let mut file = self.traffic_file.lock().await;
-        if let Some(file) = file.as_mut() {
-            file.append(&line).await?;
-        }
-        Ok(())
+    pub(crate) fn try_record_event(
+        &self,
+        event: RecorderEvent,
+        targets: crate::active_case::DependencyTargets,
+        background_rule_name: Option<String>,
+    ) -> Result<()> {
+        self.writer.try_record(writer::RecordEnvelope {
+            event,
+            targets,
+            background_rule_name,
+        })
     }
 
     /// Flush currently buffered run-level `traffic.jsonl` records.
     pub async fn flush_traffic(&self) -> Result<()> {
-        let mut file = self.traffic_file.lock().await;
-        if let Some(file) = file.as_mut() {
-            file.flush().await?;
-        }
-        Ok(())
+        self.writer.flush_traffic().await
     }
 
     pub async fn write_case_json<T: Serialize>(
@@ -184,45 +184,7 @@ impl Recorder {
     }
 }
 
-fn spawn_jsonl_flush_task(
-    traffic_file: &Arc<Mutex<Option<jsonl::BufferedJsonlWriter>>>,
-    dependency_files: &Arc<Mutex<jsonl::JsonlWriterPool>>,
-    interval: Duration,
-) {
-    let traffic_file = Arc::downgrade(traffic_file);
-    let dependency_files = Arc::downgrade(dependency_files);
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(interval).await;
-
-            let Some(traffic_file) = traffic_file.upgrade() else {
-                break;
-            };
-            let traffic_flush = {
-                let mut writer = traffic_file.lock().await;
-                match writer.as_mut() {
-                    Some(writer) => writer.flush().await,
-                    None => Ok(()),
-                }
-            };
-            drop(traffic_file);
-            if let Err(error) = traffic_flush {
-                warn!(%error, "failed to periodically flush traffic JSONL");
-            }
-
-            let Some(dependency_files) = dependency_files.upgrade() else {
-                break;
-            };
-            let dependency_flush = dependency_files.lock().await.flush_open().await;
-            drop(dependency_files);
-            if let Err(error) = dependency_flush {
-                warn!(%error, "failed to periodically flush dependency JSONL");
-            }
-        }
-    });
-}
-
-fn should_write_traffic_event(mode: TrafficJsonlMode, event: &RecorderEvent) -> bool {
+pub(super) fn should_write_traffic_event(mode: TrafficJsonlMode, event: &RecorderEvent) -> bool {
     match mode {
         TrafficJsonlMode::Full => true,
         TrafficJsonlMode::Off => false,

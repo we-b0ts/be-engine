@@ -57,17 +57,12 @@ pub(super) async fn record_query_completion(
         record_event(
             state,
             RecorderEvent::MysqlResponse(response),
-            ownership.as_ref(),
+            ownership.clone(),
         )
         .await?;
     }
     if let Some(exchange) = exchange {
-        record_event(
-            state,
-            RecorderEvent::MysqlExchange(exchange),
-            ownership.as_ref(),
-        )
-        .await?;
+        record_event(state, RecorderEvent::MysqlExchange(exchange), ownership).await?;
     }
     Ok(())
 }
@@ -75,11 +70,12 @@ pub(super) async fn record_query_completion(
 pub(super) async fn record_event(
     state: &AppState,
     event: RecorderEvent,
-    ownership: Option<&DependencyTargets>,
+    ownership: Option<DependencyTargets>,
 ) -> Result<()> {
-    state.recorder().record(event.clone()).await?;
     if let Some(ownership) = ownership {
-        state.record_dependency_for_targets(&event, ownership).await;
+        state.record_event_for_targets(event, ownership);
+    } else if let Err(error) = state.recorder().record(event).await {
+        tracing::warn!(%error, "failed to enqueue MySQL recorder event");
     }
     Ok(())
 }

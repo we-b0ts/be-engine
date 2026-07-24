@@ -14,8 +14,13 @@ use uuid::Uuid;
 use crate::DependencyExchangeOutcome;
 use crate::motan::{RequestIdentity, patch_request_id, read_frame};
 
+use super::command_matching::{
+    CaseConnectionBinding, CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic,
+    preferred_match, unmatched_diagnostic,
+};
 use super::report::command::{
-    CommandMatchedReport, CommandProtocolReport, CommandRequestReport, CommandUnusedReport,
+    CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
+    CommandUnusedReport,
 };
 use super::{
     ReplayExchangeStatus, ReplayExchangeTiming, ReplayProtocol, ReplayReportWriter, ReplaySource,
@@ -237,40 +242,35 @@ impl MotanReplayState {
         bound_connection: Option<Uuid>,
         codec_version: u8,
         identity: &RequestIdentity,
-    ) -> Option<MatchedExchange> {
-        let matches = |index: usize, exchange: &ReplayExchange| {
+    ) -> std::result::Result<MatchedExchange, CommandMatchDiagnostic> {
+        let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
-                && is_lane_head(&self.exchanges, index)
                 && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
                 && exchange.record.codec_version == codec_version
                 && exchange.identity == *identity
+        });
+        let index = match matched {
+            PreferredMatch::Matched(index) => index,
+            PreferredMatch::LaneBlocked { candidate, blocker } => {
+                return Err(lane_blocked_diagnostic(&self.exchanges, candidate, blocker));
+            }
+            PreferredMatch::NotFound => {
+                return Err(unmatched_diagnostic(
+                    &self.exchanges,
+                    active_case_id,
+                    |exchange| {
+                        motan_mismatch_fields(exchange, bound_connection, codec_version, identity)
+                    },
+                ));
+            }
         };
-        let index = self
-            .exchanges
-            .iter()
-            .enumerate()
-            .find(|(index, exchange)| {
-                exchange.source == ReplaySource::Case
-                    && exchange.case_id.as_deref() == active_case_id
-                    && matches(*index, exchange)
-            })
-            .map(|(index, _)| index)
-            .or_else(|| {
-                self.exchanges
-                    .iter()
-                    .enumerate()
-                    .find(|(index, exchange)| {
-                        exchange.source == ReplaySource::Bootstrap && matches(*index, exchange)
-                    })
-                    .map(|(index, _)| index)
-            })?;
         let exchange = &mut self.exchanges[index];
         exchange.status = if exchange.timing.outcome().is_client_terminated() {
             ReplayExchangeStatus::AwaitingClientTermination
         } else {
             ReplayExchangeStatus::Responding
         };
-        Some(MatchedExchange {
+        Ok(MatchedExchange {
             index,
             connection_id: exchange.record.connection_id,
             response: exchange.response.clone(),
@@ -303,6 +303,7 @@ impl MotanReplayState {
             target: matched.report.target.clone(),
             command: matched.report.command.clone(),
             reason,
+            diagnostic: None,
         });
     }
 
@@ -333,7 +334,7 @@ pub(super) async fn handle_connection(
     };
     state.lock().await.motan.events.connections += 1;
     report_writer.request();
-    let mut bound_connection = None;
+    let mut connection_binding = CaseConnectionBinding::default();
     loop {
         let Some(frame) = read_frame(&mut stream, 64 * 1024 * 1024).await? else {
             break;
@@ -358,6 +359,7 @@ pub(super) async fn handle_connection(
                     target: target_key.clone(),
                     command: identity.command(),
                     reason: "no recorded Motan heartbeat response template".to_string(),
+                    diagnostic: None,
                 });
                 report_writer.request();
                 return Err(anyhow!("no recorded Motan heartbeat response template"));
@@ -371,6 +373,7 @@ pub(super) async fn handle_connection(
         let matched = {
             let mut replay = state.lock().await;
             let active_case_id = replay.active_case_id.clone();
+            let bound_connection = connection_binding.connection(active_case_id.as_deref());
             match replay.motan.match_exchange(
                 active_case_id.as_deref(),
                 &target_key,
@@ -378,11 +381,11 @@ pub(super) async fn handle_connection(
                 frame.codec_version,
                 &identity,
             ) {
-                Some(matched) => {
-                    bound_connection.get_or_insert(matched.connection_id);
+                Ok(matched) => {
+                    connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
                     Some(matched)
                 }
-                None => {
+                Err(diagnostic) => {
                     replay.motan.events.unmatched.push(CommandRequestReport {
                         case_id: active_case_id,
                         target: target_key.clone(),
@@ -390,6 +393,7 @@ pub(super) async fn handle_connection(
                         reason:
                             "no recorded Motan exchange matched method identity and connection lane"
                                 .to_string(),
+                        diagnostic: Some(diagnostic),
                     });
                     None
                 }
@@ -487,13 +491,53 @@ fn register_target(
     )
 }
 
-fn is_lane_head(exchanges: &[ReplayExchange], candidate: usize) -> bool {
-    let exchange = &exchanges[candidate];
-    !exchanges.iter().any(|other| {
-        !other.status.is_consumed()
-            && other.record.connection_id == exchange.record.connection_id
-            && other.record.sequence < exchange.record.sequence
-    })
+impl CommandExchangeScope for ReplayExchange {
+    fn source(&self) -> ReplaySource {
+        self.source
+    }
+
+    fn case_id(&self) -> Option<&str> {
+        self.case_id.as_deref()
+    }
+
+    fn connection_id(&self) -> Uuid {
+        self.record.connection_id
+    }
+
+    fn sequence(&self) -> u64 {
+        self.record.sequence
+    }
+
+    fn command(&self) -> &str {
+        &self.record.command
+    }
+
+    fn is_available(&self) -> bool {
+        self.status.is_available()
+    }
+
+    fn is_consumed(&self) -> bool {
+        self.status.is_consumed()
+    }
+}
+
+fn motan_mismatch_fields(
+    exchange: &ReplayExchange,
+    bound_connection: Option<Uuid>,
+    codec_version: u8,
+    identity: &RequestIdentity,
+) -> Vec<&'static str> {
+    let mut fields = Vec::new();
+    if bound_connection.is_some_and(|id| exchange.record.connection_id != id) {
+        fields.push("connection");
+    }
+    if exchange.record.codec_version != codec_version {
+        fields.push("codec_version");
+    }
+    if exchange.identity != *identity {
+        fields.push("method_identity");
+    }
+    fields
 }
 
 fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnusedReport> {

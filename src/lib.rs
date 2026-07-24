@@ -14,7 +14,6 @@ mod memcached;
 mod motan;
 mod mysql;
 mod path_pattern;
-mod process_lookup;
 mod proxy;
 mod recorder;
 mod redis;
@@ -184,7 +183,6 @@ impl AppState {
         operations: Vec<String>,
         resources: Vec<String>,
         client_addr: Option<String>,
-        client_process: Option<crate::recorder::ProcessInfo>,
         target: Option<String>,
         reason: impl Into<String>,
     ) {
@@ -211,7 +209,6 @@ impl AppState {
             operations,
             resources,
             client_addr,
-            client_process,
             target,
             reason,
         });
@@ -227,7 +224,6 @@ impl AppState {
         operation_class: OperationClass,
         operation: impl Into<String>,
         client_addr: Option<String>,
-        client_process: Option<crate::recorder::ProcessInfo>,
         target: Option<String>,
         reason: impl Into<String>,
     ) {
@@ -268,14 +264,12 @@ impl AppState {
             operation_class: operation_class.as_str().to_string(),
             operation,
             client_addr,
-            client_process,
             target,
             reason,
         });
-        if let Err(error) = self.recorder().record(event.clone()).await {
-            warn!(error = %error, "failed to record access policy rejection");
-        }
-        self.record_active_case_dependency_if_relevant(&event).await;
+        let mut targets = self.capture_dependency_targets();
+        targets.bootstrap_open = false;
+        self.record_event_for_targets(event, targets);
     }
 
     pub fn dns_registry(&self) -> &FakeDnsRegistry {
@@ -305,10 +299,9 @@ impl AppState {
     pub(crate) fn try_register_active_case(
         &self,
         case: CaseContext,
-        upstream_pid: Option<u32>,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
         let bootstrap_was_open = self.inner.active_cases.is_bootstrap_open();
-        let guard = self.inner.active_cases.try_register(case, upstream_pid)?;
+        let guard = self.inner.active_cases.try_register(case)?;
         if bootstrap_was_open {
             self.schedule_bootstrap_dependency_summary("first active case");
         }
@@ -411,74 +404,49 @@ impl AppState {
         }
     }
 
-    pub(crate) fn capture_dependency_targets(&self, event_pid: Option<u32>) -> DependencyTargets {
-        self.inner.active_cases.current_targets_for_event(event_pid)
+    pub(crate) fn capture_dependency_targets(&self) -> DependencyTargets {
+        self.inner.active_cases.current_targets_for_event()
     }
 
-    pub(crate) async fn record_dependency_if_relevant(&self, event: &RecorderEvent) {
-        let event_pid = event.client_pid();
-        let targets = self.capture_dependency_targets(event_pid);
-        self.record_dependency_for_targets(event, &targets).await;
+    pub(crate) fn record_event(&self, event: RecorderEvent) {
+        let targets = self.capture_dependency_targets();
+        self.record_event_for_targets(event, targets);
     }
 
-    pub(crate) async fn record_dependency_for_targets(
+    pub(crate) fn record_event_for_targets(
         &self,
-        event: &RecorderEvent,
-        targets: &DependencyTargets,
+        event: RecorderEvent,
+        targets: DependencyTargets,
     ) {
         let background_rule_name = self
             .config()
             .recording
             .background_dependencies
             .iter()
-            .find(|rule| rule.matches(event))
-            .map(|rule| rule.name());
-        if targets.bootstrap_open
-            && let Err(err) = self
-                .recorder()
-                .append_bootstrap_dependency(
-                    event,
-                    background_rule_name.unwrap_or("bootstrap_window"),
-                )
-                .await
+            .find(|rule| rule.matches(&event))
+            .map(|rule| rule.name().to_string());
+        let event_type = event.kind();
+        if let Err(err) = self
+            .recorder()
+            .try_record_event(event, targets, background_rule_name)
         {
             warn!(
                 error = %err,
-                "failed to append bootstrap dependency"
+                event_type,
+                "failed to enqueue recorder event"
             );
-        }
-        if background_rule_name.is_some() {
-            return;
-        }
-        self.record_case_dependencies(event, targets).await;
-    }
-
-    async fn record_active_case_dependency_if_relevant(&self, event: &RecorderEvent) {
-        let event_pid = event.client_pid();
-        let targets = self.capture_dependency_targets(event_pid);
-        self.record_case_dependencies(event, &targets).await;
-    }
-
-    async fn record_case_dependencies(&self, event: &RecorderEvent, targets: &DependencyTargets) {
-        if targets.ambiguous_active_cases > 0 {
-            warn!(
-                active_cases = targets.ambiguous_active_cases,
-                event_type = event.kind(),
-                "skipping case dependency because active case ownership is ambiguous"
-            );
-        }
-        for (case, matched_by) in &targets.cases {
-            if let Err(err) = self
-                .recorder()
-                .append_case_dependency(case, event, matched_by)
-                .await
+            if let Some(case) =
+                self.inner
+                    .active_cases
+                    .invalidate_current_case(CaseInvalidation::new(
+                        "recording_writer_failure",
+                        format!("failed to enqueue {event_type} recorder event: {err}"),
+                    ))
             {
                 warn!(
-                    error = %err,
                     case_id = %case.id,
                     rule = %case.rule_name,
-                    matched_by,
-                    "failed to append case dependency"
+                    "active recording case invalidated by recorder writer failure"
                 );
             }
         }
@@ -530,38 +498,78 @@ impl AppState {
             "traffic recorder proxy started"
         );
 
-        let run_result = tokio::select! {
-            result = shutdown_signal() => {
-                result?;
-                let newly_quiescing = self.begin_case_quiescing();
-                let timeout_ms = self.config().recording.shutdown_case_drain_timeout_ms;
-                info!(
-                    newly_quiescing,
-                    timeout_ms,
-                    "shutdown signal received; draining active recording case"
-                );
-                if self.wait_for_active_case_shutdown_drain().await {
-                    info!("active recording case shutdown drain completed");
-                } else {
-                    warn!(
+        let mut registry_flush_interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + dns_mock::REGISTRY_FLUSH_INTERVAL,
+            dns_mock::REGISTRY_FLUSH_INTERVAL,
+        );
+        registry_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let shutdown = shutdown_signal();
+        tokio::pin!(shutdown);
+        let run_result = loop {
+            tokio::select! {
+                result = &mut shutdown => {
+                    result?;
+                    let newly_quiescing = self.begin_case_quiescing();
+                    let timeout_ms = self.config().recording.shutdown_case_drain_timeout_ms;
+                    info!(
+                        newly_quiescing,
                         timeout_ms,
-                        "active recording case shutdown drain timed out"
+                        "shutdown signal received; draining active recording case"
                     );
+                    if self.wait_for_active_case_shutdown_drain().await {
+                        info!("active recording case shutdown drain completed");
+                    } else {
+                        warn!(
+                            timeout_ms,
+                            "active recording case shutdown drain timed out"
+                        );
+                    }
+                    break Ok(());
                 }
-                Ok(())
-            }
-            Some(joined) = tasks.join_next() => {
-                joined.context("proxy task panicked")?
+                joined = tasks.join_next(), if !tasks.is_empty() => {
+                    let Some(joined) = joined else {
+                        continue;
+                    };
+                    break joined.context("proxy task panicked")?;
+                }
+                _ = registry_flush_interval.tick() => {
+                    match self.dns_registry().flush_if_dirty().await {
+                        Ok(true) => info!("flushed fake DNS registry"),
+                        Ok(false) => {}
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                "failed to flush fake DNS registry; pending updates will be retried"
+                            );
+                        }
+                    }
+                }
             }
         };
 
+        tasks.abort_all();
+        while let Some(joined) = tasks.join_next().await {
+            if let Err(error) = joined
+                && !error.is_cancelled()
+            {
+                warn!(error = %error, "proxy task failed while shutting down");
+            }
+        }
         self.kubectl_proxy_manager().shutdown().await;
-        let has_failed_cases = self
+        let finish_run_result = self
             .recorder()
             .finish_run()
             .await
-            .context("failed to finalize recording run")?;
+            .context("failed to finalize recording run");
+        let registry_flush_result = self
+            .dns_registry()
+            .flush_if_dirty()
+            .await
+            .context("failed to flush fake DNS registry during shutdown");
+
         run_result?;
+        let has_failed_cases = finish_run_result?;
+        registry_flush_result?;
         if has_failed_cases {
             anyhow::bail!("recording run finished with failed cases");
         }
@@ -611,7 +619,6 @@ mod tests {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             scheme: "fake_ip_http".to_string(),
             method: "GET".to_string(),
             uri: uri.to_string(),
@@ -651,14 +658,13 @@ mod tests {
             rule_name: "api".to_string(),
             uri_group: None,
         };
-        let guard = state.try_register_active_case(case.clone(), None).unwrap();
+        let guard = state.try_register_active_case(case.clone()).unwrap();
 
         let background = http_dependency(
             "config.api.demo.test",
             "/1/config/service?action=lookup&group=reload.properties",
         );
-        state.recorder().record(background.clone()).await.unwrap();
-        state.record_dependency_if_relevant(&background).await;
+        state.record_event(background);
         drop(guard);
         state.recorder().publish_case(&case).await.unwrap();
         state.recorder().finish_run().await.unwrap();

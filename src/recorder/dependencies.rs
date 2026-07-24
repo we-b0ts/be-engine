@@ -32,19 +32,8 @@ impl Recorder {
         }
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
-        if self.finalized_cases.lock().await.contains(&case.id) {
-            return Ok(());
-        }
-        let dir = self.case_staging_dir(case);
-        tokio::fs::create_dir_all(&dir)
-            .await
-            .with_context(|| format!("failed to create case recording dir {}", dir.display()))?;
-        let path = dir.join(case_dependency_filename(event));
-        let line = dependency_line(event, "case_dependency_matched_by", matched_by)?;
-        self.dependency_files
-            .lock()
-            .await
-            .append(&path, &line)
+        self.writer
+            .append_case(case.clone(), event.clone(), matched_by)
             .await
     }
 
@@ -58,20 +47,8 @@ impl Recorder {
         }
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
-        tokio::fs::create_dir_all(&*self.run_dir)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create recording run dir {}",
-                    self.run_dir.display()
-                )
-            })?;
-        let path = self.run_dir.join(bootstrap_dependency_filename(event));
-        let line = dependency_line(event, "bootstrap_dependency_matched_by", matched_by)?;
-        self.dependency_files
-            .lock()
-            .await
-            .append(&path, &line)
+        self.writer
+            .append_bootstrap(event.clone(), matched_by)
             .await
     }
 
@@ -82,10 +59,8 @@ impl Recorder {
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         let path = self.case_staging_dir(case).join("dependencies.jsonl");
-        self.dependency_files
-            .lock()
-            .await
-            .flush_and_remove(&path)
+        self.writer
+            .flush_case(path.parent().expect("case dependency has a parent"))
             .await?;
         let raw = match tokio::fs::read_to_string(&path).await {
             Ok(raw) => raw,
@@ -152,33 +127,24 @@ impl Recorder {
     }
 
     pub(super) async fn flush_case_dependency_files(&self, dir: &Path) -> Result<()> {
-        self.dependency_files
-            .lock()
-            .await
-            .flush_and_remove_under(dir)
-            .await
+        self.writer.flush_case(dir).await
     }
 
     pub(super) async fn flush_bootstrap_dependency_files(&self) -> Result<()> {
-        let semantic = self.run_dir.join("bootstrap-dependencies.jsonl");
-        let debug = self.run_dir.join("bootstrap-dependencies-debug.jsonl");
-        let mut files = self.dependency_files.lock().await;
-        files.flush_and_remove(&semantic).await?;
-        files.flush_and_remove(&debug).await
+        self.writer.flush_bootstrap().await
     }
 
     pub(super) async fn flush_all_dependency_files(&self) -> Result<()> {
-        self.dependency_files.lock().await.flush_all().await
+        self.writer.flush_all().await
     }
 }
 
-fn dependency_line(
+pub(super) fn dependency_line(
     event: &RecorderEvent,
     matched_by_field: &str,
     matched_by: &str,
 ) -> Result<Vec<u8>> {
     let mut value = serde_json::to_value(event).context("failed to serialize dependency event")?;
-    compact_process_info(&mut value);
     if let serde_json::Value::Object(object) = &mut value {
         object.insert(
             matched_by_field.to_string(),
@@ -190,7 +156,7 @@ fn dependency_line(
     Ok(line)
 }
 
-fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
+pub(super) fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
     if is_debug_event(event) {
         "dependencies-debug.jsonl"
     } else {
@@ -198,7 +164,7 @@ fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
     }
 }
 
-fn bootstrap_dependency_filename(event: &RecorderEvent) -> &'static str {
+pub(super) fn bootstrap_dependency_filename(event: &RecorderEvent) -> &'static str {
     if is_debug_event(event) {
         "bootstrap-dependencies-debug.jsonl"
     } else {
@@ -214,27 +180,6 @@ fn is_debug_event(event: &RecorderEvent) -> bool {
             | RecorderEvent::MysqlPacket(_)
     ) || matches!(event, RecorderEvent::RedisExchange(exchange) if exchange.command == "QUIT")
         || matches!(event, RecorderEvent::MotanExchange(exchange) if exchange.heartbeat)
-}
-
-fn compact_process_info(value: &mut serde_json::Value) {
-    match value {
-        serde_json::Value::Object(object) => {
-            if let Some(process) = object.get_mut("client_process")
-                && let Some(pid) = process.get("pid").and_then(serde_json::Value::as_u64)
-            {
-                *process = serde_json::Value::Number(pid.into());
-            }
-            for child in object.values_mut() {
-                compact_process_info(child);
-            }
-        }
-        serde_json::Value::Array(values) => {
-            for child in values {
-                compact_process_info(child);
-            }
-        }
-        _ => {}
-    }
 }
 
 #[cfg(test)]
@@ -268,13 +213,14 @@ mod tests {
                 Some("SHOW FULL TABLES FROM `` LIKE 'PROBABLYNOT'"),
             ),
             (3, "COM_QUERY", Some("SELECT 1;")),
+            (4, "COM_QUERY", Some("SELECT 2")),
         ];
         for (sequence, command, sql) in maintenance {
             recorder
                 .append_case_dependency(
                     &case,
                     &RecorderEvent::MysqlQuery(mysql_query(connection_id, sequence, command, sql)),
-                    "process",
+                    "active_window",
                 )
                 .await
                 .unwrap();
@@ -286,7 +232,11 @@ mod tests {
                     .push("no server response packets were captured".to_string());
             }
             recorder
-                .append_case_dependency(&case, &RecorderEvent::MysqlExchange(exchange), "process")
+                .append_case_dependency(
+                    &case,
+                    &RecorderEvent::MysqlExchange(exchange),
+                    "active_window",
+                )
                 .await
                 .unwrap();
         }
@@ -295,11 +245,11 @@ mod tests {
                 &case,
                 &RecorderEvent::MysqlExchange(mysql_exchange(
                     connection_id,
-                    4,
+                    5,
                     "COM_QUERY",
-                    Some("SELECT 2"),
+                    Some("SELECT 3"),
                 )),
-                "process",
+                "active_window",
             )
             .await
             .unwrap();
@@ -314,10 +264,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(semantic.lines().count(), 1);
-        assert!(semantic.contains("SELECT 2"));
+        assert!(semantic.contains("SELECT 3"));
         assert!(!semantic.contains("COM_PING"));
         assert!(!semantic.contains("PROBABLYNOT"));
         assert!(!semantic.contains("SELECT 1"));
+        assert!(!semantic.contains("SELECT 2"));
 
         let debug = tokio::fs::read_to_string(case_dir.join("dependencies-debug.jsonl"))
             .await
@@ -325,6 +276,7 @@ mod tests {
         assert!(debug.contains("COM_PING"));
         assert!(debug.contains("PROBABLYNOT"));
         assert!(debug.contains("SELECT 1"));
+        assert!(debug.contains("SELECT 2"));
 
         super::super::summary::write_case_dependency_summary(&case_dir)
             .await
@@ -335,6 +287,7 @@ mod tests {
         assert!(!summary.contains("COM_PING"));
         assert!(!summary.contains("PROBABLYNOT"));
         assert!(!summary.contains("SELECT 1"));
+        assert!(!summary.contains("SELECT 2"));
 
         for (sequence, command, sql) in maintenance {
             recorder
@@ -361,9 +314,9 @@ mod tests {
             .append_bootstrap_dependency(
                 &RecorderEvent::MysqlExchange(mysql_exchange(
                     connection_id,
-                    4,
+                    5,
                     "COM_QUERY",
-                    Some("SELECT 2"),
+                    Some("SELECT 3"),
                 )),
                 "bootstrap_window",
             )
@@ -376,10 +329,11 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(bootstrap_semantic.lines().count(), 1);
-        assert!(bootstrap_semantic.contains("SELECT 2"));
+        assert!(bootstrap_semantic.contains("SELECT 3"));
         assert!(!bootstrap_semantic.contains("COM_PING"));
         assert!(!bootstrap_semantic.contains("PROBABLYNOT"));
         assert!(!bootstrap_semantic.contains("SELECT 1"));
+        assert!(!bootstrap_semantic.contains("SELECT 2"));
 
         let bootstrap_debug =
             tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-debug.jsonl"))
@@ -388,6 +342,7 @@ mod tests {
         assert!(bootstrap_debug.contains("COM_PING"));
         assert!(bootstrap_debug.contains("PROBABLYNOT"));
         assert!(bootstrap_debug.contains("SELECT 1"));
+        assert!(bootstrap_debug.contains("SELECT 2"));
     }
 
     #[tokio::test]
@@ -415,7 +370,7 @@ mod tests {
 
         for event in [&quit, &get] {
             recorder
-                .append_case_dependency(&case, event, "process")
+                .append_case_dependency(&case, event, "active_window")
                 .await
                 .unwrap();
         }
@@ -492,7 +447,7 @@ mod tests {
 
         for event in [&heartbeat, &business] {
             recorder
-                .append_case_dependency(&case, event, "process")
+                .append_case_dependency(&case, event, "active_window")
                 .await
                 .unwrap();
         }
@@ -535,7 +490,6 @@ mod tests {
             sequence,
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             command: command.to_string(),
             query: query.map(ToOwned::to_owned),
             payload_len: query.map_or(1, str::len),
@@ -554,7 +508,6 @@ mod tests {
             query_sequence,
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             route_name: None,
             target_host: Some("mysql.internal".to_string()),
             target_port: Some(3306),
@@ -595,7 +548,6 @@ mod tests {
             sequence,
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             target_host: "redis.internal".to_string(),
             target_port: 6379,
             target_addr: "redis.internal:6379".to_string(),
@@ -631,7 +583,6 @@ mod tests {
             sequence,
             timestamp: Utc::now(),
             client_addr: None,
-            client_process: None,
             target_host: "vintage-node-10-0-0-1.trp.test".to_string(),
             target_port: 8881,
             target_addr: "vintage-node-10-0-0-1.trp.test:8881".to_string(),

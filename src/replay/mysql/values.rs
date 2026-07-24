@@ -16,6 +16,7 @@ pub(in crate::replay) fn builtin_response(
                 rows: Vec::new(),
             },
             MysqlMaintenanceQuery::SelectOne => single_integer_result("1", 1),
+            MysqlMaintenanceQuery::SelectTwo => single_integer_result("2", 2),
         });
     }
 

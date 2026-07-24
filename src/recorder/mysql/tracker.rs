@@ -1,13 +1,27 @@
+use std::collections::VecDeque;
+
+use anyhow::{Result, bail, ensure};
+
 use crate::DependencyExchangeOutcome;
 use crate::mysql::wire::{ClientCommand, MysqlPacket, ServerPacketInfo};
-use crate::recorder::{MysqlExchangeEvent, MysqlResponseEvent, ProcessInfo};
+use crate::recorder::{MysqlExchangeEvent, MysqlResponseEvent};
 
 use super::response::MysqlResponseTracker;
 use super::semantic::{MysqlExchangeContext, MysqlSemanticTracker};
 
+const MAX_PENDING_QUERIES: usize = 64;
+const MAX_PENDING_QUERY_BYTES: usize = 16 * 1024 * 1024;
+
 pub(super) struct MysqlQueryTracker {
     response: MysqlResponseTracker,
     semantic: MysqlSemanticTracker,
+    pending_requests: VecDeque<PendingRequest>,
+    pending_query_bytes: usize,
+}
+
+struct PendingRequest {
+    query_sequence: u64,
+    payload_bytes: usize,
 }
 
 #[derive(Default)]
@@ -25,6 +39,8 @@ impl MysqlQueryTracker {
         Self {
             response: MysqlResponseTracker::new(max_body_bytes, record_raw_packets),
             semantic: MysqlSemanticTracker::new(max_body_bytes, context),
+            pending_requests: VecDeque::new(),
+            pending_query_bytes: 0,
         }
     }
 
@@ -44,61 +60,60 @@ impl MysqlQueryTracker {
         command: &ClientCommand,
         packet: &MysqlPacket,
         client_addr: Option<String>,
-        client_process: Option<ProcessInfo>,
-    ) -> MysqlQueryCompletion {
-        let response = self.response.start_query(
+    ) -> Result<()> {
+        self.ensure_aligned()?;
+        ensure!(
+            self.pending_requests.len() < MAX_PENDING_QUERIES,
+            "MySQL connection exceeded the {MAX_PENDING_QUERIES}-request pending FIFO limit"
+        );
+        let pending_query_bytes = self
+            .pending_query_bytes
+            .checked_add(packet.payload.len())
+            .ok_or_else(|| anyhow::anyhow!("MySQL pending request byte count overflowed"))?;
+        ensure!(
+            pending_query_bytes <= MAX_PENDING_QUERY_BYTES,
+            "MySQL connection exceeded the {MAX_PENDING_QUERY_BYTES}-byte pending request limit"
+        );
+
+        self.response.start_query(
             connection_id,
             query_sequence,
             command.command_name.clone(),
             client_addr.clone(),
-            client_process.clone(),
         );
-        let exchange = self.semantic.start_query(
-            connection_id,
+        self.semantic
+            .start_query(connection_id, query_sequence, command, packet, client_addr);
+        self.pending_requests.push_back(PendingRequest {
             query_sequence,
-            command,
-            packet,
-            client_addr,
-            client_process,
-        );
-        MysqlQueryCompletion::new(response, exchange)
+            payload_bytes: packet.payload.len(),
+        });
+        self.pending_query_bytes = pending_query_bytes;
+        self.ensure_aligned()?;
+        Ok(())
     }
 
     pub(super) fn observe_no_response_command(
         &mut self,
         command: &ClientCommand,
         packet: &MysqlPacket,
-        closes_connection: bool,
-    ) -> MysqlQueryCompletion {
-        let fallback_status = if closes_connection {
-            "client_terminated"
-        } else {
-            "incomplete"
-        };
-        let response = self.response.finish_active(fallback_status);
-        let exchange = if closes_connection {
-            self.semantic
-                .finish_active(fallback_status, None, None, None)
-        } else {
-            self.semantic.observe_no_response_command(command, packet)
-        };
-        MysqlQueryCompletion::new(response, exchange)
+    ) {
+        self.semantic.observe_no_response_command(command, packet);
     }
 
     pub(super) fn observe_server_packet(
         &mut self,
         packet: &MysqlPacket,
         packet_info: ServerPacketInfo,
-    ) -> MysqlQueryCompletion {
+    ) -> Result<MysqlQueryCompletion> {
         self.semantic.observe_packet(packet);
         let response = self.response.observe_packet(packet, packet_info);
         let exchange = response
             .as_ref()
             .and_then(|response| self.semantic.finish_from_response(response));
-        MysqlQueryCompletion::new(response, exchange)
+        self.complete(response, exchange)
     }
 
-    pub(super) fn finish_active(&mut self, status: &str) -> MysqlQueryCompletion {
+    pub(super) fn finish_active(&mut self, status: &str) -> Result<MysqlQueryCompletion> {
         let response = self.response.finish_active(status);
         let exchange = match response.as_ref() {
             Some(response) if status != "client_terminated" => {
@@ -112,7 +127,65 @@ impl MysqlQueryTracker {
             ),
             None => self.semantic.finish_active(status, None, None, None),
         };
-        MysqlQueryCompletion::new(response, exchange)
+        self.complete(response, exchange)
+    }
+
+    pub(super) fn finish_all(&mut self, status: &str) -> Result<Vec<MysqlQueryCompletion>> {
+        let mut completions = Vec::with_capacity(self.pending_requests.len());
+        while !self.pending_requests.is_empty() {
+            completions.push(self.finish_active(status)?);
+        }
+        self.ensure_aligned()?;
+        Ok(completions)
+    }
+
+    fn complete(
+        &mut self,
+        response: Option<MysqlResponseEvent>,
+        exchange: Option<MysqlExchangeEvent>,
+    ) -> Result<MysqlQueryCompletion> {
+        let completion = MysqlQueryCompletion::new(response, exchange);
+        let (response_sequence, exchange_sequence) = completion.sequences();
+        match (response_sequence, exchange_sequence) {
+            (None, None) => {}
+            (Some(response_sequence), Some(exchange_sequence))
+                if response_sequence == exchange_sequence =>
+            {
+                let pending = self
+                    .pending_requests
+                    .pop_front()
+                    .ok_or_else(|| anyhow::anyhow!("MySQL completion has no pending request"))?;
+                ensure!(
+                    pending.query_sequence == response_sequence,
+                    "MySQL FIFO sequence mismatch: pending={}, response={response_sequence}",
+                    pending.query_sequence
+                );
+                self.pending_query_bytes = self
+                    .pending_query_bytes
+                    .checked_sub(pending.payload_bytes)
+                    .ok_or_else(|| anyhow::anyhow!("MySQL pending request bytes underflowed"))?;
+            }
+            (Some(response_sequence), Some(exchange_sequence)) => bail!(
+                "MySQL response/exchange sequence mismatch: response={response_sequence}, exchange={exchange_sequence}"
+            ),
+            (response_sequence, exchange_sequence) => bail!(
+                "MySQL response/exchange FIFO diverged: response={response_sequence:?}, exchange={exchange_sequence:?}"
+            ),
+        }
+        self.ensure_aligned()?;
+        Ok(completion)
+    }
+
+    fn ensure_aligned(&self) -> Result<()> {
+        ensure!(
+            self.response.pending_len() == self.pending_requests.len()
+                && self.semantic.pending_len() == self.pending_requests.len(),
+            "MySQL pending FIFO diverged: requests={}, responses={}, exchanges={}",
+            self.pending_requests.len(),
+            self.response.pending_len(),
+            self.semantic.pending_len()
+        );
+        Ok(())
     }
 }
 
@@ -168,26 +241,25 @@ mod tests {
 
         let first = query_packet("SET character_set_results = NULL");
         let first_command = parse_client_command(&first).unwrap();
-        assert!(
-            tracker
-                .start_query(uuid::Uuid::nil(), 5, &first_command, &first, None, None,)
-                .is_empty()
-        );
+        tracker
+            .start_query(uuid::Uuid::nil(), 5, &first_command, &first, None)
+            .unwrap();
 
         let ok = ok_packet();
-        let first_completion = tracker.observe_server_packet(&ok, parse_server_packet(&ok));
+        let first_completion = tracker
+            .observe_server_packet(&ok, parse_server_packet(&ok))
+            .unwrap();
         assert_eq!(first_completion.sequences(), (Some(5), Some(5)));
 
         let second = query_packet("SET autocommit=1");
         let second_command = parse_client_command(&second).unwrap();
-        assert!(
-            tracker
-                .start_query(uuid::Uuid::nil(), 6, &second_command, &second, None, None,)
-                .is_empty(),
-            "the completed first exchange must not be flushed as incomplete"
-        );
+        tracker
+            .start_query(uuid::Uuid::nil(), 6, &second_command, &second, None)
+            .unwrap();
 
-        let second_completion = tracker.observe_server_packet(&ok, parse_server_packet(&ok));
+        let second_completion = tracker
+            .observe_server_packet(&ok, parse_server_packet(&ok))
+            .unwrap();
         let (response, exchange) = second_completion.into_parts();
         assert_eq!(response.unwrap().query_sequence, 6);
         let exchange = exchange.unwrap();
@@ -201,10 +273,14 @@ mod tests {
         let mut tracker = MysqlQueryTracker::new(1024, false, MysqlExchangeContext::default());
         let query = query_packet("SELECT 1");
         let command = parse_client_command(&query).unwrap();
-        tracker.start_query(uuid::Uuid::nil(), 1, &command, &query, None, None);
+        tracker
+            .start_query(uuid::Uuid::nil(), 1, &command, &query, None)
+            .unwrap();
 
         let ok = ok_packet();
-        let mut completion = tracker.observe_server_packet(&ok, parse_server_packet(&ok));
+        let mut completion = tracker
+            .observe_server_packet(&ok, parse_server_packet(&ok))
+            .unwrap();
         completion.mark_client_terminated();
 
         let (response, exchange) = completion.into_parts();
@@ -218,10 +294,143 @@ mod tests {
         assert!(exchange.response.affected_rows.is_none());
     }
 
+    #[test]
+    fn consecutive_query_and_ping_complete_in_fifo_order() {
+        let mut tracker = MysqlQueryTracker::new(1024, false, MysqlExchangeContext::default());
+        let query = query_packet("SELECT 2");
+        let query_command = parse_client_command(&query).unwrap();
+        tracker
+            .start_query(uuid::Uuid::nil(), 10, &query_command, &query, None)
+            .unwrap();
+        let ping = MysqlPacket {
+            sequence_id: 0,
+            payload: vec![0x0e],
+        };
+        let ping_command = parse_client_command(&ping).unwrap();
+        tracker
+            .start_query(uuid::Uuid::nil(), 11, &ping_command, &ping, None)
+            .unwrap();
+
+        for packet in [
+            server_packet(1, &[1]),
+            server_packet(2, b"column"),
+            server_packet(3, &[0xfe, 0, 0, 0, 0]),
+            server_packet(4, &[1, b'2']),
+        ] {
+            assert!(
+                tracker
+                    .observe_server_packet(&packet, parse_server_packet(&packet))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        let eof = server_packet(5, &[0xfe, 0, 0, 0, 0]);
+        let query_completion = tracker
+            .observe_server_packet(&eof, parse_server_packet(&eof))
+            .unwrap();
+        let (_, query_exchange) = query_completion.into_parts();
+        let query_exchange = query_exchange.unwrap();
+        assert_eq!(query_exchange.query_sequence, 10);
+        assert_eq!(query_exchange.command, "COM_QUERY");
+        assert_eq!(query_exchange.sql.as_deref(), Some("SELECT 2"));
+        assert_eq!(query_exchange.response.status, "resultset");
+
+        let ok = ok_packet();
+        let ping_completion = tracker
+            .observe_server_packet(&ok, parse_server_packet(&ok))
+            .unwrap();
+        let (_, ping_exchange) = ping_completion.into_parts();
+        let ping_exchange = ping_exchange.unwrap();
+        assert_eq!(ping_exchange.query_sequence, 11);
+        assert_eq!(ping_exchange.command, "COM_PING");
+        assert!(ping_exchange.sql.is_none());
+        assert_eq!(ping_exchange.response.status, "ok");
+    }
+
+    #[test]
+    fn no_response_command_does_not_flush_pending_query() {
+        let mut tracker = MysqlQueryTracker::new(1024, false, MysqlExchangeContext::default());
+        let query = query_packet("SELECT business_value");
+        let query_command = parse_client_command(&query).unwrap();
+        tracker
+            .start_query(uuid::Uuid::nil(), 20, &query_command, &query, None)
+            .unwrap();
+        let close = MysqlPacket {
+            sequence_id: 0,
+            payload: [vec![0x19], 7_u32.to_le_bytes().to_vec()].concat(),
+        };
+        let close_command = parse_client_command(&close).unwrap();
+
+        tracker.observe_no_response_command(&close_command, &close);
+        let ok = ok_packet();
+        let completion = tracker
+            .observe_server_packet(&ok, parse_server_packet(&ok))
+            .unwrap();
+        assert_eq!(completion.sequences(), (Some(20), Some(20)));
+    }
+
+    #[test]
+    fn connection_termination_finishes_every_pending_query_in_order() {
+        let mut tracker = MysqlQueryTracker::new(1024, false, MysqlExchangeContext::default());
+        for (sequence, sql) in [(30, "SELECT first"), (31, "SELECT second")] {
+            let query = query_packet(sql);
+            let command = parse_client_command(&query).unwrap();
+            tracker
+                .start_query(uuid::Uuid::nil(), sequence, &command, &query, None)
+                .unwrap();
+        }
+
+        let completions = tracker.finish_all("client_terminated").unwrap();
+        assert_eq!(completions.len(), 2);
+        assert_eq!(completions[0].sequences(), (Some(30), Some(30)));
+        assert_eq!(completions[1].sequences(), (Some(31), Some(31)));
+        for completion in completions {
+            let (_, exchange) = completion.into_parts();
+            let exchange = exchange.unwrap();
+            assert_eq!(
+                exchange.outcome,
+                DependencyExchangeOutcome::ClientTerminated
+            );
+        }
+    }
+
+    #[test]
+    fn pending_fifo_has_an_explicit_request_limit() {
+        let mut tracker = MysqlQueryTracker::new(1024, false, MysqlExchangeContext::default());
+        let ping = MysqlPacket {
+            sequence_id: 0,
+            payload: vec![0x0e],
+        };
+        let command = parse_client_command(&ping).unwrap();
+        for sequence in 1..=MAX_PENDING_QUERIES as u64 {
+            tracker
+                .start_query(uuid::Uuid::nil(), sequence, &command, &ping, None)
+                .unwrap();
+        }
+
+        let error = tracker
+            .start_query(
+                uuid::Uuid::nil(),
+                MAX_PENDING_QUERIES as u64 + 1,
+                &command,
+                &ping,
+                None,
+            )
+            .expect_err("the pending FIFO limit must reject another request");
+        assert!(error.to_string().contains("pending FIFO limit"));
+    }
+
     fn query_packet(sql: &str) -> MysqlPacket {
         MysqlPacket {
             sequence_id: 0,
             payload: [vec![0x03], sql.as_bytes().to_vec()].concat(),
+        }
+    }
+
+    fn server_packet(sequence_id: u8, payload: &[u8]) -> MysqlPacket {
+        MysqlPacket {
+            sequence_id,
+            payload: payload.to_vec(),
         }
     }
 

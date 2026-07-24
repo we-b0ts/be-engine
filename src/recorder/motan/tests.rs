@@ -126,7 +126,6 @@ fn spawn_handler(
         state,
         ConnectionContext {
             client_addr: None,
-            client_process: None,
             target_host: "vintage-node-10-145-1-107.trp.test".to_string(),
             target_port: 8881,
             target_addr: "vintage-node-10-145-1-107.trp.test:8881".to_string(),

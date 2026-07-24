@@ -3,6 +3,7 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
+use tracing::debug;
 use url::form_urlencoded;
 
 use crate::dependency::DiscoveredTcpTarget;
@@ -48,7 +49,21 @@ impl Plugin for Naming {
 
         match action {
             "lookup" | "lookupforupdate" => {
-                let plan = ResponsePlan::parse(input.body, service, cluster)?;
+                let plan = match ResponsePlan::parse(input.body, service, cluster)? {
+                    ParsedResponse::Success(plan) => plan,
+                    ParsedResponse::ApplicationError { code } => {
+                        debug!(
+                            plugin = PLUGIN_NAME,
+                            authority = input.authority.unwrap_or_default(),
+                            service,
+                            cluster,
+                            application_code = %code,
+                            response_body_bytes = input.body.len(),
+                            "left Vintage application error response unchanged"
+                        );
+                        return Ok(PluginResult::Unchanged);
+                    }
+                };
                 let targets = plan
                     .upstream_ips()
                     .into_iter()
@@ -70,6 +85,11 @@ impl Plugin for Naming {
     }
 }
 
+enum ParsedResponse {
+    Success(ResponsePlan),
+    ApplicationError { code: String },
+}
+
 pub(super) struct ResponsePlan {
     outer: Value,
     inner: Value,
@@ -79,9 +99,11 @@ pub(super) struct ResponsePlan {
 }
 
 impl ResponsePlan {
-    fn parse(body: &[u8], service: &str, cluster: &str) -> Result<Self> {
+    fn parse(body: &[u8], service: &str, cluster: &str) -> Result<ParsedResponse> {
         let outer = parse_outer(body)?;
-        ensure_success(&outer)?;
+        if let Some(code) = application_error_code(&outer)? {
+            return Ok(ParsedResponse::ApplicationError { code });
+        }
         let inner_text = outer
             .get("body")
             .and_then(Value::as_str)
@@ -103,13 +125,13 @@ impl ResponsePlan {
                 MAX_DISCOVERED_NODES
             );
         }
-        Ok(Self {
+        Ok(ParsedResponse::Success(Self {
             outer,
             inner,
             service: service.to_string(),
             cluster: cluster.to_string(),
             nodes,
-        })
+        }))
     }
 
     pub(super) fn upstream_ips(&self) -> BTreeSet<Ipv4Addr> {
@@ -177,13 +199,15 @@ fn parse_outer(body: &[u8]) -> Result<Value> {
     Ok(outer)
 }
 
-fn ensure_success(outer: &Value) -> Result<()> {
-    if matches!(outer.get("code"), Some(Value::String(code)) if code == "200")
-        || matches!(outer.get("code"), Some(Value::Number(code)) if code.as_u64() == Some(200))
-    {
-        return Ok(());
+fn application_error_code(outer: &Value) -> Result<Option<String>> {
+    match outer.get("code") {
+        Some(Value::String(code)) if code == "200" => Ok(None),
+        Some(Value::Number(code)) if code.as_u64() == Some(200) => Ok(None),
+        Some(Value::String(code)) if !code.is_empty() => Ok(Some(code.clone())),
+        Some(Value::Number(code)) => Ok(Some(code.to_string())),
+        Some(_) => bail!("Vintage response application code is not a string or number"),
+        None => bail!("Vintage response has no application code"),
     }
-    bail!("Vintage response application code is not 200")
 }
 
 fn collect_nodes(inner: &Value) -> Result<Vec<SocketAddrV4>> {
@@ -360,20 +384,39 @@ mod tests {
     }
 
     #[test]
-    fn rejects_selected_application_error_instead_of_rewriting_it() {
+    fn leaves_selected_application_error_unchanged() {
         let plugin = Naming::new(&["yf-rpc".to_string()], &[]);
         let uri: Uri = "/naming/service?action=lookup&service=yf-rpc&cluster=user/service"
             .parse()
             .unwrap();
 
-        let error = match plugin.rewrite(&input(
-            &uri,
-            br#"{"code":"400","body":"{\"error\":\"not found\"}"}"#,
-        )) {
-            Ok(_) => panic!("expected Vintage application error"),
-            Err(error) => error.to_string(),
-        };
-        assert!(error.contains("application code is not 200"));
+        assert!(matches!(
+            plugin
+                .rewrite(&input(
+                    &uri,
+                    br#"{"code":"400","body":"{\"error_Code\":\"400\",\"error\":\"not found\",\"request\":\"/naming/service\"}"}"#,
+                ))
+                .unwrap(),
+            PluginResult::Unchanged
+        ));
+    }
+
+    #[test]
+    fn rejects_malformed_success_response() {
+        let plugin = Naming::new(&["yf-rpc".to_string()], &[]);
+        let uri: Uri = "/naming/service?action=lookup&service=yf-rpc&cluster=user/service"
+            .parse()
+            .unwrap();
+
+        let error = plugin
+            .rewrite(&input(&uri, br#"{"code":"200","body":"not-json"}"#))
+            .err()
+            .expect("malformed successful response must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("Vintage lookup body is not valid JSON")
+        );
     }
 
     #[test]

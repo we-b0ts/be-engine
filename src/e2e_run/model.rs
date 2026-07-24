@@ -220,21 +220,32 @@ impl ActiveRunState {
         recording_rule: Option<String>,
         active_dir: &std::path::Path,
     ) -> Self {
-        let cases = inventory
+        let mut cases = inventory
             .groups
             .iter()
             .flat_map(|group| {
-                group.cases.iter().map(|case| CaseExecution {
-                    case_id: case.case_id.clone(),
-                    case_dir: case.case_dir.clone(),
-                    group_id: group.group_id.clone(),
-                    status: CaseStatus::Pending,
-                    assertion_passed: None,
-                    replay_clean: None,
-                    response_assertion: None,
+                group.cases.iter().map(|case| {
+                    (
+                        case.recorded_at,
+                        CaseExecution {
+                            case_id: case.case_id.clone(),
+                            case_dir: case.case_dir.clone(),
+                            group_id: group.group_id.clone(),
+                            status: CaseStatus::Pending,
+                            assertion_passed: None,
+                            replay_clean: None,
+                            response_assertion: None,
+                        },
+                    )
                 })
             })
-            .collect();
+            .collect::<Vec<_>>();
+        cases.sort_by(|(left_time, left), (right_time, right)| {
+            left_time
+                .cmp(right_time)
+                .then_with(|| left.case_id.cmp(&right.case_id))
+        });
+        let cases = cases.into_iter().map(|(_, execution)| execution).collect();
         let reports = active_dir.join("reports");
         Self {
             version: STATE_VERSION,
@@ -448,6 +459,64 @@ impl RunIndex {
                 })
                 .collect(),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::case_group::{CanonicalCase, CanonicalCaseGroup};
+
+    #[test]
+    fn active_run_orders_cases_globally_by_recording_timestamp() {
+        let inventory = CaseGroupInventory {
+            case_source: PathBuf::from("/cases"),
+            source_revision: "source".to_string(),
+            case_inventory_id: "inventory".to_string(),
+            groups: vec![
+                CanonicalCaseGroup {
+                    group_id: "GET /later".to_string(),
+                    method: "GET".to_string(),
+                    source_route: "/later".to_string(),
+                    pattern: None,
+                    case_inventory_id: "later".to_string(),
+                    cases: vec![canonical_case("case-a", "2026-07-24T02:00:02Z")],
+                },
+                CanonicalCaseGroup {
+                    group_id: "GET /earlier".to_string(),
+                    method: "GET".to_string(),
+                    source_route: "/earlier".to_string(),
+                    pattern: None,
+                    case_inventory_id: "earlier".to_string(),
+                    cases: vec![canonical_case("case-z", "2026-07-24T02:00:01Z")],
+                },
+            ],
+        };
+
+        let state = ActiveRunState::new(
+            "run".to_string(),
+            1,
+            &inventory,
+            None,
+            std::path::Path::new("/run"),
+        );
+
+        assert_eq!(
+            state
+                .cases
+                .iter()
+                .map(|case| case.case_id.as_str())
+                .collect::<Vec<_>>(),
+            ["case-z", "case-a"]
+        );
+    }
+
+    fn canonical_case(case_id: &str, recorded_at: &str) -> CanonicalCase {
+        CanonicalCase {
+            case_id: case_id.to_string(),
+            case_dir: PathBuf::from("/cases").join(case_id),
+            recorded_at: Some(recorded_at.parse().unwrap()),
+        }
     }
 }
 

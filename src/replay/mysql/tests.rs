@@ -156,6 +156,26 @@ async fn maintenance_queries_use_builtin_responses_without_recorded_exchanges() 
         &mut client,
         MysqlPacket {
             sequence_id: 0,
+            payload: [vec![0x03], b"SELECT 2".to_vec()].concat(),
+        },
+    )
+    .await;
+    assert_eq!(
+        read_packet(&mut client).await.unwrap().unwrap().payload,
+        vec![1]
+    );
+    let _column = read_packet(&mut client).await.unwrap().unwrap();
+    let _columns_eof = read_packet(&mut client).await.unwrap().unwrap();
+    assert_eq!(
+        read_packet(&mut client).await.unwrap().unwrap().payload,
+        vec![1, b'2']
+    );
+    let _rows_eof = read_packet(&mut client).await.unwrap().unwrap();
+
+    write_packet_bytes(
+        &mut client,
+        MysqlPacket {
+            sequence_id: 0,
             payload: [
                 vec![0x03],
                 b"SHOW FULL TABLES FROM `` LIKE 'PROBABLYNOT'".to_vec(),
@@ -169,7 +189,7 @@ async fn maintenance_queries_use_builtin_responses_without_recorded_exchanges() 
     assert_eq!(read_u16_le(&error.payload, 1), Some(1102));
 
     let state = runtime.state.lock().await;
-    assert_eq!(state.mysql.events.builtin_query_count, 2);
+    assert_eq!(state.mysql.events.builtin_query_count, 3);
     assert!(state.mysql.events.unmatched_queries.is_empty());
     assert!(!super::super::report_is_dirty(&state.snapshot_report()));
     drop(state);

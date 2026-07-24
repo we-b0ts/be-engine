@@ -2,6 +2,7 @@
 pub(crate) enum MysqlMaintenanceQuery {
     C3p0TableProbe,
     SelectOne,
+    SelectTwo,
 }
 
 const MAX_MAINTENANCE_QUERY_BYTES: usize = 128;
@@ -21,6 +22,7 @@ pub(crate) fn classify_mysql_maintenance_query(sql: &str) -> Option<MysqlMainten
             Some(MysqlMaintenanceQuery::C3p0TableProbe)
         }
         "select 1" => Some(MysqlMaintenanceQuery::SelectOne),
+        "select 2" => Some(MysqlMaintenanceQuery::SelectTwo),
         _ => None,
     }
 }
@@ -62,9 +64,13 @@ mod tests {
             classify_mysql_maintenance_query("  SeLeCt\n1 ; "),
             Some(MysqlMaintenanceQuery::SelectOne)
         );
+        assert_eq!(
+            classify_mysql_maintenance_query(" SELECT 2; "),
+            Some(MysqlMaintenanceQuery::SelectTwo)
+        );
 
         for sql in [
-            "SELECT 2",
+            "SELECT 3",
             "SELECT 1 FROM business_table",
             "SHOW FULL TABLES FROM `app` LIKE 'PROBABLYNOT'",
             "SHOW TABLES",
@@ -80,6 +86,7 @@ mod tests {
     fn recognizes_protocol_ping_without_treating_other_commands_as_maintenance() {
         assert!(is_mysql_maintenance_exchange("COM_PING", None));
         assert!(is_mysql_maintenance_exchange("COM_QUERY", Some("SELECT 1")));
+        assert!(is_mysql_maintenance_exchange("COM_QUERY", Some("SELECT 2")));
         assert!(!is_mysql_maintenance_exchange(
             "COM_STMT_EXECUTE",
             Some("SELECT 1")

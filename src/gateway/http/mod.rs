@@ -109,7 +109,6 @@ async fn handle_gateway_request(
                 operation_class,
                 method.to_string(),
                 client_addr,
-                None,
                 Some(original_uri.to_string()),
                 "HTTP method is classified as a write operation",
             )
@@ -355,7 +354,6 @@ async fn handle_gateway_request(
                         id,
                         timestamp: Utc::now(),
                         client_addr: client_addr.clone(),
-                        client_process: None,
                         scheme: "http_gateway".to_string(),
                         method: method.to_string(),
                         uri: original_uri.to_string(),
@@ -473,7 +471,7 @@ struct GatewayErrorContext {
 }
 
 async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody> {
-    let error = ctx.err.to_string();
+    let error = format!("{:#}", ctx.err);
     let drain_invalidation = if let Some(case) = &ctx.case {
         ctx.state.drain_active_case_dependencies(case.id).await
     } else {
@@ -523,7 +521,6 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
             id: ctx.id,
             timestamp: Utc::now(),
             client_addr: ctx.client_addr.clone(),
-            client_process: None,
             scheme: "http_gateway".to_string(),
             method: ctx.method.to_string(),
             uri: ctx.original_uri.to_string(),
@@ -562,7 +559,6 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
             timestamp: Utc::now(),
             protocol: "http_gateway".to_string(),
             client_addr: ctx.client_addr,
-            client_process: None,
             target: ctx.target,
             error: error.clone(),
         }))

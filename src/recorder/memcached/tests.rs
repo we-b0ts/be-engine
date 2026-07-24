@@ -84,7 +84,6 @@ async fn blocked_text_write_does_not_reach_upstream() {
         state,
         ConnectionContext {
             client_addr: None,
-            client_process: None,
             target_host: "cache.test".to_string(),
             target_port: 11211,
             target_addr: "cache.test:11211".to_string(),
@@ -141,7 +140,6 @@ async fn pending_text_exchange_records_client_termination_as_replay_safe() {
         state.clone(),
         ConnectionContext {
             client_addr: None,
-            client_process: None,
             target_host: "cache.test".to_string(),
             target_port: 11211,
             target_addr: "cache.test:11211".to_string(),

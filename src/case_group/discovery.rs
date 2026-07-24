@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::path_pattern::matches_path_pattern;
@@ -13,6 +14,8 @@ const IGNORED_DIRECTORIES: &[&str] = &["failed", "staging", ".replay", ".partial
 
 #[derive(Debug, Deserialize)]
 struct RecordedRequest {
+    #[serde(default)]
+    timestamp: Option<DateTime<Utc>>,
     method: String,
     uri: String,
 }
@@ -23,6 +26,7 @@ struct RawCase {
     dir: PathBuf,
     method: String,
     path: String,
+    recorded_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +36,7 @@ pub(super) struct PublishedCase {
     pub(super) member_dir: PathBuf,
     pub(super) method: String,
     pub(super) path: String,
+    pub(super) recorded_at: Option<DateTime<Utc>>,
 }
 
 pub(super) fn discover_published_cases(case_source: &Path) -> Result<Vec<PublishedCase>> {
@@ -75,6 +80,7 @@ pub(super) fn discover_published_cases(case_source: &Path) -> Result<Vec<Publish
                 member_dir,
                 method: case.method,
                 path: case.path,
+                recorded_at: case.recorded_at,
             })
         })
         .collect()
@@ -112,6 +118,7 @@ fn walk_case_directories(root: &Path, directory: &Path, cases: &mut Vec<RawCase>
             dir: directory.to_path_buf(),
             method: recorded.method.trim().to_ascii_uppercase(),
             path,
+            recorded_at: recorded.timestamp,
         });
         return Ok(());
     }
@@ -228,7 +235,11 @@ pub(super) fn select_group_cases(
         }
     }
     let mut selected = selected;
-    selected.sort_by(|left, right| left.id.cmp(&right.id));
+    selected.sort_by(|left, right| {
+        left.recorded_at
+            .cmp(&right.recorded_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
     Ok(selected)
 }
 
@@ -246,6 +257,14 @@ pub(super) fn inventory_id(cases: &[PublishedCase]) -> String {
                 hash = hash.wrapping_mul(0x100000001b3);
             }
             hash ^= 0xff;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        if let Some(recorded_at) = case.recorded_at {
+            for byte in recorded_at.to_rfc3339().as_bytes() {
+                hash ^= u64::from(*byte);
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+            hash ^= 0xfe;
             hash = hash.wrapping_mul(0x100000001b3);
         }
     }

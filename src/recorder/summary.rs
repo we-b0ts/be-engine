@@ -544,6 +544,7 @@ fn is_debug_only_mysql_exchange(exchange: &crate::recorder::MysqlExchangeEvent) 
             exchange.command.as_str(),
             exchange.sql.as_deref(),
             exchange.response.status.as_str(),
+            exchange.query_sequence,
         )
 }
 
@@ -563,6 +564,7 @@ fn is_debug_only_mysql_exchange_value(value: &Value) -> bool {
                 .get("response")
                 .and_then(|response| json_str(response, "status"))
                 .unwrap_or_default(),
+            json_u64(value, "query_sequence").unwrap_or_default(),
         )
 }
 
@@ -574,8 +576,18 @@ fn is_successful_stmt_prepare_value(value: &Value) -> bool {
             == Some("stmt_prepare")
 }
 
-fn is_successful_mysql_session_setup(command: &str, sql: Option<&str>, status: &str) -> bool {
-    command == "COM_QUERY" && status == "ok" && sql.is_some_and(is_mysql_session_setup_sql)
+fn is_successful_mysql_session_setup(
+    command: &str,
+    sql: Option<&str>,
+    status: &str,
+    query_sequence: u64,
+) -> bool {
+    command == "COM_QUERY"
+        && matches!(status, "ok" | "resultset")
+        && sql.is_some_and(|sql| {
+            is_mysql_session_setup_sql(sql)
+                || (query_sequence <= 9 && is_mysql_connector_initialization_sql(sql))
+        })
 }
 
 fn is_mysql_session_setup_sql(sql: &str) -> bool {
@@ -587,7 +599,44 @@ fn is_mysql_session_setup_sql(sql: &str) -> bool {
         || normalized.starts_with("set character_set_results ")
         || normalized.starts_with("set collation_connection ")
         || normalized.starts_with("set time_zone ")
-        || normalized.starts_with("set sql_mode ")
+        || is_mysql_set_assignment(&normalized, "sql_mode")
+        || normalized == "set autocommit=1"
+        || normalized == "set autocommit = 1"
+}
+
+fn is_mysql_set_assignment(sql: &str, variable: &str) -> bool {
+    sql.strip_prefix("set ")
+        .and_then(|remainder| remainder.strip_prefix(variable))
+        .and_then(|remainder| remainder.chars().next())
+        .is_some_and(|separator| separator == '=' || separator.is_whitespace())
+}
+
+fn is_mysql_connector_initialization_sql(sql: &str) -> bool {
+    let normalized = normalize_mysql_control_sql(sql);
+    let normalized = strip_leading_mysql_comment(&normalized);
+    normalized == "show collation"
+        || normalized == "show warnings"
+        || matches!(
+            normalized,
+            "select @@session.auto_increment_increment"
+                | "select @@session.tx_isolation"
+                | "select @@session.transaction_isolation"
+        )
+        || (normalized.starts_with("show variables where ")
+            && normalized.contains("variable_name")
+            && normalized.contains("character_set_client")
+            && normalized.contains("transaction_isolation")
+            && normalized.contains("max_allowed_packet"))
+}
+
+fn strip_leading_mysql_comment(sql: &str) -> &str {
+    let Some(comment) = sql.strip_prefix("/*") else {
+        return sql;
+    };
+    comment
+        .split_once("*/")
+        .map(|(_, remainder)| remainder.trim_start())
+        .unwrap_or(sql)
 }
 
 fn normalize_mysql_control_sql(sql: &str) -> String {
@@ -741,6 +790,60 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_bounded_mysql_connector_initialization_queries() {
+        let connector_comment = "/* mysql-connector-java-5.1.10 ( Revision: ${svn.Revision} ) */";
+        for sql in [
+            "SHOW COLLATION",
+            "SHOW WARNINGS",
+            "SELECT @@session.tx_isolation",
+            &format!("{connector_comment}SELECT @@session.auto_increment_increment"),
+            &format!(
+                "{connector_comment}SHOW VARIABLES WHERE Variable_name = 'character_set_client' \
+                 OR Variable_name = 'transaction_isolation' \
+                 OR Variable_name = 'max_allowed_packet'"
+            ),
+        ] {
+            assert!(
+                is_successful_mysql_session_setup("COM_QUERY", Some(sql), "resultset", 9),
+                "{sql}"
+            );
+            assert!(
+                !is_successful_mysql_session_setup("COM_QUERY", Some(sql), "resultset", 10),
+                "{sql}"
+            );
+        }
+        assert!(is_successful_mysql_session_setup(
+            "COM_QUERY",
+            Some("SET autocommit=1"),
+            "ok",
+            20
+        ));
+        for sql in [
+            "SET sql_mode='NO_AUTO_CREATE_USER,STRICT_TRANS_TABLES'",
+            "SET sql_mode = 'STRICT_TRANS_TABLES'",
+        ] {
+            assert!(is_successful_mysql_session_setup(
+                "COM_QUERY",
+                Some(sql),
+                "ok",
+                20
+            ));
+        }
+        assert!(!is_successful_mysql_session_setup(
+            "COM_QUERY",
+            Some("SET sql_mode_override = 'STRICT_TRANS_TABLES'"),
+            "ok",
+            20
+        ));
+        assert!(!is_successful_mysql_session_setup(
+            "COM_QUERY",
+            Some("SELECT 3"),
+            "resultset",
+            1
+        ));
+    }
+
+    #[test]
     fn dependency_summary_omits_successful_stmt_prepare_lines() {
         let raw = r#"{"event_type":"mysql_exchange","command":"COM_STMT_PREPARE","response":{"status":"stmt_prepare"}}
 {"event_type":"mysql_exchange","command":"COM_STMT_EXECUTE","sql":"SELECT * FROM `user`","response":{"status":"resultset","row_count":0,"columns":[]}}"#;
@@ -755,6 +858,7 @@ mod tests {
     #[test]
     fn dependency_summary_omits_successful_mysql_session_setup_lines() {
         let raw = r#"{"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SET NAMES utf8","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}
+{"event_type":"mysql_exchange","query_sequence":4,"command":"COM_QUERY","sql":"SHOW COLLATION","response":{"status":"resultset","row_count":1,"columns":[]}}
 {"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SET @tenant_id = 1","response":{"status":"ok","affected_rows":0,"last_insert_id":0}}
 {"event_type":"mysql_exchange","command":"COM_QUERY","sql":"SELECT * FROM `user`","response":{"status":"resultset","row_count":0,"columns":[]}}"#;
         let summary = serde_json::to_value(build_dependency_summary(raw)).unwrap();

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -9,7 +9,7 @@ use crate::DependencyExchangeOutcome;
 use crate::mysql::wire::{ClientCommand, MysqlPacket};
 use crate::recorder::{
     MysqlColumn, MysqlExchangeEvent, MysqlExchangeResponse, MysqlResponseEvent, MysqlValue,
-    ProcessInfo, capture_body,
+    capture_body,
 };
 
 mod decode;
@@ -56,7 +56,7 @@ const MYSQL_CHARSET_BINARY: u16 = 63;
 #[derive(Debug, Clone)]
 pub(crate) struct MysqlSemanticTracker {
     statements: HashMap<u32, PreparedStatement>,
-    active: Option<ActiveExchange>,
+    pending: VecDeque<ActiveExchange>,
     max_value_bytes: usize,
     context: MysqlExchangeContext,
 }
@@ -93,7 +93,6 @@ struct ActiveExchange {
     connection_id: Uuid,
     query_sequence: u64,
     client_addr: Option<String>,
-    client_process: Option<ProcessInfo>,
     command: String,
     sql: Option<String>,
     statement_id: Option<u32>,
@@ -113,7 +112,7 @@ impl MysqlSemanticTracker {
     pub(crate) fn new(max_value_bytes: usize, context: MysqlExchangeContext) -> Self {
         Self {
             statements: HashMap::new(),
-            active: None,
+            pending: VecDeque::new(),
             max_value_bytes,
             context,
         }
@@ -126,16 +125,13 @@ impl MysqlSemanticTracker {
         command: &ClientCommand,
         packet: &MysqlPacket,
         client_addr: Option<String>,
-        client_process: Option<ProcessInfo>,
-    ) -> Option<MysqlExchangeEvent> {
-        let previous = self.finish_active("incomplete", None, None, None);
+    ) {
         let (statement_id, params, sql, mut parse_warnings) =
             self.parse_client_input(command, packet);
-        self.active = Some(ActiveExchange {
+        self.pending.push_back(ActiveExchange {
             connection_id,
             query_sequence,
             client_addr,
-            client_process,
             command: command.command_name.clone(),
             sql: sql.or_else(|| command.query.clone()),
             statement_id,
@@ -147,31 +143,32 @@ impl MysqlSemanticTracker {
                 parse_warnings
             },
         });
-        previous
     }
 
     pub(crate) fn observe_no_response_command(
         &mut self,
         command: &ClientCommand,
         packet: &MysqlPacket,
-    ) -> Option<MysqlExchangeEvent> {
-        let previous = self.finish_active("incomplete", None, None, None);
+    ) {
         if command.command_name == "COM_STMT_CLOSE"
             && let Some(statement_id) = read_u32_le(&packet.payload, 1)
         {
             self.statements.remove(&statement_id);
         }
-        previous
     }
 
     pub(crate) fn observe_packet(&mut self, packet: &MysqlPacket) {
-        if let Some(active) = &mut self.active {
+        if let Some(active) = self.pending.front_mut() {
             active.packets.push(packet.clone());
         }
     }
 
     pub(crate) fn database(&self) -> Option<&str> {
         self.context.database.as_deref()
+    }
+
+    pub(crate) fn pending_len(&self) -> usize {
+        self.pending.len()
     }
 
     pub(crate) fn prepared_sql_for_packet(&self, packet: &MysqlPacket) -> Option<&str> {
@@ -186,7 +183,7 @@ impl MysqlSemanticTracker {
         response: &MysqlResponseEvent,
     ) -> Option<MysqlExchangeEvent> {
         let confirmed_database = (response.status == "ok")
-            .then_some(self.active.as_ref())
+            .then_some(self.pending.front())
             .flatten()
             .filter(|active| active.command == "COM_INIT_DB")
             .and_then(|active| active.sql.clone());
@@ -209,7 +206,7 @@ impl MysqlSemanticTracker {
         error_message: Option<String>,
         duration_ms: Option<u128>,
     ) -> Option<MysqlExchangeEvent> {
-        let mut active = self.active.take()?;
+        let mut active = self.pending.pop_front()?;
         let status = fallback_status.to_string();
         let response = self.parse_response(&mut active, &status, error_code, error_message);
         Some(MysqlExchangeEvent {
@@ -218,7 +215,6 @@ impl MysqlSemanticTracker {
             query_sequence: active.query_sequence,
             timestamp: Utc::now(),
             client_addr: active.client_addr,
-            client_process: active.client_process,
             route_name: self.context.route_name.clone(),
             target_host: self.context.target_host.clone(),
             target_port: self.context.target_port,

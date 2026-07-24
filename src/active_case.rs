@@ -28,7 +28,6 @@ struct ActiveCaseState {
 #[derive(Debug, Clone)]
 struct ActiveCaseRegistration {
     case: CaseContext,
-    upstream_pid: Option<u32>,
     invalidation: Option<CaseInvalidation>,
     accepting_dependencies: bool,
     dependencies: Arc<DependencyActivity>,
@@ -90,7 +89,6 @@ impl ActiveCaseRegistry {
     pub(crate) fn try_register(
         &self,
         case: CaseContext,
-        upstream_pid: Option<u32>,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
         let mut state = self.state.lock().expect("active case registry poisoned");
         if state.quiescing {
@@ -105,7 +103,6 @@ impl ActiveCaseRegistry {
         state.bootstrap_open = false;
         state.active.push(ActiveCaseRegistration {
             case: case.clone(),
-            upstream_pid,
             invalidation: None,
             accepting_dependencies: true,
             dependencies: Arc::new(DependencyActivity::default()),
@@ -253,22 +250,16 @@ impl ActiveCaseRegistry {
         }
     }
 
-    pub(crate) fn current_targets_for_event(&self, event_pid: Option<u32>) -> DependencyTargets {
+    pub(crate) fn current_targets_for_event(&self) -> DependencyTargets {
         let state = self.state.lock().expect("active case registry poisoned");
         let active_count = state.active.len();
         let (cases, ambiguous_active_cases, mut reservations) = match state.active.as_slice() {
             [] => (Vec::new(), 0, Vec::new()),
-            [registration] if registration.accepting_dependencies => {
-                let matched_by = match (registration.upstream_pid, event_pid) {
-                    (Some(upstream_pid), Some(event_pid)) if upstream_pid == event_pid => "process",
-                    _ => "active_window",
-                };
-                (
-                    vec![(registration.case.clone(), matched_by)],
-                    0,
-                    vec![registration.dependencies.reserve()],
-                )
-            }
+            [registration] if registration.accepting_dependencies => (
+                vec![(registration.case.clone(), "active_window")],
+                0,
+                vec![registration.dependencies.reserve()],
+            ),
             [_] => (Vec::new(), 0, Vec::new()),
             active => (Vec::new(), active.len(), Vec::new()),
         };
@@ -301,19 +292,19 @@ mod tests {
     fn closes_bootstrap_on_first_case() {
         let registry = ActiveCaseRegistry::default();
 
-        let initial = registry.current_targets_for_event(None);
+        let initial = registry.current_targets_for_event();
         assert!(initial.bootstrap_open);
         assert!(initial.cases.is_empty());
 
         let case = case();
-        let guard = registry.try_register(case.clone(), Some(42)).unwrap();
+        let guard = registry.try_register(case.clone()).unwrap();
 
-        let active = registry.current_targets_for_event(Some(42));
+        let active = registry.current_targets_for_event();
         assert!(!active.bootstrap_open);
-        assert_eq!(active.cases, vec![(case, "process")]);
+        assert_eq!(active.cases, vec![(case, "active_window")]);
 
         drop(guard);
-        let after_case = registry.current_targets_for_event(None);
+        let after_case = registry.current_targets_for_event();
         assert!(!after_case.bootstrap_open);
         assert!(after_case.cases.is_empty());
     }
@@ -322,7 +313,7 @@ mod tests {
     fn keeps_first_invalidation_until_case_finishes() {
         let registry = ActiveCaseRegistry::default();
         let case = case();
-        let guard = registry.try_register(case.clone(), Some(42)).unwrap();
+        let guard = registry.try_register(case.clone()).unwrap();
         let first = CaseInvalidation::new("first_reason", "first message");
         let second = CaseInvalidation::new("second_reason", "second message");
 
@@ -342,7 +333,7 @@ mod tests {
         let registry = ActiveCaseRegistry::default();
         let active = case();
         let other = case();
-        let guard = registry.try_register(active.clone(), Some(42)).unwrap();
+        let guard = registry.try_register(active.clone()).unwrap();
         let invalidation = CaseInvalidation::new("client_disconnected", "client disconnected");
 
         assert_eq!(
@@ -365,27 +356,27 @@ mod tests {
         let case = case();
 
         assert!(matches!(
-            registry.try_register(case.clone(), Some(42)),
+            registry.try_register(case.clone()),
             Err(ActiveCaseRejection::NotReady)
         ));
-        assert!(registry.current_targets_for_event(None).bootstrap_open);
+        assert!(registry.current_targets_for_event().bootstrap_open);
 
         assert!(registry.close_bootstrap());
-        let guard = registry.try_register(case.clone(), Some(42)).unwrap();
-        let active = registry.current_targets_for_event(Some(42));
-        assert_eq!(active.cases, vec![(case, "process")]);
+        let guard = registry.try_register(case.clone()).unwrap();
+        let active = registry.current_targets_for_event();
+        assert_eq!(active.cases, vec![(case, "active_window")]);
         drop(guard);
     }
 
     #[tokio::test]
     async fn quiescing_rejects_new_cases_and_waits_for_active_case() {
         let registry = ActiveCaseRegistry::default();
-        let guard = registry.try_register(case(), Some(42)).unwrap();
+        let guard = registry.try_register(case()).unwrap();
         assert!(registry.begin_quiescing());
         assert!(!registry.begin_quiescing());
         assert!(registry.is_quiescing());
         assert!(matches!(
-            registry.try_register(case(), Some(43)),
+            registry.try_register(case()),
             Err(ActiveCaseRejection::Quiescing)
         ));
 
@@ -406,7 +397,7 @@ mod tests {
     #[tokio::test]
     async fn active_case_shutdown_drain_can_time_out() {
         let registry = ActiveCaseRegistry::default();
-        let _guard = registry.try_register(case(), Some(42)).unwrap();
+        let _guard = registry.try_register(case()).unwrap();
         registry.begin_quiescing();
 
         assert!(
@@ -422,14 +413,14 @@ mod tests {
         let first = case();
         let second = case();
 
-        let guard = registry.try_register(first, Some(42)).unwrap();
+        let guard = registry.try_register(first).unwrap();
         assert!(matches!(
-            registry.try_register(second.clone(), Some(43)),
+            registry.try_register(second.clone()),
             Err(ActiveCaseRejection::Busy)
         ));
 
         drop(guard);
-        assert!(registry.try_register(second, Some(43)).is_ok());
+        assert!(registry.try_register(second).is_ok());
     }
 
     #[test]
@@ -445,21 +436,19 @@ mod tests {
             state.bootstrap_open = false;
             state.active.push(ActiveCaseRegistration {
                 case: first,
-                upstream_pid: None,
                 invalidation: None,
                 accepting_dependencies: true,
                 dependencies: Arc::new(DependencyActivity::default()),
             });
             state.active.push(ActiveCaseRegistration {
                 case: second,
-                upstream_pid: None,
                 invalidation: None,
                 accepting_dependencies: true,
                 dependencies: Arc::new(DependencyActivity::default()),
             });
         }
 
-        let targets = registry.current_targets_for_event(None);
+        let targets = registry.current_targets_for_event();
         assert!(targets.cases.is_empty());
         assert_eq!(targets.ambiguous_active_cases, 2);
         assert!(!targets.bootstrap_open);
@@ -474,7 +463,7 @@ mod tests {
         assert!(!registry.is_bootstrap_open());
         assert!(!registry.close_bootstrap());
 
-        let targets = registry.current_targets_for_event(None);
+        let targets = registry.current_targets_for_event();
         assert!(!targets.bootstrap_open);
         assert!(targets.cases.is_empty());
     }
@@ -483,9 +472,9 @@ mod tests {
     async fn closing_case_stops_new_dependencies_and_waits_only_for_captured_dependencies() {
         let registry = ActiveCaseRegistry::default();
         let case = case();
-        let _guard = registry.try_register(case.clone(), Some(42)).unwrap();
-        let targets = registry.current_targets_for_event(Some(42));
-        assert_eq!(targets.cases, vec![(case.clone(), "process")]);
+        let _guard = registry.try_register(case.clone()).unwrap();
+        let targets = registry.current_targets_for_event();
+        assert_eq!(targets.cases, vec![(case.clone(), "active_window")]);
 
         let closing_registry = registry.clone();
         let closing = tokio::spawn(async move {
@@ -495,12 +484,7 @@ mod tests {
         });
         tokio::task::yield_now().await;
         assert!(!closing.is_finished());
-        assert!(
-            registry
-                .current_targets_for_event(Some(42))
-                .cases
-                .is_empty()
-        );
+        assert!(registry.current_targets_for_event().cases.is_empty());
 
         drop(targets);
         assert_eq!(
@@ -516,7 +500,7 @@ mod tests {
     async fn post_response_window_accepts_new_dependencies_until_it_closes() {
         let registry = ActiveCaseRegistry::default();
         let case = case();
-        let _guard = registry.try_register(case.clone(), Some(42)).unwrap();
+        let _guard = registry.try_register(case.clone()).unwrap();
 
         let closing_registry = registry.clone();
         let closing_case_id = case.id;
@@ -531,17 +515,12 @@ mod tests {
         });
         tokio::task::yield_now().await;
 
-        let during_window = registry.current_targets_for_event(Some(42));
-        assert_eq!(during_window.cases, vec![(case, "process")]);
+        let during_window = registry.current_targets_for_event();
+        assert_eq!(during_window.cases, vec![(case, "active_window")]);
         drop(during_window);
 
         tokio::time::sleep(Duration::from_millis(120)).await;
-        assert!(
-            registry
-                .current_targets_for_event(Some(42))
-                .cases
-                .is_empty()
-        );
+        assert!(registry.current_targets_for_event().cases.is_empty());
         assert_eq!(closing.await.unwrap(), DependencyDrainResult::Drained);
     }
 
@@ -549,7 +528,7 @@ mod tests {
     async fn dependency_drain_returns_immediately_when_nothing_is_in_flight() {
         let registry = ActiveCaseRegistry::default();
         let case = case();
-        let _guard = registry.try_register(case.clone(), None).unwrap();
+        let _guard = registry.try_register(case.clone()).unwrap();
 
         assert_eq!(
             tokio::time::timeout(
@@ -565,7 +544,7 @@ mod tests {
     #[tokio::test]
     async fn closing_bootstrap_waits_for_captured_dependencies() {
         let registry = ActiveCaseRegistry::default();
-        let targets = registry.current_targets_for_event(None);
+        let targets = registry.current_targets_for_event();
         assert!(targets.bootstrap_open);
         assert!(registry.close_bootstrap());
 
@@ -584,8 +563,8 @@ mod tests {
     async fn dependency_drain_times_out_while_request_remains_in_flight() {
         let registry = ActiveCaseRegistry::default();
         let case = case();
-        let _guard = registry.try_register(case.clone(), None).unwrap();
-        let targets = registry.current_targets_for_event(None);
+        let _guard = registry.try_register(case.clone()).unwrap();
+        let targets = registry.current_targets_for_event();
 
         assert_eq!(
             registry
@@ -593,7 +572,7 @@ mod tests {
                 .await,
             DependencyDrainResult::TimedOut
         );
-        assert!(registry.current_targets_for_event(None).cases.is_empty());
+        assert!(registry.current_targets_for_event().cases.is_empty());
         drop(targets);
     }
 }
