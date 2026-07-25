@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{SocketAddr, TcpListener as StdTcpListener};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -6,24 +6,18 @@ use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
 use traffic_e2e::{
     AppConfig, HttpGatewayRuleConfig, MysqlRouteConfig, MysqlWriteOperation, RecordingAccessPolicy,
     RecordingAccessRuleConfig, RecordingAccessRuleEffect,
 };
 
-// free_addr() releases its socket before AppState binds the configured
-// listeners. Serialize these integration tests to prevent port reuse.
-static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
-
 #[tokio::test]
 async fn rejected_http_dependency_invalidates_active_gateway_case() {
-    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
-    let proxy_addr = free_addr();
-    let gateway_addr = free_addr();
+    let reserved_ports = ReservedPorts::<2>::new();
+    let [proxy_addr, gateway_addr] = reserved_ports.addresses();
     let dependency = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let dependency_addr = dependency.local_addr().unwrap();
     let dependency_task = tokio::spawn(async move {
@@ -90,6 +84,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
     let recorder = state.recorder().clone();
+    drop(reserved_ports);
     let recorder_task = tokio::spawn(async move { state.run().await });
     wait_for_port(proxy_addr).await;
     wait_for_port(gateway_addr).await;
@@ -157,11 +152,11 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
 
 #[tokio::test]
 async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_does_not() {
-    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     let temp = tempdir().unwrap();
-    let mysql_proxy_addr = free_addr();
+    let reserved_ports = ReservedPorts::<2>::new();
+    let [mysql_proxy_addr, gateway_addr] = reserved_ports.addresses();
     let mysql_upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let mysql_upstream_addr = mysql_upstream.local_addr().unwrap();
     let mysql_upstream_task = tokio::spawn(async move {
@@ -211,7 +206,6 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
     });
 
     let fallback = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let gateway_addr = free_addr();
     let mut config = AppConfig::default();
     config.http_gateway.enabled = true;
     config.http_gateway.listen = gateway_addr;
@@ -245,6 +239,7 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
 
     let state = traffic_e2e::AppState::new(config).await.unwrap();
     let recorder = state.recorder().clone();
+    drop(reserved_ports);
     let recorder_task = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
 
@@ -391,11 +386,20 @@ fn mysql_login_payload(database: &str) -> Vec<u8> {
     payload
 }
 
-fn free_addr() -> SocketAddr {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
+struct ReservedPorts<const N: usize> {
+    listeners: [StdTcpListener; N],
+}
+
+impl<const N: usize> ReservedPorts<N> {
+    fn new() -> Self {
+        Self {
+            listeners: std::array::from_fn(|_| StdTcpListener::bind("127.0.0.1:0").unwrap()),
+        }
+    }
+
+    fn addresses(&self) -> [SocketAddr; N] {
+        std::array::from_fn(|index| self.listeners[index].local_addr().unwrap())
+    }
 }
 
 async fn wait_for_port(addr: SocketAddr) {
