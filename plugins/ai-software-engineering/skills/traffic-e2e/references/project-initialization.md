@@ -62,8 +62,8 @@ it:
 - image, platform, entrypoint, command, working directory, and configured user;
 - network mode, shared namespace, listen ports, and published ports;
 - bind-mount source, destination, read/write mode, and host-path type;
-- environment, environment-file, health, restart, ulimit, and capability
-  settings;
+- environment, environment-file, health, restart, security, capability,
+  ulimit, PID, memory, and shared-memory settings;
 - the genuine source process's effective resource limits and the user-switch
   path that establishes them; and
 - the role of each supporting container and the process that emits each remote
@@ -116,8 +116,9 @@ Treat this as the complete source-controlled write allowlist:
 Add `.traffic-e2e/adapters/<component>/` only when the inspected image cannot
 satisfy the fixed recording identity, CA trust, low-port, resource-limit, or
 startup contract directly. Use that component directory as its Docker build
-context. Do not create a top-level `recording/`, `docker/`, or other
-initialization directory.
+context and build it with `--network none`; a recording-only adapter must not
+download build dependencies. Do not create a top-level `recording/`, `docker/`,
+or other initialization directory.
 
 Do not modify application source, application configuration, repository build
 files, deployment files, CI, repository instructions, README, or other
@@ -252,6 +253,17 @@ recording entrypoint that prepares configuration and mounts as root, then
 executes the genuine application process as `998:998`. Preserve the original
 application command and dependency clients.
 
+Inspect every image-internal directory that the genuine source process must
+write, including work, temp, generated configuration, and application log
+directories. Create or assign only those exact paths to `998:998` in the
+recording adapter. Do not broadly change ownership of the application tree.
+
+Use a non-PAM numeric identity-drop mechanism. Inspect its actual path, version,
+and syntax inside the target image instead of assuming host behavior. The
+adapter must preserve the inspected working directory, environment, executable,
+and argv; use `exec` so the genuine process keeps the container signal chain.
+Do not use `su` or `runuser`.
+
 ### Runtime Limits
 
 Preserve inspected Docker ulimits. Because the source process changes identity,
@@ -259,14 +271,18 @@ also compare the original and recording process limits through
 `/proc/<pid>/limits`, especially open files and user processes. Docker
 `HostConfig.Ulimits` alone is not proof of the effective limits.
 
-Do not use `su`, `runuser`, or another PAM path when it silently applies a
-different `limits.d` policy. Use a non-PAM identity drop that retains the
-required inherited limits, or pass the exact evidenced Docker ulimits. For
-example, do not let an original unlimited process limit become a soft
-`nproc=1024` merely because the recording process runs as a non-root user.
-Do not raise a limit beyond the original effective value without separate
-runtime evidence. Verify the final genuine source process limits before
-readiness.
+Use an identity drop that retains the required inherited limits, or pass the
+exact evidenced Docker ulimits. Do not let an original unlimited process limit
+become a soft `nproc=1024` merely because the recording process runs as a
+non-root user. Do not raise a limit beyond the original effective value without
+separate runtime evidence.
+
+Before the first full recording startup, run a bounded probe through the same
+adapter entrypoint and identity-drop path. Prove numeric UID/GID `998:998`, the
+exact working directory, executable and argv handling, relevant effective
+limits, required image-internal write access, and successful execution of the
+real launcher. After the genuine source starts, verify its UID/GID and
+`/proc/<pid>/limits` again before readiness.
 
 ### Ports Below 1024
 
@@ -349,7 +365,9 @@ Use distinct, deterministic managed container names and fail clearly when one
 already exists. Once Recorder has started, use the same graceful finalization
 path for normal timeout, operator interrupt, startup failure, and readiness
 failure. Keep failure diagnostics. Do not use `kill -9` as the normal shutdown
-path.
+path. Make cleanup idempotent and aware of each completed startup stage; a
+failure before Recorder starts must not require run metadata, and every cleanup
+must touch only components created by that invocation.
 
 Start Recorder with an internal control socket:
 
