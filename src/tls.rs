@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -10,6 +11,10 @@ use rcgen::{
 };
 use rustls::ServerConfig;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use x509_parser::parse_x509_certificate;
+
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 pub struct MitmCa {
     ca_cert: Certificate,
@@ -60,6 +65,7 @@ impl MitmCa {
             let key_pem = fs::read_to_string(key_path)
                 .with_context(|| format!("failed to read CA key {}", key_path.display()))?;
             let key_pair = KeyPair::from_pem(&key_pem).context("failed to parse CA key PEM")?;
+            ensure_ca_key_matches(&ca_cert_der, &key_pair)?;
             let params = CertificateParams::from_ca_cert_pem(&cert_pem)
                 .context("failed to parse CA cert PEM")?;
             let cert = params
@@ -101,9 +107,9 @@ impl MitmCa {
             .context("failed to generate CA certificate")?;
         let ca_cert_pem = cert.pem();
         let ca_cert_der = cert.der().clone();
-        fs::write(cert_path, &ca_cert_pem)
+        write_new_ca_file(cert_path, ca_cert_pem.as_bytes(), 0o644)
             .with_context(|| format!("failed to write CA cert {}", cert_path.display()))?;
-        fs::write(key_path, key_pair.serialize_pem())
+        write_new_ca_file(key_path, key_pair.serialize_pem().as_bytes(), 0o600)
             .with_context(|| format!("failed to write CA key {}", key_path.display()))?;
 
         Ok(Self {
@@ -173,6 +179,30 @@ impl MitmCa {
     }
 }
 
+fn ensure_ca_key_matches(cert_der: &[u8], key_pair: &KeyPair) -> Result<()> {
+    let (_, cert) =
+        parse_x509_certificate(cert_der).context("failed to inspect CA certificate public key")?;
+    ensure!(
+        cert.public_key().raw == key_pair.public_key_der(),
+        "CA certificate and private key do not match"
+    );
+    Ok(())
+}
+
+fn write_new_ca_file(path: &Path, contents: &[u8], mode: u32) -> Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(mode);
+
+    let mut file = options.open(path)?;
+    file.write_all(contents)?;
+    #[cfg(unix)]
+    file.set_permissions(fs::Permissions::from_mode(mode))?;
+    file.sync_all()?;
+    Ok(())
+}
+
 fn parse_first_cert_der(pem: &str) -> Result<CertificateDer<'static>> {
     let mut reader = pem.as_bytes();
     let mut certs = rustls_pemfile::certs(&mut reader);
@@ -214,6 +244,20 @@ mod tests {
         let ca = MitmCa::load_or_generate(&cert, &key).unwrap();
         assert_eq!(ca.ca_cert_pem(), persisted_pem);
         let _ = ca.server_config_for_host("example.com:443").unwrap();
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                std::fs::metadata(&cert).unwrap().permissions().mode() & 0o777,
+                0o644
+            );
+            assert_eq!(
+                std::fs::metadata(&key).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
     }
 
     #[test]
@@ -234,5 +278,24 @@ mod tests {
             "existing certificate"
         );
         assert!(!key.exists());
+    }
+
+    #[test]
+    fn refuses_a_mismatched_ca_pair() {
+        let dir = tempdir().unwrap();
+        let first_cert = dir.path().join("first-ca.pem");
+        let first_key = dir.path().join("first-ca-key.pem");
+        let second_cert = dir.path().join("second-ca.pem");
+        let second_key = dir.path().join("second-ca-key.pem");
+        MitmCa::load_or_generate(&first_cert, &first_key).unwrap();
+        MitmCa::load_or_generate(&second_cert, &second_key).unwrap();
+        std::fs::copy(&second_key, &first_key).unwrap();
+
+        let error = MitmCa::load_or_generate(&first_cert, &first_key)
+            .err()
+            .expect("mismatched CA pair must fail")
+            .to_string();
+
+        assert!(error.contains("do not match"));
     }
 }

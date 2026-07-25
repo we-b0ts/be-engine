@@ -119,23 +119,27 @@ traffic-e2e record --config config/recorder.example.toml
 ```
 
 Automation should publish Recorder lifecycle state on a Unix socket and wait
-through the public readiness command:
+through the public lifecycle commands:
 
 ```bash
 traffic-e2e record \
   --config config/recorder.example.toml \
   --control-socket /run/traffic-e2e/recording.sock
 
+traffic-e2e recording wait-listeners \
+  --control-socket /run/traffic-e2e/recording.sock
+# Start the source application after this succeeds.
 traffic-e2e recording wait-ready \
-  --control-socket /run/traffic-e2e/recording.sock \
-  --timeout-seconds 300
+  --control-socket /run/traffic-e2e/recording.sock
 ```
 
-Run the second command from another process that can access the socket, such
-as `docker exec` in the Recorder container. It succeeds only after every
-enabled Recorder listener has bound and the configured HTTP gateway source
-readiness probe has succeeded. It does not parse recorder configuration or
-probe listener ports. `--timeout-seconds` defaults to `300`.
+Run the wait commands from another process that can access the socket, such as
+`docker exec` in the Recorder container. `wait-listeners` succeeds after
+Recorder initialization and every enabled listener bind, so automation can
+then prepare CA trust and start the source. `wait-ready` additionally requires
+the configured HTTP gateway source readiness probe. Neither command parses
+recorder configuration or probes listener ports. `--timeout-seconds` defaults
+to `300`.
 
 `traffic-e2e record` enables local DNS capture and fake-IP TCP/UDP redirect by
 default, which modifies local DNS/iptables state. Use this when you

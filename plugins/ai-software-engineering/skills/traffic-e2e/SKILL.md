@@ -82,9 +82,9 @@ write. Use `plan` only when diagnostic output is useful.
    networking by default. Run Recorder, source, and dependency-producing
    sidecars with `--network container:<anchor>` so they share that one
    namespace. Use another verified Docker network only when explicitly
-   required. Run only the process that emits the source contract's outbound
-   dependency traffic as the fixed `trp-record` identity; preserve other
-   component users. Let managed `traffic-e2e record` own DNS, fake-IP
+   required. Run only the genuine source application process as the fixed
+   `trp-record` identity; always preserve supporting-container users. Let
+   managed `traffic-e2e record` own DNS, fake-IP
    interception, recovery, and shutdown inside that boundary.
 3. Wait for configured readiness. Send only controlled trigger requests and
    avoid overlapping active cases.

@@ -92,7 +92,9 @@ pub use recorder::{
     TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
     capture_case_body, redact_headers,
 };
-pub use recording_control::{RecordingReadiness, RecordingWaitConfig, wait_for_recording_ready};
+pub use recording_control::{
+    RecordingReadiness, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
+};
 pub use replay::{
     DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,

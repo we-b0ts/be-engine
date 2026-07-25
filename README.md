@@ -75,17 +75,20 @@ traffic-e2e record --config config/recorder.example.toml
 
 Automation can reserve the recording directory name with an explicit UTC run
 identifier: `traffic-e2e record --config ... --run-id YYYYMMDDHHMMSS`.
-It can also wait for every enabled listener and the configured source
-readiness probe without parsing the recorder config:
+It can also expose two lifecycle barriers without parsing the recorder config:
 
 ```bash
 traffic-e2e record --config ... --control-socket /run/traffic-e2e/recording.sock
+traffic-e2e recording wait-listeners \
+  --control-socket /run/traffic-e2e/recording.sock
+# Start the source application after this succeeds.
 traffic-e2e recording wait-ready \
-  --control-socket /run/traffic-e2e/recording.sock \
-  --timeout-seconds 300
+  --control-socket /run/traffic-e2e/recording.sock
 ```
 
-`recording wait-ready` defaults to a 300-second timeout.
+`recording wait-listeners` succeeds after Recorder initialization and every
+enabled listener bind. `recording wait-ready` additionally waits for the
+configured source readiness probe. Both default to a 300-second timeout.
 
 Local interception is always filtered to the fixed `trp-record` Unix user.
 This is a project-created system account, not a Linux built-in. Create it once,

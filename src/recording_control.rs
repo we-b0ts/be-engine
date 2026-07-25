@@ -52,6 +52,7 @@ impl RecordingListener {
 pub struct RecordingReadiness {
     pub phase: String,
     pub ready: bool,
+    pub listeners_bound: bool,
     pub source_ready: bool,
     pub listeners_ready: Vec<String>,
     pub listeners_pending: Vec<String>,
@@ -140,17 +141,16 @@ impl RecordingLifecycle {
             .map(RecordingListener::as_str)
             .map(str::to_string)
             .collect::<Vec<_>>();
-        let ready = state.error.is_none()
-            && !state.stopping
-            && state.source_ready
-            && listeners_pending.is_empty();
+        let listeners_bound = listeners_pending.is_empty();
+        let ready =
+            state.error.is_none() && !state.stopping && state.source_ready && listeners_bound;
         let phase = if state.error.is_some() {
             "failed"
         } else if state.stopping {
             "stopping"
         } else if ready {
             "ready"
-        } else if listeners_pending.is_empty() {
+        } else if listeners_bound {
             "waiting_for_source"
         } else {
             "starting"
@@ -158,6 +158,7 @@ impl RecordingLifecycle {
         RecordingReadiness {
             phase: phase.to_string(),
             ready,
+            listeners_bound,
             source_ready: state.source_ready,
             listeners_ready,
             listeners_pending,
@@ -326,7 +327,42 @@ async fn remove_stale_socket(path: &Path) -> Result<()> {
     })
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RecordingWaitTarget {
+    Listeners,
+    Ready,
+}
+
+impl RecordingWaitTarget {
+    fn is_satisfied(self, status: &RecordingReadiness) -> bool {
+        match self {
+            Self::Listeners => status.listeners_bound,
+            Self::Ready => status.ready,
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Listeners => "recording listeners",
+            Self::Ready => "recording",
+        }
+    }
+}
+
+pub async fn wait_for_recording_listeners(
+    config: RecordingWaitConfig,
+) -> Result<RecordingReadiness> {
+    wait_for_recording_state(config, RecordingWaitTarget::Listeners).await
+}
+
 pub async fn wait_for_recording_ready(config: RecordingWaitConfig) -> Result<RecordingReadiness> {
+    wait_for_recording_state(config, RecordingWaitTarget::Ready).await
+}
+
+async fn wait_for_recording_state(
+    config: RecordingWaitConfig,
+    target: RecordingWaitTarget,
+) -> Result<RecordingReadiness> {
     ensure!(
         !config.timeout.is_zero(),
         "recording readiness timeout must be greater than zero"
@@ -336,6 +372,7 @@ pub async fn wait_for_recording_ready(config: RecordingWaitConfig) -> Result<Rec
     let mut observed_control = false;
     let mut last_status: Option<RecordingReadiness> = None;
     info!(
+        target = target.description(),
         timeout_seconds = config.timeout.as_secs(),
         control_socket = %config.control_socket_path.display(),
         "waiting for recording readiness"
@@ -344,7 +381,7 @@ pub async fn wait_for_recording_ready(config: RecordingWaitConfig) -> Result<Rec
         let elapsed = started.elapsed();
         let remaining = config.timeout.saturating_sub(elapsed);
         if remaining.is_zero() {
-            return readiness_timeout(config.timeout, last_status.as_ref(), None);
+            return readiness_timeout(target, config.timeout, last_status.as_ref(), None);
         }
         let request_error = match tokio::time::timeout(
             CONTROL_IO_TIMEOUT.min(remaining),
@@ -354,15 +391,15 @@ pub async fn wait_for_recording_ready(config: RecordingWaitConfig) -> Result<Rec
         {
             Ok(Ok(status)) => {
                 observed_control = true;
-                if status.ready {
-                    return Ok(status);
-                }
                 if matches!(status.phase.as_str(), "failed" | "stopping") {
                     let message = status
                         .error
                         .as_deref()
                         .unwrap_or("recorder stopped before reaching readiness");
                     return Err(anyhow!("{message}: {}", serde_json::to_string(&status)?));
+                }
+                if target.is_satisfied(&status) {
+                    return Ok(status);
                 }
                 last_status = Some(status);
                 None
@@ -379,10 +416,11 @@ pub async fn wait_for_recording_ready(config: RecordingWaitConfig) -> Result<Rec
 
         let elapsed = started.elapsed();
         if elapsed >= config.timeout {
-            return readiness_timeout(config.timeout, last_status.as_ref(), request_error);
+            return readiness_timeout(target, config.timeout, last_status.as_ref(), request_error);
         }
         if elapsed >= next_progress {
             info!(
+                target = target.description(),
                 elapsed_seconds = elapsed.as_secs(),
                 timeout_seconds = config.timeout.as_secs(),
                 control_socket = %config.control_socket_path.display(),
@@ -395,12 +433,14 @@ pub async fn wait_for_recording_ready(config: RecordingWaitConfig) -> Result<Rec
 }
 
 fn readiness_timeout(
+    target: RecordingWaitTarget,
     timeout: Duration,
     last_status: Option<&RecordingReadiness>,
     request_error: Option<anyhow::Error>,
 ) -> Result<RecordingReadiness> {
     let message = format!(
-        "recording did not become ready within {} seconds",
+        "{} did not become ready within {} seconds",
+        target.description(),
         timeout.as_secs()
     );
     if let Some(status) = last_status {
@@ -490,12 +530,39 @@ mod tests {
         lifecycle.mark_listener_ready(RecordingListener::DnsMock);
         lifecycle.mark_listener_ready(RecordingListener::TcpGateway);
         lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
-        assert_eq!(lifecycle.snapshot().phase, "waiting_for_source");
+        let listeners_ready = lifecycle.snapshot();
+        assert!(listeners_ready.listeners_bound);
+        assert_eq!(listeners_ready.phase, "waiting_for_source");
 
         lifecycle.mark_source_ready();
         let ready = lifecycle.snapshot();
         assert!(ready.ready);
         assert_eq!(ready.phase, "ready");
+    }
+
+    #[tokio::test]
+    async fn wait_listeners_returns_before_source_readiness() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("recording.sock");
+        let lifecycle = RecordingLifecycle::from_config(&test_config());
+        let server = RecordingControlServer::start(lifecycle.clone(), socket.clone())
+            .await
+            .unwrap();
+        lifecycle.mark_listener_ready(RecordingListener::DnsMock);
+        lifecycle.mark_listener_ready(RecordingListener::TcpGateway);
+        lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
+
+        let response = wait_for_recording_listeners(RecordingWaitConfig {
+            control_socket_path: socket,
+            timeout: Duration::from_secs(1),
+        })
+        .await
+        .unwrap();
+
+        assert!(response.listeners_bound);
+        assert!(!response.source_ready);
+        assert!(!response.ready);
+        server.shutdown().await.unwrap();
     }
 
     #[tokio::test]
