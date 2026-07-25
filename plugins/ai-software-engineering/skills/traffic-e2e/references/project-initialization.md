@@ -120,12 +120,14 @@ Create the three configuration files in this order:
 traffic-e2e config recorder init \
   --target-root . \
   --source-http-port <port> \
-  --readiness-path <path> \
-  --readiness-status <status> \
   --upstream-dns <ip:port>
 traffic-e2e config replay init --target-root .
 traffic-e2e config project init --target-root .
 ```
+
+Recorder initialization defaults readiness to path `/healthz` with exact
+status `404`. When source evidence requires another contract, override it with
+`--readiness <path>` and, when needed, `--readiness-status <status>`.
 
 The initializers own and validate the baseline templates. Do not hand-write or
 post-edit the generated configuration during initialization. Recorder
@@ -187,22 +189,27 @@ recording paths. Start Recorder with `NET_ADMIN` and `NET_RAW`, not
 
 ### Fixed Identity And Bind Mounts
 
-Run Recorder and every dependency-producing source or supporting process with
-numeric UID/GID `998:998`. Host account names for that numeric identity are
-irrelevant.
+Run Recorder as root inside its bounded runtime with only the required
+capabilities. Run the genuine source process that emits the dependency traffic
+to be intercepted with numeric UID/GID `998:998`; host account names for that
+identity are irrelevant. Preserve the inspected users of supporting containers
+unless evidence proves that one is the actual emitter of source-owned outbound
+dependency traffic.
 
 Keep every inspected bind-mount source and destination unchanged. Require each
-writable host source to exist and be a directory. Before startup, recursively
-give the exact writable source and its existing descendants to `998:998`:
+writable host source used by the fixed source process to exist and be a
+directory. Before startup, recursively give that exact source and its existing
+descendants to `998:998`:
 
 ```text
 chown -hR 998:998 -- <exact-writable-bind-source>
 chmod -R u+rwX -- <exact-writable-bind-source>
 ```
 
-Apply these commands only to the exact inspected mount sources. Verify read,
-write, and directory traversal with a `998:998` probe before starting the
-application. For read-only mounts, verify traversal and read access.
+Apply these commands only to exact mounts used by the fixed source process.
+Verify read, write, and directory traversal with a `998:998` probe before
+starting the application. For its read-only mounts, verify traversal and read
+access.
 
 When an application image requires root initialization, use a bounded
 recording entrypoint that prepares configuration and mounts as root, then
@@ -211,8 +218,8 @@ application command and dependency clients.
 
 ### Ports Below 1024
 
-For each required listen port below 1024, first prove whether UID 998 can bind
-it in the selected namespace. Preserve the original port.
+For each required source-process listen port below 1024, first prove whether
+UID 998 can bind it in the selected namespace. Preserve the original port.
 
 If binding requires privilege, adapt only the recording image:
 
@@ -262,9 +269,9 @@ The script must:
 
 1. use strict shell behavior and repository-root-relative paths;
 2. verify Docker, the installed binary, pinned images, environment files,
-   exact bind mounts, UID 998 access, required ports, and container-name
+   exact bind mounts, source UID 998 access, required ports, and container-name
    availability;
-3. prepare writable bind-mount ownership;
+3. prepare writable source bind-mount ownership;
 4. start the anchor and Recorder, then wait for Recorder listeners and the CA
    pair when applicable;
 5. start supporting containers and the genuine source in the shared namespace;
@@ -303,7 +310,8 @@ Report `initialization complete` only when:
 
 - all three configuration initializers succeeded;
 - source-controlled outputs and ignore rules are correct;
-- the command used the pinned shared images and fixed `998:998` identity;
+- the command used the pinned shared images and ran the source traffic emitter
+  with the fixed `998:998` identity;
 - every managed component joined the anchor namespace;
 - Recorder and the genuine source reached readiness; and
 - Recorder finalized cleanly at the end of the bounded session.
