@@ -74,11 +74,9 @@ arrangement that places its traffic inside that identity and network boundary.
 ## Readiness And Case Admission
 
 Prefer the recorder rule's ready probe. Until readiness succeeds, matching
-traffic receives the configured fallback and does not create a case. Repository
-initialization defaults this to an in-Recorder fixed response rather than an
-upstream. Do not replace application readiness with a fixed sleep; large
-services can bind a port or answer a trivial path before business
-initialization finishes.
+traffic receives the configured fallback and does not create a case. Do not
+replace application readiness with a fixed sleep; large services can bind a
+port or answer a trivial path before business initialization finishes.
 
 After readiness, only one matching case owns dependency attribution at a time.
 Overlapping matched requests use fallback and do not become part of the active

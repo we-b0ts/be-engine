@@ -1,0 +1,127 @@
+# Platform traffic recording configuration.
+[dns_mock]
+enabled = true
+listen = "127.0.0.153:15353"
+upstream_dns = "10.10.10.11:53"
+fake_cidr = "198.19.0.0/16"
+ttl_seconds = 60
+registry_path = "./recordings/fake_dns_registry.json"
+bypass_domains = []
+
+[[dns_mock.bypass_strategies]]
+strategy = "breeze"
+snapshot_dir = "/data1/breeze/snapshot"
+
+[dns_mock.hosts]
+"breeze.recording" = ["127.0.0.1"]
+
+[tcp_gateway]
+enabled = true
+listen = "127.0.0.1:15001"
+backlog = 65535
+record_http = true
+mitm_https = true
+https_ports = []
+
+[tcp_gateway.protocol_detection]
+enabled = true
+redis_port_hints = [6379]
+memcached_port_hints = [11211]
+kafka_port_hints = [9092]
+overrides = []
+
+[http_response_rewrite]
+enabled = true
+
+[[http_response_rewrite.rules]]
+name = "platform-vintage-naming"
+authorities = [
+  "config.api.demo.test",
+  "static.config.api.demo.test",
+  "register.kailash.demo.test",
+]
+methods = ["GET"]
+path = "/naming/service"
+status_codes = [200]
+content_types = ["application/json"]
+plugin = { name = "vintage-naming" }
+
+[udp_gateway]
+enabled = false
+listen = "127.0.0.1:15002"
+forward = false
+
+[http_gateway]
+enabled = true
+listen = "0.0.0.0:17171"
+matched_upstream = "http://127.0.0.1:8080"
+fallback_mode = "fixed_response"
+preserve_host = true
+
+[http_gateway.fixed_response]
+status = 404
+content_type = "application/json"
+headers = { x-traffic-e2e-fallback = "fixed" }
+body = '{"code":"40401","msg":"not_in___PROJECT_SCOPE___record_api"}'
+
+[http_gateway.ready]
+enabled = true
+path = "/healthz"
+success_status = 404
+interval_ms = 1000
+
+[http_gateway.case_limits]
+default = 100
+
+[http_gateway.case_limits.overrides]
+
+[http_gateway.verified_excludes]
+# BEGIN AI-MANAGED VERIFIED API EXCLUDES
+apis = [
+]
+# END AI-MANAGED VERIFIED API EXCLUDES
+
+[[http_gateway.rules]]
+name = "record-api"
+methods = ["GET"]
+path_prefixes = ["/"]
+# BEGIN AI-MANAGED ALLOWED UNUSED HTTP HOSTS
+allowed_unused_http_hosts = [
+]
+# END AI-MANAGED ALLOWED UNUSED HTTP HOSTS
+# BEGIN AI-MANAGED CASE PATH PATTERNS
+# source_revision = ""
+case_path_patterns = [
+]
+# END AI-MANAGED CASE PATH PATTERNS
+headers = {}
+
+[mysql]
+record_raw_packets = false
+
+[recording]
+output_dir = "./recordings"
+max_body_bytes = 10485760
+max_decoded_body_bytes = 33554432
+traffic_jsonl = "errors"
+jsonl_buffer_capacity_bytes = 262144
+jsonl_flush_interval_ms = 1000
+writer_queue_capacity = 65536
+case_dependency_post_response_window_ms = 100
+case_dependency_drain_timeout_ms = 5000
+shutdown_case_drain_timeout_ms = 20000
+access_policy = "unrestricted"
+redact_headers = [
+  "authorization",
+  "cookie",
+  "set-cookie",
+  "proxy-authorization",
+  "proxy-authenticate",
+]
+
+# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
+# END AI-MANAGED BACKGROUND DEPENDENCIES
+
+[tls]
+ca_cert_path = "./data/traffic-recorder-ca.pem"
+ca_key_path = "./data/traffic-recorder-ca-key.pem"
