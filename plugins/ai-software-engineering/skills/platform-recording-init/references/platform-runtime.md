@@ -43,6 +43,9 @@ provides:
 Mount the Breeze snapshot into Recorder at `/data1/breeze/snapshot` read-only.
 Mount the rendered config, ignored data directory, recordings directory, and
 control-socket directory once each under Recorder's `/workspace` layout.
+Recorder uses `[dns_mock].upstream_dns` for both fake-DNS forwarding and the
+local DNS interception bypass. Do not pass a separate `UPSTREAM_DNS`
+environment variable.
 
 ## Inspect And Reproduce Startup
 
@@ -69,6 +72,17 @@ application process with a recording launcher that uses:
 
 Preserve its working directory, executable, argv, environment, and signal
 chain. Do not use PAM, `su`, or `runuser`.
+
+The adapter is a recording-only image. During its build, recursively assign
+the complete application root to the recording identity:
+
+```dockerfile
+RUN chown -R 998:998 /data1/weibo
+```
+
+Do not substitute a narrower writable-directory guess. Root bootstrap remains
+root and can still read or write this tree; the final Java process can then
+read and write every application runtime path after dropping to `998:998`.
 
 Reproduce the inspected effective `nofile` and `nproc` limits. Prove the
 launcher does not introduce a lower per-user process limit before full
@@ -97,7 +111,42 @@ chmod -R u+rwX -- <path>
 ```
 
 Preserve shared Platform mounts needed by Breeze instead of translating them.
-Do not create per-run variants of source bind directories.
+The following host and container paths are fixed and must never become
+`/data1/breeze-recording` or per-run directories:
+
+```text
+/data1/breeze/socks
+/data1/breeze/snapshot
+/data1/breeze/logs
+```
+
+Docker `-v` may recreate missing host directories as `root:root`. Therefore,
+before every recording start, use a short-lived root helper container to
+idempotently create and normalize exactly those three host directories:
+
+```bash
+mkdir -p \
+  /host-data1/breeze/socks \
+  /host-data1/breeze/snapshot \
+  /host-data1/breeze/logs
+chown -hR 998:998 -- \
+  /host-data1/breeze/socks \
+  /host-data1/breeze/snapshot \
+  /host-data1/breeze/logs
+chmod -R u+rwX -- \
+  /host-data1/breeze/socks \
+  /host-data1/breeze/snapshot \
+  /host-data1/breeze/logs
+chmod 2775 /host-data1/breeze/socks
+chmod 0775 \
+  /host-data1/breeze/snapshot \
+  /host-data1/breeze/logs
+```
+
+Bind-mount host `/data1` at `/host-data1` for this helper when the login user
+cannot repair the paths directly. Do not change the owner of the
+`/data1/breeze` parent. Do not create per-run variants of source bind
+directories.
 
 ## Breeze SDK Source Patch
 
@@ -120,7 +169,8 @@ Use this fixed Dockerfile fragment after the inspected source `FROM` line:
 COPY MeshConnectUtil.java /usr/local/share/traffic-e2e/MeshConnectUtil.java
 COPY apply-breeze-sdk-patch /usr/local/bin/apply-breeze-sdk-patch
 RUN chmod 0755 /usr/local/bin/apply-breeze-sdk-patch \
-    && /usr/local/bin/apply-breeze-sdk-patch
+    && /usr/local/bin/apply-breeze-sdk-patch \
+    && chown -R 998:998 /data1/weibo
 ```
 
 Start the source with:
@@ -183,7 +233,8 @@ Use this fixed lifecycle:
 
 1. validate arguments and create ignored runtime directories;
 2. build the source adapter with `--network none`;
-3. prepare stable recording bind sources and their `998:998` ownership;
+3. prepare stable private recording bind sources and normalize the three
+   shared Breeze directories to `998:998`;
 4. start Anchor and Recorder, then run `recording wait-listeners`;
 5. prepare the source truststore;
 6. start Breeze with its genuine Vintage configuration and wait for Breeze;

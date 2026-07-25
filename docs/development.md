@@ -150,6 +150,10 @@ rules:
 traffic-e2e record --config config/recorder.example.toml --no-dns
 ```
 
+Managed recording uses `dns_mock.upstream_dns` from the Recorder TOML for both
+fake-DNS forwarding and the local DNS interception bypass. It does not require
+or read a separate `UPSTREAM_DNS` environment variable.
+
 `traffic-e2e record` always limits DNS and fake-IP interception to the
 dedicated Unix user `trp-record`. Run the source service as that user so
 bootstrap and case dependencies are not polluted by unrelated local processes.

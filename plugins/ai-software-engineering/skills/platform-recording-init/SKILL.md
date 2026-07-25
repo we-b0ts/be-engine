@@ -35,23 +35,29 @@ writing files or starting containers.
 1. Inspect repository instructions and both containers. Preserve the source
    image, root bootstrap, environment, command, working directory, limits, and
    container mount destinations.
-2. Copy and render the files under [assets/recording](assets/recording).
+2. Ensure the local `dev-migration` branch exists before rendering
+   `project.yaml`. If `origin/dev-migration` exists, create the local tracking
+   branch from it; otherwise create `dev-migration` from the repository's
+   default branch. Do not switch the current working branch.
+3. Copy and render the files under [assets/recording](assets/recording).
    Replace only the documented `__PROJECT_SCOPE__` and `__PROJECT_CLI__`
    placeholders in configuration templates. Copy `mesh_switch_task.sh`
    unchanged to `scripts/mesh_switch_task.sh`.
-3. Copy the Breeze patch assets unchanged into
+4. Copy the Breeze patch assets unchanged into
    `.traffic-e2e/adapters/source/`. Generate the remaining source adapter
    Dockerfile and launchers from inspected evidence; invoke the bundled patch
-   applicator during the image build.
-4. Generate `scripts/start-recording` for the inspected startup parameters.
+   applicator and recursively assign `/data1/weibo` to numeric `998:998`
+   during the image build.
+5. Generate `scripts/start-recording` for the inspected startup parameters.
    Follow the fixed lifecycle in the runtime reference; do not reconstruct it
    from another repository.
-5. Create empty recording bind sources by translating each private source
+6. Create empty recording bind sources by translating each private source
    mount from `/data1/<project>/<path>` to
    `/data1/<project>-recording/<path>`. Keep container destinations unchanged,
    copy no original content, and recursively assign the new writable sources
-   to numeric `998:998`.
-6. Validate configuration, adapter construction, shell syntax, bounded
+   to numeric `998:998`. Before every start, also normalize the fixed shared
+   Breeze directories as specified by the runtime reference.
+7. Validate configuration, adapter construction, shell syntax, bounded
    startup, readiness, identity, dependency routing, and clean Recorder
    finalization.
 

@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -39,10 +40,11 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
     let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
+    let configured_upstream_dns = config.dns_mock.upstream_dns;
     let state = AppState::new_with_run_id(config, args.run_id).await?;
     let mut interception = if args.dns && !args.no_dns {
         Some(Guard::enable(
-            record_dns_config()?,
+            record_dns_config(configured_upstream_dns)?,
             record_fake_ip_config(&configured_fake_cidr)?,
         )?)
     } else {
@@ -216,18 +218,13 @@ fn reject_owner_config(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn record_dns_config() -> Result<DnsConfig> {
+fn record_dns_config(configured_upstream_dns: SocketAddr) -> Result<DnsConfig> {
     Ok(DnsConfig {
         dns_ip: environment("DNS_IP", "127.0.0.153"),
         dns_port: environment("DNS_PORT", "15353")
             .parse()
             .context("DNS_PORT must be a valid port")?,
-        upstream_dns: environment("UPSTREAM_DNS", "10.10.10.10:53")
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect(),
+        upstream_dns: vec![configured_upstream_dns.to_string()],
     })
 }
 
@@ -370,6 +367,21 @@ mod tests {
             resolve_environment_config_default(None, &defaults.dns_mock.fake_cidr),
             DEFAULT_FAKE_CIDR
         );
+    }
+
+    #[test]
+    fn interception_dns_uses_recorder_upstream() {
+        let configured: AppConfig = toml::from_str(
+            r#"
+            [dns_mock]
+            upstream_dns = "10.10.10.11:53"
+            "#,
+        )
+        .unwrap();
+
+        let interception = record_dns_config(configured.dns_mock.upstream_dns).unwrap();
+
+        assert_eq!(interception.upstream_dns, ["10.10.10.11:53"]);
     }
 
     #[test]
