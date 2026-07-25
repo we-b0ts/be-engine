@@ -160,34 +160,24 @@ parameters. Different Platform services may use different images, environment,
 `NAME_CONF`, Breeze service pools, mounts, or root bootstrap commands; preserve
 that evidence instead of forcing one universal Docker command.
 
-Inline these Platform Mesh console commands in the generated script; do not
-depend on a host-only `mesh_switch_task.sh`:
-
-```text
-on resource mesh.switcher
-off resource kv.mesh.auto.degrade.switcher
-off resource mc.mesh.auto.degrade.switcher
-off resource redis.mesh.auto.degrade.switcher
-off resource mcq.mesh.auto.degrade.switcher
-off resource uuid.mesh.auto.degrade.switcher
-off resource vector.mesh.auto.degrade.switcher
-off resource kv.mesh.exception.toTcp.switcher
-off resource mc.mesh.exception.toTcp.switcher
-off resource redis.mesh.exception.toTcp.switcher
-off resource mcq.mesh.exception.toTcp.switcher
-off resource uuid.mesh.exception.toTcp.switcher
-off resource vector.mesh.exception.toTcp.switcher
-```
-
-Send each command with CRLF to source port `880` and fail when a command cannot
-be delivered.
+Copy `assets/recording/mesh_switch_task.sh` unchanged to
+`scripts/mesh_switch_task.sh`. Do not inline, reconstruct, or depend on a
+host-installed copy of this script.
 
 The generated script must accept:
 
 ```bash
 ./scripts/start-recording
 ./scripts/start-recording --duration-seconds <positive-integer>
+./scripts/start-recording --mesh-only <true|false>
 ```
+
+Default `mesh_only` to `true`. Accept only the literal values `true` and
+`false`, reject missing, invalid, or duplicate values before changing runtime
+state, and allow it to be combined with `--duration-seconds`. Require `nc` and
+an executable repository copy of the asset during preflight. When true, run the
+repository's `scripts/mesh_switch_task.sh` immediately after source port `880`
+becomes available. When false, do not execute it.
 
 Use this fixed lifecycle:
 
@@ -199,8 +189,8 @@ Use this fixed lifecycle:
 6. start Breeze with its genuine Vintage configuration and wait for Breeze;
 7. start the source with `MESH_CONNECT_HOST=breeze.recording`;
 8. wait for source port `880`, verify the genuine Java process is `998:998`,
-   and apply the Platform Mesh switches;
-9. run `traffic-e2e recording wait-ready`, then apply the Mesh switches again;
+   then run `scripts/mesh_switch_task.sh` when `mesh_only` is true;
+9. run `traffic-e2e recording wait-ready`;
 10. record for the selected duration;
 11. send `SIGINT` to Recorder, wait for drain and finalization, preserve
     diagnostics, and remove only containers created by this invocation.
@@ -219,6 +209,7 @@ the normal Recorder shutdown path.
 Before reporting completion:
 
 - validate the rendered TOML and YAML with the installed `traffic-e2e`;
+- run `bash -n` for both generated scripts;
 - build the adapter without network access;
 - verify the patched class exists in the source JAR;
 - prove Breeze, port `880`, source readiness, UID/GID `998:998`, and fake-DNS

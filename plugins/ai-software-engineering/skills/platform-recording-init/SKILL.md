@@ -37,7 +37,8 @@ writing files or starting containers.
    container mount destinations.
 2. Copy and render the files under [assets/recording](assets/recording).
    Replace only the documented `__PROJECT_SCOPE__` and `__PROJECT_CLI__`
-   placeholders in configuration templates.
+   placeholders in configuration templates. Copy `mesh_switch_task.sh`
+   unchanged to `scripts/mesh_switch_task.sh`.
 3. Copy the Breeze patch assets unchanged into
    `.traffic-e2e/adapters/source/`. Generate the remaining source adapter
    Dockerfile and launchers from inspected evidence; invoke the bundled patch
@@ -64,6 +65,7 @@ Limit initialization changes to:
 .traffic-e2e/replay.yaml
 .traffic-e2e/adapters/source/*
 scripts/start-recording
+scripts/mesh_switch_task.sh
 .gitignore
 ```
 
@@ -85,6 +87,7 @@ outer rewrite skill owns branch creation, commits, pushes, and pull requests.
 Run:
 
 ```bash
+bash -n scripts/mesh_switch_task.sh
 bash -n scripts/start-recording
 ./scripts/start-recording --duration-seconds 1
 ```
