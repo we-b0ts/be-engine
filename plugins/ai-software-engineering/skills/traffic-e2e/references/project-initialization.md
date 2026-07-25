@@ -94,14 +94,38 @@ Create this source-controlled scaffold:
 .traffic-e2e/
 ├── project.yaml
 ├── recorder.toml
-└── replay.yaml
+├── replay.yaml
+└── adapters/                 # only when required
+    └── <component>/
+        └── <recording-only adapter files>
 scripts/
 └── start-recording
+.gitignore
 ```
 
-Add an application recording image or entrypoint only when the inspected image
-cannot satisfy the fixed recording identity, CA trust, low-port, or startup
-contract directly.
+Treat this as the complete source-controlled write allowlist:
+
+- generate the three top-level `.traffic-e2e` configuration files only through
+  their initializers;
+- place every required recording-only Dockerfile, loader configuration, and
+  source-container entrypoint under `.traffic-e2e/adapters/<component>/`;
+- generate only the user-facing `scripts/start-recording`; and
+- append only the required missing entries to `.gitignore`, preserving all
+  unrelated content.
+
+Add `.traffic-e2e/adapters/<component>/` only when the inspected image cannot
+satisfy the fixed recording identity, CA trust, low-port, resource-limit, or
+startup contract directly. Use that component directory as its Docker build
+context. Do not create a top-level `recording/`, `docker/`, or other
+initialization directory.
+
+Do not modify application source, application configuration, repository build
+files, deployment files, CI, repository instructions, README, or other
+documentation during initialization. Reading them for runtime evidence does
+not authorize changing them. A write outside the allowlist requires explicit
+user authorization naming the additional path. If the recording environment
+cannot be built within this boundary, stop as `initialization incomplete`
+instead of expanding scope.
 
 Ensure Git ignores:
 
@@ -112,9 +136,11 @@ Ensure Git ignores:
 /recordings/
 ```
 
-Also ignore generated logs, truststores, temporary state, and CA material. If a
-recording image uses the repository root as its build context, add equivalent
-`.dockerignore` rules so those files never enter the context.
+Generated logs, truststores, temporary state, CA material, and other local
+runtime files must stay under the ignored `.traffic-e2e/data/`,
+`.traffic-e2e/local/`, or `.traffic-e2e/.env` paths. Recording runs stay under
+the ignored `recordings/` path. These paths may be created during validation
+but must never be staged or committed.
 
 Create the three configuration files in this order:
 
@@ -365,6 +391,10 @@ git check-ignore .traffic-e2e/local/probe
 git check-ignore .traffic-e2e/data/probe
 git check-ignore recordings/probe
 ```
+
+Inspect the final Git diff and require every source-controlled change to match
+the scaffold write allowlist. Treat an unexpected tracked path as incomplete;
+do not justify or retain it after the fact.
 
 Then execute the same user-facing command. The duration begins after readiness,
 so one second is sufficient for initialization validation:
