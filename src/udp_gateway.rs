@@ -16,6 +16,7 @@ use crate::AppState;
 use crate::access_policy::{AccessDecision, OperationClass};
 use crate::dns_mock::FakeDnsEntry;
 use crate::recorder::{BodyCapture, RecorderEvent, UdpDatagramEvent, capture_body};
+use crate::recording_control::RecordingListener;
 
 const UDP_RECV_BUFFER_BYTES: usize = 65_535;
 
@@ -27,6 +28,7 @@ pub async fn run(state: AppState) -> Result<()> {
             config.listen
         )
     })?;
+    state.mark_recording_listener_ready(RecordingListener::UdpGateway);
     info!(
         listen = %config.listen,
         forward = config.forward,

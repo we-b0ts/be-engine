@@ -118,6 +118,25 @@ cargo install --path .
 traffic-e2e record --config config/recorder.example.toml
 ```
 
+Automation should publish Recorder lifecycle state on a Unix socket and wait
+through the public readiness command:
+
+```bash
+traffic-e2e record \
+  --config config/recorder.example.toml \
+  --control-socket /run/traffic-e2e/recording.sock
+
+traffic-e2e recording wait-ready \
+  --control-socket /run/traffic-e2e/recording.sock \
+  --timeout-seconds 180
+```
+
+Run the second command from another process that can access the socket, such
+as `docker exec` in the Recorder container. It succeeds only after every
+enabled Recorder listener has bound and the configured HTTP gateway source
+readiness probe has succeeded. It does not parse recorder configuration or
+probe listener ports.
+
 `traffic-e2e record` enables local DNS capture and fake-IP TCP/UDP redirect by
 default, which modifies local DNS/iptables state. Use this when you
 intentionally want the recorder to intercept local traffic. To skip those

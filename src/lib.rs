@@ -16,6 +16,7 @@ mod mysql;
 mod path_pattern;
 mod proxy;
 mod recorder;
+mod recording_control;
 mod redis;
 mod replay;
 mod repository;
@@ -23,6 +24,7 @@ mod tcp_gateway;
 mod tls;
 mod udp_gateway;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,6 +46,7 @@ use crate::active_case::{
 use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::http::case::CaseInvalidation;
+use crate::recording_control::{RecordingControlServer, RecordingLifecycle, RecordingListener};
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
@@ -89,6 +92,7 @@ pub use recorder::{
     TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
     capture_case_body, redact_headers,
 };
+pub use recording_control::{RecordingReadiness, RecordingWaitConfig, wait_for_recording_ready};
 pub use replay::{
     DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,
@@ -118,6 +122,7 @@ struct AppStateInner {
     upstream_tls_config: Arc<ClientConfig>,
     active_cases: ActiveCaseRegistry,
     kubectl_proxy_manager: KubectlProxyManager,
+    recording_lifecycle: RecordingLifecycle,
 }
 
 impl AppState {
@@ -151,6 +156,7 @@ impl AppState {
         let client = Client::builder(TokioExecutor::new()).build(https);
 
         let case_matching_ready = !config.http_gateway.ready.enabled;
+        let recording_lifecycle = RecordingLifecycle::from_config(&config);
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -162,6 +168,7 @@ impl AppState {
                 upstream_tls_config,
                 active_cases: ActiveCaseRegistry::new(case_matching_ready),
                 kubectl_proxy_manager: KubectlProxyManager::default(),
+                recording_lifecycle,
             }),
         })
     }
@@ -315,6 +322,7 @@ impl AppState {
     pub(crate) fn close_bootstrap(&self, reason: &'static str) -> bool {
         let closed = self.inner.active_cases.close_bootstrap();
         if closed {
+            self.inner.recording_lifecycle.mark_source_ready();
             info!(reason, "bootstrap dependency window closed");
             self.schedule_bootstrap_dependency_summary(reason);
         }
@@ -346,6 +354,10 @@ impl AppState {
         } else {
             "running"
         }
+    }
+
+    pub(crate) fn mark_recording_listener_ready(&self, listener: RecordingListener) {
+        self.inner.recording_lifecycle.mark_listener_ready(listener);
     }
 
     pub(crate) async fn wait_for_active_case_shutdown_drain(&self) -> bool {
@@ -457,6 +469,16 @@ impl AppState {
     }
 
     pub async fn run(self) -> Result<()> {
+        self.run_with_control_socket(None).await
+    }
+
+    pub async fn run_with_control_socket(self, control_socket: Option<PathBuf>) -> Result<()> {
+        let control_server = match control_socket {
+            Some(path) => Some(
+                RecordingControlServer::start(self.inner.recording_lifecycle.clone(), path).await?,
+            ),
+            None => None,
+        };
         let mut tasks = JoinSet::new();
 
         if self.config().http.enabled {
@@ -512,7 +534,10 @@ impl AppState {
         let run_result = loop {
             tokio::select! {
                 result = &mut shutdown => {
-                    result?;
+                    if let Err(error) = result {
+                        break Err(error);
+                    }
+                    self.inner.recording_lifecycle.mark_stopping();
                     let newly_quiescing = self.begin_case_quiescing();
                     let timeout_ms = self.config().recording.shutdown_case_drain_timeout_ms;
                     info!(
@@ -534,7 +559,10 @@ impl AppState {
                     let Some(joined) = joined else {
                         continue;
                     };
-                    break joined.context("proxy task panicked")?;
+                    break match joined {
+                        Ok(result) => result,
+                        Err(error) => Err(error).context("proxy task panicked"),
+                    };
                 }
                 _ = registry_flush_interval.tick() => {
                     match self.dns_registry().flush_if_dirty().await {
@@ -550,6 +578,9 @@ impl AppState {
                 }
             }
         };
+        if let Err(error) = &run_result {
+            self.inner.recording_lifecycle.mark_failed(error);
+        }
 
         tasks.abort_all();
         while let Some(joined) = tasks.join_next().await {
@@ -571,13 +602,24 @@ impl AppState {
             .await
             .context("failed to flush fake DNS registry during shutdown");
 
-        run_result?;
-        let has_failed_cases = finish_run_result?;
-        registry_flush_result?;
-        if has_failed_cases {
-            anyhow::bail!("recording run finished with failed cases");
+        let result = async {
+            run_result?;
+            let has_failed_cases = finish_run_result?;
+            registry_flush_result?;
+            if has_failed_cases {
+                anyhow::bail!("recording run finished with failed cases");
+            }
+            Ok(())
         }
-        Ok(())
+        .await;
+        if let Err(error) = &result {
+            self.inner.recording_lifecycle.mark_failed(error);
+        }
+        let control_result = match control_server {
+            Some(server) => server.shutdown().await,
+            None => Ok(()),
+        };
+        result.and(control_result)
     }
 }
 

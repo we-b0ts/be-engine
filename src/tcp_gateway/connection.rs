@@ -25,6 +25,7 @@ use crate::recorder::mysql::{MysqlConnectionContext, handle_connected_mysql};
 use crate::recorder::redis::{
     ConnectionContext as RedisConnectionContext, handle_connected as handle_connected_redis,
 };
+use crate::recording_control::RecordingListener;
 
 use super::{
     RawTcpOptions, TcpConnectionRecord, detection::DetectedProtocol, detection::Detection,
@@ -41,6 +42,7 @@ const MAX_SNIFF_BYTES: usize = 4096;
 pub(crate) async fn run(state: AppState) -> Result<()> {
     let config = state.config().tcp_gateway.clone();
     let listener = bind_listener(config.listen, config.backlog)?;
+    state.mark_recording_listener_ready(RecordingListener::TcpGateway);
     info!(
         listen = %config.listen,
         backlog = config.backlog,

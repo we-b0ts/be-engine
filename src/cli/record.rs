@@ -17,6 +17,9 @@ pub(super) struct RecordArgs {
     /// Explicit 14-digit UTC recording run identifier.
     #[arg(long, value_parser = parse_run_id)]
     run_id: Option<String>,
+    /// Publish managed recording lifecycle state on this Unix socket.
+    #[arg(long)]
+    control_socket: Option<PathBuf>,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -45,7 +48,7 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     } else {
         None
     };
-    let result = state.run().await;
+    let result = state.run_with_control_socket(args.control_socket).await;
     if let Some(guard) = interception.as_mut() {
         guard.disable();
     }
@@ -310,6 +313,23 @@ mod tests {
                 "../../recording",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_recording_control_socket() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--config",
+            "recorder.toml",
+            "--control-socket",
+            "/run/traffic-e2e/recording.sock",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.record.control_socket.as_deref(),
+            Some(Path::new("/run/traffic-e2e/recording.sock"))
         );
     }
 

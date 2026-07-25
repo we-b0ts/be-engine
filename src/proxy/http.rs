@@ -23,6 +23,7 @@ use crate::http::rewrite::{self, RewriteInput};
 use crate::recorder::{
     HttpExchangeEvent, ProxyErrorEvent, RecorderEvent, capture_body, redact_headers,
 };
+use crate::recording_control::RecordingListener;
 use crate::{AppState, ProxyClient};
 
 type ProxyBody = BoxBody<Bytes, Infallible>;
@@ -31,6 +32,7 @@ pub async fn run(state: AppState) -> Result<()> {
     let listener = TcpListener::bind(state.config().http.listen)
         .await
         .with_context(|| format!("failed to bind HTTP proxy {}", state.config().http.listen))?;
+    state.mark_recording_listener_ready(RecordingListener::HttpProxy);
     info!(listen = %state.config().http.listen, "HTTP/HTTPS proxy listening");
 
     loop {

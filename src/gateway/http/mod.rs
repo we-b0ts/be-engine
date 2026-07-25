@@ -23,6 +23,7 @@ use crate::recorder::{
     CaseContext, HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
     capture_body, capture_case_body, redact_headers,
 };
+use crate::recording_control::RecordingListener;
 
 mod admission;
 mod lifecycle;
@@ -42,6 +43,7 @@ pub async fn run(state: AppState) -> Result<()> {
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("failed to bind HTTP gateway {}", config.listen))?;
+    state.mark_recording_listener_ready(RecordingListener::HttpGateway);
     info!(
         listen = %config.listen,
         matched_upstream = %config.matched_upstream,

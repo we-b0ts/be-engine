@@ -272,10 +272,12 @@ The script must:
    exact bind mounts, source UID 998 access, required ports, and container-name
    availability;
 3. prepare writable source bind-mount ownership;
-4. start the anchor and Recorder, then wait for Recorder listeners and the CA
+4. start the anchor and Recorder with a control socket, then wait for the CA
    pair when applicable;
 5. start supporting containers and the genuine source in the shared namespace;
-6. wait for supporting services and genuine application readiness;
+6. wait for required supporting-service prerequisites, then use Recorder's
+   readiness command to wait for all enabled Recorder listeners and genuine
+   application readiness;
 7. print the Recorder gateway and remain attached for the selected duration;
 8. send `SIGINT` to Recorder when time expires or the operator interrupts;
 9. wait for Recorder drain and finalization, report the run path and errors,
@@ -287,6 +289,29 @@ already exists. Once Recorder has started, use the same graceful finalization
 path for normal timeout, operator interrupt, startup failure, and readiness
 failure. Keep failure diagnostics. Do not use `kill -9` as the normal shutdown
 path.
+
+Start Recorder with an internal control socket:
+
+```text
+traffic-e2e record \
+  --config /workspace/.traffic-e2e/recorder.toml \
+  --control-socket /run/traffic-e2e/recording.sock
+```
+
+After the genuine source has started, make this the sole check for
+Recorder-owned listeners and the configured source readiness probe:
+
+```text
+docker exec <recorder-container> traffic-e2e recording wait-ready \
+  --control-socket /run/traffic-e2e/recording.sock \
+  --timeout-seconds <bounded-timeout>
+```
+
+The command reads Recorder's internal lifecycle state and fails on timeout,
+listener failure, or shutdown. Do not parse `recorder.toml` or probe
+Recorder-owned TCP/UDP ports in the generated shell script. Keep
+evidence-based checks for supporting-service prerequisites that Recorder does
+not represent.
 
 ## Validate Completion
 
