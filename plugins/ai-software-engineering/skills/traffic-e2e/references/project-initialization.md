@@ -189,7 +189,6 @@ container with:
 
 Only the anchor selects the backing network. Components in its namespace use
 their original listen ports and communicate through their common loopback.
-Resolve host port collisions before startup.
 
 Use another backing network only when the user requests it or authoritative
 runtime evidence requires it. In that case, prove required DNS, routes, egress,
@@ -395,9 +394,8 @@ docker exec <recorder-container> traffic-e2e recording wait-ready \
 
 Both commands read Recorder's internal lifecycle state and default to a
 300-second timeout. They fail on timeout, listener failure, or shutdown. Do
-not parse `recorder.toml` or probe Recorder-owned TCP/UDP ports in the
-generated shell script. Keep evidence-based checks for supporting-service
-prerequisites that Recorder does not represent.
+not parse `recorder.toml` in the generated shell script. Keep evidence-based
+checks for supporting-service prerequisites that Recorder does not represent.
 
 ## Validate Completion
 
