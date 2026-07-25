@@ -82,8 +82,10 @@ readiness probe without parsing the recorder config:
 traffic-e2e record --config ... --control-socket /run/traffic-e2e/recording.sock
 traffic-e2e recording wait-ready \
   --control-socket /run/traffic-e2e/recording.sock \
-  --timeout-seconds 180
+  --timeout-seconds 300
 ```
+
+`recording wait-ready` defaults to a 300-second timeout.
 
 Local interception is always filtered to the fixed `trp-record` Unix user.
 This is a project-created system account, not a Linux built-in. Create it once,

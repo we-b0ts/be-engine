@@ -128,14 +128,14 @@ traffic-e2e record \
 
 traffic-e2e recording wait-ready \
   --control-socket /run/traffic-e2e/recording.sock \
-  --timeout-seconds 180
+  --timeout-seconds 300
 ```
 
 Run the second command from another process that can access the socket, such
 as `docker exec` in the Recorder container. It succeeds only after every
 enabled Recorder listener has bound and the configured HTTP gateway source
 readiness probe has succeeded. It does not parse recorder configuration or
-probe listener ports.
+probe listener ports. `--timeout-seconds` defaults to `300`.
 
 `traffic-e2e record` enables local DNS capture and fake-IP TCP/UDP redirect by
 default, which modifies local DNS/iptables state. Use this when you

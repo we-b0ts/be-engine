@@ -311,7 +311,7 @@ The command reads Recorder's internal lifecycle state and fails on timeout,
 listener failure, or shutdown. Do not parse `recorder.toml` or probe
 Recorder-owned TCP/UDP ports in the generated shell script. Keep
 evidence-based checks for supporting-service prerequisites that Recorder does
-not represent.
+not represent. Omit `--timeout-seconds` to use the 300-second default.
 
 ## Validate Completion
 

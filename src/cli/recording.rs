@@ -25,7 +25,7 @@ struct WaitReadyArgs {
     /// Maximum time to wait for ready-to-record state.
     #[arg(
         long,
-        default_value_t = 180,
+        default_value_t = 300,
         value_parser = clap::value_parser!(u64).range(1..=86_400)
     )]
     timeout_seconds: u64,
@@ -66,7 +66,7 @@ mod tests {
         ])
         .unwrap();
         let RecordingCommand::WaitReady(args) = parsed.recording.command;
-        assert_eq!(args.timeout_seconds, 180);
+        assert_eq!(args.timeout_seconds, 300);
 
         assert!(
             TestCli::try_parse_from([
