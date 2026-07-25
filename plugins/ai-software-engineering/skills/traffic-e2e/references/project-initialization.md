@@ -63,7 +63,9 @@ it:
 - network mode, shared namespace, listen ports, and published ports;
 - bind-mount source, destination, read/write mode, and host-path type;
 - environment, environment-file, health, restart, ulimit, and capability
-  settings; and
+  settings;
+- the genuine source process's effective resource limits and the user-switch
+  path that establishes them; and
 - the role of each supporting container and the process that emits each remote
   dependency connection.
 
@@ -224,24 +226,48 @@ recording entrypoint that prepares configuration and mounts as root, then
 executes the genuine application process as `998:998`. Preserve the original
 application command and dependency clients.
 
+### Runtime Limits
+
+Preserve inspected Docker ulimits. Because the source process changes identity,
+also compare the original and recording process limits through
+`/proc/<pid>/limits`, especially open files and user processes. Docker
+`HostConfig.Ulimits` alone is not proof of the effective limits.
+
+Do not use `su`, `runuser`, or another PAM path when it silently applies a
+different `limits.d` policy. Use a non-PAM identity drop that retains the
+required inherited limits, or pass the exact evidenced Docker ulimits. For
+example, do not let an original unlimited process limit become a soft
+`nproc=1024` merely because the recording process runs as a non-root user.
+Do not raise a limit beyond the original effective value without separate
+runtime evidence. Verify the final genuine source process limits before
+readiness.
+
 ### Ports Below 1024
 
-For each required source-process listen port below 1024, first prove whether
-UID 998 can bind it in the selected namespace. Preserve the original port.
+Resolve every required source-process listen port below 1024 before the first
+full recording startup. Read `net.ipv4.ip_unprivileged_port_start` from the
+selected anchor network namespace, not a throwaway Docker namespace. Preserve
+the original port.
 
-If binding requires privilege, adapt only the recording image:
+When UID 998 will bind below that threshold, treat privilege as required unless
+a narrow bind probe in the same namespace proves otherwise. Adapt only the
+recording image:
 
 1. resolve the real executable that owns the listener;
 2. make its dynamic libraries available through the system loader when
    required;
 3. apply `cap_net_bind_service=+ep` to that executable; and
-4. verify the capability and the genuine listener while the process runs as
-   UID 998.
+4. run the real launcher as UID 998 before full startup, then verify the
+   capability and genuine listener while the application runs as UID 998.
 
 Do not change the host-wide unprivileged-port sysctl, run the application as
 root, or use a privileged container to bypass this requirement. For Java,
 resolve the actual launcher and JDK library layout before applying the file
-capability.
+capability. File capabilities enable secure-execution rules that can invalidate
+`$ORIGIN` or environment-based library lookup. Run the exact Java launcher
+as UID 998, such as with `java -version`, before full startup; if loading fails,
+register only the required JDK library directories in the recording image's
+loader configuration and run `ldconfig`.
 
 ### HTTPS And CA Trust
 
