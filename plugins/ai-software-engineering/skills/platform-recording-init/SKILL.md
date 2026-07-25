@@ -35,31 +35,36 @@ writing files or starting containers.
 1. Inspect repository instructions and both containers. Preserve the source
    image, root bootstrap, environment, command, working directory, limits, and
    container mount destinations.
-2. Ensure the local `dev-migration` branch exists before rendering
-   `project.yaml`. If `origin/dev-migration` exists, create the local tracking
-   branch from it; otherwise create `dev-migration` from the repository's
-   default branch. Do not switch the current working branch.
-3. Copy and render the files under [assets/recording](assets/recording).
+2. Ensure `dev-migration` exists locally and on `origin` before rendering
+   `project.yaml`. Track `origin/dev-migration` when it exists; otherwise
+   create `dev-migration` from the repository's confirmed default-branch
+   baseline and publish it. Treat it as the fixed initialization PR base.
+3. Create or reuse a named initialization branch based on `dev-migration` and
+   switch to it before writing files. Never write initialization outputs on
+   the default branch or directly on `dev-migration`.
+4. Copy and render the files under [assets/recording](assets/recording).
    Replace only the documented `__PROJECT_SCOPE__` and `__PROJECT_CLI__`
    placeholders in configuration templates. Copy `mesh_switch_task.sh`
    unchanged to `scripts/mesh_switch_task.sh`.
-4. Copy the Breeze patch assets unchanged into
+5. Copy the Breeze patch assets unchanged into
    `.traffic-e2e/adapters/source/`. Generate the remaining source adapter
    Dockerfile and launchers from inspected evidence; invoke the bundled patch
    applicator and recursively assign `/data1/weibo` to numeric `998:998`
    during the image build.
-5. Generate `scripts/start-recording` for the inspected startup parameters.
+6. Generate `scripts/start-recording` for the inspected startup parameters.
    Follow the fixed lifecycle in the runtime reference; do not reconstruct it
    from another repository.
-6. Create empty recording bind sources by translating each private source
+7. Create empty recording bind sources by translating each private source
    mount from `/data1/<project>/<path>` to
    `/data1/<project>-recording/<path>`. Keep container destinations unchanged,
    copy no original content, and recursively assign the new writable sources
    to numeric `998:998`. Before every start, also normalize the fixed shared
    Breeze directories as specified by the runtime reference.
-7. Validate configuration, adapter construction, shell syntax, bounded
+8. Validate configuration, adapter construction, shell syntax, bounded
    startup, readiness, identity, dependency routing, and clean Recorder
    finalization.
+9. Commit only the initialization outputs, push the initialization branch, and
+   create or update its draft PR targeting `dev-migration`.
 
 ## Source-Controlled Output
 
@@ -85,8 +90,7 @@ Append only missing ignore entries for:
 ```
 
 Do not modify business source, build files, deployment files, CI, README, or
-repository instructions. This skill creates files in the current branch; an
-outer rewrite skill owns branch creation, commits, pushes, and pull requests.
+repository instructions.
 
 ## Completion
 
@@ -101,5 +105,7 @@ bash -n scripts/start-recording
 Report completion only after Recorder listeners, Breeze, and the genuine
 source are ready; the genuine source Java process runs as numeric `998:998`;
 `breeze.recording` resolves through fake DNS for that identity; and Recorder
-finalizes cleanly. Do not send a business request or require a recorded case
-during initialization.
+finalizes cleanly. Also require published `dev-migration` and initialization
+branches plus the draft PR from the initialization branch to `dev-migration`.
+Do not send a business request or require a recorded case during
+initialization.
