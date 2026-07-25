@@ -71,7 +71,9 @@ application process with a recording launcher that uses:
 ```
 
 Preserve its working directory, executable, argv, environment, and signal
-chain. Do not use PAM, `su`, or `runuser`.
+chain. Inside `chroot`, `cd` to the inspected working directory before
+`exec`-ing the application; do not rely on the caller's working directory.
+Do not use PAM, `su`, or `runuser`.
 
 The adapter is a recording-only image. During its build, recursively assign
 the complete application root to the recording identity:
@@ -246,10 +248,12 @@ Use this fixed lifecycle:
 11. send `SIGINT` to Recorder, wait for drain and finalization, preserve
     diagnostics, and remove only containers created by this invocation.
 
-Both Recorder wait commands use its control socket and default 300-second
-timeouts. Do not parse `recorder.toml` in shell. Do not reject startup merely
-because a host port probe reports another listener; let actual component
-startup expose conflicts.
+Run both Recorder wait commands through `docker exec` inside the Recorder
+container, using the container's control-socket path. They default to
+300-second timeouts. Do not access the bind-mounted socket from the host or
+parse `recorder.toml` in shell. Do not reject startup merely because a host
+port probe reports another listener; let actual component startup expose
+conflicts.
 
 Use strict shell behavior, deterministic project-prefixed container names,
 stage-aware idempotent cleanup, and `exec` in launchers. Never use `kill -9` as
