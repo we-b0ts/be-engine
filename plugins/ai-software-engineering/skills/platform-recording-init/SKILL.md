@@ -58,8 +58,9 @@ writing files or starting containers.
    `--api 'METHOD /path-or-pattern'` and
    `--brz-no-fallback <true|false>`. Default the duration to 60 seconds and
    Breeze no-fallback to `true`, pass API selectors through unchanged to
-   `traffic-e2e record`, and require AI or automated calls to pass the duration
-   explicitly. Follow
+   `traffic-e2e record`, capture the host wrapper's numeric UID/GID and pass it
+   through `--artifact-owner`, and require AI or automated calls to pass the
+   duration explicitly. Follow
    the fixed lifecycle in the runtime reference; do not reconstruct it from
    another repository.
 7. Before target implementation exists, generate an extensible
@@ -88,7 +89,8 @@ writing files or starting containers.
    Breeze directories as specified by the runtime reference.
 9. Validate configuration, adapter construction, shell syntax, bounded
    standard and comparison recording startup, readiness, identity, dependency
-   routing, and clean finalization.
+   routing, clean finalization, and host ownership of the complete finalized
+   standard recording run.
 10. Commit only the initialization outputs, push the initialization branch, and
    create or update its draft PR targeting `dev-migration`.
 
@@ -136,8 +138,9 @@ bash -n scripts/<project>-cli
 Report completion only after Recorder listeners, Breeze, and the genuine
 source are ready; the genuine source Java process runs as numeric `998:998`;
 `breeze.recording` resolves through fake DNS for that identity; and Recorder
-finalizes cleanly. The bounded comparison recording validation must prove the
-baseline and fixed-response candidate both became ready and
+finalizes cleanly with its complete run tree owned by the host user that
+invoked `scripts/start-recording`. The bounded comparison recording validation
+must prove the baseline and fixed-response candidate both became ready and
 `comparison-recording-run.json` finalized; it does not require frontend
 traffic or a published comparison recording case. Also require published
 `dev-migration` and initialization branches plus the draft PR from the

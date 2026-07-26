@@ -87,15 +87,15 @@ pub use e2e_run::{
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
-    AccessPolicyAllowEvent, BodyCapture, CaseBodyCapture, CaseContext, HeaderMapSnapshot,
-    HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent, KafkaFetchEvent,
-    KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent, MemcachedExchangeEvent,
-    MotanConnectionEvent, MotanExchangeEvent, MysqlColumn, MysqlConnectionEvent,
-    MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent, MysqlQueryEvent,
-    MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue, ProxyErrorEvent,
-    ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent, RedisExchangeEvent,
-    TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
-    capture_case_body, redact_headers,
+    AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
+    HeaderMapSnapshot, HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent,
+    KafkaFetchEvent, KafkaHeaderCapture, KafkaProduceEvent, MemcachedConnectionEvent,
+    MemcachedExchangeEvent, MotanConnectionEvent, MotanExchangeEvent, MysqlColumn,
+    MysqlConnectionEvent, MysqlExchangeEvent, MysqlExchangeResponse, MysqlPacketEvent,
+    MysqlQueryEvent, MysqlResponseEvent, MysqlResponsePacket, MysqlTlsRejectedEvent, MysqlValue,
+    ProxyErrorEvent, ReadonlyRejectionEvent, Recorder, RecorderEvent, RedisConnectionEvent,
+    RedisExchangeEvent, TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body,
+    capture_body_with_original_len, capture_case_body, redact_headers,
 };
 pub use recording_api::RecordingApi;
 pub use recording_control::{
@@ -149,6 +149,15 @@ impl AppState {
         run_id: Option<String>,
         recording_apis: Vec<RecordingApi>,
     ) -> Result<Self> {
+        Self::new_with_recording_apis_and_artifact_owner(config, run_id, recording_apis, None).await
+    }
+
+    pub async fn new_with_recording_apis_and_artifact_owner(
+        config: AppConfig,
+        run_id: Option<String>,
+        recording_apis: Vec<RecordingApi>,
+        artifact_owner: Option<ArtifactOwner>,
+    ) -> Result<Self> {
         config
             .validate()
             .context("invalid recorder configuration")?;
@@ -162,6 +171,7 @@ impl AppState {
             recording_output_dir,
             run_id,
             recording_apis.iter().map(ToString::to_string).collect(),
+            artifact_owner,
         )
         .await
         .context("failed to initialize JSONL recorder")?;

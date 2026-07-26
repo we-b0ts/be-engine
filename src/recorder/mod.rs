@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::config::{RecordingAccessPolicy, RecordingConfig, TrafficJsonlMode};
 
+mod artifact_owner;
 mod capture;
 mod dependencies;
 mod event;
@@ -26,11 +27,23 @@ mod run;
 mod summary;
 mod writer;
 
+pub use artifact_owner::ArtifactOwner;
 pub use capture::*;
 pub use event::*;
 
+struct RecorderOptions {
+    access_policy: RecordingAccessPolicy,
+    traffic_jsonl: TrafficJsonlMode,
+    buffer_settings: jsonl::JsonlBufferSettings,
+    writer_queue_capacity: usize,
+    run_id: Option<String>,
+    recording_apis: Vec<String>,
+    artifact_owner: Option<ArtifactOwner>,
+}
+
 #[derive(Clone)]
 pub struct Recorder {
+    artifact_owner: Option<ArtifactOwner>,
     traffic_jsonl: TrafficJsonlMode,
     writer: writer::RecorderWriter,
     pub(crate) run_dir: Arc<PathBuf>,
@@ -52,15 +65,18 @@ impl Recorder {
         let defaults = RecordingConfig::default();
         Self::new_with_options(
             output_dir,
-            access_policy,
-            defaults.traffic_jsonl,
-            jsonl::JsonlBufferSettings {
-                capacity: defaults.jsonl_buffer_capacity_bytes,
-                flush_interval: Duration::from_millis(defaults.jsonl_flush_interval_ms),
+            RecorderOptions {
+                access_policy,
+                traffic_jsonl: defaults.traffic_jsonl,
+                buffer_settings: jsonl::JsonlBufferSettings {
+                    capacity: defaults.jsonl_buffer_capacity_bytes,
+                    flush_interval: Duration::from_millis(defaults.jsonl_flush_interval_ms),
+                },
+                writer_queue_capacity: defaults.writer_queue_capacity,
+                run_id: None,
+                recording_apis: Vec::new(),
+                artifact_owner: None,
             },
-            defaults.writer_queue_capacity,
-            None,
-            Vec::new(),
         )
         .await
     }
@@ -75,6 +91,7 @@ impl Recorder {
             &config.output_dir,
             run_id,
             Vec::new(),
+            None,
         )
         .await
     }
@@ -84,18 +101,22 @@ impl Recorder {
         output_dir: impl AsRef<Path>,
         run_id: Option<String>,
         recording_apis: Vec<String>,
+        artifact_owner: Option<ArtifactOwner>,
     ) -> Result<Self> {
         Self::new_with_options(
             output_dir,
-            config.access_policy,
-            config.traffic_jsonl,
-            jsonl::JsonlBufferSettings {
-                capacity: config.jsonl_buffer_capacity_bytes,
-                flush_interval: Duration::from_millis(config.jsonl_flush_interval_ms),
+            RecorderOptions {
+                access_policy: config.access_policy,
+                traffic_jsonl: config.traffic_jsonl,
+                buffer_settings: jsonl::JsonlBufferSettings {
+                    capacity: config.jsonl_buffer_capacity_bytes,
+                    flush_interval: Duration::from_millis(config.jsonl_flush_interval_ms),
+                },
+                writer_queue_capacity: config.writer_queue_capacity,
+                run_id,
+                recording_apis,
+                artifact_owner,
             },
-            config.writer_queue_capacity,
-            run_id,
-            recording_apis,
         )
         .await
     }
@@ -107,13 +128,17 @@ impl Recorder {
 
     async fn new_with_options(
         output_dir: impl AsRef<Path>,
-        access_policy: RecordingAccessPolicy,
-        traffic_jsonl: TrafficJsonlMode,
-        buffer_settings: jsonl::JsonlBufferSettings,
-        writer_queue_capacity: usize,
-        run_id: Option<String>,
-        recording_apis: Vec<String>,
+        options: RecorderOptions,
     ) -> Result<Self> {
+        let RecorderOptions {
+            access_policy,
+            traffic_jsonl,
+            buffer_settings,
+            writer_queue_capacity,
+            run_id,
+            recording_apis,
+            artifact_owner,
+        } = options;
         let output_dir = output_dir.as_ref();
         tokio::fs::create_dir_all(output_dir)
             .await
@@ -140,6 +165,7 @@ impl Recorder {
         )
         .await?;
         let recorder = Self {
+            artifact_owner,
             traffic_jsonl,
             writer,
             run_dir,

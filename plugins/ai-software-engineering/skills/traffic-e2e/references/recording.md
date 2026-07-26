@@ -13,6 +13,7 @@ Confirm before starting:
 - the target's normal startup command and readiness condition;
 - the fixed `trp-record` interception user or an equivalent supported target
   execution path;
+- the numeric host artifact owner when Recorder runs as root in a container;
 - output directory and optional explicit UTC run ID;
 - request/response body limits and decoded-size limits;
 - header redaction and handling of sensitive dependency payloads;
@@ -78,6 +79,19 @@ Build steps may run as the developer. The dependency-producing source process
 must run with the fixed interception identity or through another tool-supported
 arrangement that places its traffic inside that identity and network boundary.
 
+When a host wrapper starts Recorder as root in a container and bind-mounts the
+recording output, capture the wrapper's numeric `id -u` and `id -g` before
+starting containers and pass them directly to:
+
+```bash
+traffic-e2e record --artifact-owner UID:GID ...
+```
+
+The option controls only finalized run artifacts. It does not change the fixed
+`trp-record` interception identity. Do not source the value from Recorder TOML,
+an environment variable, or an identity discovered inside the root container.
+Direct host execution as the intended artifact owner omits the option.
+
 ## Readiness And Case Admission
 
 Prefer the recorder rule's ready probe. Until readiness succeeds, matching
@@ -130,6 +144,9 @@ entire output directory even when application headers are redacted.
 
 Stop through the managed process signal path and wait for finalization. Do not
 kill the recorder abruptly merely because the trigger request returned.
+When `--artifact-owner` was supplied, finalization must assign the complete
+exact run tree to that numeric UID and GID; an ownership failure makes the
+managed recording unsuccessful even when its canonical payloads were written.
 
 Inspect:
 
@@ -150,6 +167,11 @@ an untruncated body, semantic dependencies, and a summary. An empty semantic
 dependency file plus `total_events: 0` is valid explicit evidence. A missing
 file, partial body, proxy error, unsupported or unsafe protocol, access-policy
 rejection, or failed directory is not.
+
+For a root container recording, also verify that the exact finalized run and
+all descendants have the requested host UID and GID and that the host wrapper
+can create runner-owned artifacts under that run. Do not repair this with
+world-writable permissions or by changing the owner of the recordings root.
 
 Use `dependencies-debug.jsonl` only for protocol diagnosis. Normal replay and
 acceptance use `dependencies.jsonl`. Fix failed cases and create a new run;
