@@ -30,11 +30,12 @@ do not rewrite working code merely because the request uses the word
 
 ## Required Companion Skills
 
-Before recording or verifying traffic, read `../traffic-e2e/SKILL.md`
-completely and follow its reference routing. Before modifying target code, also
-read `../backend-engineering/SKILL.md` completely and follow its reference
-routing for architecture, migration, dependency clients, implementation
-language, and verification.
+Before recording or verifying traffic, use the companion
+[`traffic-e2e`](../traffic-e2e/SKILL.md) skill: read its `SKILL.md` completely
+and follow its reference routing. Before modifying target code, also use the
+companion [`backend-engineering`](../backend-engineering/SKILL.md) skill: read
+its `SKILL.md` completely and follow its reference routing for architecture,
+migration, dependency clients, implementation language, and verification.
 
 Treat both as mandatory for implementation. This skill owns rewrite sequencing
 and delivery. `traffic-e2e` owns each recording and verification operation and
