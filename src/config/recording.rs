@@ -17,6 +17,7 @@ pub struct RecordingConfig {
     pub jsonl_buffer_capacity_bytes: usize,
     pub jsonl_flush_interval_ms: u64,
     pub writer_queue_capacity: usize,
+    pub post_ready_settle_ms: u64,
     #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
@@ -201,9 +202,10 @@ impl Default for RecordingConfig {
             jsonl_buffer_capacity_bytes: 256 * 1024,
             jsonl_flush_interval_ms: 1_000,
             writer_queue_capacity: 65_536,
+            post_ready_settle_ms: 10_000,
             case_dependency_post_response_window_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,
-            shutdown_case_drain_timeout_ms: 20_000,
+            shutdown_case_drain_timeout_ms: 5_000,
             redact_headers: vec![
                 "authorization".to_string(),
                 "cookie".to_string(),
@@ -251,6 +253,8 @@ mod tests {
     #[test]
     fn validates_case_dependency_drain_timing() {
         let mut config = AppConfig::default();
+        assert_eq!(config.recording.post_ready_settle_ms, 10_000);
+        assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);
         config.recording.case_dependency_post_response_window_ms = 0;
         config.validate().unwrap();
 

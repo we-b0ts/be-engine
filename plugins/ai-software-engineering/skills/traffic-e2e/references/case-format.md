@@ -255,11 +255,15 @@ across cases from the same recording run. Do not move it into a case directory
 unless packaging a standalone case bundle; replay should discover it by walking
 upward from the case directory. Its debug and summary companions use the same
 naming pattern: `bootstrap-dependencies-debug.jsonl` and
-`bootstrap-dependencies-summary.json`. Newer recordings may close the bootstrap
-window earlier when the recorder's `[http_gateway.ready]` probe observes the
-configured upstream path returning the configured success status. Traffic after
-that ready signal is normal idle/background traffic, not bootstrap evidence,
-unless it belongs to an active case.
+`bootstrap-dependencies-summary.json`. Newer recordings close the bootstrap
+window after the recorder's `[http_gateway.ready]` probe observes the configured
+upstream path returning the configured success status and
+`recording.post_ready_settle_ms` elapses. Dependencies captured during that
+fixed settle interval remain bootstrap evidence. Recorder flushes the sealed
+bootstrap JSONL before opening case admission and generates its summary only
+during final run shutdown. Traffic after the window closes is normal
+idle/background traffic, not bootstrap evidence, unless it belongs to an
+active case.
 
 ## MySQL Exchange Records
 

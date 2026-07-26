@@ -166,6 +166,12 @@ and no case is created. After ready, only one matched case can be active at a
 time; overlapping matching requests also use fallback so dependencies are not
 shared across cases.
 
+A matched request first reserves the single case slot without accepting
+dependencies. Recorder reads the complete inbound request and persists
+`admission.json` before activating dependency ownership and forwarding the
+request to the source. Cancellation before activation releases the reservation
+without creating a case or attributing process-level traffic to it.
+
 The default `http_gateway.fallback_mode = "upstream"` forwards those requests
 to `fallback_upstream`. For a fallback that always returns the same payload,
 use an in-process fixed response instead of running another service:
@@ -769,8 +775,12 @@ dependency contract from missing capture evidence.
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`
 with `recording-error.json` instead of being published. Successfully published
-cases remain in their normal rule directories when another case fails. On
-clean shutdown, recording exits with an error if the run contains failed cases.
+cases remain in their normal rule directories when another case fails. A clean
+shutdown reports `status: completed` and exits successfully even when
+`failed_cases` is nonzero; consumers select only canonical published cases and
+use `failed_cases` plus `errors` for diagnostics. `status: failed` and a
+nonzero process exit are reserved for Recorder-level runtime or finalization
+failure.
 
 A complete zero-length response body is publishable even when its
 `Content-Type` advertises JSON. Recorder preserves the empty body and replay
@@ -904,9 +914,10 @@ and Kafka failure injection are unsupported and fail closed. Schema Registry
 remains an ordinary HTTP dependency. Kafka payloads and headers are sensitive
 because exact bytes are required for replay.
 
-Dependency summaries are generated when a case is published, when bootstrap
-recording closes, and when the run finishes. They are intentionally not rebuilt
-after every cache exchange.
+Case dependency summaries are generated when each case is published.
+Bootstrap dependency files are sealed before case admission opens, while the
+potentially large bootstrap summary is generated only when the run finishes.
+Summaries are intentionally not rebuilt after every cache exchange.
 
 ## Testing Guidance
 

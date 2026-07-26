@@ -45,7 +45,8 @@ writing files or starting containers.
 4. Copy and render the files under [assets/recording](assets/recording).
    Replace only the documented `__PROJECT_SCOPE__` and `__PROJECT_CLI__`
    placeholders in configuration templates. Copy `mesh_switch_task.sh`
-   unchanged to `scripts/mesh_switch_task.sh`.
+   unchanged to `scripts/mesh_switch_task.sh`. Keep the template's fixed
+   10-second post-ready settle interval; `recording wait-ready` owns that wait.
 5. Copy the Breeze patch assets unchanged into
    `.traffic-e2e/adapters/source/`. Generate the remaining source adapter
    Dockerfile and launchers from inspected evidence; invoke the bundled patch

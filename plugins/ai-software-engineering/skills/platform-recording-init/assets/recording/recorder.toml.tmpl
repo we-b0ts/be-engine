@@ -107,9 +107,10 @@ traffic_jsonl = "errors"
 jsonl_buffer_capacity_bytes = 262144
 jsonl_flush_interval_ms = 1000
 writer_queue_capacity = 65536
+post_ready_settle_ms = 10000
 case_dependency_post_response_window_ms = 100
 case_dependency_drain_timeout_ms = 5000
-shutdown_case_drain_timeout_ms = 20000
+shutdown_case_drain_timeout_ms = 5000
 access_policy = "unrestricted"
 redact_headers = [
   "authorization",

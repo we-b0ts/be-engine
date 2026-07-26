@@ -153,6 +153,28 @@ async fn handle_gateway_request(
             max_cases,
         )
     });
+    let request_body = match req.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => {
+            return record_gateway_error(GatewayErrorContext {
+                state,
+                id,
+                client_addr,
+                method,
+                original_uri,
+                authority,
+                request_headers: request_headers_for_record,
+                request_body: Bytes::new(),
+                started,
+                matched_rule: matched_rule_name,
+                case: None,
+                should_record: false,
+                target: None,
+                err: anyhow!("failed to read gateway request body: {err}"),
+            })
+            .await;
+        }
+    };
     let mut should_record = false;
     let mut case = None;
     let mut upstream_base = config.fallback_upstream.clone();
@@ -178,29 +200,6 @@ async fn handle_gateway_request(
     let lifecycle_state = state.clone();
     let active_case_id = case.as_ref().map(|case| case.id);
     let request = async move {
-        let request_body = match req.into_body().collect().await {
-            Ok(collected) => collected.to_bytes(),
-            Err(err) => {
-                return record_gateway_error(GatewayErrorContext {
-                    state,
-                    id,
-                    client_addr,
-                    method,
-                    original_uri,
-                    authority,
-                    request_headers: request_headers_for_record,
-                    request_body: Bytes::new(),
-                    started,
-                    matched_rule: matched_rule_name.clone(),
-                    case,
-                    should_record,
-                    target: Some(upstream_base.clone()),
-                    err: anyhow!("failed to read gateway request body: {err}"),
-                })
-                .await;
-            }
-        };
-
         if !should_record && config.fallback_mode == HttpGatewayFallbackMode::FixedResponse {
             return build_fixed_response(
                 config

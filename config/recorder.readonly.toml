@@ -51,6 +51,7 @@ headers = {}
 [recording]
 output_dir = "./recordings/readonly-manual"
 max_body_bytes = 1048576
+post_ready_settle_ms = 0
 access_policy = "block_known_writes"
 redact_headers = [
   "authorization",

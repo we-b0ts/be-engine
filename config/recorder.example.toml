@@ -196,6 +196,10 @@ jsonl_flush_interval_ms = 1000
 # Completed events move into this bounded queue before JSONL serialization and
 # persistence so dependency writes do not delay dependency responses.
 writer_queue_capacity = 65536
+# Keep startup dependencies in bootstrap for this fixed interval after the
+# readiness probe succeeds. Matching traffic continues to use the configured
+# fallback until the interval ends.
+post_ready_settle_ms = 10000
 # Keep dependency admission open for a fixed interval after the HTTP response
 # completes so synchronous server-side after-hooks can start. Set to 0 to close
 # admission immediately when the response completes.
@@ -205,7 +209,7 @@ case_dependency_post_response_window_ms = 100
 case_dependency_drain_timeout_ms = 5000
 # On shutdown, stop admitting new cases and allow the active case to finish
 # before any remaining staging case is failed.
-shutdown_case_drain_timeout_ms = 20000
+shutdown_case_drain_timeout_ms = 5000
 # unrestricted keeps existing forwarding behavior. block_known_writes rejects
 # operations that the protocol classifiers identify as writes; unknown commands
 # are still forwarded for compatibility.

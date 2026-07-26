@@ -154,6 +154,13 @@ impl Recorder {
             .await
     }
 
+    pub(crate) async fn discard_unadmitted_case(&self, case: &CaseContext) -> Result<()> {
+        let _guard = self.dependency_write_lock.lock().await;
+        self.flush_case_dependency_files(&self.case_staging_dir(case))
+            .await?;
+        remove_dir_if_exists(&self.case_staging_dir(case)).await
+    }
+
     async fn record_case_failure(
         &self,
         case: &CaseContext,
@@ -189,10 +196,23 @@ impl Recorder {
             state.errors.push(summary.clone());
         }
         self.append_run_error(&summary).await?;
-        self.write_run_report("failed").await
+        self.write_run_report("running").await
     }
 
     pub async fn finish_run(&self) -> Result<bool> {
+        self.finish_run_with_status("completed").await
+    }
+
+    pub(crate) async fn finish_run_after_runtime(&self, runtime_succeeded: bool) -> Result<bool> {
+        self.finish_run_with_status(if runtime_succeeded {
+            "completed"
+        } else {
+            "failed"
+        })
+        .await
+    }
+
+    async fn finish_run_with_status(&self, status: &'static str) -> Result<bool> {
         {
             let mut state = self.run_state.lock().await;
             state.finishing = true;
@@ -223,12 +243,7 @@ impl Recorder {
             state.finished = true;
             state.failed_cases > 0
         };
-        self.write_run_report(if has_failed_cases {
-            "failed"
-        } else {
-            "completed"
-        })
-        .await?;
+        self.write_run_report(status).await?;
         self.flush_traffic().await?;
         Ok(has_failed_cases)
     }
@@ -331,10 +346,10 @@ impl Recorder {
         Ok(cases)
     }
 
-    pub(crate) async fn finalize_bootstrap_dependency_summary(&self) -> Result<()> {
+    pub(crate) async fn seal_bootstrap_dependencies(&self) -> Result<()> {
         let _guard = self.dependency_write_lock.lock().await;
-        self.flush_bootstrap_dependency_files().await?;
-        write_bootstrap_dependency_summary(&self.run_dir).await
+        self.ensure_run_accepts_case_writes().await?;
+        self.flush_bootstrap_dependency_files().await
     }
 
     pub(crate) fn case_dir(&self, case: &CaseContext) -> PathBuf {
@@ -386,17 +401,6 @@ impl Recorder {
 
     pub(crate) async fn write_run_report(&self, status: &'static str) -> Result<()> {
         let state = self.run_state.lock().await;
-        let status = if state.finished {
-            if state.failed_cases > 0 {
-                "failed"
-            } else {
-                "completed"
-            }
-        } else if state.failed_cases > 0 {
-            "failed"
-        } else {
-            status
-        };
         let report = RecorderRunReport {
             run_id: state.run_id.clone(),
             status,
@@ -489,7 +493,7 @@ mod tests {
             .await
             .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
-        assert_eq!(report["status"], "failed");
+        assert_eq!(report["status"], "running");
         assert_eq!(report["published_cases"], 3);
         assert_eq!(report["failed_cases"], 1);
     }
@@ -542,7 +546,7 @@ mod tests {
             .await
             .unwrap();
         let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
-        assert_eq!(report["status"], "failed");
+        assert_eq!(report["status"], "completed");
         assert_eq!(report["published_cases"], 0);
         assert_eq!(report["failed_cases"], 2);
         assert_eq!(
@@ -561,5 +565,20 @@ mod tests {
                 .is_err()
         );
         assert!(!recorder.case_staging_dir(&grouped).exists());
+    }
+
+    #[tokio::test]
+    async fn runtime_failure_is_distinct_from_individual_case_failures() {
+        let temp = tempfile::tempdir().unwrap();
+        let recorder = Recorder::new(temp.path()).await.unwrap();
+
+        assert!(!recorder.finish_run_after_runtime(false).await.unwrap());
+
+        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
+            .await
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
+        assert_eq!(report["status"], "failed");
+        assert_eq!(report["failed_cases"], 0);
     }
 }

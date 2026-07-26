@@ -437,6 +437,8 @@ mod tests {
         assert_eq!(config.recording.jsonl_buffer_capacity_bytes, 256 * 1024);
         assert_eq!(config.recording.jsonl_flush_interval_ms, 1_000);
         assert_eq!(config.recording.writer_queue_capacity, 65_536);
+        assert_eq!(config.recording.post_ready_settle_ms, 10_000);
+        assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);
         assert_eq!(
             config.recording.case_dependency_post_response_window_ms,
             100

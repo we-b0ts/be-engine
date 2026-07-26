@@ -40,8 +40,8 @@ use uuid::Uuid;
 
 use crate::access_policy::{AccessDecision, OperationClass, decide};
 use crate::active_case::{
-    ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection, DependencyDrainResult,
-    DependencyTargets,
+    ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection,
+    DependencyDrainResult, DependencyTargets,
 };
 use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
@@ -309,37 +309,49 @@ impl AppState {
         self.inner.upstream_tls_config.clone()
     }
 
-    pub(crate) fn try_register_active_case(
+    pub(crate) fn try_reserve_active_case(
         &self,
         case: CaseContext,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
-        let bootstrap_was_open = self.inner.active_cases.is_bootstrap_open();
-        let guard = self.inner.active_cases.try_register(case)?;
-        if bootstrap_was_open {
-            self.schedule_bootstrap_dependency_summary("first active case");
-        }
-        Ok(guard)
+        self.inner.active_cases.try_reserve(case)
     }
 
-    pub(crate) fn close_bootstrap(&self, reason: &'static str) -> bool {
+    pub(crate) async fn close_bootstrap(&self, reason: &'static str) -> Result<bool> {
         let closed = self.inner.active_cases.close_bootstrap();
-        if closed {
-            self.inner.recording_lifecycle.mark_source_ready();
-            info!(reason, "bootstrap dependency window closed");
-            self.schedule_bootstrap_dependency_summary(reason);
+        if !closed {
+            return Ok(false);
         }
-        closed
+        info!(reason, "bootstrap dependency window closed");
+        self.seal_bootstrap_dependencies(reason).await?;
+        if !self.inner.active_cases.enable_case_matching() {
+            return Ok(false);
+        }
+        self.inner.recording_lifecycle.mark_source_ready();
+        Ok(true)
     }
 
-    fn schedule_bootstrap_dependency_summary(&self, reason: &'static str) {
-        let recorder = self.recorder().clone();
-        let active_cases = self.inner.active_cases.clone();
-        tokio::spawn(async move {
-            active_cases.wait_for_bootstrap_dependencies().await;
-            if let Err(err) = recorder.finalize_bootstrap_dependency_summary().await {
-                warn!(error = %err, reason, "failed to finalize bootstrap dependency summary");
-            }
-        });
+    pub(crate) async fn seal_bootstrap_dependencies(&self, reason: &'static str) -> Result<()> {
+        if self.inner.active_cases.is_bootstrap_sealed() {
+            return Ok(());
+        }
+        self.inner
+            .active_cases
+            .wait_for_bootstrap_dependencies()
+            .await;
+        if let Err(error) = self.recorder().seal_bootstrap_dependencies().await {
+            self.inner.recording_lifecycle.mark_failed(&error);
+            return Err(error).context("failed to seal bootstrap dependencies");
+        }
+        self.inner.active_cases.mark_bootstrap_sealed();
+        info!(reason, "bootstrap dependencies sealed");
+        Ok(())
+    }
+
+    pub(crate) fn activate_case_dependencies(
+        &self,
+        guard: &ActiveCaseGuard,
+    ) -> Result<(), ActiveCaseActivationError> {
+        guard.activate_dependencies()
     }
 
     pub(crate) fn is_bootstrap_open(&self) -> bool {
@@ -360,6 +372,10 @@ impl AppState {
 
     pub(crate) fn mark_recording_listener_ready(&self, listener: RecordingListener) {
         self.inner.recording_lifecycle.mark_listener_ready(listener);
+    }
+
+    pub(crate) fn mark_recording_source_settling(&self) {
+        self.inner.recording_lifecycle.mark_source_settling();
     }
 
     pub(crate) async fn wait_for_active_case_shutdown_drain(&self) -> bool {
@@ -583,6 +599,7 @@ impl AppState {
         if let Err(error) = &run_result {
             self.inner.recording_lifecycle.mark_failed(error);
         }
+        let runtime_succeeded = run_result.is_ok();
 
         tasks.abort_all();
         while let Some(joined) = tasks.join_next().await {
@@ -595,7 +612,7 @@ impl AppState {
         self.kubectl_proxy_manager().shutdown().await;
         let finish_run_result = self
             .recorder()
-            .finish_run()
+            .finish_run_after_runtime(runtime_succeeded)
             .await
             .context("failed to finalize recording run");
         let registry_flush_result = self
@@ -605,12 +622,14 @@ impl AppState {
             .context("failed to flush fake DNS registry during shutdown");
 
         let result = async {
-            run_result?;
             let has_failed_cases = finish_run_result?;
-            registry_flush_result?;
             if has_failed_cases {
-                anyhow::bail!("recording run finished with failed cases");
+                warn!(
+                    "recording run finalized with failed cases; published cases remain available"
+                );
             }
+            run_result?;
+            registry_flush_result?;
             Ok(())
         }
         .await;
@@ -706,7 +725,8 @@ mod tests {
             rule_name: "api".to_string(),
             uri_group: None,
         };
-        let guard = state.try_register_active_case(case.clone()).unwrap();
+        let guard = state.try_reserve_active_case(case.clone()).unwrap();
+        state.activate_case_dependencies(&guard).unwrap();
 
         let background = http_dependency(
             "config.api.demo.test",

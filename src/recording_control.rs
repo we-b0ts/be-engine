@@ -64,6 +64,7 @@ pub struct RecordingReadiness {
 struct RecordingLifecycleState {
     expected: BTreeSet<RecordingListener>,
     listening: BTreeSet<RecordingListener>,
+    source_settling: bool,
     source_ready: bool,
     stopping: bool,
     error: Option<String>,
@@ -99,6 +100,7 @@ impl RecordingLifecycle {
             inner: Arc::new(Mutex::new(RecordingLifecycleState {
                 expected,
                 listening: BTreeSet::new(),
+                source_settling: false,
                 source_ready: !config.http_gateway.ready.enabled,
                 stopping: false,
                 error: None,
@@ -111,7 +113,13 @@ impl RecordingLifecycle {
     }
 
     pub(crate) fn mark_source_ready(&self) {
-        self.lock().source_ready = true;
+        let mut state = self.lock();
+        state.source_settling = false;
+        state.source_ready = true;
+    }
+
+    pub(crate) fn mark_source_settling(&self) {
+        self.lock().source_settling = true;
     }
 
     pub(crate) fn mark_stopping(&self) {
@@ -150,10 +158,12 @@ impl RecordingLifecycle {
             "stopping"
         } else if ready {
             "ready"
-        } else if listeners_bound {
-            "waiting_for_source"
-        } else {
+        } else if !listeners_bound {
             "starting"
+        } else if state.source_settling {
+            "settling"
+        } else {
+            "waiting_for_source"
         };
         RecordingReadiness {
             phase: phase.to_string(),
@@ -533,6 +543,11 @@ mod tests {
         let listeners_ready = lifecycle.snapshot();
         assert!(listeners_ready.listeners_bound);
         assert_eq!(listeners_ready.phase, "waiting_for_source");
+
+        lifecycle.mark_source_settling();
+        let settling = lifecycle.snapshot();
+        assert!(!settling.ready);
+        assert_eq!(settling.phase, "settling");
 
         lifecycle.mark_source_ready();
         let ready = lifecycle.snapshot();

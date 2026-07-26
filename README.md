@@ -255,9 +255,17 @@ See [Verified API Excludes](docs/verified-api-excludes.md).
 `[http_gateway.ready]` is an optional active readiness probe against
 `matched_upstream`. When enabled, the recorder sends `GET path` every
 `interval_ms` milliseconds, defaulting to once per second. When the response
-status equals `success_status`, the shared bootstrap dependency window closes.
-The probe itself is not recorded as a case. If this section is disabled, the
-bootstrap window still closes when the first matched gateway case starts.
+status equals `success_status`, the recorder waits
+`recording.post_ready_settle_ms` milliseconds before closing the shared
+bootstrap dependency window and admitting the first case. The default is
+10 seconds. Dependencies observed during this fixed settle interval remain
+bootstrap dependencies, and matching requests continue to use the configured
+fallback. Before case admission opens, Recorder waits for accepted bootstrap
+events to finish and flushes their JSONL files; the potentially large bootstrap
+summary is generated only when the run finishes. The probe itself is not
+recorded as a case. If this section is disabled, the settle interval does not
+apply and the bootstrap window still closes when the first matched gateway
+case is reserved.
 
 Each recorder process creates one run directory under `recording.output_dir`
 named `YYYYMMDDHHMMSS`. Matched gateway requests create case directories inside
@@ -304,10 +312,11 @@ stores the matched upstream response; if the response body has
 `Content-Encoding: gzip` or `deflate`, it is decoded before being written.
 Incomplete cases, including truncated request or expected response bodies, are
 not published into `<rule-name>/<uri-group>/<case-id>`. They are moved under
-`<run-id>/failed/...` with `recording-error.json`, and a clean shutdown
-returns an error when the run has failed cases. Fix the recording limit or
-recorder behavior and record again; do not consume failed cases as replay
-fixtures.
+`<run-id>/failed/...` with `recording-error.json`. A cleanly finalized run
+remains `completed`; `failed_cases` and `errors` describe the rejected
+individual cases, while run-level `failed` is reserved for Recorder failure.
+Fix the recording limit or recorder behavior and record again; do not consume
+failed cases as replay fixtures.
 When `block_known_writes` rejects a dependency during an active case, the
 payload-free `readonly_rejection` is retained in the failed case's
 `dependencies.jsonl` and the complete case is moved under `failed/`. The
@@ -356,9 +365,12 @@ cross-machine system check, follow
 Before the first matched gateway case is registered, replay-oriented dependency
 traffic is also written to run-level `bootstrap-dependencies.jsonl`; protocol
 debug records go to `bootstrap-dependencies-debug.jsonl`. The bootstrap window
-closes permanently when `[http_gateway.ready]` succeeds or, if no ready probe is
-configured, when the first case starts. Later idle traffic remains only in
-that run's `traffic.jsonl` unless it belongs to an active case.
+closes permanently after `[http_gateway.ready]` succeeds and
+`recording.post_ready_settle_ms` elapses or, if no ready probe is configured,
+when the first case is reserved. Recorder flushes the closed bootstrap files
+before activating that case and writes `bootstrap-dependencies-summary.json`
+during final run shutdown. Later idle traffic remains only in that run's
+`traffic.jsonl` unless it belongs to an active case.
 
 ## Configure Local Fake-IP DNS Gateway
 

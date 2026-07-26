@@ -35,7 +35,8 @@ provides:
 - TCP dependency recording and HTTPS MITM;
 - Vintage `/naming/service` response rewriting;
 - HTTP gateway port `17171` to source port `8080`;
-- `/healthz` readiness with exact status `404`;
+- `/healthz` readiness with exact status `404` and a fixed 10-second
+  post-ready settle interval before first-case admission;
 - `GET` recording over `/`, unrestricted matched forwarding, and fixed
   unmatched responses; and
 - runtime CA files under ignored `.traffic-e2e/data`.
@@ -243,7 +244,8 @@ Use this fixed lifecycle:
 7. start the source with `MESH_CONNECT_HOST=breeze.recording`;
 8. wait for source port `880`, verify the genuine Java process is `998:998`,
    then run `scripts/mesh_switch_task.sh` when `mesh_only` is true;
-9. run `traffic-e2e recording wait-ready`;
+9. run `traffic-e2e recording wait-ready`; this already waits through the
+   configured post-ready settle interval, so do not add another shell sleep;
 10. record for the selected duration;
 11. send `SIGINT` to Recorder, wait for drain and finalization, preserve
     diagnostics, and remove only containers created by this invocation.

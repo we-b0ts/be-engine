@@ -145,7 +145,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
     let report: Value =
         serde_json::from_str(&std::fs::read_to_string(run_dir.join("recording-run.json")).unwrap())
             .unwrap();
-    assert_eq!(report["status"], "failed");
+    assert_eq!(report["status"], "running");
     assert_eq!(report["published_cases"], 0);
     assert_eq!(report["failed_cases"], 1);
 }

@@ -369,7 +369,7 @@ mod tests {
         .unwrap();
         state
             .recorder()
-            .finalize_bootstrap_dependency_summary()
+            .seal_bootstrap_dependencies()
             .await
             .unwrap();
 
