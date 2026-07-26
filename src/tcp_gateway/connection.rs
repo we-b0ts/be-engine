@@ -252,9 +252,14 @@ async fn proxy_raw_tcp(
         protocol = Some(DetectedProtocol::Mysql);
     }
     if protocol.is_none() && state.config().tcp_gateway.protocol_detection.enabled {
-        protocol = match peek_client_protocol_with_timeout(&client, PARTIAL_PEEK_TIMEOUT).await {
-            Ok(Detection::Match(protocol)) => Some(protocol),
-            _ => protocol_hint(&state, fake_addr.port()),
+        let hint = protocol_hint(&state, fake_addr.port());
+        protocol = if options.sniff_server_first_protocols && hint.is_none() {
+            Some(detect_protocol_when_data_arrives(&client, &upstream).await?)
+        } else {
+            match peek_client_protocol_with_timeout(&client, PARTIAL_PEEK_TIMEOUT).await? {
+                Detection::Match(protocol) => Some(protocol),
+                Detection::NeedMore | Detection::NoMatch => hint,
+            }
         };
     }
     if protocol == Some(DetectedProtocol::MemcachedText) {
@@ -492,6 +497,35 @@ async fn peek_client_protocol(stream: &TcpStream) -> Result<Detection> {
     peek_client_protocol_with_timeout(stream, INITIAL_PEEK_TIMEOUT).await
 }
 
+async fn detect_protocol_when_data_arrives(
+    client: &TcpStream,
+    upstream: &TcpStream,
+) -> Result<DetectedProtocol> {
+    tokio::select! {
+        detection = peek_client_protocol_after_data(client) => {
+            Ok(match detection? {
+                Detection::Match(protocol) => protocol,
+                Detection::NeedMore | Detection::NoMatch => DetectedProtocol::Raw,
+            })
+        }
+        mysql = upstream_looks_like_mysql_after_data(upstream) => {
+            Ok(if mysql? {
+                DetectedProtocol::Mysql
+            } else {
+                DetectedProtocol::Raw
+            })
+        }
+    }
+}
+
+async fn peek_client_protocol_after_data(stream: &TcpStream) -> Result<Detection> {
+    let mut first = [0_u8; 1];
+    if stream.peek(&mut first).await? == 0 {
+        return Ok(Detection::NoMatch);
+    }
+    peek_client_protocol_with_timeout(stream, PARTIAL_PEEK_TIMEOUT).await
+}
+
 async fn peek_client_protocol_with_timeout(
     stream: &TcpStream,
     wait: Duration,
@@ -538,6 +572,14 @@ async fn upstream_looks_like_mysql(stream: &TcpStream) -> Result<bool> {
     Ok(detect_mysql_server(&buf[..len]) == Detection::Match(DetectedProtocol::Mysql))
 }
 
+async fn upstream_looks_like_mysql_after_data(stream: &TcpStream) -> Result<bool> {
+    let mut first = [0_u8; 1];
+    if stream.peek(&mut first).await? == 0 {
+        return Ok(false);
+    }
+    upstream_looks_like_mysql(stream).await
+}
+
 pub(super) fn upstream_addr(entry: &FakeDnsEntry, port: u16) -> Result<SocketAddr> {
     let ip = entry
         .real_ips
@@ -569,59 +611,5 @@ fn original_dst(stream: &TcpStream) -> Result<SocketAddr> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{TcpApplicationProtocol, TcpProtocolOverrideConfig};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[test]
-    fn exact_override_wins_over_port_hints() {
-        let mut config = crate::TcpProtocolDetectionConfig::default();
-        config.overrides.push(TcpProtocolOverrideConfig {
-            host: "cache.internal".to_string(),
-            port: 6379,
-            protocol: TcpApplicationProtocol::Raw,
-        });
-        assert_eq!(
-            protocol_override(&config, "CACHE.INTERNAL.", 6379),
-            Some(DetectedProtocol::Raw)
-        );
-    }
-
-    #[tokio::test]
-    async fn configured_listener_accepts_connections() {
-        let listener = bind_listener("127.0.0.1:0".parse().unwrap(), 4096).unwrap();
-        let addr = listener.local_addr().unwrap();
-        let client_task = tokio::spawn(TcpStream::connect(addr));
-
-        let (_, peer_addr) = listener.accept().await.unwrap();
-
-        assert!(peer_addr.ip().is_loopback());
-        client_task.await.unwrap().unwrap();
-    }
-
-    #[tokio::test]
-    async fn fragmented_sniff_waits_for_a_complete_command_without_consuming_it() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let command = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n".to_vec();
-        let writer = command.clone();
-        let client_task = tokio::spawn(async move {
-            let mut client = TcpStream::connect(addr).await.unwrap();
-            for byte in writer {
-                client.write_all(&[byte]).await.unwrap();
-                sleep(Duration::from_millis(2)).await;
-            }
-        });
-        let (mut server, _) = listener.accept().await.unwrap();
-
-        assert_eq!(
-            peek_client_protocol(&server).await.unwrap(),
-            Detection::Match(DetectedProtocol::Redis)
-        );
-        let mut actual = vec![0_u8; command.len()];
-        server.read_exact(&mut actual).await.unwrap();
-        assert_eq!(actual, command);
-        client_task.await.unwrap();
-    }
-}
+#[path = "connection_tests.rs"]
+mod tests;

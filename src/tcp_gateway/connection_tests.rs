@@ -1,0 +1,193 @@
+use super::*;
+use crate::config::{TcpApplicationProtocol, TcpProtocolOverrideConfig};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[test]
+fn exact_override_wins_over_port_hints() {
+    let mut config = crate::TcpProtocolDetectionConfig::default();
+    config.overrides.push(TcpProtocolOverrideConfig {
+        host: "cache.internal".to_string(),
+        port: 6379,
+        protocol: TcpApplicationProtocol::Raw,
+    });
+    assert_eq!(
+        protocol_override(&config, "CACHE.INTERNAL.", 6379),
+        Some(DetectedProtocol::Raw)
+    );
+}
+
+#[tokio::test]
+async fn configured_listener_accepts_connections() {
+    let listener = bind_listener("127.0.0.1:0".parse().unwrap(), 4096).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let client_task = tokio::spawn(TcpStream::connect(addr));
+
+    let (_, peer_addr) = listener.accept().await.unwrap();
+
+    assert!(peer_addr.ip().is_loopback());
+    client_task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn fragmented_sniff_waits_for_a_complete_command_without_consuming_it() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let command = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n".to_vec();
+    let writer = command.clone();
+    let client_task = tokio::spawn(async move {
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        for byte in writer {
+            client.write_all(&[byte]).await.unwrap();
+            sleep(Duration::from_millis(2)).await;
+        }
+    });
+    let (mut server, _) = listener.accept().await.unwrap();
+
+    assert_eq!(
+        peek_client_protocol(&server).await.unwrap(),
+        Detection::Match(DetectedProtocol::Redis)
+    );
+    let mut actual = vec![0_u8; command.len()];
+    server.read_exact(&mut actual).await.unwrap();
+    assert_eq!(actual, command);
+    client_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn idle_detection_accepts_a_delayed_mysql_greeting() {
+    let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let client_task = tokio::spawn(TcpStream::connect(client_listener.local_addr().unwrap()));
+    let (proxy_client, _) = client_listener.accept().await.unwrap();
+    let _client = client_task.await.unwrap().unwrap();
+
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_task = tokio::spawn(TcpStream::connect(upstream_listener.local_addr().unwrap()));
+    let (mut upstream_server, _) = upstream_listener.accept().await.unwrap();
+    let proxy_upstream = upstream_task.await.unwrap().unwrap();
+    let detection = tokio::spawn(async move {
+        detect_protocol_when_data_arrives(&proxy_client, &proxy_upstream).await
+    });
+
+    sleep(INITIAL_PEEK_TIMEOUT + PARTIAL_PEEK_TIMEOUT + Duration::from_millis(200)).await;
+    upstream_server
+        .write_all(&[1, 0, 0, 0, 0x0a])
+        .await
+        .unwrap();
+
+    assert_eq!(detection.await.unwrap().unwrap(), DetectedProtocol::Mysql);
+}
+
+#[tokio::test]
+async fn idle_connection_detects_motan_when_the_first_request_arrives_later() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = crate::AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    let state = crate::AppState::new(config).await.unwrap();
+
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_addr = upstream_listener.local_addr().unwrap();
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_addr = gateway_listener.local_addr().unwrap();
+    let client_task = tokio::spawn(TcpStream::connect(gateway_addr));
+    let (proxy_client, peer_addr) = gateway_listener.accept().await.unwrap();
+    let mut client = client_task.await.unwrap().unwrap();
+
+    let entry = FakeDnsEntry {
+        domain: "vintage-node-127-0-0-1.trp.test".to_string(),
+        fake_ip: Ipv4Addr::new(198, 19, 0, 20),
+        real_ips: vec![Ipv4Addr::LOCALHOST],
+        response_alias: true,
+        upstream_authority: None,
+        upstream_protocol: None,
+        first_seen: chrono::Utc::now(),
+        last_seen: chrono::Utc::now(),
+    };
+    let fake_addr = SocketAddr::new(IpAddr::V4(entry.fake_ip), upstream_addr.port());
+    let state_for_proxy = state.clone();
+    let proxy = tokio::spawn(proxy_raw_tcp(
+        proxy_client,
+        fake_addr,
+        entry,
+        Some(peer_addr.to_string()),
+        state_for_proxy,
+        RawTcpOptions {
+            record_connection: true,
+            sniff_server_first_protocols: true,
+            detected_protocol: None,
+        },
+    ));
+    let (mut upstream, _) = upstream_listener.accept().await.unwrap();
+
+    sleep(INITIAL_PEEK_TIMEOUT + PARTIAL_PEEK_TIMEOUT + Duration::from_millis(200)).await;
+    let request = motan_request_frame(
+        42,
+        &[
+            "cn.sina.api.data.service.SinaUserService",
+            "getBareSinaUsers",
+            "long[]",
+        ],
+    );
+    client.write_all(&request).await.unwrap();
+    let mut forwarded = vec![0_u8; request.len()];
+    upstream.read_exact(&mut forwarded).await.unwrap();
+    assert_eq!(forwarded, request);
+
+    let response = motan_frame(42, false, 1, b"recorded-user");
+    upstream.write_all(&response).await.unwrap();
+    let mut delivered = vec![0_u8; response.len()];
+    client.read_exact(&mut delivered).await.unwrap();
+    assert_eq!(delivered, response);
+
+    client.shutdown().await.unwrap();
+    drop(client);
+    let mut eof = [0_u8; 1];
+    assert_eq!(upstream.read(&mut eof).await.unwrap(), 0);
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), proxy)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let traffic = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    assert!(traffic.contains(r#""event_type":"motan_exchange""#));
+    assert!(
+        traffic
+            .contains(r#""command":"cn.sina.api.data.service.SinaUserService#getBareSinaUsers""#)
+    );
+}
+
+fn motan_request_frame(request_id: u64, identity: &[&str]) -> Vec<u8> {
+    let mut block = Vec::new();
+    for value in identity {
+        block.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        block.extend_from_slice(value.as_bytes());
+    }
+    let mut body = vec![0xAC, 0xED, 0x00, 0x05, 0x77, block.len() as u8];
+    body.extend_from_slice(&block);
+    motan_frame(request_id, true, 0, &body)
+}
+
+fn motan_frame(request_id: u64, request: bool, inner_flag: u8, body: &[u8]) -> Vec<u8> {
+    let mut inner = vec![0_u8; 16];
+    inner[..2].copy_from_slice(&[0xF0, 0xF0]);
+    inner[2] = 1;
+    inner[3] = inner_flag;
+    inner[4..12].copy_from_slice(&request_id.to_be_bytes());
+    inner[12..16].copy_from_slice(&(body.len() as u32).to_be_bytes());
+    inner.extend_from_slice(body);
+
+    let mut outer = vec![0_u8; 16];
+    outer[..2].copy_from_slice(&[0xF1, 0xF1]);
+    outer[3] = u8::from(!request);
+    outer[4..12].copy_from_slice(&request_id.to_be_bytes());
+    outer[12..16].copy_from_slice(&(inner.len() as u32).to_be_bytes());
+    outer.extend_from_slice(&inner);
+    outer
+}
