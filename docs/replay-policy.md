@@ -1,11 +1,12 @@
-# Replay And Assertion Policy
+# Dependency Replay And Response Verification Policy
 
-Each target repository owns one source-controlled `.traffic-e2e/replay.yaml`.
-Pass it explicitly to every recorded replay:
+Each target repository owns one source-controlled
+`.traffic-e2e/verification.yaml`. Pass it explicitly to every recorded replay
+and comparison verification:
 
 ```bash
 traffic-e2e config replay init --target-root .
-traffic-e2e replay --policy .traffic-e2e/replay.yaml /path/to/case-group
+traffic-e2e replay --policy .traffic-e2e/verification.yaml /path/to/case-group
 ```
 
 Initialization, evidence-driven application, and replay each validate the
@@ -14,7 +15,8 @@ policy.
 This policy is independent of recorder `case_path_patterns`:
 
 - `case_path_patterns` groups recorded inbound API paths.
-- replay policy matches legitimate runtime-generated dependency fields.
+- verification policy matches legitimate runtime-generated dependency fields
+  and owns reviewed response-comparison rules.
 
 ## Required Contract
 
@@ -38,13 +40,26 @@ response_rules:
 ```
 
 `expected-response.json` is an assertion oracle only. Target product code,
-dependency mocks, E2E setup, and replay policy generation must not read its
+dependency mocks, E2E setup, and verification policy generation must not read its
 status, headers, or body to create the actual response, dependency result,
 branch decision, cache result, or side effect. The policy parser requires this
 declaration; migration review must also verify the target harness obeys it.
 
+The same version 2 `response_rules` also apply to offline comparison recording
+verification. `traffic-e2e compare <comparison-recording-run> --policy
+<verification.yaml>` treats the baseline `expected-response.json` as the
+oracle and the candidate `response.json` as actual output. When
+`expected-response-after.json` exists, it also checks source-before against
+source-after. An unexempted source difference classifies the case as
+`source_drift`, not a candidate defect. Replay dependency rules are ignored
+during this file-only operation, and no interception or isolation is enabled.
+
 Do not put recorded values, response bodies, secrets, absolute case paths, or
 case-id exceptions in the policy. Use selectors and semantic validation only.
+In particular, ordinary mutable business data observed at different times is
+not a dynamic-response exemption. Re-record it under comparable state. Add a
+response rule only after source semantics prove current-time/random generation
+or order-insensitive collection behavior.
 
 ## Rule Scope
 

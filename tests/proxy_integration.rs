@@ -13,9 +13,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use traffic_e2e::{
-    AppConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig, HttpResponseRewriteConfig,
-    HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig, MysqlRouteConfig,
-    RecordingAccessPolicy, VerifiedApiExclude, VerifiedApiExcludesConfig,
+    AppConfig, ArtifactsConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
+    HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
+    MysqlRouteConfig, RecordingAccessPolicy,
 };
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
@@ -46,7 +46,9 @@ async fn records_http_proxy_exchange() {
     config.http.enabled = true;
     config.http.listen = proxy_addr;
     config.mysql.enabled = false;
-    config.recording.output_dir = temp.path().join("recordings");
+    config.artifacts = Some(ArtifactsConfig {
+        root_dir: temp.path().join("artifacts"),
+    });
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
@@ -68,7 +70,7 @@ async fn records_http_proxy_exchange() {
     handle.abort();
     recorder.flush_traffic().await.unwrap();
 
-    let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let run_dir = only_recording_run_dir(&temp.path().join("artifacts/recordings"));
     let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
@@ -197,7 +199,7 @@ async fn recording_policy_blocks_http_gateway_write_before_case_registration() {
 }
 
 #[tokio::test]
-async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
+async fn http_gateway_applies_manual_and_runtime_api_excludes_before_recording() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -224,19 +226,18 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
         path_prefixes: vec!["/record/private".to_string()],
         ..Default::default()
     }];
-    config.http_gateway.verified_excludes = VerifiedApiExcludesConfig {
-        apis: vec![VerifiedApiExclude {
-            rule: "record-path".to_string(),
-            method: "GET".to_string(),
-            path_pattern: "/record/verified/**".to_string(),
-        }],
-    };
     config.mysql.enabled = false;
     config.recording.output_dir = temp.path().join("recordings");
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
-    let state = traffic_e2e::AppState::new(config).await.unwrap();
+    let state = traffic_e2e::AppState::new_with_recording_apis(
+        config,
+        None,
+        vec!["GET /record".parse().unwrap()],
+    )
+    .await
+    .unwrap();
     let recorder = state.recorder().clone();
     let handle = tokio::spawn(async move { state.run().await });
     wait_for_port(gateway_addr).await;
@@ -245,8 +246,8 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     assert!(matched_response.contains("matched"));
     let excluded_response = raw_http_get(gateway_addr, "/record/private").await;
     assert!(excluded_response.contains("fallback"));
-    let verified_response = raw_http_get(gateway_addr, "/record/verified/default/pods/nginx").await;
-    assert!(verified_response.contains("fallback"));
+    let unselected_response = raw_http_get(gateway_addr, "/record/other").await;
+    assert!(unselected_response.contains("fallback"));
     let fallback_response = raw_http_get(gateway_addr, "/recording/two").await;
     assert!(fallback_response.contains("fallback"));
 
@@ -255,13 +256,23 @@ async fn http_gateway_applies_manual_and_verified_excludes_before_recording() {
     recorder.flush_traffic().await.unwrap();
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
+    let run_summary: Value = serde_json::from_slice(
+        &tokio::fs::read(run_dir.join("recording-run.json"))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        run_summary["recording_apis"],
+        serde_json::json!(["GET /record"])
+    );
     let jsonl = tokio::fs::read_to_string(run_dir.join("traffic.jsonl"))
         .await
         .unwrap();
     assert!(jsonl.contains(r#""event_type":"http_exchange""#));
     assert!(jsonl.contains("/record"));
     assert!(!jsonl.contains("/record/private"));
-    assert!(!jsonl.contains("/record/verified/default/pods/nginx"));
+    assert!(!jsonl.contains("/record/other"));
     assert!(!jsonl.contains("/recording/two"));
 }
 

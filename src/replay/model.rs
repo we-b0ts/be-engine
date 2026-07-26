@@ -124,7 +124,7 @@ pub(super) async fn discover_replay_cases(
     root_dir: &Path,
     selected_case_ids: &BTreeSet<String>,
 ) -> Result<(ReplayMode, BTreeMap<String, ReplayCase>, Option<String>)> {
-    crate::case_kind::reject_online_compare(root_dir)?;
+    crate::case_kind::reject_comparison_recording(root_dir)?;
     let direct_dependencies = root_dir.join("dependencies.jsonl");
     if direct_dependencies.is_file() {
         let case_id = path_file_name(root_dir).unwrap_or_else(|| "case".to_string());
@@ -146,7 +146,7 @@ pub(super) async fn discover_replay_cases(
     let mut cases = BTreeMap::new();
     let mut pending = vec![root_dir.to_path_buf()];
     while let Some(scan_dir) = pending.pop() {
-        crate::case_kind::reject_online_compare(&scan_dir)?;
+        crate::case_kind::reject_comparison_recording(&scan_dir)?;
         let dependencies_path = scan_dir.join("dependencies.jsonl");
         if !dependencies_path.is_file() {
             let mut entries = tokio::fs::read_dir(&scan_dir).await.with_context(|| {
@@ -331,22 +331,22 @@ pub(super) fn normalize_host(host: &str) -> String {
 }
 
 #[cfg(test)]
-mod online_compare_tests {
+mod comparison_recording_tests {
     use super::*;
 
     #[tokio::test]
-    async fn replay_discovery_rejects_online_compare_artifact() {
+    async fn replay_discovery_rejects_comparison_recording_artifact() {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory.path().join("case-kind.json"),
-            r#"{"version":1,"kind":"online_compare"}"#,
+            r#"{"version":1,"kind":"comparison_recording"}"#,
         )
         .unwrap();
         let error = discover_replay_cases(directory.path(), &BTreeSet::new())
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("online compare artifacts are not replay cases"));
+        assert!(error.contains("comparison recording artifacts are not replay cases"));
     }
 
     #[test]

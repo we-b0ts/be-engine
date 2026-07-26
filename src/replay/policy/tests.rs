@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::path::Path;
 
 use chrono::{TimeZone, Utc};
 use serde_json::{Value, json};
@@ -12,6 +13,17 @@ use crate::replay::{
 };
 
 const CASE_ID: &str = "case-1";
+
+#[test]
+fn validates_shared_verification_policy_example() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("config")
+        .join("verification.example.yaml");
+    let report = validate_replay_policy(&path).unwrap();
+
+    assert_eq!(report.version, 2);
+    assert!(report.runner_owned_response_assertions);
+}
 
 #[test]
 fn validates_assertion_only_policy_contract() {

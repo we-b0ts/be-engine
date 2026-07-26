@@ -1,21 +1,14 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
-use hyper::Method;
-
-use super::model::{
-    ApiVerificationConfig, ApiVerificationThresholds, ProjectConfig, ResolvedProjectConfig,
-    RunLayout,
-};
+use super::model::{ProjectConfig, ResolvedProjectConfig, RunLayout};
 use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
-use crate::path_pattern::validate_path_pattern;
 use crate::replay::validate_replay_policy;
+use anyhow::{Context, Result, bail, ensure};
 
-const CONFIG_VERSION: u32 = 4;
+const CONFIG_VERSION: u32 = 5;
 const DEFAULT_LOCAL_ROOT: &str = "local";
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -95,37 +88,15 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     let local_root = traffic_e2e_dir.join(&local_root_setting);
     require_local_ignored(&target_root, &local_root)?;
 
-    let mut overrides = BTreeMap::new();
-    for api_override in options.api_verification_overrides {
-        ensure!(
-            overrides
-                .insert(
-                    api_override.api.clone(),
-                    ApiVerificationThresholds {
-                        consecutive_successful_runs: api_override.consecutive_successful_runs,
-                        successful_cases: api_override.successful_cases,
-                    },
-                )
-                .is_none(),
-            "duplicate API verification override for {}",
-            api_override.api
-        );
-    }
     let project_config = ProjectConfig {
         version: CONFIG_VERSION,
         project_cli: options.project_cli,
         replay_policy: options.replay_policy,
         replay_startup_timeout_seconds: options.replay_startup_timeout_seconds,
-        api_verification: ApiVerificationConfig {
-            consecutive_successful_runs: options.api_verification_consecutive_successful_runs,
-            successful_cases: options.api_verification_successful_cases,
-            overrides,
-        },
         pr_base: options.pr_base,
         recorder_config: options.recorder_config,
         local_root: local_root_setting,
         recording_rule: options.recording_rule,
-        _legacy_required_consecutive_successful_runs: None,
     };
     validate_project_config(&project_config)?;
     if options.force {
@@ -182,7 +153,6 @@ pub(super) fn resolve_layout(
             .as_deref()
             .map(|path| resolve_under(&target_root, path)),
         recording_rule: config.recording_rule,
-        api_verification: config.api_verification,
         runner_owned_response_assertions: policy.runner_owned_response_assertions,
     };
     let layout = RunLayout {
@@ -234,14 +204,14 @@ fn load_project_config(target_root: &Path, config_path: &Path) -> Result<Project
     let config: ProjectConfig = store::read_yaml(config_path).with_context(|| {
         format!(
             "{} is incomplete or obsolete; regenerate it with \
-             `traffic-e2e config project init --target-root <target>`",
+             `traffic-e2e config --target-root <target> project init --force`",
             config_path.display()
         )
     })?;
     validate_project_config(&config).with_context(|| {
         format!(
             "{} is incomplete or obsolete; regenerate it with \
-             `traffic-e2e config project init --target-root <target>`",
+             `traffic-e2e config --target-root <target> project init --force`",
             config_path.display()
         )
     })?;
@@ -268,25 +238,6 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "replay_startup_timeout_seconds must be greater than zero"
     );
     ensure!(
-        config.api_verification.consecutive_successful_runs > 0,
-        "api_verification.consecutive_successful_runs must be greater than zero"
-    );
-    ensure!(
-        config.api_verification.successful_cases > 0,
-        "api_verification.successful_cases must be greater than zero"
-    );
-    for (api_key, thresholds) in &config.api_verification.overrides {
-        validate_api_verification_key(api_key)?;
-        ensure!(
-            thresholds.consecutive_successful_runs > 0,
-            "api_verification override {api_key:?} consecutive_successful_runs must be greater than zero"
-        );
-        ensure!(
-            thresholds.successful_cases > 0,
-            "api_verification override {api_key:?} successful_cases must be greater than zero"
-        );
-    }
-    ensure!(
         !config.pr_base.trim().is_empty(),
         "pr_base must not be empty"
     );
@@ -302,25 +253,6 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         ensure!(!rule.trim().is_empty(), "recording_rule must not be empty");
     }
     Ok(())
-}
-
-fn validate_api_verification_key(api_key: &str) -> Result<()> {
-    let (method, path_pattern) = api_key.split_once(' ').with_context(|| {
-        format!("api_verification override key must use 'METHOD path_pattern': {api_key:?}")
-    })?;
-    ensure!(
-        format!("{method} {path_pattern}") == api_key,
-        "api_verification override key must use one canonical separator: {api_key:?}"
-    );
-    let parsed = method.parse::<Method>().with_context(|| {
-        format!("api_verification override has invalid HTTP method: {api_key:?}")
-    })?;
-    ensure!(
-        parsed.as_str() == method && method == method.to_ascii_uppercase(),
-        "api_verification override method must use canonical uppercase form: {api_key:?}"
-    );
-    validate_path_pattern(path_pattern)
-        .with_context(|| format!("invalid api_verification override {api_key:?}"))
 }
 
 fn resolve_under(root: &Path, path: &Path) -> PathBuf {
@@ -369,11 +301,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::e2e_run::E2eApiVerificationOverride;
-    use crate::e2e_run::model::{
-        DEFAULT_CONSECUTIVE_SUCCESSFUL_RUNS, DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
-        DEFAULT_SUCCESSFUL_CASES,
-    };
+    use crate::e2e_run::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS;
 
     fn target() -> TempDir {
         let target = tempfile::tempdir().unwrap();
@@ -446,9 +374,6 @@ mod tests {
             project_cli: PathBuf::from("scripts/project-cli"),
             replay_policy: PathBuf::from("config/replay.yaml"),
             replay_startup_timeout_seconds: DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
-            api_verification_consecutive_successful_runs: DEFAULT_CONSECUTIVE_SUCCESSFUL_RUNS,
-            api_verification_successful_cases: DEFAULT_SUCCESSFUL_CASES,
-            api_verification_overrides: Vec::new(),
             pr_base: "integration".to_string(),
             recorder_config: None,
             recording_rule: None,
@@ -478,19 +403,9 @@ mod tests {
             config.replay_startup_timeout_seconds,
             DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS
         );
-        assert_eq!(
-            config.api_verification.consecutive_successful_runs,
-            DEFAULT_CONSECUTIVE_SUCCESSFUL_RUNS
-        );
-        assert_eq!(
-            config.api_verification.successful_cases,
-            DEFAULT_SUCCESSFUL_CASES
-        );
         assert_eq!(config.pr_base, "integration");
         assert_eq!(result.pr_base, "integration");
         assert_eq!(config.local_root, PathBuf::from(DEFAULT_LOCAL_ROOT));
-        let yaml = fs::read_to_string(&result.config).unwrap();
-        assert!(!yaml.contains("required_consecutive_successful_runs"));
     }
 
     #[test]
@@ -509,7 +424,7 @@ mod tests {
         let repository_name = crate::repository::directory_name(root).unwrap();
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(
-            root.join(".traffic-e2e/replay.yaml"),
+            root.join(".traffic-e2e/verification.yaml"),
             "version: 2\nexpected_response: assertions_only\nrules: []\n",
         )
         .unwrap();
@@ -532,7 +447,7 @@ mod tests {
         assert!(!root.join(&config.project_cli).exists());
         assert_eq!(
             config.replay_policy,
-            PathBuf::from(".traffic-e2e/replay.yaml")
+            PathBuf::from(".traffic-e2e/verification.yaml")
         );
         assert_eq!(config.pr_base, "dev-migration");
         assert_eq!(
@@ -542,51 +457,6 @@ mod tests {
         assert_eq!(
             config.recording_rule.as_deref(),
             Some(crate::config::DEFAULT_RECORDING_RULE)
-        );
-    }
-
-    #[test]
-    fn initialize_persists_api_verification_overrides() {
-        let target = target();
-        let mut options = options(target.path());
-        options
-            .api_verification_overrides
-            .push(E2eApiVerificationOverride {
-                api: "GET /api/widgets/*".to_string(),
-                consecutive_successful_runs: 5,
-                successful_cases: 200,
-            });
-
-        let result = initialize(options).unwrap();
-        let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
-        let thresholds = config.api_verification.thresholds_for("GET /api/widgets/*");
-
-        assert_eq!(thresholds.consecutive_successful_runs, 5);
-        assert_eq!(thresholds.successful_cases, 200);
-        assert!(
-            fs::read_to_string(result.config)
-                .unwrap()
-                .contains("GET /api/widgets/*:")
-        );
-    }
-
-    #[test]
-    fn initialize_rejects_duplicate_api_verification_overrides() {
-        let target = target();
-        let mut options = options(target.path());
-        let api_override = E2eApiVerificationOverride {
-            api: "GET /api/widgets/*".to_string(),
-            consecutive_successful_runs: 5,
-            successful_cases: 200,
-        };
-        options.api_verification_overrides = vec![api_override.clone(), api_override];
-
-        let error = initialize(options).unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("duplicate API verification override")
         );
     }
 
@@ -602,27 +472,6 @@ mod tests {
         replacement.force = true;
         let result = initialize(replacement).unwrap();
         assert!(result.replaced);
-    }
-
-    #[test]
-    fn accepts_legacy_successful_run_setting_without_persisting_it() {
-        let target = target();
-        let mut generated = options(target.path());
-        generated.force = false;
-        let result = initialize(generated).unwrap();
-        let mut yaml = fs::read_to_string(&result.config).unwrap();
-        yaml.push_str("required_consecutive_successful_runs: 3\n");
-        fs::write(&result.config, yaml).unwrap();
-        let cases = target.path().join("cases/run");
-        fs::create_dir_all(&cases).unwrap();
-
-        resolve_layout(target.path(), &cases, None).unwrap();
-
-        let mut replacement = options(target.path());
-        replacement.force = true;
-        initialize(replacement).unwrap();
-        let yaml = fs::read_to_string(&result.config).unwrap();
-        assert!(!yaml.contains("required_consecutive_successful_runs"));
     }
 
     #[test]
@@ -662,67 +511,6 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_zero_api_verification_thresholds() {
-        let target = target();
-        initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let yaml = fs::read_to_string(&config_path).unwrap().replace(
-            "consecutive_successful_runs: 3",
-            "consecutive_successful_runs: 0",
-        );
-        fs::write(&config_path, yaml).unwrap();
-        let cases = target.path().join("cases/run");
-        fs::create_dir_all(&cases).unwrap();
-
-        let error = resolve_layout(target.path(), &cases, None).unwrap_err();
-
-        assert!(
-            format!("{error:#}")
-                .contains("api_verification.consecutive_successful_runs must be greater than zero")
-        );
-    }
-
-    #[test]
-    fn config_rejects_noncanonical_api_verification_override() {
-        let target = target();
-        let result = initialize(options(target.path())).unwrap();
-        let config_path = result.config;
-        let yaml = fs::read_to_string(&config_path).unwrap().replace(
-            "  successful_cases: 3\n",
-            "  successful_cases: 3\n  overrides:\n    \"get /api/widgets/*\":\n      consecutive_successful_runs: 2\n      successful_cases: 4\n",
-        );
-        fs::write(&config_path, yaml).unwrap();
-        let cases = target.path().join("cases/run");
-        fs::create_dir_all(&cases).unwrap();
-
-        let error = resolve_layout(target.path(), &cases, None).unwrap_err();
-
-        assert!(
-            format!("{error:#}")
-                .contains("api_verification override method must use canonical uppercase form")
-        );
-    }
-
-    #[test]
-    fn config_rejects_incomplete_api_verification_override() {
-        let error = serde_yaml::from_str::<ApiVerificationConfig>(
-            r#"consecutive_successful_runs: 3
-successful_cases: 3
-overrides:
-  GET /api/widgets/*:
-    consecutive_successful_runs: 2
-"#,
-        )
-        .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("missing field `successful_cases`")
-        );
-    }
-
-    #[test]
     fn config_defaults_replay_startup_timeout_when_field_is_missing() {
         let target = target();
         initialize(options(target.path())).unwrap();
@@ -742,31 +530,6 @@ overrides:
         assert_eq!(
             config.replay_startup_timeout,
             Duration::from_secs(DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS)
-        );
-    }
-
-    #[test]
-    fn config_defaults_api_verification_when_field_is_missing() {
-        let target = target();
-        initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let yaml = fs::read_to_string(&config_path).unwrap().replace(
-            "api_verification:\n  consecutive_successful_runs: 3\n  successful_cases: 3\n",
-            "",
-        );
-        fs::write(&config_path, yaml).unwrap();
-        let cases = target.path().join("cases/run");
-        fs::create_dir_all(&cases).unwrap();
-
-        let (config, _) = resolve_layout(target.path(), &cases, None).unwrap();
-
-        assert_eq!(
-            config.api_verification.consecutive_successful_runs,
-            DEFAULT_CONSECUTIVE_SUCCESSFUL_RUNS
-        );
-        assert_eq!(
-            config.api_verification.successful_cases,
-            DEFAULT_SUCCESSFUL_CASES
         );
     }
 
@@ -830,7 +593,7 @@ overrides:
         assert!(
             error
                 .to_string()
-                .contains("traffic-e2e config project init")
+                .contains("traffic-e2e config --target-root <target> project init --force")
         );
     }
 

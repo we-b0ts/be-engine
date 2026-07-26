@@ -1,3 +1,5 @@
+mod document;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -5,7 +7,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::config::{fingerprint, load_replay_policy};
+use self::document::{render_response_rules, replace_response_rules};
+use super::config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
 use super::pattern::path_pattern_matches;
 use super::response::{ResponseRuleKind, parse_api, response_rule_id, validate_json_pointer};
 use crate::config::edit::write_atomic;
@@ -29,14 +32,31 @@ pub struct DynamicResponseRuleFeedback {
     pub aggregate_report: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct ComparisonResponseRuleFeedback {
+    pub policy_path: PathBuf,
+    pub kind: ResponseRuleKind,
+    pub api: String,
+    pub json_pointers: Vec<String>,
+    pub comparison_report: PathBuf,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ResponseRuleReport {
     pub policy: PathBuf,
     pub policy_fingerprint: String,
-    pub assertion_report: PathBuf,
-    pub assertion_fingerprint: String,
-    pub aggregate_report: PathBuf,
-    pub aggregate_fingerprint: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assertion_report: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assertion_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregate_report: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregate_fingerprint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison_report: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comparison_fingerprint: Option<String>,
     pub kind: ResponseRuleKind,
     pub api: String,
     pub json_pointers: Vec<String>,
@@ -83,36 +103,11 @@ impl ResponseRulePlan {
 }
 
 pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRulePlan> {
-    ensure!(
-        !feedback.json_pointers.is_empty(),
-        "at least one --json-pointer is required"
-    );
-    let (method, path_pattern) = parse_api(&feedback.api)?;
-    ensure!(
-        method == method.to_ascii_uppercase(),
-        "API method must use uppercase canonical form"
-    );
-    let requested = feedback
-        .json_pointers
-        .iter()
-        .map(|pointer| {
-            validate_json_pointer(pointer)?;
-            Ok(pointer.clone())
-        })
-        .collect::<Result<BTreeSet<_>>>()?;
-
-    let original = fs::read_to_string(&feedback.policy_path).with_context(|| {
-        format!(
-            "failed to read replay policy {}",
-            feedback.policy_path.display()
-        )
-    })?;
-    let loaded = load_replay_policy(&feedback.policy_path)?;
-    ensure!(
-        loaded.document.version >= 2,
-        "response rules require replay policy version 2"
-    );
-
+    let prepared = prepare_response_rule(
+        &feedback.policy_path,
+        &feedback.api,
+        &feedback.json_pointers,
+    )?;
     let assertion_bytes = read_regular(&feedback.assertion_report, "assertion report")?;
     let assertions: AssertionEvidence =
         serde_json::from_slice(&assertion_bytes).context("invalid assertion report")?;
@@ -122,7 +117,7 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         "response rule planning requires runner-owned assertion evidence"
     );
     ensure!(
-        assertions.policy_fingerprint.as_deref() == Some(loaded.fingerprint.as_str()),
+        assertions.policy_fingerprint.as_deref() == Some(prepared.loaded.fingerprint.as_str()),
         "assertion report replay policy fingerprint is stale"
     );
     let aggregate_bytes = read_regular(&feedback.aggregate_report, "aggregate report")?;
@@ -149,88 +144,237 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         assertion_cases == aggregate_cases,
         "assertion and aggregate reports must cover the same focused API cases"
     );
-    let matching = assertions
-        .cases
+    let matching_cases = validate_response_evidence(
+        &prepared,
+        feedback.kind,
+        &feedback.api,
+        &assertions.cases,
+        true,
+    )?;
+    build_response_rule_plan(
+        feedback.policy_path,
+        feedback.kind,
+        feedback.api,
+        prepared,
+        matching_cases,
+        ResponseRuleEvidence::Replay {
+            assertion_report: feedback.assertion_report,
+            assertion_fingerprint: fingerprint(&assertion_bytes),
+            aggregate_report: feedback.aggregate_report,
+            aggregate_fingerprint: fingerprint(&aggregate_bytes),
+        },
+    )
+}
+
+pub fn plan_comparison_response_rule(
+    feedback: ComparisonResponseRuleFeedback,
+) -> Result<ResponseRulePlan> {
+    let prepared = prepare_response_rule(
+        &feedback.policy_path,
+        &feedback.api,
+        &feedback.json_pointers,
+    )?;
+    let comparison_bytes = read_regular(&feedback.comparison_report, "comparison report")?;
+    let comparison: ComparisonEvidence =
+        serde_json::from_slice(&comparison_bytes).context("invalid comparison report")?;
+    ensure!(
+        comparison.version == 2
+            && comparison.kind == "comparison_recording_verification"
+            && comparison.expected_response == "assertions_only"
+            && comparison.assertion_mode == "comparison_recording"
+            && comparison.baseline_recheck == "optional_source_consistency",
+        "response rule planning requires comparison recording verification evidence"
+    );
+    ensure!(
+        comparison.complete,
+        "comparison recording verification evidence must be complete"
+    );
+    ensure!(
+        comparison.policy_fingerprint == prepared.loaded.fingerprint,
+        "comparison report replay policy fingerprint is stale"
+    );
+    ensure!(
+        comparison.cases.iter().all(|case| case.response.is_some()),
+        "complete comparison report contains an unevaluable case"
+    );
+    ensure!(
+        comparison
+            .cases
+            .iter()
+            .all(|case| case.classification.as_deref() != Some("source_drift")),
+        "source-drift comparison evidence cannot authorize a response rule"
+    );
+    let matching_cases = validate_response_evidence(
+        &prepared,
+        feedback.kind,
+        &feedback.api,
+        &comparison.cases,
+        false,
+    )?;
+    build_response_rule_plan(
+        feedback.policy_path,
+        feedback.kind,
+        feedback.api,
+        prepared,
+        matching_cases,
+        ResponseRuleEvidence::Comparison {
+            comparison_report: feedback.comparison_report,
+            comparison_fingerprint: fingerprint(&comparison_bytes),
+        },
+    )
+}
+
+struct PreparedResponseRule {
+    method: String,
+    path_pattern: String,
+    requested: BTreeSet<String>,
+    original: String,
+    loaded: LoadedReplayPolicy,
+}
+
+enum ResponseRuleEvidence {
+    Replay {
+        assertion_report: PathBuf,
+        assertion_fingerprint: String,
+        aggregate_report: PathBuf,
+        aggregate_fingerprint: String,
+    },
+    Comparison {
+        comparison_report: PathBuf,
+        comparison_fingerprint: String,
+    },
+}
+
+fn prepare_response_rule(
+    policy_path: &Path,
+    api: &str,
+    json_pointers: &[String],
+) -> Result<PreparedResponseRule> {
+    ensure!(
+        !json_pointers.is_empty(),
+        "at least one --json-pointer is required"
+    );
+    let (method, path_pattern) = parse_api(api)?;
+    ensure!(
+        method == method.to_ascii_uppercase(),
+        "API method must use uppercase canonical form"
+    );
+    let requested = json_pointers
+        .iter()
+        .map(|pointer| {
+            validate_json_pointer(pointer)?;
+            Ok(pointer.clone())
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    let original = fs::read_to_string(policy_path)
+        .with_context(|| format!("failed to read replay policy {}", policy_path.display()))?;
+    let loaded = load_replay_policy(policy_path)?;
+    ensure!(
+        loaded.document.version >= 2,
+        "response rules require replay policy version 2"
+    );
+    Ok(PreparedResponseRule {
+        method: method.to_string(),
+        path_pattern: path_pattern.to_string(),
+        requested,
+        original,
+        loaded,
+    })
+}
+
+fn validate_response_evidence(
+    prepared: &PreparedResponseRule,
+    kind: ResponseRuleKind,
+    api: &str,
+    cases: &[AssertionCaseEvidence],
+    require_all_cases: bool,
+) -> Result<usize> {
+    let matching = cases
         .iter()
         .filter_map(|case| {
             let response = case.response.as_ref()?;
-            (response.method.eq_ignore_ascii_case(method)
-                && path_pattern_matches(path_pattern, &response.path))
+            (response.method.eq_ignore_ascii_case(&prepared.method)
+                && path_pattern_matches(&prepared.path_pattern, &response.path))
             .then_some((case, response))
         })
         .collect::<Vec<_>>();
     ensure!(
         !matching.is_empty(),
-        "assertion report contains no cases for {}",
-        feedback.api
+        "response evidence contains no cases for {api}"
     );
     ensure!(
-        matching.len() == assertions.cases.len(),
-        "assertion report contains cases outside the requested canonical API group"
+        !require_all_cases || matching.len() == cases.len(),
+        "response evidence contains cases outside the requested canonical API group"
     );
     let mut observed_difference = false;
     for (case, response) in &matching {
-        ensure!(
-            aggregate_cases.contains(&case.case_id),
-            "aggregate report does not cover assertion case {:?}",
-            case.case_id
-        );
         ensure!(
             response.body_mode == "json_structural",
             "response rules require structural JSON assertion evidence"
         );
         for difference in &response.differences {
             ensure!(
-                difference_supports_rule(feedback.kind, difference, &requested),
+                difference_supports_rule(kind, difference, &prepared.requested),
                 "case {:?} has an unsupported or undeclared response difference at {}",
                 case.case_id,
                 difference.pointer
             );
             observed_difference = true;
         }
-        for pointer in &requested {
+        for pointer in &prepared.requested {
             ensure!(
-                response.candidates(feedback.kind).contains(pointer)
+                response.candidates(kind).contains(pointer)
                     || response
-                        .applied_rule_ids(feedback.kind)
-                        .contains(&response_rule_id(feedback.kind, &feedback.api, pointer))
+                        .applied_rule_ids(kind)
+                        .contains(&response_rule_id(kind, api, pointer))
                     || response.differences.is_empty(),
                 "case {:?} does not provide {:?} evidence for {}",
                 case.case_id,
-                feedback.kind,
+                kind,
                 pointer
             );
         }
     }
     ensure!(
         observed_difference
-            || requested.iter().all(|pointer| {
-                response_rule_map(&loaded.document.response_rules, feedback.kind)
-                    .get(&feedback.api)
+            || prepared.requested.iter().all(|pointer| {
+                response_rule_map(&prepared.loaded.document.response_rules, kind)
+                    .get(api)
                     .is_some_and(|pointers| pointers.contains(pointer))
             }),
-        "assertion evidence contains no differing field selected by the proposed rule"
+        "response evidence contains no differing field selected by the proposed rule"
     );
+    Ok(matching.len())
+}
 
-    let mut updated_rules = loaded.document.response_rules.clone();
-    let fields = response_rule_map_mut(&mut updated_rules, feedback.kind)
-        .entry(feedback.api.clone())
+fn build_response_rule_plan(
+    policy_path: PathBuf,
+    kind: ResponseRuleKind,
+    api: String,
+    prepared: PreparedResponseRule,
+    matching_cases: usize,
+    evidence: ResponseRuleEvidence,
+) -> Result<ResponseRulePlan> {
+    let mut updated_rules = prepared.loaded.document.response_rules.clone();
+    let fields = response_rule_map_mut(&mut updated_rules, kind)
+        .entry(api.clone())
         .or_default();
     let before = fields.iter().cloned().collect::<BTreeSet<_>>();
-    fields.extend(requested.iter().cloned());
+    fields.extend(prepared.requested.iter().cloned());
     fields.sort();
     fields.dedup();
-    let added = requested
+    let added = prepared
+        .requested
         .difference(&before)
-        .map(|pointer| response_rule_id(feedback.kind, &feedback.api, pointer))
+        .map(|pointer| response_rule_id(kind, &api, pointer))
         .collect::<Vec<_>>();
-    let updated = replace_response_rules(&original, &updated_rules)?;
-    let changed = updated != original;
+    let updated = replace_response_rules(&prepared.original, &updated_rules)?;
+    let changed = updated != prepared.original;
     let diff = if changed {
         format!(
             "--- {}\n+++ {}\n@@ response_rules @@\n{}",
-            feedback.policy_path.display(),
-            feedback.policy_path.display(),
+            policy_path.display(),
+            policy_path.display(),
             render_response_rules(&updated_rules)?
                 .lines()
                 .map(|line| format!("+{line}\n"))
@@ -239,21 +383,56 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
     } else {
         String::new()
     };
+    let (
+        assertion_report,
+        assertion_fingerprint,
+        aggregate_report,
+        aggregate_fingerprint,
+        comparison_report,
+        comparison_fingerprint,
+    ) = match evidence {
+        ResponseRuleEvidence::Replay {
+            assertion_report,
+            assertion_fingerprint,
+            aggregate_report,
+            aggregate_fingerprint,
+        } => (
+            Some(assertion_report),
+            Some(assertion_fingerprint),
+            Some(aggregate_report),
+            Some(aggregate_fingerprint),
+            None,
+            None,
+        ),
+        ResponseRuleEvidence::Comparison {
+            comparison_report,
+            comparison_fingerprint,
+        } => (
+            None,
+            None,
+            None,
+            None,
+            Some(comparison_report),
+            Some(comparison_fingerprint),
+        ),
+    };
     Ok(ResponseRulePlan {
-        policy_path: feedback.policy_path.clone(),
-        original,
+        policy_path: policy_path.clone(),
+        original: prepared.original,
         updated,
         report: ResponseRuleReport {
-            policy: feedback.policy_path,
-            policy_fingerprint: loaded.fingerprint,
-            assertion_report: feedback.assertion_report,
-            assertion_fingerprint: fingerprint(&assertion_bytes),
-            aggregate_report: feedback.aggregate_report,
-            aggregate_fingerprint: fingerprint(&aggregate_bytes),
-            kind: feedback.kind,
-            api: feedback.api,
-            json_pointers: requested.into_iter().collect(),
-            matching_cases: matching.len(),
+            policy: policy_path,
+            policy_fingerprint: prepared.loaded.fingerprint,
+            assertion_report,
+            assertion_fingerprint,
+            aggregate_report,
+            aggregate_fingerprint,
+            comparison_report,
+            comparison_fingerprint,
+            kind,
+            api,
+            json_pointers: prepared.requested.into_iter().collect(),
+            matching_cases,
             changed,
             applied: false,
             added_rule_ids: added,
@@ -285,8 +464,22 @@ struct AssertionEvidence {
 }
 
 #[derive(Debug, Deserialize)]
+struct ComparisonEvidence {
+    version: u8,
+    kind: String,
+    expected_response: String,
+    assertion_mode: String,
+    baseline_recheck: String,
+    policy_fingerprint: String,
+    complete: bool,
+    cases: Vec<AssertionCaseEvidence>,
+}
+
+#[derive(Debug, Deserialize)]
 struct AssertionCaseEvidence {
     case_id: String,
+    #[serde(default)]
+    classification: Option<String>,
     response: Option<ResponseCaseEvidence>,
 }
 
@@ -381,53 +574,6 @@ fn response_rule_map_mut(
         ResponseRuleKind::Dynamic => &mut rules.dynamic,
         ResponseRuleKind::Unordered => &mut rules.unordered,
     }
-}
-
-fn replace_response_rules(
-    original: &str,
-    rules: &super::response::ResponseRules,
-) -> Result<String> {
-    let rendered = render_response_rules(rules)?;
-    let mut offset = 0;
-    let mut start = None;
-    let mut end = original.len();
-    for line in original.split_inclusive('\n') {
-        let trimmed = line.trim_end_matches(['\r', '\n']);
-        if start.is_none() && trimmed.starts_with("response_rules:") && !trimmed.starts_with(' ') {
-            start = Some(offset);
-        } else if start.is_some() && !trimmed.is_empty() && !trimmed.starts_with([' ', '#']) {
-            end = offset;
-            break;
-        }
-        offset += line.len();
-    }
-    let mut updated = String::new();
-    if let Some(start) = start {
-        updated.push_str(&original[..start]);
-        updated.push_str(&rendered);
-        updated.push_str(&original[end..]);
-    } else {
-        updated.push_str(original);
-        if !updated.ends_with('\n') {
-            updated.push('\n');
-        }
-        updated.push_str(&rendered);
-    }
-    let document: super::config::ReplayPolicyDocument =
-        serde_yaml::from_str(&updated).context("generated replay policy is invalid YAML")?;
-    super::config::validate_document(&document).context("generated replay policy is invalid")?;
-    Ok(updated)
-}
-
-#[derive(Serialize)]
-struct ResponseRulesDocument<'a> {
-    response_rules: &'a super::response::ResponseRules,
-}
-
-fn render_response_rules(rules: &super::response::ResponseRules) -> Result<String> {
-    Ok(serde_yaml::to_string(&ResponseRulesDocument {
-        response_rules: rules,
-    })?)
 }
 
 fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {

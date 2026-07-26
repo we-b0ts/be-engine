@@ -5,7 +5,7 @@ response rules.
 
 ## Ownership
 
-Maintain one source-controlled target `.traffic-e2e/replay.yaml`. Every replay
+Maintain one source-controlled target `.traffic-e2e/verification.yaml`. Every replay
 MUST pass it explicitly with `--policy`; do not auto-discover it or duplicate
 rules in shell, application config, target code, or traffic E2E state.
 

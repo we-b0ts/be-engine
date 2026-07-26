@@ -4,13 +4,18 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use hyper::StatusCode;
 use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
-use traffic_e2e::{AppConfig, CompareConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig};
+use traffic_e2e::{
+    AppConfig, ArtifactsConfig, ComparisonRecordingConfig, ComparisonRecordingRunOptions,
+    HttpGatewayReadyConfig, HttpGatewayRuleConfig,
+};
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
 // before the runtime binds it. Keep these integration tests exclusive to close
@@ -18,44 +23,145 @@ use traffic_e2e::{AppConfig, CompareConfig, HttpGatewayReadyConfig, HttpGatewayR
 static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
+async fn duration_stops_cleanly_after_comparison_recording_is_ready() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let baseline = spawn_response_upstream("ready", 2).await;
+    let candidate = spawn_status_sequence_upstream(vec![
+        (StatusCode::SERVICE_UNAVAILABLE, "not-ready"),
+        (StatusCode::OK, "ready"),
+    ])
+    .await;
+    let gateway = free_addr();
+    let run_id = "20260722155959";
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    config.http_gateway.ready = HttpGatewayReadyConfig {
+        enabled: true,
+        path: "/".to_string(),
+        success_status: 200,
+        interval_ms: 100,
+    };
+    let started = Instant::now();
+
+    traffic_e2e::run_comparison_recording_with_duration(
+        config,
+        Some(run_id.to_string()),
+        Some(Duration::from_millis(25)),
+    )
+    .await
+    .unwrap();
+
+    assert!(started.elapsed() >= Duration::from_millis(100));
+    let summary = read_json(&run_dir(&temp, run_id).join("comparison-recording-run.json"));
+    assert_eq!(summary["status"], "completed");
+    assert_eq!(summary["ready"], true);
+}
+
+#[tokio::test]
 async fn returns_baseline_without_waiting_for_candidate_and_records_both() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
-    let baseline = spawn_response_upstream("baseline", 1).await;
+    let baseline = spawn_response_upstream("baseline", 2).await;
     let candidate = spawn_delayed_upstream("candidate", 1, Duration::from_millis(300)).await;
     let gateway = free_addr();
     let run_id = "20260722160000";
-    let config = compare_config(&temp, gateway, baseline, candidate);
-    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording_with_options(
+        config,
+        ComparisonRecordingRunOptions {
+            run_id: Some(run_id.to_string()),
+            duration: None,
+            recording_apis: vec!["GET /api/users/*".parse().unwrap()],
+        },
+    ));
     wait_for_port(gateway).await;
 
     let started = Instant::now();
-    assert!(raw_get(gateway, "/api/users").await.contains("baseline"));
+    assert!(raw_get(gateway, "/api/users/42").await.contains("baseline"));
     assert!(started.elapsed() < Duration::from_millis(250));
+    assert!(raw_get(gateway, "/api/ignored").await.contains("baseline"));
 
-    let group = run_dir(&temp, run_id).join("api/api-users");
+    let group = run_dir(&temp, run_id).join("api/api-users-wildcard");
     let case = wait_for_only_child(&group).await;
     for file in [
         "case-kind.json",
         "request.json",
-        "baseline-response.json",
-        "candidate-response.json",
+        "expected-response.json",
+        "response.json",
     ] {
         assert!(case.join(file).is_file(), "missing {file}");
     }
     assert!(!case.join("comparison.json").exists());
     assert!(!case.join("dependencies.jsonl").exists());
     let kind = read_json(&case.join("case-kind.json"));
-    assert_eq!(kind["kind"], "online_compare");
+    assert_eq!(kind["kind"], "comparison_recording");
     assert_eq!(
-        read_json(&case.join("baseline-response.json"))["status"],
-        200
+        read_json(&case.join("request.json"))["api_pattern"],
+        "/api/users/*"
     );
     assert_eq!(
-        read_json(&case.join("candidate-response.json"))["status"],
+        read_json(&case.join("expected-response.json"))["status"],
         200
     );
+    assert_eq!(read_json(&case.join("response.json"))["status"], 200);
+    assert!(!case.join("expected-response-after.json").exists());
+    assert!(!run_dir(&temp, run_id).join("api/api-ignored").exists());
+    assert_eq!(
+        read_json(&run_dir(&temp, run_id).join("comparison-recording-run.json"))["recording_apis"],
+        serde_json::json!(["GET /api/users/*"])
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn optional_baseline_recheck_records_source_candidate_source_in_order() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let baseline = spawn_status_sequence_upstream(vec![
+        (StatusCode::OK, "baseline-before"),
+        (StatusCode::OK, "baseline-after"),
+    ])
+    .await;
+    let candidate = spawn_response_upstream("candidate", 1).await;
+    let gateway = free_addr();
+    let run_id = "20260722160008";
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    config
+        .comparison_recording
+        .as_mut()
+        .unwrap()
+        .baseline_recheck = true;
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
+    wait_for_port(gateway).await;
+
+    assert!(
+        raw_get(gateway, "/api/recheck")
+            .await
+            .contains("baseline-before")
+    );
+    let case = wait_for_only_child(&run_dir(&temp, run_id).join("api/api-recheck")).await;
+    assert_eq!(
+        recorded_body(&case.join("expected-response.json")),
+        "baseline-before"
+    );
+    assert_eq!(recorded_body(&case.join("response.json")), "candidate");
+    assert_eq!(
+        recorded_body(&case.join("expected-response-after.json")),
+        "baseline-after"
+    );
+    let summary = wait_for_count(
+        &run_dir(&temp, run_id).join("comparison-recording-run.json"),
+        "baseline_recheck_success",
+        1,
+    )
+    .await;
+    assert_eq!(summary["counts"]["candidate_success"], 1);
     task.abort();
 }
 
@@ -69,9 +175,12 @@ async fn case_limit_suppresses_files_but_keeps_mirroring() {
         spawn_counting_upstream(StatusCode::OK, "candidate", 2, None).await;
     let gateway = free_addr();
     let run_id = "20260722160001";
-    let mut config = compare_config(&temp, gateway, baseline, candidate);
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
     config.http_gateway.case_limits.default = 1;
-    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
     wait_for_port(gateway).await;
 
     assert!(raw_get(gateway, "/api/one").await.contains("baseline"));
@@ -81,7 +190,7 @@ async fn case_limit_suppresses_files_but_keeps_mirroring() {
     let _ = wait_for_only_child(&group).await;
     assert_eq!(std::fs::read_dir(&group).unwrap().count(), 1);
     let summary = wait_for_count(
-        &run_dir(&temp, run_id).join("compare-run.json"),
+        &run_dir(&temp, run_id).join("comparison-recording-run.json"),
         "suppressed_by_case_limit",
         1,
     )
@@ -104,9 +213,16 @@ async fn response_limit_preserves_baseline_and_records_partial_response() {
     let candidate = spawn_response_upstream("candidate", 1).await;
     let gateway = free_addr();
     let run_id = "20260722160002";
-    let mut config = compare_config(&temp, gateway, baseline, candidate);
-    config.compare.as_mut().unwrap().max_response_bytes = 8;
-    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    config
+        .comparison_recording
+        .as_mut()
+        .unwrap()
+        .max_response_bytes = 8;
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
     wait_for_port(gateway).await;
 
     assert!(
@@ -115,7 +231,7 @@ async fn response_limit_preserves_baseline_and_records_partial_response() {
             .contains("baseline-too-large")
     );
     let case = wait_for_only_child(&run_dir(&temp, run_id).join("api/api-large")).await;
-    let baseline = read_json(&case.join("baseline-response.json"));
+    let baseline = read_json(&case.join("expected-response.json"));
     assert_eq!(baseline["status"], 200);
     assert_eq!(baseline["body"]["original_len"], 18);
     assert_eq!(baseline["body"]["stored_len"], 8);
@@ -130,7 +246,7 @@ async fn response_limit_preserves_baseline_and_records_partial_response() {
 }
 
 #[tokio::test]
-async fn unmatched_request_bypasses_compare_request_limit() {
+async fn non_read_request_is_never_mirrored() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
@@ -140,14 +256,21 @@ async fn unmatched_request_bypasses_compare_request_limit() {
         spawn_counting_upstream(StatusCode::OK, "candidate", 1, None).await;
     let gateway = free_addr();
     let run_id = "20260722160007";
-    let mut config = compare_config(&temp, gateway, baseline, candidate);
-    config.compare.as_mut().unwrap().max_request_bytes = 4;
-    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    config
+        .comparison_recording
+        .as_mut()
+        .unwrap()
+        .max_request_bytes = 4;
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
     wait_for_port(gateway).await;
 
     let response = raw_request(
         gateway,
-        b"POST /health HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\nConnection: close\r\n\r\n12345",
+        b"POST /api/write HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\nConnection: close\r\n\r\n12345",
     )
     .await;
     assert!(response.contains("baseline"));
@@ -171,16 +294,19 @@ async fn overload_forwards_only_to_baseline() {
     .await;
     let gateway = free_addr();
     let run_id = "20260722160003";
-    let mut config = compare_config(&temp, gateway, baseline, candidate);
-    config.compare.as_mut().unwrap().max_in_flight = 1;
-    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    config.comparison_recording.as_mut().unwrap().max_in_flight = 1;
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
     wait_for_port(gateway).await;
 
     assert!(raw_get(gateway, "/api/one").await.contains("baseline"));
     assert!(raw_get(gateway, "/api/two").await.contains("baseline"));
     wait_for_counter(&candidate_requests, 1).await;
     let summary = wait_for_count(
-        &run_dir(&temp, run_id).join("compare-run.json"),
+        &run_dir(&temp, run_id).join("comparison-recording-run.json"),
         "overloaded",
         1,
     )
@@ -201,9 +327,16 @@ async fn request_limit_rejects_before_either_upstream() {
         spawn_counting_upstream(StatusCode::OK, "candidate", 1, None).await;
     let gateway = free_addr();
     let run_id = "20260722160004";
-    let mut config = compare_config(&temp, gateway, baseline, candidate);
-    config.compare.as_mut().unwrap().max_request_bytes = 4;
-    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    config
+        .comparison_recording
+        .as_mut()
+        .unwrap()
+        .max_request_bytes = 4;
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
     wait_for_port(gateway).await;
 
     let response = raw_request(
@@ -216,7 +349,7 @@ async fn request_limit_rejects_before_either_upstream() {
     assert_eq!(baseline_requests.load(Ordering::SeqCst), 0);
     assert_eq!(candidate_requests.load(Ordering::SeqCst), 0);
     let _ = wait_for_count(
-        &run_dir(&temp, run_id).join("compare-run.json"),
+        &run_dir(&temp, run_id).join("comparison-recording-run.json"),
         "request_too_large",
         1,
     )
@@ -235,15 +368,18 @@ async fn unmatched_request_forwards_only_to_baseline() {
         spawn_counting_upstream(StatusCode::OK, "candidate", 1, None).await;
     let gateway = free_addr();
     let run_id = "20260722160005";
-    let config = compare_config(&temp, gateway, baseline, candidate);
-    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
     wait_for_port(gateway).await;
 
     assert!(raw_get(gateway, "/health").await.contains("baseline"));
     wait_for_counter(&baseline_requests, 1).await;
     assert_eq!(candidate_requests.load(Ordering::SeqCst), 0);
     let summary = wait_for_count(
-        &run_dir(&temp, run_id).join("compare-run.json"),
+        &run_dir(&temp, run_id).join("comparison-recording-run.json"),
         "unmatched",
         1,
     )
@@ -263,14 +399,17 @@ async fn not_ready_request_forwards_only_to_baseline() {
         spawn_counting_upstream(StatusCode::SERVICE_UNAVAILABLE, "candidate", 2, None).await;
     let gateway = free_addr();
     let run_id = "20260722160006";
-    let mut config = compare_config(&temp, gateway, baseline, candidate);
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
     config.http_gateway.ready = HttpGatewayReadyConfig {
         enabled: true,
         path: "/".to_string(),
         success_status: 200,
         interval_ms: 1_000,
     };
-    let task = tokio::spawn(traffic_e2e::run_compare(config, Some(run_id.to_string())));
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
     wait_for_port(gateway).await;
     wait_for_counter(&candidate_requests, 1).await;
 
@@ -278,7 +417,7 @@ async fn not_ready_request_forwards_only_to_baseline() {
     wait_for_counter(&baseline_requests, 2).await;
     assert_eq!(candidate_requests.load(Ordering::SeqCst), 1);
     let summary = wait_for_count(
-        &run_dir(&temp, run_id).join("compare-run.json"),
+        &run_dir(&temp, run_id).join("comparison-recording-run.json"),
         "not_ready",
         1,
     )
@@ -291,30 +430,32 @@ fn install_crypto() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
-fn compare_config(
+fn comparison_recording_config(
     temp: &tempfile::TempDir,
     gateway: SocketAddr,
     baseline: SocketAddr,
     candidate: SocketAddr,
 ) -> AppConfig {
     let mut config = AppConfig {
-        compare: Some(CompareConfig {
-            baseline_upstream: format!("http://{baseline}"),
+        comparison_recording: Some(ComparisonRecordingConfig {
             candidate_upstream: format!("http://{candidate}"),
             upstream_timeout_ms: 2_000,
             summary_flush_interval_ms: 10,
             ..Default::default()
         }),
+        artifacts: Some(ArtifactsConfig {
+            root_dir: temp.path().join("artifacts"),
+        }),
         ..Default::default()
     };
     config.http_gateway.listen = gateway;
+    config.http_gateway.matched_upstream = format!("http://{baseline}");
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
         name: Some("api".to_string()),
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/api".to_string()],
         ..Default::default()
     }];
-    config.recording.output_dir = temp.path().join("recordings");
     config
 }
 
@@ -328,6 +469,27 @@ async fn spawn_delayed_upstream(body: &'static str, count: usize, delay: Duratio
     spawn_counting_upstream(StatusCode::OK, body, count, Some(delay))
         .await
         .0
+}
+
+async fn spawn_status_sequence_upstream(responses: Vec<(StatusCode, &'static str)>) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        for (status, body) in responses {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 2048];
+            let _ = stream.read(&mut buffer).await.unwrap();
+            let response = format!(
+                "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                status.as_u16(),
+                status.canonical_reason().unwrap_or("Unknown"),
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    address
 }
 
 async fn spawn_counting_upstream(
@@ -436,9 +598,23 @@ async fn wait_for_count(path: &Path, field: &str, expected: u64) -> Value {
 }
 
 fn run_dir(temp: &tempfile::TempDir, run_id: &str) -> PathBuf {
-    temp.path().join("recordings/comparisons").join(run_id)
+    temp.path()
+        .join("artifacts/comparison-recordings")
+        .join(run_id)
 }
 
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+fn recorded_body(path: &Path) -> String {
+    let response = read_json(path);
+    let body = &response["body"];
+    match body["encoding"].as_str().unwrap() {
+        "utf8" => body["data"].as_str().unwrap().to_string(),
+        "base64" => {
+            String::from_utf8(STANDARD.decode(body["data"].as_str().unwrap()).unwrap()).unwrap()
+        }
+        encoding => panic!("unexpected recording body encoding {encoding}"),
+    }
 }

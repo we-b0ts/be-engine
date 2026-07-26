@@ -71,7 +71,7 @@ pub(super) async fn run(command: WorkflowCommand) -> Result<()> {
             let report = run_e2e_api(context(args.context), &args.api).await?;
             print_json(&report)?;
             ensure!(
-                report.successful,
+                report.passed,
                 "focused API replay finished with status {}",
                 report.status
             );
@@ -81,7 +81,7 @@ pub(super) async fn run(command: WorkflowCommand) -> Result<()> {
             let report = run_e2e_round(context(args)).await?;
             print_json(&report)?;
             ensure!(
-                report.successful,
+                report.passed,
                 "E2E run finished with status {}",
                 report.status
             );

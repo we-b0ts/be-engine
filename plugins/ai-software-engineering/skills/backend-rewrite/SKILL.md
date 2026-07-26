@@ -77,8 +77,23 @@ another task-service action.
 7. Repeat focused implementation and verification only until the selected
    group passes. Run the required complete round after shared
    behavior-affecting changes.
-8. Review module boundaries, run all repository-required gates, and preserve
+8. After the affected replay E2E scope passes, invoke the repository's
+   `scripts/start-recording-comparison` with a new explicit run ID, explicit
+   duration, and the same repeatable `--api` scope used for recording when
+   applicable. Preserve any Platform wrapper-owned shared Breeze and
+   `--brz-no-fallback` behavior. Run offline `traffic-e2e compare` on that
+   exact finalized run. Treat only its per-API passed result as current
+   validation success. Delegate
+   candidate-defect, source-drift, and non-determinism diagnosis to
+   `traffic-e2e`; after any code or policy repair, pass affected E2E again and
+   create a new comparison recording.
+9. Review module boundaries, run all repository-required gates, and preserve
    the exact traffic-e2e completion status and remaining blockers.
+
+If the same root cause blocks three consecutive repair cycles without new
+evidence or meaningful progress, stop the loop and report `blocked` with the
+exact E2E and comparison artifacts. Report `incomplete` instead when work can
+continue but a required gate or external observation is still missing.
 
 ## Delivery
 

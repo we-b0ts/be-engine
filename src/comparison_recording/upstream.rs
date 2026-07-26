@@ -11,8 +11,8 @@ use hyper::body::Incoming;
 use hyper::{HeaderMap, Method, Response, StatusCode, Uri};
 use tracing::info;
 
-use super::CompareRuntime;
-use super::model::{CompareBodyCapture, CompareResponseRecord};
+use super::model::{ComparisonRecordingBody, ComparisonRecordingResponse};
+use super::runtime::ComparisonRecordingRuntime;
 use crate::config::HttpGatewayReadyConfig;
 use crate::gateway::http::transport::{
     GatewayBody, build_downstream_response, build_upstream_request, build_upstream_uri,
@@ -29,7 +29,7 @@ pub(super) enum UpstreamErrorKind {
 
 #[derive(Clone)]
 pub(super) struct UpstreamCapture {
-    pub(super) record: CompareResponseRecord,
+    pub(super) record: ComparisonRecordingResponse,
     pub(super) downstream: Option<(StatusCode, HeaderMap, Bytes)>,
     pub(super) error_kind: Option<UpstreamErrorKind>,
 }
@@ -57,7 +57,7 @@ pub(super) enum ResponseDisposition {
 }
 
 pub(super) async fn fetch_upstream(
-    runtime: &CompareRuntime,
+    runtime: &ComparisonRecordingRuntime,
     upstream: &str,
     method: &Method,
     uri: &Uri,
@@ -83,7 +83,7 @@ pub(super) async fn fetch_upstream(
         let response_headers = response.headers().clone();
         let body = collect_response(
             response.into_body(),
-            runtime.compare.max_response_bytes,
+            runtime.comparison_recording.max_response_bytes,
             matches!(disposition, ResponseDisposition::Downstream),
         )
         .await?;
@@ -97,7 +97,7 @@ pub(super) async fn fetch_upstream(
         })
     };
     match tokio::time::timeout(
-        Duration::from_millis(runtime.compare.upstream_timeout_ms),
+        Duration::from_millis(runtime.comparison_recording.upstream_timeout_ms),
         operation,
     )
     .await
@@ -111,7 +111,8 @@ pub(super) async fn fetch_upstream(
             truncated,
         })) => UpstreamCapture {
             record: if truncated {
-                CompareResponseRecord {
+                ComparisonRecordingResponse {
+                    version: 1,
                     timestamp,
                     upstream: upstream.to_string(),
                     status: Some(status.as_u16()),
@@ -121,7 +122,10 @@ pub(super) async fn fetch_upstream(
                     )),
                     body: Some(body_capture(&captured, true, Some(original_len))),
                     duration_ms: started.elapsed().as_millis(),
-                    error: Some("response body exceeded compare.max_response_bytes".to_string()),
+                    error: Some(
+                        "response body exceeded comparison_recording.max_response_bytes"
+                            .to_string(),
+                    ),
                 }
             } else {
                 response_record(
@@ -188,15 +192,16 @@ async fn collect_response(
 }
 
 fn response_record(
-    runtime: &CompareRuntime,
+    runtime: &ComparisonRecordingRuntime,
     timestamp: chrono::DateTime<Utc>,
     upstream: &str,
     status: StatusCode,
     headers: &HeaderMap,
     body: &[u8],
     started: Instant,
-) -> CompareResponseRecord {
-    CompareResponseRecord {
+) -> ComparisonRecordingResponse {
+    ComparisonRecordingResponse {
+        version: 1,
         timestamp,
         upstream: upstream.to_string(),
         status: Some(status.as_u16()),
@@ -217,7 +222,8 @@ pub(super) fn failed_capture(
     kind: UpstreamErrorKind,
 ) -> UpstreamCapture {
     UpstreamCapture {
-        record: CompareResponseRecord {
+        record: ComparisonRecordingResponse {
+            version: 1,
             timestamp: Utc::now(),
             upstream: upstream.to_string(),
             status: None,
@@ -280,8 +286,8 @@ pub(super) fn body_capture(
     bytes: &[u8],
     truncated: bool,
     original_len: Option<usize>,
-) -> CompareBodyCapture {
-    CompareBodyCapture {
+) -> ComparisonRecordingBody {
+    ComparisonRecordingBody {
         encoding: "base64",
         original_len,
         stored_len: bytes.len(),
@@ -290,16 +296,21 @@ pub(super) fn body_capture(
     }
 }
 
-pub(super) async fn run_ready_probe(runtime: CompareRuntime) {
+pub(super) async fn run_ready_probe(runtime: ComparisonRecordingRuntime) {
     let ready = runtime.gateway.ready.clone();
     let mut interval = tokio::time::interval(Duration::from_millis(ready.interval_ms.max(1)));
     loop {
         interval.tick().await;
-        let baseline = probe_once(&runtime, &runtime.compare.baseline_upstream, &ready);
-        let candidate = probe_once(&runtime, &runtime.compare.candidate_upstream, &ready);
+        let baseline = probe_once(&runtime, &runtime.baseline_upstream, &ready);
+        let candidate = probe_once(
+            &runtime,
+            &runtime.comparison_recording.candidate_upstream,
+            &ready,
+        );
         if matches!(tokio::join!(baseline, candidate), (Ok(true), Ok(true))) {
             runtime.ready.store(true, Ordering::Release);
             runtime.store.summary().set_ready().await;
+            runtime.ready_notify.notify_waiters();
             info!("baseline and candidate ready probes succeeded");
             return;
         }
@@ -307,7 +318,7 @@ pub(super) async fn run_ready_probe(runtime: CompareRuntime) {
 }
 
 async fn probe_once(
-    runtime: &CompareRuntime,
+    runtime: &ComparisonRecordingRuntime,
     upstream: &str,
     ready: &HttpGatewayReadyConfig,
 ) -> Result<bool> {

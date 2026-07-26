@@ -7,7 +7,7 @@ use super::model::RunStatus;
 
 pub(super) fn status_label(status: RunStatus) -> &'static str {
     match status {
-        RunStatus::Successful => "successful",
+        RunStatus::Successful => "passed",
         RunStatus::Failed => "failed",
         RunStatus::Interrupted => "interrupted",
         RunStatus::Running => "running",

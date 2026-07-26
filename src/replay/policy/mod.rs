@@ -13,9 +13,9 @@ mod tests;
 pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
 pub(in crate::replay) use config::{fingerprint, load_replay_policy};
 pub use feedback::{
-    DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
-    ResponseRuleFeedback, ResponseRulePlan, ResponseRuleReport, plan_dynamic_response_rule,
-    plan_response_rule,
+    ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
+    DynamicResponseRuleReport, ResponseRuleFeedback, ResponseRulePlan, ResponseRuleReport,
+    plan_comparison_response_rule, plan_dynamic_response_rule, plan_response_rule,
 };
 pub use initialization::{
     ReplayPolicyInitOptions, ReplayPolicyInitResult, initialize_replay_policy,

@@ -8,10 +8,11 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
 
 mod allowed_unused_http;
+mod artifacts;
 mod background_dependencies;
 mod background_feedback;
 mod case_limits;
-mod compare;
+mod comparison_recording;
 mod dns;
 pub(crate) mod edit;
 mod feedback;
@@ -20,19 +21,19 @@ mod http_response_rewrite;
 mod initialization;
 mod recording;
 mod rule_document;
-mod verified_excludes;
 
 pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     plan_allowed_unused_http_hosts,
 };
+pub use artifacts::ArtifactsConfig;
 pub use background_dependencies::BackgroundDependencyRuleConfig;
 pub use background_feedback::{
     BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
     plan_background_dependency,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
-pub use compare::CompareConfig;
+pub use comparison_recording::ComparisonRecordingConfig;
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
@@ -50,17 +51,12 @@ pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     TrafficJsonlMode,
 };
-pub use verified_excludes::{
-    VerifiedApiExclude, VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus,
-    VerifiedApiExcludeFeedback, VerifiedApiExcludePlan, VerifiedApiExcludeReport,
-    VerifiedApiExcludesConfig, VerifiedApiVerification, ensure_verified_api_exclude,
-    plan_verified_api_exclude,
-};
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
-    pub compare: Option<CompareConfig>,
+    pub artifacts: Option<ArtifactsConfig>,
+    pub comparison_recording: Option<ComparisonRecordingConfig>,
     pub dns_mock: DnsMockConfig,
     pub tcp_gateway: TcpGatewayConfig,
     pub udp_gateway: UdpGatewayConfig,
@@ -139,7 +135,6 @@ pub struct HttpGatewayConfig {
     pub preserve_host: bool,
     pub ready: HttpGatewayReadyConfig,
     pub case_limits: HttpGatewayCaseLimitsConfig,
-    pub verified_excludes: VerifiedApiExcludesConfig,
     pub exclude_rules: Vec<HttpGatewayRuleConfig>,
     pub rules: Vec<HttpGatewayRuleConfig>,
 }
@@ -203,30 +198,31 @@ impl AppConfig {
         Ok(config)
     }
 
-    pub fn load_compare(path: impl AsRef<Path>) -> Result<Self> {
+    pub fn load_comparison_recording(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
         let config: Self = toml::from_str(&raw)
             .with_context(|| format!("failed to parse config {}", path.display()))?;
         config
-            .validate_compare()
-            .with_context(|| format!("invalid compare config {}", path.display()))?;
+            .validate_comparison_recording()
+            .with_context(|| format!("invalid comparison recording config {}", path.display()))?;
         Ok(config)
     }
 
-    pub fn validate_compare(&self) -> Result<()> {
-        let compare = self
-            .compare
-            .as_ref()
-            .context("compare command requires a [compare] configuration section")?;
-        compare.validate(&self.http_gateway)?;
+    pub fn validate_comparison_recording(&self) -> Result<()> {
+        self.validate_artifacts()?;
+        let comparison_recording = self.comparison_recording.as_ref().context(
+            "record-comparison command requires a [comparison_recording] configuration section",
+        )?;
+        comparison_recording.validate(&self.http_gateway)?;
         self.http_gateway
             .case_limits
             .validate(&self.http_gateway.rules)
     }
 
     pub fn validate(&self) -> Result<()> {
+        self.validate_artifacts()?;
         self.dns_mock.validate()?;
         self.recording.validate()?;
         self.http_response_rewrite.validate()?;
@@ -235,12 +231,6 @@ impl AppConfig {
         self.http_gateway
             .case_limits
             .validate(&self.http_gateway.rules)?;
-        self.http_gateway
-            .verified_excludes
-            .validate(&self.http_gateway.rules)?;
-        if let Some(compare) = &self.compare {
-            compare.validate(&self.http_gateway)?;
-        }
         if self.tcp_gateway.backlog == 0 || self.tcp_gateway.backlog > i32::MAX as u32 {
             bail!("tcp_gateway.backlog must be between 1 and {}", i32::MAX);
         }
@@ -252,6 +242,27 @@ impl AppConfig {
             bail!(
                 "http_response_rewrite requires dns_mock.enabled, tcp_gateway.enabled, and tcp_gateway.record_http"
             );
+        }
+        Ok(())
+    }
+
+    pub fn recording_output_dir(&self) -> PathBuf {
+        self.artifacts
+            .as_ref()
+            .map(|artifacts| artifacts.root_dir.join("recordings"))
+            .unwrap_or_else(|| self.recording.output_dir.clone())
+    }
+
+    pub fn comparison_recording_output_dir(&self) -> PathBuf {
+        self.artifacts
+            .as_ref()
+            .map(|artifacts| artifacts.root_dir.join("comparison-recordings"))
+            .unwrap_or_else(|| self.recording.output_dir.join("comparison-recordings"))
+    }
+
+    fn validate_artifacts(&self) -> Result<()> {
+        if let Some(artifacts) = &self.artifacts {
+            artifacts.validate()?;
         }
         Ok(())
     }
@@ -322,7 +333,6 @@ impl Default for HttpGatewayConfig {
             preserve_host: true,
             ready: HttpGatewayReadyConfig::default(),
             case_limits: HttpGatewayCaseLimitsConfig::default(),
-            verified_excludes: VerifiedApiExcludesConfig::default(),
             exclude_rules: Vec::new(),
             rules: Vec::new(),
         }
@@ -404,13 +414,27 @@ mod tests {
     }
 
     #[test]
-    fn loads_example_compare_config() {
+    fn loads_example_comparison_recording_config() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
-            .join("compare.example.toml");
-        let config = AppConfig::load_compare(path).unwrap();
-        assert!(config.compare.is_some());
+            .join("recorder.example.toml");
+        let config = AppConfig::load_comparison_recording(path).unwrap();
+        assert!(
+            !config
+                .comparison_recording
+                .as_ref()
+                .unwrap()
+                .baseline_recheck
+        );
         assert_eq!(config.http_gateway.rules.len(), 1);
+        assert_eq!(
+            config.recording_output_dir(),
+            PathBuf::from("./.traffic-e2e/artifacts/recordings")
+        );
+        assert_eq!(
+            config.comparison_recording_output_dir(),
+            PathBuf::from("./.traffic-e2e/artifacts/comparison-recordings")
+        );
     }
 
     #[test]
@@ -449,6 +473,51 @@ mod tests {
             RecordingAccessPolicy::Unrestricted
         );
         assert!(config.recording.access_rules.is_empty());
+        assert!(config.artifacts.is_none());
+        assert_eq!(config.recording_output_dir(), PathBuf::from("./recordings"));
+        assert_eq!(
+            config.comparison_recording_output_dir(),
+            PathBuf::from("./recordings/comparison-recordings")
+        );
+    }
+
+    #[test]
+    fn validates_comparison_recording_configuration_only_for_that_mode() {
+        let mut config = AppConfig {
+            comparison_recording: Some(ComparisonRecordingConfig::default()),
+            ..Default::default()
+        };
+        config
+            .comparison_recording
+            .as_mut()
+            .unwrap()
+            .candidate_upstream = config.http_gateway.matched_upstream.clone();
+        config.http_gateway.rules = vec![HttpGatewayRuleConfig {
+            name: Some("api".to_string()),
+            methods: vec!["GET".to_string()],
+            ..Default::default()
+        }];
+
+        config.validate().unwrap();
+        assert!(config.validate_comparison_recording().is_err());
+    }
+
+    #[test]
+    fn rejects_empty_artifact_root() {
+        let config = AppConfig {
+            artifacts: Some(ArtifactsConfig {
+                root_dir: PathBuf::new(),
+            }),
+            ..Default::default()
+        };
+
+        let error = config.validate().unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("artifacts.root_dir must not be empty")
+        );
     }
 
     #[test]
@@ -527,11 +596,6 @@ mod tests {
             matched_upstream = "http://127.0.0.1:9001"
             fallback_upstream = "http://127.0.0.1:9002"
 
-            [http_gateway.verified_excludes]
-            apis = [
-              { rule = "record-api", method = "GET", path_pattern = "/api/users/*" },
-            ]
-
             [http_gateway.ready]
             enabled = true
             path = "/"
@@ -566,7 +630,6 @@ mod tests {
         assert_eq!(config.http_gateway.ready.success_status, 200);
         assert_eq!(config.http_gateway.ready.interval_ms, 1000);
         assert_eq!(config.http_gateway.rules.len(), 2);
-        assert_eq!(config.http_gateway.verified_excludes.apis.len(), 1);
         assert_eq!(config.http_gateway.exclude_rules.len(), 1);
         assert_eq!(
             config.http_gateway.exclude_rules[0].name.as_deref(),

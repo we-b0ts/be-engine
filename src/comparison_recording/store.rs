@@ -7,8 +7,8 @@ use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
-use super::model::{CaseKind, CompareCase};
-use super::summary::CompareSummary;
+use super::model::{CaseKind, ComparisonRecordingCase};
+use super::summary::ComparisonRecordingSummary;
 use crate::recorder::sanitize_path_component;
 
 #[derive(Default)]
@@ -18,27 +18,33 @@ struct Quota {
 }
 
 #[derive(Clone)]
-pub(super) struct CompareStore {
+pub(super) struct ComparisonRecordingStore {
     run_dir: Arc<PathBuf>,
     quotas: Arc<Mutex<HashMap<(String, String), Quota>>>,
-    summary: CompareSummary,
+    summary: ComparisonRecordingSummary,
 }
 
 pub(super) struct Reservation {
     key: (String, String),
 }
 
-impl CompareStore {
-    pub(super) async fn create(output: &Path, run_id: &str) -> Result<Self> {
-        let root = output.join("comparisons");
-        tokio::fs::create_dir_all(&root)
+impl ComparisonRecordingStore {
+    pub(super) async fn create(
+        output_dir: &Path,
+        run_id: &str,
+        recording_apis: Vec<String>,
+    ) -> Result<Self> {
+        tokio::fs::create_dir_all(output_dir)
             .await
-            .with_context(|| format!("failed to create {}", root.display()))?;
-        let run_dir = root.join(run_id);
-        tokio::fs::create_dir(&run_dir)
-            .await
-            .with_context(|| format!("failed to create compare run {}", run_dir.display()))?;
-        let summary = CompareSummary::new(run_id.to_string(), &run_dir);
+            .with_context(|| format!("failed to create {}", output_dir.display()))?;
+        let run_dir = output_dir.join(run_id);
+        tokio::fs::create_dir(&run_dir).await.with_context(|| {
+            format!(
+                "failed to create comparison recording run {}",
+                run_dir.display()
+            )
+        })?;
+        let summary = ComparisonRecordingSummary::new(run_id.to_string(), &run_dir, recording_apis);
         summary.flush().await?;
         Ok(Self {
             run_dir: Arc::new(run_dir),
@@ -47,7 +53,7 @@ impl CompareStore {
         })
     }
 
-    pub(super) fn summary(&self) -> &CompareSummary {
+    pub(super) fn summary(&self) -> &ComparisonRecordingSummary {
         &self.summary
     }
 
@@ -69,20 +75,20 @@ impl CompareStore {
                 std::fs::rename(&source, &target)?;
                 std::fs::write(
                     target.join("recording-error.json"),
-                    b"{\"error\":\"compare case remained in staging during shutdown\"}\n",
+                    b"{\"error\":\"comparison recording case remained in staging during shutdown\"}\n",
                 )?;
             }
             Ok::<usize, anyhow::Error>(leaves.len())
         })
         .await
-        .context("unfinished compare case cleanup task panicked")??;
+        .context("unfinished comparison recording case cleanup task panicked")??;
         if unfinished > 0 {
             self.summary
                 .update(|counts| counts.failed += unfinished)
                 .await;
             self.summary
                 .record_error(format!(
-                    "{unfinished} compare case(s) remained in staging during shutdown"
+                    "{unfinished} comparison recording case(s) remained in staging during shutdown"
                 ))
                 .await;
         }
@@ -112,7 +118,11 @@ impl CompareStore {
         Some(Reservation { key })
     }
 
-    pub(super) async fn publish(&self, case: &CompareCase, reservation: Reservation) -> Result<()> {
+    pub(super) async fn publish(
+        &self,
+        case: &ComparisonRecordingCase,
+        reservation: Reservation,
+    ) -> Result<()> {
         let result = self.write_and_publish(case).await;
         match result {
             Ok(()) => {
@@ -125,7 +135,10 @@ impl CompareStore {
             }
             Err(error) => {
                 self.release(reservation).await;
-                let message = format!("compare case {} failed to publish: {error:#}", case.id);
+                let message = format!(
+                    "comparison recording case {} failed to publish: {error:#}",
+                    case.id
+                );
                 let _ = self.move_to_failed(case, &message).await;
                 self.summary.update(|counts| counts.failed += 1).await;
                 self.summary
@@ -137,25 +150,30 @@ impl CompareStore {
         }
     }
 
-    async fn write_and_publish(&self, case: &CompareCase) -> Result<()> {
+    async fn write_and_publish(&self, case: &ComparisonRecordingCase) -> Result<()> {
         let staging = self.case_path("staging", case);
         tokio::fs::create_dir_all(&staging)
             .await
             .with_context(|| format!("failed to create {}", staging.display()))?;
         write_json(&staging.join("case-kind.json"), &CaseKind::default()).await?;
         write_json(&staging.join("request.json"), &case.request).await?;
-        write_json(&staging.join("baseline-response.json"), &case.baseline).await?;
-        write_json(&staging.join("candidate-response.json"), &case.candidate).await?;
+        write_json(&staging.join("expected-response.json"), &case.baseline).await?;
+        write_json(&staging.join("response.json"), &case.candidate).await?;
+        if let Some(recheck) = &case.baseline_recheck {
+            write_json(&staging.join("expected-response-after.json"), recheck).await?;
+        }
         sync_dir(&staging).await?;
 
         let published = self.published_path(case);
-        let parent = published.parent().context("compare case has no parent")?;
+        let parent = published
+            .parent()
+            .context("comparison recording case has no parent")?;
         tokio::fs::create_dir_all(parent).await?;
         tokio::fs::rename(&staging, &published)
             .await
             .with_context(|| {
                 format!(
-                    "failed to publish compare case from {} to {}",
+                    "failed to publish comparison recording case from {} to {}",
                     staging.display(),
                     published.display()
                 )
@@ -163,7 +181,7 @@ impl CompareStore {
         sync_dir(parent).await
     }
 
-    async fn move_to_failed(&self, case: &CompareCase, message: &str) -> Result<()> {
+    async fn move_to_failed(&self, case: &ComparisonRecordingCase, message: &str) -> Result<()> {
         let staging = self.case_path("staging", case);
         let failed = self.case_path("failed", case);
         if let Some(parent) = failed.parent() {
@@ -184,14 +202,14 @@ impl CompareStore {
         .await
     }
 
-    fn published_path(&self, case: &CompareCase) -> PathBuf {
+    fn published_path(&self, case: &ComparisonRecordingCase) -> PathBuf {
         self.run_dir
             .join(sanitize_path_component(&case.rule))
             .join(sanitize_path_component(&case.group))
             .join(case.id.to_string())
     }
 
-    fn case_path(&self, area: &str, case: &CompareCase) -> PathBuf {
+    fn case_path(&self, area: &str, case: &ComparisonRecordingCase) -> PathBuf {
         self.run_dir
             .join(area)
             .join(sanitize_path_component(&case.rule))
@@ -203,7 +221,7 @@ impl CompareStore {
         let mut quotas = self.quotas.lock().await;
         let quota = quotas
             .get_mut(&reservation.key)
-            .expect("compare reservation quota exists");
+            .expect("comparison recording reservation quota exists");
         quota.reserved -= 1;
         quota.published += 1;
     }
@@ -216,8 +234,8 @@ impl CompareStore {
 }
 
 async fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
-    let mut payload =
-        serde_json::to_vec_pretty(value).context("failed to serialize compare artifact")?;
+    let mut payload = serde_json::to_vec_pretty(value)
+        .context("failed to serialize comparison recording artifact")?;
     payload.push(b'\n');
     let mut file = tokio::fs::OpenOptions::new()
         .create_new(true)
@@ -238,7 +256,7 @@ async fn sync_dir(path: &Path) -> Result<()> {
             .with_context(|| format!("failed to sync directory {}", path.display()))
     })
     .await
-    .context("compare directory sync task panicked")?
+    .context("comparison recording directory sync task panicked")?
 }
 
 fn collect_leaf_directories(root: &Path, directory: &Path, out: &mut Vec<PathBuf>) -> Result<()> {

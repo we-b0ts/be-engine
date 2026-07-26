@@ -1,6 +1,6 @@
 /target/
 /data/
+/.traffic-e2e/artifacts/
 /recordings/
-/comparisons/
 *.swp
 .agents

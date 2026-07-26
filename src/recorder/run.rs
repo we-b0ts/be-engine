@@ -18,6 +18,7 @@ struct RecorderRunReport {
     run_id: String,
     status: &'static str,
     output_dir: String,
+    recording_apis: Vec<String>,
     access_policy: &'static str,
     traffic_jsonl: &'static str,
     published_cases: usize,
@@ -28,6 +29,7 @@ struct RecorderRunReport {
 #[derive(Debug, Default)]
 pub(crate) struct RecorderRunState {
     pub(crate) run_id: String,
+    pub(crate) recording_apis: Vec<String>,
     pub(crate) published_cases: usize,
     pub(crate) published_cases_by_group: BTreeMap<(String, Option<String>), usize>,
     pub(crate) failed_cases: usize,
@@ -405,6 +407,7 @@ impl Recorder {
             run_id: state.run_id.clone(),
             status,
             output_dir: self.run_dir.display().to_string(),
+            recording_apis: state.recording_apis.clone(),
             access_policy: self.access_policy.as_str(),
             traffic_jsonl: self.traffic_jsonl.as_str(),
             published_cases: state.published_cases,

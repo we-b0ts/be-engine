@@ -1,6 +1,6 @@
 ---
 name: traffic-e2e
-description: "Operate traffic-e2e for managed recording, published case inspection and grouping, genuine dependency replay, response verification, failure diagnosis, and recorder feedback. Use when recording application traffic, replaying cases, verifying software behavior against recorded contracts, diagnosing failures, or maintaining evidence-driven traffic-e2e policy. Do not invoke for repository initialization, ordinary project initialization, merely developing or reviewing the traffic-e2e implementation, or general backend coding."
+description: "Operate traffic-e2e for managed recording, published case inspection and grouping, genuine dependency replay, response verification, comparison recording verification, failure diagnosis, and recorder feedback. Use when recording application traffic, replaying cases, verifying software behavior against recorded contracts or live comparison evidence, diagnosing failures, or maintaining evidence-driven traffic-e2e policy. Do not invoke for repository initialization, ordinary project initialization, merely developing or reviewing the traffic-e2e implementation, or general backend coding."
 ---
 
 # Traffic E2E
@@ -50,11 +50,13 @@ coverage.
   replay execution or low-level lifecycle diagnosis.
 - Read [aggregate-report.md](references/aggregate-report.md) for low-level
   collection, multi-case, or multi-session aggregation.
-- Read [verified-excludes.md](references/verified-excludes.md) only after final
-  aggregate and response assertion evidence exists.
 - Read [failure-diagnosis.md](references/failure-diagnosis.md) after the first
   failed attempt. This is REQUIRED before changing target behavior, replay
   policy, or recorder attribution for an unused case dependency.
+- Read
+  [comparison-verification.md](references/comparison-verification.md) before
+  recording or evaluating baseline/candidate comparison traffic. This phase
+  starts only after the affected replay E2E scope passes.
 
 ## Configuration Interfaces
 
@@ -64,11 +66,46 @@ replay <plan|apply> <strategy>`. Use `apply` for normal automation; it performs
 the same current-state planning and evidence validation before its atomic
 write. Use `plan` only when diagnostic output is useful.
 
+## Rewrite Verification Loop
+
+When repository initialization provides source-controlled recording scripts,
+use them as the normal orchestration boundary. Do not reconstruct their
+container, source-startup, candidate-startup, or cleanup commands in the task.
+Generated scripts default to 60 seconds when a caller omits the duration, but
+AI and automated invocations must always pass `--duration-seconds 60` or
+another positive integer.
+
+1. Call `scripts/start-recording` to collect genuine frontend requests,
+   expected responses, and case-owned dependencies. Pass a unique UTC
+   `--run-id YYYYMMDDHHMMSS`, resolve that exact finalized recording run, and
+   never select a run merely because it is newest. When work is scoped to
+   known APIs, repeat `--api 'METHOD /path-or-pattern'`; this is a run-local
+   filter and must not be converted into a recorder config edit.
+2. Use that immutable run with the standard `prepare` and `run-api` workflow.
+   Implement or fix the target until the affected genuine dependency replay E2E
+   scope passes.
+3. Only then call `scripts/start-recording-comparison` to collect read-only
+   frontend traffic against the normally running source and candidate. Pass a
+   new explicit run ID and the same affected `--api` selectors. For a Platform
+   wrapper, preserve its single shared Breeze topology and
+   `--brz-no-fallback` behavior. Then run offline `traffic-e2e compare` on that
+   exact finalized comparison run. Only the comparison report's per-API passed
+   result is validation success.
+4. Diagnose every difference as a candidate defect, source data drift, or
+   source-proven non-determinism. If comparison exposes an API without a valid
+   standard E2E case, return to `scripts/start-recording` and establish that
+   replay contract before changing target behavior for the API.
+5. After a code or policy change, pass the affected standard E2E scope again,
+   create a new immutable comparison recording, and compare it. Repeat until
+   both evidence gates pass.
+
 ## Managed Recording
 
 1. Inspect the target's authoritative recorder config, startup, readiness,
    upstreams, access policy, redaction, limits, enabled protocols, dependency
-   timing, and background rules. Do not guess from examples.
+   timing, and background rules. Do not guess from examples. When
+   `scripts/start-recording` exists, invoke it instead of bypassing its
+   repository-specific orchestration.
 2. For container recording, create a network-namespace anchor that uses host
    networking by default. Run Recorder, source, and dependency-producing
    sidecars with `--network container:<anchor>` so they share that one
@@ -102,9 +139,30 @@ write. Use `plan` only when diagnostic output is useful.
    unresolved before changing recorder config.
 6. After all selected groups pass, run the required full round when a later
    behavior-affecting change can invalidate earlier evidence.
-7. Use runner-owned reports, aggregation, progress, policy feedback, and
-   verified excludes. Never hand-edit generated state or parse partial output
-   to manufacture completion.
+7. Use runner-owned reports, aggregation, E2E pass progress, comparison
+   reports, and policy feedback. Never hand-edit generated state or parse
+   partial output to manufacture completion.
+
+## Comparison Verification
+
+1. Start comparison only after genuine dependency replay E2E passes for the
+   affected behavior.
+2. When `scripts/start-recording-comparison` exists, invoke it instead of
+   reproducing its source and candidate lifecycle. Run both services normally
+   without fixed-user or network isolation. Configure only explicit read-only
+   methods. Use repeatable `--api` arguments for the affected scope instead of
+   rewriting recorder TOML. For Platform repositories, require source and
+   candidate containers to reuse one Breeze instance; let the wrapper consume
+   `--brz-no-fallback <true|false>` rather than forwarding it to traffic-e2e.
+3. Use the optional baseline recheck when source-time drift evidence is needed;
+   do not treat it as automatic authorization to ignore a difference.
+4. Classify non-passing evidence as candidate implementation difference,
+   source data drift, or source-proven intentional non-determinism.
+5. Fix code for genuine candidate defects. Re-record inconclusive mutable-data
+   cases. Apply only narrow, evidence-backed dynamic or unordered response
+   rules for proven non-determinism.
+6. After any behavior or policy change, pass the affected replay E2E scope
+   again and generate a new comparison report.
 
 ## Evidence Gates
 
@@ -127,8 +185,14 @@ A replay scope passes only when:
   case and session IDs;
 - aggregate evidence is complete and clean;
 - response assertions pass after the last behavior-affecting change; and
-- applicable runner progress, pattern feedback, and verified-exclude outcomes
-  reached their canonical terminal states.
+- applicable runner progress and pattern feedback reached their canonical
+  E2E-pass states.
+
+A comparison scope passes only when its run finalized cleanly, every published
+case was evaluated, no source-drift or unevaluable case remains, all candidate
+responses and every affected API pass the reviewed shared verification policy,
+and the affected candidate behavior still passes replay E2E. This report is
+current evidence, not a permanent API-verified terminal state.
 
 ## Stop And Report
 
@@ -139,5 +203,5 @@ completion artifacts.
 
 For execution work, report `complete`, `incomplete`, or `blocked` with the exact
 case source and IDs, final session/report, aggregate, policy, assertion,
-pattern, verified-exclude status, verification command, and remaining blockers.
+pattern, comparison API counts, verification command, and remaining blockers.
 Never use success wording while an applicable gate is missing.

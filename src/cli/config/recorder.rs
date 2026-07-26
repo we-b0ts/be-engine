@@ -5,9 +5,8 @@ use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     AllowedUnusedHttpHostFeedback, BackgroundDependencyFeedback, CasePathPatternAuthority,
-    CasePathPatternFeedback, RecorderConfigInitOptions, VerifiedApiExcludeFeedback,
-    VerifiedApiVerification, initialize_recorder_config, plan_allowed_unused_http_hosts,
-    plan_background_dependency, plan_case_path_pattern_feedback, plan_verified_api_exclude,
+    CasePathPatternFeedback, RecorderConfigInitOptions, initialize_recorder_config,
+    plan_allowed_unused_http_hosts, plan_background_dependency, plan_case_path_pattern_feedback,
 };
 
 #[derive(Debug, Args)]
@@ -31,6 +30,9 @@ struct InitArgs {
     /// Genuine source HTTP port inside the shared recording network namespace.
     #[arg(long)]
     source_http_port: u16,
+    /// Candidate HTTP port initially served by the generated fixed-response project CLI.
+    #[arg(long, default_value_t = 8081)]
+    candidate_http_port: u16,
     /// Genuine application readiness path.
     #[arg(long = "readiness", default_value = "/healthz")]
     readiness_path: String,
@@ -53,7 +55,6 @@ enum PlanStrategy {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostArgs),
     BackgroundDependencies(BackgroundDependencyArgs),
     CasePathPatterns(PatternFeedbackArgs),
-    VerifiedExcludes(VerifiedExcludeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -67,7 +68,6 @@ enum ApplyStrategy {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostArgs),
     BackgroundDependencies(BackgroundDependencyArgs),
     CasePathPatterns(ApplyPatternFeedbackArgs),
-    VerifiedExcludes(VerifiedExcludeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -134,31 +134,6 @@ struct ApplyPatternFeedbackArgs {
     allow_delete: bool,
 }
 
-#[derive(Debug, Args)]
-struct VerifiedExcludeArgs {
-    #[arg(long, default_value = traffic_e2e::DEFAULT_RECORDING_RULE)]
-    rule: String,
-    #[arg(long)]
-    method: String,
-    #[arg(
-        long,
-        help = "Exact path or recorder path pattern: '*' matches one segment; trailing '**' matches one or more remaining segments"
-    )]
-    pattern: String,
-    #[arg(long)]
-    aggregate_report: PathBuf,
-    #[arg(long)]
-    assertion_report: PathBuf,
-    #[arg(long)]
-    consecutive_successful_runs: u64,
-    #[arg(long)]
-    consecutive_successful_cases: u64,
-    #[arg(long)]
-    required_consecutive_successful_runs: u64,
-    #[arg(long)]
-    required_successful_cases: u64,
-}
-
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum AuthorityArg {
     Focused,
@@ -180,6 +155,7 @@ pub(super) fn run(target_root: PathBuf, args: RecorderArgs) -> Result<()> {
             super::print_json(&initialize_recorder_config(RecorderConfigInitOptions {
                 target_root,
                 source_http_port: args.source_http_port,
+                candidate_http_port: args.candidate_http_port,
                 readiness_path: args.readiness_path,
                 readiness_status: args.readiness_status,
                 upstream_dns: args.upstream_dns,
@@ -205,10 +181,6 @@ fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
             let plan = plan_case_path_pattern_feedback(pattern_feedback(config, args))?;
             super::print_json(plan.report())
         }
-        PlanStrategy::VerifiedExcludes(args) => {
-            let plan = plan_verified_api_exclude(verified_feedback(config, args))?;
-            super::print_json(plan.report())
-        }
     }
 }
 
@@ -227,10 +199,6 @@ fn apply(target_root: PathBuf, strategy: ApplyStrategy) -> Result<()> {
         ApplyStrategy::CasePathPatterns(args) => {
             let report = plan_case_path_pattern_feedback(pattern_feedback(config, args.feedback))?
                 .apply(args.allow_delete)?;
-            super::print_json(&report)
-        }
-        ApplyStrategy::VerifiedExcludes(args) => {
-            let report = plan_verified_api_exclude(verified_feedback(config, args))?.apply()?;
             super::print_json(&report)
         }
     }
@@ -280,26 +248,6 @@ fn pattern_feedback(config_path: PathBuf, args: PatternFeedbackArgs) -> CasePath
     }
 }
 
-fn verified_feedback(
-    config_path: PathBuf,
-    args: VerifiedExcludeArgs,
-) -> VerifiedApiExcludeFeedback {
-    VerifiedApiExcludeFeedback {
-        config_path,
-        rule_name: args.rule,
-        method: args.method,
-        path_pattern: args.pattern,
-        aggregate_report: args.aggregate_report,
-        assertion_report: args.assertion_report,
-        verification: VerifiedApiVerification {
-            consecutive_successful_runs: args.consecutive_successful_runs,
-            consecutive_successful_cases: args.consecutive_successful_cases,
-            required_consecutive_successful_runs: args.required_consecutive_successful_runs,
-            required_successful_cases: args.required_successful_cases,
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use clap::Parser;
@@ -324,11 +272,14 @@ mod tests {
         .unwrap();
         assert_eq!(defaults.init.readiness_path, "/healthz");
         assert_eq!(defaults.init.readiness_status, 404);
+        assert_eq!(defaults.init.candidate_http_port, 8081);
 
         let explicit = TestCli::try_parse_from([
             "test",
             "--source-http-port",
             "8080",
+            "--candidate-http-port",
+            "8181",
             "--readiness",
             "/ready",
             "--readiness-status",
@@ -339,5 +290,6 @@ mod tests {
         .unwrap();
         assert_eq!(explicit.init.readiness_path, "/ready");
         assert_eq!(explicit.init.readiness_status, 200);
+        assert_eq!(explicit.init.candidate_http_port, 8181);
     }
 }

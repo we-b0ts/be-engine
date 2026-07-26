@@ -1,10 +1,7 @@
-version: 4
+version: 5
 project_cli: scripts/__PROJECT_CLI__
-replay_policy: .traffic-e2e/replay.yaml
+replay_policy: .traffic-e2e/verification.yaml
 replay_startup_timeout_seconds: 60
-api_verification:
-  consecutive_successful_runs: 3
-  successful_cases: 3
 pr_base: dev-migration
 recorder_config: .traffic-e2e/recorder.toml
 local_root: local

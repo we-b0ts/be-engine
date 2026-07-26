@@ -1,13 +1,8 @@
-mod model;
-mod store;
-mod summary;
-mod upstream;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use bytes::Bytes;
 use chrono::Utc;
 use hyper::body::Incoming;
@@ -17,146 +12,131 @@ use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::net::TcpListener;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot};
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use self::model::{CompareCase, CompareRequestRecord};
-use self::store::{CompareStore, Reservation};
-use self::upstream::{
+use super::model::{ComparisonRecordingCase, ComparisonRecordingRequest};
+use super::store::{ComparisonRecordingStore, Reservation};
+use super::tasks::BackgroundTasks;
+use super::upstream::{
     LimitedBodyError, ResponseDisposition, UpstreamCapture, UpstreamErrorKind, body_capture,
     collect_limited, collect_unlimited, downstream_response, fetch_upstream, run_ready_probe,
 };
-use crate::VerifiedApiExcludesConfig;
-use crate::config::{AppConfig, CompareConfig, HttpGatewayConfig};
+use crate::config::{AppConfig, ComparisonRecordingConfig, HttpGatewayConfig};
 use crate::gateway::http::rules::{
     RuleDecision, evaluate_request, request_authority, resolve_case_group,
 };
 use crate::gateway::http::transport::{GatewayBody, simple_response};
 use crate::recorder::redact_headers;
+use crate::recording_api::{RecordingApi, validate_selection};
+
+#[derive(Debug, Clone, Default)]
+pub struct ComparisonRecordingRunOptions {
+    pub run_id: Option<String>,
+    pub duration: Option<Duration>,
+    pub recording_apis: Vec<RecordingApi>,
+}
 
 #[derive(Clone)]
-struct CompareRuntime {
-    config: Arc<AppConfig>,
-    compare: CompareConfig,
-    gateway: HttpGatewayConfig,
-    client: crate::ProxyClient,
-    store: CompareStore,
-    ready: Arc<AtomicBool>,
+pub(super) struct ComparisonRecordingRuntime {
+    pub(super) config: Arc<AppConfig>,
+    pub(super) comparison_recording: ComparisonRecordingConfig,
+    pub(super) baseline_upstream: String,
+    pub(super) gateway: HttpGatewayConfig,
+    pub(super) recording_apis: Vec<RecordingApi>,
+    pub(super) client: crate::ProxyClient,
+    pub(super) store: ComparisonRecordingStore,
+    pub(super) ready: Arc<AtomicBool>,
+    pub(super) ready_notify: Arc<Notify>,
     permits: Arc<Semaphore>,
     background: BackgroundTasks,
 }
 
-type BackgroundFuture = std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
-
-enum BackgroundCommand {
-    Spawn(BackgroundFuture),
-    Shutdown(Duration, oneshot::Sender<()>),
-}
-
-#[derive(Clone)]
-struct BackgroundTasks {
-    sender: mpsc::UnboundedSender<BackgroundCommand>,
-}
-
-impl BackgroundTasks {
-    fn new() -> Self {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        tokio::spawn(async move {
-            let mut tasks = JoinSet::new();
-            loop {
-                tokio::select! {
-                    Some(command) = receiver.recv() => match command {
-                        BackgroundCommand::Spawn(task) => {
-                            tasks.spawn(task);
-                        }
-                        BackgroundCommand::Shutdown(timeout, done) => {
-                            drain_join_set(&mut tasks, timeout).await;
-                            let _ = done.send(());
-                            return;
-                        }
-                    },
-                    Some(result) = tasks.join_next(), if !tasks.is_empty() => {
-                        if let Err(error) = result {
-                            warn!(%error, "compare background task failed");
-                        }
-                    }
-                    else => return,
-                }
-            }
-        });
-        Self { sender }
-    }
-
-    fn spawn(&self, task: impl Future<Output = ()> + Send + 'static) {
-        if self
-            .sender
-            .send(BackgroundCommand::Spawn(Box::pin(task)))
-            .is_err()
-        {
-            warn!("compare background task rejected because tracker stopped");
-        }
-    }
-
-    async fn drain(&self, timeout: Duration) {
-        let (done, completed) = oneshot::channel();
-        if self
-            .sender
-            .send(BackgroundCommand::Shutdown(timeout, done))
-            .is_ok()
-        {
-            let _ = completed.await;
-        }
-    }
-}
-
-async fn drain_join_set(tasks: &mut JoinSet<()>, timeout: Duration) {
-    let deadline = tokio::time::Instant::now() + timeout;
-    while !tasks.is_empty() {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        match tokio::time::timeout(remaining, tasks.join_next()).await {
-            Ok(Some(Ok(()))) => {}
-            Ok(Some(Err(error))) => warn!(%error, "compare background task failed"),
-            Ok(None) => break,
-            Err(_) => {
-                tasks.abort_all();
-                while tasks.join_next().await.is_some() {}
-                warn!("timed out draining compare background tasks; remaining tasks aborted");
-            }
-        }
-    }
-}
-
 pub async fn run(config: AppConfig, run_id: Option<String>) -> Result<()> {
+    run_with_options(
+        config,
+        ComparisonRecordingRunOptions {
+            run_id,
+            ..ComparisonRecordingRunOptions::default()
+        },
+    )
+    .await
+}
+
+pub async fn run_with_duration(
+    config: AppConfig,
+    run_id: Option<String>,
+    duration: Option<Duration>,
+) -> Result<()> {
+    run_with_options(
+        config,
+        ComparisonRecordingRunOptions {
+            run_id,
+            duration,
+            ..ComparisonRecordingRunOptions::default()
+        },
+    )
+    .await
+}
+
+pub async fn run_with_options(
+    config: AppConfig,
+    options: ComparisonRecordingRunOptions,
+) -> Result<()> {
+    let ComparisonRecordingRunOptions {
+        run_id,
+        duration,
+        recording_apis,
+    } = options;
+    ensure!(
+        duration.is_none_or(|duration| !duration.is_zero()),
+        "comparison recording duration must be greater than zero"
+    );
     config
-        .validate_compare()
-        .context("invalid compare configuration")?;
-    let compare = config
-        .compare
-        .clone()
-        .context("compare command requires a [compare] configuration section")?;
+        .validate_comparison_recording()
+        .context("invalid comparison recording configuration")?;
+    validate_selection(&recording_apis, &config.http_gateway.rules)
+        .context("invalid comparison recording API selection")?;
+    let comparison_recording = config.comparison_recording.clone().context(
+        "record-comparison command requires a [comparison_recording] configuration section",
+    )?;
+    let baseline_upstream = comparison_recording
+        .baseline_upstream(&config.http_gateway)
+        .to_string();
     let run_id = run_id.unwrap_or_else(|| Utc::now().format("%Y%m%d%H%M%S").to_string());
     validate_run_id(&run_id)?;
-    let store = CompareStore::create(&config.recording.output_dir, &run_id).await?;
+    let store = ComparisonRecordingStore::create(
+        &config.comparison_recording_output_dir(),
+        &run_id,
+        recording_apis.iter().map(ToString::to_string).collect(),
+    )
+    .await?;
     let gateway = config.http_gateway.clone();
-    let listener = TcpListener::bind(gateway.listen)
-        .await
-        .with_context(|| format!("failed to bind compare gateway {}", gateway.listen))?;
+    let listener = TcpListener::bind(gateway.listen).await.with_context(|| {
+        format!(
+            "failed to bind comparison recording gateway {}",
+            gateway.listen
+        )
+    })?;
     let https = HttpsConnectorBuilder::new()
         .with_webpki_roots()
         .https_or_http()
         .enable_http1()
         .build();
     let client = Client::builder(TokioExecutor::new()).build(https);
-    let runtime = CompareRuntime {
+    let runtime = ComparisonRecordingRuntime {
         config: Arc::new(config),
-        compare: compare.clone(),
+        comparison_recording: comparison_recording.clone(),
+        baseline_upstream: baseline_upstream.clone(),
         gateway: gateway.clone(),
+        recording_apis,
         client,
         store,
         ready: Arc::new(AtomicBool::new(!gateway.ready.enabled)),
-        permits: Arc::new(Semaphore::new(compare.max_in_flight)),
+        ready_notify: Arc::new(Notify::new()),
+        permits: Arc::new(Semaphore::new(comparison_recording.max_in_flight)),
         background: BackgroundTasks::new(),
     };
     if runtime.ready.load(Ordering::Acquire) {
@@ -167,12 +147,14 @@ pub async fn run(config: AppConfig, run_id: Option<String>) -> Result<()> {
         .enabled
         .then(|| tokio::spawn(run_ready_probe(runtime.clone())));
     let summary_task = tokio::spawn(run_summary_flush(runtime.clone()));
+    let duration_wait = wait_for_duration(runtime.clone(), duration);
+    tokio::pin!(duration_wait);
     info!(
         listen = %gateway.listen,
-        baseline = %compare.baseline_upstream,
-        candidate = %compare.candidate_upstream,
+        baseline = %baseline_upstream,
+        candidate = %comparison_recording.candidate_upstream,
         run_id,
-        "online compare recorder listening"
+        "comparison recording gateway listening"
     );
 
     let mut connections = JoinSet::new();
@@ -182,8 +164,13 @@ pub async fn run(config: AppConfig, run_id: Option<String>) -> Result<()> {
                 signal?;
                 break;
             }
+            _ = &mut duration_wait => {
+                info!("comparison recording duration elapsed");
+                break;
+            }
             accepted = listener.accept() => {
-                let (stream, peer) = accepted.context("failed to accept compare client")?;
+                let (stream, peer) =
+                    accepted.context("failed to accept comparison recording client")?;
                 let runtime = runtime.clone();
                 connections.spawn(async move {
                     let service = service_fn(move |request| {
@@ -200,13 +187,13 @@ pub async fn run(config: AppConfig, run_id: Option<String>) -> Result<()> {
                         .serve_connection(TokioIo::new(stream), service)
                         .await
                     {
-                        warn!(%error, "compare client connection ended with error");
+                        warn!(%error, "comparison recording client connection ended with error");
                     }
                 });
             }
             Some(result) = connections.join_next(), if !connections.is_empty() => {
                 if let Err(error) = result {
-                    warn!(%error, "compare client connection task failed");
+                    warn!(%error, "comparison recording client connection task failed");
                 }
             }
         }
@@ -222,16 +209,43 @@ pub async fn run(config: AppConfig, run_id: Option<String>) -> Result<()> {
     let _ = summary_task.await;
     runtime
         .background
-        .drain(Duration::from_millis(compare.upstream_timeout_ms))
+        .drain(Duration::from_millis(
+            comparison_recording.upstream_timeout_ms.saturating_mul(
+                if comparison_recording.baseline_recheck {
+                    3
+                } else {
+                    2
+                },
+            ),
+        ))
         .await;
     runtime.store.fail_unfinished().await?;
     runtime.store.summary().finish().await?;
     Ok(())
 }
 
+async fn wait_for_duration(runtime: ComparisonRecordingRuntime, duration: Option<Duration>) {
+    let Some(duration) = duration else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    while !runtime.ready.load(Ordering::Acquire) {
+        let notified = runtime.ready_notify.notified();
+        if runtime.ready.load(Ordering::Acquire) {
+            break;
+        }
+        notified.await;
+    }
+    info!(
+        duration_seconds = duration.as_secs_f64(),
+        "comparison recording duration started"
+    );
+    tokio::time::sleep(duration).await;
+}
+
 async fn handle_request(
     request: Request<Incoming>,
-    runtime: CompareRuntime,
+    runtime: ComparisonRecordingRuntime,
     client_addr: Option<String>,
 ) -> Response<GatewayBody> {
     runtime
@@ -243,8 +257,12 @@ async fn handle_request(
     let uri = request.uri().clone();
     let headers = request.headers().clone();
     let authority = request_authority(&uri, &headers);
+    let recording_api_pattern = runtime
+        .recording_apis
+        .iter()
+        .find(|api| api.matches(&method, &uri))
+        .map(|api| api.path_pattern().to_string());
     let decision = evaluate_request(
-        &VerifiedApiExcludesConfig::default(),
         &runtime.gateway.exclude_rules,
         &runtime.gateway.rules,
         &method,
@@ -252,7 +270,19 @@ async fn handle_request(
         &headers,
     );
     let matched = match decision {
-        RuleDecision::Matched(rule) => Some(rule),
+        RuleDecision::Matched(rule)
+            if runtime.recording_apis.is_empty() || recording_api_pattern.is_some() =>
+        {
+            Some(rule)
+        }
+        RuleDecision::Matched(_) => {
+            runtime
+                .store
+                .summary()
+                .update(|counts| counts.excluded += 1)
+                .await;
+            None
+        }
         RuleDecision::Excluded { .. } => {
             runtime
                 .store
@@ -295,7 +325,11 @@ async fn handle_request(
 
     let mirrored = matched.is_some() && permit.is_some();
     let body_result = if mirrored {
-        collect_limited(request.into_body(), runtime.compare.max_request_bytes).await
+        collect_limited(
+            request.into_body(),
+            runtime.comparison_recording.max_request_bytes,
+        )
+        .await
     } else {
         collect_unlimited(request.into_body()).await
     };
@@ -309,7 +343,7 @@ async fn handle_request(
                 .await;
             return simple_response(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                "compare request body too large",
+                "comparison recording request body too large",
             );
         }
         Err(LimitedBodyError::Read(error)) => {
@@ -346,25 +380,29 @@ async fn handle_request(
         .summary()
         .set_in_flight(
             runtime
-                .compare
+                .comparison_recording
                 .max_in_flight
                 .saturating_sub(runtime.permits.available_permits()),
         )
         .await;
 
-    let group = resolve_case_group(&uri, &rule.case_path_patterns);
+    let group = recording_api_pattern.as_ref().map_or_else(
+        || resolve_case_group(&uri, &rule.case_path_patterns),
+        |pattern| resolve_case_group(&uri, std::slice::from_ref(pattern)),
+    );
     let limit = runtime.gateway.case_limits.limit_for(&group.pattern);
     let reservation = runtime
         .store
         .try_reserve(&rule.name, &group.pattern, limit)
         .await;
-    let request_record = CompareRequestRecord {
+    let request_record = ComparisonRecordingRequest {
         timestamp: Utc::now(),
         client_addr,
         method: method.to_string(),
         uri: uri.to_string(),
         authority,
         matched_rule: rule.name.clone(),
+        api_pattern: group.pattern.clone(),
         headers: redact_headers(&headers, &runtime.config.recording.redact_headers),
         body: body_capture(&body, false, Some(body.len())),
     };
@@ -389,13 +427,16 @@ async fn handle_request(
     });
     match receiver.await {
         Ok(capture) => downstream_response(&capture),
-        Err(_) => simple_response(StatusCode::BAD_GATEWAY, "baseline compare task failed"),
+        Err(_) => simple_response(
+            StatusCode::BAD_GATEWAY,
+            "baseline comparison recording task failed",
+        ),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 async fn run_dual(
-    runtime: CompareRuntime,
+    runtime: ComparisonRecordingRuntime,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
@@ -403,50 +444,52 @@ async fn run_dual(
     rule: String,
     group: String,
     pattern: String,
-    request: CompareRequestRecord,
+    request: ComparisonRecordingRequest,
     reservation: Option<Reservation>,
     _permit: OwnedSemaphorePermit,
     baseline_sender: oneshot::Sender<UpstreamCapture>,
 ) {
-    let baseline_request = fetch_upstream(
+    let baseline = fetch_upstream(
         &runtime,
-        &runtime.compare.baseline_upstream,
+        &runtime.baseline_upstream,
         &method,
         &uri,
         &headers,
         body.clone(),
         ResponseDisposition::Downstream,
-    );
-    let candidate_request = fetch_upstream(
+    )
+    .await;
+    update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline).await;
+    let _ = baseline_sender.send(baseline.clone());
+
+    let candidate = fetch_upstream(
         &runtime,
-        &runtime.compare.candidate_upstream,
+        &runtime.comparison_recording.candidate_upstream,
         &method,
         &uri,
         &headers,
-        body,
+        body.clone(),
         ResponseDisposition::CaptureOnly,
-    );
-    tokio::pin!(baseline_request, candidate_request);
-    let mut baseline = None;
-    let mut candidate = None;
-    let mut baseline_sender = Some(baseline_sender);
-    while baseline.is_none() || candidate.is_none() {
-        tokio::select! {
-            capture = &mut baseline_request, if baseline.is_none() => {
-                update_upstream_counts(&runtime, true, &capture).await;
-                if let Some(sender) = baseline_sender.take() {
-                    let _ = sender.send(capture.clone());
-                }
-                baseline = Some(capture);
-            }
-            capture = &mut candidate_request, if candidate.is_none() => {
-                update_upstream_counts(&runtime, false, &capture).await;
-                candidate = Some(capture);
-            }
-        }
-    }
-    let baseline = baseline.expect("baseline compare request completed");
-    let candidate = candidate.expect("candidate compare request completed");
+    )
+    .await;
+    update_upstream_counts(&runtime, UpstreamRole::Candidate, &candidate).await;
+
+    let baseline_recheck = if runtime.comparison_recording.baseline_recheck {
+        let capture = fetch_upstream(
+            &runtime,
+            &runtime.baseline_upstream,
+            &method,
+            &uri,
+            &headers,
+            body,
+            ResponseDisposition::CaptureOnly,
+        )
+        .await;
+        update_upstream_counts(&runtime, UpstreamRole::BaselineRecheck, &capture).await;
+        Some(capture)
+    } else {
+        None
+    };
     runtime
         .store
         .summary()
@@ -461,10 +504,16 @@ async fn run_dual(
             counts.last_candidate_status = candidate.record.status;
             counts.last_baseline_error = baseline.record.error.clone();
             counts.last_candidate_error = candidate.record.error.clone();
+            counts.last_baseline_recheck_status = baseline_recheck
+                .as_ref()
+                .and_then(|capture| capture.record.status);
+            counts.last_baseline_recheck_error = baseline_recheck
+                .as_ref()
+                .and_then(|capture| capture.record.error.clone());
         })
         .await;
     if let Some(reservation) = reservation {
-        let case = CompareCase {
+        let case = ComparisonRecordingCase {
             id: Uuid::new_v4(),
             rule,
             group,
@@ -472,9 +521,14 @@ async fn run_dual(
             request,
             baseline: baseline.record,
             candidate: candidate.record,
+            baseline_recheck: baseline_recheck.map(|capture| capture.record),
         };
         if let Err(error) = runtime.store.publish(&case, reservation).await {
-            warn!(%error, case_id = %case.id, "failed to publish online compare case");
+            warn!(
+                %error,
+                case_id = %case.id,
+                "failed to publish comparison recording case"
+            );
         }
     }
     runtime
@@ -482,7 +536,7 @@ async fn run_dual(
         .summary()
         .set_in_flight(
             runtime
-                .compare
+                .comparison_recording
                 .max_in_flight
                 .saturating_sub(runtime.permits.available_permits())
                 .saturating_sub(1),
@@ -491,7 +545,7 @@ async fn run_dual(
 }
 
 async fn forward_baseline(
-    runtime: &CompareRuntime,
+    runtime: &ComparisonRecordingRuntime,
     method: &Method,
     uri: &Uri,
     headers: &HeaderMap,
@@ -499,7 +553,7 @@ async fn forward_baseline(
 ) -> Response<GatewayBody> {
     let capture = fetch_upstream(
         runtime,
-        &runtime.compare.baseline_upstream,
+        &runtime.baseline_upstream,
         method,
         uri,
         headers,
@@ -507,43 +561,56 @@ async fn forward_baseline(
         ResponseDisposition::Downstream,
     )
     .await;
-    update_upstream_counts(runtime, true, &capture).await;
+    update_upstream_counts(runtime, UpstreamRole::Baseline, &capture).await;
     downstream_response(&capture)
 }
 
+#[derive(Clone, Copy)]
+enum UpstreamRole {
+    Baseline,
+    Candidate,
+    BaselineRecheck,
+}
+
 async fn update_upstream_counts(
-    runtime: &CompareRuntime,
-    baseline: bool,
+    runtime: &ComparisonRecordingRuntime,
+    role: UpstreamRole,
     capture: &UpstreamCapture,
 ) {
     runtime
         .store
         .summary()
-        .update(|counts| match (baseline, capture.error_kind) {
-            (true, None) => counts.baseline_success += 1,
-            (true, Some(UpstreamErrorKind::ResponseTooLarge)) => {
+        .update(|counts| match (role, capture.error_kind) {
+            (UpstreamRole::Baseline, None) => counts.baseline_success += 1,
+            (UpstreamRole::Baseline, Some(UpstreamErrorKind::ResponseTooLarge)) => {
                 counts.baseline_error += 1;
                 counts.baseline_response_too_large += 1;
             }
-            (true, Some(_)) => counts.baseline_error += 1,
-            (false, None) => counts.candidate_success += 1,
-            (false, Some(UpstreamErrorKind::ResponseTooLarge)) => {
+            (UpstreamRole::Baseline, Some(_)) => counts.baseline_error += 1,
+            (UpstreamRole::Candidate, None) => counts.candidate_success += 1,
+            (UpstreamRole::Candidate, Some(UpstreamErrorKind::ResponseTooLarge)) => {
                 counts.candidate_error += 1;
                 counts.candidate_response_too_large += 1;
             }
-            (false, Some(_)) => counts.candidate_error += 1,
+            (UpstreamRole::Candidate, Some(_)) => counts.candidate_error += 1,
+            (UpstreamRole::BaselineRecheck, None) => counts.baseline_recheck_success += 1,
+            (UpstreamRole::BaselineRecheck, Some(UpstreamErrorKind::ResponseTooLarge)) => {
+                counts.baseline_recheck_error += 1;
+                counts.baseline_recheck_response_too_large += 1;
+            }
+            (UpstreamRole::BaselineRecheck, Some(_)) => counts.baseline_recheck_error += 1,
         })
         .await;
 }
 
-async fn run_summary_flush(runtime: CompareRuntime) {
+async fn run_summary_flush(runtime: ComparisonRecordingRuntime) {
     let mut interval = tokio::time::interval(Duration::from_millis(
-        runtime.compare.summary_flush_interval_ms,
+        runtime.comparison_recording.summary_flush_interval_ms,
     ));
     loop {
         interval.tick().await;
         if let Err(error) = runtime.store.summary().flush().await {
-            warn!(%error, "failed to flush compare run summary");
+            warn!(%error, "failed to flush comparison recording run summary");
         }
     }
 }
@@ -553,7 +620,7 @@ fn validate_run_id(run_id: &str) -> Result<()> {
         run_id.len() == 14
             && run_id.bytes().all(|byte| byte.is_ascii_digit())
             && chrono::NaiveDateTime::parse_from_str(run_id, "%Y%m%d%H%M%S").is_ok(),
-        "compare run ID must be a valid 14-digit UTC timestamp"
+        "comparison recording run ID must be a valid 14-digit UTC timestamp"
     );
     Ok(())
 }

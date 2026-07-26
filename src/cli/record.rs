@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use clap::{ArgAction, Args};
 use tracing::info;
-use traffic_e2e::{AppConfig, AppState, HttpResponseRewritePluginConfig, TlsConfig};
+use traffic_e2e::{AppConfig, AppState, HttpResponseRewritePluginConfig, RecordingApi, TlsConfig};
 
 use super::interception::{DnsConfig, FakeIpConfig, Guard};
 
@@ -21,6 +21,9 @@ pub(super) struct RecordArgs {
     /// Publish managed recording lifecycle state on this Unix socket.
     #[arg(long)]
     control_socket: Option<PathBuf>,
+    /// Record only this API for the current run; repeat for multiple METHOD/path selectors.
+    #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
+    apis: Vec<RecordingApi>,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -41,7 +44,7 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     preflight(&config)?;
     let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
     let configured_upstream_dns = config.dns_mock.upstream_dns;
-    let state = AppState::new_with_run_id(config, args.run_id).await?;
+    let state = AppState::new_with_recording_apis(config, args.run_id, args.apis).await?;
     let mut interception = if args.dns && !args.no_dns {
         Some(Guard::enable(
             record_dns_config(configured_upstream_dns)?,
@@ -327,6 +330,39 @@ mod tests {
         assert_eq!(
             cli.record.control_socket.as_deref(),
             Some(Path::new("/run/traffic-e2e/recording.sock"))
+        );
+    }
+
+    #[test]
+    fn accepts_repeatable_runtime_api_selection() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--config",
+            "recorder.toml",
+            "--api",
+            "GET /api/users/*",
+            "--api",
+            "HEAD /healthz",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.record
+                .apis
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["GET /api/users/*", "HEAD /healthz"]
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "--config",
+                "recorder.toml",
+                "--api",
+                "get /api/users",
+            ])
+            .is_err()
         );
     }
 

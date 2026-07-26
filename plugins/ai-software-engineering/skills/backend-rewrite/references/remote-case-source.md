@@ -111,15 +111,15 @@ asking the runner for status. For each frozen candidate in ascending order:
 2. discover all canonical case sources;
 3. call `traffic-e2e status --target-root <target> --case-source <source>` for
    every source;
-4. skip the recording only when every source has successful terminal runner
-   state;
+4. skip the recording only when every source has terminal runner state
+   `passed`;
 5. otherwise select that recording and stop scanning.
 
 Missing, failed, interrupted, invalid, or unavailable runner state is not
 processed. If cache or runner evidence was removed, conservatively materialize
 or verify the recording again. Do not use a changelog, download receipt,
 archive presence, helper exit status, migration ledger, response-only result,
-or verified-exclude entry as processed evidence.
+or an older comparison report as processed evidence.
 
 If no candidate remains, report that the frozen snapshot has no clean
 unprocessed recording and perform no migration or delivery mutation.

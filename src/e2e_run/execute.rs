@@ -6,11 +6,9 @@ use serde::Serialize;
 use tokio::process::Child;
 
 use super::case_progress;
-use super::final_evidence::{
-    build_final_evidence, summarize_apis_without_aggregate, sync_verified_excludes,
-};
+use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout, RunStatus};
-use super::progress::{build_progress, refresh_verification, update_focused_index, update_index};
+use super::progress::{build_progress, update_focused_index, update_index};
 use super::runtime::{
     best_effort_stop, control, finalize_replay, run_project, spawn_replay, stop_replay_process,
     wait_for_replay, wait_for_replay_ready,
@@ -29,7 +27,7 @@ pub struct E2eRunResult {
     pub run_key: String,
     pub sequence: u64,
     pub status: String,
-    pub successful: bool,
+    pub passed: bool,
     pub latest_state: PathBuf,
     pub progress: PathBuf,
 }
@@ -40,7 +38,7 @@ pub struct E2eApiRunResult {
     pub api: String,
     pub attempt: u64,
     pub status: String,
-    pub successful: bool,
+    pub passed: bool,
     pub latest_state: PathBuf,
     pub progress: PathBuf,
 }
@@ -183,15 +181,8 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
     }
     let previous_path = layout.latest_dir.join("state.yaml");
     if previous_path.is_file() {
-        let mut previous: ActiveRunState = store::read_yaml(&previous_path)?;
-        update_focused_index(
-            &mut index,
-            &previous,
-            &inventory,
-            inventory_complete,
-            &config.api_verification,
-        );
-        sync_verified_excludes(&config, &mut previous, &index)?;
+        let previous: ActiveRunState = store::read_yaml(&previous_path)?;
+        update_focused_index(&mut index, &previous, &inventory, inventory_complete);
         store::write_yaml(&previous_path, &previous)?;
         store::write_yaml(&global_layout.index_path, &index)?;
         store::write_yaml(
@@ -235,20 +226,20 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         inventory_complete,
         &mut state,
     )?;
-    let successful = state.status == RunStatus::Successful;
+    let passed = state.status == RunStatus::Successful;
     Ok(E2eApiRunResult {
         run_key: state.run_key,
         api: api_key.to_string(),
         attempt,
         status: status_label(state.status).to_string(),
-        successful,
+        passed,
         latest_state: layout.latest_dir.join("state.yaml"),
         progress: global_layout.progress_path,
     })
 }
 
 fn finish_focused_and_publish(
-    config: &ResolvedProjectConfig,
+    _config: &ResolvedProjectConfig,
     global_layout: &RunLayout,
     focused_layout: &RunLayout,
     index: &mut super::model::RunIndex,
@@ -261,14 +252,7 @@ fn finish_focused_and_publish(
         state.status.is_terminal(),
         "focused run state is not terminal"
     );
-    update_focused_index(
-        index,
-        state,
-        inventory,
-        inventory_complete,
-        &config.api_verification,
-    );
-    sync_verified_excludes(config, state, index)?;
+    update_focused_index(index, state, inventory, inventory_complete);
     let progress = build_progress(index, state);
     store::publish_snapshot(
         &focused_layout.active_dir,
@@ -302,10 +286,8 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
         latest_path.is_file(),
         "there is no active or latest E2E run to recover"
     );
-    let mut state: ActiveRunState = store::read_yaml(&latest_path)?;
-    let mut index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
-    refresh_verification(&mut index, &config.api_verification);
-    sync_verified_excludes(&config, &mut state, &index)?;
+    let state: ActiveRunState = store::read_yaml(&latest_path)?;
+    let index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
     store::write_yaml(&latest_path, &state)?;
     store::write_yaml(&layout.progress_path, &build_progress(&index, &state))?;
     store::write_yaml(&layout.index_path, &index)?;
@@ -439,7 +421,7 @@ async fn run_active_with_replay(
         && state.replay_finalized
         && state.aggregate_complete
         && state.aggregate_clean
-        && state.apis.iter().all(|api| api.successful)
+        && state.apis.iter().all(|api| api.complete_pass)
         && state.errors.is_empty()
     {
         RunStatus::Successful
@@ -518,7 +500,7 @@ async fn execute_case(
         .map_err(|error| anyhow::anyhow!("runner-owned response assertion failed: {error:#}"))
     } else if config.runner_owned_response_assertions {
         Err(anyhow::anyhow!(
-            "project CLI did not produce a successful actual response"
+            "project CLI did not produce a usable actual response"
         ))
     } else {
         Err(anyhow::anyhow!(
@@ -573,7 +555,7 @@ fn mark_unfinished_cases(state: &mut ActiveRunState) {
 }
 
 fn finish_and_publish(
-    config: &ResolvedProjectConfig,
+    _config: &ResolvedProjectConfig,
     layout: &RunLayout,
     index: &mut super::model::RunIndex,
     state: &mut ActiveRunState,
@@ -585,8 +567,7 @@ fn finish_and_publish(
     }
     state.finished_at.get_or_insert_with(Utc::now);
     ensure!(state.status.is_terminal(), "run state is not terminal");
-    update_index(index, state, &config.api_verification);
-    sync_verified_excludes(config, state, index)?;
+    update_index(index, state);
     let progress = build_progress(index, state);
     store::publish_terminal(layout, state, index)?;
     store::write_yaml(&layout.progress_path, &progress)?;
@@ -598,7 +579,7 @@ fn result(layout: &RunLayout, state: &ActiveRunState) -> E2eRunResult {
         run_key: state.run_key.clone(),
         sequence: state.sequence,
         status: status_label(state.status).to_string(),
-        successful: state.status == RunStatus::Successful,
+        passed: state.status == RunStatus::Successful,
         latest_state: layout.latest_dir.join("state.yaml"),
         progress: layout.progress_path.clone(),
     }
