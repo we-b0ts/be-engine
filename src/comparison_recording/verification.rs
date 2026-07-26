@@ -1,0 +1,397 @@
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, ensure};
+use serde::{Deserialize, Serialize};
+
+use crate::config::edit::{create_atomic, write_atomic};
+use crate::replay::{
+    ComparisonResponseAssertionOptions, ResponseAssertionCaseReport, assert_comparison_response,
+    validate_replay_policy,
+};
+
+const RUN_SUMMARY_FILE: &str = "comparison-recording-run.json";
+
+#[derive(Debug, Clone)]
+pub struct ComparisonVerificationOptions {
+    pub case_source: PathBuf,
+    pub policy: PathBuf,
+    pub report: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ComparisonVerificationCounts {
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub inconclusive: usize,
+    pub unevaluable: usize,
+    pub apis_total: usize,
+    pub apis_passed: usize,
+    pub apis_failed: usize,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ComparisonVerificationApiCounts {
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+    pub inconclusive: usize,
+    pub unevaluable: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonVerificationApi {
+    pub passed: bool,
+    pub counts: ComparisonVerificationApiCounts,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ComparisonVerificationClassification {
+    Passed,
+    CandidateDifference,
+    SourceDrift,
+    Unevaluable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonVerificationCase {
+    pub case_id: String,
+    pub case_dir: String,
+    pub api: String,
+    pub classification: ComparisonVerificationClassification,
+    pub passed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response: Option<ResponseAssertionCaseReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub baseline_recheck: Option<ResponseAssertionCaseReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonVerificationReport {
+    pub version: u8,
+    pub kind: String,
+    pub case_source: String,
+    pub recording_summary_path: String,
+    pub recording_summary_fingerprint: String,
+    pub expected_response: String,
+    pub assertion_mode: String,
+    pub baseline_recheck: String,
+    pub policy_path: String,
+    pub policy_fingerprint: String,
+    pub report_path: String,
+    pub complete: bool,
+    pub passed: bool,
+    pub counts: ComparisonVerificationCounts,
+    pub apis: std::collections::BTreeMap<String, ComparisonVerificationApi>,
+    pub cases: Vec<ComparisonVerificationCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecordingSummary {
+    status: String,
+    ready: bool,
+    finished_at: Option<serde_json::Value>,
+    counts: RecordingCounts,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecordingCounts {
+    published: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecordedRequest {
+    method: String,
+    api_pattern: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CaseKind {
+    version: u8,
+    kind: String,
+}
+
+pub fn verify_comparison_recording(
+    options: ComparisonVerificationOptions,
+) -> Result<ComparisonVerificationReport> {
+    let case_source = options.case_source.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve comparison recording source {}",
+            options.case_source.display()
+        )
+    })?;
+    ensure!(
+        case_source.is_dir(),
+        "comparison recording source must be a directory"
+    );
+    let summary_path = case_source.join(RUN_SUMMARY_FILE);
+    let summary_bytes = read_regular(&summary_path, "comparison recording summary")?;
+    let summary: RecordingSummary = serde_json::from_slice(&summary_bytes)
+        .with_context(|| format!("invalid recording summary {}", summary_path.display()))?;
+    ensure!(
+        summary.status == "completed" && summary.finished_at.is_some(),
+        "comparison recording run is not finalized successfully"
+    );
+    ensure!(
+        summary.ready,
+        "comparison recording run never observed both upstreams ready"
+    );
+
+    let policy = validate_replay_policy(&options.policy)?;
+    ensure!(
+        policy.runner_owned_response_assertions,
+        "comparison verification requires replay policy version 2"
+    );
+    let mut case_dirs = discover_cases(&case_source)?;
+    case_dirs.sort();
+    ensure!(
+        !case_dirs.is_empty(),
+        "comparison recording run contains no published cases"
+    );
+    ensure!(
+        case_dirs.len() == summary.counts.published,
+        "comparison recording summary reports {} published cases but {} were discovered",
+        summary.counts.published,
+        case_dirs.len()
+    );
+
+    let mut ids = BTreeSet::new();
+    let mut cases = Vec::with_capacity(case_dirs.len());
+    let mut api_counts =
+        std::collections::BTreeMap::<String, ComparisonVerificationApiCounts>::new();
+    let mut counts = ComparisonVerificationCounts {
+        total: case_dirs.len(),
+        ..ComparisonVerificationCounts::default()
+    };
+    for case_dir in case_dirs {
+        let case_id = case_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("comparison recording case directory has no UTF-8 name")?
+            .to_string();
+        ensure!(
+            ids.insert(case_id.clone()),
+            "duplicate comparison recording case id {case_id:?}"
+        );
+        let request_path = case_dir.join("request.json");
+        let request: RecordedRequest =
+            serde_json::from_slice(&read_regular(&request_path, "comparison request")?)
+                .with_context(|| {
+                    format!("invalid comparison request {}", request_path.display())
+                })?;
+        let api = format!("{} {}", request.method, request.api_pattern)
+            .parse::<crate::recording_api::RecordingApi>()
+            .with_context(|| {
+                format!(
+                    "invalid comparison API metadata in {}",
+                    request_path.display()
+                )
+            })?
+            .to_string();
+        let response = assert_comparison_response(ComparisonResponseAssertionOptions {
+            case_id: case_id.clone(),
+            request: request_path,
+            expected_response: case_dir.join("expected-response.json"),
+            response: case_dir.join("response.json"),
+            policy: options.policy.clone(),
+        });
+        let recheck_path = case_dir.join("expected-response-after.json");
+        let baseline_recheck = if path_is_present(&recheck_path)? {
+            Some(assert_comparison_response(
+                ComparisonResponseAssertionOptions {
+                    case_id: case_id.clone(),
+                    request: case_dir.join("request.json"),
+                    expected_response: case_dir.join("expected-response.json"),
+                    response: recheck_path,
+                    policy: options.policy.clone(),
+                },
+            ))
+        } else {
+            None
+        };
+        match (response, baseline_recheck.transpose()) {
+            (Ok(response), Ok(baseline_recheck)) => {
+                let (classification, passed) = if baseline_recheck
+                    .as_ref()
+                    .is_some_and(|report| !report.passed)
+                {
+                    counts.inconclusive += 1;
+                    (ComparisonVerificationClassification::SourceDrift, false)
+                } else if response.passed {
+                    counts.passed += 1;
+                    (ComparisonVerificationClassification::Passed, true)
+                } else {
+                    counts.failed += 1;
+                    (
+                        ComparisonVerificationClassification::CandidateDifference,
+                        false,
+                    )
+                };
+                update_api_counts(api_counts.entry(api.clone()).or_default(), classification);
+                cases.push(ComparisonVerificationCase {
+                    case_id,
+                    case_dir: case_dir.display().to_string(),
+                    api,
+                    classification,
+                    passed,
+                    response: Some(response),
+                    baseline_recheck,
+                    error: None,
+                });
+            }
+            (response, baseline_recheck) => {
+                counts.unevaluable += 1;
+                update_api_counts(
+                    api_counts.entry(api.clone()).or_default(),
+                    ComparisonVerificationClassification::Unevaluable,
+                );
+                let error = response
+                    .err()
+                    .into_iter()
+                    .chain(baseline_recheck.err())
+                    .map(|error| format!("{error:#}"))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                cases.push(ComparisonVerificationCase {
+                    case_id,
+                    case_dir: case_dir.display().to_string(),
+                    api,
+                    classification: ComparisonVerificationClassification::Unevaluable,
+                    passed: false,
+                    response: None,
+                    baseline_recheck: None,
+                    error: Some(error),
+                });
+            }
+        }
+    }
+    let apis = api_counts
+        .into_iter()
+        .map(|(api, counts)| {
+            let passed = counts.total > 0 && counts.passed == counts.total;
+            (api, ComparisonVerificationApi { passed, counts })
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    counts.apis_total = apis.len();
+    counts.apis_passed = apis.values().filter(|api| api.passed).count();
+    counts.apis_failed = counts.apis_total.saturating_sub(counts.apis_passed);
+    let complete = counts.unevaluable == 0;
+    let passed = complete && counts.failed == 0 && counts.passed == counts.total;
+    let report = ComparisonVerificationReport {
+        version: 2,
+        kind: "comparison_recording_verification".to_string(),
+        case_source: case_source.display().to_string(),
+        recording_summary_path: summary_path.display().to_string(),
+        recording_summary_fingerprint: fingerprint(&summary_bytes),
+        expected_response: "assertions_only".to_string(),
+        assertion_mode: "comparison_recording".to_string(),
+        baseline_recheck: "optional_source_consistency".to_string(),
+        policy_path: policy.path,
+        policy_fingerprint: policy.fingerprint,
+        report_path: options.report.display().to_string(),
+        complete,
+        passed,
+        counts,
+        apis,
+        cases,
+    };
+    write_report(&options.report, &report)?;
+    Ok(report)
+}
+
+fn update_api_counts(
+    counts: &mut ComparisonVerificationApiCounts,
+    classification: ComparisonVerificationClassification,
+) {
+    counts.total += 1;
+    match classification {
+        ComparisonVerificationClassification::Passed => counts.passed += 1,
+        ComparisonVerificationClassification::CandidateDifference => counts.failed += 1,
+        ComparisonVerificationClassification::SourceDrift => counts.inconclusive += 1,
+        ComparisonVerificationClassification::Unevaluable => counts.unevaluable += 1,
+    }
+}
+
+fn discover_cases(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut cases = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory)
+            .with_context(|| format!("failed to scan {}", directory.display()))?
+        {
+            let entry = entry?;
+            let metadata = std::fs::symlink_metadata(entry.path())?;
+            if !metadata.is_dir() || metadata.file_type().is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| matches!(name, "failed" | "staging"))
+            {
+                continue;
+            }
+            let marker = path.join("case-kind.json");
+            if marker.is_file() {
+                let bytes = read_regular(&marker, "comparison recording case kind")?;
+                let kind: CaseKind = serde_json::from_slice(&bytes)
+                    .with_context(|| format!("invalid case kind {}", marker.display()))?;
+                ensure!(
+                    kind.version == 1 && kind.kind == "comparison_recording",
+                    "unsupported comparison recording case kind in {}",
+                    marker.display()
+                );
+                cases.push(path);
+            } else {
+                pending.push(path);
+            }
+        }
+    }
+    Ok(cases)
+}
+
+fn path_is_present(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to inspect optional artifact {}", path.display())),
+    }
+}
+
+fn write_report(path: &Path, report: &ComparisonVerificationReport) -> Result<()> {
+    let mut payload =
+        serde_json::to_vec_pretty(report).context("failed to serialize comparison report")?;
+    payload.push(b'\n');
+    if path.exists() {
+        write_atomic(path, &payload)
+    } else {
+        create_atomic(path, &payload)
+    }
+    .with_context(|| format!("failed to write comparison report {}", path.display()))
+}
+
+fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {
+    let metadata = std::fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "{label} must be a regular file and not a symlink"
+    );
+    std::fs::read(path).with_context(|| format!("failed to read {label} {}", path.display()))
+}
+
+fn fingerprint(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("fnv1a64:{hash:016x}")
+}

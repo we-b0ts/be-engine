@@ -12,6 +12,7 @@ E2E contracts.
   capture, and HTTP/HTTPS recording.
 - Automatic local root CA generation, with support for configured CA cert/key paths.
 - Full request/response recording with configurable body truncation.
+- Live baseline/candidate response recording without dependency interception.
 - Default redaction for sensitive proxy and HTTP headers.
 - Optional MySQL TCP proxy with DNS/hosts routing through per-IP listeners.
 - MySQL login/query/response packet metadata and raw response payload recording.
@@ -44,6 +45,8 @@ Use the binary directly for the standard traffic E2E workflow:
 traffic-e2e config recorder init ...
 traffic-e2e config replay init ...
 traffic-e2e config project init ...
+traffic-e2e record-comparison ...
+traffic-e2e compare ... --policy .traffic-e2e/verification.yaml
 traffic-e2e prepare ...
 traffic-e2e run-api ...
 traffic-e2e run ...
@@ -52,10 +55,22 @@ traffic-e2e recover ...
 traffic-e2e abort ...
 ```
 
-Evidence-driven recorder and replay configuration changes live under
+Evidence-driven recorder and verification-policy changes live under
 `traffic-e2e config ... plan|apply`; low-level grouping and report commands live
 under `traffic-e2e diagnose`. Managed recording, replay, fixed-user target
 isolation, and host interception are implemented by the same Rust binary.
+
+Comparison recording accepts only explicitly configured `GET`, `HEAD`, and
+`OPTIONS` methods and never enables isolation. It normally captures one source
+response and one candidate response. Set
+`comparison_recording.baseline_recheck = true` to additionally capture a
+source response after the candidate for source-drift diagnosis. Passing
+`record-comparison --baseline-recheck` enables it for one run without changing
+the configuration. Comparison recording defaults to 60 seconds; automated
+calls pass `--duration-seconds 60` or another positive integer explicitly.
+Offline `compare` reuses
+`.traffic-e2e/verification.yaml`; see
+[development.md](docs/development.md#running-locally).
 
 ## Run
 
@@ -71,10 +86,15 @@ local rules.
 ```bash
 cargo install --path .
 traffic-e2e record --config config/recorder.example.toml
+traffic-e2e record --config config/recorder.example.toml \
+  --api 'GET /api/widgets/*'
 ```
 
 Automation can reserve the recording directory name with an explicit UTC run
 identifier: `traffic-e2e record --config ... --run-id YYYYMMDDHHMMSS`.
+Repeat `--api 'METHOD /path-or-pattern'` to restrict only that run; omission
+uses the TOML rules unchanged. A supplied selector is also the case's
+`api_pattern`, so wildcard traffic stays grouped under the requested API.
 It can also expose two lifecycle barriers without parsing the recorder config:
 
 ```bash
@@ -109,7 +129,7 @@ The default example listens on:
 - DNS mock: `127.0.0.153:15353`
 - TCP fake-IP gateway: `127.0.0.1:15001`
 - HTTP gateway for tcpcopy traffic: `0.0.0.0:18084`
-- JSONL output: `./recordings/<run-id>/traffic.jsonl`
+- JSONL output: `./.traffic-e2e/artifacts/recordings/<run-id>/traffic.jsonl`
 - Generated CA: `./data/traffic-recorder-ca.pem`
 
 For dependency replay, install the binary and pass the case directory directly:
@@ -122,11 +142,13 @@ traffic-e2e replay path/to/case-dir
 traffic-e2e replay path/to/recordings/<run-id>
 ```
 
-For runtime-generated UUIDs, timestamps, and signed query fields, keep a
-source-controlled `.traffic-e2e/replay.yaml` in the target project and pass it with
+For runtime-generated UUIDs, timestamps, signed query fields, and reviewed
+response-comparison exemptions, keep a
+source-controlled `.traffic-e2e/verification.yaml` in the target project and pass it with
 `--policy`. Initialize it with `traffic-e2e config replay init --target-root
-<target>`; initialization, strategy application, and replay each validate the
-policy. See [Replay Dynamic-Value Policy](docs/replay-policy.md).
+<target>`; initialization, strategy application, replay, and comparison each
+validate the policy. See
+[Dependency Replay And Response Verification Policy](docs/replay-policy.md).
 
 `traffic-e2e replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
@@ -204,13 +226,6 @@ path = "/"
 success_status = 200
 interval_ms = 1000
 
-[http_gateway.verified_excludes]
-# BEGIN AI-MANAGED VERIFIED API EXCLUDES
-apis = [
-  # { rule = "record-api", method = "GET", path_pattern = "/api/users/*" },
-]
-# END AI-MANAGED VERIFIED API EXCLUDES
-
 [[http_gateway.exclude_rules]]
 name = "exclude-health"
 methods = ["GET"]
@@ -238,19 +253,11 @@ keeps the original `Host` header when forwarding. Recording access policy is
 evaluated before both rule sets, so exclusion rules do not bypass
 `block_known_writes`.
 
-`[http_gateway.verified_excludes]` contains recorder-owned, replay-verified API
-exclusions. Traffic E2E verification thresholds belong in
-`.traffic-e2e/project.yaml`: an API must satisfy both the configured number of
-trailing successful rounds and the successful case executions covered by those
-rounds. Global defaults may be overridden for an exact
-`METHOD + path_pattern`. When an API first becomes verified,
-`traffic-e2e` atomically adds the exact `rule + method + path_pattern` and
-verifies convergence.
-The path pattern may be exact, use whole-segment `*`, or end in a `**`
-catch-all matching one or more remaining segments.
-On the next recorder start, matching traffic uses the configured fallback
-without creating a case.
-See [Verified API Excludes](docs/verified-api-excludes.md).
+Use repeatable `record --api 'METHOD /path-or-pattern'` arguments to narrow one
+recording run without editing the TOML. Runtime selectors are intersected with
+`[[http_gateway.rules]]`; they never widen the configured recording scope.
+They also define the selected cases' API grouping. Omitting `--api` preserves
+the configured behavior.
 
 `[http_gateway.ready]` is an optional active readiness probe against
 `matched_upstream`. When enabled, the recorder sends `GET path` every
@@ -267,9 +274,11 @@ recorded as a case. If this section is disabled, the settle interval does not
 apply and the bootstrap window still closes when the first matched gateway
 case is reserved.
 
-Each recorder process creates one run directory under `recording.output_dir`
-named `YYYYMMDDHHMMSS`. Matched gateway requests create case directories inside
-that run after the case is complete and valid:
+Each recorder process creates one run directory under
+`artifacts.root_dir/recordings` named `YYYYMMDDHHMMSS`. Comparison recording
+runs use the sibling `artifacts.root_dir/comparison-recordings` directory.
+Matched gateway requests create case directories inside the recording run
+after the case is complete and valid:
 
 ```text
 <run-id>/traffic.jsonl
@@ -398,7 +407,7 @@ listen = "127.0.0.153:15353"
 upstream_dns = "10.10.10.10:53"
 fake_cidr = "198.18.0.0/15"
 ttl_seconds = 60
-registry_path = "./recordings/fake_dns_registry.json"
+registry_path = "./.traffic-e2e/artifacts/fake_dns_registry.json"
 # Exact names, suffixes starting with ".", and glob wildcards using "*" or "?"
 # are returned from upstream DNS unchanged.
 bypass_domains = [

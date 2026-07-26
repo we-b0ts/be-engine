@@ -1,39 +1,48 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use clap::Args;
-use traffic_e2e::{AppConfig, run_compare};
+use traffic_e2e::{ComparisonVerificationOptions, verify_comparison_recording};
 
 #[derive(Debug, Args)]
 pub(super) struct CompareArgs {
-    /// Compare-mode TOML configuration.
+    /// Finalized comparison recording run directory.
+    #[arg(value_name = "COMPARISON_RECORDING_RUN")]
+    case_source: PathBuf,
+    /// Verification YAML whose response_rules define allowed response differences.
     #[arg(long)]
-    config: PathBuf,
-    /// Explicit 14-digit UTC compare run identifier.
-    #[arg(long, value_parser = parse_run_id)]
-    run_id: Option<String>,
+    policy: PathBuf,
+    /// JSON report path. Defaults to comparison-report.json in the run directory.
+    #[arg(long)]
+    report: Option<PathBuf>,
 }
 
 pub(super) async fn run(args: CompareArgs) -> Result<()> {
     ensure!(
-        args.config.is_file(),
-        "compare config not found: {}",
-        args.config.display()
+        args.case_source.is_dir(),
+        "comparison recording run not found: {}",
+        args.case_source.display()
     );
-    let config = AppConfig::load_compare(&args.config)
-        .with_context(|| format!("failed to load compare config {}", args.config.display()))?;
-    run_compare(config, args.run_id).await
-}
-
-fn parse_run_id(value: &str) -> std::result::Result<String, String> {
-    if value.len() == 14
-        && value.bytes().all(|byte| byte.is_ascii_digit())
-        && chrono::NaiveDateTime::parse_from_str(value, "%Y%m%d%H%M%S").is_ok()
-    {
-        Ok(value.to_string())
-    } else {
-        Err("run ID must contain exactly 14 ASCII digits (YYYYMMDDHHMMSS)".to_string())
-    }
+    ensure!(
+        args.policy.is_file(),
+        "verification policy not found: {}",
+        args.policy.display()
+    );
+    let report_path = args
+        .report
+        .unwrap_or_else(|| args.case_source.join("comparison-report.json"));
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: args.case_source,
+        policy: args.policy,
+        report: report_path,
+    })?;
+    super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&report)?))?;
+    ensure!(
+        report.passed,
+        "comparison recording verification failed; see {}",
+        report.report_path
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -42,30 +51,30 @@ mod tests {
 
     use super::*;
 
-    #[derive(Parser)]
+    #[derive(Debug, Parser)]
     struct TestCli {
         #[command(flatten)]
         compare: CompareArgs,
     }
 
     #[test]
-    fn parses_compare_arguments_without_policy() {
+    fn requires_only_recording_source_and_policy() {
         let parsed = TestCli::try_parse_from([
             "test",
-            "--config",
-            "compare.toml",
-            "--run-id",
-            "20260722153045",
+            "artifacts/comparison-recordings/20260722160000",
+            "--policy",
+            ".traffic-e2e/verification.yaml",
         ])
         .unwrap();
-        assert_eq!(parsed.compare.run_id.as_deref(), Some("20260722153045"));
+
+        assert!(parsed.compare.report.is_none());
         assert!(
             TestCli::try_parse_from([
                 "test",
-                "--config",
-                "compare.toml",
+                "artifacts/comparison-recordings/20260722160000",
                 "--policy",
-                "replay.yaml",
+                ".traffic-e2e/verification.yaml",
+                "--intercept",
             ])
             .is_err()
         );

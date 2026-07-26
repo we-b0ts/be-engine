@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    ReplayPolicyInitOptions, ResponseRuleFeedback, ResponseRuleKind, initialize_replay_policy,
-    plan_response_rule,
+    ComparisonResponseRuleFeedback, ReplayPolicyInitOptions, ResponseRuleFeedback,
+    ResponseRuleKind, initialize_replay_policy, plan_comparison_response_rule, plan_response_rule,
 };
 
 #[derive(Debug, Args)]
@@ -15,7 +15,7 @@ pub(super) struct ReplayArgs {
 
 #[derive(Debug, Subcommand)]
 enum ReplayCommand {
-    /// Create an empty assertion-only replay policy.
+    /// Create an empty dependency replay and response verification policy.
     Init,
     /// Validate evidence and preview one policy strategy.
     Plan(PlanArgs),
@@ -42,6 +42,11 @@ enum ReplayStrategy {
 }
 
 #[derive(Debug, Args)]
+#[command(group(
+    ArgGroup::new("evidence")
+        .required(true)
+        .args(["assertion_report", "comparison_report"])
+))]
 struct ResponseRuleArgs {
     #[arg(long, value_enum)]
     kind: ResponseRuleKindArg,
@@ -49,10 +54,20 @@ struct ResponseRuleArgs {
     api: String,
     #[arg(long = "json-pointer", required = true)]
     json_pointers: Vec<String>,
-    #[arg(long)]
-    assertion_report: PathBuf,
-    #[arg(long)]
-    aggregate_report: PathBuf,
+    #[arg(
+        long,
+        requires = "aggregate_report",
+        conflicts_with = "comparison_report"
+    )]
+    assertion_report: Option<PathBuf>,
+    #[arg(
+        long,
+        requires = "assertion_report",
+        conflicts_with = "comparison_report"
+    )]
+    aggregate_report: Option<PathBuf>,
+    #[arg(long, conflicts_with_all = ["assertion_report", "aggregate_report"])]
+    comparison_report: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -104,12 +119,28 @@ fn response_rule_plan(
     target_root: PathBuf,
     args: ResponseRuleArgs,
 ) -> Result<traffic_e2e::ResponseRulePlan> {
-    plan_response_rule(ResponseRuleFeedback {
-        policy_path: target_root.join(".traffic-e2e/replay.yaml"),
-        kind: args.kind.into(),
-        api: args.api,
-        json_pointers: args.json_pointers,
-        assertion_report: args.assertion_report,
-        aggregate_report: args.aggregate_report,
-    })
+    let policy_path = target_root.join(".traffic-e2e/verification.yaml");
+    let kind = args.kind.into();
+    if let Some(comparison_report) = args.comparison_report {
+        plan_comparison_response_rule(ComparisonResponseRuleFeedback {
+            policy_path,
+            kind,
+            api: args.api,
+            json_pointers: args.json_pointers,
+            comparison_report,
+        })
+    } else {
+        plan_response_rule(ResponseRuleFeedback {
+            policy_path,
+            kind,
+            api: args.api,
+            json_pointers: args.json_pointers,
+            assertion_report: args
+                .assertion_report
+                .expect("clap requires replay assertion evidence"),
+            aggregate_report: args
+                .aggregate_report
+                .expect("clap requires replay aggregate evidence"),
+        })
+    }
 }

@@ -20,7 +20,7 @@ pub(super) struct ConfigArgs {
 enum ConfigCommand {
     /// Create or update .traffic-e2e/recorder.toml.
     Recorder(recorder::RecorderArgs),
-    /// Create or update .traffic-e2e/replay.yaml.
+    /// Create or update .traffic-e2e/verification.yaml.
     Replay(replay::ReplayArgs),
     /// Create .traffic-e2e/project.yaml from repository conventions.
     Project(project::ProjectArgs),

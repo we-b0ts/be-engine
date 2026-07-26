@@ -2,7 +2,7 @@ mod access_policy;
 mod active_case;
 mod case_group;
 mod case_kind;
-mod compare;
+mod comparison_recording;
 mod config;
 mod dependency;
 mod dns_mock;
@@ -16,6 +16,7 @@ mod mysql;
 mod path_pattern;
 mod proxy;
 mod recorder;
+mod recording_api;
 mod recording_control;
 mod redis;
 mod replay;
@@ -52,33 +53,37 @@ pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
     ensure_case_group,
 };
-pub use compare::run as run_compare;
+pub use comparison_recording::{
+    ComparisonRecordingRunOptions, ComparisonVerificationApi, ComparisonVerificationApiCounts,
+    ComparisonVerificationCase, ComparisonVerificationClassification, ComparisonVerificationCounts,
+    ComparisonVerificationOptions, ComparisonVerificationReport, run as run_comparison_recording,
+    run_with_duration as run_comparison_recording_with_duration,
+    run_with_options as run_comparison_recording_with_options, verify_comparison_recording,
+};
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
-    AppConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
-    BackgroundDependencyRuleConfig, CasePathPatternAuthority, CasePathPatternFeedback,
-    CasePathPatternPlan, CasePathPatternReport, CompareConfig, DEFAULT_FAKE_CIDR,
-    DEFAULT_RECORDING_RULE, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
+    AppConfig, ArtifactsConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan,
+    BackgroundDependencyReport, BackgroundDependencyRuleConfig, CasePathPatternAuthority,
+    CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport, ComparisonRecordingConfig,
+    DEFAULT_FAKE_CIDR, DEFAULT_RECORDING_RULE, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
     HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
     MysqlConfig, MysqlRouteConfig, RecorderConfigInitOptions, RecorderConfigInitResult,
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
-    TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode, UdpGatewayConfig, VerifiedApiExclude,
-    VerifiedApiExcludeEnsureReport, VerifiedApiExcludeEnsureStatus, VerifiedApiExcludeFeedback,
-    VerifiedApiExcludePlan, VerifiedApiExcludeReport, VerifiedApiExcludesConfig,
-    VerifiedApiVerification, ensure_verified_api_exclude, initialize_recorder_config,
-    plan_allowed_unused_http_hosts, plan_background_dependency, plan_case_path_pattern_feedback,
-    plan_verified_api_exclude,
+    TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode, UdpGatewayConfig,
+    initialize_recorder_config, plan_allowed_unused_http_hosts, plan_background_dependency,
+    plan_case_path_pattern_feedback,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
-    E2eApiRunResult, E2eApiVerificationOverride, E2eFocusedApiStatus, E2eRunContext,
-    E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult,
-    E2eRunStatus, abort_e2e_run, initialize_e2e_run, initialize_standard_e2e_project,
-    prepare_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round, status_e2e_run,
+    E2eApiRunResult, E2eFocusedApiStatus, E2eRunContext, E2eRunInitOptions, E2eRunInitResult,
+    E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus, abort_e2e_run,
+    initialize_e2e_run, initialize_standard_e2e_project,
+    initialize_standard_e2e_project_with_force, prepare_e2e_run, recover_e2e_run, run_e2e_api,
+    run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use recorder::{
@@ -92,17 +97,19 @@ pub use recorder::{
     TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
     capture_case_body, redact_headers,
 };
+pub use recording_api::RecordingApi;
 pub use recording_control::{
     RecordingReadiness, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
 };
 pub use replay::{
-    DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
-    MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,
-    ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayPolicyInitOptions,
-    ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind,
-    ResponseRulePlan, ResponseRuleReport, aggregate_replay_reports,
-    aggregate_replay_reports_with_options, initialize_replay_policy, plan_dynamic_response_rule,
-    plan_response_rule, run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
+    ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
+    DynamicResponseRuleReport, MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions,
+    ReplayAggregateReport, ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig,
+    ReplayPolicyInitOptions, ReplayPolicyInitResult, ReplayPolicyValidationReport,
+    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport,
+    aggregate_replay_reports, aggregate_replay_reports_with_options, initialize_replay_policy,
+    plan_comparison_response_rule, plan_dynamic_response_rule, plan_response_rule,
+    run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
     validate_replay_policy,
 };
 pub use tls::MitmCa;
@@ -116,6 +123,7 @@ pub struct AppState {
 
 struct AppStateInner {
     config: AppConfig,
+    recording_apis: Vec<RecordingApi>,
     recorder: Recorder,
     dns_registry: FakeDnsRegistry,
     dns_bypass_matcher: DomainMatcher,
@@ -133,14 +141,30 @@ impl AppState {
     }
 
     pub async fn new_with_run_id(config: AppConfig, run_id: Option<String>) -> Result<Self> {
+        Self::new_with_recording_apis(config, run_id, Vec::new()).await
+    }
+
+    pub async fn new_with_recording_apis(
+        config: AppConfig,
+        run_id: Option<String>,
+        recording_apis: Vec<RecordingApi>,
+    ) -> Result<Self> {
         config
             .validate()
             .context("invalid recorder configuration")?;
+        recording_api::validate_selection(&recording_apis, &config.http_gateway.rules)
+            .context("invalid recording API selection")?;
         let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
             .context("failed to initialize DNS bypass matcher")?;
-        let recorder = Recorder::new_with_recording_config_and_run_id(&config.recording, run_id)
-            .await
-            .context("failed to initialize JSONL recorder")?;
+        let recording_output_dir = config.recording_output_dir();
+        let recorder = Recorder::new_with_recording_config_at_and_run_id(
+            &config.recording,
+            recording_output_dir,
+            run_id,
+            recording_apis.iter().map(ToString::to_string).collect(),
+        )
+        .await
+        .context("failed to initialize JSONL recorder")?;
         let dns_registry = FakeDnsRegistry::load_or_new(
             &config.dns_mock.fake_cidr,
             Some(&config.dns_mock.registry_path),
@@ -162,6 +186,7 @@ impl AppState {
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
+                recording_apis,
                 recorder,
                 dns_registry,
                 dns_bypass_matcher,
@@ -181,6 +206,22 @@ impl AppState {
 
     pub fn recorder(&self) -> &Recorder {
         &self.inner.recorder
+    }
+
+    pub(crate) fn should_record_api(&self, method: &hyper::Method, uri: &hyper::Uri) -> bool {
+        self.inner.recording_apis.is_empty() || self.recording_api_pattern(method, uri).is_some()
+    }
+
+    pub(crate) fn recording_api_pattern(
+        &self,
+        method: &hyper::Method,
+        uri: &hyper::Uri,
+    ) -> Option<&str> {
+        self.inner
+            .recording_apis
+            .iter()
+            .find(|api| api.matches(method, uri))
+            .map(RecordingApi::path_pattern)
     }
 
     pub(crate) fn access_decision(&self, operation: OperationClass) -> AccessDecision {

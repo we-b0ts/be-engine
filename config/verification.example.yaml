@@ -1,7 +1,7 @@
-version: 1
+version: 2
 expected_response: assertions_only
 
-# Copy this file to the target repository as .traffic-e2e/replay.yaml. Keep only
+# Copy this file to the target repository as .traffic-e2e/verification.yaml. Keep only
 # evidence-backed rules for that target; never put recorded UUIDs, timestamps,
 # response bodies, secrets, absolute case paths, or case-id exceptions here.
 rules:
@@ -66,3 +66,9 @@ rules:
           time:
             relative_to: replay_now
             tolerance: 2s
+
+# Add only source-proven non-deterministic response fields from finalized E2E
+# or comparison reports through `traffic-e2e config replay apply response-rule`.
+response_rules:
+  dynamic: {}
+  unordered: {}

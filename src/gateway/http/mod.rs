@@ -124,15 +124,27 @@ async fn handle_gateway_request(
     let request_headers_for_record =
         redact_headers(&request_headers, &state.config().recording.redact_headers);
     let authority = request_authority(&original_uri, &request_headers);
+    let recording_api_pattern = state
+        .recording_api_pattern(&method, &original_uri)
+        .map(str::to_string);
     let matched_rule = match evaluate_request(
-        &config.verified_excludes,
         &config.exclude_rules,
         &config.rules,
         &method,
         &original_uri,
         &request_headers,
     ) {
-        RuleDecision::Matched(rule) => Some(rule),
+        RuleDecision::Matched(rule) if state.should_record_api(&method, &original_uri) => {
+            Some(rule)
+        }
+        RuleDecision::Matched(_) => {
+            info!(
+                method = %method,
+                uri = %original_uri,
+                "HTTP gateway request is outside the runtime recording API selection"
+            );
+            None
+        }
         RuleDecision::Excluded { name } => {
             info!(exclude_rule = %name, uri = %original_uri, "HTTP gateway request excluded from matching");
             None
@@ -141,7 +153,10 @@ async fn handle_gateway_request(
     };
     let matched_rule_name = matched_rule.as_ref().map(|rule| rule.name.clone());
     let candidate_case = matched_rule.as_ref().map(|rule| {
-        let group = resolve_case_group(&original_uri, &rule.case_path_patterns);
+        let group = recording_api_pattern.as_ref().map_or_else(
+            || resolve_case_group(&original_uri, &rule.case_path_patterns),
+            |pattern| resolve_case_group(&original_uri, std::slice::from_ref(pattern)),
+        );
         let max_cases = config.case_limits.limit_for(&group.pattern);
         (
             CaseContext {

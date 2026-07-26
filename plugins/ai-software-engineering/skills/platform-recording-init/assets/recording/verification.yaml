@@ -1,4 +1,4 @@
-# Generated for Platform traffic replay.
+# Generated for Platform dependency replay and response verification.
 version: 2
 expected_response: assertions_only
 rules: []

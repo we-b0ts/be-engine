@@ -30,20 +30,10 @@ pub struct E2eRunInitOptions {
     pub project_cli: PathBuf,
     pub replay_policy: PathBuf,
     pub replay_startup_timeout_seconds: u64,
-    pub api_verification_consecutive_successful_runs: u64,
-    pub api_verification_successful_cases: u64,
-    pub api_verification_overrides: Vec<E2eApiVerificationOverride>,
     pub pr_base: String,
     pub recorder_config: Option<PathBuf>,
     pub recording_rule: Option<String>,
     pub force: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct E2eApiVerificationOverride {
-    pub api: String,
-    pub consecutive_successful_runs: u64,
-    pub successful_cases: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -105,21 +95,25 @@ pub fn initialize_e2e_run(options: E2eRunInitOptions) -> Result<E2eRunInitResult
 }
 
 pub fn initialize_standard_e2e_project(target_root: PathBuf) -> Result<E2eRunInitResult> {
+    initialize_standard_e2e_project_with_force(target_root, false)
+}
+
+pub fn initialize_standard_e2e_project_with_force(
+    target_root: PathBuf,
+    force: bool,
+) -> Result<E2eRunInitResult> {
     let resolved_root = std::fs::canonicalize(&target_root)
         .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
     let repository_name = crate::repository::directory_name(&resolved_root)?;
     initialize_e2e_run(E2eRunInitOptions {
         target_root,
         project_cli: PathBuf::from(format!("scripts/{repository_name}-cli")),
-        replay_policy: PathBuf::from(".traffic-e2e/replay.yaml"),
+        replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
         replay_startup_timeout_seconds: 60,
-        api_verification_consecutive_successful_runs: 3,
-        api_verification_successful_cases: 3,
-        api_verification_overrides: Vec::new(),
         pr_base: "dev-migration".to_string(),
         recorder_config: Some(PathBuf::from(".traffic-e2e/recorder.toml")),
         recording_rule: Some(crate::config::DEFAULT_RECORDING_RULE.to_string()),
-        force: false,
+        force,
     })
 }
 
@@ -236,7 +230,7 @@ fn run_status_label(status: RunStatus) -> &'static str {
     match status {
         RunStatus::Running => "running",
         RunStatus::Finalizing => "finalizing",
-        RunStatus::Successful => "successful",
+        RunStatus::Successful => "passed",
         RunStatus::Failed => "failed",
         RunStatus::Interrupted => "interrupted",
     }

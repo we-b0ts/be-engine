@@ -10,7 +10,7 @@ use tokio::sync::Mutex;
 use super::model::{ApiCountMap, ApiCounts};
 
 #[derive(Debug, Clone, Default, Serialize)]
-pub(super) struct CompareCounts {
+pub(super) struct ComparisonRecordingCounts {
     pub(super) received: usize,
     pub(super) matched: usize,
     pub(super) unmatched: usize,
@@ -24,6 +24,9 @@ pub(super) struct CompareCounts {
     pub(super) baseline_success: usize,
     pub(super) baseline_error: usize,
     pub(super) baseline_response_too_large: usize,
+    pub(super) baseline_recheck_success: usize,
+    pub(super) baseline_recheck_error: usize,
+    pub(super) baseline_recheck_response_too_large: usize,
     pub(super) candidate_success: usize,
     pub(super) candidate_error: usize,
     pub(super) candidate_response_too_large: usize,
@@ -33,47 +36,49 @@ pub(super) struct CompareCounts {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct CompareRunReport {
+struct ComparisonRecordingRunReport {
     version: u8,
     run_id: String,
     status: String,
     output_dir: String,
+    recording_apis: Vec<String>,
     started_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
     ready: bool,
     in_flight: usize,
-    counts: CompareCounts,
+    counts: ComparisonRecordingCounts,
     apis: ApiCountMap,
     errors: Vec<String>,
 }
 
 #[derive(Clone)]
-pub(super) struct CompareSummary {
+pub(super) struct ComparisonRecordingSummary {
     path: Arc<PathBuf>,
-    state: Arc<Mutex<CompareRunReport>>,
+    state: Arc<Mutex<ComparisonRecordingRunReport>>,
 }
 
-impl CompareSummary {
-    pub(super) fn new(run_id: String, run_dir: &Path) -> Self {
+impl ComparisonRecordingSummary {
+    pub(super) fn new(run_id: String, run_dir: &Path, recording_apis: Vec<String>) -> Self {
         Self {
-            path: Arc::new(run_dir.join("compare-run.json")),
-            state: Arc::new(Mutex::new(CompareRunReport {
+            path: Arc::new(run_dir.join("comparison-recording-run.json")),
+            state: Arc::new(Mutex::new(ComparisonRecordingRunReport {
                 version: 1,
                 run_id,
                 status: "running".to_string(),
                 output_dir: run_dir.display().to_string(),
+                recording_apis,
                 started_at: Utc::now(),
                 finished_at: None,
                 ready: false,
                 in_flight: 0,
-                counts: CompareCounts::default(),
+                counts: ComparisonRecordingCounts::default(),
                 apis: ApiCountMap::new(),
                 errors: Vec::new(),
             })),
         }
     }
 
-    pub(super) async fn update(&self, change: impl FnOnce(&mut CompareCounts)) {
+    pub(super) async fn update(&self, change: impl FnOnce(&mut ComparisonRecordingCounts)) {
         change(&mut self.state.lock().await.counts);
     }
 
@@ -117,7 +122,7 @@ impl CompareSummary {
         let payload = {
             let state = self.state.lock().await;
             let mut payload = serde_json::to_vec_pretty(&*state)
-                .context("failed to serialize compare run report")?;
+                .context("failed to serialize comparison recording run report")?;
             payload.push(b'\n');
             payload
         };

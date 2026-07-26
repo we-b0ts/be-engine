@@ -16,6 +16,14 @@ pub(super) struct ExpectedResponse {
 }
 
 #[derive(Debug, Deserialize)]
+pub(super) struct ComparisonResponse {
+    pub(super) version: u8,
+    pub(super) status: Option<u16>,
+    pub(super) body: Option<ResponseBody>,
+    pub(super) error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ActualResponse {
     pub(super) version: u8,
@@ -25,9 +33,9 @@ pub(super) struct ActualResponse {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ResponseBody {
-    encoding: String,
-    data: String,
-    truncated: bool,
+    pub(super) encoding: String,
+    pub(super) data: String,
+    pub(super) truncated: bool,
 }
 
 pub(super) fn decode_body(body: &ResponseBody, label: &str) -> Result<Vec<u8>> {

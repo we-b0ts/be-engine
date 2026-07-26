@@ -213,24 +213,31 @@ parameters. Different Platform services may use different images, environment,
 `NAME_CONF`, Breeze service pools, mounts, or root bootstrap commands; preserve
 that evidence instead of forcing one universal Docker command.
 
-Copy `assets/recording/mesh_switch_task.sh` unchanged to
-`scripts/mesh_switch_task.sh`. Do not inline, reconstruct, or depend on a
+Copy `assets/recording/brz-no-fallback.sh` unchanged to
+`scripts/brz-no-fallback.sh`. Do not inline, reconstruct, or depend on a
 host-installed copy of this script.
 
 The generated script must accept:
 
 ```bash
 ./scripts/start-recording
+./scripts/start-recording --run-id YYYYMMDDHHMMSS
 ./scripts/start-recording --duration-seconds <positive-integer>
-./scripts/start-recording --mesh-only <true|false>
+./scripts/start-recording --brz-no-fallback <true|false>
+./scripts/start-recording --api 'GET /api/widgets/*'
 ```
 
-Default `mesh_only` to `true`. Accept only the literal values `true` and
-`false`, reject missing, invalid, or duplicate values before changing runtime
-state, and allow it to be combined with `--duration-seconds`. Require `nc` and
-an executable repository copy of the asset during preflight. When true, run the
-repository's `scripts/mesh_switch_task.sh` immediately after source port `880`
-becomes available. When false, do not execute it.
+Default `brz_no_fallback` to `true`. Accept only the literal values `true` and
+`false`. Default `duration_seconds` to `60` when omitted. AI and automated
+invocations must explicitly pass `--duration-seconds 60` or another positive
+integer. Require `--run-id` to be a valid 14-digit UTC timestamp. Reject
+missing, invalid, or duplicate values before changing runtime state, allow all
+options to combine, accept repeatable canonical `--api` selectors, and pass
+the run ID and API selectors through unchanged to `traffic-e2e record`.
+Require `nc` and an executable repository copy of the asset during preflight.
+When `brz_no_fallback` is true, run the repository's
+`scripts/brz-no-fallback.sh` immediately after source port `880` becomes
+available. When false, do not execute it.
 
 Use this fixed lifecycle:
 
@@ -243,7 +250,7 @@ Use this fixed lifecycle:
 6. start Breeze with its genuine Vintage configuration and wait for Breeze;
 7. start the source with `MESH_CONNECT_HOST=breeze.recording`;
 8. wait for source port `880`, verify the genuine Java process is `998:998`,
-   then run `scripts/mesh_switch_task.sh` when `mesh_only` is true;
+   then run `scripts/brz-no-fallback.sh` when `brz_no_fallback` is true;
 9. run `traffic-e2e recording wait-ready`; this already waits through the
    configured post-ready settle interval, so do not add another shell sleep;
 10. record for the selected duration;
@@ -261,18 +268,130 @@ Use strict shell behavior, deterministic project-prefixed container names,
 stage-aware idempotent cleanup, and `exec` in launchers. Never use `kill -9` as
 the normal Recorder shutdown path.
 
+## Generate Comparison Recording
+
+Initialization happens before the target implementation exists. Generate a
+source-controlled, extensible `scripts/<project>-cli` facade with at least
+these initialization-time lifecycle commands:
+
+```text
+start
+status
+stop
+```
+
+Initially, `start` must launch an owned fixed-response HTTP mock on port `8081`.
+Every request path returns the configured readiness status `404` and this exact
+body:
+
+```json
+{"code":"COMPARISON_RECORDING_CANDIDATE_NOT_IMPLEMENTED","msg":"fixed mock response"}
+```
+
+`status` must validate the owned PID and listening port. `stop` must be
+idempotent and stop only the process owned by this repository. This list is a
+minimum, not an exclusive command set. When genuine target startup becomes
+available, replace the mock implementation behind this facade, preserve the
+`start`/`status`/`stop` lifecycle semantics used by comparison recording, and
+add the `e2e`, `test`, and `check` commands required by the standard traffic
+E2E target facade.
+
+Generate `scripts/start-recording-comparison` with these accepted forms:
+
+```bash
+./scripts/start-recording-comparison
+./scripts/start-recording-comparison --run-id YYYYMMDDHHMMSS
+./scripts/start-recording-comparison --duration-seconds <positive-integer>
+./scripts/start-recording-comparison --baseline-recheck
+./scripts/start-recording-comparison --brz-no-fallback <true|false>
+./scripts/start-recording-comparison --api 'GET /api/widgets/*'
+```
+
+Default the duration to `60` seconds when omitted. AI and automated invocations
+must explicitly pass `--duration-seconds 60` or another positive integer.
+Default `brz_no_fallback` to `true` and accept only literal `true` or `false`.
+Require `--run-id` to be a valid 14-digit UTC timestamp. Allow every option to
+combine, reject missing, invalid, or duplicate option values before changing
+runtime state, and accept repeatable canonical `--api` selectors. Consume
+`--brz-no-fallback` in the wrapper; pass the run ID, duration, baseline recheck,
+and API selectors through unchanged to `traffic-e2e record-comparison`.
+
+Start exactly one Breeze container for comparison and connect both the genuine
+source container and candidate container to that same instance with their
+normal dependency configuration. Do not start a Breeze per application.
+`brz-no-fallback.sh` controls application-side fallback behavior, so when the
+option is true, execute the mounted repository script against the source and
+against every candidate runtime that exposes the Platform mesh control
+endpoint after each becomes ready. Treat a required but unreachable control
+endpoint as startup failure. When false, skip those commands. Use this
+lifecycle:
+
+1. validate arguments and create ignored runtime directories;
+2. create the comparison network topology and start one genuine inspected
+   Breeze instance without Recorder dependency interception;
+3. start the genuine inspected source as the baseline and connect it to the
+   shared Breeze;
+4. invoke `scripts/<project>-cli stop` to remove only a stale owned candidate,
+   then invoke `start`, connect the candidate to the same Breeze, and require
+   `status` to succeed;
+5. when `brz_no_fallback` is true, apply `scripts/brz-no-fallback.sh` to each
+   applicable ready application container;
+6. run `traffic-e2e record-comparison --config
+   .traffic-e2e/recorder.toml`, passing through `--run-id`,
+   `--duration-seconds`, every `--api`, and the enable-only
+   `--baseline-recheck` flag when set;
+7. forward termination to `traffic-e2e`, allow it to finalize artifacts, then
+   stop only the owned candidate, source, shared Breeze, and network resources;
+   and
+8. preserve the `record-comparison` exit status.
+
+Do not invoke `scripts/start-recording`: that workflow intentionally installs
+dependency interception, while comparison recording must execute each
+service's original dependency behavior. Do not enable the fixed recording
+user, DNS/iptables interception, fake-IP routing, MITM, replay, or any other
+isolation for `record-comparison`.
+
+Comparison rules may contain only `GET`, `HEAD`, and `OPTIONS`; configuration
+must fail before startup for every other method. Keep
+`comparison_recording.baseline_recheck = false` during initialization. A later
+verification run may explicitly pass `--baseline-recheck` to capture
+source-before, candidate, and source-after in that order when source-time drift
+evidence is needed.
+
+After a run with frontend cases finalizes, verify it offline:
+
+```bash
+traffic-e2e compare \
+  .traffic-e2e/artifacts/comparison-recordings/<run-id> \
+  --policy .traffic-e2e/verification.yaml
+```
+
+This command is file-only and must not enable isolation. It writes
+`comparison-report.json` by default and reuses only the shared verification
+policy's response rules. A changed optional source recheck is `source_drift`
+and remains inconclusive; it must not be attributed to candidate code or
+automatically exempted. Use `--comparison-report` with
+`traffic-e2e config replay plan|apply response-rule` when reviewed online
+evidence proves that another dynamic or unordered field should be exempted.
+
 ## Validation
 
 Before reporting completion:
 
 - validate the rendered TOML and YAML with the installed `traffic-e2e`;
-- run `bash -n` for both generated scripts;
+- run `bash -n` for `scripts/start-recording`,
+  `scripts/start-recording-comparison`, `scripts/<project>-cli`, and
+  `scripts/brz-no-fallback.sh`;
 - build the adapter without network access;
 - verify the patched class exists in the source JAR;
 - prove Breeze, port `880`, source readiness, UID/GID `998:998`, and fake-DNS
   resolution of `breeze.recording` under the source identity;
-- run `./scripts/start-recording --duration-seconds 1`; and
-- require finalized run metadata with no Recorder startup or shutdown error.
+- run `./scripts/start-recording --duration-seconds 1` and require finalized
+  standard recording metadata with no Recorder startup or shutdown error; and
+- run `./scripts/start-recording-comparison --duration-seconds 1`, prove the
+  source and candidate reused exactly one Breeze instance, require both
+  upstreams to become ready, and require a finalized
+  `comparison-recording-run.json`.
 
 This validation proves ready-to-record state. It does not require a business
-request or a published traffic case.
+request or a published standard or comparison recording case.

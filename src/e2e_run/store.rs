@@ -77,7 +77,7 @@ pub(super) fn load_or_create_index(
     case_source: &Path,
 ) -> Result<RunIndex> {
     if layout.index_path.is_file() {
-        let mut index: RunIndex = read_yaml(&layout.index_path)?;
+        let index: RunIndex = read_yaml(&layout.index_path)?;
         ensure!(
             index.version == STATE_VERSION,
             "unsupported E2E run index version {}",
@@ -91,7 +91,6 @@ pub(super) fn load_or_create_index(
             index.case_source == case_source,
             "E2E run index belongs to another case source"
         );
-        index.normalize_legacy_progress();
         return Ok(index);
     }
     progress::load_progress_baseline(

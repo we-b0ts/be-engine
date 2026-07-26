@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::model::{ActiveRunState, ApiExecution, ApiProgress, ApiVerificationConfig, RunIndex};
+use super::model::{ActiveRunState, ApiExecution, ApiProgress, RunIndex};
 use super::store;
 use crate::case_group::CaseGroupInventory;
 
-const PROGRESS_VERSION: u32 = 2;
+const PROGRESS_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct ProgressReport {
@@ -36,20 +36,20 @@ struct ProgressSummary {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct SuccessCounts {
     executed: u64,
-    successful: u64,
-    consecutive_successful: u64,
+    #[serde(default, alias = "successful")]
+    passed: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct ApiCounts {
     total: u32,
-    verified: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LatestRun {
     number: u64,
-    successful: bool,
+    #[serde(alias = "successful")]
+    passed: bool,
     cases: LatestCounts,
     apis: LatestCounts,
 }
@@ -57,12 +57,12 @@ struct LatestRun {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 struct LatestCounts {
     executed: u32,
-    successful: u32,
+    #[serde(alias = "successful")]
+    passed: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ProgressApi {
-    verified: bool,
     runs: SuccessCounts,
     cases: SuccessCounts,
 }
@@ -77,26 +77,15 @@ pub(super) fn load_progress_baseline(
     }
     let report: ProgressReport = store::read_yaml(progress_path)?;
     ensure!(
-        matches!(report.version, 1 | PROGRESS_VERSION),
+        matches!(report.version, 1 | 2 | PROGRESS_VERSION),
         "unsupported E2E progress version {}",
         report.version
     );
-    let report = if report.version == 1 {
-        normalize_legacy_report(report)
-    } else {
-        report
-    };
     let mut index = RunIndex::empty(run_key, case_source);
     index.executions = report.progress.runs.executed;
-    index.successful = report.progress.runs.successful;
-    index.consecutive_successful_runs = report.progress.runs.consecutive_successful;
+    index.passed_runs = report.progress.runs.passed;
     index.replayed_cases = report.progress.cases.executed;
-    index.passed_cases = report.progress.cases.successful;
-    index.consecutive_successful_cases = report.progress.cases.consecutive_successful;
-    index.current_run.baseline_consecutive_successful_runs =
-        report.progress.runs.consecutive_successful;
-    index.current_run.baseline_consecutive_successful_cases =
-        report.progress.cases.consecutive_successful;
+    index.passed_cases = report.progress.cases.passed;
     index.apis = report
         .apis
         .into_iter()
@@ -105,12 +94,9 @@ pub(super) fn load_progress_baseline(
                 api_key,
                 ApiProgress {
                     executions: api.runs.executed,
-                    successful: api.runs.successful,
-                    consecutive_successful_runs: api.runs.consecutive_successful,
+                    passed_runs: api.runs.passed,
                     executed_cases: api.cases.executed,
-                    successful_cases: api.cases.successful,
-                    consecutive_successful_cases: api.cases.consecutive_successful,
-                    verified: api.verified,
+                    passed_cases: api.cases.passed,
                     ..ApiProgress::default()
                 },
             )
@@ -119,62 +105,7 @@ pub(super) fn load_progress_baseline(
     Ok(index)
 }
 
-fn normalize_legacy_report(mut report: ProgressReport) -> ProgressReport {
-    let run_counted = report.progress.runs.executed > 0;
-    let run_successful = run_counted && report.latest_run.successful;
-    report.version = PROGRESS_VERSION;
-    report.progress.runs = SuccessCounts {
-        executed: u64::from(run_counted),
-        successful: u64::from(run_successful),
-        consecutive_successful: u64::from(run_successful),
-    };
-    report.progress.cases = SuccessCounts {
-        executed: u64::from(report.latest_run.cases.executed),
-        successful: u64::from(report.latest_run.cases.successful),
-        consecutive_successful: if run_successful {
-            u64::from(report.latest_run.cases.successful)
-        } else {
-            0
-        },
-    };
-    report.progress.apis.verified = 0;
-    report.latest_run.number = u64::from(run_counted);
-    for api in report.apis.values_mut() {
-        let old_runs = api.runs;
-        let old_cases = api.cases;
-        let counted = old_runs.executed > 0;
-        let successful = counted && old_runs.consecutive_successful > 0;
-        let current_cases = if old_runs.consecutive_successful > 0 {
-            old_cases
-                .consecutive_successful
-                .checked_div(old_runs.consecutive_successful)
-                .unwrap_or(0)
-        } else {
-            old_cases
-                .executed
-                .checked_div(old_runs.executed)
-                .unwrap_or(0)
-        };
-        api.verified = false;
-        api.runs = SuccessCounts {
-            executed: u64::from(counted),
-            successful: u64::from(successful),
-            consecutive_successful: u64::from(successful),
-        };
-        api.cases = SuccessCounts {
-            executed: current_cases,
-            successful: if successful { current_cases } else { 0 },
-            consecutive_successful: if successful { current_cases } else { 0 },
-        };
-    }
-    report
-}
-
-pub(super) fn update_index(
-    index: &mut RunIndex,
-    state: &ActiveRunState,
-    verification: &ApiVerificationConfig,
-) {
+pub(super) fn update_index(index: &mut RunIndex, state: &ActiveRunState) {
     if index.latest_sequence == Some(state.sequence) {
         return;
     }
@@ -194,7 +125,6 @@ pub(super) fn update_index(
         update_api_progress(index, api, global_evidence_clean);
     }
     update_current_run_totals(index, state);
-    refresh_verification(index, verification);
 }
 
 pub(super) fn update_focused_index(
@@ -202,7 +132,6 @@ pub(super) fn update_focused_index(
     state: &ActiveRunState,
     inventory: &CaseGroupInventory,
     inventory_complete: bool,
-    verification: &ApiVerificationConfig,
 ) {
     let Some(api) = state.apis.first() else {
         return;
@@ -239,7 +168,6 @@ pub(super) fn update_focused_index(
         state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
     update_api_progress(index, api, global_evidence_clean);
     update_current_run_totals(index, state);
-    refresh_verification(index, verification);
 }
 
 fn reconcile_baseline(index: &mut RunIndex, state: &ActiveRunState) {
@@ -248,19 +176,6 @@ fn reconcile_baseline(index: &mut RunIndex, state: &ActiveRunState) {
         || (!index.case_inventory_id.is_empty()
             && index.case_inventory_id != state.case_inventory_id);
     if baseline_changed {
-        index.consecutive_successful_runs = 0;
-        index.consecutive_successful_cases = 0;
-        index.current_run.baseline_consecutive_successful_runs = 0;
-        index.current_run.baseline_consecutive_successful_cases = 0;
-        for api in index.apis.values_mut() {
-            api.consecutive_successful_runs = 0;
-            api.consecutive_successful_cases = 0;
-            api.verified = false;
-        }
-        for contribution in index.current_run.apis.values_mut() {
-            contribution.baseline_consecutive_successful_runs = 0;
-            contribution.baseline_consecutive_successful_cases = 0;
-        }
         index.latest_focused_sequences.clear();
     }
     index.source_revision = state.source_revision.clone();
@@ -272,8 +187,6 @@ fn count_current_run(index: &mut RunIndex) {
         return;
     }
     index.current_run.counted = true;
-    index.current_run.baseline_consecutive_successful_runs = index.consecutive_successful_runs;
-    index.current_run.baseline_consecutive_successful_cases = index.consecutive_successful_cases;
     index.executions = index.executions.saturating_add(1);
 }
 
@@ -285,8 +198,6 @@ fn update_api_progress(index: &mut RunIndex, api: &ApiExecution, global_evidence
         .entry(api.api_key.clone())
         .or_default();
     if !contribution.counted {
-        contribution.baseline_consecutive_successful_runs = progress.consecutive_successful_runs;
-        contribution.baseline_consecutive_successful_cases = progress.consecutive_successful_cases;
         contribution.counted = true;
         progress.executions = progress.executions.saturating_add(1);
     }
@@ -297,29 +208,18 @@ fn update_api_progress(index: &mut RunIndex, api: &ApiExecution, global_evidence
         .executed_cases
         .saturating_sub(contribution.executed_cases)
         .saturating_add(u64::from(api.total));
-    progress.successful_cases = progress
-        .successful_cases
-        .saturating_sub(contribution.successful_cases)
+    progress.passed_cases = progress
+        .passed_cases
+        .saturating_sub(contribution.passed_cases)
         .saturating_add(u64::from(api.passed));
-    let successful = global_evidence_clean && api.successful;
-    progress.successful = progress
-        .successful
-        .saturating_sub(u64::from(contribution.successful))
-        .saturating_add(u64::from(successful));
-    if successful {
-        progress.consecutive_successful_runs = contribution
-            .baseline_consecutive_successful_runs
-            .saturating_add(1);
-        progress.consecutive_successful_cases = contribution
-            .baseline_consecutive_successful_cases
-            .saturating_add(u64::from(api.passed));
-    } else {
-        progress.consecutive_successful_runs = 0;
-        progress.consecutive_successful_cases = 0;
-    }
-    contribution.successful = successful;
+    let passed = global_evidence_clean && api.complete_pass;
+    progress.passed_runs = progress
+        .passed_runs
+        .saturating_sub(u64::from(contribution.passed))
+        .saturating_add(u64::from(passed));
+    contribution.passed = passed;
     contribution.executed_cases = u64::from(api.total);
-    contribution.successful_cases = u64::from(api.passed);
+    contribution.passed_cases = u64::from(api.passed);
 }
 
 fn update_current_run_totals(index: &mut RunIndex, state: &ActiveRunState) {
@@ -330,12 +230,12 @@ fn update_current_run_totals(index: &mut RunIndex, state: &ActiveRunState) {
         .filter(|api| api.counted)
         .map(|api| api.executed_cases)
         .sum::<u64>();
-    let successful_cases = index
+    let passed_cases = index
         .current_run
         .apis
         .values()
         .filter(|api| api.counted)
-        .map(|api| api.successful_cases)
+        .map(|api| api.passed_cases)
         .sum::<u64>();
     index.replayed_cases = index
         .replayed_cases
@@ -343,53 +243,30 @@ fn update_current_run_totals(index: &mut RunIndex, state: &ActiveRunState) {
         .saturating_add(executed_cases);
     index.passed_cases = index
         .passed_cases
-        .saturating_sub(index.current_run.successful_cases)
-        .saturating_add(successful_cases);
+        .saturating_sub(index.current_run.passed_cases)
+        .saturating_add(passed_cases);
 
-    let successful = index.inventory_complete
+    let passed = index.inventory_complete
         && !index.current_run.api_keys.is_empty()
         && index.current_run.api_keys.iter().all(|api_key| {
             index
                 .current_run
                 .apis
                 .get(api_key)
-                .is_some_and(|api| api.counted && api.successful)
+                .is_some_and(|api| api.counted && api.passed)
         });
-    index.successful = index
-        .successful
-        .saturating_sub(u64::from(index.current_run.successful))
-        .saturating_add(u64::from(successful));
-    if successful {
-        index.consecutive_successful_runs = index
-            .current_run
-            .baseline_consecutive_successful_runs
-            .saturating_add(1);
-        index.consecutive_successful_cases = index
-            .current_run
-            .baseline_consecutive_successful_cases
-            .saturating_add(successful_cases);
-    } else {
-        index.consecutive_successful_runs = 0;
-        index.consecutive_successful_cases = 0;
-    }
-    index.current_run.successful = successful;
+    index.passed_runs = index
+        .passed_runs
+        .saturating_sub(u64::from(index.current_run.passed))
+        .saturating_add(u64::from(passed));
+    index.current_run.passed = passed;
     index.current_run.executed_cases = executed_cases;
-    index.current_run.successful_cases = successful_cases;
+    index.current_run.passed_cases = passed_cases;
     index.latest_status = Some(state.status);
 }
 
-pub(super) fn refresh_verification(index: &mut RunIndex, verification: &ApiVerificationConfig) {
-    for (api_key, progress) in &mut index.apis {
-        let thresholds = verification.thresholds_for(api_key);
-        progress.verified = progress.consecutive_successful_runs
-            >= thresholds.consecutive_successful_runs
-            && progress.consecutive_successful_cases >= thresholds.successful_cases;
-    }
-}
-
 pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> ProgressReport {
-    let verified = index.apis.values().filter(|api| api.verified).count() as u32;
-    let successful_apis = index
+    let passed_apis = index
         .current_run
         .api_keys
         .iter()
@@ -398,7 +275,7 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
                 .current_run
                 .apis
                 .get(*api_key)
-                .is_some_and(|api| api.counted && api.successful)
+                .is_some_and(|api| api.counted && api.passed)
         })
         .count() as u32;
     let executed_apis = index
@@ -420,7 +297,7 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
             .finished_at
             .unwrap_or_else(chrono::Utc::now)
             .to_rfc3339(),
-        status: if index.current_run.successful {
+        status: if index.current_run.passed {
             "complete".to_string()
         } else {
             "in_progress".to_string()
@@ -431,29 +308,26 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
         progress: ProgressSummary {
             runs: SuccessCounts {
                 executed: index.executions,
-                successful: index.successful,
-                consecutive_successful: index.consecutive_successful_runs,
+                passed: index.passed_runs,
             },
             cases: SuccessCounts {
                 executed: index.replayed_cases,
-                successful: index.passed_cases,
-                consecutive_successful: index.consecutive_successful_cases,
+                passed: index.passed_cases,
             },
             apis: ApiCounts {
                 total: index.apis.len() as u32,
-                verified,
             },
         },
         latest_run: LatestRun {
             number: index.executions,
-            successful: index.current_run.successful,
+            passed: index.current_run.passed,
             cases: LatestCounts {
                 executed: u32::try_from(index.current_run.executed_cases).unwrap_or(u32::MAX),
-                successful: u32::try_from(index.current_run.successful_cases).unwrap_or(u32::MAX),
+                passed: u32::try_from(index.current_run.passed_cases).unwrap_or(u32::MAX),
             },
             apis: LatestCounts {
                 executed: executed_apis,
-                successful: successful_apis,
+                passed: passed_apis,
             },
         },
         apis: index
@@ -463,16 +337,13 @@ pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> Progre
                 (
                     api_key.clone(),
                     ProgressApi {
-                        verified: api.verified,
                         runs: SuccessCounts {
                             executed: api.executions,
-                            successful: api.successful,
-                            consecutive_successful: api.consecutive_successful_runs,
+                            passed: api.passed_runs,
                         },
                         cases: SuccessCounts {
                             executed: api.executed_cases,
-                            successful: api.successful_cases,
-                            consecutive_successful: api.consecutive_successful_cases,
+                            passed: api.passed_cases,
                         },
                     },
                 )

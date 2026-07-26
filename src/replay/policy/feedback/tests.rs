@@ -75,6 +75,65 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
 }
 
 #[test]
+fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
+    let temp = tempdir().unwrap();
+    let policy = temp.path().join("replay.yaml");
+    let comparison = temp.path().join("comparison-report.json");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+    let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
+    fs::write(
+        &comparison,
+        serde_json::to_vec(&json!({
+            "version": 2,
+            "kind": "comparison_recording_verification",
+            "expected_response": "assertions_only",
+            "assertion_mode": "comparison_recording",
+            "baseline_recheck": "optional_source_consistency",
+            "policy_fingerprint": fingerprint,
+            "complete": true,
+            "cases": [{
+                "case_id": "case-1",
+                "classification": "candidate_difference",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/resource/token",
+                    "body_mode": "json_structural",
+                    "differences": [{
+                        "pointer": "/content",
+                        "kind": "value_mismatch",
+                        "expected_type": "string",
+                        "actual_type": "string"
+                    }],
+                    "applied_dynamic_rule_ids": [],
+                    "dynamic_candidates": ["/content"]
+                }
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let feedback = ComparisonResponseRuleFeedback {
+        policy_path: policy.clone(),
+        kind: ResponseRuleKind::Dynamic,
+        api: "GET /api/resource/token".to_string(),
+        json_pointers: vec!["/content".to_string()],
+        comparison_report: comparison,
+    };
+
+    let plan = plan_comparison_response_rule(feedback).unwrap();
+    assert!(plan.report().changed);
+    assert_eq!(plan.report().matching_cases, 1);
+    assert!(plan.report().comparison_report.is_some());
+    assert!(plan.report().assertion_report.is_none());
+    plan.apply().unwrap();
+    assert!(fs::read_to_string(policy).unwrap().contains("/content"));
+}
+
+#[test]
 fn plans_and_applies_evidence_backed_unordered_array() {
     let temp = tempdir().unwrap();
     let policy = temp.path().join("replay.yaml");

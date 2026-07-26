@@ -84,26 +84,113 @@ only.
 
 ## Running Locally
 
-Run online baseline/candidate mirroring with:
+Record baseline/candidate responses from live frontend traffic with:
 
 ```bash
-traffic-e2e compare --config config/compare.example.toml
+traffic-e2e record-comparison --config config/recorder.example.toml
+traffic-e2e record-comparison \
+  --config config/recorder.example.toml \
+  --duration-seconds 60 \
+  --api 'GET /api/widgets/*'
+traffic-e2e record-comparison \
+  --config config/recorder.example.toml \
+  --baseline-recheck
 ```
 
-Compare mode does not compare responses. It returns the baseline response and
-records the request plus baseline and candidate responses under
-`<recording.output_dir>/comparisons/<run-id>/`. It does not load replay policy,
-record dependencies, install interception rules, or initialize a MITM CA.
+The default comparison recording duration is 60 seconds. AI and automated
+invocations must pass `--duration-seconds 60` or another positive integer
+explicitly.
+
+Comparison recording does not compare responses. It returns the baseline
+response and records the request plus baseline and candidate responses under
+`<artifacts.root_dir>/comparison-recordings/<run-id>/`. It uses
+`http_gateway.matched_upstream` as the baseline unless
+`comparison_recording.baseline_upstream` is explicitly set. It does not load
+the verification policy, record dependencies, install interception rules, or
+initialize a MITM CA.
 Explicit named HTTP gateway rules and methods are required. Only GET, HEAD, and
-OPTIONS may be mirrored unless `[compare].allow_side_effecting_methods = true`;
-side-effecting methods must still be explicitly listed in a rule. Reaching an
-API case limit suppresses later case files for that API but does not stop
+OPTIONS may be mirrored. Any configured POST, PUT, PATCH, DELETE, or other
+non-read method fails configuration validation before the listener starts, so
+comparison recording cannot duplicate a write across both upstreams. Reaching
+an API case limit suppresses later case files for that API but does not stop
 mirroring.
 
-Compare artifacts carry `case-kind.json` with `kind = online_compare` and are
-not replay inputs. `prepare`, case grouping, and replay reject them explicitly.
-The process creates one run for its lifetime; restart it or provide a new
-`--run-id` to reset case quotas. Archive and remove old runs externally.
+By default the source baseline is requested once. Set
+`[comparison_recording].baseline_recheck = true` to capture the same read-only
+request in strict source-before, candidate, source-after order. The frontend
+still receives the first source response without waiting for the later
+captures. The recheck adds `expected-response-after.json` and is diagnostic
+evidence for source-time drift; it is not automatic proof that a candidate
+difference is safe to ignore. Use the enable-only `--baseline-recheck` flag for
+one run without changing the source-controlled default.
+
+Comparison recording artifacts carry `case-kind.json` with
+`kind = comparison_recording` and are not replay inputs. `prepare`, case
+grouping, and replay reject them explicitly. The process creates one run for
+its lifetime; start it again or provide a new `--run-id` to reset case quotas.
+With `--duration-seconds`, the timer begins only after both configured
+readiness probes succeed, then shutdown finalizes
+`comparison-recording-run.json`. Archive and remove old runs externally.
+
+`traffic-e2e config recorder init` emits required AI actions for creating
+`scripts/<project>-cli` with `start/status/stop` and
+`scripts/start-recording-comparison`. Before project code exists, the project
+CLI's `start` command serves a fixed response on the configured candidate port.
+The wrapper accepts and passes through `--duration-seconds` and
+`--baseline-recheck`, accepts `--brz-no-fallback <true|false>`, defaults the
+duration to 60 seconds and Breeze no-fallback to `true`, and later keeps using
+the stable project CLI contract when the mock is replaced by the genuine
+service. The Platform wrapper starts exactly one Breeze instance shared by the
+source and candidate containers; it consumes the Breeze option locally rather
+than passing it to `traffic-e2e`. AI and automated wrapper calls always pass
+the duration explicitly.
+
+Each published comparison recording case contains:
+
+```text
+request.json
+expected-response.json        # source baseline before candidate
+response.json                 # candidate
+expected-response-after.json  # optional source baseline recheck
+```
+
+After the run finalizes, compare all cases offline with the same verification
+policy already used by E2E:
+
+```bash
+traffic-e2e compare \
+  .traffic-e2e/artifacts/comparison-recordings/<run-id> \
+  --policy .traffic-e2e/verification.yaml
+```
+
+The command writes `comparison-report.json` in the run directory by default
+and exits non-zero when a response differs, source-before/source-after drift
+makes a case inconclusive, or a case cannot be evaluated. Only
+`response_rules` from `verification.yaml` participate in this phase; dependency
+matching rules remain replay-only. The report groups cases by the recorded
+`METHOD + api_pattern`; `apis_passed` is the current validation-success count,
+while E2E progress uses only replay `passed` wording. Dynamic and unordered
+candidates in the report can be fed back through the existing response-rule
+workflow:
+
+```bash
+traffic-e2e config replay plan response-rule \
+  --kind dynamic \
+  --api "GET /api/token" \
+  --json-pointer /token \
+  --comparison-report .traffic-e2e/artifacts/comparison-recordings/<run-id>/comparison-report.json
+```
+
+Neither `record-comparison` nor `compare` enables the fixed recording user,
+DNS/iptables interception, fake-IP routing, MITM, dependency replay, or any
+other isolation workflow.
+
+AI must diagnose a failed comparison before changing code or policy. A stable
+source recheck plus a candidate mismatch is stronger implementation-defect
+evidence. A changed source recheck is `source_drift`: ordinary mutable business
+data must be re-recorded in a quieter or snapshot-consistent window, not
+exempted. Only source-proven current-time/random scalar fields or
+order-insensitive arrays may use the shared dynamic/unordered rules.
 
 Run the service with:
 
@@ -116,6 +203,8 @@ Install the binary and run managed recording:
 ```bash
 cargo install --path .
 traffic-e2e record --config config/recorder.example.toml
+traffic-e2e record --config config/recorder.example.toml \
+  --api 'GET /api/widgets/*'
 ```
 
 Automation should publish Recorder lifecycle state on a Unix socket and wait
@@ -341,12 +430,12 @@ traffic-e2e replay --no-intercept path/to/case-dir
 ```
 
 Target-specific dynamic UUID, timestamp, and signed-query matching belongs in
-a source-controlled `.traffic-e2e/replay.yaml`, not product code or recorded fixture
+a source-controlled `.traffic-e2e/verification.yaml`, not product code or recorded fixture
 overrides. Initialize it once and load it explicitly:
 
 ```bash
 traffic-e2e config replay init --target-root ../target
-traffic-e2e replay --policy ../target/.traffic-e2e/replay.yaml path/to/case-dir
+traffic-e2e replay --policy ../target/.traffic-e2e/verification.yaml path/to/case-dir
 ```
 
 See [replay-policy.md](replay-policy.md) for the policy schemas,
@@ -356,7 +445,7 @@ behavior.
 
 Recorder-owned host exceptions for API-independent process-level tasks remain
 in the target repository's `.traffic-e2e/recorder.toml`, not
-`.traffic-e2e/replay.yaml`. Apply an add-only host after source inspection
+`.traffic-e2e/verification.yaml`. Apply an add-only host after source inspection
 proves that all traffic to that host belongs to a task that is unrelated to API
 handlers:
 
@@ -379,7 +468,7 @@ Pass the config and rule together for direct replay:
 
 ```bash
 traffic-e2e replay \
-  --policy ../target/.traffic-e2e/replay.yaml \
+  --policy ../target/.traffic-e2e/verification.yaml \
   --recorder-config ../target/.traffic-e2e/recorder.toml \
   --recording-rule record-api \
   path/to/case-dir
@@ -546,33 +635,13 @@ modifies recordings or existing case directories.
 A focused action with no `--pattern` is valid and returns
 `no_candidates: true` with no config diff.
 
-After the final aggregate and target response-assertion report exist, apply the
-recorder exclusion deterministically:
-
-```bash
-traffic-e2e config recorder apply verified-excludes \
-  --target-root ../target \
-  --rule record-api \
-  --method GET \
-  --pattern '/api/users/*' \
-  --aggregate-report ../target/.traffic-e2e/run-reports/run.json \
-  --assertion-report ../target/.traffic-e2e/run-reports/assertions.json \
-  --consecutive-successful-runs 3 \
-  --consecutive-successful-cases 9 \
-  --required-consecutive-successful-runs 3 \
-  --required-successful-cases 3
-```
-
-The action returns `below_threshold` without changing the config,
-`already_present` for an existing exact entry, or atomically applies an
-eligible entry. Dirty, incomplete, or mismatched evidence fails the command.
-Use `plan` with the same strategy and arguments only for optional diagnostics;
-automation must not reimplement eligibility branching or edit the file.
-
-Thresholds live in `.traffic-e2e/project.yaml`; `.traffic-e2e/recorder.toml` stores only
-the managed verified exclusions. Neither belongs in `.traffic-e2e/replay.yaml`. See
-[verified-api-excludes.md](verified-api-excludes.md) for the assertion report
-schema, exact case-set gate, and runtime behavior.
+To narrow one recording invocation, repeat
+`--api 'METHOD /path-or-pattern'` on `record` or `record-comparison`. The
+selectors are run-local and intersect the configured HTTP rules. They are
+persisted in the run summary and used as the selected cases' `api_pattern`, but
+never rewrite
+`.traffic-e2e/recorder.toml`; no plan/apply workflow is needed for a temporary
+recording scope.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup
@@ -592,14 +661,10 @@ The command validates the conventional inputs and generates
 `.traffic-e2e/project.yaml`:
 
 ```yaml
-version: 4
+version: 5
 project_cli: scripts/<project>-cli
-replay_policy: .traffic-e2e/replay.yaml
+replay_policy: .traffic-e2e/verification.yaml
 replay_startup_timeout_seconds: 60
-api_verification:
-  consecutive_successful_runs: 3
-  successful_cases: 3
-  overrides: {}
 pr_base: dev-migration
 recorder_config: .traffic-e2e/recorder.toml
 recording_rule: record-api
@@ -612,16 +677,18 @@ omitted from an older config. The runner prints `loaded_cases=0` when dependency
 loading starts, then relays progress about every 5% by loaded case count while
 retaining the complete replay log in the run reports directory.
 
-`api_verification` owns both verification thresholds. The successful-case
-threshold counts canonical cases covered by trailing successful distinct
-published runs. Replaying one run does not advance either threshold. Once an
-API's thresholds are met, the runner synchronizes it into the managed recorder
-exclusion list; `.traffic-e2e/recorder.toml` does not own another threshold.
+Replay E2E progress reports `passed`, not `verified`: E2E proves the recorded
+contract can execute, but does not retire an API from future validation.
+Comparison reports are the authority for current validation success and
+include both case-level and API-level passed counts.
 
 Existing configuration is never overwritten. If the file is missing, every
 other runner command points back to `config project init`; if any required
 field is missing or the configured PR base no longer resolves, every command
-fails before using traffic E2E state. `prepare`, `run-api`, and `run` require a
+fails before using traffic E2E state. Replace an obsolete generated version
+explicitly with
+`traffic-e2e config --target-root <target> project init --force`.
+`prepare`, `run-api`, and `run` require a
 named feature branch different from `pr_base`. Do not hand-write it. Prepare
 each API only after confirming whether its source URI is static or dynamic:
 
@@ -648,9 +715,7 @@ traffic-e2e run-api \
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
 logical run in `e2e-progress.yaml`; repeating one run does not add runs or
-cases. When distinct published runs reach both effective thresholds, the runner
-synchronizes the verified exclude. Focused evidence never replaces the global
-full-round `latest`.
+cases. Focused evidence never replaces the global full-round `latest`.
 
 After every published case is prepared exactly once and every focused group
 passes, the grouped result is sufficient unless behavior-affecting code changed
@@ -664,14 +729,14 @@ traffic-e2e run \
 
 The full command starts replay once, loads bootstrap and all selected cases
 once, starts the target once, executes cases sequentially, finalizes and
-aggregates once, runs per-API verified-exclude ensure, atomically publishes
+aggregates once, atomically publishes
 `.traffic-e2e/local/<run-key>/latest/`, and updates the Git-eligible
 `.traffic-e2e/e2e-progress.yaml`.
 
 Progress reaches `status: complete` when every grouped API in the current
-logical run has finalized, complete, clean passing evidence. Verification
-thresholds are maintained independently and do not gate the current run or
-delivery. A grouped focused pass is sufficient unless later behavior changes
+logical run has finalized, complete, clean passing evidence. This is an E2E
+pass, not a long-term verification terminal state. A grouped focused pass is
+sufficient unless later behavior changes
 may invalidate it; then use one full regression round. Use `status`, `abort`,
 and `recover` for interrupted global rounds. Generated local JSON/YAML is
 tool-owned and must not be edited by AI or by target scripts.
@@ -742,14 +807,30 @@ Generated runtime artifacts are ignored by git:
 
 - `target/`
 - `data/`
-- `recordings/`
+- `.traffic-e2e/artifacts/`
+- legacy `recordings/`
 - `*.swp`
 
 Do not commit generated CA files, traffic recordings, test captures, or local
 swap files.
 
-Each recorder process creates one run directory under `recording.output_dir`
-named `YYYYMMDDHHMMSS`. Valid case output is published inside that run:
+New recorder configurations use one shared artifact root. Standard and
+comparison recording runs are kept in sibling directories so a target
+repository needs only one generated-data directory:
+
+```text
+<artifacts.root_dir>/
+  recordings/<run-id>/
+  comparison-recordings/<run-id>/
+```
+
+Existing configurations without `[artifacts]` remain supported:
+`recording.output_dir` is the recording run root and its
+`comparison-recordings/` subdirectory is the comparison recording run root.
+
+Each recorder process creates one run directory under
+`<artifacts.root_dir>/recordings/` named `YYYYMMDDHHMMSS`. Valid case output is
+published inside that run:
 
 ```text
 <run-id>/traffic.jsonl

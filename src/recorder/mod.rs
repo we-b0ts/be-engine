@@ -60,16 +60,33 @@ impl Recorder {
             },
             defaults.writer_queue_capacity,
             None,
+            Vec::new(),
         )
         .await
     }
 
-    pub(crate) async fn new_with_recording_config_and_run_id(
+    #[cfg(test)]
+    async fn new_with_recording_config_and_run_id(
         config: &RecordingConfig,
         run_id: Option<String>,
     ) -> Result<Self> {
-        Self::new_with_options(
+        Self::new_with_recording_config_at_and_run_id(
+            config,
             &config.output_dir,
+            run_id,
+            Vec::new(),
+        )
+        .await
+    }
+
+    pub(crate) async fn new_with_recording_config_at_and_run_id(
+        config: &RecordingConfig,
+        output_dir: impl AsRef<Path>,
+        run_id: Option<String>,
+        recording_apis: Vec<String>,
+    ) -> Result<Self> {
+        Self::new_with_options(
+            output_dir,
             config.access_policy,
             config.traffic_jsonl,
             jsonl::JsonlBufferSettings {
@@ -78,6 +95,7 @@ impl Recorder {
             },
             config.writer_queue_capacity,
             run_id,
+            recording_apis,
         )
         .await
     }
@@ -94,6 +112,7 @@ impl Recorder {
         buffer_settings: jsonl::JsonlBufferSettings,
         writer_queue_capacity: usize,
         run_id: Option<String>,
+        recording_apis: Vec<String>,
     ) -> Result<Self> {
         let output_dir = output_dir.as_ref();
         tokio::fs::create_dir_all(output_dir)
@@ -126,6 +145,7 @@ impl Recorder {
             run_dir,
             run_state: Arc::new(Mutex::new(RecorderRunState {
                 run_id,
+                recording_apis,
                 ..Default::default()
             })),
             dependency_write_lock: Arc::new(Mutex::new(())),

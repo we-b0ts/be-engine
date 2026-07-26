@@ -8,6 +8,7 @@ mod diagnose;
 mod interception;
 mod output;
 mod record;
+mod record_comparison;
 mod recording;
 mod replay;
 mod signal;
@@ -39,10 +40,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Mirror matched HTTP requests to baseline and candidate services and record both responses.
-    Compare(compare::CompareArgs),
     /// Run the recorder with fixed-user local interception.
     Record(record::RecordArgs),
+    /// Record matched HTTP requests and both baseline/candidate responses for later comparison.
+    RecordComparison(record_comparison::RecordComparisonArgs),
+    /// Compare a finalized comparison recording with replay response rules.
+    Compare(compare::CompareArgs),
     /// Wait for and inspect managed recording lifecycle state.
     Recording(recording::RecordingArgs),
     /// Run a managed replay session with fixed-user local interception.
@@ -81,6 +84,7 @@ pub(crate) async fn run() -> Result<()> {
         .init();
 
     match cli.command {
+        Command::RecordComparison(args) => record_comparison::run(args).await,
         Command::Compare(args) => compare::run(args).await,
         Command::Record(args) => record::run(args).await,
         Command::Recording(args) => recording::run(args).await,
@@ -123,8 +127,9 @@ mod tests {
         assert_eq!(
             names,
             [
-                "compare",
                 "record",
+                "record-comparison",
+                "compare",
                 "recording",
                 "replay",
                 "target",
@@ -161,6 +166,25 @@ mod tests {
     }
 
     #[test]
+    fn compare_does_not_accept_recording_or_interception_options() {
+        assert!(
+            Cli::try_parse_from(["traffic-e2e", "compare", "run", "--policy", "replay.yaml",])
+                .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "compare",
+                "run",
+                "--policy",
+                "replay.yaml",
+                "--intercept",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
     fn exposes_action_first_config_strategy_commands() {
         assert!(
             Cli::try_parse_from([
@@ -193,6 +217,46 @@ mod tests {
                 "aggregate.json",
             ])
             .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "config",
+                "replay",
+                "plan",
+                "response-rule",
+                "--kind",
+                "dynamic",
+                "--api",
+                "GET /api/token",
+                "--json-pointer",
+                "/token",
+                "--comparison-report",
+                "comparison-report.json",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "config",
+                "replay",
+                "plan",
+                "response-rule",
+                "--kind",
+                "dynamic",
+                "--api",
+                "GET /api/token",
+                "--json-pointer",
+                "/token",
+                "--comparison-report",
+                "comparison-report.json",
+                "--assertion-report",
+                "assertions.json",
+                "--aggregate-report",
+                "aggregate.json",
+            ])
+            .is_err()
         );
     }
 

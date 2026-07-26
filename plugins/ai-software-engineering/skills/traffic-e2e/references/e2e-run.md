@@ -3,8 +3,8 @@
 This reference is owned by the `traffic-e2e` skill.
 
 Use `traffic-e2e` as the only normal AI-facing replay command. Low-level
-grouping, replay-control, aggregate, and verified-exclude commands remain
-recorder-owned implementation details and human diagnostic surfaces.
+grouping, replay-control, and aggregate commands remain implementation details
+and human diagnostic surfaces.
 
 ## Initialize Target Configuration
 
@@ -20,14 +20,10 @@ Do not hand-write the YAML. The initializer requires the standard executable
 generates:
 
 ```yaml
-version: 4
+version: 5
 project_cli: scripts/<project>-cli
-replay_policy: .traffic-e2e/replay.yaml
+replay_policy: .traffic-e2e/verification.yaml
 replay_startup_timeout_seconds: 60
-api_verification:
-  consecutive_successful_runs: 3
-  successful_cases: 3
-  overrides: {}
 pr_base: dev-migration
 recorder_config: .traffic-e2e/recorder.toml
 recording_rule: record-api
@@ -42,14 +38,15 @@ the runner prints `completed_cases=0` and case-execution progress about every
 5% by completed case count, including the final 100% event. Small focused
 groups report each completed case.
 
-`api_verification` is the sole verification policy. `successful_cases` counts
-canonical cases covered by the same trailing
-successful distinct published runs. Replaying the same run does not add runs or
-cases. The runner synchronizes an API into
-`.traffic-e2e/recorder.toml` only after its effective thresholds are met.
+The E2E runner reports replay execution as `passed`. It does not mark an API
+permanently verified and never edits recorder scope after a pass. Current
+validation success comes from the later comparison report, which reports both
+case-level and API-level passed counts.
 
 The target repository MUST ignore `.traffic-e2e/local/` before initialization.
-The initializer refuses to replace existing configuration.
+The initializer refuses to replace existing configuration unless an obsolete
+generated version is explicitly regenerated with
+`traffic-e2e config --target-root <target> project init --force`.
 Every other runner command validates that the generated config exists, has all
 required fields, and still names an existing PR base before reading
 or changing traffic E2E state.
@@ -125,12 +122,10 @@ unused applicable rules, and policy fingerprints. Version-one policies retain
 the legacy target-owned assertion contract for existing repositories.
 
 Run `run-api` only until the current complete API group passes. Once it passes,
-stop. Do not repeat a successful case source to advance API verification.
+stop.
 Terminal focused attempts replace that API's final contribution to the current
-logical run; they do not add another run or another copy of its cases. Once
-distinct published runs meet the API's effective thresholds, the runner runs
-the managed verified-excludes update. Focused attempts MUST NOT replace the
-full-round `latest`.
+logical run; they do not add another run or another copy of its cases. Focused
+attempts MUST NOT replace the full-round `latest`.
 
 Fix an evidenced defect and rerun the same API. If later shared behavior changes
 may invalidate an earlier focused pass, rerun the affected groups or use one
@@ -185,22 +180,21 @@ traffic-e2e run \
 The command owns the entire round: one replay server, one bootstrap/full-case
 load, one target start, sequential case begin/request/assert/end, one target
 stop, one replay finalize, a global aggregate, per-API evidence views,
-eligible verified-excludes updates, progress update, and atomic publication.
+progress update, and atomic publication.
 
 Do not repair code inside a full round. If it fails, use focused `run-api` to
 diagnose and fix, then restart the full regression when it remains required.
 Progress reaches `status: complete` after every API in the current logical run
-passes. API verification is maintained independently across distinct published
-runs.
+passes. Comparison verification remains a separate, repeatable phase.
 
 ## Completion
 
 - Terminal focused and full attempts update the current logical run only from
   finalized, complete, clean evidence.
 - Human progress uses `status: in_progress` until every API in the current
-  logical run passes; verified status is not a completion or delivery gate.
-- An API is `verified` only when trailing successful distinct published runs
-  meet both its effective configured run and canonical-case counts.
+  logical run passes.
+- An E2E pass proves replay compatibility only. A subsequent comparison report
+  is the authority for current API validation success.
 - Re-publishing or replaying the same run is idempotent for run and case counts.
 
 ## Generated State
@@ -208,7 +202,7 @@ runs.
 ```text
 .traffic-e2e/
 ├── project.yaml
-├── replay.yaml
+├── verification.yaml
 ├── recorder.toml
 ├── e2e-progress.yaml
 └── local/
@@ -224,22 +218,16 @@ runs.
         └── latest/
 ```
 
-`.traffic-e2e/replay.yaml` and `.traffic-e2e/recorder.toml` are source-controlled
-verification inputs.
+`.traffic-e2e/verification.yaml` and `.traffic-e2e/recorder.toml` are
+source-controlled verification inputs.
 `project.yaml` is generated by `init`; all files under `local/` and every JSON/YAML
 evidence file inside active, focused, and latest directories are generated by
 the runner. AI MUST NOT hand-edit generated files. `e2e-progress.yaml` is the
-concise, Git-eligible human report; it omits protocol, connection, policy,
-session, aggregate, root-cause, and repair detail. It reports only executed,
-successful, and trailing-success counts for logical runs and canonical cases,
-globally and for every API. The case streak is the number of canonical cases
-covered by trailing successful distinct published runs; a non-successful run
-resets it. Replaying the current run replaces its terminal contribution instead
-of increasing counts. Changed source or case inventory starts new streaks.
-The runner loads the existing report as the project history baseline and
-preserves APIs absent from the current inventory. AI does not merge,
-reconstruct, or validate these counters. Detailed failure categories remain in
-local evidence.
+concise, Git-eligible human report; it uses `passed` only for E2E execution and
+does not contain API-verified state. Replaying the current run replaces its
+terminal contribution instead of increasing counts. The runner loads the
+existing report as the project history baseline and preserves APIs absent from
+the current inventory. Detailed failure categories remain in local evidence.
 
 Run `status` first for an interrupted full round. Use `recover` to restore an
 interrupted atomic publication or abort a surviving global `.active`; use

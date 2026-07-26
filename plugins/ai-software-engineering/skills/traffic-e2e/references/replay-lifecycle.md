@@ -14,7 +14,7 @@ standard version-two
 `scripts/<project>-cli e2e --case-dir <path> --actual-response <path>` once per
 active case. That facade executes the request and writes the actual response;
 it does not read the expected response or own replay startup, begin/end,
-response comparison, aggregate, progress, or verified-exclude operations.
+response comparison, aggregate, or progress operations.
 
 Clear inherited HTTP proxy variables only inside the recorded-E2E invocation so
 dependency traffic can reach DNS and fake-IP interception. Do not change the
@@ -107,7 +107,7 @@ case and session ids and both fail-on-incomplete and fail-on-dirty gates.
 
 Focused attempts retain their own aggregate for diagnosis and use it to replace
 the selected API's contribution to the current logical run and update any
-eligible verified exclude. Repeating one run does not add counts. Focused
+current E2E pass progress. Repeating one run does not add counts. Focused
 attempts never replace the global full-round `latest`. Only one published case
 replayed in exactly one finalized session may record
 `not_applicable_single_case_single_session`. Never enumerate report paths,
