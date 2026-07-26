@@ -8,18 +8,37 @@ description: "Rewrite or migrate backend services against local recorded traffic
 Coordinate backend implementation, traffic verification, and delivery. Keep
 the companion skills authoritative for their own domains.
 
+## Invocation Contract
+
+Treat a concise request as sufficient when it identifies the target repository,
+the rewrite or compatibility objective, and any available traffic-source or
+runtime facts. Discover initialized project configuration, repository scripts,
+case sources, API scope, startup commands, and current implementation state
+from the target instead of requiring the user to restate the standard workflow.
+
+Do not require the user to supply recording commands, generated run IDs,
+durations, replay commands, comparison commands, repair-loop instructions, or
+completion rules. Generate unique UTC run IDs, pass the required explicit
+duration, retain exact artifact paths, and apply the workflow below
+automatically. Ask only for a fact that cannot be discovered safely and would
+materially change the implementation or authorize a new external effect.
+
+When relevant code already exists, verify it first against traffic evidence.
+Preserve passing behavior and make only evidence-backed compatibility fixes;
+do not rewrite working code merely because the request uses the word
+"rewrite".
+
 ## Required Companion Skills
 
-Before modifying target code:
+Before recording or verifying traffic, read `../traffic-e2e/SKILL.md`
+completely and follow its reference routing. Before modifying target code, also
+read `../backend-engineering/SKILL.md` completely and follow its reference
+routing for architecture, migration, dependency clients, implementation
+language, and verification.
 
-1. Read `../backend-engineering/SKILL.md` completely and follow its reference
-   routing for architecture, migration, dependency clients, implementation
-   language, and verification.
-2. Read `../traffic-e2e/SKILL.md` completely and follow its reference routing
-   for recording, grouping, genuine dependency replay, response assertions,
-   failure diagnosis, and completion evidence.
-
-Treat both as mandatory. This skill owns sequencing and delivery only; do not
+Treat both as mandatory for implementation. This skill owns rewrite sequencing
+and delivery. `traffic-e2e` owns each recording and verification operation and
+its evidence gates; `backend-engineering` owns production-code quality. Do not
 copy or weaken their detailed contracts here.
 
 ## Remote Case Sources
@@ -35,16 +54,12 @@ another task-service action.
 
 ## Workflow
 
-1. Read repository instructions, migration notes, startup paths, and any
-   supplied recording source. Determine whether the request is recording
-   initialization, case recording, or implementation. For a Platform
-   department recording-initialization request, read
-   `../platform-recording-init/SKILL.md` completely and delegate the
-   repository scaffold and ready-to-record validation to it before requiring
-   cases or modifying product code. Under an explicit `backend-rewrite`
-   invocation, interpret a concise `<repo> repo init` request as this Platform
-   recording-initialization phase unless the user names another initialization
-   scope. Keep unrelated worktree changes out of scope.
+1. Read repository instructions, migration notes, startup paths, initialized
+   traffic-e2e configuration, recording scripts, current implementation, and
+   any supplied case source. Determine the earliest required phase:
+   initialization, standard recording, implementation/E2E, or comparison.
+   Resume from existing valid evidence instead of restarting completed phases.
+   Keep unrelated worktree changes out of scope.
 2. Resolve the PR base before substantial work. If
    `<target-root>/.traffic-e2e/project.yaml` exists, use its exact `pr_base`.
    Otherwise use `dev-migration` unless the user explicitly requires another
@@ -55,45 +70,55 @@ another task-service action.
    implementation feature branch from that base. Branch creation, commits,
    pushes, and PR delivery belong to this orchestration skill; the traffic-e2e
    configuration initializers never switch or create branches.
-3. Run Platform recording initialization on the feature branch. Require the
-   generated project configuration to record the resolved base as `pr_base`.
-   Commit and push the generated initialization, then create a draft PR
-   targeting that base. If project configuration already exists, validate its
-   `pr_base` instead of silently replacing it.
-4. Confirm a canonical traffic-e2e case source for implementation. Preserve an
-   explicit local case-source path exactly. For a remote IPv4 source, follow
-   the remote-case-source reference, materialize candidates in ascending order,
-   select at most one recording for the invocation, and inspect its resolved
-   canonical sources before implementation. Otherwise, if cases must be
-   recorded first, complete the traffic skill's recording gate. Then confirm
-   the source route, target facade, replay policy, dependency wiring, and
-   genuine runtime clients. Prepare one canonical API group at a time.
-5. Implement the smallest cohesive production change that preserves the
-   recorded contract. Do not read expected responses or recorded dependency
-   outputs from target code, fixtures, configuration, or test support.
-6. Run repository-focused checks and the canonical focused traffic replay.
-   Delegate failure classification, replay policy, recorder attribution, and
-   completion evidence to `traffic-e2e`; do not create parallel rules here.
-7. Repeat focused implementation and verification only until the selected
-   group passes. Run the required complete round after shared
-   behavior-affecting changes.
-8. After the affected replay E2E scope passes, invoke the repository's
-   `scripts/start-recording-comparison` with a new explicit run ID, explicit
-   duration, and the same repeatable `--api` scope used for recording when
-   applicable. Preserve any Platform wrapper-owned shared Breeze and
-   `--brz-no-fallback` behavior. Run offline `traffic-e2e compare` on that
-   exact finalized run. Treat only its per-API passed result as current
-   validation success. Delegate
-   candidate-defect, source-drift, and non-determinism diagnosis to
-   `traffic-e2e`; after any code or policy repair, pass affected E2E again and
-   create a new comparison recording.
-9. Review module boundaries, run all repository-required gates, and preserve
-   the exact traffic-e2e completion status and remaining blockers.
+3. Initialize recording only when the required target configuration or scripts
+   are absent. For a Platform department repository, read
+   `../platform-recording-init/SKILL.md` completely and use it for that phase.
+   Require generated project configuration to record the resolved `pr_base`.
+   If initialization changes the repository, commit and push it and create the
+   draft PR before implementation. When valid configuration already exists,
+   validate and reuse it instead of regenerating it.
+4. Establish one immutable canonical E2E case source. Preserve an explicit
+   local source exactly. For a remote IPv4 source, follow the remote reference
+   and select at most one recording for the invocation. Otherwise call the
+   repository's `scripts/start-recording` with a generated unique UTC run ID,
+   explicit `--duration-seconds 60`, and repeatable `--api` selectors when the
+   affected scope is known. Resolve that exact finalized run; never choose a
+   run merely because it is newest. If the observation window receives no
+   qualifying traffic, report `incomplete` rather than inventing a request.
+5. Confirm source routes, target facade, verification policy, dependency
+   wiring, and genuine runtime clients. Prepare one canonical API group at a
+   time. Run the existing implementation first when present, then implement or
+   repair only the smallest cohesive behavior proved necessary by the cases.
+   Target code, fixtures, configuration, and test support must never consume
+   expected responses or recorded dependency outputs.
+6. Run repository-focused checks and focused traffic E2E. Use `traffic-e2e`
+   failure classification before changing product behavior, verification
+   policy, dependency wiring, or recorder attribution. Repeat the focused
+   implementation/E2E cycle until the selected groups pass, then run any
+   required full round after shared behavior-affecting changes.
+7. Only after the affected replay E2E scope passes, call
+   `scripts/start-recording-comparison` with a new generated UTC run ID,
+   explicit `--duration-seconds 60`, and the same affected `--api` scope.
+   Preserve wrapper-owned runtime options such as shared Breeze and
+   `--brz-no-fallback`. Run offline `traffic-e2e compare` against that exact
+   finalized run and shared verification policy. Only the comparison report's
+   per-API passed result is current validation success.
+8. Delegate every comparison difference to `traffic-e2e` diagnosis. Fix code
+   for a candidate defect, re-record inconclusive source drift, and change
+   policy only for source-proven intentional non-determinism. If comparison
+   exposes an API without a valid E2E contract, return to standard recording
+   before modifying that API. After every code or policy change, pass affected
+   E2E again and create a new comparison recording. Never reinterpret an older
+   comparison as evidence for changed code.
+9. Continue the E2E/comparison repair loop until both evidence gates pass.
+   Review module boundaries, run all repository-required gates, and preserve
+   exact artifact identities and remaining blockers.
 
 If the same root cause blocks three consecutive repair cycles without new
 evidence or meaningful progress, stop the loop and report `blocked` with the
 exact E2E and comparison artifacts. Report `incomplete` instead when work can
-continue but a required gate or external observation is still missing.
+continue but a required gate, qualifying traffic, or other external
+observation is still missing.
 
 ## Delivery
 

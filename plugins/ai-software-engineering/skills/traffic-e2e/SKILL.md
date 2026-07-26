@@ -66,38 +66,24 @@ replay <plan|apply> <strategy>`. Use `apply` for normal automation; it performs
 the same current-state planning and evidence validation before its atomic
 write. Use `plan` only when diagnostic output is useful.
 
-## Rewrite Verification Loop
+## Repository Entrypoints
 
-When repository initialization provides source-controlled recording scripts,
-use them as the normal orchestration boundary. Do not reconstruct their
-container, source-startup, candidate-startup, or cleanup commands in the task.
-Generated scripts default to 60 seconds when a caller omits the duration, but
-AI and automated invocations must always pass `--duration-seconds 60` or
-another positive integer.
+This skill owns the mechanics and evidence gates of recording, replay, and
+comparison. A rewrite orchestration skill decides when to enter and repeat
+those phases.
 
-1. Call `scripts/start-recording` to collect genuine frontend requests,
-   expected responses, and case-owned dependencies. Pass a unique UTC
-   `--run-id YYYYMMDDHHMMSS`, resolve that exact finalized recording run, and
-   never select a run merely because it is newest. When work is scoped to
-   known APIs, repeat `--api 'METHOD /path-or-pattern'`; this is a run-local
-   filter and must not be converted into a recorder config edit.
-2. Use that immutable run with the standard `prepare` and `run-api` workflow.
-   Implement or fix the target until the affected genuine dependency replay E2E
-   scope passes.
-3. Only then call `scripts/start-recording-comparison` to collect read-only
-   frontend traffic against the normally running source and candidate. Pass a
-   new explicit run ID and the same affected `--api` selectors. For a Platform
-   wrapper, preserve its single shared Breeze topology and
-   `--brz-no-fallback` behavior. Then run offline `traffic-e2e compare` on that
-   exact finalized comparison run. Only the comparison report's per-API passed
-   result is validation success.
-4. Diagnose every difference as a candidate defect, source data drift, or
-   source-proven non-determinism. If comparison exposes an API without a valid
-   standard E2E case, return to `scripts/start-recording` and establish that
-   replay contract before changing target behavior for the API.
-5. After a code or policy change, pass the affected standard E2E scope again,
-   create a new immutable comparison recording, and compare it. Repeat until
-   both evidence gates pass.
+When source-controlled `scripts/start-recording` or
+`scripts/start-recording-comparison` exists, use it as the normal operation
+boundary. Do not reconstruct its container, service startup, signal,
+finalization, or cleanup lifecycle. Generated scripts may default to 60
+seconds, but AI and automated invocations must pass
+`--duration-seconds 60` or another positive integer explicitly.
+
+Generate a unique UTC `--run-id YYYYMMDDHHMMSS` for every new recording
+operation unless the caller supplied one, retain the exact finalized artifact
+path, and never select a run merely because it is newest. When the intended
+scope is known, pass repeatable `--api 'METHOD /path-or-pattern'`; the selector
+is run-local and must not become a recorder configuration edit.
 
 ## Managed Recording
 
