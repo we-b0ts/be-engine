@@ -23,6 +23,7 @@ use crate::recorder::{
     CaseContext, HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
     capture_body, capture_case_body, redact_headers,
 };
+use crate::recording_control::RecordingListener;
 
 mod admission;
 mod lifecycle;
@@ -42,6 +43,7 @@ pub async fn run(state: AppState) -> Result<()> {
     let listener = TcpListener::bind(config.listen)
         .await
         .with_context(|| format!("failed to bind HTTP gateway {}", config.listen))?;
+    state.mark_recording_listener_ready(RecordingListener::HttpGateway);
     info!(
         listen = %config.listen,
         matched_upstream = %config.matched_upstream,
@@ -151,6 +153,28 @@ async fn handle_gateway_request(
             max_cases,
         )
     });
+    let request_body = match req.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => {
+            return record_gateway_error(GatewayErrorContext {
+                state,
+                id,
+                client_addr,
+                method,
+                original_uri,
+                authority,
+                request_headers: request_headers_for_record,
+                request_body: Bytes::new(),
+                started,
+                matched_rule: matched_rule_name,
+                case: None,
+                should_record: false,
+                target: None,
+                err: anyhow!("failed to read gateway request body: {err}"),
+            })
+            .await;
+        }
+    };
     let mut should_record = false;
     let mut case = None;
     let mut upstream_base = config.fallback_upstream.clone();
@@ -176,29 +200,6 @@ async fn handle_gateway_request(
     let lifecycle_state = state.clone();
     let active_case_id = case.as_ref().map(|case| case.id);
     let request = async move {
-        let request_body = match req.into_body().collect().await {
-            Ok(collected) => collected.to_bytes(),
-            Err(err) => {
-                return record_gateway_error(GatewayErrorContext {
-                    state,
-                    id,
-                    client_addr,
-                    method,
-                    original_uri,
-                    authority,
-                    request_headers: request_headers_for_record,
-                    request_body: Bytes::new(),
-                    started,
-                    matched_rule: matched_rule_name.clone(),
-                    case,
-                    should_record,
-                    target: Some(upstream_base.clone()),
-                    err: anyhow!("failed to read gateway request body: {err}"),
-                })
-                .await;
-            }
-        };
-
         if !should_record && config.fallback_mode == HttpGatewayFallbackMode::FixedResponse {
             return build_fixed_response(
                 config

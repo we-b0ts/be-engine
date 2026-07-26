@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use hyper::{HeaderMap, Method, Uri};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::AppState;
 use crate::config::{HttpGatewayConfig, HttpGatewayReadyConfig};
@@ -13,6 +13,7 @@ use super::transport::{build_upstream_request, build_upstream_uri, send_upstream
 
 pub(super) async fn run(state: AppState, config: HttpGatewayConfig) {
     let interval = Duration::from_millis(config.ready.interval_ms.max(1));
+    let post_ready_settle = Duration::from_millis(state.config().recording.post_ready_settle_ms);
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     info!(
@@ -27,12 +28,43 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) {
         ticker.tick().await;
         match probe_once(&state, &config.matched_upstream, &config.ready).await {
             Ok(status) if status == config.ready.success_status => {
-                state.close_bootstrap("http_gateway.ready");
+                if !post_ready_settle.is_zero() {
+                    state.mark_recording_source_settling();
+                    info!(
+                        upstream = %config.matched_upstream,
+                        path = %config.ready.path,
+                        status,
+                        post_ready_settle_ms = post_ready_settle.as_millis(),
+                        "HTTP gateway ready probe succeeded; waiting before case admission"
+                    );
+                    tokio::time::sleep(post_ready_settle).await;
+                    if !state.is_bootstrap_open() {
+                        info!(
+                            "HTTP gateway ready settle stopped because bootstrap is already closed"
+                        );
+                        return;
+                    }
+                }
+                match state.close_bootstrap("http_gateway.ready").await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        info!("HTTP gateway ready probe stopped before case admission was enabled");
+                        return;
+                    }
+                    Err(error) => {
+                        warn!(
+                            %error,
+                            "HTTP gateway ready probe could not seal bootstrap dependencies"
+                        );
+                        return;
+                    }
+                }
                 info!(
                     upstream = %config.matched_upstream,
                     path = %config.ready.path,
                     status,
-                    "HTTP gateway ready probe succeeded"
+                    post_ready_settle_ms = post_ready_settle.as_millis(),
+                    "HTTP gateway ready probe succeeded and case admission is enabled"
                 );
                 return;
             }
@@ -138,6 +170,7 @@ mod tests {
             success_status: 200,
             interval_ms: 1,
         };
+        config.recording.post_ready_settle_ms = 0;
         config.recording.output_dir = temp.path().join("recordings");
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
@@ -150,6 +183,59 @@ mod tests {
             .await
             .unwrap();
 
+        assert!(!state.is_bootstrap_open());
+    }
+
+    #[tokio::test]
+    async fn delays_case_admission_after_source_readiness() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_addr = upstream.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut stream, _) = upstream.accept().await.unwrap();
+            let mut buf = [0_u8; 2048];
+            let _ = stream.read(&mut buf).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .await
+                .unwrap();
+        });
+
+        let temp = tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.http_gateway.matched_upstream = format!("http://{upstream_addr}");
+        config.http_gateway.ready = HttpGatewayReadyConfig {
+            enabled: true,
+            path: "/ready".to_string(),
+            success_status: 200,
+            interval_ms: 1,
+        };
+        config.recording.post_ready_settle_ms = 50;
+        config.recording.output_dir = temp.path().join("recordings");
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+
+        let state = AppState::new(config).await.unwrap();
+        let ready_config = state.config().http_gateway.clone();
+        let started = tokio::time::Instant::now();
+        let ready_task = tokio::spawn(run(state.clone(), ready_config));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let readiness = state.inner.recording_lifecycle.snapshot();
+                if readiness.phase == "settling" {
+                    assert!(!readiness.source_ready);
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(state.is_bootstrap_open());
+        ready_task.await.unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(50));
         assert!(!state.is_bootstrap_open());
     }
 }

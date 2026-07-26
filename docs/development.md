@@ -18,6 +18,59 @@ cargo build
 The repository includes `.cargo/config.toml` for the configured crates.io
 mirror. Do not replace that registry configuration unless explicitly asked.
 
+## Shared Recording Images
+
+The repository owns the Dockerfiles for the two project-independent recording
+images:
+
+```text
+docker/network-anchor/Dockerfile
+docker/recorder-runtime/Dockerfile
+```
+
+Published Linux/amd64 references:
+
+```text
+registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
+registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
+```
+
+Build the inert Linux/amd64 network-namespace anchor without network access:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --network none \
+  --load \
+  --file docker/network-anchor/Dockerfile \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1 \
+  docker/network-anchor
+```
+
+Build the Linux/amd64 Recorder runtime through the host network. When the host
+requires a proxy, pass only the standard proxy build arguments that are already
+present in the environment; do not declare them in the Dockerfile or persist
+them as image environment variables:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --network host \
+  --build-arg HTTP_PROXY \
+  --build-arg HTTPS_PROXY \
+  --build-arg ALL_PROXY \
+  --build-arg NO_PROXY \
+  --load \
+  --file docker/recorder-runtime/Dockerfile \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev \
+  docker/recorder-runtime
+```
+
+The `-dev` runtime intentionally contains no `traffic-e2e` binary. Mount the
+exact installed Linux/amd64 binary read-only at
+`/usr/local/bin/traffic-e2e`. Publish only versioned tags, verify the pushed
+manifest digest, and pin consumers to `tag@sha256`.
+
 ## CLI Boundaries
 
 Use `traffic-e2e config ... init` for one-time target configuration and
@@ -65,6 +118,29 @@ cargo install --path .
 traffic-e2e record --config config/recorder.example.toml
 ```
 
+Automation should publish Recorder lifecycle state on a Unix socket and wait
+through the public lifecycle commands:
+
+```bash
+traffic-e2e record \
+  --config config/recorder.example.toml \
+  --control-socket /run/traffic-e2e/recording.sock
+
+traffic-e2e recording wait-listeners \
+  --control-socket /run/traffic-e2e/recording.sock
+# Start the source application after this succeeds.
+traffic-e2e recording wait-ready \
+  --control-socket /run/traffic-e2e/recording.sock
+```
+
+Run the wait commands from another process that can access the socket, such as
+`docker exec` in the Recorder container. `wait-listeners` succeeds after
+Recorder initialization and every enabled listener bind, so automation can
+then prepare CA trust and start the source. `wait-ready` additionally requires
+the configured HTTP gateway source readiness probe. Neither command parses
+recorder configuration or probes listener ports. `--timeout-seconds` defaults
+to `300`.
+
 `traffic-e2e record` enables local DNS capture and fake-IP TCP/UDP redirect by
 default, which modifies local DNS/iptables state. Use this when you
 intentionally want the recorder to intercept local traffic. To skip those
@@ -73,6 +149,10 @@ rules:
 ```bash
 traffic-e2e record --config config/recorder.example.toml --no-dns
 ```
+
+Managed recording uses `dns_mock.upstream_dns` from the Recorder TOML for both
+fake-DNS forwarding and the local DNS interception bypass. It does not require
+or read a separate `UPSTREAM_DNS` environment variable.
 
 `traffic-e2e record` always limits DNS and fake-IP interception to the
 dedicated Unix user `trp-record`. Run the source service as that user so
@@ -85,6 +165,12 @@ ready probe succeeds, matching traffic uses the configured fallback strategy
 and no case is created. After ready, only one matched case can be active at a
 time; overlapping matching requests also use fallback so dependencies are not
 shared across cases.
+
+A matched request first reserves the single case slot without accepting
+dependencies. Recorder reads the complete inbound request and persists
+`admission.json` before activating dependency ownership and forwarding the
+request to the source. Cancellation before activation releases the reservation
+without creating a case or attributing process-level traffic to it.
 
 The default `http_gateway.fallback_mode = "upstream"` forwards those requests
 to `fallback_upstream`. For a fallback that always returns the same payload,
@@ -689,8 +775,12 @@ dependency contract from missing capture evidence.
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`
 with `recording-error.json` instead of being published. Successfully published
-cases remain in their normal rule directories when another case fails. On
-clean shutdown, recording exits with an error if the run contains failed cases.
+cases remain in their normal rule directories when another case fails. A clean
+shutdown reports `status: completed` and exits successfully even when
+`failed_cases` is nonzero; consumers select only canonical published cases and
+use `failed_cases` plus `errors` for diagnostics. `status: failed` and a
+nonzero process exit are reserved for Recorder-level runtime or finalization
+failure.
 
 A complete zero-length response body is publishable even when its
 `Content-Type` advertises JSON. Recorder preserves the empty body and replay
@@ -824,9 +914,10 @@ and Kafka failure injection are unsupported and fail closed. Schema Registry
 remains an ordinary HTTP dependency. Kafka payloads and headers are sensitive
 because exact bytes are required for replay.
 
-Dependency summaries are generated when a case is published, when bootstrap
-recording closes, and when the run finishes. They are intentionally not rebuilt
-after every cache exchange.
+Case dependency summaries are generated when each case is published.
+Bootstrap dependency files are sealed before case admission opens, while the
+potentially large bootstrap summary is generated only when the run finishes.
+Summaries are intentionally not rebuilt after every cache exchange.
 
 ## Testing Guidance
 

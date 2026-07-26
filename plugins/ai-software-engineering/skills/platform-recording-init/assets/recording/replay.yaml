@@ -1,0 +1,7 @@
+# Generated for Platform traffic replay.
+version: 2
+expected_response: assertions_only
+rules: []
+response_rules:
+  dynamic: {}
+  unordered: {}

@@ -818,7 +818,7 @@ async fn http_gateway_keeps_truncated_case_out_of_published_recordings() {
     assert!(error_raw.contains("expected_response_body_truncated"));
     let report_raw = std::fs::read_to_string(run_dir.join("recording-run.json")).unwrap();
     let report: Value = serde_json::from_str(&report_raw).unwrap();
-    assert_eq!(report["status"], "failed");
+    assert_eq!(report["status"], "running");
     assert_eq!(report["published_cases"], 0);
     assert_eq!(report["failed_cases"], 1);
     let errors_raw = std::fs::read_to_string(run_dir.join("errors.jsonl")).unwrap();

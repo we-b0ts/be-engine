@@ -16,6 +16,7 @@ mod mysql;
 mod path_pattern;
 mod proxy;
 mod recorder;
+mod recording_control;
 mod redis;
 mod replay;
 mod repository;
@@ -23,6 +24,7 @@ mod tcp_gateway;
 mod tls;
 mod udp_gateway;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,12 +40,13 @@ use uuid::Uuid;
 
 use crate::access_policy::{AccessDecision, OperationClass, decide};
 use crate::active_case::{
-    ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection, DependencyDrainResult,
-    DependencyTargets,
+    ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRegistry, ActiveCaseRejection,
+    DependencyDrainResult, DependencyTargets,
 };
 use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::http::case::CaseInvalidation;
+use crate::recording_control::{RecordingControlServer, RecordingLifecycle, RecordingListener};
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
@@ -89,6 +92,9 @@ pub use recorder::{
     TcpGatewayConnectionEvent, UdpDatagramEvent, capture_body, capture_body_with_original_len,
     capture_case_body, redact_headers,
 };
+pub use recording_control::{
+    RecordingReadiness, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
+};
 pub use replay::{
     DynamicResponseRuleFeedback, DynamicResponseRulePlan, DynamicResponseRuleReport,
     MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,
@@ -118,6 +124,7 @@ struct AppStateInner {
     upstream_tls_config: Arc<ClientConfig>,
     active_cases: ActiveCaseRegistry,
     kubectl_proxy_manager: KubectlProxyManager,
+    recording_lifecycle: RecordingLifecycle,
 }
 
 impl AppState {
@@ -151,6 +158,7 @@ impl AppState {
         let client = Client::builder(TokioExecutor::new()).build(https);
 
         let case_matching_ready = !config.http_gateway.ready.enabled;
+        let recording_lifecycle = RecordingLifecycle::from_config(&config);
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 config,
@@ -162,6 +170,7 @@ impl AppState {
                 upstream_tls_config,
                 active_cases: ActiveCaseRegistry::new(case_matching_ready),
                 kubectl_proxy_manager: KubectlProxyManager::default(),
+                recording_lifecycle,
             }),
         })
     }
@@ -300,36 +309,49 @@ impl AppState {
         self.inner.upstream_tls_config.clone()
     }
 
-    pub(crate) fn try_register_active_case(
+    pub(crate) fn try_reserve_active_case(
         &self,
         case: CaseContext,
     ) -> Result<ActiveCaseGuard, ActiveCaseRejection> {
-        let bootstrap_was_open = self.inner.active_cases.is_bootstrap_open();
-        let guard = self.inner.active_cases.try_register(case)?;
-        if bootstrap_was_open {
-            self.schedule_bootstrap_dependency_summary("first active case");
-        }
-        Ok(guard)
+        self.inner.active_cases.try_reserve(case)
     }
 
-    pub(crate) fn close_bootstrap(&self, reason: &'static str) -> bool {
+    pub(crate) async fn close_bootstrap(&self, reason: &'static str) -> Result<bool> {
         let closed = self.inner.active_cases.close_bootstrap();
-        if closed {
-            info!(reason, "bootstrap dependency window closed");
-            self.schedule_bootstrap_dependency_summary(reason);
+        if !closed {
+            return Ok(false);
         }
-        closed
+        info!(reason, "bootstrap dependency window closed");
+        self.seal_bootstrap_dependencies(reason).await?;
+        if !self.inner.active_cases.enable_case_matching() {
+            return Ok(false);
+        }
+        self.inner.recording_lifecycle.mark_source_ready();
+        Ok(true)
     }
 
-    fn schedule_bootstrap_dependency_summary(&self, reason: &'static str) {
-        let recorder = self.recorder().clone();
-        let active_cases = self.inner.active_cases.clone();
-        tokio::spawn(async move {
-            active_cases.wait_for_bootstrap_dependencies().await;
-            if let Err(err) = recorder.finalize_bootstrap_dependency_summary().await {
-                warn!(error = %err, reason, "failed to finalize bootstrap dependency summary");
-            }
-        });
+    pub(crate) async fn seal_bootstrap_dependencies(&self, reason: &'static str) -> Result<()> {
+        if self.inner.active_cases.is_bootstrap_sealed() {
+            return Ok(());
+        }
+        self.inner
+            .active_cases
+            .wait_for_bootstrap_dependencies()
+            .await;
+        if let Err(error) = self.recorder().seal_bootstrap_dependencies().await {
+            self.inner.recording_lifecycle.mark_failed(&error);
+            return Err(error).context("failed to seal bootstrap dependencies");
+        }
+        self.inner.active_cases.mark_bootstrap_sealed();
+        info!(reason, "bootstrap dependencies sealed");
+        Ok(())
+    }
+
+    pub(crate) fn activate_case_dependencies(
+        &self,
+        guard: &ActiveCaseGuard,
+    ) -> Result<(), ActiveCaseActivationError> {
+        guard.activate_dependencies()
     }
 
     pub(crate) fn is_bootstrap_open(&self) -> bool {
@@ -346,6 +368,14 @@ impl AppState {
         } else {
             "running"
         }
+    }
+
+    pub(crate) fn mark_recording_listener_ready(&self, listener: RecordingListener) {
+        self.inner.recording_lifecycle.mark_listener_ready(listener);
+    }
+
+    pub(crate) fn mark_recording_source_settling(&self) {
+        self.inner.recording_lifecycle.mark_source_settling();
     }
 
     pub(crate) async fn wait_for_active_case_shutdown_drain(&self) -> bool {
@@ -457,6 +487,16 @@ impl AppState {
     }
 
     pub async fn run(self) -> Result<()> {
+        self.run_with_control_socket(None).await
+    }
+
+    pub async fn run_with_control_socket(self, control_socket: Option<PathBuf>) -> Result<()> {
+        let control_server = match control_socket {
+            Some(path) => Some(
+                RecordingControlServer::start(self.inner.recording_lifecycle.clone(), path).await?,
+            ),
+            None => None,
+        };
         let mut tasks = JoinSet::new();
 
         if self.config().http.enabled {
@@ -512,7 +552,10 @@ impl AppState {
         let run_result = loop {
             tokio::select! {
                 result = &mut shutdown => {
-                    result?;
+                    if let Err(error) = result {
+                        break Err(error);
+                    }
+                    self.inner.recording_lifecycle.mark_stopping();
                     let newly_quiescing = self.begin_case_quiescing();
                     let timeout_ms = self.config().recording.shutdown_case_drain_timeout_ms;
                     info!(
@@ -534,7 +577,10 @@ impl AppState {
                     let Some(joined) = joined else {
                         continue;
                     };
-                    break joined.context("proxy task panicked")?;
+                    break match joined {
+                        Ok(result) => result,
+                        Err(error) => Err(error).context("proxy task panicked"),
+                    };
                 }
                 _ = registry_flush_interval.tick() => {
                     match self.dns_registry().flush_if_dirty().await {
@@ -550,6 +596,10 @@ impl AppState {
                 }
             }
         };
+        if let Err(error) = &run_result {
+            self.inner.recording_lifecycle.mark_failed(error);
+        }
+        let runtime_succeeded = run_result.is_ok();
 
         tasks.abort_all();
         while let Some(joined) = tasks.join_next().await {
@@ -562,7 +612,7 @@ impl AppState {
         self.kubectl_proxy_manager().shutdown().await;
         let finish_run_result = self
             .recorder()
-            .finish_run()
+            .finish_run_after_runtime(runtime_succeeded)
             .await
             .context("failed to finalize recording run");
         let registry_flush_result = self
@@ -571,13 +621,26 @@ impl AppState {
             .await
             .context("failed to flush fake DNS registry during shutdown");
 
-        run_result?;
-        let has_failed_cases = finish_run_result?;
-        registry_flush_result?;
-        if has_failed_cases {
-            anyhow::bail!("recording run finished with failed cases");
+        let result = async {
+            let has_failed_cases = finish_run_result?;
+            if has_failed_cases {
+                warn!(
+                    "recording run finalized with failed cases; published cases remain available"
+                );
+            }
+            run_result?;
+            registry_flush_result?;
+            Ok(())
         }
-        Ok(())
+        .await;
+        if let Err(error) = &result {
+            self.inner.recording_lifecycle.mark_failed(error);
+        }
+        let control_result = match control_server {
+            Some(server) => server.shutdown().await,
+            None => Ok(()),
+        };
+        result.and(control_result)
     }
 }
 
@@ -662,7 +725,8 @@ mod tests {
             rule_name: "api".to_string(),
             uri_group: None,
         };
-        let guard = state.try_register_active_case(case.clone()).unwrap();
+        let guard = state.try_reserve_active_case(case.clone()).unwrap();
+        state.activate_case_dependencies(&guard).unwrap();
 
         let background = http_dependency(
             "config.api.demo.test",

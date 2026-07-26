@@ -1,6 +1,6 @@
 ---
 name: traffic-e2e
-description: "Initialize repositories for managed traffic recording from existing source-system processes, container names or IDs, or docker run commands, and operate traffic-e2e for recording, published case inspection and grouping, genuine dependency replay, response verification, failure diagnosis, and recorder feedback. Use when asked to initialize a repo for traffic recording, including requests such as “为当前 repo 初始化流量录制”, or when recording application traffic, replaying cases, verifying software behavior against recorded contracts, diagnosing failures, or maintaining traffic-e2e policy and evidence. Do not invoke for ordinary project initialization, merely to develop or review the traffic-e2e tool implementation, or as a general backend coding guide."
+description: "Operate traffic-e2e for managed recording, published case inspection and grouping, genuine dependency replay, response verification, failure diagnosis, and recorder feedback. Use when recording application traffic, replaying cases, verifying software behavior against recorded contracts, diagnosing failures, or maintaining evidence-driven traffic-e2e policy. Do not invoke for repository initialization, ordinary project initialization, merely developing or reviewing the traffic-e2e implementation, or general backend coding."
 ---
 
 # Traffic E2E
@@ -28,10 +28,6 @@ coverage.
 
 ## Reference Routing
 
-- Read [project-initialization.md](references/project-initialization.md) before
-  generating a target repository's `.traffic-e2e` configuration,
-  `scripts/start-recording`, recording image, or container adapters from
-  supplied source-system startup inputs.
 - Read [recording.md](references/recording.md) before managed recording or
   recording-failure diagnosis.
 - Read [case-format.md](references/case-format.md) when resolving artifacts or
@@ -62,12 +58,7 @@ coverage.
 
 ## Configuration Interfaces
 
-For one-time repository initialization, follow the project-initialization
-reference and create the three documents with `traffic-e2e config recorder
-init`, `traffic-e2e config replay init`, then `traffic-e2e config project init`.
-Do not hand-write their initial contents.
-
-After initialization, make evidence-driven managed changes only through
+Make evidence-driven managed changes only through
 `traffic-e2e config recorder <plan|apply> <strategy>` or `traffic-e2e config
 replay <plan|apply> <strategy>`. Use `apply` for normal automation; it performs
 the same current-state planning and evidence validation before its atomic
@@ -78,11 +69,14 @@ write. Use `plan` only when diagnostic output is useful.
 1. Inspect the target's authoritative recorder config, startup, readiness,
    upstreams, access policy, redaction, limits, enabled protocols, dependency
    timing, and background rules. Do not guess from examples.
-2. For container recording, create a dedicated bridge and network-namespace
-   anchor. Run Recorder, source, and dependency-producing sidecars in that
-   namespace; never use host networking. Confirm their fixed `trp-record`
-   identity and let managed `traffic-e2e record` own DNS, fake-IP interception,
-   recovery, and shutdown inside that boundary.
+2. For container recording, create a network-namespace anchor that uses host
+   networking by default. Run Recorder, source, and dependency-producing
+   sidecars with `--network container:<anchor>` so they share that one
+   namespace. Use another verified Docker network only when explicitly
+   required. Run only the genuine source application process as the fixed
+   `trp-record` identity; always preserve supporting-container users. Let
+   managed `traffic-e2e record` own DNS, fake-IP
+   interception, recovery, and shutdown inside that boundary.
 3. Wait for configured readiness. Send only controlled trigger requests and
    avoid overlapping active cases.
 4. Allow post-response dependency admission and bounded drain to finish, then

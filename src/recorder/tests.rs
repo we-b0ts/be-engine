@@ -268,7 +268,7 @@ async fn case_files_include_uri_group_when_present() {
 }
 
 #[tokio::test]
-async fn bootstrap_dependency_writes_run_file_and_summary() {
+async fn bootstrap_dependency_summary_is_generated_only_when_run_finishes() {
     let temp = tempfile::tempdir().unwrap();
     let recorder = Recorder::new(temp.path()).await.unwrap();
     let event = RecorderEvent::ProxyError(ProxyErrorEvent {
@@ -292,10 +292,13 @@ async fn bootstrap_dependency_writes_run_file_and_summary() {
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "proxy_error");
     assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
+    assert!(
+        !tokio::fs::try_exists(recorder.run_dir.join("bootstrap-dependencies-summary.json"))
+            .await
+            .unwrap()
+    );
 
-    summary::write_bootstrap_dependency_summary(&recorder.run_dir)
-        .await
-        .unwrap();
+    assert!(!recorder.finish_run().await.unwrap());
     let summary_raw =
         tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-summary.json"))
             .await
@@ -673,7 +676,7 @@ async fn fail_case_moves_staging_to_failed_and_records_error() {
         .await
         .unwrap();
     let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
-    assert_eq!(report["status"], "failed");
+    assert_eq!(report["status"], "running");
     assert_eq!(report["published_cases"], 0);
     assert_eq!(report["failed_cases"], 1);
 }

@@ -11,7 +11,7 @@ use super::model::{
     ApiVerificationConfig, ApiVerificationThresholds, ProjectConfig, ResolvedProjectConfig,
     RunLayout,
 };
-use super::{E2eRunInitOptions, E2eRunInitResult, branch, require_executable, store};
+use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
 use crate::path_pattern::validate_path_pattern;
 use crate::replay::validate_replay_policy;
 
@@ -60,8 +60,6 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         );
     }
 
-    let project_cli = resolve_under(&target_root, &options.project_cli);
-    require_executable(&project_cli, "project CLI")?;
     let replay_policy = resolve_under(&target_root, &options.replay_policy);
     ensure!(
         replay_policy.is_file(),
@@ -461,6 +459,7 @@ mod tests {
     #[test]
     fn initialize_generates_valid_project_config() {
         let target = target();
+        fs::remove_file(target.path().join("scripts/project-cli")).unwrap();
 
         let result = initialize(options(target.path())).unwrap();
 
@@ -508,8 +507,6 @@ mod tests {
                 .success()
         );
         let repository_name = crate::repository::directory_name(root).unwrap();
-        let project_cli = root.join(format!("scripts/{repository_name}-cli"));
-        fs::copy(root.join("scripts/project-cli"), &project_cli).unwrap();
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(
             root.join(".traffic-e2e/replay.yaml"),
@@ -532,6 +529,7 @@ mod tests {
             config.project_cli,
             PathBuf::from(format!("scripts/{repository_name}-cli"))
         );
+        assert!(!root.join(&config.project_cli).exists());
         assert_eq!(
             config.replay_policy,
             PathBuf::from(".traffic-e2e/replay.yaml")

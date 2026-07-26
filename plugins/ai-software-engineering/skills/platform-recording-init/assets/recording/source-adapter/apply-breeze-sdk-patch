@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+search_root=${1:-/data1}
+patch_source=${BREEZE_PATCH_SOURCE:-/usr/local/share/traffic-e2e/MeshConnectUtil.java}
+candidate_file=/tmp/traffic-e2e-breeze-sdk-candidates
+classes_directory=/tmp/traffic-e2e-breeze-sdk-classes
+
+test -f "${patch_source}"
+find "${search_root}" -type f -name 'breeze-sdk-core-*.jar' -print >"${candidate_file}"
+candidate_count=$(wc -l <"${candidate_file}" | tr -d '[:space:]')
+
+if [ "${candidate_count}" != "1" ]; then
+    echo "expected exactly one breeze-sdk-core-*.jar under ${search_root}, found ${candidate_count}" >&2
+    sed 's/^/candidate: /' "${candidate_file}" >&2
+    exit 1
+fi
+
+breeze_sdk_jar=$(sed -n '1p' "${candidate_file}")
+library_directory=$(dirname "${breeze_sdk_jar}")
+
+rm -rf "${classes_directory}"
+mkdir -p "${classes_directory}"
+
+javac \
+    -source 8 \
+    -target 8 \
+    -proc:none \
+    -encoding UTF-8 \
+    -classpath "${library_directory}/*" \
+    -d "${classes_directory}" \
+    "${patch_source}"
+
+jar uf "${breeze_sdk_jar}" \
+    -C "${classes_directory}" \
+    com/weibo/api/datamesh/common/utils/MeshConnectUtil.class
+
+jar tf "${breeze_sdk_jar}" |
+    grep -Fx 'com/weibo/api/datamesh/common/utils/MeshConnectUtil.class' >/dev/null
+
+rm -rf "${candidate_file}" "${classes_directory}"

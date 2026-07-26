@@ -60,11 +60,12 @@ the recorder. A bypassed domain is deliberately not recorded; verify that the
 bypass rule matches the intended dependency ownership rather than using a broad
 wildcard to reduce load.
 
-For a container source, run Recorder in the same dedicated recording network
-namespace as the source and dependency-producing sidecars. Use a namespace
-anchor attached to a dedicated Docker bridge and join every managed component
-with `--network container:<anchor>`. Do not use host networking or a
-host-running Recorder for container recording.
+For a container source, run Recorder in the same anchored network namespace as
+the source and dependency-producing sidecars. Start the anchor with
+`--network host` by default, then join every managed component with
+`--network container:<anchor>`. Use another verified Docker network only when
+the user or authoritative target runtime explicitly requires it. Do not start
+Recorder, source, or sidecars independently on different network namespaces.
 
 Build steps may run as the developer. The dependency-producing source process
 must run with the fixed interception identity or through another tool-supported
@@ -73,11 +74,9 @@ arrangement that places its traffic inside that identity and network boundary.
 ## Readiness And Case Admission
 
 Prefer the recorder rule's ready probe. Until readiness succeeds, matching
-traffic receives the configured fallback and does not create a case. Repository
-initialization defaults this to an in-Recorder fixed response rather than an
-upstream. Do not replace application readiness with a fixed sleep; large
-services can bind a port or answer a trivial path before business
-initialization finishes.
+traffic receives the configured fallback and does not create a case. Do not
+replace application readiness with a fixed sleep; large services can bind a
+port or answer a trivial path before business initialization finishes.
 
 After readiness, only one matching case owns dependency attribution at a time.
 Overlapping matched requests use fallback and do not become part of the active

@@ -37,13 +37,14 @@ another task-service action.
 
 1. Read repository instructions, migration notes, startup paths, and any
    supplied recording source. Determine whether the request is recording
-   initialization, case recording, or implementation. When the user asks to
-   initialize recording, or no recording setup exists yet, follow
-   `traffic-e2e`'s project-initialization reference before requiring cases or
-   modifying product code. Under an explicit `backend-rewrite` invocation,
-   interpret a concise `<repo> repo init` request as this recording-
-   initialization phase unless the user names another initialization scope.
-   Keep unrelated worktree changes out of scope.
+   initialization, case recording, or implementation. For a Platform
+   department recording-initialization request, read
+   `../platform-recording-init/SKILL.md` completely and delegate the
+   repository scaffold and ready-to-record validation to it before requiring
+   cases or modifying product code. Under an explicit `backend-rewrite`
+   invocation, interpret a concise `<repo> repo init` request as this Platform
+   recording-initialization phase unless the user names another initialization
+   scope. Keep unrelated worktree changes out of scope.
 2. Resolve the PR base before substantial work. If
    `<target-root>/.traffic-e2e/project.yaml` exists, use its exact `pr_base`.
    Otherwise use `dev-migration` unless the user explicitly requires another
@@ -54,11 +55,11 @@ another task-service action.
    implementation feature branch from that base. Branch creation, commits,
    pushes, and PR delivery belong to this orchestration skill; the traffic-e2e
    configuration initializers never switch or create branches.
-3. Run recording initialization on the feature branch. The standard project
-   initializer records the resolved base as `pr_base`; require the generated
-   value to match. Commit and push the generated initialization, then create a
-   draft PR targeting that base. If project configuration already exists,
-   validate its `pr_base` instead of silently replacing it.
+3. Run Platform recording initialization on the feature branch. Require the
+   generated project configuration to record the resolved base as `pr_base`.
+   Commit and push the generated initialization, then create a draft PR
+   targeting that base. If project configuration already exists, validate its
+   `pr_base` instead of silently replacing it.
 4. Confirm a canonical traffic-e2e case source for implementation. Preserve an
    explicit local case-source path exactly. For a remote IPv4 source, follow
    the remote-case-source reference, materialize candidates in ascending order,

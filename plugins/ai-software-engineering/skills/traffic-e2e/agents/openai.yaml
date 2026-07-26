@@ -1,4 +1,4 @@
 interface:
   display_name: "Traffic E2E"
-  short_description: "Initialize, record, replay, and verify traffic E2E"
-  default_prompt: "Use $traffic-e2e to initialize this repository from its existing source-system container names, IDs, or startup commands for managed traffic recording, or to record, replay, and verify canonical cases."
+  short_description: "Record, replay, and verify real traffic"
+  default_prompt: "Use $traffic-e2e to record, inspect, replay, and verify canonical traffic cases with genuine dependency behavior."

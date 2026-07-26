@@ -26,6 +26,7 @@ use crate::recorder::{
     MysqlTlsRejectedEvent, ProxyErrorEvent, RecorderEvent, capture_body,
     capture_body_with_original_len,
 };
+use crate::recording_control::RecordingListener;
 
 #[cfg(test)]
 mod fifo_tests;
@@ -55,11 +56,25 @@ pub(crate) struct MysqlConnectionContext {
 
 pub async fn run(state: AppState) -> Result<()> {
     let routes = state.config().mysql.effective_routes();
+    let mut bound_routes = Vec::with_capacity(routes.len());
+    for route in routes {
+        let listener = TcpListener::bind(route.listen)
+            .await
+            .with_context(|| format!("failed to bind MySQL proxy {}", route.listen))?;
+        info!(
+            route = route.name.as_deref().unwrap_or("unnamed"),
+            listen = %route.listen,
+            upstream = %route.upstream,
+            "MySQL proxy listening"
+        );
+        bound_routes.push((route, listener));
+    }
+    state.mark_recording_listener_ready(RecordingListener::Mysql);
     let mut tasks = JoinSet::new();
 
-    for route in routes {
+    for (route, listener) in bound_routes {
         let state = state.clone();
-        tasks.spawn(async move { run_route(state, route).await });
+        tasks.spawn(async move { run_route(state, route, listener).await });
     }
 
     match tasks.join_next().await {
@@ -68,17 +83,7 @@ pub async fn run(state: AppState) -> Result<()> {
     }
 }
 
-async fn run_route(state: AppState, route: MysqlRouteConfig) -> Result<()> {
-    let listener = TcpListener::bind(route.listen)
-        .await
-        .with_context(|| format!("failed to bind MySQL proxy {}", route.listen))?;
-    info!(
-        route = route.name.as_deref().unwrap_or("unnamed"),
-        listen = %route.listen,
-        upstream = %route.upstream,
-        "MySQL proxy listening"
-    );
-
+async fn run_route(state: AppState, route: MysqlRouteConfig, listener: TcpListener) -> Result<()> {
     loop {
         let (client, peer_addr) = listener
             .accept()

@@ -8,6 +8,7 @@ use tokio::time::{Duration, timeout};
 use tracing::{info, warn};
 
 use crate::AppState;
+use crate::recording_control::RecordingListener;
 
 mod bypass;
 pub(crate) use bypass::DomainMatcher;
@@ -32,6 +33,7 @@ pub async fn run(state: AppState) -> Result<()> {
             config.listen
         )
     })?);
+    state.mark_recording_listener_ready(RecordingListener::DnsMock);
     info!(
         listen = %config.listen,
         upstream_dns = %config.upstream_dns,

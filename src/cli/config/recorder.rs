@@ -18,7 +18,7 @@ pub(super) struct RecorderArgs {
 
 #[derive(Debug, Subcommand)]
 enum RecorderCommand {
-    /// Create a complete recorder template from four runtime facts.
+    /// Create a complete recorder template from source runtime facts.
     Init(InitArgs),
     /// Validate evidence and preview one recorder strategy.
     Plan(PlanArgs),
@@ -32,10 +32,10 @@ struct InitArgs {
     #[arg(long)]
     source_http_port: u16,
     /// Genuine application readiness path.
-    #[arg(long)]
+    #[arg(long = "readiness", default_value = "/healthz")]
     readiness_path: String,
     /// Exact final HTTP status proving application readiness.
-    #[arg(long)]
+    #[arg(long, default_value_t = 404)]
     readiness_status: u16,
     /// Reachable upstream resolver used after Recorder intercepts target DNS.
     #[arg(long)]
@@ -297,5 +297,47 @@ fn verified_feedback(
             required_consecutive_successful_runs: args.required_consecutive_successful_runs,
             required_successful_cases: args.required_successful_cases,
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        init: InitArgs,
+    }
+
+    #[test]
+    fn defaults_readiness_and_accepts_explicit_overrides() {
+        let defaults = TestCli::try_parse_from([
+            "test",
+            "--source-http-port",
+            "8080",
+            "--upstream-dns",
+            "10.10.10.10:53",
+        ])
+        .unwrap();
+        assert_eq!(defaults.init.readiness_path, "/healthz");
+        assert_eq!(defaults.init.readiness_status, 404);
+
+        let explicit = TestCli::try_parse_from([
+            "test",
+            "--source-http-port",
+            "8080",
+            "--readiness",
+            "/ready",
+            "--readiness-status",
+            "200",
+            "--upstream-dns",
+            "10.10.10.10:53",
+        ])
+        .unwrap();
+        assert_eq!(explicit.init.readiness_path, "/ready");
+        assert_eq!(explicit.init.readiness_status, 200);
     }
 }

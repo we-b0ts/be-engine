@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -17,6 +18,9 @@ pub(super) struct RecordArgs {
     /// Explicit 14-digit UTC recording run identifier.
     #[arg(long, value_parser = parse_run_id)]
     run_id: Option<String>,
+    /// Publish managed recording lifecycle state on this Unix socket.
+    #[arg(long)]
+    control_socket: Option<PathBuf>,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -36,16 +40,17 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
     let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
+    let configured_upstream_dns = config.dns_mock.upstream_dns;
     let state = AppState::new_with_run_id(config, args.run_id).await?;
     let mut interception = if args.dns && !args.no_dns {
         Some(Guard::enable(
-            record_dns_config()?,
+            record_dns_config(configured_upstream_dns)?,
             record_fake_ip_config(&configured_fake_cidr)?,
         )?)
     } else {
         None
     };
-    let result = state.run().await;
+    let result = state.run_with_control_socket(args.control_socket).await;
     if let Some(guard) = interception.as_mut() {
         guard.disable();
     }
@@ -213,18 +218,13 @@ fn reject_owner_config(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn record_dns_config() -> Result<DnsConfig> {
+fn record_dns_config(configured_upstream_dns: SocketAddr) -> Result<DnsConfig> {
     Ok(DnsConfig {
         dns_ip: environment("DNS_IP", "127.0.0.153"),
         dns_port: environment("DNS_PORT", "15353")
             .parse()
             .context("DNS_PORT must be a valid port")?,
-        upstream_dns: environment("UPSTREAM_DNS", "10.10.10.10:53")
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .collect(),
+        upstream_dns: vec![configured_upstream_dns.to_string()],
     })
 }
 
@@ -314,6 +314,23 @@ mod tests {
     }
 
     #[test]
+    fn accepts_recording_control_socket() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--config",
+            "recorder.toml",
+            "--control-socket",
+            "/run/traffic-e2e/recording.sock",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.record.control_socket.as_deref(),
+            Some(Path::new("/run/traffic-e2e/recording.sock"))
+        );
+    }
+
+    #[test]
     fn no_dns_overrides_default_interception() {
         let default = TestCli::try_parse_from(["test", "--config", "recorder.toml"]).unwrap();
         assert!(default.record.dns);
@@ -350,6 +367,21 @@ mod tests {
             resolve_environment_config_default(None, &defaults.dns_mock.fake_cidr),
             DEFAULT_FAKE_CIDR
         );
+    }
+
+    #[test]
+    fn interception_dns_uses_recorder_upstream() {
+        let configured: AppConfig = toml::from_str(
+            r#"
+            [dns_mock]
+            upstream_dns = "10.10.10.11:53"
+            "#,
+        )
+        .unwrap();
+
+        let interception = record_dns_config(configured.dns_mock.upstream_dns).unwrap();
+
+        assert_eq!(interception.upstream_dns, ["10.10.10.11:53"]);
     }
 
     #[test]

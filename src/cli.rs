@@ -8,6 +8,7 @@ mod diagnose;
 mod interception;
 mod output;
 mod record;
+mod recording;
 mod replay;
 mod signal;
 mod target;
@@ -42,6 +43,8 @@ enum Command {
     Compare(compare::CompareArgs),
     /// Run the recorder with fixed-user local interception.
     Record(record::RecordArgs),
+    /// Wait for and inspect managed recording lifecycle state.
+    Recording(recording::RecordingArgs),
     /// Run a managed replay session with fixed-user local interception.
     Replay(replay::ReplayArgs),
     /// Execute a prebuilt target command as the fixed interception user.
@@ -80,6 +83,7 @@ pub(crate) async fn run() -> Result<()> {
     match cli.command {
         Command::Compare(args) => compare::run(args).await,
         Command::Record(args) => record::run(args).await,
+        Command::Recording(args) => recording::run(args).await,
         Command::Replay(args) => replay::run(args).await,
         Command::Target(args) => target::run(args).await,
         Command::Config(args) => config::run(args),
@@ -119,8 +123,19 @@ mod tests {
         assert_eq!(
             names,
             [
-                "compare", "record", "replay", "target", "config", "prepare", "run-api", "run",
-                "status", "recover", "abort", "diagnose"
+                "compare",
+                "record",
+                "recording",
+                "replay",
+                "target",
+                "config",
+                "prepare",
+                "run-api",
+                "run",
+                "status",
+                "recover",
+                "abort",
+                "diagnose"
             ]
         );
     }

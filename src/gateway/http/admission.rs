@@ -5,7 +5,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::recorder::CaseContext;
-use crate::{ActiveCaseGuard, ActiveCaseRejection, AppState};
+use crate::{ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRejection, AppState};
 
 pub(super) async fn try_admit_case(
     state: &AppState,
@@ -29,8 +29,19 @@ pub(super) async fn try_admit_case(
         return None;
     }
 
-    match state.try_register_active_case(case.clone()) {
+    match state.try_reserve_active_case(case.clone()) {
         Ok(guard) => {
+            if let Err(err) = state
+                .seal_bootstrap_dependencies("HTTP gateway case admission")
+                .await
+            {
+                warn!(
+                    error = %err,
+                    case_id = %case.id,
+                    "failed to seal bootstrap dependencies before HTTP gateway case admission"
+                );
+                return None;
+            }
             let admission = CaseAdmissionRecord {
                 timestamp: Utc::now(),
                 case_id: case.id,
@@ -50,6 +61,17 @@ pub(super) async fn try_admit_case(
                     case_id = %case.id,
                     "failed to persist HTTP gateway case admission"
                 );
+                discard_unadmitted_case(state, case).await;
+                return None;
+            }
+            if let Err(reason) = state.activate_case_dependencies(&guard) {
+                info!(
+                    reason = active_case_activation_error(reason),
+                    rule = %case.rule_name,
+                    case_pattern,
+                    "HTTP gateway case admission stopped before dependency activation"
+                );
+                discard_unadmitted_case(state, case).await;
                 return None;
             }
             info!(
@@ -74,6 +96,16 @@ pub(super) async fn try_admit_case(
     }
 }
 
+async fn discard_unadmitted_case(state: &AppState, case: &CaseContext) {
+    if let Err(error) = state.recorder().discard_unadmitted_case(case).await {
+        warn!(
+            %error,
+            case_id = %case.id,
+            "failed to discard unadmitted HTTP gateway case"
+        );
+    }
+}
+
 #[derive(Serialize)]
 struct CaseAdmissionRecord {
     timestamp: DateTime<Utc>,
@@ -90,6 +122,13 @@ fn active_case_rejection_reason(reason: ActiveCaseRejection) -> &'static str {
         ActiveCaseRejection::NotReady => "not_ready",
         ActiveCaseRejection::Busy => "busy",
         ActiveCaseRejection::Quiescing => "quiescing",
+    }
+}
+
+fn active_case_activation_error(reason: ActiveCaseActivationError) -> &'static str {
+    match reason {
+        ActiveCaseActivationError::Quiescing => "quiescing",
+        ActiveCaseActivationError::ReservationMissing => "reservation_missing",
     }
 }
 
@@ -157,5 +196,143 @@ mod tests {
         assert!(!drain.is_finished());
         drop(guard);
         assert!(drain.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn cancelled_admission_does_not_accept_dependencies_or_leave_staging() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let temp = tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.mysql.enabled = false;
+        config.recording.output_dir = temp.path().join("recordings");
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+        let state = AppState::new(config).await.unwrap();
+        assert!(state.close_bootstrap("test").await.unwrap());
+
+        let dependency_write_lock = state.recorder().dependency_write_lock.clone();
+        let write_guard = dependency_write_lock.lock().await;
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some("api-resource-isok".to_string()),
+        };
+        let case_for_task = case.clone();
+        let state_for_task = state.clone();
+        let admission = tokio::spawn(async move {
+            let uri = "/api/resource/isok".parse().unwrap();
+            try_admit_case(
+                &state_for_task,
+                &case_for_task,
+                "/api/resource/isok",
+                50,
+                "http://127.0.0.1:7171",
+                &uri,
+            )
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !state.inner.active_cases.case_slot_occupied() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(state.capture_dependency_targets().cases.is_empty());
+
+        admission.abort();
+        assert!(matches!(
+            admission.await,
+            Err(error) if error.is_cancelled()
+        ));
+        drop(write_guard);
+
+        assert!(
+            !tokio::fs::try_exists(state.recorder().case_staging_dir(&case))
+                .await
+                .unwrap()
+        );
+        assert!(!state.inner.active_cases.case_slot_occupied());
+    }
+
+    #[tokio::test]
+    async fn cancelled_bootstrap_seal_is_retried_by_the_next_admission() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let temp = tempdir().unwrap();
+        let mut config = AppConfig::default();
+        config.mysql.enabled = false;
+        config.recording.output_dir = temp.path().join("recordings");
+        config.tls.ca_cert_path = temp.path().join("ca.pem");
+        config.tls.ca_key_path = temp.path().join("ca-key.pem");
+        let state = AppState::new(config).await.unwrap();
+
+        let dependency_write_lock = state.recorder().dependency_write_lock.clone();
+        let write_guard = dependency_write_lock.lock().await;
+        let first = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "record-api".to_string(),
+            uri_group: Some("api-resource-isok".to_string()),
+        };
+        let first_for_task = first.clone();
+        let state_for_task = state.clone();
+        let first_admission = tokio::spawn(async move {
+            let uri = "/api/resource/isok".parse().unwrap();
+            try_admit_case(
+                &state_for_task,
+                &first_for_task,
+                "/api/resource/isok",
+                50,
+                "http://127.0.0.1:7171",
+                &uri,
+            )
+            .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !state.inner.active_cases.case_slot_occupied() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!state.inner.active_cases.is_bootstrap_open());
+        assert!(!state.inner.active_cases.is_bootstrap_sealed());
+        assert!(state.capture_dependency_targets().cases.is_empty());
+
+        first_admission.abort();
+        assert!(matches!(
+            first_admission.await,
+            Err(error) if error.is_cancelled()
+        ));
+        drop(write_guard);
+
+        let second = CaseContext {
+            id: Uuid::new_v4(),
+            ..first
+        };
+        let uri = "/api/resource/isok".parse().unwrap();
+        let second_guard = try_admit_case(
+            &state,
+            &second,
+            "/api/resource/isok",
+            50,
+            "http://127.0.0.1:7171",
+            &uri,
+        )
+        .await
+        .unwrap();
+        assert!(state.inner.active_cases.is_bootstrap_sealed());
+        assert_eq!(
+            state.capture_dependency_targets().cases,
+            vec![(second.clone(), "active_window")]
+        );
+
+        drop(second_guard);
+        state
+            .recorder()
+            .discard_unadmitted_case(&second)
+            .await
+            .unwrap();
     }
 }
