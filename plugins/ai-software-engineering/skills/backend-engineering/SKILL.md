@@ -46,6 +46,30 @@ of the current change.
    multiplication, avoidable allocation, hidden blocking, resource leaks,
    missing observability, and accidental behavior changes.
 
+Read-only inspection of an available authorized runtime is allowed when
+repository files do not establish effective configuration or startup behavior.
+Inspect only necessary configuration, environment variable names and
+provenance, startup arguments, deployment metadata, and dependency wiring.
+Never print, persist, or hard-code secret values, and do not replace a genuine
+runtime dependency with an environment variable inferred from traffic.
+
+## Rewrite Loop Handoff
+
+When `backend-rewrite` delegates a `target_behavior` TODO, require the active
+API, immutable case source and IDs, observable difference, dependency evidence,
+source behavior evidence, and exact requested outcome. Implement and verify
+only that target-owned TODO, then return:
+
+```text
+todo_status, changed_behavior, affected_apis, local_checks, return_to: e2e
+```
+
+Do not declare migration completion, start comparison, change background
+attribution or replay policy, or modify the traffic-e2e system from this
+handoff. If the evidence instead proves a Recorder or Replay capability gap,
+return the evidence and system-owned TODO to the rewrite orchestrator as
+`blocked`.
+
 ## Non-Negotiable Baseline
 
 - Every queue, buffer, cache, batch, fan-out, task set, and in-flight request

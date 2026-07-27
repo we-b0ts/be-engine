@@ -42,6 +42,23 @@ and delivery. `traffic-e2e` owns each recording and verification operation and
 its evidence gates; `backend-engineering` owns production-code quality. Do not
 copy or weaken their detailed contracts here.
 
+## Runtime Evidence
+
+When repository files and traffic artifacts do not establish effective
+behavior, inspect an available authorized source or target runtime read-only.
+Useful evidence includes effective configuration, environment variable names
+and provenance, startup arguments, working directory, mounts, deployment
+manifests, network wiring, and dependency endpoints. Do not print, persist, or
+copy secret values into logs, recordings, commits, PRs, or handoff text.
+
+Runtime inspection is an allowed diagnostic action, not a mandatory phase and
+not authority to hard-code observed values. Preserve the provenance rules in
+`traffic-e2e` target integration: only direct process environment, startup
+arguments, or machine-local configuration may become equivalent target inputs;
+values loaded through a runtime dependency must keep that genuine dependency
+path. If essential runtime evidence is unavailable, report the missing
+observation and owner as `incomplete`.
+
 ## Remote Case Sources
 
 When the user supplies a remote task-service IPv4 address instead of a local
@@ -82,10 +99,16 @@ another task-service action.
    local source exactly. For a remote IPv4 source, follow the remote reference
    and select at most one recording for the invocation. Otherwise call the
    repository's `scripts/start-recording` with a generated unique UTC run ID,
-   explicit `--duration-seconds 60`, and repeatable `--api` selectors when the
-   affected scope is known. Resolve that exact finalized run; never choose a
-   run merely because it is newest. If the observation window receives no
-   qualifying traffic, report `incomplete` rather than inventing a request.
+   explicit `--duration-seconds 60`, and one `--api` selector for the active
+   API. Work on exactly one active API at a time. When the user has not named an
+   API and the stated traffic source is the listener on port 18061, first run
+   `nc -kl4 18061` while no recorder owns that port, observe only enough of one
+   request to identify a concrete method and path, stop the listener, and use
+   that API as the selector. Do not persist or report headers, credentials, or
+   bodies, and do not use an unscoped recording as API discovery. Resolve the
+   exact finalized run; never choose a run merely because it is newest. If the
+   observation window receives no qualifying traffic, report `incomplete`
+   rather than inventing a request.
 5. Confirm source routes, target facade, verification policy, dependency
    wiring, and genuine runtime clients. Prepare one canonical API group at a
    time. Run the existing implementation first when present, then implement or
@@ -115,11 +138,52 @@ another task-service action.
    Review module boundaries, run all repository-required gates, and preserve
    exact artifact identities and remaining blockers.
 
-If the same root cause blocks three consecutive repair cycles without new
-evidence or meaningful progress, stop the loop and report `blocked` with the
-exact E2E and comparison artifacts. Report `incomplete` instead when work can
-continue but a required gate, qualifying traffic, or other external
-observation is still missing.
+## Loop State And Routing
+
+Keep one explicit state record for the active API:
+
+```text
+api, stage, case_source, source_revision, e2e_evidence,
+comparison_evidence, last_failure_category, next_todo, todo_owner, resume_stage
+```
+
+Advance only through:
+
+```text
+select_api -> record -> prepare -> e2e -> compare -> api_done -> select_api
+```
+
+Do not select another API until the active API is `api_done`. Do not enter
+comparison without runner-generated proof that the active API's complete E2E
+scope passed after the latest behavior, policy, attribution, or case-source
+change. Route every non-passing result before acting:
+
+- `target_behavior`: give an evidence packet to `backend-engineering`, repair
+  the target, and rerun E2E against the same source;
+- `target_environment`: repair the target runtime configuration or wiring and
+  rerun E2E against the same source;
+- `background_dependency`: prove process-level ownership, apply the narrow
+  background rule, make a new standard recording for the same API, prepare it,
+  and rerun E2E;
+- `recording_configuration`: repair target-owned recording configuration, make
+  a new standard recording, prepare it, and rerun E2E;
+- `intentional_nondeterminism`: apply only source-proven policy, then rerun E2E
+  before making a new comparison recording;
+- `source_drift`: obtain a new comparison observation without reinterpreting
+  the old report;
+- `recorder_capability_gap` or `replay_capability_gap`: report `blocked` with a
+  TODO owned by `traffic-e2e-system`; do not modify the traffic-e2e
+  implementation or add a target workaround;
+- `unresolved`: continue diagnosis without changing code, policy, or
+  attribution.
+
+A confirmed Recorder or Replay capability gap stops immediately after one
+bounded reproduction proves that the genuine contract cannot be captured or
+replayed and that target wiring or configuration is not the cause. For other
+categories, stop as `blocked` when the same root cause repeats for three
+consecutive repair cycles without new evidence or meaningful progress. Report
+`incomplete` when work can continue but a required gate, qualifying traffic,
+runtime access, or other external observation is still missing.
 
 ## Delivery
 
@@ -138,3 +202,52 @@ address, frozen snapshot boundary, selected recording ID, cache root, archive
 SHA-256, every resolved canonical case source, and their exact runner states.
 Downloaded artifacts or helper success never substitute for replay completion
 evidence.
+
+## Final Decision Record
+
+Constrain the final decision, not the investigation. Do not force commentary,
+diagnosis, code review, or intermediate repair work into a report schema. Omit
+inapplicable fields and do not emit placeholders or invented values.
+
+For a verified API, use this short form:
+
+```text
+Status: complete
+API: <METHOD pattern>
+E2E: passed — <exact current report>
+Compare: passed — <exact current report>
+Delivery: <PR or delivered artifact>
+Conclusion: <one explicit sentence>
+```
+
+For an API that cannot currently complete, use:
+
+```text
+Status: incomplete | blocked
+API: <METHOD pattern>
+Stage: <select_api | record | prepare | e2e | compare>
+Conclusion: <one explicit sentence>
+E2E: <not_run | failed | passed | stale> — <report when available>
+Compare: <not_started | failed | passed | stale> — <report when available>
+Category: <evidence-backed failure category>
+Evidence:
+- <exact artifact or observation>
+Next TODO:
+- Owner: <responsible actor or component>
+- Action: <specific next action>
+- Acceptance: <how completion will be verified>
+- Resume from: <stage>
+- Required transitions: <only re-record, rerun E2E, or new comparison if needed>
+```
+
+Use `complete` only when the API is `api_done` and current E2E and comparison
+evidence both pass. If E2E is not current and passing, comparison must be
+`not_started` or `stale`. For `background_dependency`, require re-recording and
+resume from `record`. For a Recorder or Replay capability gap, use `blocked`,
+set the owner to `traffic-e2e-system`, and state the required system change and
+its acceptance check. Every `incomplete` or `blocked` result requires an
+actionable owner, TODO, acceptance condition, and resume stage.
+
+A draft PR or delivered change is not verification success. Do not use vague
+handoffs such as “continue investigating”, and never use success wording while
+an applicable gate is missing.
