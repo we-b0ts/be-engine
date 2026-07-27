@@ -1,6 +1,6 @@
 ---
 name: platform-recording-init
-description: "Initialize a Platform department Java/Tomcat repository for managed traffic recording from an existing source application container, using the standard Breeze and Vintage topology, fixed Recorder configuration, bundled Breeze SDK source-image patch, and repository-local Breeze resource development contract. Use when invoked directly or when a Platform backend rewrite asks to initialize the current repo for traffic recording from a container such as friendship. Do not use for generic repositories, recording cases, replay, or implementation work."
+description: "Initialize a Platform department Java/Tomcat repository for managed traffic recording from an existing source application container, using the standard Breeze and Vintage recording topology, fixed Recorder configuration, and bundled Breeze SDK source-image patch. Use when invoked directly or when a Platform backend rewrite asks to initialize the current repo for traffic recording from a container such as friendship. Do not use for generic repositories, recording cases, replay, or target SDK implementation."
 ---
 
 # Platform Recording Init
@@ -55,21 +55,13 @@ writing files or starting containers.
    settle interval and encrypted `authorization` request-header policy;
    `recording wait-ready` owns the wait. Keep `authorization` in
    `redact_headers` for response-side protection; request encryption takes
-   precedence. Handle the repository document and `AGENTS.md` fragment only
-   as specified in the next step; do not copy the fragment as a standalone
-   target file.
-5. Copy
-   `assets/recording/docs/breeze-resource-development.md` unchanged to
-   `docs/breeze-resource-development.md`. Merge the exact managed block from
-   `assets/recording/AGENTS.breeze.md` into the root `AGENTS.md`: create the
-   file when absent, replace only the existing managed block when present, and
-   otherwise append it without changing existing repository instructions.
-6. Copy the Breeze patch assets unchanged into
+   precedence.
+5. Copy the Breeze patch assets unchanged into
    `.traffic-e2e/adapters/source/`. Generate the remaining source adapter
    Dockerfile and launchers from inspected evidence; invoke the bundled patch
    applicator and recursively assign `/data1/weibo` to numeric `998:998`
    during the image build.
-7. Generate `scripts/start-recording` for the inspected startup parameters.
+6. Generate `scripts/start-recording` for the inspected startup parameters.
    Support optional `--run-id YYYYMMDDHHMMSS` and
    `--duration-seconds <positive-integer>`, plus repeatable
    `--api 'METHOD /path-or-pattern'` and
@@ -81,7 +73,7 @@ writing files or starting containers.
    changing runtime state and pass it only to Recorder. Follow the fixed
    lifecycle in the runtime reference; do not reconstruct it from another
    repository.
-8. Before target implementation exists, generate an extensible
+7. Before target implementation exists, generate an extensible
    `scripts/<project>-cli` whose initialization-time minimum is a
    fixed-response candidate mock behind `start`, `status`, and `stop`, then
    generate `scripts/start-recording-comparison` against that stable lifecycle
@@ -101,19 +93,19 @@ writing files or starting containers.
    environment before changing runtime state and preserve it only for
    `traffic-e2e record-comparison`. Follow the fixed lifecycle in the runtime
    reference.
-9. Create empty recording bind sources by translating each private source
+8. Create empty recording bind sources by translating each private source
    mount from `/data1/<project>/<path>` to
    `/data1/<project>-recording/<path>`. Keep container destinations unchanged,
    copy no original content, and recursively assign the new writable sources
    to numeric `998:998`. Before every start, also normalize the fixed shared
    Breeze directories as specified by the runtime reference.
-10. Validate configuration, adapter construction, shell syntax, bounded
+9. Validate configuration, adapter construction, shell syntax, bounded
    standard and comparison recording startup, readiness, identity, dependency
-   routing, the Breeze development document and its `AGENTS.md` reference,
-   its independent-startup creation and replay-read-only descriptor rules,
-   clean finalization, and host ownership of the complete finalized standard
-   recording run.
-11. Commit only the initialization outputs, push the initialization branch, and
+   routing, shared Breeze descriptor preservation, clean finalization, and
+   host ownership of the complete finalized standard recording run. Do not
+   generate target Breeze SDK packages or repository development rules; those
+   belong to [`breeze-sdk`](../breeze-sdk/SKILL.md).
+10. Commit only the initialization outputs, push the initialization branch, and
    create or update its draft PR targeting `dev-migration`.
 
 ## Source-Controlled Output
@@ -129,8 +121,6 @@ scripts/start-recording
 scripts/start-recording-comparison
 scripts/<project>-cli
 scripts/brz-no-fallback.sh
-docs/breeze-resource-development.md
-AGENTS.md
 .gitignore
 ```
 
@@ -144,8 +134,7 @@ Append only missing ignore entries for:
 ```
 
 Do not modify business source, build files, deployment files, CI, README, or
-repository instructions outside the managed Platform Breeze block in the root
-`AGENTS.md`.
+repository instructions.
 
 ## Completion
 
@@ -173,9 +162,6 @@ must prove the baseline and fixed-response candidate both became ready and
 `comparison-recording-run.json` finalized; it does not require frontend
 traffic or a published comparison recording case. Also require published
 `dev-migration` and initialization branches plus the draft PR from the
-initialization branch to `dev-migration`. Also require exactly one managed
-Platform Breeze block in `AGENTS.md`, a valid relative link from that block to
-`docs/breeze-resource-development.md`, and the closed Breeze package allowlist
-plus independent-startup creation and replay-read-only descriptor rules in
-that document. Do not send a business request or require a recorded case during
+initialization branch to `dev-migration`. Do not send a business request,
+implement target Breeze clients, or require a recorded case during
 initialization.

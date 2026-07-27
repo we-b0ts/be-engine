@@ -39,6 +39,12 @@ diagnosis, and their evidence gates. Before target-code work, read and use
 code quality and local verification. Companion results inform this workflow
 but cannot advance, terminate, or declare the migration complete.
 
+When source or target evidence includes the Breeze SDK, `brz-*`,
+`crates/breeze/`, or `/data1/breeze/socks`, also read and use
+[`breeze-sdk`](../breeze-sdk/SKILL.md) before Breeze target-code work. It owns
+resource identity, descriptor lifecycle, and Breeze client construction;
+rewrite retains slice sequencing, evidence gates, completion, and delivery.
+
 Do not modify traffic-e2e to complete a rewrite. Route a proven Recorder or
 Replay capability gap to `traffic-e2e-system`, and do not add a
 recording-backed workaround to target code.

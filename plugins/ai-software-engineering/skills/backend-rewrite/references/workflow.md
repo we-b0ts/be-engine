@@ -94,11 +94,20 @@ active scope, immutable case source and IDs, structured response difference,
 causal dependency evidence, source behavior evidence, requested outcome
 ```
 
+When source code, runtime evidence, recorded dependency targets, or the target
+contains Breeze, read and use `../../breeze-sdk/SKILL.md`. Add the complete
+logical resource identity, operating mode (`independent`, `recording`,
+`comparison`, or `replay`), and exact descriptor or port evidence to the
+target-code packet. In replay mode, require read-only resolution and treat a
+missing exact descriptor as a startup blocker; do not authorize creation,
+mutation, or a protocol-default port.
+
 Use `backend-engineering` for target-owned implementation and local checks.
 Record its result as:
 
 ```text
-todo_status, changed_behavior, affected_apis, local_checks
+todo_status, changed_behavior, affected_apis, changed_resources,
+descriptor_behavior, local_checks
 ```
 
 The target-code task must not declare migration completion, start comparison,
