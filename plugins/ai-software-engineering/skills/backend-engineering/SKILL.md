@@ -92,6 +92,49 @@ return the evidence and system-owned TODO to the rewrite orchestrator as
 - Production behavior MUST NOT depend on tests, recordings, fixtures, debug
   branches, or developer-only defaults.
 
+## Breeze Resource Packages
+
+For Rust workspace changes that access MySQL, Redis, or Memcached:
+
+- Production access MUST use the dedicated library packages
+  `crates/breeze/mysql` (`brz-mysql`),
+  `crates/breeze/redis` (`brz-redis`), and
+  `crates/breeze/memcached` (`brz-memcached`).
+- If the required package does not exist, create and register it as a workspace
+  member before adding the access path. Application packages MUST NOT construct
+  or manage the underlying resource client directly.
+- The `brz-*` package is the application-facing boundary for resource access,
+  including connection management, discovery and routing, sharding when
+  applicable, timeouts, retries, enablement, health, and shutdown. Its
+  implementation MAY reuse other workspace packages. Business-specific SQL,
+  cache keys, serialization, and fallback behavior remain owned by the
+  corresponding business capability.
+
+## Large Rust Backend Structure
+
+For large Rust backends:
+
+- The primary product package MUST live at the repository root. The root
+  `Cargo.toml` MUST contain both `[package]` and `[workspace]`, primary product
+  source MUST live under root `src/`, and library packages MUST live under
+  `crates/`. Do not move the primary package under `apps/`.
+- Put only additional independently deployed runtime roles in separate binary
+  packages, conventionally under `apps/<role>/`.
+- Binary entrypoints own configuration loading, dependency construction,
+  startup, and shutdown; they MUST NOT own business behavior.
+- Organize business libraries by cohesive product capability. Use modules
+  inside a capability for application logic, domain policy, dependency
+  contracts, and adapters. Do not create repository-wide `service`, `model`,
+  `common`, or `utils` packages that collect unrelated capabilities.
+- Construct runtime dependencies explicitly in each binary's composition root
+  and pass them through constructors. The dependency graph MUST remain
+  acyclic and visible from code; do not use a global service locator,
+  component scanning, or a catch-all application context.
+- Keep HTTP JSON DTOs and generated Protobuf, RPC, or storage types at their
+  respective adapter boundaries. Application and domain code MUST use
+  transport-independent business types, with explicit conversion at each
+  boundary.
+
 ## Risk-Scaled Decisions
 
 Do not add caches, pools, batching, lock-free structures, circuit breakers, or
@@ -108,6 +151,10 @@ defects before they become scale defects.
 
 - Read [architecture.md](references/architecture.md) when choosing modules,
   ownership, configuration, APIs, or runtime boundaries.
+- Read [large-rust-backend-architecture.md](references/large-rust-backend-architecture.md)
+  before structuring or extending a Rust backend with multiple deployable
+  roles, product capabilities, service dependencies, remote clients, API
+  adapters, or complex configuration.
 - Read [concurrency-and-backpressure.md](references/concurrency-and-backpressure.md)
   when adding async work, threads, queues, batching, fan-out, or background work.
 - Read [dependency-clients.md](references/dependency-clients.md) whenever the
