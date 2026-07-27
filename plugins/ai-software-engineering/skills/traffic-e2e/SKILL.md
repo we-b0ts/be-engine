@@ -148,7 +148,10 @@ advances only the current stage. It is not whole-migration completion.
    required. Run only the genuine source application process as the fixed
    `trp-record` identity; always preserve supporting-container users. Let
    managed `traffic-e2e record` own DNS, fake-IP
-   interception, recovery, and shutdown inside that boundary.
+   interception, recovery, and shutdown inside that boundary. When Recorder
+   runs as container root over a host bind mount, require the host wrapper to
+   pass its numeric user and group through `--artifact-owner UID:GID`; never
+   use the fixed interception identity as the artifact owner.
 3. Wait for configured readiness. Send only controlled trigger requests and
    avoid overlapping active cases.
 4. Allow post-response dependency admission and bounded drain to finish, then
@@ -211,7 +214,8 @@ A recording is usable only when managed shutdown finalized cleanly, the genuine
 ready target handled the intended trigger, every selected case is canonically
 published with complete bodies and explicit semantic dependency evidence, no
 selected case exists only under failed/partial/truncated state, and no policy,
-protocol, capture, drain, or interception failure invalidates the contract.
+protocol, capture, drain, interception, or requested artifact-ownership failure
+invalidates the contract.
 
 A replay scope passes only when:
 

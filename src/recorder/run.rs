@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
+use tracing::info;
 use uuid::Uuid;
 
 use super::dependencies::ensure_case_dependency_file;
@@ -247,6 +248,21 @@ impl Recorder {
         };
         self.write_run_report(status).await?;
         self.flush_traffic().await?;
+        if let Some(owner) = self.artifact_owner {
+            owner.assign_to(&self.run_dir).await.with_context(|| {
+                format!(
+                    "failed to assign finalized recording run {} to {}",
+                    self.run_dir.display(),
+                    owner
+                )
+            })?;
+            info!(
+                run_dir = %self.run_dir.display(),
+                uid = owner.uid(),
+                gid = owner.gid(),
+                "assigned finalized recording artifact ownership"
+            );
+        }
         Ok(has_failed_cases)
     }
 
@@ -457,6 +473,8 @@ fn path_relative_to(path: &Path, base: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::MetadataExt;
+
     use super::*;
 
     fn case(group: &str) -> CaseContext {
@@ -583,5 +601,28 @@ mod tests {
         let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
         assert_eq!(report["status"], "failed");
         assert_eq!(report["failed_cases"], 0);
+    }
+
+    #[tokio::test]
+    async fn finish_run_assigns_the_configured_artifact_owner() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut recorder = Recorder::new(temp.path()).await.unwrap();
+        let owner = super::super::ArtifactOwner::new(unsafe { libc::geteuid() }, unsafe {
+            libc::getegid()
+        });
+        recorder.artifact_owner = Some(owner);
+        let artifact = recorder.run_dir.join("nested/request.json");
+        tokio::fs::create_dir_all(artifact.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&artifact, "{}\n").await.unwrap();
+
+        recorder.finish_run().await.unwrap();
+
+        for path in [recorder.run_dir.as_ref(), artifact.as_path()] {
+            let metadata = std::fs::symlink_metadata(path).unwrap();
+            assert_eq!(metadata.uid(), owner.uid());
+            assert_eq!(metadata.gid(), owner.gid());
+        }
     }
 }

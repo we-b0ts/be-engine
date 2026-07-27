@@ -71,6 +71,11 @@ exact installed Linux/amd64 binary read-only at
 `/usr/local/bin/traffic-e2e`. Publish only versioned tags, verify the pushed
 manifest digest, and pin consumers to `tag@sha256`.
 
+Recorder remains root inside this runtime for managed DNS and interception.
+When its recording output is a host bind mount, the host wrapper must pass
+`traffic-e2e record --artifact-owner "$(id -u):$(id -g)"` so finalization
+assigns only the exact run tree back to the invoking host user.
+
 ## CLI Boundaries
 
 Use `traffic-e2e config ... init` for one-time target configuration and
