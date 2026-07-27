@@ -66,38 +66,73 @@ replay <plan|apply> <strategy>`. Use `apply` for normal automation; it performs
 the same current-state planning and evidence validation before its atomic
 write. Use `plan` only when diagnostic output is useful.
 
-## Rewrite Verification Loop
+## Runtime Evidence
 
-When repository initialization provides source-controlled recording scripts,
-use them as the normal orchestration boundary. Do not reconstruct their
-container, source-startup, candidate-startup, or cleanup commands in the task.
-Generated scripts default to 60 seconds when a caller omits the duration, but
-AI and automated invocations must always pass `--duration-seconds 60` or
-another positive integer.
+When artifacts and repository configuration do not explain a recording,
+replay, or comparison result, inspect an available authorized source or target
+runtime read-only. Inspect only what is necessary, such as effective
+configuration, environment variable names and provenance, startup arguments,
+mounts, container or deployment metadata, network wiring, and dependency
+endpoints. Never dump secret values or copy them into logs, cases, policy,
+commits, or reports.
 
-1. Call `scripts/start-recording` to collect genuine frontend requests,
-   expected responses, and case-owned dependencies. Pass a unique UTC
-   `--run-id YYYYMMDDHHMMSS`, resolve that exact finalized recording run, and
-   never select a run merely because it is newest. When work is scoped to
-   known APIs, repeat `--api 'METHOD /path-or-pattern'`; this is a run-local
-   filter and must not be converted into a recorder config edit.
-2. Use that immutable run with the standard `prepare` and `run-api` workflow.
-   Implement or fix the target until the affected genuine dependency replay E2E
-   scope passes.
-3. Only then call `scripts/start-recording-comparison` to collect read-only
-   frontend traffic against the normally running source and candidate. Pass a
-   new explicit run ID and the same affected `--api` selectors. For a Platform
-   wrapper, preserve its single shared Breeze topology and
-   `--brz-no-fallback` behavior. Then run offline `traffic-e2e compare` on that
-   exact finalized comparison run. Only the comparison report's per-API passed
-   result is validation success.
-4. Diagnose every difference as a candidate defect, source data drift, or
-   source-proven non-determinism. If comparison exposes an API without a valid
-   standard E2E case, return to `scripts/start-recording` and establish that
-   replay contract before changing target behavior for the API.
-5. After a code or policy change, pass the affected standard E2E scope again,
-   create a new immutable comparison recording, and compare it. Repeat until
-   both evidence gates pass.
+Runtime evidence may establish configuration provenance or a wiring defect. It
+must not turn a value loaded by a genuine runtime dependency into a target
+environment variable. Follow [target-integration.md](references/target-integration.md)
+for materialization and precedence rules.
+
+## Repository Entrypoints
+
+This skill owns the mechanics and evidence gates of recording, replay, and
+comparison. A rewrite orchestration skill decides when to enter and repeat
+those phases.
+
+When source-controlled `scripts/start-recording` or
+`scripts/start-recording-comparison` exists, use it as the normal operation
+boundary. Do not reconstruct its container, service startup, signal,
+finalization, or cleanup lifecycle. Generated scripts may default to 60
+seconds, but AI and automated invocations must pass
+`--duration-seconds 60` or another positive integer explicitly.
+
+Generate a unique UTC `--run-id YYYYMMDDHHMMSS` for every new recording
+operation unless the caller supplied one, retain the exact finalized artifact
+path, and never select a run merely because it is newest. When the intended
+scope is known, pass repeatable `--api 'METHOD /path-or-pattern'`; the selector
+is run-local and must not become a recorder configuration edit.
+
+## Operation Outcome
+
+Return a concise control handoff to the calling orchestrator after each
+recording, preparation, E2E, comparison, or diagnosis operation. This is not a
+mandatory user-facing report template. Always include:
+
+```text
+status: passed | action_required | incomplete | blocked
+stage, api, exact evidence
+```
+
+For a non-passing outcome, also include the evidence-backed category, owner,
+next TODO, and resume stage. Include `case_source`, `requires_rerecord`,
+`requires_e2e_rerun`, and `requires_new_comparison` only when they affect the
+next transition. Omit inapplicable fields; do not invent values or emit an
+empty schema.
+
+Use these categories:
+
+```text
+target_behavior, target_environment, background_dependency,
+recording_configuration, recording_no_traffic,
+recorder_capability_gap, replay_capability_gap,
+intentional_nondeterminism, source_drift, unresolved
+```
+
+Set `owner` to the component or team that can perform `next_todo`; do not assign
+a traffic-e2e system defect to the rewrite target. Use `rewrite-agent` for
+target runtime, recording configuration, background attribution, policy, and
+new observations; `backend-engineering` for target behavior;
+`traffic-e2e-system` for Recorder or Replay capability gaps; and
+`runtime-owner` for missing runtime access or qualifying traffic. `passed`
+advances only the current stage. It is not whole-migration completion.
 
 ## Managed Recording
 
@@ -122,8 +157,10 @@ another positive integer.
 4. Allow post-response dependency admission and bounded drain to finish, then
    stop cleanly and inspect run diagnostics, failed cases, canonical files, and
    summaries.
-5. Fix recorder, target, or config defects and create a new run. Never repair
-   or promote a failed or published recording in place.
+5. Fix target-owned or recording-configuration defects and create a new run.
+   For a confirmed Recorder capability gap, stop with a system-owned blocker
+   instead of modifying the tool from a rewrite task. Never repair or promote a
+   failed or published recording in place.
 
 ## Replay And Verification
 
@@ -139,7 +176,10 @@ another positive integer.
    that complete group passes.
 5. Diagnose failures from canonical evidence. Classify every unused case
    dependency from source as case-owned, source-proven background, or
-   unresolved before changing recorder config.
+   unresolved before changing recorder config. After applying a proven
+   background rule, make a new standard recording for the same API, prepare
+   that new immutable source, and rerun E2E. A background rule changes
+   capture-time attribution; it never cleans or reinterprets an old recording.
 6. After all selected groups pass, run the required full round when a later
    behavior-affecting change can invalidate earlier evidence.
 7. Use runner-owned reports, aggregation, E2E pass progress, comparison
@@ -148,8 +188,9 @@ another positive integer.
 
 ## Comparison Verification
 
-1. Start comparison only after genuine dependency replay E2E passes for the
-   affected behavior.
+1. Start comparison only after runner-generated evidence proves genuine
+   dependency replay E2E passed for the exact affected API and case source
+   after the latest target, policy, attribution, or case-source change.
 2. When `scripts/start-recording-comparison` exists, invoke it instead of
    reproducing its source and candidate lifecycle. Run both services normally
    without fixed-user or network isolation. Configure only explicit read-only
@@ -200,12 +241,22 @@ current evidence, not a permanent API-verified terminal state.
 
 ## Stop And Report
 
-If the same root cause repeats for three consecutive cycles without new
-evidence or meaningful progress, stop as `blocked` or `incomplete`. Never invent
-requests, responses, dependency values, side effects, source routes, or
-completion artifacts.
+Report `blocked` immediately when one bounded reproduction confirms a Recorder
+or Replay capability gap: the genuine contract cannot be captured or replayed,
+and target configuration, runtime wiring, or an ordinary re-recording cannot
+resolve it. Do not modify the traffic-e2e implementation or create a
+recording-backed target workaround during a rewrite. Emit a blocker packet
+with the capability, exact evidence, required system change, owner, resume
+stage, and verification command.
+
+For other categories, stop as `blocked` when the same root cause repeats for
+three consecutive cycles without new evidence or meaningful progress. Use
+`incomplete` when a required observation or input is missing but work can
+resume. Never invent requests, responses, dependency values, side effects,
+source routes, or completion artifacts.
 
 For execution work, report `complete`, `incomplete`, or `blocked` with the exact
 case source and IDs, final session/report, aggregate, policy, assertion,
 pattern, comparison API counts, verification command, and remaining blockers.
-Never use success wording while an applicable gate is missing.
+Also include the active API, stage, failure category, owner, next TODO, and
+resume stage. Never use success wording while an applicable gate is missing.
