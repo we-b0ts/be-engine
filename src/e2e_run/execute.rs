@@ -71,7 +71,7 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
     store::begin_active(&layout, &state)?;
 
     if let Err(error) = run_active(&config, &layout, &inventory, &mut state).await {
-        state.errors.push(format!("{error:#}"));
+        state.push_error(format!("{error:#}"));
         state.status = RunStatus::Interrupted;
         mark_unfinished_cases(&mut state);
         best_effort_stop(&config, &layout, &mut state).await;
@@ -94,9 +94,7 @@ pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
     let mut index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
     best_effort_stop(&config, &layout, &mut state).await;
     state.status = RunStatus::Interrupted;
-    state
-        .errors
-        .push("run aborted before terminal replay evidence".to_string());
+    state.push_error("run aborted before terminal replay evidence");
     mark_unfinished_cases(&mut state);
     let inventory =
         load_complete_case_group_inventory(&layout.group_index_path, &layout.case_source)?;
@@ -164,9 +162,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
             best_effort_stop(&config, &layout, &mut interrupted).await;
             interrupted.status = RunStatus::Interrupted;
             interrupted.finished_at = Some(Utc::now());
-            interrupted
-                .errors
-                .push("stale focused attempt recovered before rerun".to_string());
+            interrupted.push_error("stale focused attempt recovered before rerun");
             mark_unfinished_cases(&mut interrupted);
             summarize_apis_without_aggregate(&layout, &mut interrupted, &focused_inventory);
         }
@@ -211,7 +207,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
     )?;
     store::begin_active(&layout, &state)?;
     if let Err(error) = run_active(&config, &layout, &focused_inventory, &mut state).await {
-        state.errors.push(format!("{error:#}"));
+        state.push_error(format!("{error:#}"));
         state.status = RunStatus::Interrupted;
         mark_unfinished_cases(&mut state);
         best_effort_stop(&config, &layout, &mut state).await;
@@ -402,7 +398,7 @@ async fn run_active_with_replay(
     if stop.success {
         state.target_started = false;
     } else {
-        state.errors.push("project CLI stop failed".to_string());
+        state.push_error("project CLI stop failed");
     }
     state.status = RunStatus::Finalizing;
     store::write_active(layout, state)?;
@@ -441,9 +437,7 @@ async fn execute_case(
     case_dir: &Path,
 ) {
     let Some(case_index) = state.cases.iter().position(|case| case.case_id == case_id) else {
-        state
-            .errors
-            .push(format!("case {case_id} disappeared from run state"));
+        state.push_error(format!("case {case_id} disappeared from run state"));
         return;
     };
     state.cases[case_index].status = CaseStatus::Running;
@@ -452,9 +446,7 @@ async fn execute_case(
     let begin = control(state, "begin", Some(case_id), false, false).await;
     if let Err(error) = begin {
         state.cases[case_index].status = CaseStatus::Incomplete;
-        state
-            .errors
-            .push(format!("case {case_id} begin failed: {error:#}"));
+        state.push_error(format!("case {case_id} begin failed: {error:#}"));
         let _ = store::write_active(layout, state);
         return;
     }
@@ -527,14 +519,14 @@ async fn execute_case(
     };
     match response_assertion {
         Ok(report) => state.cases[case_index].response_assertion = Some(report),
-        Err(error) if config.runner_owned_response_assertions => state.errors.push(format!(
+        Err(error) if config.runner_owned_response_assertions => state.push_error(format!(
             "case {case_id} response assertion could not be evaluated: {error:#}"
         )),
         Err(_) => {}
     }
     state.cases[case_index].assertion_passed = Some(assertion_passed);
     if let Err(error) = assertion_command {
-        state.errors.push(format!(
+        state.push_error(format!(
             "case {case_id} assertion command failed: {error:#}"
         ));
     }
@@ -548,7 +540,7 @@ async fn execute_case(
         CaseStatus::Failed
     };
     if let Err(error) = ended {
-        state.errors.push(format!(
+        state.push_error(format!(
             "case {case_id} replay evidence is dirty: {error:#}"
         ));
     }
