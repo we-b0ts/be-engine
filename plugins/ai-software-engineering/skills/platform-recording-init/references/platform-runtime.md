@@ -24,6 +24,9 @@ Resolve `traffic-e2e` through `PATH`, canonicalize its symlink with
 `readlink -f`, and mount the resulting binary read-only into Recorder. Run
 Recorder as root with `NET_ADMIN` and `NET_RAW`. Run Breeze with its inspected
 root identity. Run only the genuine source Java process as numeric `998:998`.
+The host `scripts/start-recording` process is the intended owner of finalized
+recording artifacts; pass its numeric UID/GID to containerized Recorder through
+`--artifact-owner`.
 
 ## Fixed Recorder Policy
 
@@ -234,6 +237,12 @@ integer. Require `--run-id` to be a valid 14-digit UTC timestamp. Reject
 missing, invalid, or duplicate values before changing runtime state, allow all
 options to combine, accept repeatable canonical `--api` selectors, and pass
 the run ID and API selectors through unchanged to `traffic-e2e record`.
+Before starting containers, capture `artifact_owner="$(id -u):$(id -g)"` in
+the host wrapper and add `--artifact-owner "$artifact_owner"` to the Recorder
+arguments. Do not expose a wrapper override, derive the value inside the root
+container, use numeric `998:998`, or normalize ownership with a post-run
+"newest directory" scan. Recorder owns the exact run path and must recursively
+assign that tree after its writers flush and final metadata is persisted.
 Require `nc` and an executable repository copy of the asset during preflight.
 When `brz_no_fallback` is true, run the repository's
 `scripts/brz-no-fallback.sh` immediately after source port `880` becomes
@@ -241,7 +250,8 @@ available. When false, do not execute it.
 
 Use this fixed lifecycle:
 
-1. validate arguments and create ignored runtime directories;
+1. validate arguments, capture the host artifact owner, and create ignored
+   runtime directories;
 2. build the source adapter with `--network none`;
 3. prepare stable private recording bind sources and normalize the three
    shared Breeze directories to `998:998`;
@@ -254,8 +264,9 @@ Use this fixed lifecycle:
 9. run `traffic-e2e recording wait-ready`; this already waits through the
    configured post-ready settle interval, so do not add another shell sleep;
 10. record for the selected duration;
-11. send `SIGINT` to Recorder, wait for drain and finalization, preserve
-    diagnostics, and remove only containers created by this invocation.
+11. send `SIGINT` to Recorder, wait for drain, finalization, and exact-run
+    artifact ownership assignment, preserve diagnostics, and remove only
+    containers created by this invocation.
 
 Run both Recorder wait commands through `docker exec` inside the Recorder
 container, using the container's control-socket path. They default to
@@ -387,7 +398,9 @@ Before reporting completion:
 - prove Breeze, port `880`, source readiness, UID/GID `998:998`, and fake-DNS
   resolution of `breeze.recording` under the source identity;
 - run `./scripts/start-recording --duration-seconds 1` and require finalized
-  standard recording metadata with no Recorder startup or shutdown error; and
+  standard recording metadata with no Recorder startup or shutdown error, then
+  require the complete exact run tree to have the invoking host UID/GID and be
+  writable for runner-owned artifacts; and
 - run `./scripts/start-recording-comparison --duration-seconds 1`, prove the
   source and candidate reused exactly one Breeze instance, require both
   upstreams to become ready, and require a finalized

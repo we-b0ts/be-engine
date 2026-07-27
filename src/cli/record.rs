@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use clap::{ArgAction, Args};
 use tracing::info;
-use traffic_e2e::{AppConfig, AppState, HttpResponseRewritePluginConfig, RecordingApi, TlsConfig};
+use traffic_e2e::{
+    AppConfig, AppState, ArtifactOwner, HttpResponseRewritePluginConfig, RecordingApi, TlsConfig,
+};
 
 use super::interception::{DnsConfig, FakeIpConfig, Guard};
 
@@ -18,6 +20,9 @@ pub(super) struct RecordArgs {
     /// Explicit 14-digit UTC recording run identifier.
     #[arg(long, value_parser = parse_run_id)]
     run_id: Option<String>,
+    /// Assign the finalized recording run to this numeric UID:GID.
+    #[arg(long, value_name = "UID:GID")]
+    artifact_owner: Option<ArtifactOwner>,
     /// Publish managed recording lifecycle state on this Unix socket.
     #[arg(long)]
     control_socket: Option<PathBuf>,
@@ -39,12 +44,24 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
         args.config.display()
     );
     reject_owner_config(&args.config)?;
+    if args.artifact_owner.is_some() {
+        ensure!(
+            unsafe { libc::geteuid() } == 0,
+            "--artifact-owner requires traffic-e2e record to run as root"
+        );
+    }
     let mut config = AppConfig::load(&args.config)?;
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
     let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
     let configured_upstream_dns = config.dns_mock.upstream_dns;
-    let state = AppState::new_with_recording_apis(config, args.run_id, args.apis).await?;
+    let state = AppState::new_with_recording_apis_and_artifact_owner(
+        config,
+        args.run_id,
+        args.apis,
+        args.artifact_owner,
+    )
+    .await?;
     let mut interception = if args.dns && !args.no_dns {
         Some(Guard::enable(
             record_dns_config(configured_upstream_dns)?,
@@ -314,6 +331,36 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn accepts_only_numeric_artifact_owners() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--config",
+            "recorder.toml",
+            "--artifact-owner",
+            "1114:1115",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.record.artifact_owner,
+            Some(ArtifactOwner::new(1114, 1115))
+        );
+        for invalid in ["icy:icy", "1114", "1114:", "-1:1115"] {
+            assert!(
+                TestCli::try_parse_from([
+                    "test",
+                    "--config",
+                    "recorder.toml",
+                    "--artifact-owner",
+                    invalid,
+                ])
+                .is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]
