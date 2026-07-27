@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::config::{RecordingAccessPolicy, RecordingConfig, TrafficJsonlMode};
+use crate::request_headers::RequestHeaderCapture;
 
 mod artifact_owner;
 mod capture;
@@ -39,6 +40,7 @@ struct RecorderOptions {
     run_id: Option<String>,
     recording_apis: Vec<String>,
     artifact_owner: Option<ArtifactOwner>,
+    request_header_capture: RequestHeaderCapture,
 }
 
 #[derive(Clone)]
@@ -51,6 +53,7 @@ pub struct Recorder {
     pub(crate) dependency_write_lock: Arc<Mutex<()>>,
     pub(crate) finalized_cases: Arc<Mutex<HashSet<Uuid>>>,
     pub(crate) access_policy: RecordingAccessPolicy,
+    request_header_capture: RequestHeaderCapture,
 }
 
 impl Recorder {
@@ -76,6 +79,10 @@ impl Recorder {
                 run_id: None,
                 recording_apis: Vec::new(),
                 artifact_owner: None,
+                request_header_capture: RequestHeaderCapture::from_environment(
+                    &defaults.encrypt_request_headers,
+                    &defaults.redact_headers,
+                )?,
             },
         )
         .await
@@ -116,6 +123,10 @@ impl Recorder {
                 run_id,
                 recording_apis,
                 artifact_owner,
+                request_header_capture: RequestHeaderCapture::from_environment(
+                    &config.encrypt_request_headers,
+                    &config.redact_headers,
+                )?,
             },
         )
         .await
@@ -138,6 +149,7 @@ impl Recorder {
             run_id,
             recording_apis,
             artifact_owner,
+            request_header_capture,
         } = options;
         let output_dir = output_dir.as_ref();
         tokio::fs::create_dir_all(output_dir)
@@ -177,6 +189,7 @@ impl Recorder {
             dependency_write_lock: Arc::new(Mutex::new(())),
             finalized_cases,
             access_policy,
+            request_header_capture,
         };
         recorder.write_run_report("running").await?;
         Ok(recorder)
@@ -187,6 +200,13 @@ impl Recorder {
             return Ok(());
         }
         self.writer.try_record_traffic(event)
+    }
+
+    pub(crate) fn capture_request_headers(
+        &self,
+        headers: &hyper::HeaderMap,
+    ) -> Result<HeaderMapSnapshot> {
+        self.request_header_capture.capture(headers)
     }
 
     pub(crate) fn try_record_event(

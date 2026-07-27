@@ -16,7 +16,8 @@ Confirm before starting:
 - the numeric host artifact owner when Recorder runs as root in a container;
 - output directory and optional explicit UTC run ID;
 - request/response body limits and decoded-size limits;
-- header redaction and handling of sensitive dependency payloads;
+- request-header encryption, key-variable availability, response-header
+  redaction, and handling of sensitive dependency payloads;
 - enabled HTTP, HTTPS, MySQL, Redis, Memcached, Kafka, TCP, and UDP paths;
 - fake-DNS CIDR, bypass domains, ports, and host routing from configuration;
 - `recording.access_policy` and any narrowly scoped access rules;
@@ -139,6 +140,21 @@ Do not log or commit credentials, authorization headers, cookies, tokens,
 private keys, cache keys/values, Kafka payloads, full SQL binds, or recording
 files. Exact dependency payloads may be necessary for replay, so protect the
 entire output directory even when application headers are redacted.
+
+`recording.encrypt_request_headers` matches header names case-insensitively and
+stores each configured request-header value as a versioned AES-256-GCM
+envelope directly in `request.json`. Request encryption takes precedence when
+a name is also present in `recording.redact_headers`; keeping
+`authorization` in both lists protects request replayability and response-side
+redaction. Encryption requires `TRAFFIC_E2E_ENCRYPTION_KEY_B64` to decode to
+exactly 32 bytes. Generate it outside the recording script, for example with
+`openssl rand -base64 32`, and protect the value as a secret.
+
+When encryption is configured, missing, empty, invalid-Base64, or wrong-length
+key material must fail Recorder startup before recording artifacts are
+created. Repository wrappers pass the variable only to Recorder or the host
+`record-comparison` process; they must not log it or inject it into source,
+candidate, Breeze, or other supporting services.
 
 ## Shutdown And Validation
 

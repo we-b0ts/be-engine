@@ -106,6 +106,30 @@ The default comparison recording duration is 60 seconds. AI and automated
 invocations must pass `--duration-seconds 60` or another positive integer
 explicitly.
 
+Sensitive request headers can remain replayable without storing plaintext:
+
+```toml
+[recording]
+encrypt_request_headers = ["authorization"]
+```
+
+Header-name matching is case-insensitive, so this protects `Authorization` as
+well. Set a Base64-encoded 32-byte AES-256-GCM key before standard recording,
+comparison recording, and replay:
+
+```bash
+export TRAFFIC_E2E_ENCRYPTION_KEY_B64="$(openssl rand -base64 32)"
+```
+
+The value is written only as versioned ciphertext in `request.json`. Keep
+`authorization` in `redact_headers` too: request encryption takes precedence,
+while response headers remain redacted. If encrypted headers are configured
+and the environment variable is missing, invalid, or decodes to any length
+other than 32 bytes, recording startup fails. Replay also fails with missing
+or wrong key material. Repository wrappers must preserve the variable for
+Recorder or `record-comparison`, not inject it into source, candidate, or
+supporting services.
+
 Comparison recording does not compare responses. It returns the baseline
 response and records the request plus baseline and candidate responses under
 `<artifacts.root_dir>/comparison-recordings/<run-id>/`. It uses

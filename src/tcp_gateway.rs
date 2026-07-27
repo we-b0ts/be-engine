@@ -180,7 +180,16 @@ async fn handle_http_request(
     }
     let request_headers = req.headers().clone();
     let request_headers_for_record =
-        redact_headers(&request_headers, &state.config().recording.redact_headers);
+        match state.recorder().capture_request_headers(&request_headers) {
+            Ok(headers) => headers,
+            Err(error) => {
+                warn!(error = %error, "failed to protect recorded HTTP request headers");
+                return simple_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to protect recorded request headers",
+                );
+            }
+        };
     let authority = request_authority(&original_uri, &request_headers)
         .or_else(|| Some(format!("{}:{}", entry.domain, fake_addr.port())));
 
@@ -424,7 +433,16 @@ async fn handle_https_request(
     }
     let request_headers = req.headers().clone();
     let request_headers_for_record =
-        redact_headers(&request_headers, &state.config().recording.redact_headers);
+        match state.recorder().capture_request_headers(&request_headers) {
+            Ok(headers) => headers,
+            Err(error) => {
+                warn!(error = %error, "failed to protect recorded HTTPS request headers");
+                return simple_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to protect recorded request headers",
+                );
+            }
+        };
     let authority =
         request_authority(&original_uri, &request_headers).or(Some(fallback_authority.clone()));
 

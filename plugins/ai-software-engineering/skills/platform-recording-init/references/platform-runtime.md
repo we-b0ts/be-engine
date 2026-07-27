@@ -41,7 +41,10 @@ provides:
 - `/healthz` readiness with exact status `404` and a fixed 10-second
   post-ready settle interval before first-case admission;
 - `GET` recording over `/`, unrestricted matched forwarding, and fixed
-  unmatched responses; and
+  unmatched responses;
+- AES-256-GCM encryption of the request-side `authorization` header using
+  `TRAFFIC_E2E_ENCRYPTION_KEY_B64`, while retaining response-side
+  `authorization` redaction; and
 - runtime CA files under ignored `.traffic-e2e/data`.
 
 Mount the Breeze snapshot into Recorder at `/data1/breeze/snapshot` read-only.
@@ -154,6 +157,35 @@ cannot repair the paths directly. Do not change the owner of the
 `/data1/breeze` parent. Do not create per-run variants of source bind
 directories.
 
+## Generate The Repository Breeze Contract
+
+Copy
+`assets/recording/docs/breeze-resource-development.md` unchanged to
+`docs/breeze-resource-development.md`. This document is the target repository's
+authoritative Platform contract for the closed `crates/breeze/` package set,
+socks descriptor registration, and recording/replay port identity.
+
+Merge the exact contents of `assets/recording/AGENTS.breeze.md` into the root
+`AGENTS.md`. Preserve every existing instruction outside these markers:
+
+```text
+<!-- BEGIN PLATFORM BREEZE RESOURCE DEVELOPMENT -->
+<!-- END PLATFORM BREEZE RESOURCE DEVELOPMENT -->
+```
+
+Create `AGENTS.md` when it is absent. When the managed block already exists,
+replace only that block; otherwise append the block once. Do not copy
+`AGENTS.breeze.md` into the target repository. Require its relative link to
+resolve to the generated document.
+
+Do not render observed resource ports into either committed file. Ports are
+runtime identities selected through `/data1/breeze/socks`. The generated
+document requires later `brz-*` implementations to reuse an exact descriptor
+or, only during independent service startup when it is absent, create one with
+a randomly selected eligible port for Breeze to load. Recording creates and
+preserves the applicable descriptors; replay must resolve their exact ports
+without allocating a port or mutating any descriptor.
+
 ## Breeze SDK Source Patch
 
 The Breeze patch changes the SDK inside the source application image, not the
@@ -237,6 +269,12 @@ integer. Require `--run-id` to be a valid 14-digit UTC timestamp. Reject
 missing, invalid, or duplicate values before changing runtime state, allow all
 options to combine, accept repeatable canonical `--api` selectors, and pass
 the run ID and API selectors through unchanged to `traffic-e2e record`.
+Require `TRAFFIC_E2E_ENCRYPTION_KEY_B64` during the same preflight and validate,
+without printing decoded bytes, that it is strict Base64 for exactly 32 bytes.
+Pass it to the Recorder container with an explicit
+`--env TRAFFIC_E2E_ENCRYPTION_KEY_B64`; do not pass it to Anchor, Breeze, or
+the source. Recorder independently repeats key validation, and the wrapper
+must preserve its startup failure and never log the value.
 Before starting containers, capture `artifact_owner="$(id -u):$(id -g)"` in
 the host wrapper and add `--artifact-owner "$artifact_owner"` to the Recorder
 arguments. Do not expose a wrapper override, derive the value inside the root
@@ -250,8 +288,8 @@ available. When false, do not execute it.
 
 Use this fixed lifecycle:
 
-1. validate arguments, capture the host artifact owner, and create ignored
-   runtime directories;
+1. validate arguments and the encryption-key environment, capture the host
+   artifact owner, and create ignored runtime directories;
 2. build the source adapter with `--network none`;
 3. prepare stable private recording bind sources and normalize the three
    shared Breeze directories to `998:998`;
@@ -326,6 +364,13 @@ combine, reject missing, invalid, or duplicate option values before changing
 runtime state, and accept repeatable canonical `--api` selectors. Consume
 `--brz-no-fallback` in the wrapper; pass the run ID, duration, baseline recheck,
 and API selectors through unchanged to `traffic-e2e record-comparison`.
+Require `TRAFFIC_E2E_ENCRYPTION_KEY_B64` during this preflight and validate,
+without printing decoded bytes, that it is strict Base64 for exactly 32 bytes.
+Preserve it for the host `traffic-e2e record-comparison` process. If the
+command is launched through `sudo` or another environment boundary, forward
+only this named variable explicitly. Never pass it to the source, candidate,
+or Breeze, and never print it. `record-comparison` independently repeats key
+validation before creating its run directory.
 
 Start exactly one Breeze container for comparison and connect both the genuine
 source container and candidate container to that same instance with their
@@ -337,7 +382,8 @@ endpoint after each becomes ready. Treat a required but unreachable control
 endpoint as startup failure. When false, skip those commands. Use this
 lifecycle:
 
-1. validate arguments and create ignored runtime directories;
+1. validate arguments and the encryption-key environment, then create ignored
+   runtime directories;
 2. create the comparison network topology and start one genuine inspected
    Breeze instance without Recorder dependency interception;
 3. start the genuine inspected source as the baseline and connect it to the
@@ -397,6 +443,10 @@ Before reporting completion:
 - verify the patched class exists in the source JAR;
 - prove Breeze, port `880`, source readiness, UID/GID `998:998`, and fake-DNS
   resolution of `breeze.recording` under the source identity;
+- require exactly one managed Platform Breeze block in root `AGENTS.md`, its
+  relative document link to resolve, and the generated Breeze document to
+  contain the six-package allowlist plus independent-startup creation and
+  replay-read-only socks rules;
 - run `./scripts/start-recording --duration-seconds 1` and require finalized
   standard recording metadata with no Recorder startup or shutdown error, then
   require the complete exact run tree to have the invoking host UID/GID and be
@@ -405,6 +455,12 @@ Before reporting completion:
   source and candidate reused exactly one Breeze instance, require both
   upstreams to become ready, and require a finalized
   `comparison-recording-run.json`.
+
+Before the bounded runs, verify that both scripts fail before creating
+containers or artifacts when `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is absent,
+malformed, or decodes to a length other than 32 bytes. Run the successful
+checks with a valid unlogged value, for example one generated outside the
+script with `openssl rand -base64 32`.
 
 This validation proves ready-to-record state. It does not require a business
 request or a published standard or comparison recording case.

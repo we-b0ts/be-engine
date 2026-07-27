@@ -14,7 +14,7 @@ or catch-all service boundaries without validating their ownership.
 - [Dependency Direction](#dependency-direction)
 - [Application Services](#application-services)
 - [Serialization And Contract Boundaries](#serialization-and-contract-boundaries)
-- [Data Resources And Remote Services](#data-resources-and-remote-services)
+- [Infrastructure Resources And Remote Services](#infrastructure-resources-and-remote-services)
 - [HTTP, Routing, And Middleware](#http-routing-and-middleware)
 - [Configuration Ownership](#configuration-ownership)
 - [Composition Root](#composition-root)
@@ -179,11 +179,11 @@ generated types in a dedicated contract package owned by that protocol or
 capability. Keep business orchestration and infrastructure lifecycle out of
 contract packages.
 
-## Data Resources And Remote Services
+## Infrastructure Resources And Remote Services
 
-Use the required Breeze resource packages for MySQL, Redis, and Memcached.
-Business repositories and cache adapters depend on those packages without
-constructing another client, pool, resolver, or retry layer.
+Use repository-approved packages for shared database, cache, and messaging
+infrastructure. Business repositories and adapters depend on those packages
+without constructing another client, pool, resolver, producer, or retry layer.
 
 Represent every internal or third-party remote system through a named client
 or adapter boundary:
@@ -198,9 +198,9 @@ or adapter boundary:
 - Do not pass raw HTTP, RPC, or generated client objects into application
   services.
 
-If a remote client is reused by multiple deployables, make it a library package.
-If it is local to one capability, it may remain an adapter module while
-preserving the same dependency boundary.
+If a remote client is reused by multiple deployables, make it a library
+package. If it is local to one capability, it may remain an adapter module
+while preserving the same dependency boundary.
 
 ## HTTP, Routing, And Middleware
 

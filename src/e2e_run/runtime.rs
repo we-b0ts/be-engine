@@ -15,6 +15,7 @@ use super::store;
 use super::support::{allocate_control_socket, wait_for_pid_exit};
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{ReplayControlConfig, run_replay_control};
+use crate::request_headers::ENCRYPTION_KEY_ENV;
 
 const PROXY_ENVIRONMENT: &[&str] = &[
     "HTTP_PROXY",
@@ -109,9 +110,7 @@ pub(super) async fn run_project(
 ) -> Result<CommandEvidence> {
     let mut command = Command::new(&config.project_cli);
     command.current_dir(&layout.target_root).args(args);
-    for name in PROXY_ENVIRONMENT {
-        command.env_remove(name);
-    }
+    sanitize_project_environment(&mut command);
     let output = command.output().await.with_context(|| {
         format!(
             "failed to run project CLI {} {}",
@@ -130,6 +129,13 @@ pub(super) async fn run_project(
     };
     store::write_json(evidence_path, &evidence)?;
     Ok(evidence)
+}
+
+fn sanitize_project_environment(command: &mut Command) {
+    for name in PROXY_ENVIRONMENT {
+        command.env_remove(name);
+    }
+    command.env_remove(ENCRYPTION_KEY_ENV);
 }
 
 pub(super) async fn control(
@@ -404,6 +410,21 @@ mod tests {
                 OsString::from("--recording-rule"),
                 OsString::from("pluto"),
             ]
+        );
+    }
+
+    #[test]
+    fn project_commands_do_not_receive_request_header_encryption_keys() {
+        let mut command = Command::new("true");
+        command.env(ENCRYPTION_KEY_ENV, "test-secret");
+
+        sanitize_project_environment(&mut command);
+
+        assert!(
+            command
+                .as_std()
+                .get_envs()
+                .any(|(name, value)| { name == ENCRYPTION_KEY_ENV && value.is_none() })
         );
     }
 }

@@ -220,6 +220,11 @@ shutdown_case_drain_timeout_ms = 5000
 # operations that the protocol classifiers identify as writes; unknown commands
 # are still forwarded for compatibility.
 access_policy = "unrestricted"
+# Request headers listed here are stored as AES-256-GCM ciphertext and require
+# TRAFFIC_E2E_ENCRYPTION_KEY_B64 during standard/comparison recording and
+# replay. Request-side encryption takes precedence when a name also appears in
+# redact_headers.
+encrypt_request_headers = []
 redact_headers = [
   "authorization",
   "cookie",

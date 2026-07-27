@@ -109,6 +109,7 @@ pub(super) fn publish_terminal(
         state.status.is_terminal(),
         "cannot publish a non-terminal run"
     );
+    remove_decrypted_request_views(&layout.active_dir)?;
     let published_state =
         state_for_published_directory(state, &layout.active_dir, &layout.latest_dir)?;
     write_active(layout, &published_state)?;
@@ -152,6 +153,7 @@ pub(super) fn publish_snapshot(
         state.status.is_terminal(),
         "cannot publish a non-terminal run"
     );
+    remove_decrypted_request_views(active_dir)?;
     let published_state = state_for_published_directory(state, active_dir, latest_dir)?;
     write_yaml(&active_dir.join("state.yaml"), &published_state)?;
     let parent = latest_dir
@@ -173,6 +175,20 @@ pub(super) fn publish_snapshot(
             .with_context(|| format!("failed to remove {}", previous.display()))?;
     }
     Ok(())
+}
+
+fn remove_decrypted_request_views(active_dir: &Path) -> Result<()> {
+    let views = active_dir.join("tmp/decrypted-request-views");
+    match fs::remove_dir_all(&views) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove decrypted request views before publication: {}",
+                views.display()
+            )
+        }),
+    }
 }
 
 fn state_for_published_directory(
@@ -388,6 +404,9 @@ mod tests {
         fs::create_dir_all(&active).unwrap();
         let terminal = state(&active, super::super::model::RunStatus::Successful);
         write_yaml(&active.join("state.yaml"), &terminal).unwrap();
+        let decrypted_views = active.join("tmp/decrypted-request-views/view/case");
+        fs::create_dir_all(&decrypted_views).unwrap();
+        fs::write(decrypted_views.join("request.json"), "plaintext secret").unwrap();
 
         publish_snapshot(&active, &latest, &terminal).unwrap();
 
@@ -405,5 +424,6 @@ mod tests {
             published.assertions_report,
             latest.join("reports/assertions.json")
         );
+        assert!(!latest.join("tmp/decrypted-request-views").exists());
     }
 }

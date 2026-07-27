@@ -183,7 +183,16 @@ async fn forward_and_record(
     }
     let request_headers = req.headers().clone();
     let request_headers_for_record =
-        redact_headers(&request_headers, &state.config().recording.redact_headers);
+        match state.recorder().capture_request_headers(&request_headers) {
+            Ok(headers) => headers,
+            Err(error) => {
+                warn!(error = %error, "failed to protect recorded proxy request headers");
+                return simple_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "failed to protect recorded request headers",
+                );
+            }
+        };
 
     let authority = original_uri
         .authority()

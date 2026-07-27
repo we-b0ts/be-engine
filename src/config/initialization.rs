@@ -133,7 +133,11 @@ pub fn initialize_recorder_config(
                  options through unchanged. AI and automated invocations must \
                  explicitly pass `--duration-seconds 60` or another positive integer. Forward \
                  termination, allow graceful artifact finalization, stop only owned processes, \
-                 and preserve the record-comparison exit status.",
+                 and preserve the record-comparison exit status. If \
+                 `recording.encrypt_request_headers` is nonempty, validate before changing state \
+                 that `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is strict Base64 for exactly 32 bytes, then \
+                 preserve it only for the record-comparison process; never print it or inject it \
+                 into the baseline, candidate, Breeze, or other supporting services.",
                 start_comparison_recording_script.display(),
                 project_cli.display(),
             ),
@@ -308,6 +312,7 @@ case_dependency_post_response_window_ms = 100
 case_dependency_drain_timeout_ms = 5000
 shutdown_case_drain_timeout_ms = 5000
 access_policy = "unrestricted"
+encrypt_request_headers = []
 redact_headers = [
   "authorization",
   "cookie",
@@ -396,6 +401,7 @@ mod tests {
         assert!(result.required_ai_actions[1].contains("one shared Breeze"));
         assert!(result.required_ai_actions[1].contains("scripts/brz-no-fallback.sh"));
         assert!(result.required_ai_actions[1].contains("traffic-e2e record-comparison"));
+        assert!(result.required_ai_actions[1].contains("TRAFFIC_E2E_ENCRYPTION_KEY_B64"));
         assert!(result.required_ai_actions[2].contains("traffic-e2e compare"));
         assert!(result.required_ai_actions[2].contains("per-API passed counts"));
         assert!(result.required_ai_actions[2].contains("outside fixed-user"));

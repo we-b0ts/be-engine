@@ -43,6 +43,12 @@ recorded dependencies to produce results, read the expected response, or decide
 whether assertions passed. Its E2E exit code proves request execution and
 capture only.
 
+For a case with encrypted request headers, the runner passes a private
+short-lived case view whose `request.json` already contains authenticated
+plaintext header values. The facade reads that file exactly like an ordinary
+case. It must not read `TRAFFIC_E2E_ENCRYPTION_KEY_B64`, decrypt envelopes,
+modify the canonical recording, or retain the temporary case view.
+
 ## Identity And Staging
 
 Intercepted recording and replay are limited to the fixed `trp-record` user.

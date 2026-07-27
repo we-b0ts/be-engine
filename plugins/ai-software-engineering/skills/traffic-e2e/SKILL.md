@@ -94,6 +94,12 @@ finalization, or cleanup lifecycle. Generated scripts may default to 60
 seconds, but AI and automated invocations must pass
 `--duration-seconds 60` or another positive integer explicitly.
 
+When `recording.encrypt_request_headers` is nonempty, require the named
+encryption-key environment before recording, comparison recording, or replay.
+Keep the value out of commands, logs, reports, cases, policy, and target
+configuration. Repository wrappers own propagation across their runtime
+boundary.
+
 Generate a unique UTC `--run-id YYYYMMDDHHMMSS` for every new recording
 operation unless the caller supplied one, retain the exact finalized artifact
 path, and never select a run merely because it is newest. When the intended
@@ -138,9 +144,11 @@ advances only the current stage. It is not whole-migration completion.
 
 1. Inspect the target's authoritative recorder config, startup, readiness,
    upstreams, access policy, redaction, limits, enabled protocols, dependency
-   timing, and background rules. Do not guess from examples. When
-   `scripts/start-recording` exists, invoke it instead of bypassing its
-   repository-specific orchestration.
+   timing, request-header encryption, key-variable availability, and
+   background rules. Do not guess from examples. When `scripts/start-recording`
+   exists, invoke it instead of bypassing its repository-specific
+   orchestration. Missing or invalid configured key material is a recording
+   startup failure; do not silently redact or record plaintext instead.
 2. For container recording, create a network-namespace anchor that uses host
    networking by default. Run Recorder, source, and dependency-producing
    sidecars with `--network container:<anchor>` so they share that one
@@ -165,7 +173,10 @@ advances only the current stage. It is not whole-migration completion.
 ## Replay And Verification
 
 1. Resolve the exact published case source and IDs. Group one confirmed source
-   API at a time; never infer API identity from directory names.
+   API at a time; never infer API identity from directory names. If selected
+   `request.json` files contain encrypted request headers, require the original
+   key environment. Missing, wrong, or invalid key material blocks replay
+   startup; it must not be replaced with a placeholder.
 2. Inspect normal target startup, config, dependency wiring, and source
    behavior. Require genuine clients and the ordinary runtime path.
 3. Use a source-controlled assertion-only replay policy and audit target code
@@ -198,6 +209,9 @@ advances only the current stage. It is not whole-migration completion.
    rewriting recorder TOML. For Platform repositories, require source and
    candidate containers to reuse one Breeze instance; let the wrapper consume
    `--brz-no-fallback <true|false>` rather than forwarding it to traffic-e2e.
+   When request-header encryption is configured, require the same key
+   environment used by standard recording and preserve it only for
+   `record-comparison`; do not inject it into source, candidate, or Breeze.
 3. Use the optional baseline recheck when source-time drift evidence is needed;
    do not treat it as automatic authorization to ignore a difference.
 4. Classify non-passing evidence as candidate implementation difference,
