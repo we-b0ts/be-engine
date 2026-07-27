@@ -19,6 +19,7 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::MitmCa;
+use crate::request_headers::validate_request_file;
 mod assertion;
 mod command_matching;
 #[cfg(test)]
@@ -112,6 +113,7 @@ pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Resul
 }
 
 pub async fn run_replay(config: ReplayConfig) -> Result<()> {
+    validate_replay_request_headers(&config).await?;
     let tcp_listener = TcpListener::bind(config.tcp_listen)
         .await
         .with_context(|| {
@@ -178,13 +180,13 @@ impl ReplayRuntime {
         let ca_key_path = config
             .ca_key_path
             .unwrap_or_else(|| replay_artifact_dir.join("replay-ca-key.pem"));
-        let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
         let selected_case_ids = config
             .selected_case_ids
             .into_iter()
             .collect::<BTreeSet<_>>();
         let (mode, mut cases, active_case_id) =
             discover_replay_cases(&root_dir, &selected_case_ids).await?;
+        let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
         let bootstrap_path = find_upward(&root_dir, "bootstrap-dependencies.jsonl");
         let mut mysql = MysqlReplayState::default();
         let mut http_exchanges = Vec::new();
@@ -388,6 +390,24 @@ impl ReplayRuntime {
         )
         .await
     }
+}
+
+async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
+    let selected_case_ids = config
+        .selected_case_ids
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let (_, cases, _) = discover_replay_cases(&config.case_dir, &selected_case_ids).await?;
+    for case in cases.values() {
+        validate_request_file(&case.dir.join("request.json")).with_context(|| {
+            format!(
+                "encrypted request header preflight failed for case {}",
+                case.id
+            )
+        })?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]

@@ -9,6 +9,7 @@ use super::case_progress;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout, RunStatus};
 use super::progress::{build_progress, update_focused_index, update_index};
+use super::request_view::RequestCaseView;
 use super::runtime::{
     best_effort_stop, control, finalize_replay, run_project, spawn_replay, stop_replay_process,
     wait_for_replay, wait_for_replay_ready,
@@ -462,24 +463,32 @@ async fn execute_case(
         .active_dir
         .join("reports")
         .join(format!("case-{:04}.json", position + 1));
-    let case_arg = case_dir.display().to_string();
     let actual_response = layout
         .active_dir
         .join("reports")
         .join(format!("actual-response-{:04}.json", position + 1));
     let actual_arg = actual_response.display().to_string();
-    let args = if config.runner_owned_response_assertions {
-        vec![
-            "e2e",
-            "--case-dir",
-            case_arg.as_str(),
-            "--actual-response",
-            actual_arg.as_str(),
-        ]
-    } else {
-        vec!["e2e", "--case-dir", case_arg.as_str()]
+    let case_view = RequestCaseView::prepare(case_dir, &layout.active_dir.join("tmp"));
+    let assertion_command = match &case_view {
+        Ok(case_view) => {
+            let case_arg = case_view.case_dir().display().to_string();
+            let args = if config.runner_owned_response_assertions {
+                vec![
+                    "e2e",
+                    "--case-dir",
+                    case_arg.as_str(),
+                    "--actual-response",
+                    actual_arg.as_str(),
+                ]
+            } else {
+                vec!["e2e", "--case-dir", case_arg.as_str()]
+            };
+            run_project(config, layout, &args, &log_path).await
+        }
+        Err(error) => Err(anyhow::anyhow!(
+            "failed to prepare replay request for case {case_id}: {error:#}"
+        )),
     };
-    let assertion_command = run_project(config, layout, &args, &log_path).await;
     let response_assertion = if config.runner_owned_response_assertions
         && assertion_command
             .as_ref()

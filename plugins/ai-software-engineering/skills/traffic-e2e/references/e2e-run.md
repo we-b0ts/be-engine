@@ -100,6 +100,15 @@ scripts/<project>-cli e2e \
   --actual-response <runner-owned-output>
 ```
 
+When the recorded `request.json` contains encrypted request-header values, the
+runner authenticates and decrypts them with
+`TRAFFIC_E2E_ENCRYPTION_KEY_B64`, creates a private `0600` short-lived case
+view under runner-owned local state, and passes that view as `--case-dir`.
+Other case artifacts remain links to the immutable source. The view is removed
+after the case command returns and before runner state is published. The
+project CLI reads ordinary header values and must not load the key or implement
+decryption. Missing, invalid, or wrong key material fails replay startup.
+
 The command reads only the recorded request, sends it through normal target
 startup, and writes:
 

@@ -92,24 +92,6 @@ return the evidence and system-owned TODO to the rewrite orchestrator as
 - Production behavior MUST NOT depend on tests, recordings, fixtures, debug
   branches, or developer-only defaults.
 
-## Breeze Resource Packages
-
-For Rust workspace changes that access MySQL, Redis, or Memcached:
-
-- Production access MUST use the dedicated library packages
-  `crates/breeze/mysql` (`brz-mysql`),
-  `crates/breeze/redis` (`brz-redis`), and
-  `crates/breeze/memcached` (`brz-memcached`).
-- If the required package does not exist, create and register it as a workspace
-  member before adding the access path. Application packages MUST NOT construct
-  or manage the underlying resource client directly.
-- The `brz-*` package is the application-facing boundary for resource access,
-  including connection management, discovery and routing, sharding when
-  applicable, timeouts, retries, enablement, health, and shutdown. Its
-  implementation MAY reuse other workspace packages. Business-specific SQL,
-  cache keys, serialization, and fallback behavior remain owned by the
-  corresponding business capability.
-
 ## Large Rust Backend Structure
 
 For large Rust backends:

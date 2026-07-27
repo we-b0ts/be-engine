@@ -21,6 +21,7 @@ mod recording_control;
 mod redis;
 mod replay;
 mod repository;
+mod request_headers;
 mod tcp_gateway;
 mod tls;
 mod udp_gateway;

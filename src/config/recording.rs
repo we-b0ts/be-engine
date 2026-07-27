@@ -22,6 +22,7 @@ pub struct RecordingConfig {
     pub case_dependency_post_response_window_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
     pub shutdown_case_drain_timeout_ms: u64,
+    pub encrypt_request_headers: Vec<String>,
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
     pub access_rules: Vec<RecordingAccessRuleConfig>,
@@ -121,6 +122,7 @@ impl RecordingConfig {
         if self.shutdown_case_drain_timeout_ms == 0 {
             bail!("recording.shutdown_case_drain_timeout_ms must be greater than zero");
         }
+        self.validate_request_header_encryption()?;
         let mut names = HashSet::new();
         for rule in &self.access_rules {
             let name = rule.name();
@@ -160,6 +162,10 @@ impl RecordingConfig {
         }
         super::background_dependencies::validate(&self.background_dependencies)?;
         Ok(())
+    }
+
+    pub(super) fn validate_request_header_encryption(&self) -> Result<()> {
+        validate_encrypted_request_headers(&self.encrypt_request_headers)
     }
 }
 
@@ -206,6 +212,7 @@ impl Default for RecordingConfig {
             case_dependency_post_response_window_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,
             shutdown_case_drain_timeout_ms: 5_000,
+            encrypt_request_headers: Vec::new(),
             redact_headers: vec![
                 "authorization".to_string(),
                 "cookie".to_string(),
@@ -218,6 +225,27 @@ impl Default for RecordingConfig {
             background_dependencies: Vec::new(),
         }
     }
+}
+
+fn validate_encrypted_request_headers(names: &[String]) -> Result<()> {
+    let mut unique = HashSet::new();
+    for name in names {
+        if name.trim().is_empty() {
+            bail!("recording.encrypt_request_headers must not contain an empty name");
+        }
+        let normalized = name.to_ascii_lowercase();
+        normalized
+            .parse::<hyper::header::HeaderName>()
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "recording.encrypt_request_headers contains invalid header name {name:?}"
+                )
+            })?;
+        if !unique.insert(normalized) {
+            bail!("recording.encrypt_request_headers contains duplicate header name {name:?}");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -418,5 +446,21 @@ mod tests {
             let config: AppConfig = toml::from_str(invalid).unwrap();
             assert!(config.validate().is_err());
         }
+    }
+
+    #[test]
+    fn validates_encrypted_request_header_names_case_insensitively() {
+        let mut config = AppConfig::default();
+        config.recording.encrypt_request_headers = vec!["Authorization".to_string()];
+        config.validate().unwrap();
+
+        config
+            .recording
+            .encrypt_request_headers
+            .push("authorization".to_string());
+        assert!(config.validate().is_err());
+
+        config.recording.encrypt_request_headers = vec!["not a header".to_string()];
+        assert!(config.validate().is_err());
     }
 }

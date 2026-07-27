@@ -18,6 +18,13 @@ lifecycle in the task. The script and direct `record-comparison` command default
 to 60 seconds. AI and automated invocations must explicitly pass
 `--duration-seconds 60` or another positive integer.
 
+When `recording.encrypt_request_headers` is nonempty, comparison recording
+requires the same `TRAFFIC_E2E_ENCRYPTION_KEY_B64` contract as standard
+recording. The repository wrapper preserves it only for the host
+`record-comparison` process and never prints it or injects it into source,
+candidate, Breeze, or other services. Missing or invalid key material must
+fail before the comparison run directory is created.
+
 For Platform repositories, the wrapper starts one Breeze instance and connects
 both source and candidate containers to it. It accepts
 `--brz-no-fallback <true|false>`, defaults it to `true`, and consumes it

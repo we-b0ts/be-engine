@@ -29,8 +29,8 @@ use crate::gateway::http::rules::{
     RuleDecision, evaluate_request, request_authority, resolve_case_group,
 };
 use crate::gateway::http::transport::{GatewayBody, simple_response};
-use crate::recorder::redact_headers;
 use crate::recording_api::{RecordingApi, validate_selection};
+use crate::request_headers::RequestHeaderCapture;
 
 #[derive(Debug, Clone, Default)]
 pub struct ComparisonRecordingRunOptions {
@@ -50,6 +50,7 @@ pub(super) struct ComparisonRecordingRuntime {
     pub(super) store: ComparisonRecordingStore,
     pub(super) ready: Arc<AtomicBool>,
     pub(super) ready_notify: Arc<Notify>,
+    request_header_capture: RequestHeaderCapture,
     permits: Arc<Semaphore>,
     background: BackgroundTasks,
 }
@@ -102,6 +103,11 @@ pub async fn run_with_options(
     let comparison_recording = config.comparison_recording.clone().context(
         "record-comparison command requires a [comparison_recording] configuration section",
     )?;
+    let request_header_capture = RequestHeaderCapture::from_environment(
+        &config.recording.encrypt_request_headers,
+        &config.recording.redact_headers,
+    )
+    .context("failed to initialize comparison request header protection")?;
     let baseline_upstream = comparison_recording
         .baseline_upstream(&config.http_gateway)
         .to_string();
@@ -136,6 +142,7 @@ pub async fn run_with_options(
         store,
         ready: Arc::new(AtomicBool::new(!gateway.ready.enabled)),
         ready_notify: Arc::new(Notify::new()),
+        request_header_capture,
         permits: Arc::new(Semaphore::new(comparison_recording.max_in_flight)),
         background: BackgroundTasks::new(),
     };
@@ -367,6 +374,16 @@ async fn handle_request(
             .await;
         return forward_baseline(&runtime, &method, &uri, &headers, body).await;
     };
+    let protected_headers = match runtime.request_header_capture.capture(&headers) {
+        Ok(headers) => headers,
+        Err(error) => {
+            warn!(error = %error, "failed to protect comparison request headers");
+            return simple_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to protect recorded request headers",
+            );
+        }
+    };
     runtime
         .store
         .summary()
@@ -403,7 +420,7 @@ async fn handle_request(
         authority,
         matched_rule: rule.name.clone(),
         api_pattern: group.pattern.clone(),
-        headers: redact_headers(&headers, &runtime.config.recording.redact_headers),
+        headers: protected_headers,
         body: body_capture(&body, false, Some(body.len())),
     };
     let (sender, receiver) = oneshot::channel();

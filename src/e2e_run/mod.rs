@@ -5,6 +5,7 @@ mod execute;
 mod final_evidence;
 mod model;
 mod progress;
+mod request_view;
 mod runtime;
 mod store;
 mod support;

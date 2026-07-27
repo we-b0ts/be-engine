@@ -212,6 +212,7 @@ impl AppConfig {
 
     pub fn validate_comparison_recording(&self) -> Result<()> {
         self.validate_artifacts()?;
+        self.recording.validate_request_header_encryption()?;
         let comparison_recording = self.comparison_recording.as_ref().context(
             "record-comparison command requires a [comparison_recording] configuration section",
         )?;
@@ -418,7 +419,7 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
             .join("recorder.example.toml");
-        let config = AppConfig::load_comparison_recording(path).unwrap();
+        let mut config = AppConfig::load_comparison_recording(path).unwrap();
         assert!(
             !config
                 .comparison_recording
@@ -435,6 +436,9 @@ mod tests {
             config.comparison_recording_output_dir(),
             PathBuf::from("./.traffic-e2e/artifacts/comparison-recordings")
         );
+
+        config.recording.encrypt_request_headers = vec!["not a header".to_string()];
+        assert!(config.validate_comparison_recording().is_err());
     }
 
     #[test]

@@ -108,13 +108,19 @@ another task-service action.
    bodies, and do not use an unscoped recording as API discovery. Resolve the
    exact finalized run; never choose a run merely because it is newest. If the
    observation window receives no qualifying traffic, report `incomplete`
-   rather than inventing a request.
+   rather than inventing a request. When the authoritative recorder config
+   encrypts request headers, require its named key environment before invoking
+   the wrapper; never print, persist, or forward its value to the source or
+   supporting services.
 5. Confirm source routes, target facade, verification policy, dependency
    wiring, and genuine runtime clients. Prepare one canonical API group at a
    time. Run the existing implementation first when present, then implement or
    repair only the smallest cohesive behavior proved necessary by the cases.
    Target code, fixtures, configuration, and test support must never consume
-   expected responses or recorded dependency outputs.
+   expected responses or recorded dependency outputs. For encrypted request
+   headers, let the standard runner create its authenticated temporary request
+   view; target code and the project facade must not decrypt recordings or
+   receive the encryption key.
 6. Run repository-focused checks and focused traffic E2E. Use `traffic-e2e`
    failure classification before changing product behavior, verification
    policy, dependency wiring, or recorder attribution. Repeat the focused
@@ -124,9 +130,12 @@ another task-service action.
    `scripts/start-recording-comparison` with a new generated UTC run ID,
    explicit `--duration-seconds 60`, and the same affected `--api` scope.
    Preserve wrapper-owned runtime options such as shared Breeze and
-   `--brz-no-fallback`. Run offline `traffic-e2e compare` against that exact
-   finalized run and shared verification policy. Only the comparison report's
-   per-API passed result is current validation success.
+   `--brz-no-fallback`. When request-header encryption is configured, preserve
+   the same named key environment for the comparison recording wrapper without
+   exposing it to source, candidate, or Breeze. Run offline `traffic-e2e
+   compare` against that exact finalized run and shared verification policy.
+   Only the comparison report's per-API passed result is current validation
+   success.
 8. Delegate every comparison difference to `traffic-e2e` diagnosis. Fix code
    for a candidate defect, re-record inconclusive source drift, and change
    policy only for source-proven intentional non-determinism. If comparison
@@ -167,6 +176,12 @@ change. Route every non-passing result before acting:
   and rerun E2E;
 - `recording_configuration`: repair target-owned recording configuration, make
   a new standard recording, prepare it, and rerun E2E;
+- missing, invalid, or wrong configured request-header key: obtain or correct
+  the authorized secret without changing target code or recording artifacts,
+  then resume the same `record`, `e2e`, or `compare` stage. Treat an
+  unavailable key as `incomplete`, not as a Recorder/Replay capability gap.
+  A Recorder or Replay implementation that cannot honor configured encryption
+  remains a system-owned capability gap and is `blocked`;
 - `intentional_nondeterminism`: apply only source-proven policy, then rerun E2E
   before making a new comparison recording;
 - `source_drift`: obtain a new comparison observation without reinterpreting
