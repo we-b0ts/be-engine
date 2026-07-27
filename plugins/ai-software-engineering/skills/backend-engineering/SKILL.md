@@ -1,6 +1,6 @@
 ---
 name: backend-engineering
-description: "Design, implement, modify, migrate, or review backend services using production coding, code-organization, module-ownership, architecture, runtime-safety, and verification standards. Use for backend APIs, workers, scheduled jobs, consumers, gateways, dependency clients, or shared runtime components regardless of current traffic scale; do not invoke for UI-only or documentation-only work."
+description: "Design, implement, modify, or review production backend code using coding, code-organization, module-ownership, architecture, runtime-safety, and verification standards. Use for backend APIs, workers, scheduled jobs, consumers, gateways, dependency clients, shared runtime components, and target-code work delegated by an orchestration workflow; this skill owns engineering quality, not task sequencing, external evidence gates, or delivery orchestration."
 ---
 
 # Backend Service Engineering
@@ -52,23 +52,6 @@ Inspect only necessary configuration, environment variable names and
 provenance, startup arguments, deployment metadata, and dependency wiring.
 Never print, persist, or hard-code secret values, and do not replace a genuine
 runtime dependency with an environment variable inferred from traffic.
-
-## Rewrite Loop Handoff
-
-When `backend-rewrite` delegates a `target_behavior` TODO, require the active
-API, immutable case source and IDs, observable difference, dependency evidence,
-source behavior evidence, and exact requested outcome. Implement and verify
-only that target-owned TODO, then return:
-
-```text
-todo_status, changed_behavior, affected_apis, local_checks, return_to: e2e
-```
-
-Do not declare migration completion, start comparison, change background
-attribution or replay policy, or modify the traffic-e2e system from this
-handoff. If the evidence instead proves a Recorder or Replay capability gap,
-return the evidence and system-owned TODO to the rewrite orchestrator as
-`blocked`.
 
 ## Non-Negotiable Baseline
 
@@ -148,8 +131,6 @@ defects before they become scale defects.
   for readiness, overload, degradation, shutdown, logging, metrics, or tracing.
 - Read [verification.md](references/verification.md) before making correctness,
   performance, throughput, capacity, or stability claims.
-- Read [migration.md](references/migration.md) when rewriting or migrating an
-  existing capability, including cross-language work.
 - Read [rust.md](references/rust.md) only when Rust is the implementation language.
 
 ## Completion Review

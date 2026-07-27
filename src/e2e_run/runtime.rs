@@ -250,9 +250,7 @@ pub(super) async fn finalize_replay(state: &mut ActiveRunState) -> Result<()> {
     let response = match control(state, "finalize", None, true, true).await {
         Ok(response) => response,
         Err(strict_error) => {
-            state
-                .errors
-                .push(format!("strict replay finalize failed: {strict_error:#}"));
+            state.push_error(format!("strict replay finalize failed: {strict_error:#}"));
             control(state, "finalize", None, false, false)
                 .await
                 .context("failed to finalize replay after recording dirty evidence")?
@@ -322,9 +320,7 @@ pub(super) async fn best_effort_stop(
         )
         .await
         {
-            state
-                .errors
-                .push(format!("target cleanup failed: {error:#}"));
+            state.push_error(format!("target cleanup failed: {error:#}"));
         }
         state.target_started = false;
     }
@@ -333,9 +329,7 @@ pub(super) async fn best_effort_stop(
         && state.replay_session.is_file()
         && let Err(error) = control(state, "stop", None, false, false).await
     {
-        state
-            .errors
-            .push(format!("replay cleanup failed: {error:#}"));
+        state.push_error(format!("replay cleanup failed: {error:#}"));
     }
     if let Some(pid) = replay_pid {
         wait_for_pid_exit(pid).await;

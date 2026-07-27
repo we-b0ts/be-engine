@@ -136,14 +136,15 @@ Terminal focused attempts replace that API's final contribution to the current
 logical run; they do not add another run or another copy of its cases. Focused
 attempts MUST NOT replace the full-round `latest`.
 
-Fix an evidenced defect and rerun the same API. If later shared behavior changes
-may invalidate an earlier focused pass, rerun the affected groups or use one
-full regression round.
+After the calling orchestrator fixes an evidenced target defect, rerun the same
+API. If later shared behavior changes may invalidate an earlier focused pass,
+rerun the affected groups or use one full regression round.
 
-When a recorded case HTTP exchange remains unused, first apply the
-failure-diagnosis contract loaded from the main skill and inspect the request's
-source owner. If source proves that the exact authority, method, and path family
-is owned by an API-independent process-level task, run:
+After response assertions pass, when a recorded case HTTP exchange remains
+unused, apply the failure-diagnosis contract loaded from the main skill and
+inspect the request's source owner. If source proves that the exact authority,
+method, and path family is owned by an API-independent process-level task and
+the selected API response is independent of it, run:
 
 ```bash
 traffic-e2e config recorder apply background-dependencies \
@@ -192,8 +193,9 @@ stop, one replay finalize, a global aggregate, per-API evidence views,
 progress update, and atomic publication.
 
 Do not repair code inside a full round. If it fails, use focused `run-api` to
-diagnose and fix, then restart the full regression when it remains required.
-Progress reaches `status: complete` after every API in the current logical run
+diagnose and return `target_behavior`; after the calling orchestrator repairs
+it, restart the full regression when it remains required. Progress reaches
+`status: complete` after every API in the current logical run
 passes. Comparison verification remains a separate, repeatable phase.
 
 ## Completion

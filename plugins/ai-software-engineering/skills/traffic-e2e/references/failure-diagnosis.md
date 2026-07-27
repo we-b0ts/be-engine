@@ -7,14 +7,20 @@ attempt.
 
 Classify failures in this order:
 
-1. Incomplete recording
-2. Missing or incorrect dependency replay
-3. Environment or app startup mismatch
-4. Assertion drift in unstable response fields
-5. Product code bug
+1. Incomplete recording that prevents exercising or trusting the response
+   contract
+2. Structured response assertion mismatch
+3. Response-driving dependency, environment, or app startup mismatch
+4. Assertion drift in source-proven unstable response fields
+5. Remaining dependency coverage, side-effect, and background-attribution
+   failures after response assertions pass
 
-Prefer dependency and environment explanations until the recorded dependency
-evidence is complete and replay is known to be hit.
+The response contract is the primary diagnostic output during migration.
+Inspect and report every response mismatch before applying background
+attribution. Dependency analysis belongs in that diagnosis when a dependency
+can explain the observed response difference; unrelated unused traffic does not
+preempt a target response finding. Preserve all independently evidenced failure
+categories so that a system blocker cannot hide response defects.
 
 ## Incomplete Recording Signals
 
@@ -53,18 +59,20 @@ Timing overlap, repetition, polling-like names, a successful response, and an
 unused replay exchange are not ownership evidence. If any ownership fact is
 unclear, keep the dependency case-owned and the replay incomplete.
 
-After source proves independence, use the standard runner reference's guarded
-`background-dependencies plan` command. Inspect its narrow selector and matched
-case IDs before `apply`, then create a new recording; the command cannot repair
-the immutable old case. Record the source revision and a single-line
-file/symbol explanation, never raw query values, credentials, headers, or
-bodies. Use host-wide `allowed_unused_http_hosts` only as a compatibility
-exception when an older recording cannot be replaced and source proves the
-entire host is unrelated.
+After source proves independence and response assertions pass, use the standard
+runner reference's guarded `background-dependencies plan` command. Inspect its
+narrow selector and matched case IDs before `apply`, then create a new
+recording; the command cannot repair the immutable old case. Record the source
+revision and a single-line file/symbol explanation, never raw query values,
+credentials, headers, or bodies. Use host-wide `allowed_unused_http_hosts` only
+as a compatibility exception when an older recording cannot be replaced and
+source proves the entire host is unrelated.
 
 ## Replay Failure Signals
 
-Fix replay setup before product code when:
+Treat replay setup as part of the current response repair when it can explain
+the structured difference. If the response already passes, retain the same
+signals for the later dependency-coverage gate:
 
 - the app calls a dependency but replay does not handle it
 - the replay dependency coverage summary misses a recorded response-driving,
@@ -108,11 +116,16 @@ records.
 
 ## Response Assertion Mismatches
 
-Inspect the structured response difference and compare source and target
-behavior before changing assertion policy. Fix target code, dependency wiring,
-or response construction when it does not match the source contract. Only
-consider a replay-policy strategy after dependency replay is complete and clean
-and source evidence proves the remaining difference is intentional.
+Inspect every structured response difference and compare source and target
+behavior before changing assertion policy or applying background attribution.
+Classify target code, response-driving dependency wiring, or response
+construction that violates the source contract as `target_behavior`, and return
+the structured difference and causal evidence to the calling orchestrator.
+After the caller repairs it, rerun the same immutable cases. Only consider a
+replay-policy strategy when the dependencies causal to that difference replay
+correctly and source evidence proves the remaining difference is intentional.
+Unrelated unused dependencies remain a later E2E gate; they do not suppress
+this response finding.
 
 For JSON responses, diagnose against parsed JSON values. Formatting, whitespace,
 and object key order are not assertion failures. Missing fields, extra fields,
@@ -133,19 +146,23 @@ its plan/apply operation. A scalar mismatch or generated diagnostic candidate
 does not by itself justify a policy change. If no supported strategy exists,
 keep the case incomplete. Never add a broad ignore or weaken stable fields.
 
-## Product Code Bugs
+## Target Behavior Evidence
 
-Modify product code only when:
+Classify a difference as `target_behavior` when:
 
-- dependency evidence is complete
-- replay is hit and returns the recorded behavior
-- replay coverage has no unexplained unused case exchanges or unmatched target
-  dependency calls
 - the request is driven equivalently to the recording
-- the remaining mismatch is a real behavior difference, not an unstable field
-  or missing environment setup
+- the structured response difference is a real behavior difference, not an
+  unstable field or missing environment setup
+- every dependency that can causally explain that difference is replayed
+  correctly, repaired as part of the response-driving wiring, or proven
+  unrelated to the response
 
-Keep product fixes minimal and re-run the focused recorded E2E immediately.
+Do not require unrelated unused or source-proven background exchanges to be
+clean before reporting this classification. Keep them recorded as separate
+failures, and do not declare E2E complete until the later dependency-coverage
+gate passes. If a missing or incorrect dependency can explain the response
+mismatch, classify that causal path instead of prescribing a response-only
+change.
 
 ## Recorder Feedback
 

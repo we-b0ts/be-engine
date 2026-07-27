@@ -95,12 +95,13 @@ change code or policy from a scalar mismatch alone.
 1. **Candidate implementation difference.** When the optional source-before
    and source-after responses are equal under current rules while the candidate
    differs, inspect source and candidate code, configuration, dependency
-   wiring, and response construction. Fix the candidate when it violates the
-   source contract, then pass replay E2E again before making a new comparison
-   recording. If the API has no valid standard E2E case, do not implement from
-   comparison artifacts alone: call `scripts/start-recording` to capture its
-   request, expected response, and dependencies, establish a passing replay
-   contract, and only then return to comparison.
+   wiring, and response construction. Return a source-contract violation as
+   `target_behavior`; after the calling orchestrator repairs it, pass replay
+   E2E again before making a new comparison recording. If the API has no valid
+   standard E2E case, do not prescribe implementation from comparison artifacts
+   alone: call `scripts/start-recording` to capture its request, expected
+   response, and dependencies, establish a passing replay contract, and only
+   then return to comparison.
 2. **Source data drift between observations.** When source-before and
    source-after differ under current rules, the report classifies the case as
    `source_drift`. Do not attribute the candidate mismatch to code and do not

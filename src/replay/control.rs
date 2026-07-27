@@ -109,12 +109,30 @@ pub(super) async fn send_control_request_once(config: MysqlReplayControlConfig) 
     if response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
         Ok(response)
     } else {
-        let message = response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("replay control command failed");
-        Err(anyhow!("{message}: {}", serde_json::to_string(&response)?))
+        Err(anyhow!(control_failure_message(&response, &session)))
     }
+}
+
+fn control_failure_message(response: &Value, session: &Value) -> String {
+    let mut message = response
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("replay control command failed")
+        .to_owned();
+    for field in ["complete", "dirty", "finalized"] {
+        if let Some(value) = response.get(field).and_then(Value::as_bool) {
+            message.push_str(&format!("; {field}={value}"));
+        }
+    }
+    if let Some(report_path) = session
+        .get("report_path")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+    {
+        message.push_str("; inspect replay report at ");
+        message.push_str(report_path);
+    }
+    message
 }
 
 pub(super) async fn run_control_socket(
@@ -290,7 +308,6 @@ pub(super) async fn handle_control_request(
                     "complete": false,
                     "dirty": dirty,
                     "error": "replay report has pending or active cases",
-                    "report": report,
                 })
             } else if request.fail_on_dirty && dirty {
                 serde_json::json!({
@@ -298,7 +315,6 @@ pub(super) async fn handle_control_request(
                     "complete": complete,
                     "dirty": true,
                     "error": "replay report has unmatched, unused, or unsupported exchanges",
-                    "report": report,
                 })
             } else {
                 serde_json::json!({
@@ -378,7 +394,6 @@ async fn finalize_replay(request: &ReplayControlRequest, state: Arc<Mutex<Replay
             "complete": false,
             "dirty": dirty,
             "error": "cannot finalize replay with pending or active cases",
-            "report": report,
         });
     }
     if request.fail_on_dirty && dirty {
@@ -387,7 +402,6 @@ async fn finalize_replay(request: &ReplayControlRequest, state: Arc<Mutex<Replay
             "complete": complete,
             "dirty": true,
             "error": "cannot finalize replay with unmatched, unused, or unsupported exchanges",
-            "report": report,
         });
     }
     state.finalized_at = Some(Utc::now());
@@ -472,7 +486,6 @@ pub(super) async fn end_case(
             "ok": false,
             "dirty": true,
             "error": format!("replay case {case_id} has unmatched, unused, or unsupported exchanges"),
-            "report": report,
         })
     } else {
         serde_json::json!({
@@ -564,3 +577,6 @@ pub(super) fn report_is_complete(report: &ReplayReport) -> bool {
 pub(super) fn case_is_dirty(report: &ReplayReport, case_id: &str) -> bool {
     report.case_is_dirty(case_id)
 }
+
+#[cfg(test)]
+mod tests;

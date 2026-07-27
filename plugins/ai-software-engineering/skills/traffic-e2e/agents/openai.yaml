@@ -1,4 +1,4 @@
 interface:
   display_name: "Traffic E2E"
   short_description: "Record, replay, and verify real traffic"
-  default_prompt: "Use $traffic-e2e to record, inspect, replay, and verify canonical traffic cases with genuine dependency behavior."
+  default_prompt: "Use $traffic-e2e to record, inspect, replay, diagnose, and verify canonical traffic evidence without taking ownership of target implementation or migration sequencing."

@@ -3,7 +3,12 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+const MAX_STATE_ERRORS: usize = 128;
+const MAX_STATE_ERROR_BYTES: usize = 2_048;
+const STATE_ERROR_OVERFLOW: &str =
+    "additional errors omitted; inspect the canonical assertion, command, and replay reports";
 
 use crate::case_group::CaseGroupInventory;
 use crate::replay::ResponseAssertionCaseReport;
@@ -147,7 +152,7 @@ pub(super) struct ActiveRunState {
     pub aggregate_clean: bool,
     pub cases: Vec<CaseExecution>,
     pub apis: Vec<ApiExecution>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_state_errors")]
     pub errors: Vec<String>,
 }
 
@@ -212,6 +217,47 @@ impl ActiveRunState {
             errors: Vec::new(),
         }
     }
+
+    pub(super) fn push_error(&mut self, error: impl Into<String>) {
+        push_bounded_state_error(&mut self.errors, error.into());
+    }
+}
+
+fn deserialize_state_errors<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let errors = Vec::<String>::deserialize(deserializer)?;
+    let mut bounded = Vec::with_capacity(errors.len().min(MAX_STATE_ERRORS));
+    for error in errors {
+        push_bounded_state_error(&mut bounded, error);
+    }
+    Ok(bounded)
+}
+
+fn push_bounded_state_error(errors: &mut Vec<String>, error: String) {
+    if errors.len() < MAX_STATE_ERRORS.saturating_sub(1) {
+        errors.push(bound_state_error(error));
+        return;
+    }
+    if errors.last().map(String::as_str) != Some(STATE_ERROR_OVERFLOW) {
+        errors.truncate(MAX_STATE_ERRORS.saturating_sub(1));
+        errors.push(STATE_ERROR_OVERFLOW.to_owned());
+    }
+}
+
+fn bound_state_error(mut error: String) -> String {
+    if error.len() <= MAX_STATE_ERROR_BYTES {
+        return error;
+    }
+    let suffix = format!("… [truncated; original_bytes={}]", error.len());
+    let mut end = MAX_STATE_ERROR_BYTES.saturating_sub(suffix.len());
+    while !error.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    error.truncate(end);
+    error.push_str(&suffix);
+    error
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -360,6 +406,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["case-z", "case-a"]
         );
+    }
+
+    #[test]
+    fn active_run_bounds_persisted_errors() {
+        let mut state = ActiveRunState::new(
+            "run".to_string(),
+            1,
+            &CaseGroupInventory {
+                case_source: PathBuf::from("/cases"),
+                source_revision: "source".to_string(),
+                case_inventory_id: "inventory".to_string(),
+                groups: Vec::new(),
+            },
+            None,
+            std::path::Path::new("/run"),
+        );
+
+        state.push_error("界".repeat(MAX_STATE_ERROR_BYTES));
+        for index in 0..MAX_STATE_ERRORS {
+            state.push_error(format!("error {index}"));
+        }
+
+        assert_eq!(state.errors.len(), MAX_STATE_ERRORS);
+        assert!(state.errors[0].len() <= MAX_STATE_ERROR_BYTES);
+        assert_eq!(state.errors.last().unwrap(), STATE_ERROR_OVERFLOW);
+
+        state.errors = (0..MAX_STATE_ERRORS + 1)
+            .map(|_| "界".repeat(MAX_STATE_ERROR_BYTES))
+            .collect();
+        let restored: ActiveRunState =
+            serde_yaml::from_str(&serde_yaml::to_string(&state).unwrap()).unwrap();
+        assert_eq!(restored.errors.len(), MAX_STATE_ERRORS);
+        assert!(restored.errors[0].len() <= MAX_STATE_ERROR_BYTES);
+        assert_eq!(restored.errors.last().unwrap(), STATE_ERROR_OVERFLOW);
     }
 
     fn canonical_case(case_id: &str, recorded_at: &str) -> CanonicalCase {
