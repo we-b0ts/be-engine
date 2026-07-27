@@ -166,8 +166,8 @@ not render observed resource ports into committed files or generate target
 `brz-*` packages, application instructions, or SDK development documents.
 
 Later target implementation must use
-[`breeze-sdk`](../../breeze-sdk/SKILL.md) for exact descriptor identity,
-independent-startup registration, and replay-read-only resolution.
+the [`breeze-sdk` skill](../../breeze-sdk/SKILL.md) for exact descriptor
+identity, independent-startup registration, and replay-read-only resolution.
 
 ## Breeze SDK Source Patch
 

@@ -1,6 +1,6 @@
 ---
 name: platform-recording-init
-description: "Initialize a Platform department Java/Tomcat repository for managed traffic recording from an existing source application container, using the standard Breeze and Vintage recording topology, fixed Recorder configuration, and bundled Breeze SDK source-image patch. Use when invoked directly or when a Platform backend rewrite asks to initialize the current repo for traffic recording from a container such as friendship. Do not use for generic repositories, recording cases, replay, or target SDK implementation."
+description: "Initialize Platform Java/Tomcat repositories for managed traffic recording from an existing source application container. Use when a Platform backend rewrite needs the standard Breeze and Vintage recording environment. Do not use for generic repository setup, recording or replay execution, or target SDK implementation."
 ---
 
 # Platform Recording Init
@@ -104,7 +104,7 @@ writing files or starting containers.
    routing, shared Breeze descriptor preservation, clean finalization, and
    host ownership of the complete finalized standard recording run. Do not
    generate target Breeze SDK packages or repository development rules; those
-   belong to [`breeze-sdk`](../breeze-sdk/SKILL.md).
+   belong to the [`breeze-sdk` skill](../breeze-sdk/SKILL.md).
 10. Commit only the initialization outputs, push the initialization branch, and
    create or update its draft PR targeting `dev-migration`.
 

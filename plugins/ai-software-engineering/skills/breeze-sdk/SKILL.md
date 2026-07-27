@@ -20,11 +20,13 @@ Use this skill for Breeze-specific client and runtime behavior:
 - `brz-*` package boundaries and application wiring; and
 - Breeze-specific tests and compatibility evidence.
 
-Use [`backend-engineering`](../backend-engineering/SKILL.md) for general code
-quality. The invoking workflow retains scope, sequencing, evidence gates, and
-delivery. [`traffic-e2e`](../traffic-e2e/SKILL.md) owns recording and replay
-operations; [`platform-recording-init`](../platform-recording-init/SKILL.md)
-owns the source recording topology, shared mounts, and source-image patch.
+Use the [`backend-engineering` skill](../backend-engineering/SKILL.md) for
+general code quality. The invoking workflow retains scope, sequencing,
+evidence gates, and delivery. The
+[`traffic-e2e` skill](../traffic-e2e/SKILL.md) owns recording and replay
+operations; the
+[`platform-recording-init` skill](../platform-recording-init/SKILL.md) owns the
+source recording topology, shared mounts, and source-image patch.
 
 Do not operate or modify the Breeze server, copy SDK rules into application
 `AGENTS.md`, or make each consuming repository the permanent owner of the SDK.

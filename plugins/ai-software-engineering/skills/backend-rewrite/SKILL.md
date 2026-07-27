@@ -32,18 +32,20 @@ evidence, and advance only on current proof.
 This skill alone owns migration scope, sequence, active-slice state, repair
 priority, completion, branch/PR delivery, and the final decision.
 
-Before traffic work, read and use
-[`traffic-e2e`](../traffic-e2e/SKILL.md); it owns recording, replay, comparison,
-diagnosis, and their evidence gates. Before target-code work, read and use
-[`backend-engineering`](../backend-engineering/SKILL.md); it owns production
-code quality and local verification. Companion results inform this workflow
-but cannot advance, terminate, or declare the migration complete.
+Before traffic work, read and use the
+[`traffic-e2e` skill](../traffic-e2e/SKILL.md); it owns recording, replay,
+comparison, diagnosis, and their evidence gates. Before target-code work, read
+and use the [`backend-engineering` skill](../backend-engineering/SKILL.md); it
+owns production code quality and local verification. Companion results inform
+this workflow but cannot advance, terminate, or declare the migration
+complete.
 
 When source or target evidence includes the Breeze SDK, `brz-*`,
-`crates/breeze/`, or `/data1/breeze/socks`, also read and use
-[`breeze-sdk`](../breeze-sdk/SKILL.md) before Breeze target-code work. It owns
-resource identity, descriptor lifecycle, and Breeze client construction;
-rewrite retains slice sequencing, evidence gates, completion, and delivery.
+`crates/breeze/`, or `/data1/breeze/socks`, read the
+[`breeze-sdk` skill](../breeze-sdk/SKILL.md) completely before Breeze
+target-code work and use it for that work. It owns resource identity,
+descriptor lifecycle, and Breeze client construction; rewrite retains slice
+sequencing, evidence gates, completion, and delivery.
 
 Do not modify traffic-e2e to complete a rewrite. Route a proven Recorder or
 Replay capability gap to `traffic-e2e-system`, and do not add a

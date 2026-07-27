@@ -45,9 +45,10 @@ configuration initializers never create or switch branches.
 ## Initialize Only When Needed
 
 Initialize recording only when required target configuration or scripts are
-absent. For a Platform department repository, read
-`../../platform-recording-init/SKILL.md` completely and use it for that phase.
-Require generated project configuration to record the resolved `pr_base`.
+absent. For a Platform department repository, read the
+[`platform-recording-init` skill](../../platform-recording-init/SKILL.md)
+completely and use it for that phase. Require generated project configuration
+to record the resolved `pr_base`.
 
 If initialization changes the repository, commit and push it and create the
 draft PR before implementation. Validate and reuse existing configuration
@@ -95,15 +96,18 @@ causal dependency evidence, source behavior evidence, requested outcome
 ```
 
 When source code, runtime evidence, recorded dependency targets, or the target
-contains Breeze, read and use `../../breeze-sdk/SKILL.md`. Add the complete
-logical resource identity, operating mode (`independent`, `recording`,
-`comparison`, or `replay`), and exact descriptor or port evidence to the
-target-code packet. In replay mode, require read-only resolution and treat a
-missing exact descriptor as a startup blocker; do not authorize creation,
-mutation, or a protocol-default port.
+contains Breeze, read the
+[`breeze-sdk` skill](../../breeze-sdk/SKILL.md) completely before delegating or
+writing target code, and use it for that work. Add the complete logical
+resource identity, operating mode (`independent`, `recording`, `comparison`,
+or `replay`), and exact descriptor or port evidence to the target-code packet.
+In replay mode, require read-only resolution and treat a missing exact
+descriptor as a startup blocker; do not authorize creation, mutation, or a
+protocol-default port.
 
-Use `backend-engineering` for target-owned implementation and local checks.
-Record its result as:
+Use the
+[`backend-engineering` skill](../../backend-engineering/SKILL.md) for
+target-owned implementation and local checks. Record its result as:
 
 ```text
 todo_status, changed_behavior, affected_apis, changed_resources,
