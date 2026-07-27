@@ -1,6 +1,6 @@
 ---
 name: breeze-sdk
-description: "Design, implement, integrate, migrate, or review consumer-side Breeze SDK resource clients and brz-* packages. Use for Breeze-backed MySQL, Redis, Memcached, Kafka, MCQ, or QueueService clients; /data1/breeze/socks descriptor discovery or registration; Java Breeze SDK compatibility; independent startup; comparison wiring; or replay-safe exact-port reuse. This skill owns Breeze resource identity, descriptor lifecycle, client construction, and domain verification, not Breeze server operation, recording topology, traffic evidence gates, migration sequencing, generic backend standards, or delivery."
+description: "Design, implement, integrate, migrate, or review Breeze SDK resource clients for MySQL, Redis, Memcached, Kafka, MCQ, and QueueService. Use for Breeze SDK development or any Breeze-backed integration with these resources."
 ---
 
 # Breeze SDK
