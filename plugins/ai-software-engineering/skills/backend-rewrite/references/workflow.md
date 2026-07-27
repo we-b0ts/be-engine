@@ -95,15 +95,13 @@ active scope, immutable case source and IDs, structured response difference,
 causal dependency evidence, source behavior evidence, requested outcome
 ```
 
-When source code, runtime evidence, recorded dependency targets, or the target
-contains Breeze, read the
+When target-code work designs, implements, integrates, migrates, or reviews
+MySQL, Redis, Memcached, Kafka, MCQ, or QueueService resource access, read the
 [`breeze-sdk` skill](../../breeze-sdk/SKILL.md) completely before delegating or
-writing target code, and use it for that work. Add the complete logical
-resource identity, operating mode (`independent`, `recording`, `comparison`,
-or `replay`), and exact descriptor or port evidence to the target-code packet.
-In replay mode, require read-only resolution and treat a missing exact
-descriptor as a startup blocker; do not authorize creation, mutation, or a
-protocol-default port.
+writing that code, and use it for that work. Add the resource type, source
+access semantics, and relevant runtime or recorded dependency evidence to the
+target-code packet. Let `breeze-sdk` determine the concrete resource identity,
+runtime mode, and implementation constraints.
 
 Use the
 [`backend-engineering` skill](../../backend-engineering/SKILL.md) for
@@ -111,7 +109,7 @@ target-owned implementation and local checks. Record its result as:
 
 ```text
 todo_status, changed_behavior, affected_apis, changed_resources,
-descriptor_behavior, local_checks
+resource_runtime_behavior, local_checks
 ```
 
 The target-code task must not declare migration completion, start comparison,

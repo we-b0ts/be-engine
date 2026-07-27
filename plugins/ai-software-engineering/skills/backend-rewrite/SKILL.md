@@ -40,12 +40,12 @@ owns production code quality and local verification. Companion results inform
 this workflow but cannot advance, terminate, or declare the migration
 complete.
 
-When source or target evidence includes the Breeze SDK, `brz-*`,
-`crates/breeze/`, or `/data1/breeze/socks`, read the
-[`breeze-sdk` skill](../breeze-sdk/SKILL.md) completely before Breeze
-target-code work and use it for that work. It owns resource identity,
-descriptor lifecycle, and Breeze client construction; rewrite retains slice
-sequencing, evidence gates, completion, and delivery.
+When target-code work designs, implements, integrates, migrates, or reviews
+MySQL, Redis, Memcached, Kafka, MCQ, or QueueService resource access, read the
+[`breeze-sdk` skill](../breeze-sdk/SKILL.md) completely before that work and
+use it for that work. It owns Breeze resource identity, runtime lifecycle, and
+client construction; rewrite retains slice sequencing, evidence gates,
+completion, and delivery.
 
 Do not modify traffic-e2e to complete a rewrite. Route a proven Recorder or
 Replay capability gap to `traffic-e2e-system`, and do not add a
