@@ -114,6 +114,10 @@ defects before they become scale defects.
 
 ## Reference Routing
 
+- Read [code-organization.md](references/code-organization.md) before modifying
+  or reviewing product code. For Rust changes, run its bundled organization
+  checker after the final product-code edit and before commit, then again at
+  the prescribed MR boundary.
 - Read [architecture.md](references/architecture.md) when choosing modules,
   ownership, configuration, APIs, or runtime boundaries.
 - Read [large-rust-backend-architecture.md](references/large-rust-backend-architecture.md)

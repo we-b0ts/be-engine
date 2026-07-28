@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  :
+else
+  ROOT="$PWD"
+fi
+cd "$ROOT"
+
+limit=1000
+split=800
+warn=600
+failed=0
+scope="changed"
+file_label="changed file"
+product_paths=(
+  'src/**/*.rs'
+  'src/*.rs'
+  'crates/**/src/**/*.rs'
+  'crates/**/src/*.rs'
+  'apps/**/src/**/*.rs'
+  'apps/**/src/*.rs'
+)
+
+usage() {
+  cat <<'EOF'
+Usage: check-code-organization [--all]
+
+Run from the target backend repository or one of its subdirectories.
+
+  no arguments  Check changed and untracked Rust product files under the
+                conventional src/, crates/**/src/, and apps/**/src/ roots.
+  --all         Check every tracked and untracked Rust product file in those
+                roots.
+EOF
+}
+
+case "${1:-}" in
+  "") ;;
+  --all) scope="all" ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
+if [ "$#" -gt 1 ]; then
+  usage >&2
+  exit 2
+fi
+
+changed_files() {
+  {
+    if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      if [ -n "${CODE_ORG_BASE:-}" ] && git rev-parse --verify "$CODE_ORG_BASE" >/dev/null 2>&1; then
+        base="$CODE_ORG_BASE"
+        git diff --name-only --diff-filter=ACMRTUXB "$base"...HEAD -- "${product_paths[@]}"
+      fi
+      git diff --name-only --diff-filter=ACMRTUXB -- "${product_paths[@]}"
+      git diff --cached --name-only --diff-filter=ACMRTUXB -- "${product_paths[@]}"
+      git ls-files --others --exclude-standard -- "${product_paths[@]}"
+    else
+      find_product_files
+    fi
+  } | sort -u
+}
+
+all_files() {
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git ls-files --cached --others --exclude-standard -- "${product_paths[@]}"
+  else
+    find_product_files
+  fi | sort -u
+}
+
+find_product_files() {
+  local roots=()
+  local candidate
+  for candidate in src crates apps; do
+    if [ -d "$candidate" ]; then
+      roots+=("$candidate")
+    fi
+  done
+  if [ "${#roots[@]}" -gt 0 ]; then
+    find "${roots[@]}" -type f -name '*.rs'
+  fi
+}
+
+if [ "$scope" = "all" ]; then
+  files="$(all_files)"
+  file_label="product file"
+else
+  files="$(changed_files)"
+fi
+
+if [ -z "$files" ]; then
+  echo "code organization check: no ${scope} Rust product source files"
+  exit 0
+fi
+
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+  [ -f "$file" ] || continue
+  lines="$(wc -l <"$file" | tr -d ' ')"
+  if [ "$lines" -gt "$limit" ]; then
+    echo "ERROR: $file_label $file has $lines lines; product source files must stay <= $limit lines" >&2
+    failed=1
+  elif [ "$lines" -gt "$split" ]; then
+    echo "WARN: $file_label $file has $lines lines; split it or document why it remains one cohesive responsibility" >&2
+  elif [ "$lines" -gt "$warn" ]; then
+    echo "WARN: $file_label $file has $lines lines; review whether responsibilities should be split" >&2
+  fi
+done <<<"$files"
+
+exit "$failed"
