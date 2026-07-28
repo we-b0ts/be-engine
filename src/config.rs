@@ -9,8 +9,9 @@ pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
 
 mod allowed_unused_http;
 mod artifacts;
-mod background_dependencies;
+pub(crate) mod background_dependencies;
 mod background_feedback;
+mod background_memcached_feedback;
 mod case_limits;
 mod comparison_recording;
 mod dns;
@@ -27,10 +28,16 @@ pub use allowed_unused_http::{
     plan_allowed_unused_http_hosts,
 };
 pub use artifacts::ArtifactsConfig;
-pub use background_dependencies::BackgroundDependencyRuleConfig;
+pub use background_dependencies::{
+    BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
+};
 pub use background_feedback::{
     BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
     plan_background_dependency,
+};
+pub use background_memcached_feedback::{
+    BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
+    BreezeMemcachedBackgroundDependencyReport, plan_breeze_memcached_background_dependency,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use comparison_recording::ComparisonRecordingConfig;
@@ -232,6 +239,17 @@ impl AppConfig {
         self.http_gateway
             .case_limits
             .validate(&self.http_gateway.rules)?;
+        if self
+            .recording
+            .background_dependencies
+            .iter()
+            .any(|rule| matches!(rule, BackgroundDependencyRuleConfig::Memcached { .. }))
+            && (!self.http_gateway.enabled || !self.http_gateway.ready.enabled)
+        {
+            bail!(
+                "Memcached runtime-state background dependency rules require an enabled HTTP gateway ready probe"
+            );
+        }
         if self.tcp_gateway.backlog == 0 || self.tcp_gateway.backlog > i32::MAX as u32 {
             bail!("tcp_gateway.backlog must be between 1 and {}", i32::MAX);
         }

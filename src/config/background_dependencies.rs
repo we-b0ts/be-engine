@@ -6,6 +6,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::recorder::RecorderEvent;
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundDependencyResponseRole {
+    #[default]
+    Independent,
+    RuntimeState,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
@@ -14,6 +22,21 @@ pub enum BackgroundDependencyRuleConfig {
         authorities: Vec<String>,
         methods: Vec<String>,
         path_prefixes: Vec<String>,
+        #[serde(default)]
+        response_role: BackgroundDependencyResponseRole,
+        source_revision: String,
+        source_evidence: String,
+    },
+    Memcached {
+        name: String,
+        breeze_identity: String,
+        command: String,
+        key_start: u32,
+        key_end: u32,
+        key_separator: String,
+        key_suffix: String,
+        initial_load_timeout_ms: u64,
+        response_role: BackgroundDependencyResponseRole,
         source_revision: String,
         source_evidence: String,
     },
@@ -22,7 +45,7 @@ pub enum BackgroundDependencyRuleConfig {
 impl BackgroundDependencyRuleConfig {
     pub fn name(&self) -> &str {
         match self {
-            Self::Http { name, .. } => name,
+            Self::Http { name, .. } | Self::Memcached { name, .. } => name,
         }
     }
 
@@ -32,7 +55,10 @@ impl BackgroundDependencyRuleConfig {
             methods,
             path_prefixes,
             ..
-        } = self;
+        } = self
+        else {
+            return false;
+        };
         let RecorderEvent::HttpExchange(exchange) = event else {
             return false;
         };
@@ -91,6 +117,7 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 authorities,
                 methods,
                 path_prefixes,
+                response_role,
                 source_revision,
                 source_evidence,
                 ..
@@ -98,6 +125,41 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 validate_authorities(name, authorities)?;
                 validate_methods(name, methods)?;
                 validate_path_prefixes(name, path_prefixes)?;
+                if *response_role != BackgroundDependencyResponseRole::Independent {
+                    bail!("HTTP background dependency rule {name:?} must be response-independent");
+                }
+                validate_source_metadata(source_revision, source_evidence)?;
+            }
+            BackgroundDependencyRuleConfig::Memcached {
+                breeze_identity,
+                command,
+                key_start,
+                key_end,
+                key_separator,
+                key_suffix,
+                initial_load_timeout_ms,
+                response_role,
+                source_revision,
+                source_evidence,
+                ..
+            } => {
+                validate_breeze_identity(name, breeze_identity)?;
+                if command != "get" {
+                    bail!(
+                        "Memcached background dependency rule {name:?} currently supports only command \"get\""
+                    );
+                }
+                validate_key_series(name, *key_start, *key_end, key_separator, key_suffix)?;
+                if *initial_load_timeout_ms == 0 {
+                    bail!(
+                        "Memcached background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
+                    );
+                }
+                if *response_role != BackgroundDependencyResponseRole::RuntimeState {
+                    bail!(
+                        "Memcached background dependency rule {name:?} must use response_role = \"runtime_state\""
+                    );
+                }
                 validate_source_metadata(source_revision, source_evidence)?;
             }
         }
@@ -127,9 +189,9 @@ fn validate_source_metadata(source_revision: &str, source_evidence: &str) -> Res
 fn validate_non_overlapping_rules(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
     for (index, left) in rules.iter().enumerate() {
         for right in &rules[index + 1..] {
-            if http_rules_overlap(left, right) {
+            if rules_overlap(left, right) {
                 bail!(
-                    "background dependency rules {:?} and {:?} have overlapping HTTP selectors",
+                    "background dependency rules {:?} and {:?} have overlapping selectors",
                     left.name(),
                     right.name()
                 );
@@ -139,37 +201,148 @@ fn validate_non_overlapping_rules(rules: &[BackgroundDependencyRuleConfig]) -> R
     Ok(())
 }
 
-fn http_rules_overlap(
+fn rules_overlap(
     left: &BackgroundDependencyRuleConfig,
     right: &BackgroundDependencyRuleConfig,
 ) -> bool {
-    let (
-        BackgroundDependencyRuleConfig::Http {
-            authorities: left_authorities,
-            methods: left_methods,
-            path_prefixes: left_paths,
-            ..
-        },
-        BackgroundDependencyRuleConfig::Http {
-            authorities: right_authorities,
-            methods: right_methods,
-            path_prefixes: right_paths,
-            ..
-        },
-    ) = (left, right);
-    left_authorities.iter().any(|left| {
-        right_authorities
-            .iter()
-            .any(|right| normalize_authority(left) == normalize_authority(right))
-    }) && left_methods.iter().any(|left| {
-        right_methods
-            .iter()
-            .any(|right| left.eq_ignore_ascii_case(right))
-    }) && left_paths.iter().any(|left| {
-        right_paths
-            .iter()
-            .any(|right| left.starts_with(right) || right.starts_with(left))
-    })
+    match (left, right) {
+        (
+            BackgroundDependencyRuleConfig::Http {
+                authorities: left_authorities,
+                methods: left_methods,
+                path_prefixes: left_paths,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Http {
+                authorities: right_authorities,
+                methods: right_methods,
+                path_prefixes: right_paths,
+                ..
+            },
+        ) => {
+            left_authorities.iter().any(|left| {
+                right_authorities
+                    .iter()
+                    .any(|right| normalize_authority(left) == normalize_authority(right))
+            }) && left_methods.iter().any(|left| {
+                right_methods
+                    .iter()
+                    .any(|right| left.eq_ignore_ascii_case(right))
+            }) && left_paths.iter().any(|left| {
+                right_paths
+                    .iter()
+                    .any(|right| left.starts_with(right) || right.starts_with(left))
+            })
+        }
+        (
+            BackgroundDependencyRuleConfig::Memcached {
+                breeze_identity: left_identity,
+                command: left_command,
+                key_start: left_start,
+                key_end: left_end,
+                key_separator: left_separator,
+                key_suffix: left_suffix,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Memcached {
+                breeze_identity: right_identity,
+                command: right_command,
+                key_start: right_start,
+                key_end: right_end,
+                key_separator: right_separator,
+                key_suffix: right_suffix,
+                ..
+            },
+        ) => {
+            left_identity == right_identity
+                && left_command == right_command
+                && left_separator == right_separator
+                && left_suffix == right_suffix
+                && left_start <= right_end
+                && right_start <= left_end
+        }
+        _ => false,
+    }
+}
+
+fn validate_breeze_identity(rule_name: &str, identity: &str) -> Result<()> {
+    validate_single_line(
+        "Memcached background dependency Breeze identity",
+        identity,
+        1_024,
+    )?;
+    let fields = identity.split('@').collect::<Vec<_>>();
+    if fields.len() != 3 || fields.iter().any(|field| field.is_empty()) {
+        bail!(
+            "Memcached background dependency rule {rule_name:?} must use a stable service@socket-type@protocol Breeze identity"
+        );
+    }
+    if fields[1] != "mc" {
+        bail!(
+            "Memcached background dependency rule {rule_name:?} requires a Breeze mc socket identity"
+        );
+    }
+    if fields[1].contains(':') {
+        bail!("Memcached background dependency rule {rule_name:?} must not persist a Breeze port");
+    }
+    Ok(())
+}
+
+fn validate_key_series(
+    rule_name: &str,
+    start: u32,
+    end: u32,
+    separator: &str,
+    suffix: &str,
+) -> Result<()> {
+    const MAX_KEYS: u64 = 65_536;
+    if start > end {
+        bail!(
+            "Memcached background dependency rule {rule_name:?} key_start must not exceed key_end"
+        );
+    }
+    if u64::from(end) - u64::from(start) + 1 > MAX_KEYS {
+        bail!(
+            "Memcached background dependency rule {rule_name:?} exceeds the {MAX_KEYS} key safety limit"
+        );
+    }
+    if separator.len() != 1
+        || !separator.is_ascii()
+        || separator.as_bytes()[0].is_ascii_alphanumeric()
+    {
+        bail!(
+            "Memcached background dependency rule {rule_name:?} key_separator must be one non-alphanumeric ASCII byte"
+        );
+    }
+    validate_single_line("Memcached background dependency key suffix", suffix, 128)?;
+    Ok(())
+}
+
+pub(crate) fn matches_memcached_key_series(
+    key: &[u8],
+    start: u32,
+    end: u32,
+    separator: u8,
+    suffix: &[u8],
+) -> bool {
+    let Some(separator_index) = key.iter().position(|byte| *byte == separator) else {
+        return false;
+    };
+    let (prefix, actual_suffix) = key.split_at(separator_index);
+    if prefix.is_empty()
+        || prefix.len() > 10
+        || prefix.iter().any(|byte| !byte.is_ascii_digit())
+        || actual_suffix.get(1..) != Some(suffix)
+    {
+        return false;
+    }
+    let Ok(prefix) = std::str::from_utf8(prefix) else {
+        return false;
+    };
+    let Ok(value) = prefix.parse::<u32>() else {
+        return false;
+    };
+    value >= start && value <= end && value.to_string() == prefix
 }
 
 fn validate_authorities(rule_name: &str, authorities: &[String]) -> Result<()> {
@@ -288,6 +461,23 @@ mod tests {
         })
     }
 
+    fn memcached_rule(timeout_ms: u64) -> BackgroundDependencyRuleConfig {
+        BackgroundDependencyRuleConfig::Memcached {
+            name: "planet-video-cache-warm".to_string(),
+            breeze_identity: "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc@cs"
+                .to_string(),
+            command: "get".to_string(),
+            key_start: 0,
+            key_end: 4095,
+            key_separator: ".".to_string(),
+            key_suffix: "pl_video".to_string(),
+            initial_load_timeout_ms: timeout_ms,
+            response_role: BackgroundDependencyResponseRole::RuntimeState,
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "TopUserServiceImpl.java:691 scheduled local cache warm".to_string(),
+        }
+    }
+
     #[test]
     fn http_rule_matches_authority_method_and_path_without_weakening_query_identity() {
         let rule = BackgroundDependencyRuleConfig::Http {
@@ -295,6 +485,7 @@ mod tests {
             authorities: vec!["CONFIG.API.demo.test".to_string()],
             methods: vec!["GET".to_string()],
             path_prefixes: vec!["/1/config/service".to_string()],
+            response_role: BackgroundDependencyResponseRole::Independent,
             source_revision: "0123456789abcdef".to_string(),
             source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
         };
@@ -351,6 +542,7 @@ mod tests {
             authorities: vec!["config.api.demo.test".to_string()],
             methods: Vec::new(),
             path_prefixes: vec!["/".to_string()],
+            response_role: BackgroundDependencyResponseRole::Independent,
             source_revision: "0123456789abcdef".to_string(),
             source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
         }];
@@ -361,6 +553,7 @@ mod tests {
             authorities: vec!["config.api.demo.test".to_string()],
             methods: vec!["GET".to_string()],
             path_prefixes: vec!["/lookup?group=x".to_string()],
+            response_role: BackgroundDependencyResponseRole::Independent,
             source_revision: "0123456789abcdef".to_string(),
             source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
         }];
@@ -374,9 +567,30 @@ mod tests {
             ],
             methods: vec!["GET".to_string()],
             path_prefixes: vec!["/lookup".to_string()],
+            response_role: BackgroundDependencyResponseRole::Independent,
             source_revision: "0123456789abcdef".to_string(),
             source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
         }];
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn memcached_runtime_state_requires_ready_probe_and_positive_timeout() {
+        let mut config = AppConfig::default();
+        config.recording.background_dependencies = vec![memcached_rule(30_000)];
+        let error = config.validate().unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("require an enabled HTTP gateway ready probe")
+        );
+
+        config.http_gateway.enabled = true;
+        config.http_gateway.ready.enabled = true;
+        config.validate().unwrap();
+
+        config.recording.background_dependencies = vec![memcached_rule(0)];
+        let error = config.validate().unwrap_err();
+        assert!(error.to_string().contains("initial_load_timeout_ms"));
     }
 }

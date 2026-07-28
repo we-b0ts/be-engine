@@ -108,7 +108,7 @@ impl ReplayState {
     ) -> Option<MatchedExchange> {
         let normalized_sql = sql.map(normalize_sql);
         let active_case_id = self.active_case_id.clone();
-        for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
+        for source in [ReplaySource::Case, ReplaySource::Global] {
             for index in 0..self.mysql.exchanges.len() {
                 let exchange = &self.mysql.exchanges[index];
                 if exchange.source != source
@@ -194,7 +194,7 @@ impl ReplayState {
     ) -> Option<(ReplaySource, usize)> {
         let normalized_sql = sql.map(normalize_sql);
         let active_case_id = self.active_case_id.clone();
-        for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
+        for source in [ReplaySource::Case, ReplaySource::Global] {
             for (index, exchange) in self.mysql.exchanges.iter_mut().enumerate() {
                 if exchange.source != source
                     || !exchange.status.is_available()
@@ -225,7 +225,7 @@ impl ReplayState {
         sql: &str,
     ) -> StatementMetadata {
         let normalized_sql = normalize_sql(sql);
-        for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
+        for source in [ReplaySource::Case, ReplaySource::Global] {
             for exchange in &self.mysql.exchanges {
                 if exchange.source != source || exchange.record.command != "COM_STMT_EXECUTE" {
                     continue;

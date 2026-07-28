@@ -5,13 +5,9 @@ use serde_json::Value;
 
 use super::{CommandProtocolCounts, HttpEventCounts, MysqlEventCounts, ReplayEventCounts};
 
-pub(super) fn read(report: &Value, version: u64, path: &Path) -> Result<ReplayEventCounts> {
-    let success_detail_limit = if version >= 5 {
-        Some(required_usize(report, "success_detail_limit", path)?)
-    } else {
-        None
-    };
-    if success_detail_limit == Some(0) {
+pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
+    let success_detail_limit = required_usize(report, "success_detail_limit", path)?;
+    if success_detail_limit == 0 {
         bail!(
             "replay report {} success_detail_limit must be positive",
             path.display()
@@ -24,20 +20,20 @@ pub(super) fn read(report: &Value, version: u64, path: &Path) -> Result<ReplayEv
                 report,
                 "builtin_queries",
                 "builtin_query_count",
-                success_detail_limit,
+                Some(success_detail_limit),
                 path,
             )?,
             matched_queries: success_count(
                 report,
                 "matched_queries",
                 "matched_query_count",
-                success_detail_limit,
+                Some(success_detail_limit),
                 path,
             )?,
             unmatched_queries: required_len(report, "unmatched_queries", path)?,
             unsupported_commands: required_len(report, "unsupported_commands", path)?,
             unused_case_exchanges: required_len(report, "unused_case_exchanges", path)?,
-            unused_bootstrap_exchanges: required_len(report, "unused_bootstrap_exchanges", path)?,
+            unused_global_exchanges: required_len(report, "unused_global_exchanges", path)?,
             metadata_warnings: required_len(report, "metadata_warnings", path)?,
         },
         http: HttpEventCounts {
@@ -45,7 +41,7 @@ pub(super) fn read(report: &Value, version: u64, path: &Path) -> Result<ReplayEv
                 report,
                 "matched_http_exchanges",
                 "matched_http_exchange_count",
-                success_detail_limit,
+                Some(success_detail_limit),
                 path,
             )?,
             unmatched_requests: required_len(report, "unmatched_http_requests", path)?,
@@ -56,40 +52,23 @@ pub(super) fn read(report: &Value, version: u64, path: &Path) -> Result<ReplayEv
                 "allowed_unused_case_http_exchanges",
                 path,
             )?,
-            unused_bootstrap_exchanges: required_len(
-                report,
-                "unused_bootstrap_http_exchanges",
-                path,
-            )?,
+            unused_global_exchanges: required_len(report, "unused_global_http_exchanges", path)?,
         },
-        redis: protocol_counts(report, "redis", version >= 3, success_detail_limit, path)?,
-        memcached: protocol_counts(
-            report,
-            "memcached",
-            version >= 3,
-            success_detail_limit,
-            path,
-        )?,
-        kafka: protocol_counts(report, "kafka", version >= 3, success_detail_limit, path)?,
-        motan: protocol_counts(report, "motan", false, success_detail_limit, path)?,
+        redis: protocol_counts(report, "redis", success_detail_limit, path)?,
+        memcached: protocol_counts(report, "memcached", success_detail_limit, path)?,
+        kafka: protocol_counts(report, "kafka", success_detail_limit, path)?,
+        motan: protocol_counts(report, "motan", success_detail_limit, path)?,
     })
 }
 
 fn protocol_counts(
     report: &Value,
     protocol: &str,
-    required: bool,
-    success_detail_limit: Option<usize>,
+    success_detail_limit: usize,
     path: &Path,
 ) -> Result<CommandProtocolCounts> {
     let Some(value) = report.get(protocol) else {
-        if required {
-            bail!(
-                "replay report {} version 3 or newer is missing {protocol}",
-                path.display()
-            );
-        }
-        return Ok(CommandProtocolCounts::default());
+        bail!("replay report {} is missing {protocol}", path.display());
     };
     if !value.is_object() {
         bail!(
@@ -103,14 +82,14 @@ fn protocol_counts(
             value,
             "matched",
             "matched_count",
-            success_detail_limit,
+            Some(success_detail_limit),
             path,
         )?,
         unmatched: required_len(value, "unmatched", path)?,
         unsupported: required_len(value, "unsupported", path)?,
         unsafe_events: required_len(value, "unsafe_events", path)?,
         unused_case: required_len(value, "unused_case", path)?,
-        unused_bootstrap: required_len(value, "unused_bootstrap", path)?,
+        unused_global: required_len(value, "unused_global", path)?,
         warnings: optional_len(value, "warnings", path)?,
     })
 }

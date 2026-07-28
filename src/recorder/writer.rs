@@ -8,9 +8,7 @@ use tokio::time::{Instant, MissedTickBehavior};
 use tracing::warn;
 use uuid::Uuid;
 
-use super::dependencies::{
-    bootstrap_dependency_filename, case_dependency_filename, dependency_line,
-};
+use super::dependencies::{case_dependency_filename, dependency_line, global_dependency_filename};
 use super::jsonl::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
 use super::summary::should_append_case_dependency;
 use crate::active_case::DependencyTargets;
@@ -35,8 +33,10 @@ enum WriterCommand {
         matched_by: String,
         ack: WriterAck,
     },
-    AppendBootstrap {
+    AppendGlobal {
         event: RecorderEvent,
+        reason: String,
+        phase: String,
         matched_by: String,
         ack: WriterAck,
     },
@@ -47,7 +47,7 @@ enum WriterCommand {
         dir: PathBuf,
         ack: WriterAck,
     },
-    FlushBootstrap {
+    FlushGlobal {
         ack: WriterAck,
     },
     FlushAll {
@@ -144,13 +144,17 @@ impl RecorderWriter {
         .await
     }
 
-    pub(super) async fn append_bootstrap(
+    pub(super) async fn append_global(
         &self,
         event: RecorderEvent,
+        reason: &str,
+        phase: &str,
         matched_by: &str,
     ) -> Result<()> {
-        self.request(|ack| WriterCommand::AppendBootstrap {
+        self.request(|ack| WriterCommand::AppendGlobal {
             event,
+            reason: reason.to_string(),
+            phase: phase.to_string(),
             matched_by: matched_by.to_string(),
             ack,
         })
@@ -168,9 +172,8 @@ impl RecorderWriter {
             .await
     }
 
-    pub(super) async fn flush_bootstrap(&self) -> Result<()> {
-        self.request(|ack| WriterCommand::FlushBootstrap { ack })
-            .await
+    pub(super) async fn flush_global(&self) -> Result<()> {
+        self.request(|ack| WriterCommand::FlushGlobal { ack }).await
     }
 
     pub(super) async fn flush_all(&self) -> Result<()> {
@@ -270,14 +273,18 @@ async fn process_command(
                 failure,
             );
         }
-        WriterCommand::AppendBootstrap {
+        WriterCommand::AppendGlobal {
             event,
+            reason,
+            phase,
             matched_by,
             ack,
         } => {
             acknowledge(
                 ack,
-                state.append_bootstrap(&event, &matched_by).await,
+                state
+                    .append_global(&event, &reason, &phase, &matched_by)
+                    .await,
                 failure,
             );
         }
@@ -291,8 +298,8 @@ async fn process_command(
                 failure,
             );
         }
-        WriterCommand::FlushBootstrap { ack } => {
-            acknowledge(ack, state.flush_bootstrap().await, failure);
+        WriterCommand::FlushGlobal { ack } => {
+            acknowledge(ack, state.flush_global().await, failure);
         }
         WriterCommand::FlushAll { ack } => {
             acknowledge(ack, state.flush_all().await, failure);
@@ -327,17 +334,23 @@ impl WriterState {
         if !should_append_case_dependency(&event) {
             return Ok(());
         }
-        if targets.bootstrap_open {
-            self.append_bootstrap(
+        if let Some(rule_name) = background_rule_name {
+            self.append_global(
                 &event,
-                background_rule_name
-                    .as_deref()
-                    .unwrap_or("bootstrap_window"),
+                "background_rule",
+                if targets.bootstrap_open {
+                    "bootstrap"
+                } else {
+                    "runtime"
+                },
+                &rule_name,
             )
             .await?;
-        }
-        if background_rule_name.is_some() {
             return Ok(());
+        }
+        if targets.bootstrap_open {
+            self.append_global(&event, "bootstrap_window", "bootstrap", "bootstrap_window")
+                .await?;
         }
         if targets.ambiguous_active_cases > 0 {
             warn!(
@@ -381,12 +394,18 @@ impl WriterState {
         self.dependency_files.append(&path, &line).await
     }
 
-    async fn append_bootstrap(&mut self, event: &RecorderEvent, matched_by: &str) -> Result<()> {
+    async fn append_global(
+        &mut self,
+        event: &RecorderEvent,
+        reason: &str,
+        phase: &str,
+        matched_by: &str,
+    ) -> Result<()> {
         if !should_append_case_dependency(event) {
             return Ok(());
         }
-        let path = self.run_dir.join(bootstrap_dependency_filename(event));
-        let line = dependency_line(event, "bootstrap_dependency_matched_by", matched_by)?;
+        let path = self.run_dir.join(global_dependency_filename(event));
+        let line = global_dependency_line(event, reason, phase, matched_by)?;
         self.dependency_files.append(&path, &line).await
     }
 
@@ -397,9 +416,9 @@ impl WriterState {
         Ok(())
     }
 
-    async fn flush_bootstrap(&mut self) -> Result<()> {
-        let semantic = self.run_dir.join("bootstrap-dependencies.jsonl");
-        let debug = self.run_dir.join("bootstrap-dependencies-debug.jsonl");
+    async fn flush_global(&mut self) -> Result<()> {
+        let semantic = self.run_dir.join("global-dependencies.jsonl");
+        let debug = self.run_dir.join("global-dependencies-debug.jsonl");
         self.dependency_files.flush_and_remove(&semantic).await?;
         self.dependency_files.flush_and_remove(&debug).await
     }
@@ -413,6 +432,32 @@ impl WriterState {
         self.flush_traffic().await?;
         self.dependency_files.flush_all().await
     }
+}
+
+fn global_dependency_line(
+    event: &RecorderEvent,
+    reason: &str,
+    phase: &str,
+    matched_by: &str,
+) -> Result<Vec<u8>> {
+    let mut value = serde_json::to_value(event)?;
+    if let serde_json::Value::Object(object) = &mut value {
+        object.insert(
+            "global_dependency_reason".to_string(),
+            serde_json::Value::String(reason.to_string()),
+        );
+        object.insert(
+            "global_dependency_phase".to_string(),
+            serde_json::Value::String(phase.to_string()),
+        );
+        object.insert(
+            "global_dependency_matched_by".to_string(),
+            serde_json::Value::String(matched_by.to_string()),
+        );
+    }
+    let mut line = serde_json::to_vec(&value)?;
+    line.push(b'\n');
+    Ok(line)
 }
 
 fn case_staging_dir(run_dir: &Path, case: &CaseContext) -> PathBuf {

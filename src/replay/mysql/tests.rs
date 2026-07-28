@@ -197,12 +197,12 @@ async fn maintenance_queries_use_builtin_responses_without_recorded_exchanges() 
 }
 
 #[tokio::test]
-async fn active_case_exchanges_precede_identical_bootstrap_exchanges() {
+async fn active_case_exchanges_precede_identical_global_exchanges() {
     let temp = tempdir().unwrap();
     let case_dir = temp.path().join("case-id");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
     tokio::fs::write(
-        temp.path().join("bootstrap-dependencies.jsonl"),
+        temp.path().join("global-dependencies.jsonl"),
         format!(
             "{}\n{}\n",
             execute_dependency("bootstrap", false),
@@ -283,7 +283,7 @@ async fn active_case_exchanges_precede_identical_bootstrap_exchanges() {
         Some(ReplaySource::Case)
     );
     assert!(state.unused_exchanges(ReplaySource::Case).is_empty());
-    assert_eq!(state.unused_exchanges(ReplaySource::Bootstrap).len(), 2);
+    assert_eq!(state.unused_exchanges(ReplaySource::Global).len(), 2);
     drop(state);
     task.abort();
 }

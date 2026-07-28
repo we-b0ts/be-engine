@@ -126,7 +126,7 @@ async fn recording_policy_blocks_http_write_before_upstream_and_audits_it() {
         .unwrap();
     assert!(jsonl.contains(r#""event_type":"readonly_rejection""#));
     assert!(jsonl.contains(r#""operation_class":"write""#));
-    assert!(!run_dir.join("bootstrap-dependencies.jsonl").exists());
+    assert!(!run_dir.join("global-dependencies.jsonl").exists());
 
     let report: Value = serde_json::from_str(
         &tokio::fs::read_to_string(run_dir.join("recording-run.json"))

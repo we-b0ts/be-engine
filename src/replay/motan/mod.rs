@@ -316,7 +316,7 @@ impl MotanReplayState {
             unsupported: self.events.unsupported.clone(),
             unsafe_events: self.events.unsafe_events.clone(),
             unused_case: unused(&self.exchanges, ReplaySource::Case),
-            unused_bootstrap: unused(&self.exchanges, ReplaySource::Bootstrap),
+            unused_global: unused(&self.exchanges, ReplaySource::Global),
             ..Default::default()
         }
     }

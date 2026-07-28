@@ -4,14 +4,14 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use hyper::{HeaderMap, Method, Uri};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::AppState;
 use crate::config::{HttpGatewayConfig, HttpGatewayReadyConfig};
 
 use super::transport::{build_upstream_request, build_upstream_uri, send_upstream};
 
-pub(super) async fn run(state: AppState, config: HttpGatewayConfig) {
+pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()> {
     let interval = Duration::from_millis(config.ready.interval_ms.max(1));
     let post_ready_settle = Duration::from_millis(state.config().recording.post_ready_settle_ms);
     let mut ticker = tokio::time::interval(interval);
@@ -28,35 +28,40 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) {
         ticker.tick().await;
         match probe_once(&state, &config.matched_upstream, &config.ready).await {
             Ok(status) if status == config.ready.success_status => {
-                if !post_ready_settle.is_zero() {
+                let ready_at = tokio::time::Instant::now();
+                if state.has_background_initial_loads() || !post_ready_settle.is_zero() {
                     state.mark_recording_source_settling();
                     info!(
                         upstream = %config.matched_upstream,
                         path = %config.ready.path,
                         status,
                         post_ready_settle_ms = post_ready_settle.as_millis(),
-                        "HTTP gateway ready probe succeeded; waiting before case admission"
+                        waits_for_memcached_runtime_state = state.has_background_initial_loads(),
+                        "HTTP gateway ready probe succeeded; waiting for case admission prerequisites"
                     );
-                    tokio::time::sleep(post_ready_settle).await;
-                    if !state.is_bootstrap_open() {
-                        info!(
-                            "HTTP gateway ready settle stopped because bootstrap is already closed"
-                        );
-                        return;
-                    }
+                }
+                state
+                    .wait_for_background_initial_loads()
+                    .await
+                    .context("Memcached runtime-state readiness barrier failed")?;
+                let settle_deadline = ready_at + post_ready_settle;
+                if tokio::time::Instant::now() < settle_deadline {
+                    tokio::time::sleep_until(settle_deadline).await;
+                }
+                if !state.is_bootstrap_open() {
+                    info!("HTTP gateway readiness stopped because bootstrap is already closed");
+                    return Ok(());
                 }
                 match state.close_bootstrap("http_gateway.ready").await {
                     Ok(true) => {}
                     Ok(false) => {
                         info!("HTTP gateway ready probe stopped before case admission was enabled");
-                        return;
+                        return Ok(());
                     }
                     Err(error) => {
-                        warn!(
-                            %error,
-                            "HTTP gateway ready probe could not seal bootstrap dependencies"
+                        return Err(error).context(
+                            "HTTP gateway ready probe could not seal bootstrap dependencies",
                         );
-                        return;
                     }
                 }
                 info!(
@@ -66,7 +71,7 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) {
                     post_ready_settle_ms = post_ready_settle.as_millis(),
                     "HTTP gateway ready probe succeeded and case admission is enabled"
                 );
-                return;
+                return Ok(());
             }
             Ok(status) => {
                 debug!(
@@ -89,6 +94,7 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) {
     }
 
     info!("HTTP gateway ready probe stopped because bootstrap is already closed");
+    Ok(())
 }
 
 async fn probe_once(
@@ -181,6 +187,7 @@ mod tests {
         let ready_config = state.config().http_gateway.clone();
         tokio::time::timeout(Duration::from_secs(1), run(state.clone(), ready_config))
             .await
+            .unwrap()
             .unwrap();
 
         assert!(!state.is_bootstrap_open());
@@ -234,7 +241,7 @@ mod tests {
         .unwrap();
 
         assert!(state.is_bootstrap_open());
-        ready_task.await.unwrap();
+        ready_task.await.unwrap().unwrap();
         assert!(started.elapsed() >= Duration::from_millis(50));
         assert!(!state.is_bootstrap_open());
     }

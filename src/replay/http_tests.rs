@@ -290,10 +290,10 @@ async fn replays_https_exchange_with_generated_mitm_certificate() {
 }
 
 #[tokio::test]
-async fn searches_past_same_target_bootstrap_exchange_for_active_case_match() {
+async fn searches_past_same_target_global_exchange_for_active_case_match() {
     let temp = tempdir().unwrap();
     write_http_dependency(
-        &temp.path().join("bootstrap-dependencies.jsonl"),
+        &temp.path().join("global-dependencies.jsonl"),
         "fake_ip_http",
         "api.example.test",
         "/bootstrap",
@@ -327,7 +327,7 @@ async fn searches_past_same_target_bootstrap_exchange_for_active_case_match() {
     assert!(state.http_events.unmatched.is_empty());
     assert_eq!(
         state
-            .unused_http_exchanges(ReplaySource::Bootstrap, false)
+            .unused_http_exchanges(ReplaySource::Global, false)
             .len(),
         1
     );

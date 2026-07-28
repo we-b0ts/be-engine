@@ -349,7 +349,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn records_udp_datagram_as_bootstrap_dependency() {
+    async fn records_udp_datagram_as_startup_global_dependency() {
         let temp = tempdir().unwrap();
         let mut config = crate::AppConfig::default();
         config.recording.output_dir = temp.path().join("recordings");
@@ -373,10 +373,7 @@ mod tests {
             .await
             .unwrap();
 
-        let dependencies = state
-            .recorder()
-            .run_dir
-            .join("bootstrap-dependencies.jsonl");
+        let dependencies = state.recorder().run_dir.join("global-dependencies.jsonl");
         let raw = tokio::fs::read_to_string(&dependencies).await.unwrap();
 
         assert!(raw.contains(r#""event_type":"udp_datagram""#), "{raw}");
