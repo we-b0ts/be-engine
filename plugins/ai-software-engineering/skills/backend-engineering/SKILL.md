@@ -129,6 +129,10 @@ defects before they become scale defects.
 - Read [dependency-clients.md](references/dependency-clients.md) whenever the
   change touches databases, caches, HTTP/RPC, queues, discovery, or another
   remote system.
+- When a remote resource is managed through Breeze, also read and use the
+  [`breeze-sdk` skill](../breeze-sdk/SKILL.md) for its business-independent
+  resource client; keep business behavior under this skill in the owning
+  capability.
 - Read [data-and-memory.md](references/data-and-memory.md) for JSON, large
   payloads, serialization, buffering, compression, or allocation-sensitive paths.
 - Read [resilience-and-observability.md](references/resilience-and-observability.md)

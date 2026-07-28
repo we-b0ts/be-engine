@@ -104,12 +104,16 @@ behavior, and miss/error fallback only where they affect the active behavior
 or operational contract. Equivalent target architecture is allowed.
 
 When target-code work designs, implements, integrates, migrates, or reviews
-MySQL, Redis, Memcached, Kafka, MCQ, or QueueService resource access, read the
+business-independent remote-resource access managed through Breeze, read the
 [`breeze-sdk` skill](../../breeze-sdk/SKILL.md) completely before delegating or
-writing that code, and use it for that work. Add the resource type, source
-access semantics, and relevant runtime or recorded dependency evidence to the
-target-code packet. Let `breeze-sdk` determine the concrete resource identity,
-runtime mode, and implementation constraints.
+writing that code, and use it for that work. This explicitly includes
+Memcached, Redis, MySQL, Kafka, queues such as MCQ or QueueService, Motan, and
+other Breeze-managed remote resources. Add the resource type, source access
+semantics, business/resource boundary, and relevant runtime or recorded
+dependency evidence to the target-code packet. Let `breeze-sdk` determine the
+reusable resource identity, runtime mode, and client lifecycle; keep SQL, keys,
+messages, RPC contracts, provider mapping, and orchestration in the target
+capability.
 
 Use the
 [`backend-engineering` skill](../../backend-engineering/SKILL.md) for

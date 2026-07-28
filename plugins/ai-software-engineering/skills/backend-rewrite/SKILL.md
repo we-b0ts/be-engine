@@ -43,10 +43,13 @@ this workflow but cannot advance, terminate, or declare the migration
 complete.
 
 When target-code work designs, implements, integrates, migrates, or reviews
-MySQL, Redis, Memcached, Kafka, MCQ, or QueueService resource access, read the
+business-independent remote-resource access managed through Breeze, read the
 [`breeze-sdk` skill](../breeze-sdk/SKILL.md) completely before that work and
-use it for that work. It owns Breeze resource identity, runtime lifecycle, and
-client construction; rewrite retains slice sequencing, evidence gates,
+use it for that work. This explicitly includes Memcached, Redis, MySQL, Kafka,
+queues such as MCQ or QueueService, Motan, and other Breeze-managed remote
+resources. Breeze owns reusable resource identity, discovery, runtime
+lifecycle, and client construction; business contracts and behavior remain in
+the target capability, while rewrite retains slice sequencing, evidence gates,
 completion, and delivery.
 
 Do not modify traffic-e2e to complete a rewrite. Route a proven Recorder or
