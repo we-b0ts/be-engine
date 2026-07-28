@@ -66,7 +66,7 @@ pub(in crate::replay) struct CommandProtocolReport {
     pub(in crate::replay) unsupported: Vec<CommandRequestReport>,
     pub(in crate::replay) unsafe_events: Vec<CommandRequestReport>,
     pub(in crate::replay) unused_case: Vec<CommandUnusedReport>,
-    pub(in crate::replay) unused_bootstrap: Vec<CommandUnusedReport>,
+    pub(in crate::replay) unused_global: Vec<CommandUnusedReport>,
     pub(in crate::replay) warnings: Vec<String>,
 }
 

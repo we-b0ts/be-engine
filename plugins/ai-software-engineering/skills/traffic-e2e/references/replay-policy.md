@@ -40,7 +40,7 @@ setup, dependency implementations, replay rules, branch or cache decisions,
 side-effect generation, and runtime config MUST NOT read it to create actual
 behavior.
 
-`dependencies.jsonl` and bootstrap dependency files are recorder-owned replay
+Case and Global dependency files are recorder-owned replay
 inputs. Target product code, E2E code, test support, commands, and application
 config MUST NOT read, parse, copy, or derive dependency results from them. Do
 not create recording-backed or fixture-backed target dependency implementations.

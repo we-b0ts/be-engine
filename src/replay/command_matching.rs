@@ -58,12 +58,12 @@ where
         return case_match;
     }
 
-    let bootstrap_match = match_in_scope(exchanges, ReplaySource::Bootstrap, None, &matches);
-    if matches!(bootstrap_match, PreferredMatch::Matched(_)) {
-        return bootstrap_match;
+    let global_match = match_in_scope(exchanges, ReplaySource::Global, None, &matches);
+    if matches!(global_match, PreferredMatch::Matched(_)) {
+        return global_match;
     }
 
-    match (case_match, bootstrap_match) {
+    match (case_match, global_match) {
         (blocked @ PreferredMatch::LaneBlocked { .. }, _) => blocked,
         (_, blocked @ PreferredMatch::LaneBlocked { .. }) => blocked,
         _ => PreferredMatch::NotFound,
@@ -149,7 +149,7 @@ where
         .iter()
         .enumerate()
         .filter(|(_, exchange)| {
-            exchange.is_available() && scope_matches(*exchange, ReplaySource::Bootstrap, None)
+            exchange.is_available() && scope_matches(*exchange, ReplaySource::Global, None)
         })
         .map(|(index, _)| index)
         .collect()
@@ -174,8 +174,7 @@ fn scope_matches<T>(exchange: &T, source: ReplaySource, case_id: Option<&str>) -
 where
     T: CommandExchangeScope,
 {
-    exchange.source() == source
-        && (source == ReplaySource::Bootstrap || exchange.case_id() == case_id)
+    exchange.source() == source && (source == ReplaySource::Global || exchange.case_id() == case_id)
 }
 
 fn exchange_ref<T>(exchange: &T) -> CommandExchangeRefReport

@@ -51,7 +51,7 @@ async fn coalesces_bursts_into_one_periodic_snapshot() {
     assert_eq!(writer.completed_writes(), 1);
     let report: Value =
         serde_json::from_slice(&tokio::fs::read(report_path).await.unwrap()).unwrap();
-    assert_eq!(report["version"], 5);
+    assert_eq!(report["version"], 6);
     task.abort();
 }
 

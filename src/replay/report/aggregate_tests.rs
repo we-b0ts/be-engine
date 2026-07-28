@@ -10,43 +10,18 @@ use super::aggregate::{
 };
 
 #[test]
-fn aggregates_version_two_and_three_reports() {
+fn rejects_pre_global_report_versions() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("20260714041519").join("pluto");
     write_report(
         &source,
         "api-one",
-        report_value(2, &source.join("api-one"), &[("case-a", "ended")], 2),
+        report_value(5, &source.join("api-one"), &[("case-a", "ended")], 2),
     );
-    let mut second = report_value(3, &source.join("api-two"), &[("case-b", "ended")], 1);
-    second
-        .as_object_mut()
-        .unwrap()
-        .insert("redis".to_owned(), protocol_value(1, 2, 0, 0, 0, 0, 0));
-    second
-        .as_object_mut()
-        .unwrap()
-        .insert("memcached".to_owned(), protocol_value(0, 0, 0, 0, 0, 0, 0));
-    second
-        .as_object_mut()
-        .unwrap()
-        .insert("kafka".to_owned(), protocol_value(0, 0, 0, 0, 0, 0, 0));
-    write_report(&source, "api-two", second);
 
-    let aggregate = aggregate_replay_reports(&source).unwrap();
+    let error = aggregate_replay_reports(&source).unwrap_err();
 
-    assert_eq!(aggregate.counts.reports, 2);
-    assert_eq!(aggregate.counts.published_cases, 2);
-    assert_eq!(aggregate.counts.reported_cases, 2);
-    assert_eq!(aggregate.counts.unreported_cases, 0);
-    assert_eq!(aggregate.counts.case_statuses["ended"], 2);
-    assert_eq!(aggregate.counts.events.mysql.matched_queries, 3);
-    assert_eq!(aggregate.counts.events.redis.connections, 1);
-    assert_eq!(aggregate.counts.events.redis.matched, 2);
-    assert!(aggregate.complete);
-    assert!(!aggregate.dirty);
-    assert_eq!(aggregate.cases[0].case_id, "case-a");
-    assert_eq!(aggregate.cases[1].case_id, "case-b");
+    assert!(error.to_string().contains("supported version is 6"));
 }
 
 #[test]
@@ -56,12 +31,12 @@ fn rejects_duplicate_case_ids_in_case_source() {
     write_report(
         &source,
         "api-one",
-        report_value(2, &source.join("api-one"), &[("same", "ended")], 0),
+        report_value(6, &source.join("api-one"), &[("same", "ended")], 0),
     );
     write_report(
         &source,
         "api-two",
-        report_value(2, &source.join("api-two"), &[("same", "ended")], 0),
+        report_value(6, &source.join("api-two"), &[("same", "ended")], 0),
     );
 
     let error = aggregate_replay_reports(&source).unwrap_err();
@@ -94,7 +69,7 @@ fn reports_published_cases_without_replay_output() {
 fn marks_pending_and_unused_evidence_in_summary() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value(2, &source.join("api"), &[("case-a", "pending")], 0);
+    let mut report = report_value(6, &source.join("api"), &[("case-a", "pending")], 0);
     report["unused_case_http_exchanges"] = json!([{}]);
     write_report(&source, "api", report);
 
@@ -106,17 +81,17 @@ fn marks_pending_and_unused_evidence_in_summary() {
 }
 
 #[test]
-fn retains_unused_bootstrap_as_diagnostic_without_marking_dirty() {
+fn retains_unused_global_as_diagnostic_without_marking_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v4(
+    let mut report = report_value_v6(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000088",
         true,
     );
-    report["unused_bootstrap_exchanges"] = json!([{}]);
-    report["unused_bootstrap_http_exchanges"] = json!([{}]);
+    report["unused_global_exchanges"] = json!([{}]);
+    report["unused_global_http_exchanges"] = json!([{}]);
     report["redis"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
     report["memcached"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
     report["kafka"] = protocol_value(0, 0, 0, 0, 0, 0, 1);
@@ -127,19 +102,19 @@ fn retains_unused_bootstrap_as_diagnostic_without_marking_dirty() {
 
     assert!(aggregate.is_complete());
     assert!(!aggregate.is_dirty());
-    assert_eq!(aggregate.counts.events.mysql.unused_bootstrap_exchanges, 1);
-    assert_eq!(aggregate.counts.events.http.unused_bootstrap_exchanges, 1);
-    assert_eq!(aggregate.counts.events.redis.unused_bootstrap, 1);
-    assert_eq!(aggregate.counts.events.memcached.unused_bootstrap, 1);
-    assert_eq!(aggregate.counts.events.kafka.unused_bootstrap, 1);
-    assert_eq!(aggregate.counts.events.motan.unused_bootstrap, 1);
+    assert_eq!(aggregate.counts.events.mysql.unused_global_exchanges, 1);
+    assert_eq!(aggregate.counts.events.http.unused_global_exchanges, 1);
+    assert_eq!(aggregate.counts.events.redis.unused_global, 1);
+    assert_eq!(aggregate.counts.events.memcached.unused_global, 1);
+    assert_eq!(aggregate.counts.events.kafka.unused_global, 1);
+    assert_eq!(aggregate.counts.events.motan.unused_global, 1);
 }
 
 #[test]
 fn aggregates_motan_counts_and_marks_unused_case_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v4(
+    let mut report = report_value_v6(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000087",
@@ -155,14 +130,14 @@ fn aggregates_motan_counts_and_marks_unused_case_dirty() {
     assert_eq!(aggregate.counts.events.motan.matched, 3);
     assert_eq!(aggregate.counts.events.motan.unmatched, 1);
     assert_eq!(aggregate.counts.events.motan.unused_case, 1);
-    assert_eq!(aggregate.counts.events.motan.unused_bootstrap, 1);
+    assert_eq!(aggregate.counts.events.motan.unused_global, 1);
 }
 
 #[test]
 fn retains_allowed_unused_case_http_as_diagnostic_without_marking_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v4(
+    let mut report = report_value_v6(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000089",
@@ -187,7 +162,7 @@ fn retains_allowed_unused_case_http_as_diagnostic_without_marking_dirty() {
 fn marks_unused_applicable_replay_policy_rule_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v4(
+    let mut report = report_value_v6(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000099",
@@ -215,7 +190,7 @@ fn marks_unused_applicable_replay_policy_rule_dirty() {
 fn rejects_replay_policy_that_does_not_declare_assertion_only_expected_response() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v4(
+    let mut report = report_value_v6(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000098",
@@ -246,7 +221,7 @@ fn selects_exact_cases_and_final_sessions() {
         &source,
         "api",
         "attempt-a",
-        report_value_v4(
+        report_value_v6(
             &source.join("api"),
             &[("case-a", "ended"), ("case-b", "ended")],
             session_a,
@@ -257,7 +232,7 @@ fn selects_exact_cases_and_final_sessions() {
         &source,
         "api",
         "attempt-b",
-        report_value_v4(&source.join("api"), &[("case-b", "ended")], session_b, true),
+        report_value_v6(&source.join("api"), &[("case-b", "ended")], session_b, true),
     );
     let options = ReplayAggregateOptions {
         case_ids: BTreeSet::from(["case-b".to_string()]),
@@ -284,13 +259,13 @@ fn rerun_requires_an_explicit_session_selection() {
         &source,
         "api",
         "attempt-one",
-        report_value_v4(&source.join("api"), &[("case-a", "ended")], first, true),
+        report_value_v6(&source.join("api"), &[("case-a", "ended")], first, true),
     );
     write_session_report(
         &source,
         "api",
         "attempt-two",
-        report_value_v4(&source.join("api"), &[("case-a", "ended")], second, true),
+        report_value_v6(&source.join("api"), &[("case-a", "ended")], second, true),
     );
 
     let error = aggregate_replay_reports(&source).unwrap_err();
@@ -306,14 +281,14 @@ fn rerun_requires_an_explicit_session_selection() {
 }
 
 #[test]
-fn version_four_report_must_be_finalized_to_be_complete() {
+fn unfinalized_report_is_not_complete() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
     write_session_report(
         &source,
         "api",
         "unfinished",
-        report_value_v4(
+        report_value_v6(
             &source.join("api"),
             &[("case-a", "ended")],
             "00000000-0000-4000-8000-000000000021",
@@ -328,16 +303,15 @@ fn version_four_report_must_be_finalized_to_be_complete() {
 }
 
 #[test]
-fn version_five_uses_total_success_counts_beyond_retained_details() {
+fn version_six_uses_total_success_counts_beyond_retained_details() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
-    let mut report = report_value_v4(
+    let mut report = report_value_v6(
         &source.join("api"),
         &[("case-a", "ended")],
         "00000000-0000-4000-8000-000000000051",
         true,
     );
-    report["version"] = json!(5);
     report["success_detail_limit"] = json!(100);
     report["builtin_queries"] = json!([{"index": 0}]);
     report["builtin_query_count"] = json!(6_592);
@@ -350,7 +324,7 @@ fn version_five_uses_total_success_counts_beyond_retained_details() {
         report[protocol]["matched_count"] = json!(0);
     }
     report["motan"]["matched_count"] = json!(7);
-    write_session_report(&source, "api", "v5", report);
+    write_session_report(&source, "api", "v6", report);
 
     let aggregate = aggregate_replay_reports(&source).unwrap();
 
@@ -370,7 +344,7 @@ fn selected_session_must_cover_the_selected_cases() {
         &source,
         "api",
         "other-case",
-        report_value_v4(&source.join("api"), &[("case-a", "ended")], session, true),
+        report_value_v6(&source.join("api"), &[("case-a", "ended")], session, true),
     );
     write_case(&source.join("api").join("case-b"), true);
     let options = ReplayAggregateOptions {
@@ -431,40 +405,54 @@ fn report_value(
     fs::create_dir_all(case_dir).unwrap();
     let mut report = json!({
         "version": version,
+        "session_id": "00000000-0000-4000-8000-000000000001",
+        "started_at": "2026-07-14T00:00:00Z",
+        "finalized_at": "2026-07-14T00:01:00Z",
+        "finalized": true,
         "case_dir": case_dir,
         "cases": cases.iter().map(|(case_id, status)| json!({
             "case_id": case_id,
             "status": status,
         })).collect::<Vec<_>>(),
+        "selected_case_ids": cases.iter().map(|(case_id, _)| json!(case_id)).collect::<Vec<_>>(),
+        "success_detail_limit": 100,
         "connections": 1,
+        "builtin_query_count": 0,
         "builtin_queries": [],
+        "matched_query_count": matched_queries,
         "matched_queries": [],
         "unmatched_queries": [],
         "unsupported_commands": [],
         "metadata_warnings": [],
-        "unused_bootstrap_exchanges": [],
+        "unused_global_exchanges": [],
         "unused_case_exchanges": [],
+        "matched_http_exchange_count": 0,
         "matched_http_exchanges": [],
         "unmatched_http_requests": [],
         "unsupported_http_exchanges": [],
-        "unused_bootstrap_http_exchanges": [],
+        "unused_global_http_exchanges": [],
         "unused_case_http_exchanges": [],
+        "allowed_unused_case_http_exchanges": [],
     });
     report["matched_queries"] = Value::Array(
         (0..matched_queries)
             .map(|index| json!({"index": index}))
             .collect(),
     );
+    for protocol in ["redis", "memcached", "kafka", "motan"] {
+        report[protocol] = protocol_value(0, 0, 0, 0, 0, 0, 0);
+        report[protocol]["matched_count"] = json!(0);
+    }
     report
 }
 
-fn report_value_v4(
+fn report_value_v6(
     case_dir: &Path,
     cases: &[(&str, &str)],
     session_id: &str,
     finalized: bool,
 ) -> Value {
-    let mut report = report_value(4, case_dir, cases, 0);
+    let mut report = report_value(6, case_dir, cases, 0);
     report["session_id"] = json!(session_id);
     report["started_at"] = json!("2026-07-14T00:00:00Z");
     report["finalized"] = json!(finalized);
@@ -473,9 +461,6 @@ fn report_value_v4(
     }
     report["selected_case_ids"] =
         Value::Array(cases.iter().map(|(case_id, _)| json!(case_id)).collect());
-    report["redis"] = protocol_value(0, 0, 0, 0, 0, 0, 0);
-    report["memcached"] = protocol_value(0, 0, 0, 0, 0, 0, 0);
-    report["kafka"] = protocol_value(0, 0, 0, 0, 0, 0, 0);
     report
 }
 
@@ -486,17 +471,18 @@ fn protocol_value(
     unsupported: usize,
     unsafe_events: usize,
     unused_case: usize,
-    unused_bootstrap: usize,
+    unused_global: usize,
 ) -> Value {
     let mut value = Map::new();
     value.insert("connections".to_owned(), json!(connections));
+    value.insert("matched_count".to_owned(), json!(matched));
     for (name, count) in [
         ("matched", matched),
         ("unmatched", unmatched),
         ("unsupported", unsupported),
         ("unsafe_events", unsafe_events),
         ("unused_case", unused_case),
-        ("unused_bootstrap", unused_bootstrap),
+        ("unused_global", unused_global),
     ] {
         value.insert(
             name.to_owned(),

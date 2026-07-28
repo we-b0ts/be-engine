@@ -37,5 +37,12 @@ Verify every new or changed resource package against the modes it supports.
 - Bound connection, operation, retry, and shutdown waits.
 - Exercise resource-specific error mapping and fallback behavior without
   moving business semantics into the SDK.
+- For Motan, verify the complete reusable SDK boundary: protocol, discovery,
+  routing, codec, transport, deadlines, retries, connection reuse, health, and
+  shutdown, independently from any business service interface or method
+  contract.
+- Prove capability tests own SQL, keys, messages, RPC methods, provider DTO
+  mapping, and cross-resource orchestration rather than importing them into the
+  Breeze package.
 - Run repository-focused tests, formatting, linting, and architecture checks
   required by the consuming or standalone SDK repository.

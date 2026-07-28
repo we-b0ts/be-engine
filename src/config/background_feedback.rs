@@ -7,7 +7,9 @@ use anyhow::{Context, Result, ensure};
 use hyper::http::{Method, Uri, uri::Authority};
 use serde::{Deserialize, Serialize};
 
-use super::background_dependencies::{self, BackgroundDependencyRuleConfig};
+use super::background_dependencies::{
+    self, BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
+};
 use super::edit::write_atomic;
 use super::rule_document::{find_managed_block, managed_block_diff, newline, parse_and_validate};
 
@@ -55,6 +57,13 @@ pub struct BackgroundDependencyPlan {
     report: BackgroundDependencyReport,
 }
 
+pub(super) struct RuleConfigPlan {
+    pub(super) original: String,
+    pub(super) updated: String,
+    pub(super) changed: bool,
+    pub(super) diff: String,
+}
+
 impl BackgroundDependencyPlan {
     pub fn report(&self) -> &BackgroundDependencyReport {
         &self.report
@@ -84,9 +93,6 @@ pub fn plan_background_dependency(
     feedback: BackgroundDependencyFeedback,
 ) -> Result<BackgroundDependencyPlan> {
     validate_single_line("background dependency rule name", &feedback.name, 128)?;
-    ensure_regular_config(&feedback.config_path)?;
-    let original_config = read_file(&feedback.config_path, "recorder config")?;
-    let config = parse_and_validate(&original_config, &feedback.config_path)?;
 
     let authority = canonical_authority(&feedback.authority)?;
     let method = canonical_method(&feedback.method)?;
@@ -96,6 +102,7 @@ pub fn plan_background_dependency(
         authorities: vec![authority.clone()],
         methods: vec![method.clone()],
         path_prefixes: vec![path_prefix.clone()],
+        response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: feedback.source_revision.clone(),
         source_evidence: feedback.source_evidence.clone(),
     };
@@ -110,72 +117,14 @@ pub fn plan_background_dependency(
         &path_prefix,
     )?;
 
-    let mut rules = config.recording.background_dependencies.clone();
-    if let Some(existing) = rules.iter_mut().find(|rule| rule.name() == feedback.name) {
-        ensure_same_selector(existing, &requested)?;
-        *existing = requested;
-    } else {
-        rules.push(requested);
-    }
-    background_dependencies::validate(&rules)?;
-    rules.sort_by(|left, right| left.name().cmp(right.name()));
-
-    let whole_file = 0..original_config.len();
-    let managed = find_managed_block(
-        &original_config,
-        &whole_file,
-        BEGIN_MARKER,
-        END_MARKER,
-        "background dependencies",
-    )?;
-    let total_headers = table_header_count(&original_config);
-    let block = match managed {
-        Some(block) => {
-            ensure!(
-                total_headers == table_header_count(&original_config[block.clone()])
-                    && total_headers == config.recording.background_dependencies.len(),
-                "recording.background_dependencies must be owned exclusively by its AI-managed block"
-            );
-            block
-        }
-        None => {
-            ensure!(
-                total_headers == 0 && config.recording.background_dependencies.is_empty(),
-                "existing recording.background_dependencies must be enclosed by its AI-managed block"
-            );
-            original_config.len()..original_config.len()
-        }
-    };
-    let old_block = &original_config[block.clone()];
-    let new_block = render_block(
-        &rules,
-        newline(&original_config),
-        old_block.is_empty(),
-        old_block.ends_with('\n'),
-        &original_config,
-    );
-    let updated_config = replace_range(&original_config, &block, &new_block);
-    parse_and_validate(&updated_config, &feedback.config_path)
-        .context("generated recorder config failed validation")?;
-    let changed = updated_config != original_config;
-    let diff = if changed {
-        managed_block_diff(
-            &feedback.config_path,
-            &original_config,
-            block.start,
-            old_block,
-            &new_block,
-        )
-    } else {
-        String::new()
-    };
+    let config_plan = plan_rule_config(&feedback.config_path, requested)?;
 
     Ok(BackgroundDependencyPlan {
         config_path: feedback.config_path.clone(),
         replay_report_path: feedback.replay_report_path.clone(),
-        original_config,
+        original_config: config_plan.original,
         original_replay_report,
-        updated_config,
+        updated_config: config_plan.updated,
         report: BackgroundDependencyReport {
             config: feedback.config_path,
             replay_report: feedback.replay_report_path,
@@ -188,10 +137,81 @@ pub fn plan_background_dependency(
             source_evidence: feedback.source_evidence,
             matched_unused_exchanges: evidence.count,
             matched_case_ids: evidence.case_ids,
-            changed,
+            changed: config_plan.changed,
             applied: false,
-            diff,
+            diff: config_plan.diff,
         },
+    })
+}
+
+pub(super) fn plan_rule_config(
+    config_path: &Path,
+    requested: BackgroundDependencyRuleConfig,
+) -> Result<RuleConfigPlan> {
+    ensure_regular_config(config_path)?;
+    let original = read_file(config_path, "recorder config")?;
+    let config = parse_and_validate(&original, config_path)?;
+    let mut rules = config.recording.background_dependencies.clone();
+    if let Some(existing) = rules
+        .iter_mut()
+        .find(|rule| rule.name() == requested.name())
+    {
+        ensure_same_selector(existing, &requested)?;
+        *existing = requested;
+    } else {
+        rules.push(requested);
+    }
+    background_dependencies::validate(&rules)?;
+    rules.sort_by(|left, right| left.name().cmp(right.name()));
+
+    let whole_file = 0..original.len();
+    let managed = find_managed_block(
+        &original,
+        &whole_file,
+        BEGIN_MARKER,
+        END_MARKER,
+        "background dependencies",
+    )?;
+    let total_headers = table_header_count(&original);
+    let block = match managed {
+        Some(block) => {
+            ensure!(
+                total_headers == table_header_count(&original[block.clone()])
+                    && total_headers == config.recording.background_dependencies.len(),
+                "recording.background_dependencies must be owned exclusively by its AI-managed block"
+            );
+            block
+        }
+        None => {
+            ensure!(
+                total_headers == 0 && config.recording.background_dependencies.is_empty(),
+                "existing recording.background_dependencies must be enclosed by its AI-managed block"
+            );
+            original.len()..original.len()
+        }
+    };
+    let old_block = &original[block.clone()];
+    let new_block = render_block(
+        &rules,
+        newline(&original),
+        old_block.is_empty(),
+        old_block.ends_with('\n'),
+        &original,
+    );
+    let updated = replace_range(&original, &block, &new_block);
+    parse_and_validate(&updated, config_path)
+        .context("generated recorder config failed validation")?;
+    let changed = updated != original;
+    let diff = if changed {
+        managed_block_diff(config_path, &original, block.start, old_block, &new_block)
+    } else {
+        String::new()
+    };
+    Ok(RuleConfigPlan {
+        original,
+        updated,
+        changed,
+        diff,
     })
 }
 
@@ -306,24 +326,56 @@ fn ensure_same_selector(
     existing: &BackgroundDependencyRuleConfig,
     requested: &BackgroundDependencyRuleConfig,
 ) -> Result<()> {
-    let (
-        BackgroundDependencyRuleConfig::Http {
-            authorities: existing_authorities,
-            methods: existing_methods,
-            path_prefixes: existing_paths,
-            ..
-        },
-        BackgroundDependencyRuleConfig::Http {
-            authorities: requested_authorities,
-            methods: requested_methods,
-            path_prefixes: requested_paths,
-            ..
-        },
-    ) = (existing, requested);
+    let same = match (existing, requested) {
+        (
+            BackgroundDependencyRuleConfig::Http {
+                authorities: existing_authorities,
+                methods: existing_methods,
+                path_prefixes: existing_paths,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Http {
+                authorities: requested_authorities,
+                methods: requested_methods,
+                path_prefixes: requested_paths,
+                ..
+            },
+        ) => {
+            existing_authorities == requested_authorities
+                && existing_methods == requested_methods
+                && existing_paths == requested_paths
+        }
+        (
+            BackgroundDependencyRuleConfig::Memcached {
+                breeze_identity: existing_identity,
+                command: existing_command,
+                key_start: existing_start,
+                key_end: existing_end,
+                key_separator: existing_separator,
+                key_suffix: existing_suffix,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Memcached {
+                breeze_identity: requested_identity,
+                command: requested_command,
+                key_start: requested_start,
+                key_end: requested_end,
+                key_separator: requested_separator,
+                key_suffix: requested_suffix,
+                ..
+            },
+        ) => {
+            existing_identity == requested_identity
+                && existing_command == requested_command
+                && existing_start == requested_start
+                && existing_end == requested_end
+                && existing_separator == requested_separator
+                && existing_suffix == requested_suffix
+        }
+        _ => false,
+    };
     ensure!(
-        existing_authorities == requested_authorities
-            && existing_methods == requested_methods
-            && existing_paths == requested_paths,
+        same,
         "background dependency rule name {:?} already exists with a different selector; choose a new name instead of broadening it",
         existing.name()
     );
@@ -359,22 +411,57 @@ fn render_block(
 }
 
 fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newline: &str) {
-    let BackgroundDependencyRuleConfig::Http {
-        name,
-        authorities,
-        methods,
-        path_prefixes,
-        source_revision,
-        source_evidence,
-    } = rule;
     push_line(output, TABLE_HEADER, newline);
-    push_assignment(output, "name", name, newline);
-    push_line(output, "protocol = \"http\"", newline);
-    push_array(output, "authorities", authorities, newline);
-    push_array(output, "methods", methods, newline);
-    push_array(output, "path_prefixes", path_prefixes, newline);
-    push_assignment(output, "source_revision", source_revision, newline);
-    push_assignment(output, "source_evidence", source_evidence, newline);
+    match rule {
+        BackgroundDependencyRuleConfig::Http {
+            name,
+            authorities,
+            methods,
+            path_prefixes,
+            source_revision,
+            source_evidence,
+            ..
+        } => {
+            push_assignment(output, "name", name, newline);
+            push_line(output, "protocol = \"http\"", newline);
+            push_array(output, "authorities", authorities, newline);
+            push_array(output, "methods", methods, newline);
+            push_array(output, "path_prefixes", path_prefixes, newline);
+            push_line(output, "response_role = \"independent\"", newline);
+            push_assignment(output, "source_revision", source_revision, newline);
+            push_assignment(output, "source_evidence", source_evidence, newline);
+        }
+        BackgroundDependencyRuleConfig::Memcached {
+            name,
+            breeze_identity,
+            command,
+            key_start,
+            key_end,
+            key_separator,
+            key_suffix,
+            initial_load_timeout_ms,
+            source_revision,
+            source_evidence,
+            ..
+        } => {
+            push_assignment(output, "name", name, newline);
+            push_line(output, "protocol = \"memcached\"", newline);
+            push_assignment(output, "breeze_identity", breeze_identity, newline);
+            push_assignment(output, "command", command, newline);
+            push_line(output, &format!("key_start = {key_start}"), newline);
+            push_line(output, &format!("key_end = {key_end}"), newline);
+            push_assignment(output, "key_separator", key_separator, newline);
+            push_assignment(output, "key_suffix", key_suffix, newline);
+            push_line(
+                output,
+                &format!("initial_load_timeout_ms = {initial_load_timeout_ms}"),
+                newline,
+            );
+            push_line(output, "response_role = \"runtime_state\"", newline);
+            push_assignment(output, "source_revision", source_revision, newline);
+            push_assignment(output, "source_evidence", source_evidence, newline);
+        }
+    }
 }
 
 fn push_array(output: &mut String, field: &str, values: &[String], newline: &str) {

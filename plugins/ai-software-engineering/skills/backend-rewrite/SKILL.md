@@ -21,6 +21,8 @@ evidence, and advance only on current proof.
 - Preserve genuine dependency paths. Only a value proven to come directly from
   process environment, startup arguments, or machine-local configuration may
   move to an equivalent target input.
+- Treat source-process local caches as target behavior. Reproduce the source
+  cache semantics that affect responses or runtime behavior.
 - Keep recordings immutable and assertion-only. Target code, configuration,
   tests, and fixtures must never consume expected responses or recorded
   dependency outputs.
@@ -41,10 +43,13 @@ this workflow but cannot advance, terminate, or declare the migration
 complete.
 
 When target-code work designs, implements, integrates, migrates, or reviews
-MySQL, Redis, Memcached, Kafka, MCQ, or QueueService resource access, read the
+business-independent remote-resource access managed through Breeze, read the
 [`breeze-sdk` skill](../breeze-sdk/SKILL.md) completely before that work and
-use it for that work. It owns Breeze resource identity, runtime lifecycle, and
-client construction; rewrite retains slice sequencing, evidence gates,
+use it for that work. This explicitly includes Memcached, Redis, MySQL, Kafka,
+queues such as MCQ or QueueService, Motan, and other Breeze-managed remote
+resources. Breeze owns reusable resource identity, discovery, runtime
+lifecycle, and client construction; business contracts and behavior remain in
+the target capability, while rewrite retains slice sequencing, evidence gates,
 completion, and delivery.
 
 Do not modify traffic-e2e to complete a rewrite. Route a proven Recorder or
@@ -77,17 +82,27 @@ proof that the affected E2E scope passes.
 
 Response compatibility is the primary repair loop:
 
-1. Inspect and report every structured response difference.
-2. Repair target behavior or any response-driving dependency wiring.
-3. Rerun the same immutable cases until response assertions pass.
-4. Only then classify remaining unused dependencies and apply a background
-   rule when source evidence proves process ownership and response
-   independence.
-5. A background-rule change requires a new standard recording and E2E run.
+1. Count selected and executed cases, response-passing cases, and
+   response-mismatching cases.
+2. Group every structured response difference by field and proven cause.
+   State the response cause before dependency cleanliness or blockers; if it is
+   not yet proven, say so and continue diagnosis.
+3. Repair target behavior or any response-driving dependency wiring. When a
+   source-owned cache warm is causally required, apply a source-proven
+   `runtime_state` background rule and make a new recording as part of this
+   repair.
+4. Rerun the same immutable cases until response assertions pass.
+5. Only then classify remaining unused dependencies and apply an
+   `independent` background rule when source evidence proves process ownership
+   and response independence.
+6. A background-rule change requires a new standard recording and E2E run.
 
 An unrelated unused dependency must not preempt response diagnosis. Preserve
 all independently evidenced categories so a capability blocker does not hide a
-repairable response defect.
+repairable response defect. Do not present a dependency or tool limitation as
+the cause of a response mismatch without a demonstrated causal path. A dirty
+dependency report is a later gate, never a stop signal while any response
+assertion still fails.
 
 ## State And Decisions
 
@@ -103,10 +118,17 @@ Use `complete` only when the active slice is `slice_done`, current E2E and
 comparison evidence both pass, all repository gates pass, and deliverable
 changes have been delivered as required.
 
-Use `incomplete` when a required input, qualifying traffic, runtime access, or
-external observation is missing but work can resume. Use `blocked` for a proven
-capability gap that prevents an applicable gate, or when the same root cause
-repeats for three repair cycles without new evidence or progress. Every
+Use `action_required` while a response mismatch has an in-scope target,
+environment, dependency-wiring, or configuration repair. Continue diagnosis
+and implementation rather than ending on difficulty or failed attempts.
+`action_required` is a working state, not a terminal outcome while authorized
+in-scope repair remains.
+
+Use `incomplete` only after every selected response assertion passes and the
+remaining dirty dependency evidence has no source-proven rule that can be
+safely applied. Use `blocked` only when response-driving external-system data
+was not recorded or provided and the missing information prevents target-code
+implementation. Dirty evidence alone never proves `blocked`. Every
 non-complete result needs an owner, concrete TODO, acceptance check, and resume
 stage.
 

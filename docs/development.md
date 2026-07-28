@@ -11,7 +11,7 @@ Use the standard Cargo workflow:
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
-scripts/check-code-organization
+plugins/ai-software-engineering/skills/backend-engineering/scripts/check-code-organization
 cargo build
 ```
 
@@ -557,7 +557,7 @@ traffic-e2e diagnose replay-control end <case-id> --fail-on-dirty
 traffic-e2e diagnose replay-control finalize --fail-on-dirty --fail-on-incomplete
 ```
 
-Successful `finalize` writes a version-five report with its session id,
+Successful `finalize` writes a version-six report with its session id,
 timestamps, exact selected case ids, and `finalized: true`, then stops replay.
 The command returns success only after atomically publishing that exact report;
 a report-write failure leaves the session open for retry. If finalization
@@ -567,7 +567,7 @@ reports are retained under a unique
 `.replay/sessions/<attempt>/replay-report.json` directory.
 Protocol traffic requests live snapshots through one coalescing writer, which
 writes at most once per second; lifecycle commands and finalization force an
-immediate snapshot. Version five keeps exact success counters while retaining
+immediate snapshot. Version six keeps exact success counters while retaining
 at most `success_detail_limit` successful event details per category. Dirty
 event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
@@ -865,9 +865,9 @@ published inside that run:
 <run-id>/traffic.jsonl
 <run-id>/recording-run.json
 <run-id>/errors.jsonl
-<run-id>/bootstrap-dependencies.jsonl
-<run-id>/bootstrap-dependencies-summary.json
-<run-id>/bootstrap-dependencies-debug.jsonl
+<run-id>/global-dependencies.jsonl
+<run-id>/global-dependencies-summary.json
+<run-id>/global-dependencies-debug.jsonl
 <run-id>/<rule-name>/<uri-group>/<case-id>/request.json
 <run-id>/<rule-name>/<uri-group>/<case-id>/expected-response.json
 <run-id>/<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
@@ -901,9 +901,9 @@ Use `dependencies.jsonl` for replay-oriented semantic data. Use
 `dependencies-debug.jsonl` only for protocol-level debugging. UDP datagrams,
 including push-metrics side effects, are recorded as semantic dependencies when
 captured by the UDP gateway. Run-level
-bootstrap dependency files capture replay-oriented dependencies observed before
-the service is ready, or before the first case starts when no ready probe is
-configured. Replay discovers them by walking upward from a case directory.
+Global dependency files contain replay-oriented startup traffic plus explicit
+background-rule matches. Replay discovers them by walking upward from a case
+directory, prefers Case before Global, and consumes every exchange once.
 
 Completed protocol events are moved by unique ownership into one asynchronous
 JSONL writer. `recording.writer_queue_capacity` bounds this queue by event count
@@ -925,18 +925,19 @@ methods = ["GET"]
 path_prefixes = ["/1/config/service"]
 source_revision = "0123456789abcdef"
 source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
+response_role = "independent"
 ```
 
 All three selector dimensions and both source-evidence fields are required. A
 matching exchange is not attributed to an active API case and therefore does
 not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
 `traffic.jsonl` continues to retain the exchange only when
-`recording.traffic_jsonl` permits it. When the exchange occurs while bootstrap
-is open, it remains normal `bootstrap-dependencies.jsonl` replay evidence. The
-rule changes ownership only; it does not alter forwarding, response capture,
-body limits, or protocol debugging. Add a rule only after source inspection
-proves the traffic is independent of the triggering API, then create a new
-recording run.
+`recording.traffic_jsonl` permits it. It also enters
+`global-dependencies.jsonl` with `reason=background_rule` and a
+`bootstrap|runtime` phase. The rule changes ownership only; it does not alter
+forwarding, response capture, body limits, or protocol debugging. Add an
+independent rule only after response assertions pass and source inspection
+proves API independence, then create a new recording run.
 
 Use a finalized replay report to create the AI-managed rule instead of editing
 the table directly:
@@ -944,6 +945,7 @@ the table directly:
 ```bash
 traffic-e2e config recorder apply background-dependencies \
   --target-root . \
+  --protocol http \
   --name config-refresh \
   --authority config.api.demo.test \
   --method GET \
@@ -959,11 +961,46 @@ replans against the current recorder config and replay report immediately
 before its atomic write. One rule owns one exact authority, method, and path
 prefix; use separate rules for distinct request families.
 
+A source scheduler that builds response-driving local cache state can instead
+use the current narrow Breeze Memcached rule:
+
+```bash
+traffic-e2e config recorder apply background-dependencies \
+  --target-root . \
+  --protocol memcached \
+  --name planet-video-cache-warm \
+  --breeze-resource user-video \
+  --command get \
+  --key-start 0 \
+  --key-end 4095 \
+  --key-separator . \
+  --key-suffix pl_video \
+  --initial-load-timeout-ms 30000 \
+  --replay-report <same-finalized-replay-report.json> \
+  --source-revision 0123456789abcdef \
+  --evidence 'TopUserServiceImpl.java:691 scheduled local-cache warm'
+```
+
+The tool requires one compatible Breeze `mc` descriptor, persists its complete
+stable identity without the dynamic port, and resolves the port again at
+Recorder startup. Runtime matching uses port as a coarse filter, then requires
+Memcached `get` and the exact bounded numeric key series. Apply this
+`runtime_state` rule during response repair when the cache warm is a proven
+cause; do not wait for responses to pass.
+
+An applied Memcached rule also delays source case admission until Recorder has
+counted `key_end - key_start + 1` completed replay-safe matches. The count
+includes matches observed before HTTP readiness. After the ready probe,
+Recorder waits at most `initial_load_timeout_ms` (30000 by default); timeout
+fails readiness. The rule is the opt-in: without an applied Memcached rule
+there is no additional wait. This source-recording barrier does not wait for
+target-local cache initialization during Replay.
+
 Recognized MySQL connection maintenance is not a semantic dependency. The
 strict built-in fingerprints are protocol `COM_PING`, c3p0's exact
 empty-database `SHOW FULL TABLES` probe using the `PROBABLYNOT` sentinel, and exact
 `SELECT 1` with an optional trailing semicolon. Their raw `mysql_query` and
-`mysql_response` records remain in the applicable case or bootstrap debug
+`mysql_response` records remain in the applicable case or Global debug
 JSONL, while their derived `mysql_exchange` records are omitted from semantic
 dependency JSONL and summaries. Replay handles the same fingerprints without a
 recorded exchange: ping returns OK, `SELECT 1` returns one integer row, and the
@@ -984,7 +1021,7 @@ Successful Redis authentication/session initialization is handled by replay
 and omitted from case dependencies; failed initialization remains as redacted
 evidence. Any truncated frame, parse/correlation failure, unsupported cache
 mode, or unsafe cache connection prevents a case from being published and
-prevents unsafe bootstrap replay from starting. The recording directory is
+prevents unsafe Global replay from starting. The recording directory is
 sensitive because ordinary cache keys and values are needed for exact replay.
 
 Semantic MySQL, Redis, Memcached, Kafka, and Motan business exchanges also carry
@@ -1025,9 +1062,10 @@ remains an ordinary HTTP dependency. Kafka payloads and headers are sensitive
 because exact bytes are required for replay.
 
 Case dependency summaries are generated when each case is published.
-Bootstrap dependency files are sealed before case admission opens, while the
-potentially large bootstrap summary is generated only when the run finishes.
-Summaries are intentionally not rebuilt after every cache exchange.
+Startup Global dependency files are flushed before case admission opens, while
+the writer remains available for runtime background matches. The potentially
+large Global summary is generated only when the run finishes; summaries are
+not rebuilt after every cache exchange.
 
 ## Testing Guidance
 

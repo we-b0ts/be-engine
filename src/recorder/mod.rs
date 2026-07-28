@@ -14,6 +14,7 @@ use crate::config::{RecordingAccessPolicy, RecordingConfig, TrafficJsonlMode};
 use crate::request_headers::RequestHeaderCapture;
 
 mod artifact_owner;
+pub(crate) mod background;
 mod capture;
 mod dependencies;
 mod event;

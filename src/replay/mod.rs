@@ -28,6 +28,8 @@ mod control;
 mod dependencies;
 mod dns;
 mod exchange;
+#[cfg(test)]
+mod global_dependency_tests;
 mod http;
 mod kafka;
 #[cfg(test)]
@@ -187,7 +189,7 @@ impl ReplayRuntime {
         let (mode, mut cases, active_case_id) =
             discover_replay_cases(&root_dir, &selected_case_ids).await?;
         let ca = Arc::new(MitmCa::load_or_generate(&ca_cert_path, &ca_key_path)?);
-        let bootstrap_path = find_upward(&root_dir, "bootstrap-dependencies.jsonl");
+        let (global_path, global_debug_path) = find_run_level_dependencies(&root_dir);
         let mut mysql = MysqlReplayState::default();
         let mut http_exchanges = Vec::new();
         let mut redis = redis::RedisReplayState::default();
@@ -207,10 +209,10 @@ impl ReplayRuntime {
             "loading replay case dependencies"
         );
 
-        if let Some(path) = &bootstrap_path {
+        if let Some(path) = &global_path {
             load_dependency_file(
                 path,
-                ReplaySource::Bootstrap,
+                ReplaySource::Global,
                 None,
                 &mut mysql.exchanges,
                 &mut http_exchanges,
@@ -223,7 +225,7 @@ impl ReplayRuntime {
             )
             .await?;
         }
-        if let Some(path) = find_upward(&root_dir, "bootstrap-dependencies-debug.jsonl") {
+        if let Some(path) = global_debug_path {
             load_motan_debug_file(&path, &mut motan, &mut targets).await?;
         }
         for (index, case) in cases.values().enumerate() {
@@ -309,7 +311,7 @@ impl ReplayRuntime {
             root_dir,
             cases,
             active_case_id,
-            bootstrap_path,
+            global_path,
             targets,
             mysql,
             http_exchanges,
@@ -392,6 +394,13 @@ impl ReplayRuntime {
     }
 }
 
+fn find_run_level_dependencies(root: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+    (
+        find_upward(root, "global-dependencies.jsonl"),
+        find_upward(root, "global-dependencies-debug.jsonl"),
+    )
+}
+
 async fn validate_replay_request_headers(config: &ReplayConfig) -> Result<()> {
     let selected_case_ids = config
         .selected_case_ids
@@ -421,7 +430,7 @@ struct ReplayState {
     root_dir: PathBuf,
     cases: BTreeMap<String, ReplayCase>,
     active_case_id: Option<String>,
-    bootstrap_path: Option<PathBuf>,
+    global_path: Option<PathBuf>,
     targets: Vec<ReplayTarget>,
     mysql: mysql::MysqlReplayState,
     http_exchanges: Vec<http::ReplayHttpExchange>,
@@ -443,7 +452,7 @@ impl ReplayState {
         let allowed_unused_case_http_exchanges =
             self.unused_http_exchanges(ReplaySource::Case, true);
         ReplayReport {
-            version: 5,
+            version: 6,
             session_id: self.session_id.to_string(),
             started_at: self.started_at,
             finalized_at: self.finalized_at,
@@ -461,8 +470,8 @@ impl ReplayState {
             active_case_id: self.active_case_id.clone(),
             cases: self.case_reports(),
             selected_case_ids: self.cases.keys().cloned().collect(),
-            bootstrap_dependencies_path: self
-                .bootstrap_path
+            global_dependencies_path: self
+                .global_path
                 .as_ref()
                 .map(|path| path.display().to_string()),
             targets: self.targets.clone(),
@@ -476,14 +485,13 @@ impl ReplayState {
             unmatched_queries: self.mysql.events.unmatched_queries.clone(),
             unsupported_commands: self.mysql.events.unsupported_commands.clone(),
             metadata_warnings: self.mysql.events.metadata_warnings.clone(),
-            unused_bootstrap_exchanges: self.unused_exchanges(ReplaySource::Bootstrap),
+            unused_global_exchanges: self.unused_exchanges(ReplaySource::Global),
             unused_case_exchanges: self.unused_exchanges(ReplaySource::Case),
             matched_http_exchange_count: self.http_events.matched_count,
             matched_http_exchanges: self.http_events.matched.clone(),
             unmatched_http_requests: self.http_events.unmatched.clone(),
             unsupported_http_exchanges: self.http_events.unsupported.clone(),
-            unused_bootstrap_http_exchanges: self
-                .unused_http_exchanges(ReplaySource::Bootstrap, false),
+            unused_global_http_exchanges: self.unused_http_exchanges(ReplaySource::Global, false),
             unused_case_http_exchanges,
             allowed_unused_case_http_exchanges,
             protocols: ProtocolsReport {

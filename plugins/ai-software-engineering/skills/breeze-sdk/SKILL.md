@@ -1,24 +1,44 @@
 ---
 name: breeze-sdk
-description: "Design, implement, integrate, migrate, or review Breeze SDK resource clients for MySQL, Redis, Memcached, Kafka, MCQ, and QueueService. Use for Breeze SDK development or any Breeze-backed integration with these resources."
+description: "Design, implement, integrate, migrate, or review business-independent remote-resource SDK clients used with Breeze. Use for Memcached, Redis, MySQL, Kafka, queues such as MCQ or QueueService, Motan, or other remote resources; keep business behavior in the owning backend capability."
 ---
 
 # Breeze SDK
 
-Build a reusable consumer SDK that turns a logical middleware resource identity
-into a correctly registered Breeze listener and a long-lived application
-client. Preserve Java SDK compatibility without coupling business code to
-descriptor filenames or caller-selected ports.
+Build reusable consumer SDKs that turn logical remote-resource identities into
+correctly registered Breeze listeners and long-lived application clients.
+Preserve Java SDK compatibility without coupling business code to descriptor
+filenames, caller-selected ports, or resource lifecycle.
 
 ## Ownership
 
-Use this skill for Breeze-specific client and runtime behavior:
+Use this skill for business-independent remote-resource access whose identity,
+discovery, listener, or connection lifecycle is managed through Breeze.
+This explicitly includes Memcached, Redis, MySQL, Kafka, queues such as MCQ or
+QueueService, and Motan. Treat Motan itself as business-independent platform
+infrastructure, not as a capability-owned provider client. The set remains
+open to new Breeze-managed resource types.
 
 - logical resource identity and descriptor parsing;
 - exact descriptor reuse and independent-startup registration;
 - replay-safe, read-only descriptor resolution;
+- reusable client, pool, producer, consumer, channel, or transport lifecycle;
 - `brz-*` package boundaries and application wiring; and
 - Breeze-specific tests and compatibility evidence.
+
+Classify by ownership, not by class name or protocol. Logging, serialization,
+authentication, metrics, and ordinary provider SDKs do not belong here merely
+because they are reusable. A remote-service client belongs only to the extent
+that it provides reusable Breeze-managed resource access.
+
+Keep every business contract outside this skill: SQL and tables, cache keys and
+cache policy, queue topics and message schemas, RPC service interfaces and
+method semantics, provider request/response mapping, fallback decisions, and
+cross-resource orchestration. Put those concerns in a capability-owned adapter
+that depends on the narrow Breeze SDK client. This boundary applies even when
+the business behavior is currently simple; complexity is not the ownership
+test. For Motan, this exclusion applies to the invoked business service
+contract, not to the Motan SDK or protocol implementation.
 
 Use the [`backend-engineering` skill](../backend-engineering/SKILL.md) for
 general code quality. The invoking workflow retains scope, sequencing,
@@ -44,8 +64,9 @@ project or dependency is available.
 3. Read [descriptor-lifecycle.md](references/descriptor-lifecycle.md) and
    implement one shared, deterministic descriptor layer before resource
    clients. Keep mode-specific mutation authority explicit.
-4. Read [resource-clients.md](references/resource-clients.md) and implement
-   only the needed allowlisted packages. Construct long-lived clients in the
+4. Read [resource-clients.md](references/resource-clients.md), classify the
+   reusable resource layer separately from its business adapter, and implement
+   only the needed resource packages. Construct long-lived clients in the
    composition root and keep business semantics in the owning capability.
 5. Read [verification.md](references/verification.md), run focused checks for
    every affected mode and resource, then run repository-required gates.
@@ -62,8 +83,7 @@ project or dependency is available.
 - During replay, descriptors are immutable prerequisites. Never create,
   rewrite, rename, delete, or replace one; fail startup when the exact
   recording-time descriptor is absent or invalid.
-- Never substitute MySQL, Redis, Kafka, Memcached, or other protocol-default
-  ports for missing Breeze evidence.
+- Never substitute a protocol-default port for missing Breeze evidence.
 - Comparison source and candidate share one Breeze instance, socks directory,
   resource identity, and selected port.
 - Keep parsing independent of directory iteration order, bound all waits and

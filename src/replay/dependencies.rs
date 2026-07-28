@@ -215,7 +215,7 @@ pub(super) async fn load_motan_debug_file(
 
 pub(super) fn active_case_matches(active_case_id: Option<&str>, exchange: &ReplayExchange) -> bool {
     match exchange.source {
-        ReplaySource::Bootstrap => true,
+        ReplaySource::Global => true,
         ReplaySource::Case => exchange.case_id.as_deref() == active_case_id,
     }
 }

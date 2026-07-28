@@ -343,7 +343,7 @@ impl ReplayState {
         let mut matching_index = None;
         let mut matching_policy_decision = PolicyDecision::default();
         let mut closest_mismatch = None;
-        'sources: for source in [ReplaySource::Case, ReplaySource::Bootstrap] {
+        'sources: for source in [ReplaySource::Case, ReplaySource::Global] {
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
                 if exchange.consumed
                     || exchange.source != source
@@ -511,7 +511,7 @@ fn http_request_mismatch_reason(
 
 fn active_http_case_matches(active_case_id: Option<&str>, exchange: &ReplayHttpExchange) -> bool {
     match exchange.source {
-        ReplaySource::Bootstrap => true,
+        ReplaySource::Global => true,
         ReplaySource::Case => exchange.case_id.as_deref() == active_case_id,
     }
 }

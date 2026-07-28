@@ -32,11 +32,11 @@ pub(crate) async fn write_case_dependency_summary(dir: &Path) -> Result<()> {
     write_dependency_summary(dir, "dependencies.jsonl", "dependencies-summary.json").await
 }
 
-pub(crate) async fn write_bootstrap_dependency_summary(dir: &Path) -> Result<()> {
+pub(crate) async fn write_global_dependency_summary(dir: &Path) -> Result<()> {
     write_dependency_summary(
         dir,
-        "bootstrap-dependencies.jsonl",
-        "bootstrap-dependencies-summary.json",
+        "global-dependencies.jsonl",
+        "global-dependencies-summary.json",
     )
     .await
 }

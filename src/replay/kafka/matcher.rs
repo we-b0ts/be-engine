@@ -529,7 +529,7 @@ impl KafkaReplayState {
             unsupported: self.events.unsupported.clone(),
             unsafe_events: self.events.unsafe_events.clone(),
             unused_case: self.unused(ReplaySource::Case),
-            unused_bootstrap: self.unused(ReplaySource::Bootstrap),
+            unused_global: self.unused(ReplaySource::Global),
         }
     }
 
@@ -648,6 +648,6 @@ fn scope_matches(
 ) -> bool {
     match active_case_id {
         Some(active) => source == ReplaySource::Case && case_id == Some(active),
-        None => source == ReplaySource::Bootstrap,
+        None => source == ReplaySource::Global,
     }
 }

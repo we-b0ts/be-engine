@@ -131,6 +131,39 @@ redact_headers = [
   "proxy-authenticate",
 ]
 
+# Source-proven process work can be moved from case ownership into the shared
+# Global replay pool. Use `config recorder plan|apply background-dependencies`;
+# do not hand-edit generated rules. HTTP rules are response-independent.
+# [[recording.background_dependencies]]
+# name = "config-refresh"
+# protocol = "http"
+# authorities = ["config.api.demo.test"]
+# methods = ["GET"]
+# path_prefixes = ["/1/config/service"]
+# response_role = "independent"
+# source_revision = "0123456789abcdef"
+# source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
+
+# Breeze-backed Memcached local-cache warm rules use a stable descriptor
+# identity without its dynamic port. The tool resolves the business resource
+# and writes this identity after validating finalized replay evidence.
+# [[recording.background_dependencies]]
+# name = "planet-video-cache-warm"
+# protocol = "memcached"
+# breeze_identity = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc@cs"
+# command = "get"
+# key_start = 0
+# key_end = 4095
+# key_separator = "."
+# key_suffix = "pl_video"
+# Once HTTP readiness succeeds, fail Recorder readiness if this rule has not
+# reached key_end - key_start + 1 completed matching exchanges within the
+# configured timeout. No applied Memcached rule means no additional wait.
+# initial_load_timeout_ms = 30000
+# response_role = "runtime_state"
+# source_revision = "0123456789abcdef"
+# source_evidence = "TopUserServiceImpl.java:691 scheduled local-cache warm"
+
 # BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
 # END AI-MANAGED BACKGROUND DEPENDENCIES
 

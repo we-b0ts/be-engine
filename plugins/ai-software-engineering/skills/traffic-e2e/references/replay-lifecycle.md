@@ -88,7 +88,7 @@ For each focused API attempt or full round, the runner performs:
 10. stop the target once and call
     `traffic-e2e diagnose replay-control finalize --fail-on-dirty --fail-on-incomplete`.
 
-Require the final version-five report to contain the exact selected case ids,
+Require the final version-six report to contain the exact selected case ids,
 session id, `finalized: true`, and `finalized_at`. Successful finalization
 atomically publishes the report and stops replay. A validation or report-write
 failure leaves the session incomplete; retain diagnostics and use the canonical

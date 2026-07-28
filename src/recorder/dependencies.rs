@@ -37,9 +37,11 @@ impl Recorder {
             .await
     }
 
-    pub async fn append_bootstrap_dependency(
+    pub async fn append_global_dependency(
         &self,
         event: &RecorderEvent,
+        reason: &str,
+        phase: &str,
         matched_by: &str,
     ) -> Result<()> {
         if !should_append_case_dependency(event) {
@@ -48,7 +50,7 @@ impl Recorder {
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
         self.writer
-            .append_bootstrap(event.clone(), matched_by)
+            .append_global(event.clone(), reason, phase, matched_by)
             .await
     }
 
@@ -130,8 +132,8 @@ impl Recorder {
         self.writer.flush_case(dir).await
     }
 
-    pub(super) async fn flush_bootstrap_dependency_files(&self) -> Result<()> {
-        self.writer.flush_bootstrap().await
+    pub(super) async fn flush_global_dependency_files(&self) -> Result<()> {
+        self.writer.flush_global().await
     }
 
     pub(super) async fn flush_all_dependency_files(&self) -> Result<()> {
@@ -164,11 +166,11 @@ pub(super) fn case_dependency_filename(event: &RecorderEvent) -> &'static str {
     }
 }
 
-pub(super) fn bootstrap_dependency_filename(event: &RecorderEvent) -> &'static str {
+pub(super) fn global_dependency_filename(event: &RecorderEvent) -> &'static str {
     if is_debug_event(event) {
-        "bootstrap-dependencies-debug.jsonl"
+        "global-dependencies-debug.jsonl"
     } else {
-        "bootstrap-dependencies.jsonl"
+        "global-dependencies.jsonl"
     }
 }
 
@@ -291,14 +293,16 @@ mod tests {
 
         for (sequence, command, sql) in maintenance {
             recorder
-                .append_bootstrap_dependency(
+                .append_global_dependency(
                     &RecorderEvent::MysqlQuery(mysql_query(connection_id, sequence, command, sql)),
+                    "bootstrap_window",
+                    "bootstrap",
                     "bootstrap_window",
                 )
                 .await
                 .unwrap();
             recorder
-                .append_bootstrap_dependency(
+                .append_global_dependency(
                     &RecorderEvent::MysqlExchange(mysql_exchange(
                         connection_id,
                         sequence,
@@ -306,12 +310,14 @@ mod tests {
                         sql,
                     )),
                     "bootstrap_window",
+                    "bootstrap",
+                    "bootstrap_window",
                 )
                 .await
                 .unwrap();
         }
         recorder
-            .append_bootstrap_dependency(
+            .append_global_dependency(
                 &RecorderEvent::MysqlExchange(mysql_exchange(
                     connection_id,
                     5,
@@ -319,13 +325,15 @@ mod tests {
                     Some("SELECT 3"),
                 )),
                 "bootstrap_window",
+                "bootstrap",
+                "bootstrap_window",
             )
             .await
             .unwrap();
-        recorder.flush_bootstrap_dependency_files().await.unwrap();
+        recorder.flush_global_dependency_files().await.unwrap();
 
         let bootstrap_semantic =
-            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
+            tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
                 .await
                 .unwrap();
         assert_eq!(bootstrap_semantic.lines().count(), 1);
@@ -336,7 +344,7 @@ mod tests {
         assert!(!bootstrap_semantic.contains("SELECT 2"));
 
         let bootstrap_debug =
-            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-debug.jsonl"))
+            tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies-debug.jsonl"))
                 .await
                 .unwrap();
         assert!(bootstrap_debug.contains("COM_PING"));
@@ -402,20 +410,25 @@ mod tests {
 
         for event in [&quit, &get] {
             recorder
-                .append_bootstrap_dependency(event, "bootstrap_window")
+                .append_global_dependency(
+                    event,
+                    "bootstrap_window",
+                    "bootstrap",
+                    "bootstrap_window",
+                )
                 .await
                 .unwrap();
         }
-        recorder.flush_bootstrap_dependency_files().await.unwrap();
+        recorder.flush_global_dependency_files().await.unwrap();
 
         let semantic =
-            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
+            tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
                 .await
                 .unwrap();
         assert!(semantic.contains("\"command\":\"GET\""));
         assert!(!semantic.contains("\"command\":\"QUIT\""));
         let debug =
-            tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-debug.jsonl"))
+            tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies-debug.jsonl"))
                 .await
                 .unwrap();
         assert!(debug.contains("\"command\":\"QUIT\""));
