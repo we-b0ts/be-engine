@@ -18,7 +18,7 @@ and let recorder-owned replay provide the result. Do not infer such a value from
 a recorded downstream request and turn it into an environment variable.
 
 Target product code, E2E code, test support, commands, and normal config MUST
-NOT read `dependencies.jsonl`, bootstrap dependency files, or dependency
+NOT read `dependencies.jsonl`, Global dependency files, or dependency
 fixtures. Under replay-policy version two, the target facade MUST NOT read
 `expected-response.json`; it writes actual response evidence and the runner
 owns comparison.

@@ -66,7 +66,8 @@ When the user has not named an API and traffic is expected on port 18061,
 listen only long enough to identify one concrete method and path while no
 recorder owns the port, then stop and use that selector. Do not persist or
 report headers, credentials, or bodies, and do not use an unscoped recording
-for discovery. If no qualifying traffic arrives, report `incomplete`.
+for discovery. If no qualifying traffic arrives, report `blocked` because the
+external case input was not provided.
 
 Resolve the exact finalized run; never choose a run merely because it is
 newest. When request-header encryption is configured, require the named key
@@ -83,7 +84,8 @@ endpoints.
 
 Do not print or persist secret values. Runtime inspection is diagnostic
 evidence, not authority to hard-code observed values. If essential evidence is
-unavailable, report the missing observation and owner as `incomplete`.
+unavailable and target behavior cannot be implemented without it, report the
+missing observation and owner as `blocked`.
 
 ## Delegate Target-Code Work
 
@@ -94,6 +96,12 @@ and genuine runtime clients. Before delegating `target_behavior`, provide:
 active scope, immutable case source and IDs, structured response difference,
 causal dependency evidence, source behavior evidence, requested outcome
 ```
+
+Source-process local caches belong to target implementation. Inspect and
+reproduce cache-key derivation, bounded capacity and eviction, expiry or
+refresh timing, negative caching, concurrent-load behavior, startup or warmup
+behavior, and miss/error fallback only where they affect the active behavior
+or operational contract. Equivalent target architecture is allowed.
 
 When target-code work designs, implements, integrates, migrates, or reviews
 MySQL, Redis, Memcached, Kafka, MCQ, or QueueService resource access, read the
@@ -146,13 +154,22 @@ decides the next state.
 - `target_environment`: repair target runtime wiring, then rerun E2E.
 - Response-driving dependency failure: repair target or Replay wiring needed
   to reproduce the source response, then rerun E2E.
+- Response-driving process state: when source and recording evidence prove a
+  scheduled dependency call builds local state required by the response,
+  apply a narrow `runtime_state` background rule, make a new standard
+  recording, prepare it, and continue response repair. Traffic E2E currently
+  supports Breeze-backed Memcached `get` over a bounded numeric key series and
+  delays source case admission until the configured first-load count. If the
+  target still differs because its corresponding local cache has not completed
+  initialization, repair target startup, readiness, or cache lifecycle from
+  source evidence; do not treat target timing as a Replay capability gap.
 - `background_dependency`: only after response assertions pass and source
-  proves ownership plus independence, apply the narrow rule, make a new
-  standard recording, prepare it, and rerun E2E.
+  proves ownership plus independence, apply a narrow `independent` rule, make
+  a new standard recording, prepare it, and rerun E2E.
 - `recording_configuration`: repair supported configuration, make a new
   recording, prepare it, and rerun E2E.
 - Missing or invalid configured request-header key: obtain the authorized
-  secret and resume the same stage; use `incomplete` when unavailable. A
+  secret and resume the same stage; use `blocked` when unavailable. A
   Recorder or Replay inability to honor configured encryption is a system
   capability gap.
 - `intentional_nondeterminism`: apply only source-proven policy, rerun E2E, and
@@ -169,6 +186,25 @@ response repair. Stop the whole rewrite only when it prevents exercising the
 response contract, or after response repair when the remaining gate cannot
 advance.
 
+Dirty dependency evidence never stops response repair. If any response
+assertion fails, keep the result `action_required` and continue target,
+environment, or response-driving dependency work.
+
+Conclude that recording data blocks implementation only from one
+representative case that proves all of the following:
+
+- the relevant source response path, including process-local cache behavior,
+  has been inspected;
+- every corresponding behavior determinable from source code and configuration
+  has an equivalent target implementation and focused verification;
+- the exact response-driving external value or semantic exchange is absent or
+  internally inconsistent in the recording and available runtime evidence;
+- completing the response would require inventing external-system behavior.
+
+Until that proof exists, keep a response mismatch as `action_required`.
+Repeated failed implementation attempts are not evidence of a recording-data
+blocker.
+
 ## Deliver And Report
 
 Run repository-required gates and review module boundaries. When deliverable
@@ -182,8 +218,27 @@ For a remote source, identify the IPv4 address, frozen snapshot boundary,
 selected recording ID, cache root, archive SHA-256, canonical case sources,
 and exact runner states.
 
-For a completed slice, report its scope, current passing E2E and comparison
-reports, delivery artifact, and one explicit conclusion. Otherwise report:
+Begin every report for a non-passing E2E run with response diagnosis:
+
+```text
+response: selected cases, executed cases, passing cases, mismatching cases
+representative case: case ID, fields, expected/actual shape, cause, evidence
+```
+
+The counts must come from the exact current report. Explain exactly one
+representative non-passing case in detail; do not enumerate every failed case
+in the final report. Use a response-mismatching case for `blocked` and a
+response-passing dirty case for `incomplete`. Describe its structured fields
+and expected-versus-actual shape without exposing secrets, connect it to source
+and target behavior or a response-driving dependency, and state whether the
+cause is proven. Do not claim the representative explains other cases without
+shared difference and code-path evidence. A list of differing fields, unused
+dependencies, or generic “dependency issue” is not a causal explanation.
+
+After response diagnosis, report dependency cleanliness and other blockers,
+then status, exact evidence paths, delivery, and next action. For a completed
+slice, report its scope, current passing E2E and comparison reports, delivery
+artifact, and one explicit conclusion. For any non-complete result also report:
 
 ```text
 status, scope, stage, conclusion

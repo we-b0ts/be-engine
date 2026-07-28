@@ -7,8 +7,8 @@ attempt.
 
 Classify failures in this order:
 
-1. Incomplete recording that prevents exercising or trusting the response
-   contract
+1. Missing external-system recording data that prevents implementing the
+   response contract
 2. Structured response assertion mismatch
 3. Response-driving dependency, environment, or app startup mismatch
 4. Assertion drift in source-proven unstable response fields
@@ -22,10 +22,10 @@ can explain the observed response difference; unrelated unused traffic does not
 preempt a target response finding. Preserve all independently evidenced failure
 categories so that a system blocker cannot hide response defects.
 
-## Incomplete Recording Signals
+## Blocking Recording-Data Signals
 
-Stop and report a missing-dependency list when any required behavior lacks
-evidence:
+Classify a recording-data blocker only when one representative case proves
+that required external behavior lacks evidence:
 
 - `dependencies.jsonl` is missing or empty for a request that clearly uses
   external services
@@ -45,6 +45,15 @@ evidence:
 Do not infer missing rows, messages, cache entries, or third-party responses
 from `expected-response.json` alone.
 
+Process-local cache behavior belongs to target implementation. Its absence from
+recorded dependencies is not a recording-data blocker. If source-owned
+scheduled dependency calls populate that cache, inspect their exact ownership,
+resource, command, key derivation, bounds, and refresh behavior. When the
+recorded calls are mixed into cases and their responses are required to build
+the target cache, classify them as `runtime_state` and follow
+[background-dependencies.md](background-dependencies.md) during response
+repair.
+
 For every unused case HTTP exchange, group observations by normalized
 authority, method, and path only for diagnosis, then inspect the source that
 initiates the request. Classify the narrow request family as background only
@@ -59,14 +68,15 @@ Timing overlap, repetition, polling-like names, a successful response, and an
 unused replay exchange are not ownership evidence. If any ownership fact is
 unclear, keep the dependency case-owned and the replay incomplete.
 
-After source proves independence and response assertions pass, use the standard
-runner reference's guarded `background-dependencies plan` command. Inspect its
-narrow selector and matched case IDs before `apply`, then create a new
-recording; the command cannot repair the immutable old case. Record the source
-revision and a single-line file/symbol explanation, never raw query values,
-credentials, headers, or bodies. Use host-wide `allowed_unused_http_hosts` only
-as a compatibility exception when an older recording cannot be replaced and
-source proves the entire host is unrelated.
+After source proves HTTP independence and response assertions pass, follow
+[background-dependencies.md](background-dependencies.md) and use the guarded
+`background-dependencies plan` command. Inspect its narrow selector and matched
+case IDs before `apply`, then create a new recording; the command cannot repair
+the immutable old case. Record the source revision and a single-line
+file/symbol explanation, never raw query values, credentials, headers, or
+bodies. Use host-wide `allowed_unused_http_hosts` only as a compatibility
+exception when an older recording cannot be replaced and source proves the
+entire host is unrelated.
 
 ## Replay Failure Signals
 
@@ -174,8 +184,8 @@ Report recorder feedback when replay required:
 - guessing dependency behavior from HTTP response shape
 - reading `dependencies-debug.jsonl` because `dependencies.jsonl` lacked usable
   semantic data
-- manually reconstructing a dependency input, output, ordering rule, cache
-  state, queue message, or downstream HTTP response
+- manually reconstructing a dependency input, output, ordering rule, queue
+  message, or downstream HTTP response
 - ignoring or working around missing SQL, missing prepared params, parse
   warnings, row truncation, or missing response metadata
 - relying on raw MySQL protocol type names, type codes, or flags from debug data
@@ -207,9 +217,13 @@ avoid truncating needed values, or surface unstable response fields.
 
 When blocked, output:
 
-- case path
+- exactly one representative case path
 - missing evidence or incomplete dependency records
 - why it is unsafe to invent the data
 - recommended next step, such as re-recording with the missing service captured
   or adding recorder-supported semantic capture for that dependency
 - recorder feedback, when the missing evidence suggests a recorder improvement
+
+Use `incomplete` only when all selected response assertions pass, dirty
+dependency evidence remains, and source inspection proves no safe rule to
+apply. Dirty evidence never stops diagnosis or repair of a response mismatch.

@@ -10,7 +10,7 @@ their emitted traffic to recorder-owned replay listeners. Do not reach
 production resources, and do not replace dependency calls with project-local
 fixtures, fakes, in-process mocks, or recording-backed implementations.
 
-Only recorder-owned replay consumes `dependencies.jsonl`. Under the standard
+Only recorder-owned replay consumes case or Global dependency JSONL. Under the standard
 version-two runner contract, the target facade constructs the inbound request
 from `request.json` and writes the runner-named actual-response artifact. It
 MUST NOT read `expected-response.json`; the runner alone reads it for final
@@ -62,6 +62,12 @@ prepared parameters, column schema, or untruncated rows is a recording risk.
 
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.
+
+Match Case evidence before run-level Global evidence. Consume every exchange
+once. Global is shared replay inventory, not a reusable fixture: a scheduler
+that performs several refresh cycles requires corresponding repeated recorded
+exchanges. The target must issue genuine dependency calls and build its own
+local state from replayed responses.
 
 For ordinary MySQL, Redis, Memcached, and Kafka Produce/Fetch responses, delay
 delivery by the recorded semantic exchange `duration_ms`; do not collapse

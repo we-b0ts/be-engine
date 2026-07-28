@@ -105,6 +105,14 @@ Overlapping matched requests use fallback and do not become part of the active
 case. Send a controlled trigger and wait for it to finish before sending the
 next.
 
+When one or more applied Memcached `runtime_state` background rules exist,
+source readiness also requires the first expected matching exchange count for
+every rule. Recorder counts completed matching exchanges from process startup,
+then waits no longer than each rule's `initial_load_timeout_ms` after the HTTP
+ready probe. With no applied Memcached rule, this adds no wait. Read
+[background-dependencies.md](background-dependencies.md) for the exact
+counting and failure contract.
+
 After the upstream response, the recorder accepts new case dependencies for
 `case_dependency_post_response_window_ms`, then closes admission and waits only
 for already accepted in-flight dependencies. Set the window to zero only when
@@ -113,18 +121,12 @@ Continuous background traffic must not extend a case. A drain timeout means
 accepted work did not finish; increasing it without identifying that work risks
 publishing an incoherent contract.
 
-When source inspection proves an HTTP poll belongs to a process-level task and
-not to the triggering API, add a narrow background rule before re-recording.
-When a current case source exists, do this only after response assertions pass;
-before an initial recording exists, require equivalent source evidence of
-response independence. Use `background-dependencies plan` and `apply`; do not
-hand-edit these rules. Each rule requires exactly one authority, method, and
-path prefix plus the source revision and a single-line file/symbol explanation
-proving process-level ownership and API independence. Matching exchanges do not
-enter an active case's dependencies. The run-level `traffic.jsonl` remains
-controlled by `recording.traffic_jsonl`, and a matching exchange observed while
-bootstrap is open remains bootstrap replay evidence. Classification changes
-attribution only; it does not change forwarding, capture limits, or responses.
+When source inspection proves process-owned traffic was mixed into cases, read
+[background-dependencies.md](background-dependencies.md). Use the evidence
+gated `background-dependencies plan|apply` path; never hand-edit rules. A
+response-driving `runtime_state` rule belongs in response repair. Classify
+remaining `independent` traffic only after response assertions pass. Every
+rule change requires a new standard recording.
 
 Case limits apply per resolved static path or configured case pattern. Requests
 after the limit use fallback and create no case. Failed cases do not consume the
@@ -172,7 +174,7 @@ Inspect:
 <run-id>/recording-run.json
 <run-id>/errors.jsonl
 <run-id>/traffic.jsonl
-<run-id>/bootstrap-dependencies.jsonl
+<run-id>/global-dependencies.jsonl
 <run-id>/<rule>/<group>/<case-id>/request.json
 <run-id>/<rule>/<group>/<case-id>/expected-response.json
 <run-id>/<rule>/<group>/<case-id>/dependencies.jsonl

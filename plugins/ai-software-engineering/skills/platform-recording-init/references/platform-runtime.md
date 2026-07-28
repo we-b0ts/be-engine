@@ -42,6 +42,9 @@ provides:
   post-ready settle interval before first-case admission;
 - `GET` recording over `/`, unrestricted matched forwarding, and fixed
   unmatched responses;
+- commented HTTP and Breeze-backed Memcached background-rule shapes plus an
+  empty AI-managed rule block; only evidence-backed `plan|apply` may populate
+  it, and only an applied Memcached rule adds its configured first-load wait;
 - AES-256-GCM encryption of the request-side `authorization` header using
   `TRAFFIC_E2E_ENCRYPTION_KEY_B64`, while retaining response-side
   `authorization` redaction; and
