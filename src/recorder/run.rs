@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::dependencies::ensure_case_dependency_file;
 use super::http::case::CaseInvalidationContext;
-use super::summary::{write_bootstrap_dependency_summary, write_case_dependency_summary};
+use super::summary::{write_case_dependency_summary, write_global_dependency_summary};
 use super::{CaseContext, Recorder, sanitize_path_component};
 
 #[derive(Debug, Serialize)]
@@ -223,7 +223,7 @@ impl Recorder {
         let unfinished = {
             let _guard = self.dependency_write_lock.lock().await;
             self.flush_all_dependency_files().await?;
-            write_bootstrap_dependency_summary(&self.run_dir).await?;
+            write_global_dependency_summary(&self.run_dir).await?;
             let mut unfinished = Vec::new();
             for case in self.unfinished_staging_cases().await? {
                 let failed_dir = self.move_case_to_failed(&case).await?;
@@ -367,7 +367,7 @@ impl Recorder {
     pub(crate) async fn seal_bootstrap_dependencies(&self) -> Result<()> {
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
-        self.flush_bootstrap_dependency_files().await
+        self.flush_global_dependency_files().await
     }
 
     pub(crate) fn case_dir(&self, case: &CaseContext) -> PathBuf {

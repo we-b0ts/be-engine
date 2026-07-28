@@ -11,9 +11,9 @@ async fn flush_case_dependencies(recorder: &Recorder, case: &CaseContext) {
         .unwrap();
 }
 
-async fn flush_bootstrap_dependencies(recorder: &Recorder) {
+async fn flush_global_dependencies(recorder: &Recorder) {
     let _guard = recorder.dependency_write_lock.lock().await;
-    recorder.flush_bootstrap_dependency_files().await.unwrap();
+    recorder.flush_global_dependency_files().await.unwrap();
 }
 
 fn test_proxy_error(message: &str) -> RecorderEvent {
@@ -157,10 +157,10 @@ async fn queued_dependencies_hold_bootstrap_reservations_until_persisted() {
     )
     .await
     .expect("queued dependency reservations should drain");
-    recorder.flush_bootstrap_dependency_files().await.unwrap();
+    recorder.flush_global_dependency_files().await.unwrap();
 
     let dependencies =
-        tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
+        tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
             .await
             .unwrap();
     assert_eq!(dependencies.lines().count(), 2_048);
@@ -268,7 +268,7 @@ async fn case_files_include_uri_group_when_present() {
 }
 
 #[tokio::test]
-async fn bootstrap_dependency_summary_is_generated_only_when_run_finishes() {
+async fn global_dependency_summary_is_generated_only_when_run_finishes() {
     let temp = tempfile::tempdir().unwrap();
     let recorder = Recorder::new(temp.path()).await.unwrap();
     let event = RecorderEvent::ProxyError(ProxyErrorEvent {
@@ -281,26 +281,28 @@ async fn bootstrap_dependency_summary_is_generated_only_when_run_finishes() {
     });
 
     recorder
-        .append_bootstrap_dependency(&event, "bootstrap_window")
+        .append_global_dependency(&event, "bootstrap_window", "bootstrap", "bootstrap_window")
         .await
         .unwrap();
-    flush_bootstrap_dependencies(&recorder).await;
+    flush_global_dependencies(&recorder).await;
 
-    let raw = tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies.jsonl"))
+    let raw = tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies.jsonl"))
         .await
         .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "proxy_error");
-    assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
+    assert_eq!(value["global_dependency_matched_by"], "bootstrap_window");
+    assert_eq!(value["global_dependency_reason"], "bootstrap_window");
+    assert_eq!(value["global_dependency_phase"], "bootstrap");
     assert!(
-        !tokio::fs::try_exists(recorder.run_dir.join("bootstrap-dependencies-summary.json"))
+        !tokio::fs::try_exists(recorder.run_dir.join("global-dependencies-summary.json"))
             .await
             .unwrap()
     );
 
     assert!(!recorder.finish_run().await.unwrap());
     let summary_raw =
-        tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-summary.json"))
+        tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies-summary.json"))
             .await
             .unwrap();
     let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
@@ -682,7 +684,7 @@ async fn fail_case_moves_staging_to_failed_and_records_error() {
 }
 
 #[tokio::test]
-async fn bootstrap_dependency_routes_mysql_protocol_details_to_debug_file() {
+async fn startup_global_dependency_routes_mysql_protocol_details_to_debug_file() {
     let temp = tempfile::tempdir().unwrap();
     let recorder = Recorder::new(temp.path()).await.unwrap();
     let event = RecorderEvent::MysqlQuery(MysqlQueryEvent {
@@ -697,24 +699,20 @@ async fn bootstrap_dependency_routes_mysql_protocol_details_to_debug_file() {
     });
 
     recorder
-        .append_bootstrap_dependency(&event, "bootstrap_window")
+        .append_global_dependency(&event, "bootstrap_window", "bootstrap", "bootstrap_window")
         .await
         .unwrap();
-    flush_bootstrap_dependencies(&recorder).await;
+    flush_global_dependencies(&recorder).await;
 
-    assert!(
-        !recorder
-            .run_dir
-            .join("bootstrap-dependencies.jsonl")
-            .exists()
-    );
-    let raw =
-        tokio::fs::read_to_string(recorder.run_dir.join("bootstrap-dependencies-debug.jsonl"))
-            .await
-            .unwrap();
+    assert!(!recorder.run_dir.join("global-dependencies.jsonl").exists());
+    let raw = tokio::fs::read_to_string(recorder.run_dir.join("global-dependencies-debug.jsonl"))
+        .await
+        .unwrap();
     let value: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
     assert_eq!(value["event_type"], "mysql_query");
-    assert_eq!(value["bootstrap_dependency_matched_by"], "bootstrap_window");
+    assert_eq!(value["global_dependency_matched_by"], "bootstrap_window");
+    assert_eq!(value["global_dependency_reason"], "bootstrap_window");
+    assert_eq!(value["global_dependency_phase"], "bootstrap");
 }
 
 fn mysql_exchange(

@@ -62,6 +62,6 @@ as justification for an accidental wire-format or error-semantics change.
 
 Refactor a relevant legacy boundary when the requested behavior would otherwise
 make ownership or failure handling materially worse. Do not combine that with
-unrelated repository-wide cleanup. Follow local file-size rules; absent such a
-rule, split by responsibility and reviewability rather than an arbitrary line
-count.
+unrelated repository-wide cleanup. Apply the code-organization review and size
+gates as backstops, while splitting by responsibility rather than line count
+alone.

@@ -52,19 +52,33 @@ pub async fn run(state: AppState) -> Result<()> {
         "HTTP gateway listening"
     );
 
-    if config.ready.enabled {
+    let mut ready_task = if config.ready.enabled {
         let ready_state = state.clone();
         let ready_config = config.clone();
-        tokio::spawn(async move {
-            ready::run(ready_state, ready_config).await;
-        });
-    }
+        Some(tokio::spawn(async move {
+            ready::run(ready_state, ready_config).await
+        }))
+    } else {
+        None
+    };
 
     loop {
-        let (stream, peer_addr) = listener
-            .accept()
-            .await
-            .context("failed to accept HTTP gateway client")?;
+        let accepted = tokio::select! {
+            ready_result = async {
+                ready_task
+                    .as_mut()
+                    .expect("ready task branch is guarded")
+                    .await
+            }, if ready_task.is_some() => {
+                ready_task = None;
+                ready_result
+                    .context("HTTP gateway ready task failed")?
+                    .context("HTTP gateway readiness failed")?;
+                continue;
+            }
+            accepted = listener.accept() => accepted,
+        };
+        let (stream, peer_addr) = accepted.context("failed to accept HTTP gateway client")?;
         let state = state.clone();
         let config = config.clone();
         tokio::spawn(async move {

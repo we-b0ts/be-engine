@@ -1,12 +1,14 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    AllowedUnusedHttpHostFeedback, BackgroundDependencyFeedback, CasePathPatternAuthority,
-    CasePathPatternFeedback, RecorderConfigInitOptions, initialize_recorder_config,
-    plan_allowed_unused_http_hosts, plan_background_dependency, plan_case_path_pattern_feedback,
+    AllowedUnusedHttpHostFeedback, BackgroundDependencyFeedback,
+    BreezeMemcachedBackgroundDependencyFeedback, CasePathPatternAuthority, CasePathPatternFeedback,
+    RecorderConfigInitOptions, initialize_recorder_config, plan_allowed_unused_http_hosts,
+    plan_background_dependency, plan_breeze_memcached_background_dependency,
+    plan_case_path_pattern_feedback,
 };
 
 #[derive(Debug, Args)]
@@ -80,23 +82,45 @@ struct AllowedUnusedHttpHostArgs {
 
 #[derive(Debug, Args)]
 struct BackgroundDependencyArgs {
+    #[arg(long, value_enum, default_value_t = BackgroundProtocolArg::Http)]
+    protocol: BackgroundProtocolArg,
     #[arg(long)]
     name: String,
     #[arg(long)]
-    authority: String,
+    authority: Option<String>,
     #[arg(long)]
-    method: String,
+    method: Option<String>,
     #[arg(long)]
-    path_prefix: String,
+    path_prefix: Option<String>,
+    #[arg(long)]
+    breeze_resource: Option<String>,
+    #[arg(long, default_value = "get")]
+    command: String,
+    #[arg(long)]
+    key_start: Option<u32>,
+    #[arg(long)]
+    key_end: Option<u32>,
+    #[arg(long, default_value = ".")]
+    key_separator: String,
+    #[arg(long)]
+    key_suffix: Option<String>,
+    #[arg(long, default_value_t = 30_000)]
+    initial_load_timeout_ms: u64,
     #[arg(long)]
     replay_report: PathBuf,
     #[arg(long)]
     source_revision: String,
     #[arg(
         long,
-        help = "Single-line source evidence proving process-level ownership and API independence"
+        help = "Single-line source evidence proving process-level ownership and the selected response role"
     )]
     evidence: String,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BackgroundProtocolArg {
+    Http,
+    Memcached,
 }
 
 #[derive(Debug, Args)]
@@ -174,8 +198,7 @@ fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
             super::print_json(plan.report())
         }
         PlanStrategy::BackgroundDependencies(args) => {
-            let plan = plan_background_dependency(background_feedback(config, args))?;
-            super::print_json(plan.report())
+            plan_background_dependency_args(config, args, false)
         }
         PlanStrategy::CasePathPatterns(args) => {
             let plan = plan_case_path_pattern_feedback(pattern_feedback(config, args))?;
@@ -193,8 +216,7 @@ fn apply(target_root: PathBuf, strategy: ApplyStrategy) -> Result<()> {
             super::print_json(&report)
         }
         ApplyStrategy::BackgroundDependencies(args) => {
-            let report = plan_background_dependency(background_feedback(config, args))?.apply()?;
-            super::print_json(&report)
+            plan_background_dependency_args(config, args, true)
         }
         ApplyStrategy::CasePathPatterns(args) => {
             let report = plan_case_path_pattern_feedback(pattern_feedback(config, args.feedback))?
@@ -219,20 +241,57 @@ fn allowed_unused_feedback(
     }
 }
 
-fn background_feedback(
+fn plan_background_dependency_args(
     config_path: PathBuf,
     args: BackgroundDependencyArgs,
-) -> BackgroundDependencyFeedback {
-    BackgroundDependencyFeedback {
-        config_path,
-        replay_report_path: args.replay_report,
-        name: args.name,
-        authority: args.authority,
-        method: args.method,
-        path_prefix: args.path_prefix,
-        source_revision: args.source_revision,
-        source_evidence: args.evidence,
+    apply: bool,
+) -> Result<()> {
+    match args.protocol {
+        BackgroundProtocolArg::Http => {
+            let feedback = BackgroundDependencyFeedback {
+                config_path,
+                replay_report_path: args.replay_report,
+                name: args.name,
+                authority: required(args.authority, "--authority", "http")?,
+                method: required(args.method, "--method", "http")?,
+                path_prefix: required(args.path_prefix, "--path-prefix", "http")?,
+                source_revision: args.source_revision,
+                source_evidence: args.evidence,
+            };
+            let plan = plan_background_dependency(feedback)?;
+            if apply {
+                super::print_json(&plan.apply()?)
+            } else {
+                super::print_json(plan.report())
+            }
+        }
+        BackgroundProtocolArg::Memcached => {
+            let feedback = BreezeMemcachedBackgroundDependencyFeedback {
+                config_path,
+                replay_report_path: args.replay_report,
+                name: args.name,
+                breeze_resource: required(args.breeze_resource, "--breeze-resource", "memcached")?,
+                command: args.command,
+                key_start: required(args.key_start, "--key-start", "memcached")?,
+                key_end: required(args.key_end, "--key-end", "memcached")?,
+                key_separator: args.key_separator,
+                key_suffix: required(args.key_suffix, "--key-suffix", "memcached")?,
+                initial_load_timeout_ms: args.initial_load_timeout_ms,
+                source_revision: args.source_revision,
+                source_evidence: args.evidence,
+            };
+            let plan = plan_breeze_memcached_background_dependency(feedback)?;
+            if apply {
+                super::print_json(&plan.apply()?)
+            } else {
+                super::print_json(plan.report())
+            }
+        }
     }
+}
+
+fn required<T>(value: Option<T>, flag: &str, protocol: &str) -> Result<T> {
+    value.ok_or_else(|| anyhow!("{flag} is required for --protocol {protocol}"))
 }
 
 fn pattern_feedback(config_path: PathBuf, args: PatternFeedbackArgs) -> CasePathPatternFeedback {

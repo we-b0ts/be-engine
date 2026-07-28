@@ -185,23 +185,19 @@ async fn pending_quit_is_a_safe_debug_only_terminal_exchange() {
 
     state
         .recorder()
-        .flush_bootstrap_dependency_files()
+        .flush_global_dependency_files()
         .await
         .unwrap();
-    let semantic = tokio::fs::read_to_string(
-        state
-            .recorder()
-            .run_dir
-            .join("bootstrap-dependencies.jsonl"),
-    )
-    .await
-    .unwrap();
+    let semantic =
+        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
+            .await
+            .unwrap();
     assert!(!semantic.contains("\"command\":\"QUIT\""));
     let debug = tokio::fs::read_to_string(
         state
             .recorder()
             .run_dir
-            .join("bootstrap-dependencies-debug.jsonl"),
+            .join("global-dependencies-debug.jsonl"),
     )
     .await
     .unwrap();

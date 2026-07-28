@@ -40,7 +40,7 @@ pub(in crate::replay) struct KafkaProtocolReport {
     pub(in crate::replay) unsupported: Vec<KafkaRequestReport>,
     pub(in crate::replay) unsafe_events: Vec<KafkaRequestReport>,
     pub(in crate::replay) unused_case: Vec<KafkaUnusedReport>,
-    pub(in crate::replay) unused_bootstrap: Vec<KafkaUnusedReport>,
+    pub(in crate::replay) unused_global: Vec<KafkaUnusedReport>,
 }
 
 impl KafkaProtocolReport {

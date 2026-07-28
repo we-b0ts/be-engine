@@ -42,6 +42,9 @@ provides:
   post-ready settle interval before first-case admission;
 - `GET` recording over `/`, unrestricted matched forwarding, and fixed
   unmatched responses;
+- commented HTTP and Breeze-backed Memcached background-rule shapes plus an
+  empty AI-managed rule block; only evidence-backed `plan|apply` may populate
+  it, and only an applied Memcached rule adds its configured first-load wait;
 - AES-256-GCM encryption of the request-side `authorization` header using
   `TRAFFIC_E2E_ENCRYPTION_KEY_B64`, while retaining response-side
   `authorization` redaction; and
@@ -157,34 +160,17 @@ cannot repair the paths directly. Do not change the owner of the
 `/data1/breeze` parent. Do not create per-run variants of source bind
 directories.
 
-## Generate The Repository Breeze Contract
+## Preserve The Recording Descriptor Boundary
 
-Copy
-`assets/recording/docs/breeze-resource-development.md` unchanged to
-`docs/breeze-resource-development.md`. This document is the target repository's
-authoritative Platform contract for the closed `crates/breeze/` package set,
-socks descriptor registration, and recording/replay port identity.
+Initialization owns the shared `/data1/breeze/socks` mount and source Java SDK
+behavior, not target Breeze SDK implementation. The source creates missing
+descriptors during recording and the recording lifecycle preserves them. Do
+not render observed resource ports into committed files or generate target
+`brz-*` packages, application instructions, or SDK development documents.
 
-Merge the exact contents of `assets/recording/AGENTS.breeze.md` into the root
-`AGENTS.md`. Preserve every existing instruction outside these markers:
-
-```text
-<!-- BEGIN PLATFORM BREEZE RESOURCE DEVELOPMENT -->
-<!-- END PLATFORM BREEZE RESOURCE DEVELOPMENT -->
-```
-
-Create `AGENTS.md` when it is absent. When the managed block already exists,
-replace only that block; otherwise append the block once. Do not copy
-`AGENTS.breeze.md` into the target repository. Require its relative link to
-resolve to the generated document.
-
-Do not render observed resource ports into either committed file. Ports are
-runtime identities selected through `/data1/breeze/socks`. The generated
-document requires later `brz-*` implementations to reuse an exact descriptor
-or, only during independent service startup when it is absent, create one with
-a randomly selected eligible port for Breeze to load. Recording creates and
-preserves the applicable descriptors; replay must resolve their exact ports
-without allocating a port or mutating any descriptor.
+Later target implementation must use
+the [`breeze-sdk` skill](../../breeze-sdk/SKILL.md) for exact descriptor
+identity, independent-startup registration, and replay-read-only resolution.
 
 ## Breeze SDK Source Patch
 
@@ -443,10 +429,9 @@ Before reporting completion:
 - verify the patched class exists in the source JAR;
 - prove Breeze, port `880`, source readiness, UID/GID `998:998`, and fake-DNS
   resolution of `breeze.recording` under the source identity;
-- require exactly one managed Platform Breeze block in root `AGENTS.md`, its
-  relative document link to resolve, and the generated Breeze document to
-  contain the six-package allowlist plus independent-startup creation and
-  replay-read-only socks rules;
+- prove source startup creates or reuses descriptors in the shared
+  `/data1/breeze/socks` mount without generating target SDK code or
+  repository-level SDK instructions;
 - run `./scripts/start-recording --duration-seconds 1` and require finalized
   standard recording metadata with no Recorder startup or shutdown error, then
   require the complete exact run tree to have the invoking host UID/GID and be

@@ -43,7 +43,9 @@ same genuine adapters in normal runtime and integration paths.
 
 ## Quality Gate
 
-Run the repository's required commands. Without stricter equivalents, use:
+Run the bundled code-organization checker after the final product-code edit and
+before commit, then run the repository's required commands. Without stricter
+equivalents, use:
 
 ```bash
 cargo fmt --check

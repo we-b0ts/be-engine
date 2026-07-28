@@ -46,7 +46,7 @@ whether it was intentionally excluded, lacks a business dependency, or was
 never selected; the target E2E workflow must classify that from artifacts.
 
 `complete: true` means every in-scope published case appears in a report, every
-reported case ended, and every selected version-five report was finalized.
+reported case ended, and every selected version-six report was finalized.
 Retained reports that overlap the same case require exact session selection;
 the session filter is applied before case-set validation so unrelated historical
 attempts cannot satisfy or invalidate the selected evidence. The aggregate
@@ -57,7 +57,8 @@ proof that the target project's response assertion passed.
 
 The aggregate sums the recorder-owned MySQL, HTTP, Redis, Memcached, Kafka, and
 Motan matched, unmatched, unsupported, unsafe, unused-case, and
-unused-bootstrap counters. Unused bootstrap counters are retained as startup
+unused-Global counters. Unused Global counters are retained as startup or
+background
 diagnostics but do not make a report dirty: traffic observed before readiness
 is outside the selected E2E contract and may legitimately be absent from a
 partial verification scope.
@@ -65,10 +66,11 @@ Unmatched, unsupported, unsafe, and unused case-owned evidence still makes the
 report dirty. Target-specific noise policies or test-runner results remain
 outside this report and must not be silently folded into its numbers.
 
-Version five replay reports retain only a bounded prefix of successful event
+Version six replay reports retain only a bounded prefix of successful event
 details. The aggregate MUST use their explicit success counters, not the
 retained array lengths. Dirty and unused arrays remain complete evidence,
-including non-blocking unused-bootstrap diagnostics.
+including non-blocking unused-Global diagnostics. Older replay report versions
+are rejected; there is no bootstrap-to-Global compatibility mapping.
 
 Completion runs MUST use both `--fail-on-incomplete` and `--fail-on-dirty`.
 The output is written before either gate returns a non-zero exit status so the

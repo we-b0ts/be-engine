@@ -426,57 +426,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn loads_bootstrap_dependencies_from_parent_directory() {
-        let temp = tempfile::tempdir().unwrap();
-        let group_dir = temp.path().join("record-api").join("api-user");
-        let case_dir = group_dir.join("case-id");
-        tokio::fs::create_dir_all(&case_dir).await.unwrap();
-        tokio::fs::write(
-            group_dir.join("bootstrap-dependencies.jsonl"),
-            r#"{"event_type":"mysql_exchange","target_host":"mysql.internal","target_port":3306,"target_addr":"mysql.internal:3306","database":"appdb","username":"root","command":"COM_QUERY","sql":"SELECT value FROM app_config","response":{"status":"resultset","columns":[{"name":"value","family":"string","sql_type":"VARCHAR","nullable":false}],"rows":[[{"kind":"string","value":"on"}]]}}"#,
-        )
-        .await
-        .unwrap();
-        tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
-            .await
-            .unwrap();
-        let report_path = temp.path().join("report.json");
-        let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
-        let mut client = connect_login(addr).await;
-
-        write_packet_bytes(
-            &mut client,
-            MysqlPacket {
-                sequence_id: 0,
-                payload: [vec![0x03], b"SELECT value FROM app_config".to_vec()].concat(),
-            },
-        )
-        .await;
-        assert_eq!(
-            read_packet(&mut client).await.unwrap().unwrap().payload,
-            vec![1]
-        );
-        let _column = read_packet(&mut client).await.unwrap().unwrap();
-        let _columns_eof = read_packet(&mut client).await.unwrap().unwrap();
-        let row = read_packet(&mut client).await.unwrap().unwrap();
-        assert_eq!(row.payload, lenenc_bytes(b"on"));
-        let _rows_eof = read_packet(&mut client).await.unwrap().unwrap();
-
-        wait_for_report_contains(&report_path, r#""source": "bootstrap""#).await;
-        let report: Value =
-            serde_json::from_str(&tokio::fs::read_to_string(&report_path).await.unwrap()).unwrap();
-        assert_eq!(
-            report["bootstrap_dependencies_path"],
-            group_dir
-                .join("bootstrap-dependencies.jsonl")
-                .display()
-                .to_string()
-        );
-        assert_eq!(report["matched_queries"][0]["source"], "bootstrap");
-        task.abort();
-    }
-
-    #[tokio::test]
     async fn discovers_target_from_mysql_connection_and_reports_mapping() {
         let temp = tempfile::tempdir().unwrap();
         let case_dir = temp.path().join("case");
@@ -666,7 +615,7 @@ mod tests {
         assert_eq!(report["dirty"], false);
         assert_eq!(report["complete"], true);
         assert_eq!(report["finalized"], true);
-        assert_eq!(report["report"]["version"], 5);
+        assert_eq!(report["report"]["version"], 6);
         assert_eq!(report["report"]["finalized"], true);
         assert_eq!(
             report["report"]["matched_queries"]

@@ -14,8 +14,7 @@ case-owned dependency call, and every required side effect.
 - Treat published recordings as immutable sensitive evidence. Never edit,
   trim, synthesize, or expose them to make replay pass.
 - Use `expected-response.json` only as an assertion oracle. Only
-  recorder-owned replay may consume `dependencies.jsonl` or bootstrap
-  dependencies.
+  recorder-owned replay may consume case or Global dependency files.
 - Target code, configuration, tests, and support must use genuine runtime
   clients and must never turn recorded outputs into fixtures or behavior.
 - One passing response cannot compensate for invalid artifacts, incomplete
@@ -35,6 +34,13 @@ Return a concise handoff after each operation:
 status: passed | action_required | incomplete | blocked
 stage, scope, exact evidence
 ```
+
+Use `action_required` while response or other repairable behavior remains.
+Use `incomplete` only when all selected response assertions pass but dirty
+dependency evidence remains and no source-proven rule can be safely applied.
+Use `blocked` only when response-driving external-system information was not
+recorded or provided and the missing information prevents target behavior from
+being implemented.
 
 For non-passing results, add every evidenced category, capability owner,
 concrete next TODO, acceptance check, and resume stage. Use capability owners
@@ -58,17 +64,20 @@ replay_capability_gap, intentional_nondeterminism, source_drift, unresolved
 3. After the first failure, diagnose all applicable gates. Report structured
    response differences and causal dependency evidence before remaining
    dependency coverage.
-4. Return target behavior or runtime defects to the caller. Rerun the same
-   cases after repair until response assertions pass.
-5. Only after response assertions pass, classify unused dependencies. Apply a
-   background rule only when source evidence proves process ownership and
-   response independence; then create a new standard recording.
+4. Return target behavior or runtime defects to the caller. When source
+   evidence proves process-owned dependency traffic builds response-driving
+   local state, apply a narrow `runtime_state` background rule as part of that
+   repair. Rerun the same cases after repair until response assertions pass.
+5. Only after response assertions pass, classify remaining unused dependencies.
+   Apply an `independent` background rule only when source evidence proves
+   process ownership and response independence; then create a new recording.
 6. Start comparison only after current runner-generated evidence proves the
    affected replay E2E scope passes. Any behavior or policy change makes prior
    comparison evidence stale.
 
 An unrelated unused dependency must not preempt response diagnosis. Preserve
-all independent findings when one gate is blocked.
+all independent findings when one gate is blocked. Dirty dependency evidence is
+not a stop signal while any response assertion still fails.
 
 ## Reference Routing
 
@@ -81,6 +90,8 @@ all independent findings when one gate is blocked.
 - Startup, identity, configuration, and genuine clients:
   [target-integration.md](references/target-integration.md)
 - Dependency behavior: [dependency-replay.md](references/dependency-replay.md)
+- Process-owned runtime-state or independent dependency traffic:
+  [background-dependencies.md](references/background-dependencies.md)
 - Assertion and replay policy: [replay-policy.md](references/replay-policy.md)
 - Standard project runner: [e2e-run.md](references/e2e-run.md)
 - First failed attempt: [failure-diagnosis.md](references/failure-diagnosis.md)
@@ -117,13 +128,15 @@ The selected reference defines the full gate. In all phases, evidence must be
 finalized, complete, canonical, current for the latest behavior and policy, and
 free of invalidating capture, replay, assertion, or aggregation failures.
 
-Return a Recorder or Replay capability blocker after one bounded reproduction
-proves that the genuine contract cannot be captured or replayed and ordinary
-configuration, runtime wiring, or re-recording cannot resolve it. Include the
-exact evidence, required system change, owner, affected gate, and verification
-command; do not create a target workaround.
+Return a Recorder or Replay capability gap as `action_required` while an
+in-scope system repair can recover the evidence or replay behavior. Use
+`blocked` only when one bounded reproduction proves that response-driving
+external information was not captured or provided and its absence prevents
+target implementation. Include the exact evidence, required system change or
+external input, owner, affected gate, and verification command; do not create a
+target workaround.
 
-For other causes, use `blocked` after the same root cause repeats for three
-cycles without new evidence or progress. Use `incomplete` when a required
-observation or input is missing but work can resume. Never invent requests,
-responses, dependency values, side effects, routes, or completion artifacts.
+Repeated failures without capability proof remain `action_required`, not
+`blocked`. Use `incomplete` only for response-passing dirty evidence without a
+safe source-proven rule. Never invent requests, responses, dependency values,
+side effects, routes, or completion artifacts.

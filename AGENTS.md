@@ -19,8 +19,7 @@ are development or manual host-trust tools only.
 
 - Development, runtime, recording, replay, and testing commands:
   [docs/development.md](docs/development.md)
-- Pre-change module review, naming, cohesion, dependency direction, and
-  refactoring rules:
+- Traffic-e2e-specific package and module ownership:
   [docs/code-organization.md](docs/code-organization.md)
 - Backend engineering standards for AI coding work:
   [plugins/ai-software-engineering/skills/backend-engineering/SKILL.md](plugins/ai-software-engineering/skills/backend-engineering/SKILL.md)
@@ -29,13 +28,15 @@ are development or manual host-trust tools only.
 
 ## Essential Commands
 
-Before opening or updating an MR, run at least:
+Before opening or updating an MR, run at least the following. Replace
+`origin/master` when the MR targets another branch:
 
 ```bash
 cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
-scripts/check-code-organization
+CODE_ORG_BASE=origin/master \
+  plugins/ai-software-engineering/skills/backend-engineering/scripts/check-code-organization
 ```
 
 Useful focused tests:
@@ -67,15 +68,15 @@ traffic-e2e target exec -- path/to/prebuilt-target
   detected, keep rejecting and recording the reason.
 - Keep sensitive data handling explicit. Add newly sensitive headers to
   `recording.redact_headers` defaults or document the choice.
-- Before changing product code, review the touched code against
-  [docs/code-organization.md](docs/code-organization.md). Treat the initial
-  boundary as a hypothesis and review the implemented responsibilities again
-  before completion. Keep feature-local structural convergence in scope and
-  unrelated legacy cleanup out of scope.
+- Before changing product code, follow the backend-engineering
+  [code-organization rules](plugins/ai-software-engineering/skills/backend-engineering/references/code-organization.md)
+  and this repository's [module ownership](docs/code-organization.md). Treat
+  the initial boundary as a hypothesis and review the implemented
+  responsibilities again before completion. Keep feature-local structural
+  convergence in scope and unrelated legacy cleanup out of scope.
 - Product source files must not exceed 1000 lines after a change. If a touched
-  file is already over 1000 lines, follow
-  [docs/code-organization.md](docs/code-organization.md) and split the relevant
-  responsibility before adding new behavior.
+  file is already over 1000 lines, follow the backend code-organization rules
+  and split the relevant responsibility before adding new behavior.
 
 ## Git Hygiene
 

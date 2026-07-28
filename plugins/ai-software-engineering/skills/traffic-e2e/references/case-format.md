@@ -11,9 +11,9 @@ Canonical published case layout:
 recordings/<run-id>/traffic.jsonl
 recordings/<run-id>/recording-run.json
 recordings/<run-id>/errors.jsonl
-recordings/<run-id>/bootstrap-dependencies.jsonl
-recordings/<run-id>/bootstrap-dependencies-summary.json
-recordings/<run-id>/bootstrap-dependencies-debug.jsonl
+recordings/<run-id>/global-dependencies.jsonl
+recordings/<run-id>/global-dependencies-summary.json
+recordings/<run-id>/global-dependencies-debug.jsonl
 recordings/<run-id>/<rule>/<uri-group>/<case-id>/request.json
 recordings/<run-id>/<rule>/<uri-group>/<case-id>/expected-response.json
 recordings/<run-id>/<rule>/<uri-group>/<case-id>/dependencies.jsonl
@@ -54,8 +54,8 @@ Load order:
 2. `expected-response.json`
 3. `dependencies.jsonl`
 4. `dependencies-summary.json` when present
-5. run-level `bootstrap-dependencies.jsonl` when present
-6. run-level `bootstrap-dependencies-summary.json` when present
+5. run-level `global-dependencies.jsonl` when present
+6. run-level `global-dependencies-summary.json` when present
 7. `dependencies-debug.jsonl` only for missing semantic data, parse warnings, or
    protocol debugging
 
@@ -259,21 +259,21 @@ The summary is an index for coverage and triage. Recorder-owned replay alone
 uses `dependencies.jsonl` as the source of replay payloads and exact dependency
 behavior.
 
-`bootstrap-dependencies.jsonl` is a run-level replay dependency file for
-startup/bootstrap traffic captured before the first case starts. It is shared
-across cases from the same recording run. Do not move it into a case directory
-unless packaging a standalone case bundle; replay should discover it by walking
-upward from the case directory. Its debug and summary companions use the same
-naming pattern: `bootstrap-dependencies-debug.jsonl` and
-`bootstrap-dependencies-summary.json`. Newer recordings close the bootstrap
-window after the recorder's `[http_gateway.ready]` probe observes the configured
-upstream path returning the configured success status and
-`recording.post_ready_settle_ms` elapses. Dependencies captured during that
-fixed settle interval remain bootstrap evidence. Recorder flushes the sealed
-bootstrap JSONL before opening case admission and generates its summary only
-during final run shutdown. Traffic after the window closes is normal
-idle/background traffic, not bootstrap evidence, unless it belongs to an
-active case.
+`global-dependencies.jsonl` is shared run-level replay inventory. It contains
+startup/bootstrap traffic captured before case admission and traffic matched
+by an explicit background rule during bootstrap or runtime. Each record has a
+reason, phase, and matching rule/window owner. Do not move it into a case
+directory unless packaging a standalone case bundle; Replay discovers it by
+walking upward from the case directory.
+
+The debug and summary companions are `global-dependencies-debug.jsonl` and
+`global-dependencies-summary.json`. Recorder flushes startup records before
+opening case admission but keeps the Global writer available for later rule
+matches; it generates the summary during final shutdown. Ready-time idle
+traffic without a rule is not replay inventory.
+
+Read [background-dependencies.md](background-dependencies.md) for the complete
+ownership, phase, and rule contract.
 
 ## MySQL Exchange Records
 

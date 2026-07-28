@@ -10,8 +10,7 @@ mod counts;
 mod policy;
 
 const AGGREGATE_VERSION: u8 = 1;
-const MIN_REPLAY_REPORT_VERSION: u64 = 2;
-const MAX_REPLAY_REPORT_VERSION: u64 = 5;
+const REPLAY_REPORT_VERSION: u64 = 6;
 
 #[derive(Debug, Clone, Default)]
 pub struct ReplayAggregateOptions {
@@ -104,7 +103,7 @@ pub struct MysqlEventCounts {
     pub unmatched_queries: usize,
     pub unsupported_commands: usize,
     pub unused_case_exchanges: usize,
-    pub unused_bootstrap_exchanges: usize,
+    pub unused_global_exchanges: usize,
     pub metadata_warnings: usize,
 }
 
@@ -115,7 +114,7 @@ pub struct HttpEventCounts {
     pub unsupported_exchanges: usize,
     pub unused_case_exchanges: usize,
     pub allowed_unused_case_exchanges: usize,
-    pub unused_bootstrap_exchanges: usize,
+    pub unused_global_exchanges: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -126,7 +125,7 @@ pub struct CommandProtocolCounts {
     pub unsupported: usize,
     pub unsafe_events: usize,
     pub unused_case: usize,
-    pub unused_bootstrap: usize,
+    pub unused_global: usize,
     #[serde(skip_serializing_if = "is_zero")]
     pub warnings: usize,
 }
@@ -433,9 +432,9 @@ fn summarize_report(
                 report_path.display()
             )
         })?;
-    if !(MIN_REPLAY_REPORT_VERSION..=MAX_REPLAY_REPORT_VERSION).contains(&version) {
+    if version != REPLAY_REPORT_VERSION {
         bail!(
-            "unsupported replay report version {version} in {}; supported versions are {MIN_REPLAY_REPORT_VERSION}..={MAX_REPLAY_REPORT_VERSION}",
+            "unsupported replay report version {version} in {}; supported version is {REPLAY_REPORT_VERSION}",
             report_path.display()
         );
     }
@@ -456,42 +455,32 @@ fn summarize_report(
         let status = required_case_status(case, report_path)?;
         *case_statuses.entry(status.to_owned()).or_insert(0) += 1;
     }
-    let (session_id, started_at, finalized_at, finalized) = if version >= 4 {
-        let session_id = required_string(report, "session_id", report_path)?.to_owned();
-        let started_at = required_string(report, "started_at", report_path)?.to_owned();
-        let finalized = required_bool(report, "finalized", report_path)?;
-        let finalized_at = optional_string(report, "finalized_at");
-        if finalized && finalized_at.is_none() {
-            bail!(
-                "finalized replay report {} has no finalized_at",
-                report_path.display()
-            );
-        }
-        let selected_case_ids = required_string_array(report, "selected_case_ids", report_path)?;
-        let reported_case_ids = required_array(report, "cases", report_path)?
-            .iter()
-            .map(|case| required_string(case, "case_id", report_path).map(ToOwned::to_owned))
-            .collect::<Result<BTreeSet<_>>>()?;
-        if selected_case_ids != reported_case_ids {
-            bail!(
-                "replay report {} selected_case_ids do not match reported cases",
-                report_path.display()
-            );
-        }
-        (
-            Some(session_id),
-            Some(started_at),
-            finalized_at,
-            Some(finalized),
-        )
-    } else {
-        (None, None, None, None)
-    };
+    let session_id = required_string(report, "session_id", report_path)?.to_owned();
+    let started_at = required_string(report, "started_at", report_path)?.to_owned();
+    let finalized = required_bool(report, "finalized", report_path)?;
+    let finalized_at = optional_string(report, "finalized_at");
+    if finalized && finalized_at.is_none() {
+        bail!(
+            "finalized replay report {} has no finalized_at",
+            report_path.display()
+        );
+    }
+    let selected_case_ids = required_string_array(report, "selected_case_ids", report_path)?;
+    let reported_case_ids = required_array(report, "cases", report_path)?
+        .iter()
+        .map(|case| required_string(case, "case_id", report_path).map(ToOwned::to_owned))
+        .collect::<Result<BTreeSet<_>>>()?;
+    if selected_case_ids != reported_case_ids {
+        bail!(
+            "replay report {} selected_case_ids do not match reported cases",
+            report_path.display()
+        );
+    }
     let complete = case_statuses
         .iter()
         .all(|(status, count)| status == "ended" || *count == 0)
-        && finalized.unwrap_or(true);
-    let counts = counts::read(report, version, report_path)?;
+        && finalized;
+    let counts = counts::read(report, report_path)?;
     let replay_policy = policy::summary(report, report_path)?;
     let dirty = counts.is_dirty()
         || replay_policy
@@ -502,10 +491,10 @@ fn summarize_report(
         path: report_name,
         version,
         case_dir: case_dir.display().to_string(),
-        session_id,
-        started_at,
+        session_id: Some(session_id),
+        started_at: Some(started_at),
         finalized_at,
-        finalized,
+        finalized: Some(finalized),
         complete,
         dirty,
         replay_policy,
@@ -636,7 +625,7 @@ impl MysqlEventCounts {
         self.unmatched_queries += other.unmatched_queries;
         self.unsupported_commands += other.unsupported_commands;
         self.unused_case_exchanges += other.unused_case_exchanges;
-        self.unused_bootstrap_exchanges += other.unused_bootstrap_exchanges;
+        self.unused_global_exchanges += other.unused_global_exchanges;
         self.metadata_warnings += other.metadata_warnings;
     }
 
@@ -654,7 +643,7 @@ impl HttpEventCounts {
         self.unsupported_exchanges += other.unsupported_exchanges;
         self.unused_case_exchanges += other.unused_case_exchanges;
         self.allowed_unused_case_exchanges += other.allowed_unused_case_exchanges;
-        self.unused_bootstrap_exchanges += other.unused_bootstrap_exchanges;
+        self.unused_global_exchanges += other.unused_global_exchanges;
     }
 
     fn is_dirty(&self) -> bool {
@@ -672,7 +661,7 @@ impl CommandProtocolCounts {
         self.unsupported += other.unsupported;
         self.unsafe_events += other.unsafe_events;
         self.unused_case += other.unused_case;
-        self.unused_bootstrap += other.unused_bootstrap;
+        self.unused_global += other.unused_global;
         self.warnings += other.warnings;
     }
 
