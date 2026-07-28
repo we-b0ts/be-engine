@@ -4,6 +4,14 @@ Use this reference only after the selected target behavior passes genuine
 dependency replay E2E. Comparison recording is a second verification phase
 against frontend traffic; it does not replace replay evidence.
 
+## Contents
+
+- Runtime boundary
+- Artifacts and command
+- Required diagnosis
+- Evidence-backed policy feedback
+- Completion
+
 ## Runtime Boundary
 
 Run the genuine source and candidate services normally. Neither

@@ -3,14 +3,27 @@
 Use this reference when a recorded E2E does not pass after the first replay
 attempt.
 
-## Classification Order
+## Contents
 
-Classify failures in this order:
+- Diagnosis order
+- Missing response-driving external evidence
+- Replay failure signals
+- MySQL-specific risks
+- Response assertion mismatches
+- Target behavior evidence
+- Recorder feedback
+- Blocked output
 
-1. Missing external-system recording data that prevents implementing the
-   response contract
-2. Structured response assertion mismatch
-3. Response-driving dependency, environment, or app startup mismatch
+## Diagnosis Order
+
+Diagnose a non-passing run in this order:
+
+1. Structured response assertion result, including selected, executed,
+   passing, and mismatching case counts
+2. Response-driving target behavior, dependency, environment, app startup, or
+   process-state mismatch
+3. Missing response-driving external-system evidence, but only after causal
+   diagnosis proves that its absence prevents target implementation
 4. Assertion drift in source-proven unstable response fields
 5. Remaining dependency coverage, side-effect, and background-attribution
    failures after response assertions pass
@@ -22,25 +35,37 @@ can explain the observed response difference; unrelated unused traffic does not
 preempt a target response finding. Preserve all independently evidenced failure
 categories so that a system blocker cannot hide response defects.
 
-## Blocking Recording-Data Signals
+## Missing Response-Driving External Evidence
 
-Classify a recording-data blocker only when one representative case proves
-that required external behavior lacks evidence:
+Classify a recording-data blocker only after one representative
+response-mismatching case proves all of the following:
 
-- `dependencies.jsonl` is missing or empty for a request that clearly uses
-  external services
-- dependency calls appear only in `dependencies-debug.jsonl`
-- a dependency error was recorded instead of a semantic response
-- `dependencies-summary.json` lists response-driving, auth/session, or required
-  side-effect dependencies that the replay does not cover
-- replay output contains unused recorded case exchanges or unmatched target
-  dependency calls that cannot be proven unrelated/background
-- satisfying replay coverage would require hardcoding recorded params into
-  normal runtime config or product logic
-- downstream data is needed but recorder-owned semantic replay evidence does
-  not supply it
-- the recorded HTTP response depends on data that cannot be explained by the
-  recorded dependencies
+- the relevant source response path and process-local state have been
+  inspected;
+- source code, configuration, target behavior, and runtime wiring do not
+  explain or repair the difference;
+- the response requires a specific external value or semantic exchange;
+- that response-driving evidence is absent or internally inconsistent in the
+  recording and available authorized runtime evidence; and
+- completing the response would require inventing external-system behavior.
+
+Signals that require this investigation include:
+
+- response-driving dependency calls are absent from `dependencies.jsonl` or
+  appear only in `dependencies-debug.jsonl`;
+- a response-driving dependency error was recorded instead of its semantic
+  response;
+- `dependencies-summary.json` identifies a response-driving, auth/session, or
+  required side-effect dependency that replay cannot reproduce;
+- required prepared parameters, rows, messages, metadata, or ordering are
+  absent or internally inconsistent; or
+- the recorded HTTP response depends on an external value that the recorded
+  semantic dependencies and available runtime evidence cannot explain.
+
+None of these signals alone proves `blocked`. An empty `dependencies.jsonl`,
+unused exchanges, unmatched target calls, or dirty dependency coverage can
+exist without preventing response implementation. Continue response diagnosis
+unless the causal proof above is complete.
 
 Do not infer missing rows, messages, cache entries, or third-party responses
 from `expected-response.json` alone.

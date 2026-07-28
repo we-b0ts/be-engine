@@ -83,13 +83,22 @@ pub(crate) fn resolve_business_resource(
 }
 
 pub(crate) fn resolve_identity(directory: &Path, identity: &str) -> Result<Descriptor> {
+    try_resolve_identity(directory, identity)?.with_context(|| {
+        format!(
+            "failed to resolve Breeze resource identity {identity:?}: no compatible Breeze descriptor exists in {}; replay-safe resolution never creates one",
+            directory.display()
+        )
+    })
+}
+
+pub(crate) fn try_resolve_identity(directory: &Path, identity: &str) -> Result<Option<Descriptor>> {
     validate_selector("Breeze resource identity", identity)?;
     ensure!(
         identity.split('@').count() == 3,
         "Breeze resource identity must be the stable service@socket-type@protocol identity"
     );
     let service = identity.split('@').next().expect("validated identity");
-    resolve(
+    resolve_optional(
         directory,
         |descriptor| descriptor.identity == identity,
         |filename| filename.starts_with(service),
@@ -102,6 +111,19 @@ fn resolve(
     matches: impl Fn(&Descriptor) -> bool,
     claims_resource: impl Fn(&str) -> bool,
 ) -> Result<Descriptor> {
+    resolve_optional(directory, matches, claims_resource)?.with_context(|| {
+        format!(
+            "no compatible Breeze descriptor exists in {}; replay-safe resolution never creates one",
+            directory.display()
+        )
+    })
+}
+
+fn resolve_optional(
+    directory: &Path,
+    matches: impl Fn(&Descriptor) -> bool,
+    claims_resource: impl Fn(&str) -> bool,
+) -> Result<Option<Descriptor>> {
     let mut paths = fs::read_dir(directory)
         .with_context(|| {
             format!(
@@ -145,11 +167,8 @@ fn resolve(
         }
     }
     match candidates.len() {
-        1 => Ok(candidates.pop().expect("one Breeze descriptor")),
-        0 => bail!(
-            "no compatible Breeze descriptor exists in {}; replay-safe resolution never creates one",
-            directory.display()
-        ),
+        1 => Ok(candidates.pop()),
+        0 => Ok(None),
         count => bail!(
             "{count} compatible Breeze descriptors exist in {}; full resource identity is ambiguous",
             directory.display()
@@ -228,6 +247,9 @@ mod tests {
     fn exact_identity_reuses_port_and_rejects_missing_or_duplicate_descriptors() {
         let temp = tempfile::tempdir().unwrap();
         let identity = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc@cs";
+        assert_eq!(try_resolve_identity(temp.path(), identity).unwrap(), None);
+        assert!(resolve_identity(temp.path(), identity).is_err());
+
         descriptor(
             temp.path(),
             "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs",

@@ -156,10 +156,11 @@ redact_headers = [
 # key_end = 4095
 # key_separator = "."
 # key_suffix = "pl_video"
-# Once HTTP readiness succeeds, fail Recorder readiness if this rule has not
-# reached key_end - key_start + 1 completed matching exchanges within the
-# configured timeout. No applied Memcached rule means no additional wait.
-# initial_load_timeout_ms = 30000
+# Once HTTP readiness succeeds, observe this rule for up to the configured
+# window and log progress every 10 seconds. If the expected count remains
+# incomplete, warn and continue case admission. No applied Memcached rule
+# means no additional observation window.
+# initial_load_timeout_ms = 60000
 # response_role = "runtime_state"
 # source_revision = "0123456789abcdef"
 # source_evidence = "TopUserServiceImpl.java:691 scheduled local-cache warm"

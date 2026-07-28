@@ -10,6 +10,13 @@ analysis may produce the candidate used by `traffic-e2e prepare` before
 business-code analysis begins. A grouping result never waives the final managed
 pattern plan/apply/replan gate below.
 
+## Contents
+
+- Inputs
+- Case-to-route decision
+- Pattern safety
+- Target config update
+
 ## Inputs
 
 - published case, collection, rule, or run directory

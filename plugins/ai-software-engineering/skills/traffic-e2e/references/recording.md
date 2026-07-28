@@ -4,6 +4,14 @@ Use the installed `traffic-e2e` binary and the target's authoritative recorder
 configuration. Managed recording modifies local DNS and interception state; let
 the command own setup, recovery, and cleanup.
 
+## Contents
+
+- Preconditions
+- Start
+- Readiness and case admission
+- Access and safety
+- Shutdown and validation
+
 ## Preconditions
 
 Confirm before starting:
@@ -106,12 +114,15 @@ case. Send a controlled trigger and wait for it to finish before sending the
 next.
 
 When one or more applied Memcached `runtime_state` background rules exist,
-source readiness also requires the first expected matching exchange count for
-every rule. Recorder counts completed matching exchanges from process startup,
-then waits no longer than each rule's `initial_load_timeout_ms` after the HTTP
-ready probe. With no applied Memcached rule, this adds no wait. Read
+Recorder counts completed matching exchanges from process startup, then
+observes incomplete rules for no longer than each rule's
+`initial_load_timeout_ms` after the HTTP ready probe. It logs progress and
+continues case admission with a warning when the observation window expires.
+Configured Breeze identities may remain pending while Recorder starts, but
+their source-created descriptors must resolve by HTTP readiness.
+With no applied Memcached rule, this adds no wait. Read
 [background-dependencies.md](background-dependencies.md) for the exact
-counting and failure contract.
+counting contract.
 
 After the upstream response, the recorder accepts new case dependencies for
 `case_dependency_post_response_window_ms`, then closes admission and waits only

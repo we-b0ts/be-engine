@@ -160,13 +160,14 @@ decides the next state.
   to reproduce the source response, then rerun E2E.
 - Response-driving process state: when source and recording evidence prove a
   scheduled dependency call builds local state required by the response,
-  apply a narrow `runtime_state` background rule, make a new standard
-  recording, prepare it, and continue response repair. Traffic E2E currently
-  supports Breeze-backed Memcached `get` over a bounded numeric key series and
-  delays source case admission until the configured first-load count. If the
-  target still differs because its corresponding local cache has not completed
-  initialization, repair target startup, readiness, or cache lifecycle from
-  source evidence; do not treat target timing as a Replay capability gap.
+  use traffic-e2e's evidence-validating interface to plan and apply the narrow
+  supported `runtime_state` rule, then make a new standard recording, prepare
+  it, and continue response repair. If no supported rule can express the
+  proven traffic, return the exact Recorder or Replay capability gap and
+  acceptance check to `traffic-e2e-system`. If the target still differs
+  because its corresponding local state has not completed initialization,
+  repair target startup, readiness, or cache lifecycle from source evidence;
+  do not treat target timing as a Replay capability gap.
 - `background_dependency`: only after response assertions pass and source
   proves ownership plus independence, apply a narrow `independent` rule, make
   a new standard recording, prepare it, and rerun E2E.

@@ -35,7 +35,11 @@ working directory when Docker already provides them.
 ## Required Procedure
 
 Read [platform-runtime.md](references/platform-runtime.md) completely before
-writing files or starting containers.
+writing shared runtime files or starting containers. Read
+[standard-recording.md](references/standard-recording.md) before generating or
+validating `scripts/start-recording`. Read
+[comparison-recording.md](references/comparison-recording.md) before generating
+or validating the candidate facade or `scripts/start-recording-comparison`.
 
 1. Inspect repository instructions and both containers. Preserve the source
    image, root bootstrap, environment, command, working directory, limits, and
@@ -61,50 +65,26 @@ writing files or starting containers.
    Dockerfile and launchers from inspected evidence; invoke the bundled patch
    applicator and recursively assign `/data1/weibo` to numeric `998:998`
    during the image build.
-6. Generate `scripts/start-recording` for the inspected startup parameters.
-   Support optional `--run-id YYYYMMDDHHMMSS` and
-   `--duration-seconds <positive-integer>`, plus repeatable
-   `--api 'METHOD /path-or-pattern'` and
-   `--brz-no-fallback <true|false>`. Default the duration to 60 seconds and
-   Breeze no-fallback to `true`, pass API selectors through unchanged to
-   `traffic-e2e record`, capture the host wrapper's numeric UID/GID and pass it
-   through `--artifact-owner`, and require AI or automated calls to pass the
-   duration explicitly. Validate the encryption-key environment before
-   changing runtime state and pass it only to Recorder. Follow the fixed
-   lifecycle in the runtime reference; do not reconstruct it from another
-   repository.
+6. Generate `scripts/start-recording` for the inspected startup parameters and
+   follow the exact wrapper, lifecycle, ownership, encryption, and validation
+   contract in the standard-recording reference. Do not reconstruct it from
+   another repository.
 7. Before target implementation exists, generate an extensible
    `scripts/<project>-cli` whose initialization-time minimum is a
    fixed-response candidate mock behind `start`, `status`, and `stop`, then
    generate `scripts/start-recording-comparison` against that stable lifecycle
-   subset. These three commands are not the complete or exclusive command set;
-   later implementation may add the standard `e2e`, `test`, and `check`
-   commands while preserving lifecycle semantics. The candidate listens on the
-   configured comparison recording port.
-   `start-recording-comparison` must support optional
-   `--run-id YYYYMMDDHHMMSS`, `--duration-seconds`, and the enable-only
-   `--baseline-recheck` flag, plus repeatable
-   `--api 'METHOD /path-or-pattern'` and
-   `--brz-no-fallback <true|false>`. Default the duration to 60 seconds and
-   Breeze no-fallback to `true`. Start exactly one shared Breeze for the
-   genuine source and candidate containers; consume the Breeze option in the
-   wrapper and pass only traffic-e2e options through. Require AI or automated
-   calls to pass the duration explicitly. Validate the encryption-key
-   environment before changing runtime state and preserve it only for
-   `traffic-e2e record-comparison`. Follow the fixed lifecycle in the runtime
-   reference.
+   subset. Follow the exact facade, wrapper, shared-Breeze, encryption,
+   isolation, and validation contract in the comparison-recording reference.
 8. Create empty recording bind sources by translating each private source
    mount from `/data1/<project>/<path>` to
    `/data1/<project>-recording/<path>`. Keep container destinations unchanged,
    copy no original content, and recursively assign the new writable sources
    to numeric `998:998`. Before every start, also normalize the fixed shared
    Breeze directories as specified by the runtime reference.
-9. Validate configuration, adapter construction, shell syntax, bounded
-   standard and comparison recording startup, readiness, identity, dependency
-   routing, shared Breeze descriptor preservation, clean finalization, and
-   host ownership of the complete finalized standard recording run. Do not
-   generate target Breeze SDK packages or repository development rules; those
-   belong to the [`breeze-sdk` skill](../breeze-sdk/SKILL.md).
+9. Complete the shared runtime, standard recording, and comparison recording
+   validation sections. Do not generate target Breeze SDK packages or
+   repository development rules; those belong to the
+   [`breeze-sdk` skill](../breeze-sdk/SKILL.md).
 10. Commit only the initialization outputs, push the initialization branch, and
    create or update its draft PR targeting `dev-migration`.
 
@@ -153,15 +133,8 @@ Run the two bounded recording commands with a valid, unlogged
 `TRAFFIC_E2E_ENCRYPTION_KEY_B64`; each command must fail before runtime changes
 when the variable is absent or invalid.
 
-Report completion only after Recorder listeners, Breeze, and the genuine
-source are ready; the genuine source Java process runs as numeric `998:998`;
-`breeze.recording` resolves through fake DNS for that identity; and Recorder
-finalizes cleanly with its complete run tree owned by the host user that
-invoked `scripts/start-recording`. The bounded comparison recording validation
-must prove the baseline and fixed-response candidate both became ready and
-`comparison-recording-run.json` finalized; it does not require frontend
-traffic or a published comparison recording case. Also require published
-`dev-migration` and initialization branches plus the draft PR from the
-initialization branch to `dev-migration`. Do not send a business request,
-implement target Breeze clients, or require a recorded case during
-initialization.
+Report completion only after every validation gate in the three selected
+references passes, `dev-migration` and the initialization branch are
+published, and the initialization draft PR targets `dev-migration`. Do not
+send a business request, implement target Breeze clients, or require a
+recorded case during initialization.

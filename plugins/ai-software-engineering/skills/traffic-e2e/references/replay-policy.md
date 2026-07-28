@@ -3,6 +3,14 @@
 Read this reference before creating, changing, or validating replay-time
 response rules.
 
+## Contents
+
+- Ownership
+- Assertion and dependency boundaries
+- Dependency dynamic rules
+- Dynamic response fields
+- Unordered response arrays
+
 ## Ownership
 
 Maintain one source-controlled target `.traffic-e2e/verification.yaml`. Every replay

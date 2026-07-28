@@ -975,26 +975,27 @@ traffic-e2e config recorder apply background-dependencies \
   --key-end 4095 \
   --key-separator . \
   --key-suffix pl_video \
-  --initial-load-timeout-ms 30000 \
+  --initial-load-timeout-ms 60000 \
   --replay-report <same-finalized-replay-report.json> \
   --source-revision 0123456789abcdef \
   --evidence 'TopUserServiceImpl.java:691 scheduled local-cache warm'
 ```
 
 The tool requires one compatible Breeze `mc` descriptor, persists its complete
-stable identity without the dynamic port, and resolves the port again at
-Recorder startup. Runtime matching uses port as a coarse filter, then requires
-Memcached `get` and the exact bounded numeric key series. Apply this
+stable identity without the dynamic port, and resolves the port when the
+source-created descriptor is available. Runtime matching uses port as a coarse
+filter, then requires Memcached `get` and the exact bounded numeric key series. Apply this
 `runtime_state` rule during response repair when the cache warm is a proven
 cause; do not wait for responses to pass.
 
 An applied Memcached rule also delays source case admission until Recorder has
 counted `key_end - key_start + 1` completed replay-safe matches. The count
 includes matches observed before HTTP readiness. After the ready probe,
-Recorder waits at most `initial_load_timeout_ms` (30000 by default); timeout
-fails readiness. The rule is the opt-in: without an applied Memcached rule
-there is no additional wait. This source-recording barrier does not wait for
-target-local cache initialization during Replay.
+Recorder observes for at most `initial_load_timeout_ms` (60000 by default),
+logs progress every 10 seconds, and warns but continues case admission when
+the count remains incomplete. The rule is the opt-in: without an applied
+Memcached rule there is no additional observation window. This source-recording
+wait does not apply to target-local cache initialization during Replay.
 
 Recognized MySQL connection maintenance is not a semantic dependency. The
 strict built-in fingerprints are protocol `COM_PING`, c3p0's exact

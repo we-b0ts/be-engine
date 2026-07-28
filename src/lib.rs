@@ -171,11 +171,11 @@ impl AppState {
             .context("invalid recording API selection")?;
         let background_rules = config.recording.background_dependencies.clone();
         let background_dependencies = tokio::task::spawn_blocking(move || {
-            BackgroundDependencyMatcher::resolve(&background_rules)
+            BackgroundDependencyMatcher::from_rules(&background_rules)
         })
         .await
-        .context("Breeze background dependency resolver task failed")?
-        .context("failed to resolve background dependency resources")?;
+        .context("background dependency initializer task failed")?
+        .context("failed to initialize background dependency rules")?;
         let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
             .context("failed to initialize DNS bypass matcher")?;
         let recording_output_dir = config.recording_output_dir();
@@ -430,8 +430,12 @@ impl AppState {
     pub(crate) async fn wait_for_background_initial_loads(&self) -> Result<()> {
         self.inner
             .background_dependencies
+            .ensure_resources_resolved()?;
+        self.inner
+            .background_dependencies
             .wait_for_initial_loads()
-            .await
+            .await;
+        Ok(())
     }
 
     pub(crate) fn begin_case_quiescing(&self) -> bool {

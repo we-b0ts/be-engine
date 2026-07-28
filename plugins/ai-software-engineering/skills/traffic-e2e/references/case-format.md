@@ -3,6 +3,14 @@
 Use this reference when parsing recorded artifacts, driving target requests,
 or diagnosing recorder-owned dependency replay.
 
+## Contents
+
+- Directory and files
+- HTTP boundary files
+- Body capture
+- Dependency files
+- MySQL exchange records
+
 ## Directory And Files
 
 Canonical published case layout:

@@ -2,6 +2,15 @@
 
 Read this reference for every replay execution.
 
+## Contents
+
+- Target isolation
+- Recorder commands
+- Fixed-user interception
+- Required sequence
+- Aggregate
+- Iteration
+
 ## Target Isolation
 
 Inspect the target E2E entrypoint, startup, config, and dependency endpoints.
