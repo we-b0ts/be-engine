@@ -15,6 +15,11 @@ evidence, and advance only on current proof.
   Preserve responses, dependency roles, side effects, ordering, error
   semantics, metrics, configuration provenance, and lifecycle behavior unless
   the user approves a contract change.
+- Treat the source repository and source application implementation as
+  immutable evidence. Never edit source code, replace source classes through a
+  recording adapter, patch source artifacts, or change source business
+  behavior to manufacture traffic or make verification pass. This skill
+  authorizes no source patch; never invent or extend one.
 - Treat source structure as evidence, not as target architecture. Use the
   smallest independently triggerable and verifiable slice; for HTTP traffic,
   default to one canonical API group.
@@ -50,11 +55,14 @@ queues such as MCQ or QueueService, Motan, and other Breeze-managed remote
 resources. Breeze owns reusable resource identity, discovery, runtime
 lifecycle, and client construction; business contracts and behavior remain in
 the target capability, while rewrite retains slice sequencing, evidence gates,
-completion, and delivery.
+completion, and delivery. Require target resource packages to use the shared
+Breeze descriptor library directly. Do not accept a project CLI that enumerates
+resources, invokes a descriptor resolver, or injects descriptor-derived ports.
 
 Do not modify traffic-e2e to complete a rewrite. Route a proven Recorder or
 Replay capability gap to `traffic-e2e-system`, and do not add a
-recording-backed workaround to target code.
+recording-backed workaround to target code. Likewise, never route a missing
+recording capability into a source modification.
 
 ## Required Workflow
 

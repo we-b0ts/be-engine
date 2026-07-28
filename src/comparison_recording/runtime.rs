@@ -21,8 +21,8 @@ use super::model::{ComparisonRecordingCase, ComparisonRecordingRequest};
 use super::store::{ComparisonRecordingStore, Reservation};
 use super::tasks::BackgroundTasks;
 use super::upstream::{
-    LimitedBodyError, ResponseDisposition, UpstreamCapture, UpstreamErrorKind, body_capture,
-    collect_limited, collect_unlimited, downstream_response, fetch_upstream, run_ready_probe,
+    LimitedBodyError, ResponseDisposition, UpstreamCapture, UpstreamErrorKind, collect_limited,
+    collect_unlimited, downstream_response, fetch_upstream, request_body_capture, run_ready_probe,
 };
 use crate::config::{AppConfig, ComparisonRecordingConfig, HttpGatewayConfig};
 use crate::gateway::http::rules::{
@@ -421,7 +421,7 @@ async fn handle_request(
         matched_rule: rule.name.clone(),
         api_pattern: group.pattern.clone(),
         headers: protected_headers,
-        body: body_capture(&body, false, Some(body.len())),
+        body: request_body_capture(&body, false, Some(body.len())),
     };
     let (sender, receiver) = oneshot::channel();
     let task_runtime = runtime.clone();

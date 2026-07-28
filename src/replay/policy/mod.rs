@@ -25,4 +25,5 @@ pub(in crate::replay) use matcher::{
 };
 pub(in crate::replay) use pattern::uri_path;
 pub(in crate::replay) use report::ReplayPolicyReport;
-pub use response::{ResponseField, ResponseRuleKind};
+pub(crate) use response::response_locations_overlap;
+pub use response::{DynamicResponseMechanism, ResponseField, ResponseRuleKind};

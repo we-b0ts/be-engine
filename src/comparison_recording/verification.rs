@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::edit::{create_atomic, write_atomic};
 use crate::replay::{
     ComparisonResponseAssertionOptions, ResponseAssertionCaseReport, assert_comparison_response,
-    validate_replay_policy,
+    response_locations_overlap, validate_replay_policy,
 };
 
 const RUN_SUMMARY_FILE: &str = "comparison-recording-run.json";
@@ -25,7 +25,9 @@ pub struct ComparisonVerificationCounts {
     pub passed: usize,
     pub failed: usize,
     pub inconclusive: usize,
+    pub policy_mismatch: usize,
     pub unevaluable: usize,
+    pub source_changed_cases: usize,
     pub apis_total: usize,
     pub apis_passed: usize,
     pub apis_failed: usize,
@@ -37,7 +39,9 @@ pub struct ComparisonVerificationApiCounts {
     pub passed: usize,
     pub failed: usize,
     pub inconclusive: usize,
+    pub policy_mismatch: usize,
     pub unevaluable: usize,
+    pub source_changed_cases: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,7 +55,8 @@ pub struct ComparisonVerificationApi {
 pub enum ComparisonVerificationClassification {
     Passed,
     CandidateDifference,
-    SourceDrift,
+    SourceChange,
+    PolicyMismatch,
     Unevaluable,
 }
 
@@ -66,6 +71,12 @@ pub struct ComparisonVerificationCase {
     pub response: Option<ResponseAssertionCaseReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline_recheck: Option<ResponseAssertionCaseReport>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_change_pointers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidate_only_pointers: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_mismatch_rule_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -216,15 +227,33 @@ pub fn verify_comparison_recording(
         };
         match (response, baseline_recheck.transpose()) {
             (Ok(response), Ok(baseline_recheck)) => {
-                let (classification, passed) = if baseline_recheck
+                let source_change_pointers = baseline_recheck
                     .as_ref()
-                    .is_some_and(|report| !report.passed)
+                    .map(difference_pointers)
+                    .unwrap_or_default();
+                let candidate_only_pointers =
+                    unexplained_candidate_pointers(&response, baseline_recheck.as_ref());
+                let policy_mismatch_rule_ids =
+                    policy_mismatch_rule_ids(&response, baseline_recheck.as_ref());
+                let api_entry = api_counts.entry(api.clone()).or_default();
+                if !source_change_pointers.is_empty() {
+                    counts.source_changed_cases += 1;
+                    api_entry.source_changed_cases += 1;
+                }
+                if !policy_mismatch_rule_ids.is_empty() {
+                    counts.policy_mismatch += 1;
+                    api_entry.policy_mismatch += 1;
+                }
+                let (classification, passed) = if response.differences.is_empty()
+                    && !policy_mismatch_rule_ids.is_empty()
                 {
-                    counts.inconclusive += 1;
-                    (ComparisonVerificationClassification::SourceDrift, false)
-                } else if response.passed {
+                    (ComparisonVerificationClassification::PolicyMismatch, false)
+                } else if response.differences.is_empty() {
                     counts.passed += 1;
                     (ComparisonVerificationClassification::Passed, true)
+                } else if candidate_only_pointers.is_empty() && !source_change_pointers.is_empty() {
+                    counts.inconclusive += 1;
+                    (ComparisonVerificationClassification::SourceChange, false)
                 } else {
                     counts.failed += 1;
                     (
@@ -232,7 +261,7 @@ pub fn verify_comparison_recording(
                         false,
                     )
                 };
-                update_api_counts(api_counts.entry(api.clone()).or_default(), classification);
+                update_api_counts(api_entry, classification);
                 cases.push(ComparisonVerificationCase {
                     case_id,
                     case_dir: case_dir.display().to_string(),
@@ -241,6 +270,9 @@ pub fn verify_comparison_recording(
                     passed,
                     response: Some(response),
                     baseline_recheck,
+                    source_change_pointers,
+                    candidate_only_pointers,
+                    policy_mismatch_rule_ids,
                     error: None,
                 });
             }
@@ -265,6 +297,9 @@ pub fn verify_comparison_recording(
                     passed: false,
                     response: None,
                     baseline_recheck: None,
+                    source_change_pointers: Vec::new(),
+                    candidate_only_pointers: Vec::new(),
+                    policy_mismatch_rule_ids: Vec::new(),
                     error: Some(error),
                 });
             }
@@ -283,7 +318,7 @@ pub fn verify_comparison_recording(
     let complete = counts.unevaluable == 0;
     let passed = complete && counts.failed == 0 && counts.passed == counts.total;
     let report = ComparisonVerificationReport {
-        version: 2,
+        version: 3,
         kind: "comparison_recording_verification".to_string(),
         case_source: case_source.display().to_string(),
         recording_summary_path: summary_path.display().to_string(),
@@ -312,9 +347,81 @@ fn update_api_counts(
     match classification {
         ComparisonVerificationClassification::Passed => counts.passed += 1,
         ComparisonVerificationClassification::CandidateDifference => counts.failed += 1,
-        ComparisonVerificationClassification::SourceDrift => counts.inconclusive += 1,
+        ComparisonVerificationClassification::SourceChange => counts.inconclusive += 1,
+        ComparisonVerificationClassification::PolicyMismatch => {}
         ComparisonVerificationClassification::Unevaluable => counts.unevaluable += 1,
     }
+}
+
+fn difference_pointers(report: &ResponseAssertionCaseReport) -> Vec<String> {
+    report
+        .differences
+        .iter()
+        .map(|difference| difference.pointer.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn unexplained_candidate_pointers(
+    response: &ResponseAssertionCaseReport,
+    baseline_recheck: Option<&ResponseAssertionCaseReport>,
+) -> Vec<String> {
+    let source_differences = baseline_recheck
+        .map(|report| report.differences.as_slice())
+        .unwrap_or_default();
+    response
+        .differences
+        .iter()
+        .filter(|candidate| {
+            !source_differences
+                .iter()
+                .any(|source| response_locations_overlap(&candidate.pointer, &source.pointer))
+        })
+        .map(|difference| difference.pointer.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn policy_mismatch_rule_ids(
+    response: &ResponseAssertionCaseReport,
+    baseline_recheck: Option<&ResponseAssertionCaseReport>,
+) -> Vec<String> {
+    let applied = response
+        .applied_dynamic_rule_ids
+        .iter()
+        .chain(&response.applied_unordered_rule_ids)
+        .chain(
+            baseline_recheck
+                .into_iter()
+                .flat_map(|report| &report.applied_dynamic_rule_ids),
+        )
+        .chain(
+            baseline_recheck
+                .into_iter()
+                .flat_map(|report| &report.applied_unordered_rule_ids),
+        )
+        .collect::<BTreeSet<_>>();
+    response
+        .unused_applicable_dynamic_rule_ids
+        .iter()
+        .chain(&response.unused_applicable_unordered_rule_ids)
+        .chain(
+            baseline_recheck
+                .into_iter()
+                .flat_map(|report| &report.unused_applicable_dynamic_rule_ids),
+        )
+        .chain(
+            baseline_recheck
+                .into_iter()
+                .flat_map(|report| &report.unused_applicable_unordered_rule_ids),
+        )
+        .filter(|rule_id| !applied.contains(rule_id))
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 fn discover_cases(root: &Path) -> Result<Vec<PathBuf>> {

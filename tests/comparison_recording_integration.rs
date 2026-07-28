@@ -1,3 +1,4 @@
+use std::io::{Read as _, Write as _};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -6,6 +7,9 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use hyper::StatusCode;
 use serde_json::Value;
 use tempfile::tempdir;
@@ -21,6 +25,59 @@ use traffic_e2e::{
 // before the runtime binds it. Keep these integration tests exclusive to close
 // that port-reuse race while preserving parallelism in the rest of the suite.
 static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+
+#[tokio::test]
+async fn decodes_gzip_response_artifacts_without_changing_the_forwarded_response() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let body = r#"{"ok":true,"source":"same"}"#;
+    let baseline = spawn_gzip_response_upstream(body, 1).await;
+    let candidate = spawn_response_upstream(body, 1).await;
+    let gateway = free_addr();
+    let run_id = "20260722155958";
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
+    wait_for_port(gateway).await;
+
+    let response = raw_request_bytes(
+        gateway,
+        b"GET /api/gzip HTTP/1.1\r\nHost: example.com\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n",
+    )
+    .await;
+    let body_offset = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|offset| offset + 4)
+        .unwrap();
+    assert!(
+        String::from_utf8_lossy(&response[..body_offset])
+            .to_ascii_lowercase()
+            .contains("content-encoding: gzip")
+    );
+    let mut decoder = GzDecoder::new(&response[body_offset..]);
+    let mut forwarded_body = String::new();
+    decoder.read_to_string(&mut forwarded_body).unwrap();
+    assert_eq!(forwarded_body, body);
+
+    let case = wait_for_only_child(&run_dir(&temp, run_id).join("api/api-gzip")).await;
+    let expected = read_json(&case.join("expected-response.json"));
+    assert_eq!(expected["body"]["encoding"], "utf8");
+    assert_eq!(expected["body"]["decoded"], true);
+    assert_eq!(expected["body"]["content_encoding"], "gzip");
+    assert_eq!(expected["body"]["data"], body);
+    assert_eq!(expected["body"]["decode_error"], Value::Null);
+
+    let actual = read_json(&case.join("response.json"));
+    assert_eq!(actual["body"]["encoding"], "utf8");
+    assert_eq!(actual["body"]["decoded"], false);
+    assert_eq!(actual["body"]["content_encoding"], Value::Null);
+    assert_eq!(actual["body"]["data"], body);
+    task.abort();
+}
 
 #[tokio::test]
 async fn duration_stops_cleanly_after_comparison_recording_is_ready() {
@@ -465,6 +522,28 @@ async fn spawn_response_upstream(body: &'static str, count: usize) -> SocketAddr
         .0
 }
 
+async fn spawn_gzip_response_upstream(body: &'static str, count: usize) -> SocketAddr {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(body.as_bytes()).unwrap();
+    let compressed = encoder.finish().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        for _ in 0..count {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 2048];
+            let _ = stream.read(&mut buffer).await.unwrap();
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                compressed.len()
+            );
+            stream.write_all(headers.as_bytes()).await.unwrap();
+            stream.write_all(&compressed).await.unwrap();
+        }
+    });
+    address
+}
+
 async fn spawn_delayed_upstream(body: &'static str, count: usize, delay: Duration) -> SocketAddr {
     spawn_counting_upstream(StatusCode::OK, body, count, Some(delay))
         .await
@@ -533,11 +612,15 @@ async fn raw_get(address: SocketAddr, path: &str) -> String {
 }
 
 async fn raw_request(address: SocketAddr, request: &[u8]) -> String {
+    String::from_utf8_lossy(&raw_request_bytes(address, request).await).into_owned()
+}
+
+async fn raw_request_bytes(address: SocketAddr, request: &[u8]) -> Vec<u8> {
     let mut client = TcpStream::connect(address).await.unwrap();
     client.write_all(request).await.unwrap();
     let mut response = Vec::new();
     client.read_to_end(&mut response).await.unwrap();
-    String::from_utf8_lossy(&response).into_owned()
+    response
 }
 
 fn free_addr() -> SocketAddr {

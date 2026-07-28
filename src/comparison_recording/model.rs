@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::recorder::HeaderMapSnapshot;
+use crate::recorder::{CaseBodyCapture, HeaderMapSnapshot};
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ComparisonRecordingBody {
@@ -34,7 +34,7 @@ pub(super) struct ComparisonRecordingResponse {
     pub(super) upstream: String,
     pub(super) status: Option<u16>,
     pub(super) headers: Option<HeaderMapSnapshot>,
-    pub(super) body: Option<ComparisonRecordingBody>,
+    pub(super) body: Option<CaseBodyCapture>,
     pub(super) duration_ms: u128,
     pub(super) error: Option<String>,
 }

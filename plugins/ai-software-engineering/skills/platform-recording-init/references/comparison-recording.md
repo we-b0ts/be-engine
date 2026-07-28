@@ -40,6 +40,15 @@ available, replace the mock implementation behind this facade, preserve the
 add the `e2e`, `test`, and `check` commands required by the standard traffic
 E2E target facade.
 
+This initializer owns only the facade scaffold and fixed mock. Do not plan or
+implement future dependency wiring by parsing replay sessions, dependency
+JSONL, recorded commands, keys, or target ports. The backend rewrite workflow
+must review and replace the scaffold when genuine target startup becomes
+available; Breeze-managed wiring then follows the
+[`breeze-sdk` skill](../../breeze-sdk/SKILL.md). The facade may forward generic
+Breeze topology settings, but it must not enumerate resources, call a
+descriptor resolver, or inject descriptor-derived ports.
+
 ## Wrapper Contract
 
 Generate `scripts/start-recording-comparison` with these accepted forms:
@@ -81,7 +90,9 @@ normal dependency configuration. Do not start a Breeze per application.
 option is true, execute the mounted repository script against the source and
 against every candidate runtime that exposes the Platform mesh control
 endpoint after each becomes ready. Treat a required but unreachable control
-endpoint as startup failure. When false, skip those commands.
+endpoint as startup failure. This fixed script changes only Breeze Mesh
+transport fallback; it does not authorize disabling caches, business fallback,
+or other feature switches. When false, skip those commands.
 
 Use this lifecycle:
 
@@ -92,8 +103,10 @@ Use this lifecycle:
 3. start the genuine inspected source as the baseline and connect it to the
    shared Breeze;
 4. invoke `scripts/<project>-cli stop` to remove only a stale owned candidate,
+   configure the candidate's generic descriptor policy as `RequireExisting`,
    then invoke `start`, connect the candidate to the same Breeze, and require
-   `status` to succeed;
+   `status` to succeed; the source establishes descriptors and the candidate
+   SDK resolves them internally;
 5. when `brz_no_fallback` is true, apply `scripts/brz-no-fallback.sh` to each
    applicable ready application container;
 6. run `traffic-e2e record-comparison --config
@@ -130,9 +143,10 @@ traffic-e2e compare \
 
 This command is file-only and must not enable isolation. It writes
 `comparison-report.json` by default and reuses only the shared verification
-policy's response rules. A changed optional source recheck is `source_drift`
-and remains inconclusive; it must not be attributed to candidate code or
-automatically exempted. Use `--comparison-report` with
+policy's response rules. A changed optional source recheck is reported as
+`source_change` only for candidate differences at the same response location;
+unrelated candidate differences remain candidate behavior. Source change is
+inconclusive evidence, not a cause or exemption. Use `--comparison-report` with
 `traffic-e2e config replay plan|apply response-rule` when reviewed online
 evidence proves that another dynamic or unordered field should be exempted.
 

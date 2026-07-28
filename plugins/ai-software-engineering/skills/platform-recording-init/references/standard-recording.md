@@ -56,7 +56,9 @@ assign that tree after its writers flush and final metadata is persisted.
 Require `nc` and an executable repository copy of the asset during argument
 validation. When `brz_no_fallback` is true, run the repository's
 `scripts/brz-no-fallback.sh` immediately after source port `880` becomes
-available. When false, do not execute it.
+available. The fixed script changes only Breeze Mesh transport fallback; it
+does not authorize disabling application caches, business fallback, or other
+feature switches. When false, do not execute it.
 
 ## Lifecycle
 

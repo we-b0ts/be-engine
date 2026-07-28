@@ -51,6 +51,10 @@ The shared descriptor layer owns filename parsing, identity matching, locking,
 port selection, atomic creation, and listener readiness. Resource packages
 must not implement divergent copies.
 
+Use the shared descriptor layer as a library dependency of each resource
+package. Do not expose it as a production startup executable that a project
+CLI must call before constructing resource clients.
+
 Business SQL and table selection, cache keys and cache policy, message topics
 and schemas, RPC service interfaces and method semantics, provider DTO
 mapping, fallback policy, and cross-resource orchestration stay outside the SDK
@@ -71,6 +75,21 @@ let the business adapter translate it into a capability-facing port.
 Expose logical identity and bounded operation settings to the composition
 root. Do not expose arbitrary caller-selected Breeze ports as application
 configuration.
+
+Use this integration shape:
+
+```text
+composition root declares ResourceIdentity
+  -> brz-<resource> receives identity, DescriptorPolicy, and client options
+  -> brz-<resource> resolves or registers through the descriptor library
+  -> brz-<resource> constructs and returns the long-lived client
+```
+
+The consuming application owns which logical resources it needs. The resource
+SDK owns how each identity becomes a Breeze endpoint and client. Adding a
+resource may change the application composition root and capability adapter;
+it must not require a new project-CLI branch, resolver invocation, or
+descriptor-derived address variable.
 
 Construct long-lived clients once, inject narrow interfaces into capabilities,
 reuse connections appropriately, and make startup failure explicit. Keep

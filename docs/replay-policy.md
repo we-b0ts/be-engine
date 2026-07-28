@@ -50,9 +50,10 @@ verification. `traffic-e2e compare <comparison-recording-run> --policy
 <verification.yaml>` treats the baseline `expected-response.json` as the
 oracle and the candidate `response.json` as actual output. When
 `expected-response-after.json` exists, it also checks source-before against
-source-after. An unexempted source difference classifies the case as
-`source_drift`, not a candidate defect. Replay dependency rules are ignored
-during this file-only operation, and no interception or isolation is enabled.
+source-after. A source change makes only candidate differences at the same
+response location inconclusive; unrelated candidate differences remain target
+differences. Replay dependency rules are ignored during this file-only
+operation, and no interception or isolation is enabled.
 
 Do not put recorded values, response bodies, secrets, absolute case paths, or
 case-id exceptions in the policy. Use selectors and semantic validation only.
@@ -178,23 +179,42 @@ is intentionally non-deterministic:
 response_rules:
   dynamic:
     "GET /api/resource/token":
-      - /content
+      - pointer: /content
+        mechanisms:
+          - uuid
+        source_evidence: src/token.rs:issue_token UUID generation
+        source_example: <redacted source UUID>
+        target_example: <redacted target UUID>
 ```
 
 The field must exist in both responses and keep the same scalar JSON kind.
 Only literal equality is skipped; status, structure, other fields, and non-JSON
-bodies stay exact. The comparator does not decide whether the value is a UUID,
-random token, timestamp, or another generated value. Verify those semantics in
-source review, unit tests, or real-traffic integration tests.
+bodies stay exact. Every dynamic field persists its declared mechanism,
+single-line source citation, and distinct redacted source/target examples in
+the policy. These audit fields do not make the comparator infer or validate the
+generation mechanism; verify that semantic claim through source review, unit
+tests, or real-traffic integration tests.
 
-Use evidence-backed apply after diagnosing the source and target. It replans
+Never use a dynamic rule for a difference caused by process-local cache state
+or implementation. Do not exempt an entire scalar when it contains stable
+structure that the target omitted. Use evidence-backed apply only after source
+review proves the declared nondeterministic mechanism and redacted
+source/target examples demonstrate the same stable structure. Supported
+mechanisms are `timestamp`, `duration`, `uuid`, `random`, `nonce`,
+`random-salt`, and `dynamic-derived`; a derived digest or signature must also
+declare its underlying dynamic input. It replans
 against current evidence before writing; `plan` is optional diagnostics with
-the same strategy and arguments:
+the same strategy and arguments. Apply exactly one JSON Pointer at a time
+because the citation and examples belong to that field:
 
 ```bash
 traffic-e2e config replay apply response-rule \
   --target-root . \
   --kind dynamic \
+  --dynamic-mechanism uuid \
+  --source-evidence 'src/token.rs:issue_token UUID generation' \
+  --source-example '<redacted UUID from source>' \
+  --target-example '<redacted UUID from target>' \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
   --assertion-report .traffic-e2e/local/.../assertions.json \

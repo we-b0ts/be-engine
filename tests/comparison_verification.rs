@@ -1,8 +1,11 @@
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use serde_json::json;
 use tempfile::tempdir;
 use traffic_e2e::{
@@ -27,7 +30,11 @@ rules: []
 response_rules:
   dynamic:
     "GET /api/token":
-      - /token
+      - pointer: /token
+        mechanisms: [uuid]
+        source_evidence: src/token.rs:issue_token
+        source_example: <redacted source UUID>
+        target_example: <redacted target UUID>
 "#,
     )
     .unwrap();
@@ -57,6 +64,98 @@ response_rules:
         1
     );
     assert!(report_path.is_file());
+}
+
+#[test]
+fn a_rule_used_by_the_candidate_is_not_stale_when_the_source_recheck_is_stable() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({"token": "baseline"}),
+        json!({"token": "candidate"}),
+    );
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    write_response(
+        &case.join("expected-response-after.json"),
+        json!({"token": "baseline"}),
+    );
+    let policy = temp.path().join("replay.yaml");
+    fs::write(
+        &policy,
+        r#"version: 2
+expected_response: assertions_only
+rules: []
+response_rules:
+  dynamic:
+    "GET /api/token":
+      - pointer: /token
+        mechanisms: [uuid]
+        source_evidence: src/token.rs:issue_token
+        source_example: <redacted source UUID>
+        target_example: <redacted target UUID>
+"#,
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.counts.policy_mismatch, 0);
+    assert!(report.cases[0].policy_mismatch_rule_ids.is_empty());
+}
+
+#[test]
+fn compares_a_legacy_gzip_response_with_an_uncompressed_response() {
+    let temp = tempdir().unwrap();
+    let body = json!({"token": "same"});
+    let run = create_run(temp.path(), body.clone(), body.clone());
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(&serde_json::to_vec(&body).unwrap())
+        .unwrap();
+    let compressed = encoder.finish().unwrap();
+    fs::write(
+        case.join("expected-response.json"),
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "status": 200,
+            "headers": {
+                "content-encoding": ["gzip"],
+                "content-type": ["application/json"]
+            },
+            "body": {
+                "encoding": "base64",
+                "data": STANDARD.encode(compressed),
+                "truncated": false
+            },
+            "error": null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(report.complete);
+    assert!(report.passed);
+    assert_eq!(report.counts.passed, 1);
 }
 
 #[test]
@@ -100,7 +199,7 @@ fn writes_a_failed_report_for_an_unexempted_difference() {
 }
 
 #[test]
-fn classifies_a_changed_baseline_recheck_as_source_drift() {
+fn classifies_an_overlapping_baseline_change_as_source_change() {
     let temp = tempdir().unwrap();
     let run = create_run(
         temp.path(),
@@ -129,11 +228,226 @@ fn classifies_a_changed_baseline_recheck_as_source_drift() {
     assert!(report.complete);
     assert!(!report.passed);
     assert_eq!(report.counts.inconclusive, 1);
+    assert_eq!(report.counts.source_changed_cases, 1);
     assert_eq!(
         report.cases[0].classification,
-        ComparisonVerificationClassification::SourceDrift
+        ComparisonVerificationClassification::SourceChange
     );
+    assert_eq!(report.cases[0].source_change_pointers, ["/value"]);
+    assert!(report.cases[0].candidate_only_pointers.is_empty());
     assert!(!report.cases[0].baseline_recheck.as_ref().unwrap().passed);
+}
+
+#[test]
+fn unrelated_source_change_does_not_hide_a_candidate_difference() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({"source_owned": "before", "candidate_owned": "expected"}),
+        json!({"source_owned": "before", "candidate_owned": "wrong"}),
+    );
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    write_response(
+        &case.join("expected-response-after.json"),
+        json!({"source_owned": "after", "candidate_owned": "expected"}),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert_eq!(
+        report.cases[0].classification,
+        ComparisonVerificationClassification::CandidateDifference
+    );
+    assert_eq!(report.cases[0].source_change_pointers, ["/source_owned"]);
+    assert_eq!(
+        report.cases[0].candidate_only_pointers,
+        ["/candidate_owned"]
+    );
+    assert_eq!(report.counts.failed, 1);
+    assert_eq!(report.counts.source_changed_cases, 1);
+}
+
+#[test]
+fn source_change_is_diagnostic_when_candidate_matches_source_before() {
+    let temp = tempdir().unwrap();
+    let body = json!({"value": "before"});
+    let run = create_run(temp.path(), body.clone(), body);
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    write_response(
+        &case.join("expected-response-after.json"),
+        json!({"value": "after"}),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(report.passed);
+    assert_eq!(
+        report.cases[0].classification,
+        ComparisonVerificationClassification::Passed
+    );
+    assert_eq!(report.cases[0].source_change_pointers, ["/value"]);
+    assert_eq!(report.counts.source_changed_cases, 1);
+}
+
+#[test]
+fn classifies_an_unused_response_rule_as_policy_mismatch() {
+    let temp = tempdir().unwrap();
+    let body = json!({"value": "stable"});
+    let run = create_run(temp.path(), body.clone(), body);
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        r#"version: 2
+expected_response: assertions_only
+rules: []
+response_rules:
+  dynamic:
+    "GET /api/token":
+      - pointer: /missing
+        mechanisms: [uuid]
+        source_evidence: src/token.rs:issue_token
+        source_example: <redacted source UUID>
+        target_example: <redacted target UUID>
+"#,
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(
+        report.cases[0].classification,
+        ComparisonVerificationClassification::PolicyMismatch
+    );
+    assert_eq!(report.counts.policy_mismatch, 1);
+    assert_eq!(report.cases[0].policy_mismatch_rule_ids.len(), 1);
+}
+
+#[test]
+fn preserves_policy_mismatch_diagnostics_with_a_candidate_difference() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({"value": "expected"}),
+        json!({"value": "wrong"}),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        r#"version: 2
+expected_response: assertions_only
+rules: []
+response_rules:
+  dynamic:
+    "GET /api/token":
+      - pointer: /missing
+        mechanisms: [uuid]
+        source_evidence: src/token.rs:issue_token
+        source_example: <redacted source UUID>
+        target_example: <redacted target UUID>
+"#,
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert_eq!(
+        report.cases[0].classification,
+        ComparisonVerificationClassification::CandidateDifference
+    );
+    assert_eq!(report.counts.failed, 1);
+    assert_eq!(report.counts.policy_mismatch, 1);
+    assert_eq!(report.apis["GET /api/token"].counts.policy_mismatch, 1);
+    assert_eq!(report.cases[0].policy_mismatch_rule_ids.len(), 1);
+}
+
+#[test]
+fn marks_a_response_content_decoding_failure_as_unevaluable() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({"value": "baseline"}),
+        json!({"value": "candidate"}),
+    );
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    fs::write(
+        case.join("expected-response.json"),
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "status": 200,
+            "body": {
+                "encoding": "base64",
+                "data": STANDARD.encode(b"not gzip"),
+                "truncated": false,
+                "decoded": false,
+                "content_encoding": "gzip",
+                "decode_error": "failed to decode gzip body"
+            },
+            "error": null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.complete);
+    assert!(!report.passed);
+    assert_eq!(report.counts.unevaluable, 1);
+    assert_eq!(
+        report.cases[0].classification,
+        ComparisonVerificationClassification::Unevaluable
+    );
+    assert!(
+        report.cases[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("content decoding failed: failed to decode gzip body")
+    );
 }
 
 fn create_run(root: &Path, expected: serde_json::Value, response: serde_json::Value) -> PathBuf {

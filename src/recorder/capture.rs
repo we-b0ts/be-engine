@@ -1,14 +1,12 @@
 use std::collections::HashSet;
-use std::io::Read;
 
-use anyhow::{Context, Result};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
-use flate2::read::{GzDecoder, ZlibDecoder};
 use hyper::HeaderMap;
 
 use super::{BodyCapture, CaseBodyCapture, HeaderMapSnapshot};
+use crate::http::content_encoding;
 
 pub fn capture_body(bytes: &[u8], max_body_bytes: usize) -> BodyCapture {
     let stored_len = bytes.len().min(max_body_bytes);
@@ -35,7 +33,7 @@ pub fn capture_case_body(
     let (body, decoded, decode_truncated, limit_bytes, decode_error) = match content_encoding
         .as_deref()
     {
-        Some(encoding) => match decode_content_encoding(bytes, encoding, max_decoded_body_bytes) {
+        Some(encoding) => match content_encoding::decode(bytes, encoding, max_decoded_body_bytes) {
             Ok(decoded) => (
                 decoded.body,
                 true,
@@ -116,58 +114,6 @@ fn content_encoding(headers: &HeaderMap) -> Option<String> {
         .and_then(|value| value.to_str().ok())
         .map(|value| value.trim().to_ascii_lowercase())
         .filter(|value| !value.is_empty())
-}
-
-struct DecodedBody {
-    body: Vec<u8>,
-    truncated: bool,
-}
-
-fn decode_content_encoding(bytes: &[u8], encoding: &str, limit: usize) -> Result<DecodedBody> {
-    let mut out = bytes.to_vec();
-    let mut truncated = false;
-    for coding in encoding
-        .split(',')
-        .map(str::trim)
-        .filter(|coding| !coding.is_empty())
-        .rev()
-    {
-        out = match coding {
-            "gzip" | "x-gzip" => {
-                let mut decoder = GzDecoder::new(out.as_slice());
-                let mut decoded = Vec::new();
-                decoder
-                    .by_ref()
-                    .take(limit.saturating_add(1) as u64)
-                    .read_to_end(&mut decoded)
-                    .context("failed to decode gzip body")?;
-                truncated = decoded.len() > limit;
-                decoded.truncate(limit);
-                decoded
-            }
-            "deflate" => {
-                let mut decoder = ZlibDecoder::new(out.as_slice());
-                let mut decoded = Vec::new();
-                decoder
-                    .by_ref()
-                    .take(limit.saturating_add(1) as u64)
-                    .read_to_end(&mut decoded)
-                    .context("failed to decode deflate body")?;
-                truncated = decoded.len() > limit;
-                decoded.truncate(limit);
-                decoded
-            }
-            "identity" => out,
-            other => anyhow::bail!("unsupported content-encoding {other}"),
-        };
-        if truncated {
-            break;
-        }
-    }
-    Ok(DecodedBody {
-        body: out,
-        truncated,
-    })
 }
 
 impl From<Bytes> for BodyCapture {

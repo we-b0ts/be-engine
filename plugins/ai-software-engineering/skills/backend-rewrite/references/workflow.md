@@ -29,6 +29,13 @@ implementation/E2E, or comparison. Resume from valid evidence and keep
 unrelated worktree changes out of scope. Generate unique UTC run IDs, pass
 explicit recording durations, and retain exact artifact paths.
 
+When `scripts/<project>-cli` already exists, inspect it during discovery before
+accepting target startup or replay integration as valid. Check it against the
+traffic-e2e [target integration contract](../../traffic-e2e/references/target-integration.md).
+If it parses replay sessions or dependency artifacts to derive target
+configuration, record a `target_behavior` dependency-wiring repair and complete
+that repair before the next E2E attempt.
+
 ## Resolve Delivery Base
 
 Resolve the PR base before substantial work. If
@@ -82,6 +89,12 @@ inspection to effective configuration names and provenance, startup arguments,
 working directory, mounts, deployment metadata, network wiring, and dependency
 endpoints.
 
+Keep the source repository, source image application classes, and source
+business behavior read-only. A target-owned recording adapter does not
+authorize replacing a source class or patching an application JAR. If the
+required observation cannot be obtained without changing the source, preserve
+the failed evidence and route the exact recording capability gap instead.
+
 Do not print or persist secret values. Runtime inspection is diagnostic
 evidence, not authority to hard-code observed values. If essential evidence is
 unavailable and target behavior cannot be implemented without it, report the
@@ -97,6 +110,18 @@ active scope, immutable case source and IDs, structured response difference,
 causal dependency evidence, source behavior evidence, requested outcome
 ```
 
+Before the first genuine target E2E and after every target startup or
+dependency-wiring change, re-review the complete `scripts/<project>-cli`
+facade. Replace initialization-only mock behavior rather than layering runtime
+inference onto it. Target commands must not parse replay sessions or dependency
+artifacts to derive configuration. When the wiring is Breeze-managed, also
+apply the [`breeze-sdk` skill](../../breeze-sdk/SKILL.md). The facade may pass
+one generic descriptor policy and Breeze topology settings, but it must not
+enumerate resource identities, invoke a descriptor resolver per resource,
+resolve ports, export descriptor-derived addresses, or infer the policy from
+runner state. Resource packages must call the shared descriptor library and
+construct their own clients.
+
 Source-process local caches belong to target implementation. Inspect and
 reproduce cache-key derivation, bounded capacity and eviction, expiry or
 refresh timing, negative caching, concurrent-load behavior, startup or warmup
@@ -111,9 +136,22 @@ Memcached, Redis, MySQL, Kafka, queues such as MCQ or QueueService, Motan, and
 other Breeze-managed remote resources. Add the resource type, source access
 semantics, business/resource boundary, and relevant runtime or recorded
 dependency evidence to the target-code packet. Let `breeze-sdk` determine the
-reusable resource identity, runtime mode, and client lifecycle; keep SQL, keys,
-messages, RPC contracts, provider mapping, and orchestration in the target
-capability.
+reusable resource identity, descriptor policy, and client lifecycle; keep SQL,
+keys, messages, RPC contracts, provider mapping, and orchestration in the
+target capability.
+
+Map traffic topology to the generic Breeze policy outside the SDK:
+
+- use `RequireExisting` when the target must reuse descriptors established by
+  the source or recording topology;
+- use `EnsurePresent` for ordinary startup that may register missing resources;
+  and
+- use `CreateNew` only when the caller explicitly requires an isolated empty
+  descriptor state and an existing exact descriptor must fail startup.
+
+Do not put recording, replay, comparison, or task-specific branches in Breeze
+SDK code. Adding one Breeze-managed resource may change the target composition
+root and capability adapter; it must not require a project-CLI change.
 
 Use the
 [`backend-engineering` skill](../../backend-engineering/SKILL.md) for
@@ -145,9 +183,9 @@ decides the next state.
 5. Run offline `traffic-e2e compare` against that exact finalized run and the
    shared verification policy. Only the report's per-API passing result is
    current comparison evidence.
-6. Delegate comparison differences to traffic-e2e diagnosis. Fix candidate
-   behavior, re-record inconclusive source drift, or change policy only for
-   source-proven intentional non-determinism.
+6. Delegate comparison differences to traffic-e2e diagnosis. Fix every
+   candidate-only field, re-record a field-scoped inconclusive source change,
+   or change policy only for source-proven intentional non-determinism.
 7. After every code or policy change, pass affected E2E again and create a new
    comparison recording. Never reinterpret an older report for changed code.
 
@@ -179,7 +217,13 @@ decides the next state.
   capability gap.
 - `intentional_nondeterminism`: apply only source-proven policy, rerun E2E, and
   then make a new comparison recording.
-- `source_drift`: obtain a new comparison observation.
+- `source_change`: require source-before/source-after change at the same
+  response location as every candidate difference it claims to explain.
+  Preserve unrelated candidate-only fields as `target_behavior`; otherwise
+  obtain a new comparison observation and keep the state `action_required`.
+- `verification_policy`: remove or replace stale and unsupported response rules
+  through the evidence-validating interface, rerun E2E, then create a new
+  comparison recording.
 - `recorder_capability_gap` or `replay_capability_gap`: assign the exact system
   change and acceptance check to `traffic-e2e-system`; do not create a target
   workaround.

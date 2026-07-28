@@ -18,13 +18,14 @@ use crate::gateway::http::transport::{
     GatewayBody, build_downstream_response, build_upstream_request, build_upstream_uri,
     send_upstream, simple_response,
 };
-use crate::recorder::redact_headers;
+use crate::recorder::{CaseBodyCapture, capture_case_body, redact_headers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UpstreamErrorKind {
     Request,
     Timeout,
     ResponseTooLarge,
+    ResponseDecode,
 }
 
 #[derive(Clone)]
@@ -109,32 +110,26 @@ pub(super) async fn fetch_upstream(
             captured,
             original_len,
             truncated,
-        })) => UpstreamCapture {
-            record: if truncated {
-                ComparisonRecordingResponse {
-                    version: 1,
-                    timestamp,
-                    upstream: upstream.to_string(),
-                    status: Some(status.as_u16()),
-                    headers: Some(redact_headers(
-                        &headers,
-                        &runtime.config.recording.redact_headers,
-                    )),
-                    body: Some(body_capture(&captured, true, Some(original_len))),
-                    duration_ms: started.elapsed().as_millis(),
-                    error: Some(
-                        "response body exceeded comparison_recording.max_response_bytes"
-                            .to_string(),
-                    ),
+        })) => {
+            let body = response_body_capture(runtime, &headers, &captured, original_len, truncated);
+            let record = response_record(
+                runtime, timestamp, upstream, status, &headers, body, started,
+            );
+            let error_kind = record.body.as_ref().and_then(|body| {
+                if body.truncated {
+                    Some(UpstreamErrorKind::ResponseTooLarge)
+                } else {
+                    body.decode_error
+                        .is_some()
+                        .then_some(UpstreamErrorKind::ResponseDecode)
                 }
-            } else {
-                response_record(
-                    runtime, timestamp, upstream, status, &headers, &captured, started,
-                )
-            },
-            downstream: downstream.map(|body| (status, headers, body)),
-            error_kind: truncated.then_some(UpstreamErrorKind::ResponseTooLarge),
-        },
+            });
+            UpstreamCapture {
+                record,
+                downstream: downstream.map(|body| (status, headers, body)),
+                error_kind,
+            }
+        }
         Ok(Err(error)) => failed_capture(
             upstream,
             started.elapsed().as_millis(),
@@ -197,7 +192,7 @@ fn response_record(
     upstream: &str,
     status: StatusCode,
     headers: &HeaderMap,
-    body: &[u8],
+    body: CapturedResponseBody,
     started: Instant,
 ) -> ComparisonRecordingResponse {
     ComparisonRecordingResponse {
@@ -209,10 +204,45 @@ fn response_record(
             headers,
             &runtime.config.recording.redact_headers,
         )),
-        body: Some(body_capture(body, false, Some(body.len()))),
+        body: Some(body.body),
         duration_ms: started.elapsed().as_millis(),
-        error: None,
+        error: body.error,
     }
+}
+
+struct CapturedResponseBody {
+    body: CaseBodyCapture,
+    error: Option<String>,
+}
+
+fn response_body_capture(
+    runtime: &ComparisonRecordingRuntime,
+    headers: &HeaderMap,
+    bytes: &[u8],
+    original_len: usize,
+    wire_truncated: bool,
+) -> CapturedResponseBody {
+    let mut body = capture_case_body(
+        bytes,
+        runtime.comparison_recording.max_response_bytes,
+        runtime.config.recording.decoded_body_limit(),
+        Some(headers),
+    );
+    body.original_len = original_len;
+    body.truncated |= wire_truncated;
+    let error = if wire_truncated {
+        Some("response body exceeded comparison_recording.max_response_bytes".to_string())
+    } else if body.truncated {
+        Some(format!(
+            "decoded response body exceeded configured decoded body limit of {} bytes",
+            body.limit_bytes
+        ))
+    } else {
+        body.decode_error
+            .as_ref()
+            .map(|error| format!("response body content decoding failed: {error}"))
+    };
+    CapturedResponseBody { body, error }
 }
 
 pub(super) fn failed_capture(
@@ -282,7 +312,7 @@ pub(super) async fn collect_unlimited(
     Ok(collected.freeze())
 }
 
-pub(super) fn body_capture(
+pub(super) fn request_body_capture(
     bytes: &[u8],
     truncated: bool,
     original_len: Option<usize>,

@@ -1,6 +1,7 @@
 # Breeze SDK Verification
 
-Verify every new or changed resource package against the modes it supports.
+Verify every new or changed resource package against the descriptor policies
+it supports.
 
 ## Descriptor Tests
 
@@ -10,10 +11,20 @@ Verify every new or changed resource package against the modes it supports.
 - Reuse the exact port of one compatible existing descriptor.
 - Ignore `breeze_sdk.lock` and generated `*.sock` files.
 
-## Independent-Startup Tests
+## Policy Tests
 
-- Create a format-compatible descriptor only when the exact identity is
-  absent.
+- `RequireExisting` reuses one exact descriptor and fails without mutation
+  when it is missing.
+- `EnsurePresent` reuses one exact descriptor and registers it when missing.
+- `CreateNew` fails without mutation when one exact descriptor exists and
+  registers it when missing.
+- Every policy rejects malformed, duplicate, conflicting, and out-of-range
+  claims without mutating the directory.
+- No policy rewrites, renames, deletes, replaces, or renumbers an existing
+  descriptor.
+
+## Registration Tests
+
 - Serialize concurrent registration with the shared lock and rescan after
   acquiring it.
 - Select only eligible random ports and create the descriptor atomically.
@@ -21,17 +32,14 @@ Verify every new or changed resource package against the modes it supports.
   failure.
 - Preserve all unrelated descriptors.
 
-## Replay And Comparison Tests
-
-- Fail replay startup without filesystem mutation when an exact descriptor is
-  absent, malformed, duplicate, or conflicting.
-- Use the exact recording-time descriptor port without allocation in replay.
-- Prove protocol-default ports are never substituted.
-- Prove source and candidate reuse the same descriptor and listener during
-  comparison.
-
 ## Client Lifecycle Tests
 
+- Prove each `brz-*` package takes a logical identity and descriptor policy,
+  invokes the shared descriptor library, and constructs its own client.
+- Prove normal application startup does not depend on a descriptor executable,
+  per-resource CLI enumeration, or descriptor-derived address variables.
+- Prove adding a resource does not require changing the project CLI.
+- Prove protocol-default ports are never substituted.
 - Validate startup, configuration, health, normal operations, reuse, and
   shutdown.
 - Bound connection, operation, retry, and shutdown waits.

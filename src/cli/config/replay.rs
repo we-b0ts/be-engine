@@ -3,8 +3,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    ComparisonResponseRuleFeedback, ReplayPolicyInitOptions, ResponseRuleFeedback,
-    ResponseRuleKind, initialize_replay_policy, plan_comparison_response_rule, plan_response_rule,
+    ComparisonResponseRuleFeedback, DynamicResponseMechanism, ReplayPolicyInitOptions,
+    ResponseRuleFeedback, ResponseRuleKind, initialize_replay_policy,
+    plan_comparison_response_rule, plan_response_rule,
 };
 
 #[derive(Debug, Args)]
@@ -55,6 +56,18 @@ struct ResponseRuleArgs {
     #[arg(long = "json-pointer", required = true)]
     json_pointers: Vec<String>,
     #[arg(
+        long = "dynamic-mechanism",
+        value_enum,
+        required_if_eq("kind", "dynamic")
+    )]
+    dynamic_mechanisms: Vec<DynamicResponseMechanismArg>,
+    #[arg(long, required_if_eq("kind", "dynamic"))]
+    source_evidence: Option<String>,
+    #[arg(long, required_if_eq("kind", "dynamic"))]
+    source_example: Option<String>,
+    #[arg(long, required_if_eq("kind", "dynamic"))]
+    target_example: Option<String>,
+    #[arg(
         long,
         requires = "aggregate_report",
         conflicts_with = "comparison_report"
@@ -74,6 +87,31 @@ struct ResponseRuleArgs {
 enum ResponseRuleKindArg {
     Dynamic,
     Unordered,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DynamicResponseMechanismArg {
+    Timestamp,
+    Duration,
+    Uuid,
+    Random,
+    Nonce,
+    RandomSalt,
+    DynamicDerived,
+}
+
+impl From<DynamicResponseMechanismArg> for DynamicResponseMechanism {
+    fn from(value: DynamicResponseMechanismArg) -> Self {
+        match value {
+            DynamicResponseMechanismArg::Timestamp => Self::Timestamp,
+            DynamicResponseMechanismArg::Duration => Self::Duration,
+            DynamicResponseMechanismArg::Uuid => Self::Uuid,
+            DynamicResponseMechanismArg::Random => Self::Random,
+            DynamicResponseMechanismArg::Nonce => Self::Nonce,
+            DynamicResponseMechanismArg::RandomSalt => Self::RandomSalt,
+            DynamicResponseMechanismArg::DynamicDerived => Self::DynamicDerived,
+        }
+    }
 }
 
 impl From<ResponseRuleKindArg> for ResponseRuleKind {
@@ -121,12 +159,21 @@ fn response_rule_plan(
 ) -> Result<traffic_e2e::ResponseRulePlan> {
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
     let kind = args.kind.into();
+    let dynamic_mechanisms = args
+        .dynamic_mechanisms
+        .into_iter()
+        .map(Into::into)
+        .collect();
     if let Some(comparison_report) = args.comparison_report {
         plan_comparison_response_rule(ComparisonResponseRuleFeedback {
             policy_path,
             kind,
             api: args.api,
             json_pointers: args.json_pointers,
+            dynamic_mechanisms,
+            source_evidence: args.source_evidence,
+            source_example: args.source_example,
+            target_example: args.target_example,
             comparison_report,
         })
     } else {
@@ -135,6 +182,10 @@ fn response_rule_plan(
             kind,
             api: args.api,
             json_pointers: args.json_pointers,
+            dynamic_mechanisms,
+            source_evidence: args.source_evidence,
+            source_example: args.source_example,
+            target_example: args.target_example,
             assertion_report: args
                 .assertion_report
                 .expect("clap requires replay assertion evidence"),
