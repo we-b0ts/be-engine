@@ -163,27 +163,54 @@ group and JSON Pointer:
 response_rules:
   dynamic:
     "GET /api/resource/token":
-      - /content
+      - pointer: /content
+        mechanisms:
+          - uuid
+        source_evidence: src/token.rs:issue_token UUID generation
+        source_example: <redacted source UUID>
+        target_example: <redacted target UUID>
 ```
 
 The selected field must exist in expected and actual JSON, and both values must
 have the same scalar JSON kind. Only literal equality is skipped. Status, body
 structure, undeclared fields, missing fields, nulls, arrays, and non-JSON bodies
 remain exact. The rule does not validate UUID shape, randomness, timestamps, or
-other generation semantics; cover those through source review, unit tests, or
-real-traffic integration tests.
+other generation semantics. Its persisted mechanism, source citation, and
+distinct redacted source/target examples make the decision reviewable but do
+not replace source review, unit tests, or real-traffic integration tests.
 
 On an exact scalar mismatch the assertion report may expose the pointer as a
 diagnostic candidate. That mechanical candidate is not authorization to weaken
-the assertion. Inspect source and target behavior first. If the difference is
-intentional and dependency evidence is complete and clean, apply it. The
-command replans from the current evidence before writing; `plan` is available
-with the same arguments for optional diagnostics:
+the assertion. Inspect source and target behavior first. A missing, cold,
+stale, partially loaded, differently keyed, or differently refreshed
+process-local cache is target behavior and MUST NOT authorize a dynamic rule.
+Repair its implementation, lifecycle, or readiness and rerun the same cases.
+
+Apply a dynamic rule only when source code proves a supported nondeterministic
+mechanism and a representative, redacted source/target value pair shows that
+the selected scalar differs only because of that mechanism. Stable structure
+inside a scalar remains behavior: for example, a signed URL cannot be exempted
+as one dynamic string when the target omits the required signature parameters.
+Supported declarations are `timestamp`, `duration`, `uuid`, `random`, `nonce`,
+`random-salt`, and `dynamic-derived`; use `dynamic-derived` only together with
+the underlying dynamic input when a digest, signature, or encoding is derived
+from it.
+The command requires the mechanism, a single-line source file/symbol citation,
+and different redacted source and target examples. It writes all four evidence
+fields into the policy beside the selected pointer. Apply exactly one dynamic
+JSON Pointer at a time so the evidence cannot ambiguously cover several
+fields. These declarations make the decision auditable; they do not replace
+source review. The command replans from the current evidence before writing;
+`plan` is available with the same arguments for optional diagnostics:
 
 ```bash
 traffic-e2e config replay apply response-rule \
   --target-root <target> \
   --kind dynamic \
+  --dynamic-mechanism uuid \
+  --source-evidence 'src/token.rs:issue_token UUID generation' \
+  --source-example '<redacted UUID from source>' \
+  --target-example '<redacted UUID from target>' \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
   --assertion-report .traffic-e2e/local/.../assertions.json \

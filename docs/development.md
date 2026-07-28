@@ -136,7 +136,9 @@ response and records the request plus baseline and candidate responses under
 `http_gateway.matched_upstream` as the baseline unless
 `comparison_recording.baseline_upstream` is explicitly set. It does not load
 the verification policy, record dependencies, install interception rules, or
-initialize a MITM CA.
+initialize a MITM CA. Response bodies are decoded according to their own
+`Content-Encoding` before being stored for semantic comparison, while the
+baseline response returned to the frontend retains its original encoding.
 Explicit named HTTP gateway rules and methods are required. Only GET, HEAD, and
 OPTIONS may be mirrored. Any configured POST, PUT, PATCH, DELETE, or other
 non-read method fails configuration validation before the listener starts, so
@@ -205,6 +207,10 @@ workflow:
 ```bash
 traffic-e2e config replay plan response-rule \
   --kind dynamic \
+  --dynamic-mechanism uuid \
+  --source-evidence 'src/token.rs:issue_token UUID generation' \
+  --source-example '<redacted UUID from source>' \
+  --target-example '<redacted UUID from target>' \
   --api "GET /api/token" \
   --json-pointer /token \
   --comparison-report .traffic-e2e/artifacts/comparison-recordings/<run-id>/comparison-report.json
@@ -216,9 +222,10 @@ other isolation workflow.
 
 AI must diagnose a failed comparison before changing code or policy. A stable
 source recheck plus a candidate mismatch is stronger implementation-defect
-evidence. A changed source recheck is `source_drift`: ordinary mutable business
-data must be re-recorded in a quieter or snapshot-consistent window, not
-exempted. Only source-proven current-time/random scalar fields or
+evidence. A changed source recheck is `source_change` only for candidate
+differences at the same response location; unrelated candidate differences
+remain target behavior. Ordinary mutable business data must be re-recorded in
+a quieter or snapshot-consistent window, not exempted. Only source-proven current-time/random scalar fields or
 order-insensitive arrays may use the shared dynamic/unordered rules.
 
 Run the service with:

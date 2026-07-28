@@ -1,71 +1,33 @@
 mod document;
+mod evidence;
+mod justification;
+mod model;
 
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use serde::{Deserialize, Serialize};
 
 use self::document::{render_response_rules, replace_response_rules};
+use self::evidence::{
+    AggregateEvidence, AssertionCaseEvidence, AssertionEvidence, ComparisonEvidence,
+    difference_supports_rule, response_rule_exists, source_change_overlaps,
+};
 use super::config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
 use super::pattern::path_pattern_matches;
-use super::response::{ResponseRuleKind, parse_api, response_rule_id, validate_json_pointer};
+#[cfg(test)]
+use super::response::DynamicResponseMechanism;
+use super::response::{
+    DynamicResponseRule, ResponseRuleKind, parse_api, response_rule_id, validate_json_pointer,
+};
 use crate::config::edit::write_atomic;
 
-#[derive(Debug, Clone)]
-pub struct ResponseRuleFeedback {
-    pub policy_path: PathBuf,
-    pub kind: ResponseRuleKind,
-    pub api: String,
-    pub json_pointers: Vec<String>,
-    pub assertion_report: PathBuf,
-    pub aggregate_report: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct DynamicResponseRuleFeedback {
-    pub policy_path: PathBuf,
-    pub api: String,
-    pub json_pointers: Vec<String>,
-    pub assertion_report: PathBuf,
-    pub aggregate_report: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct ComparisonResponseRuleFeedback {
-    pub policy_path: PathBuf,
-    pub kind: ResponseRuleKind,
-    pub api: String,
-    pub json_pointers: Vec<String>,
-    pub comparison_report: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ResponseRuleReport {
-    pub policy: PathBuf,
-    pub policy_fingerprint: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assertion_report: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub assertion_fingerprint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub aggregate_report: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub aggregate_fingerprint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comparison_report: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comparison_fingerprint: Option<String>,
-    pub kind: ResponseRuleKind,
-    pub api: String,
-    pub json_pointers: Vec<String>,
-    pub matching_cases: usize,
-    pub changed: bool,
-    pub applied: bool,
-    pub added_rule_ids: Vec<String>,
-    pub diff: String,
-}
+use justification::ResponseRuleJustification;
+pub use model::{
+    ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, ResponseRuleFeedback,
+    ResponseRuleReport,
+};
 
 pub struct ResponseRulePlan {
     policy_path: PathBuf,
@@ -103,6 +65,17 @@ impl ResponseRulePlan {
 }
 
 pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRulePlan> {
+    ensure!(
+        feedback.kind != ResponseRuleKind::Dynamic || feedback.json_pointers.len() == 1,
+        "dynamic response rule evidence applies to exactly one --json-pointer"
+    );
+    let justification = justification::validate(
+        feedback.kind,
+        feedback.dynamic_mechanisms,
+        feedback.source_evidence,
+        feedback.source_example,
+        feedback.target_example,
+    )?;
     let prepared = prepare_response_rule(
         &feedback.policy_path,
         &feedback.api,
@@ -157,6 +130,7 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         feedback.api,
         prepared,
         matching_cases,
+        justification,
         ResponseRuleEvidence::Replay {
             assertion_report: feedback.assertion_report,
             assertion_fingerprint: fingerprint(&assertion_bytes),
@@ -169,6 +143,17 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
 pub fn plan_comparison_response_rule(
     feedback: ComparisonResponseRuleFeedback,
 ) -> Result<ResponseRulePlan> {
+    ensure!(
+        feedback.kind != ResponseRuleKind::Dynamic || feedback.json_pointers.len() == 1,
+        "dynamic response rule evidence applies to exactly one --json-pointer"
+    );
+    let justification = justification::validate(
+        feedback.kind,
+        feedback.dynamic_mechanisms,
+        feedback.source_evidence,
+        feedback.source_example,
+        feedback.target_example,
+    )?;
     let prepared = prepare_response_rule(
         &feedback.policy_path,
         &feedback.api,
@@ -178,7 +163,7 @@ pub fn plan_comparison_response_rule(
     let comparison: ComparisonEvidence =
         serde_json::from_slice(&comparison_bytes).context("invalid comparison report")?;
     ensure!(
-        comparison.version == 2
+        comparison.version == 3
             && comparison.kind == "comparison_recording_verification"
             && comparison.expected_response == "assertions_only"
             && comparison.assertion_mode == "comparison_recording"
@@ -201,8 +186,11 @@ pub fn plan_comparison_response_rule(
         comparison
             .cases
             .iter()
-            .all(|case| case.classification.as_deref() != Some("source_drift")),
-        "source-drift comparison evidence cannot authorize a response rule"
+            .all(
+                |case| case.classification.as_deref() != Some("policy_mismatch")
+                    && case.policy_mismatch_rule_ids.is_empty()
+            ),
+        "comparison evidence with unused applicable response rules cannot authorize a new rule"
     );
     let matching_cases = validate_response_evidence(
         &prepared,
@@ -217,6 +205,7 @@ pub fn plan_comparison_response_rule(
         feedback.api,
         prepared,
         matching_cases,
+        justification,
         ResponseRuleEvidence::Comparison {
             comparison_report: feedback.comparison_report,
             comparison_fingerprint: fingerprint(&comparison_bytes),
@@ -309,6 +298,16 @@ fn validate_response_evidence(
     let mut observed_difference = false;
     for (case, response) in &matching {
         ensure!(
+            case.policy_mismatch_rule_ids.is_empty(),
+            "case {:?} has unused applicable response rules",
+            case.case_id
+        );
+        ensure!(
+            !source_change_overlaps(case, &prepared.requested),
+            "case {:?} has source changes overlapping the proposed response rule",
+            case.case_id
+        );
+        ensure!(
             response.body_mode == "json_structural",
             "response rules require structural JSON assertion evidence"
         );
@@ -338,9 +337,7 @@ fn validate_response_evidence(
     ensure!(
         observed_difference
             || prepared.requested.iter().all(|pointer| {
-                response_rule_map(&prepared.loaded.document.response_rules, kind)
-                    .get(api)
-                    .is_some_and(|pointers| pointers.contains(pointer))
+                response_rule_exists(&prepared.loaded.document.response_rules, kind, api, pointer)
             }),
         "response evidence contains no differing field selected by the proposed rule"
     );
@@ -353,16 +350,61 @@ fn build_response_rule_plan(
     api: String,
     prepared: PreparedResponseRule,
     matching_cases: usize,
+    justification: ResponseRuleJustification,
     evidence: ResponseRuleEvidence,
 ) -> Result<ResponseRulePlan> {
     let mut updated_rules = prepared.loaded.document.response_rules.clone();
-    let fields = response_rule_map_mut(&mut updated_rules, kind)
-        .entry(api.clone())
-        .or_default();
-    let before = fields.iter().cloned().collect::<BTreeSet<_>>();
-    fields.extend(prepared.requested.iter().cloned());
-    fields.sort();
-    fields.dedup();
+    let before = match kind {
+        ResponseRuleKind::Dynamic => updated_rules
+            .dynamic
+            .get(&api)
+            .into_iter()
+            .flatten()
+            .map(|field| field.pointer.clone())
+            .collect::<BTreeSet<_>>(),
+        ResponseRuleKind::Unordered => updated_rules
+            .unordered
+            .get(&api)
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect::<BTreeSet<_>>(),
+    };
+    match kind {
+        ResponseRuleKind::Dynamic => {
+            let fields = updated_rules.dynamic.entry(api.clone()).or_default();
+            for pointer in &prepared.requested {
+                let proposed = DynamicResponseRule {
+                    pointer: pointer.clone(),
+                    mechanisms: justification.dynamic_mechanisms.clone(),
+                    source_evidence: justification
+                        .source_evidence
+                        .clone()
+                        .expect("dynamic justification requires source evidence"),
+                    source_example: justification
+                        .source_example
+                        .clone()
+                        .expect("dynamic justification requires a source example"),
+                    target_example: justification
+                        .target_example
+                        .clone()
+                        .expect("dynamic justification requires a target example"),
+                };
+                if let Some(existing) = fields.iter_mut().find(|field| field.pointer == *pointer) {
+                    *existing = proposed;
+                } else {
+                    fields.push(proposed);
+                }
+            }
+            fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
+        }
+        ResponseRuleKind::Unordered => {
+            let fields = updated_rules.unordered.entry(api.clone()).or_default();
+            fields.extend(prepared.requested.iter().cloned());
+            fields.sort();
+            fields.dedup();
+        }
+    }
     let added = prepared
         .requested
         .difference(&before)
@@ -432,6 +474,10 @@ fn build_response_rule_plan(
             kind,
             api,
             json_pointers: prepared.requested.into_iter().collect(),
+            dynamic_mechanisms: justification.dynamic_mechanisms,
+            source_evidence: justification.source_evidence,
+            source_example: justification.source_example,
+            target_example: justification.target_example,
             matching_cases,
             changed,
             applied: false,
@@ -449,131 +495,13 @@ pub fn plan_dynamic_response_rule(
         kind: ResponseRuleKind::Dynamic,
         api: feedback.api,
         json_pointers: feedback.json_pointers,
+        dynamic_mechanisms: feedback.dynamic_mechanisms,
+        source_evidence: Some(feedback.source_evidence),
+        source_example: Some(feedback.source_example),
+        target_example: Some(feedback.target_example),
         assertion_report: feedback.assertion_report,
         aggregate_report: feedback.aggregate_report,
     })
-}
-
-#[derive(Debug, Deserialize)]
-struct AssertionEvidence {
-    case_source: String,
-    expected_response: String,
-    assertion_mode: String,
-    policy_fingerprint: Option<String>,
-    cases: Vec<AssertionCaseEvidence>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ComparisonEvidence {
-    version: u8,
-    kind: String,
-    expected_response: String,
-    assertion_mode: String,
-    baseline_recheck: String,
-    policy_fingerprint: String,
-    complete: bool,
-    cases: Vec<AssertionCaseEvidence>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AssertionCaseEvidence {
-    case_id: String,
-    #[serde(default)]
-    classification: Option<String>,
-    response: Option<ResponseCaseEvidence>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ResponseCaseEvidence {
-    method: String,
-    path: String,
-    body_mode: String,
-    differences: Vec<DifferenceEvidence>,
-    #[serde(default)]
-    applied_dynamic_rule_ids: Vec<String>,
-    #[serde(default)]
-    dynamic_candidates: Vec<String>,
-    #[serde(default)]
-    applied_unordered_rule_ids: Vec<String>,
-    #[serde(default)]
-    unordered_candidates: Vec<String>,
-}
-
-impl ResponseCaseEvidence {
-    fn candidates(&self, kind: ResponseRuleKind) -> &Vec<String> {
-        match kind {
-            ResponseRuleKind::Dynamic => &self.dynamic_candidates,
-            ResponseRuleKind::Unordered => &self.unordered_candidates,
-        }
-    }
-
-    fn applied_rule_ids(&self, kind: ResponseRuleKind) -> &Vec<String> {
-        match kind {
-            ResponseRuleKind::Dynamic => &self.applied_dynamic_rule_ids,
-            ResponseRuleKind::Unordered => &self.applied_unordered_rule_ids,
-        }
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct DifferenceEvidence {
-    pointer: String,
-    kind: String,
-    expected_type: Option<String>,
-    actual_type: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AggregateEvidence {
-    case_source: String,
-    selected_case_ids: Vec<String>,
-    complete: bool,
-    dirty: bool,
-}
-
-fn difference_supports_rule(
-    kind: ResponseRuleKind,
-    difference: &DifferenceEvidence,
-    requested: &BTreeSet<String>,
-) -> bool {
-    if !requested.contains(&difference.pointer) {
-        return false;
-    }
-    match kind {
-        ResponseRuleKind::Dynamic => {
-            difference.kind == "value_mismatch"
-                && difference.expected_type == difference.actual_type
-                && difference
-                    .expected_type
-                    .as_deref()
-                    .is_some_and(|kind| matches!(kind, "string" | "number" | "boolean"))
-        }
-        ResponseRuleKind::Unordered => {
-            difference.kind == "array_order_mismatch"
-                && difference.expected_type.as_deref() == Some("array")
-                && difference.actual_type.as_deref() == Some("array")
-        }
-    }
-}
-
-fn response_rule_map(
-    rules: &super::response::ResponseRules,
-    kind: ResponseRuleKind,
-) -> &std::collections::BTreeMap<String, Vec<String>> {
-    match kind {
-        ResponseRuleKind::Dynamic => &rules.dynamic,
-        ResponseRuleKind::Unordered => &rules.unordered,
-    }
-}
-
-fn response_rule_map_mut(
-    rules: &mut super::response::ResponseRules,
-    kind: ResponseRuleKind,
-) -> &mut std::collections::BTreeMap<String, Vec<String>> {
-    match kind {
-        ResponseRuleKind::Dynamic => &mut rules.dynamic,
-        ResponseRuleKind::Unordered => &mut rules.unordered,
-    }
 }
 
 fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {

@@ -151,6 +151,14 @@ complete security boundary: unknown/raw TCP and UDP can still pass. Use exact
 allow rules only for source-proven MySQL writes required by the case. A policy
 rejection during a case invalidates it.
 
+Keep the source repository and source application implementation immutable.
+Recording infrastructure may reproduce startup and route observable traffic,
+but it must not replace source classes, patch application artifacts, disable
+or bypass caches, change business feature switches, or otherwise force a
+dependency call. This prohibition includes source-code overrides placed in a
+target-owned adapter directory. Preserve the failed run and report a recording
+capability gap when genuine behavior cannot produce sufficient evidence.
+
 Do not log or commit credentials, authorization headers, cookies, tokens,
 private keys, cache keys/values, Kafka payloads, full SQL binds, or recording
 files. Exact dependency payloads may be necessary for replay, so protect the

@@ -11,7 +11,7 @@ dependency interception do not.
 - Inspect and reproduce startup
 - Source bind mounts
 - Preserve the recording descriptor boundary
-- Breeze SDK source patch
+- Closed Mesh patch exception
 - Low ports and CA
 - Shared runtime validation
 
@@ -183,12 +183,25 @@ not render observed resource ports into committed files or generate target
 
 Later target implementation must use
 the [`breeze-sdk` skill](../../breeze-sdk/SKILL.md) for exact descriptor
-identity, independent-startup registration, and replay-read-only resolution.
+identity and its generic `RequireExisting`, `EnsurePresent`, or `CreateNew`
+descriptor policy. Recording initialization does not implement or expose that
+target SDK lifecycle.
 
-## Breeze SDK Source Patch
+## Closed Mesh Patch Exception
 
-The Breeze patch changes the SDK inside the source application image, not the
-Breeze container. Copy these assets unchanged into the source adapter:
+This fixed Breeze Mesh patch is the sole source-bytecode exception in recording
+initialization. It changes only how the existing SDK selects the TCP host so
+the genuine dependency exchange can pass through Recorder. It must not change
+resource identity, commands, values, cache semantics, business branching, or
+responses.
+
+Do not treat this exception as a source-adapter pattern. Never add another Java
+source override, replace another class, patch another JAR, or modify the source
+repository or business configuration. Missing evidence requires a
+traffic-e2e capability diagnosis, not a new source patch.
+
+The patch changes the SDK inside the source application image, not the Breeze
+container. Copy these assets unchanged into the source adapter:
 
 ```text
 assets/recording/source-adapter/MeshConnectUtil.java

@@ -10,6 +10,18 @@ correctly registered Breeze listeners and long-lived application clients.
 Preserve Java SDK compatibility without coupling business code to descriptor
 filenames, caller-selected ports, or resource lifecycle.
 
+The consumer path is:
+
+```text
+application composition root
+  -> brz-<resource> package
+  -> shared descriptor library
+  -> Breeze listener
+  -> remote resource
+```
+
+The project CLI is not part of this resource path.
+
 ## Ownership
 
 Use this skill for business-independent remote-resource access whose identity,
@@ -20,8 +32,7 @@ infrastructure, not as a capability-owned provider client. The set remains
 open to new Breeze-managed resource types.
 
 - logical resource identity and descriptor parsing;
-- exact descriptor reuse and independent-startup registration;
-- replay-safe, read-only descriptor resolution;
+- descriptor resolution and permitted registration through one generic policy;
 - reusable client, pool, producer, consumer, channel, or transport lifecycle;
 - `brz-*` package boundaries and application wiring; and
 - Breeze-specific tests and compatibility evidence.
@@ -59,11 +70,13 @@ project or dependency is available.
    composition root, dependency configuration, and applicable repository
    instructions. Do not infer resource identity from a package name or
    protocol default.
-2. Enumerate each resource's complete logical identity and required mode:
-   `independent`, `recording`, `comparison`, or `replay`.
+2. Enumerate each resource's complete logical identity and select one
+   descriptor policy: `RequireExisting`, `EnsurePresent`, or `CreateNew`.
+   Do not put recording, replay, comparison, test, or deployment scenario
+   names in Breeze SDK types or branches.
 3. Read [descriptor-lifecycle.md](references/descriptor-lifecycle.md) and
    implement one shared, deterministic descriptor layer before resource
-   clients. Keep mode-specific mutation authority explicit.
+   clients. Keep policy-specific mutation authority explicit.
 4. Read [resource-clients.md](references/resource-clients.md), classify the
    reusable resource layer separately from its business adapter, and implement
    only the needed resource packages. Construct long-lived clients in the
@@ -75,17 +88,28 @@ project or dependency is available.
 
 ## Non-Negotiable Runtime Rules
 
-- Match the complete resource identity and require exactly one compatible
-  descriptor before using a port.
-- During independent startup only, a missing descriptor may be created under
-  the shared lock after a rescan, using an eligible random port and atomic
-  creation, followed by bounded listener readiness.
-- During replay, descriptors are immutable prerequisites. Never create,
-  rewrite, rename, delete, or replace one; fail startup when the exact
-  recording-time descriptor is absent or invalid.
+- `RequireExisting`: reuse one exact descriptor; fail when it is absent.
+- `EnsurePresent`: reuse one exact descriptor; register it when absent.
+- `CreateNew`: fail when the exact descriptor exists; register it when absent.
+- Every policy rejects malformed, duplicate, or conflicting claims. No policy
+  may rewrite, rename, delete, replace, or renumber an existing descriptor.
+- Registration must lock the shared directory, rescan under the lock, select
+  an eligible random port, create the descriptor atomically, and wait with a
+  bounded deadline for the Breeze listener.
+- The application composition root supplies complete logical identities and
+  generic Breeze settings. Each `brz-*` resource package calls the shared
+  descriptor library and constructs its own long-lived client.
+- A project CLI or runner may pass one generic descriptor policy and topology
+  settings selected by its caller. It MUST NOT infer that policy by inspecting
+  runner state, enumerate resources, invoke a descriptor resolver per resource,
+  resolve ports, export descriptor-derived `host:port` values, or change when
+  a resource is added.
+- Treat the descriptor implementation as an internal SDK library. A diagnostic
+  executable may inspect it manually, but normal application startup MUST NOT
+  depend on a descriptor executable.
+- Never parse replay sessions, dependency JSONL, recorded commands, keys, or
+  target ports to infer resource identity or configuration.
 - Never substitute a protocol-default port for missing Breeze evidence.
-- Comparison source and candidate share one Breeze instance, socks directory,
-  resource identity, and selected port.
 - Keep parsing independent of directory iteration order, bound all waits and
   operations, and do not log secrets.
 
@@ -94,7 +118,7 @@ project or dependency is available.
 Report:
 
 ```text
-resources, modes, identity_source, descriptor_behavior,
+resources, descriptor_policies, identity_source, descriptor_behavior,
 changed_packages, application_wiring, checks, blockers
 ```
 

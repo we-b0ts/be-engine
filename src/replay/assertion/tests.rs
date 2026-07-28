@@ -107,7 +107,7 @@ fn empty_body_does_not_match_nonempty_body() {
 #[test]
 fn dynamic_scalar_skips_only_its_literal_value() {
     let (_temp, options) = write_case(
-        "response_rules:\n  dynamic:\n    \"GET /api/resource/token\":\n      - /content\n",
+        "response_rules:\n  dynamic:\n    \"GET /api/resource/token\":\n      - pointer: /content\n        mechanisms: [uuid]\n        source_evidence: src/token.rs:issue_token\n        source_example: <redacted source UUID>\n        target_example: <redacted target UUID>\n",
         json!("recorded"),
         json!("actual"),
     );
@@ -132,7 +132,7 @@ fn exact_mismatch_surfaces_a_dynamic_candidate() {
 #[test]
 fn dynamic_field_still_requires_the_same_scalar_type() {
     let (_temp, options) = write_case(
-        "response_rules:\n  dynamic:\n    \"GET /api/resource/token\":\n      - /content\n",
+        "response_rules:\n  dynamic:\n    \"GET /api/resource/token\":\n      - pointer: /content\n        mechanisms: [uuid]\n        source_evidence: src/token.rs:issue_token\n        source_example: <redacted source UUID>\n        target_example: <redacted target UUID>\n",
         json!("recorded"),
         json!(42),
     );

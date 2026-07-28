@@ -7,7 +7,9 @@ description: "Initialize Platform Java/Tomcat repositories for managed traffic r
 
 Build a ready-to-record environment around the genuine Platform source
 application. Keep Recorder policy and Breeze dependency interception
-standardized; adapt only the source container's proven startup facts.
+standardized; adapt only the source container's proven startup facts. Treat
+the source repository, business classes, and observable application behavior
+as immutable.
 
 ## Input Contract
 
@@ -60,11 +62,13 @@ or validating the candidate facade or `scripts/start-recording-comparison`.
    `recording wait-ready` owns the wait. Keep `authorization` in
    `redact_headers` for response-side protection; request encryption takes
    precedence.
-5. Copy the Breeze patch assets unchanged into
-   `.traffic-e2e/adapters/source/`. Generate the remaining source adapter
+5. Copy the fixed Breeze Mesh patch assets unchanged into
+   `.traffic-e2e/adapters/source/`. This bundled patch is the only permitted
+   source-class patch and is a closed recording-infrastructure exception, not
+   a pattern for new adapters. Generate only the remaining source adapter
    Dockerfile and launchers from inspected evidence; invoke the bundled patch
    applicator and recursively assign `/data1/weibo` to numeric `998:998`
-   during the image build.
+   during the image build. Never add another Java override or JAR patch.
 6. Generate `scripts/start-recording` for the inspected startup parameters and
    follow the exact wrapper, lifecycle, ownership, encryption, and validation
    contract in the standard-recording reference. Do not reconstruct it from
@@ -114,7 +118,9 @@ Append only missing ignore entries for:
 ```
 
 Do not modify business source, build files, deployment files, CI, README, or
-repository instructions.
+repository instructions. The adapter output allowance does not authorize
+copying or replacing business classes, changing caches or feature switches, or
+otherwise changing source behavior.
 
 ## Completion
 

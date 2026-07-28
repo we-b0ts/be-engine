@@ -98,8 +98,9 @@ traffic-e2e run-api \
 ```
 
 One focused attempt starts replay once for that API's cases, loads applicable
-bootstrap once, starts the target once, executes every case sequentially, and
-finalizes once. It publishes only the API's focused `latest` snapshot.
+startup Global dependencies once, starts the target once, executes every case
+sequentially, and finalizes once. It publishes only the API's focused `latest`
+snapshot.
 
 With replay-policy version two, the runner invokes the target facade as:
 
@@ -196,10 +197,10 @@ traffic-e2e run \
   --case-source <case-source>
 ```
 
-The command owns the entire round: one replay server, one bootstrap/full-case
-load, one target start, sequential case begin/request/assert/end, one target
-stop, one replay finalize, a global aggregate, per-API evidence views,
-progress update, and atomic publication.
+The command owns the entire round: one replay server, one Global/full-case
+dependency load, one target start, sequential case begin/request/assert/end,
+one target stop, one replay finalize, a global aggregate, per-API evidence
+views, progress update, and atomic publication.
 
 Do not repair code inside a full round. If it fails, use focused `run-api` to
 diagnose and return `target_behavior`; after the calling orchestrator repairs

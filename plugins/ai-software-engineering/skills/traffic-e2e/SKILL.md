@@ -13,10 +13,18 @@ case-owned dependency call, and every required side effect.
 
 - Treat published recordings as immutable sensitive evidence. Never edit,
   trim, synthesize, or expose them to make replay pass.
+- Treat the source repository and source application behavior as immutable
+  evidence. Never edit source code, replace source classes through an adapter,
+  patch source artifacts, disable caches, or change business switches to
+  manufacture dependency traffic or make verification pass. This skill
+  authorizes no source patch; never invent or extend one.
 - Use `expected-response.json` only as an assertion oracle. Only
   recorder-owned replay may consume case or Global dependency files.
 - Target code, configuration, tests, and support must use genuine runtime
   clients and must never turn recorded outputs into fixtures or behavior.
+- A response difference caused by a missing, cold, stale, partially loaded, or
+  behaviorally different process-local cache is target behavior. Never exempt
+  it with a dynamic response rule.
 - One passing response cannot compensate for invalid artifacts, incomplete
   coverage, dirty dependencies, missing side effects, or a stale evidence
   gate.
@@ -53,7 +61,8 @@ Use stable evidence categories:
 ```text
 target_behavior, target_environment, background_dependency,
 recording_configuration, recording_no_traffic, recorder_capability_gap,
-replay_capability_gap, intentional_nondeterminism, source_drift, unresolved
+replay_capability_gap, verification_policy, intentional_nondeterminism,
+source_change, unresolved
 ```
 
 ## Mandatory Sequence
@@ -134,7 +143,7 @@ in-scope system repair can recover the evidence or replay behavior. Use
 external information was not captured or provided and its absence prevents
 target implementation. Include the exact evidence, required system change or
 external input, owner, affected gate, and verification command; do not create a
-target workaround.
+target workaround or alter the source to manufacture the missing evidence.
 
 Repeated failures without capability proof remain `action_required`, not
 `blocked`. Use `incomplete` only for response-passing dirty evidence without a

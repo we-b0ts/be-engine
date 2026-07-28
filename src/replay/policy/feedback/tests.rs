@@ -1,6 +1,7 @@
 use serde_json::json;
 use tempfile::tempdir;
 
+use super::evidence::{AssertionCaseEvidence, DifferenceEvidence, source_change_overlaps};
 use super::*;
 use crate::replay::validate_replay_policy;
 
@@ -59,6 +60,10 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
         kind: ResponseRuleKind::Dynamic,
         api: "GET /api/resource/token".to_string(),
         json_pointers: vec!["/content".to_string()],
+        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
+        source_evidence: Some("src/token.rs:issue_token".to_string()),
+        source_example: Some("<redacted source UUID>".to_string()),
+        target_example: Some("<redacted target UUID>".to_string()),
         assertion_report: assertions,
         aggregate_report: aggregate,
     };
@@ -66,11 +71,32 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
     let plan = plan_response_rule(feedback).unwrap();
     assert!(plan.report().changed);
     assert_eq!(plan.report().matching_cases, 1);
+    assert_eq!(
+        plan.report().dynamic_mechanisms,
+        vec![DynamicResponseMechanism::Uuid]
+    );
+    assert_eq!(
+        plan.report().source_evidence.as_deref(),
+        Some("src/token.rs:issue_token")
+    );
+    assert_eq!(
+        plan.report().source_example.as_deref(),
+        Some("<redacted source UUID>")
+    );
+    assert_eq!(
+        plan.report().target_example.as_deref(),
+        Some("<redacted target UUID>")
+    );
     let applied = plan.apply().unwrap();
     assert!(applied.applied);
     let updated = fs::read_to_string(&policy).unwrap();
     assert!(updated.contains("GET /api/resource/token"));
-    assert!(updated.contains("/content"));
+    assert!(updated.contains("pointer: /content"));
+    assert!(updated.contains("mechanisms:"));
+    assert!(updated.contains("- uuid"));
+    assert!(updated.contains("source_evidence: src/token.rs:issue_token"));
+    assert!(updated.contains("source_example: <redacted source UUID>"));
+    assert!(updated.contains("target_example: <redacted target UUID>"));
     validate_replay_policy(&policy).unwrap();
 }
 
@@ -88,7 +114,7 @@ fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
     fs::write(
         &comparison,
         serde_json::to_vec(&json!({
-            "version": 2,
+            "version": 3,
             "kind": "comparison_recording_verification",
             "expected_response": "assertions_only",
             "assertion_mode": "comparison_recording",
@@ -121,6 +147,10 @@ fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
         kind: ResponseRuleKind::Dynamic,
         api: "GET /api/resource/token".to_string(),
         json_pointers: vec!["/content".to_string()],
+        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
+        source_evidence: Some("src/token.rs:issue_token".to_string()),
+        source_example: Some("<redacted source UUID>".to_string()),
+        target_example: Some("<redacted target UUID>".to_string()),
         comparison_report: comparison,
     };
 
@@ -188,6 +218,10 @@ fn plans_and_applies_evidence_backed_unordered_array() {
         kind: ResponseRuleKind::Unordered,
         api: "GET /api/config/ansible_facts".to_string(),
         json_pointers: vec!["/general/sudo_users".to_string()],
+        dynamic_mechanisms: vec![],
+        source_evidence: None,
+        source_example: None,
+        target_example: None,
         assertion_report: assertions,
         aggregate_report: aggregate,
     };
@@ -231,5 +265,70 @@ fn unordered_evidence_rejects_content_differences() {
         ResponseRuleKind::Unordered,
         &wrong_array,
         &requested
+    ));
+}
+
+#[test]
+fn dynamic_rule_requires_auditable_mechanism_evidence() {
+    let error = justification::validate(ResponseRuleKind::Dynamic, vec![], None, None, None)
+        .err()
+        .expect("missing dynamic evidence must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("at least one --dynamic-mechanism")
+    );
+
+    let justification = justification::validate(
+        ResponseRuleKind::Dynamic,
+        vec![
+            DynamicResponseMechanism::DynamicDerived,
+            DynamicResponseMechanism::Timestamp,
+        ],
+        Some("src/signed_url.rs:sign".to_string()),
+        Some("https://img.test/a?Expires=<source-time>&ssig=<source-signature>".to_string()),
+        Some("https://img.test/a?Expires=<target-time>&ssig=<target-signature>".to_string()),
+    )
+    .unwrap();
+    assert_eq!(justification.dynamic_mechanisms.len(), 2);
+}
+
+#[test]
+fn dynamic_rule_evidence_cannot_cover_multiple_fields() {
+    let error = plan_response_rule(ResponseRuleFeedback {
+        policy_path: "verification.yaml".into(),
+        kind: ResponseRuleKind::Dynamic,
+        api: "GET /api/resource".to_string(),
+        json_pointers: vec!["/first".to_string(), "/second".to_string()],
+        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
+        source_evidence: Some("src/token.rs:issue_token".to_string()),
+        source_example: Some("<redacted source UUID>".to_string()),
+        target_example: Some("<redacted target UUID>".to_string()),
+        assertion_report: "assertions.json".into(),
+        aggregate_report: "aggregate.json".into(),
+    })
+    .err()
+    .expect("one evidence bundle must not authorize multiple fields");
+
+    assert!(error.to_string().contains("exactly one --json-pointer"));
+}
+
+#[test]
+fn source_change_can_block_only_an_overlapping_response_rule() {
+    let case = AssertionCaseEvidence {
+        case_id: "case-1".to_string(),
+        classification: Some("candidate_difference".to_string()),
+        source_change_pointers: vec!["/profile/avatar".to_string()],
+        policy_mismatch_rule_ids: Vec::new(),
+        response: None,
+    };
+
+    assert!(source_change_overlaps(
+        &case,
+        &BTreeSet::from(["/profile".to_string()])
+    ));
+    assert!(!source_change_overlaps(
+        &case,
+        &BTreeSet::from(["/counts/followers".to_string()])
     ));
 }

@@ -13,6 +13,9 @@ use self::artifact::{
 use self::compare::compare_json;
 pub use self::model::{ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference};
 use super::policy::{fingerprint, load_replay_policy, uri_path};
+use crate::http::content_encoding;
+
+const LEGACY_COMPARISON_DECODED_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
 pub struct ResponseAssertionOptions {
     pub case_id: String,
@@ -150,7 +153,31 @@ fn captured_body(response: &ComparisonResponse, label: &str) -> Result<Vec<u8>> 
                 .unwrap_or_default()
         )
     })?;
-    decode_body(body, label)
+    let captured = decode_body(body, label)?;
+    if body.decoded == Some(true) {
+        return Ok(captured);
+    }
+    let content_encoding = body.content_encoding.clone().or_else(|| {
+        response
+            .headers
+            .as_ref()
+            .and_then(|headers| headers.get("content-encoding"))
+            .filter(|values| !values.is_empty())
+            .map(|values| values.join(","))
+    });
+    let Some(content_encoding) = content_encoding else {
+        return Ok(captured);
+    };
+    let limit = body
+        .limit_bytes
+        .unwrap_or(LEGACY_COMPARISON_DECODED_BODY_LIMIT_BYTES);
+    let decoded = content_encoding::decode(&captured, &content_encoding, limit)
+        .with_context(|| format!("{label} body content decoding failed"))?;
+    ensure!(
+        !decoded.truncated,
+        "{label} decoded body exceeds limit of {limit} bytes"
+    );
+    Ok(decoded.body)
 }
 
 struct AssertionInputs {

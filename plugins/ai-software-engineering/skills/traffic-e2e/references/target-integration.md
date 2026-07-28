@@ -51,6 +51,13 @@ recorded dependencies to produce results, read the expected response, or decide
 whether assertions passed. Its E2E exit code proves request execution and
 capture only.
 
+For Breeze-managed target resources, the facade may forward one generic
+descriptor policy selected by its caller and generic Breeze topology settings.
+It must not infer the policy from runner state, enumerate resources, invoke a
+descriptor resolver per resource, resolve descriptor ports, or export
+descriptor-derived `host:port` values. The target's `brz-*` resource packages
+own logical identity, descriptor-library use, and client construction.
+
 For a case with encrypted request headers, the runner passes a private
 short-lived case view whose `request.json` already contains authenticated
 plaintext header values. The facade reads that file exactly like an ordinary

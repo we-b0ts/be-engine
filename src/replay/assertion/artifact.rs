@@ -3,6 +3,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 
+use crate::recorder::HeaderMapSnapshot;
+
 #[derive(Debug, Deserialize)]
 pub(super) struct RecordedRequest {
     pub(super) method: String,
@@ -19,6 +21,7 @@ pub(super) struct ExpectedResponse {
 pub(super) struct ComparisonResponse {
     pub(super) version: u8,
     pub(super) status: Option<u16>,
+    pub(super) headers: Option<HeaderMapSnapshot>,
     pub(super) body: Option<ResponseBody>,
     pub(super) error: Option<String>,
 }
@@ -36,10 +39,19 @@ pub(super) struct ResponseBody {
     pub(super) encoding: String,
     pub(super) data: String,
     pub(super) truncated: bool,
+    pub(super) limit_bytes: Option<usize>,
+    pub(super) decoded: Option<bool>,
+    pub(super) content_encoding: Option<String>,
+    pub(super) decode_error: Option<String>,
 }
 
 pub(super) fn decode_body(body: &ResponseBody, label: &str) -> Result<Vec<u8>> {
     ensure!(!body.truncated, "{label} body is truncated");
+    ensure!(
+        body.decode_error.is_none(),
+        "{label} body content decoding failed: {}",
+        body.decode_error.as_deref().unwrap_or_default()
+    );
     match body.encoding.as_str() {
         "utf8" => Ok(body.data.as_bytes().to_vec()),
         "base64" => STANDARD

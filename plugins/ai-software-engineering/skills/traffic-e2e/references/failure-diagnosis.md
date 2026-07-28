@@ -77,7 +77,10 @@ resource, command, key derivation, bounds, and refresh behavior. When the
 recorded calls are mixed into cases and their responses are required to build
 the target cache, classify them as `runtime_state` and follow
 [background-dependencies.md](background-dependencies.md) during response
-repair.
+repair. Whether the mismatch comes from a cache hit, miss, stale entry,
+different refresh timing, incomplete warmup, or a missing target cache,
+never classify the response field as intentional nondeterminism and never
+apply a dynamic response rule.
 
 For every unused case HTTP exchange, group observations by normalized
 authority, method, and path only for diagnosis, then inspect the source that
