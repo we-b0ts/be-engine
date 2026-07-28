@@ -43,7 +43,7 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()
                 state
                     .wait_for_background_initial_loads()
                     .await
-                    .context("Memcached runtime-state readiness barrier failed")?;
+                    .context("Breeze background resources were not ready with the source")?;
                 let settle_deadline = ready_at + post_ready_settle;
                 if tokio::time::Instant::now() < settle_deadline {
                     tokio::time::sleep_until(settle_deadline).await;

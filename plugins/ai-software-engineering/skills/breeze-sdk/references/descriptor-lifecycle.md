@@ -3,6 +3,16 @@
 Use this reference for consumer-side descriptor discovery, registration, and
 mode-specific mutation authority.
 
+## Contents
+
+- Fixed directory and filename contract
+- Deterministic resolution
+- Independent startup
+- Recording
+- Replay
+- Comparison
+- Compatibility references
+
 ## Fixed Directory And Filename Contract
 
 Use:
@@ -87,10 +97,12 @@ resource to exactly one descriptor and use its recording-time TCP port for the
 replay-intercepted host.
 
 Replay must not allocate a port or create, rewrite, rename, or delete any
-descriptor. If an exact descriptor is absent or invalid, fail startup as
-blocked: the recording artifact, mount lifecycle, or resource identity
-evidence is incomplete. Do not manufacture a descriptor from a recorded
-target port or substitute protocol defaults such as `3306`, `6379`, `9092`, or
+descriptor. If an exact descriptor is absent or invalid, fail startup and
+report the exact missing or conflicting identity, searched directory, and
+validation evidence to the invoking workflow. Do not assign the whole
+migration outcome here: the caller decides whether the evidence is repairable
+or truly unavailable. Do not manufacture a descriptor from a recorded target
+port or substitute protocol defaults such as `3306`, `6379`, `9092`, or
 `11211`.
 
 ## Comparison

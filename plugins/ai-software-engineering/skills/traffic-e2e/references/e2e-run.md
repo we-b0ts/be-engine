@@ -6,6 +6,15 @@ Use `traffic-e2e` as the only normal AI-facing replay command. Low-level
 grouping, replay-control, and aggregate commands remain implementation details
 and human diagnostic surfaces.
 
+## Contents
+
+- Initialize target configuration
+- Prepare an API
+- Focused verification loop
+- Full round
+- Completion
+- Generated state
+
 ## Initialize Target Configuration
 
 Generate and validate the source-controlled `.traffic-e2e/project.yaml` once:

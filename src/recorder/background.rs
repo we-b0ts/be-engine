@@ -1,7 +1,7 @@
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -17,14 +17,25 @@ use crate::config::BackgroundDependencyRuleConfig;
 use crate::config::background_dependencies::matches_memcached_key_series;
 use crate::dependency::DependencyExchangeOutcome;
 
-#[derive(Debug, Default)]
+const INITIAL_LOAD_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
+
+#[derive(Debug)]
 pub(crate) struct BackgroundDependencyMatcher {
     http_rules: Vec<BackgroundDependencyRuleConfig>,
-    memcached_by_port: HashMap<u16, Vec<MemcachedRule>>,
+    socks_dir: PathBuf,
+    memcached: Mutex<MemcachedRules>,
     initial_loads: InitialLoads,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
+struct MemcachedRules {
+    by_port: HashMap<u16, Vec<MemcachedRule>>,
+    pending_by_identity: HashMap<String, Vec<MemcachedRule>>,
+    ignored_ports: HashSet<u16>,
+    last_resolution_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 struct MemcachedRule {
     name: String,
     key_start: u32,
@@ -66,17 +77,18 @@ impl Default for InitialLoads {
 }
 
 impl BackgroundDependencyMatcher {
-    pub(crate) fn resolve(rules: &[BackgroundDependencyRuleConfig]) -> Result<Self> {
-        Self::resolve_in(rules, Path::new(breeze::SOCKS_DIR))
+    pub(crate) fn from_rules(rules: &[BackgroundDependencyRuleConfig]) -> Result<Self> {
+        Self::from_rules_in(rules, Path::new(breeze::SOCKS_DIR))
     }
 
-    fn resolve_in(rules: &[BackgroundDependencyRuleConfig], socks_dir: &Path) -> Result<Self> {
-        let mut matcher = Self::default();
-        let mut resolved_ports = HashMap::<String, u16>::new();
+    fn from_rules_in(rules: &[BackgroundDependencyRuleConfig], socks_dir: &Path) -> Result<Self> {
+        let mut http_rules = Vec::new();
+        let mut memcached = MemcachedRules::default();
+        let mut initial_loads = InitialLoads::default();
         for rule in rules {
             match rule {
                 BackgroundDependencyRuleConfig::Http { .. } => {
-                    matcher.http_rules.push(rule.clone());
+                    http_rules.push(rule.clone());
                 }
                 BackgroundDependencyRuleConfig::Memcached {
                     name,
@@ -88,31 +100,16 @@ impl BackgroundDependencyMatcher {
                     initial_load_timeout_ms,
                     ..
                 } => {
-                    let port = match resolved_ports.get(breeze_identity) {
-                        Some(port) => *port,
-                        None => {
-                            let descriptor =
-                                breeze::resolve_identity(socks_dir, breeze_identity).with_context(
-                                    || {
-                                        format!(
-                                            "Memcached background dependency rule {name:?} cannot resolve its Breeze resource"
-                                        )
-                                    },
-                                )?;
-                            resolved_ports.insert(breeze_identity.clone(), descriptor.port);
-                            descriptor.port
-                        }
-                    };
                     let initial_load = Arc::new(InitialLoad {
                         name: name.clone(),
                         expected: u64::from(*key_end) - u64::from(*key_start) + 1,
                         timeout: Duration::from_millis(*initial_load_timeout_ms),
                         completed: AtomicU64::new(0),
                     });
-                    matcher.initial_loads.rules.push(initial_load.clone());
-                    matcher
-                        .memcached_by_port
-                        .entry(port)
+                    initial_loads.rules.push(initial_load.clone());
+                    memcached
+                        .pending_by_identity
+                        .entry(breeze_identity.clone())
                         .or_default()
                         .push(MemcachedRule {
                             name: name.clone(),
@@ -125,6 +122,22 @@ impl BackgroundDependencyMatcher {
                 }
             }
         }
+
+        let matcher = Self {
+            http_rules,
+            socks_dir: socks_dir.to_path_buf(),
+            memcached: Mutex::new(memcached),
+            initial_loads,
+        };
+        matcher.refresh_pending_resources()?;
+        let pending = matcher.pending_resource_summary();
+        if !pending.is_empty() {
+            info!(
+                resources = %pending,
+                directory = %matcher.socks_dir.display(),
+                "Memcached background rules are waiting for source-registered Breeze descriptors"
+            );
+        }
         Ok(matcher)
     }
 
@@ -133,17 +146,30 @@ impl BackgroundDependencyMatcher {
             if !exchange.command.eq_ignore_ascii_case("get") {
                 return None;
             }
-            let rules = self.memcached_by_port.get(&exchange.target_port)?;
             let key = exchange.key.as_ref().and_then(decode_capture)?;
-            return rules.iter().find(|rule| rule.matches(&key)).map(|rule| {
-                BackgroundDependencyMatch {
-                    rule_name: rule.name.clone(),
-                    initial_load: Some(rule.initial_load.clone()),
-                    completed_response: exchange.outcome == DependencyExchangeOutcome::Response
-                        && !exchange.no_response
-                        && exchange.replay_safe,
+            let port_is_resolved = {
+                let rules = self.memcached.lock().expect("background rules poisoned");
+                if rules.ignored_ports.contains(&exchange.target_port) {
+                    return None;
                 }
-            });
+                if let Some(matched) =
+                    match_memcached_rule(&rules, exchange.target_port, &key, exchange)
+                {
+                    return Some(matched);
+                }
+                rules.by_port.contains_key(&exchange.target_port)
+            };
+            if port_is_resolved {
+                return None;
+            }
+            let refreshed = self.refresh_pending_resources().is_ok();
+            let mut rules = self.memcached.lock().expect("background rules poisoned");
+            let matched = match_memcached_rule(&rules, exchange.target_port, &key, exchange);
+            if refreshed && matched.is_none() && !rules.by_port.contains_key(&exchange.target_port)
+            {
+                rules.ignored_ports.insert(exchange.target_port);
+            }
+            return matched;
         }
         self.http_rules
             .iter()
@@ -187,16 +213,38 @@ impl BackgroundDependencyMatcher {
         !self.initial_loads.rules.is_empty()
     }
 
-    pub(crate) async fn wait_for_initial_loads(&self) -> Result<()> {
-        if self.initial_loads.rules.is_empty() || self.pending_initial_loads().is_empty() {
+    pub(crate) fn ensure_resources_resolved(&self) -> Result<()> {
+        self.refresh_pending_resources()?;
+        let pending = self.pending_resource_summary();
+        if pending.is_empty() {
             return Ok(());
         }
+        bail!(
+            "source reached HTTP readiness without registering configured Breeze resources: {pending}"
+        )
+    }
+
+    pub(crate) async fn wait_for_initial_loads(&self) {
+        if self.initial_loads.rules.is_empty() || self.pending_initial_loads().is_empty() {
+            return;
+        }
+        let _ = self.refresh_pending_resources();
         let started = Instant::now();
+        let mut next_progress_log = started + INITIAL_LOAD_PROGRESS_LOG_INTERVAL;
         let mut changed = self.initial_loads.changed.subscribe();
+        let pending = self.pending_initial_loads();
+        let progress = format_initial_load_progress(&pending);
+        let pending_resources = self.pending_resource_summary();
+        info!(
+            %progress,
+            %pending_resources,
+            progress_interval_ms = INITIAL_LOAD_PROGRESS_LOG_INTERVAL.as_millis(),
+            "Memcached runtime-state initial load observation started"
+        );
         loop {
             let pending = self.pending_initial_loads();
             if pending.is_empty() {
-                return Ok(());
+                return;
             }
             let elapsed = started.elapsed();
             let Some(remaining) = pending
@@ -204,20 +252,45 @@ impl BackgroundDependencyMatcher {
                 .map(|rule| rule.timeout.saturating_sub(elapsed))
                 .min()
             else {
-                return Ok(());
+                return;
             };
             if remaining.is_zero() {
                 let progress = format_initial_load_progress(&pending);
-                warn!(%progress, "Memcached runtime-state initial load timed out");
-                bail!(
-                    "Memcached runtime-state initial load did not complete after source readiness: {progress}"
+                let pending_resources = self.pending_resource_summary();
+                warn!(
+                    %progress,
+                    %pending_resources,
+                    "Memcached runtime-state initial load observation window elapsed; continuing recording"
                 );
+                return;
             }
-            if tokio::time::timeout(remaining, changed.changed())
-                .await
-                .is_err()
-            {
-                continue;
+            let until_progress_log = next_progress_log.saturating_duration_since(Instant::now());
+            let wait = remaining.min(until_progress_log);
+            if tokio::time::timeout(wait, changed.changed()).await.is_err() {
+                let now = Instant::now();
+                if now >= next_progress_log {
+                    let _ = self.refresh_pending_resources();
+                    let pending = self.pending_initial_loads();
+                    if pending.is_empty() {
+                        return;
+                    }
+                    let elapsed = started.elapsed();
+                    let remaining_ms = pending
+                        .iter()
+                        .map(|rule| rule.timeout.saturating_sub(elapsed))
+                        .min()
+                        .unwrap_or_default()
+                        .as_millis();
+                    let progress = format_initial_load_progress(&pending);
+                    let pending_resources = self.pending_resource_summary();
+                    info!(
+                        %progress,
+                        %pending_resources,
+                        remaining_ms,
+                        "Memcached runtime-state initial load observation is still waiting"
+                    );
+                    next_progress_log = now + INITIAL_LOAD_PROGRESS_LOG_INTERVAL;
+                }
             }
         }
     }
@@ -230,6 +303,87 @@ impl BackgroundDependencyMatcher {
                 (rule.completed.load(Ordering::Acquire) < rule.expected).then_some(rule.as_ref())
             })
             .collect()
+    }
+
+    fn refresh_pending_resources(&self) -> Result<()> {
+        let result = self.try_refresh_pending_resources();
+        let mut rules = self.memcached.lock().expect("background rules poisoned");
+        match &result {
+            Ok(()) => rules.last_resolution_error = None,
+            Err(error) => {
+                let message = format!("{error:#}");
+                if rules.last_resolution_error.as_deref() != Some(&message) {
+                    warn!(
+                        error = %error,
+                        directory = %self.socks_dir.display(),
+                        "Memcached background rule Breeze descriptor refresh failed"
+                    );
+                    rules.last_resolution_error = Some(message);
+                }
+            }
+        }
+        result
+    }
+
+    fn try_refresh_pending_resources(&self) -> Result<()> {
+        let identities = {
+            let rules = self.memcached.lock().expect("background rules poisoned");
+            rules
+                .pending_by_identity
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let mut resolved = Vec::new();
+        for identity in identities {
+            if let Some(descriptor) = breeze::try_resolve_identity(&self.socks_dir, &identity)
+                .with_context(|| {
+                    format!(
+                        "Memcached background rules cannot resolve Breeze resource {identity:?}"
+                    )
+                })?
+            {
+                resolved.push((identity, descriptor.port));
+            }
+        }
+        if resolved.is_empty() {
+            return Ok(());
+        }
+
+        let mut rules = self.memcached.lock().expect("background rules poisoned");
+        for (identity, port) in resolved {
+            let Some(resource_rules) = rules.pending_by_identity.remove(&identity) else {
+                continue;
+            };
+            let rule_names = resource_rules
+                .iter()
+                .map(|rule| rule.name.as_str())
+                .collect::<Vec<_>>()
+                .join(",");
+            rules
+                .by_port
+                .entry(port)
+                .or_default()
+                .extend(resource_rules);
+            info!(
+                %identity,
+                port,
+                rules = %rule_names,
+                "Memcached background rules resolved a source-registered Breeze descriptor"
+            );
+        }
+        Ok(())
+    }
+
+    fn pending_resource_summary(&self) -> String {
+        let rules = self.memcached.lock().expect("background rules poisoned");
+        let mut identities = rules
+            .pending_by_identity
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        identities.sort();
+        identities.join(",")
     }
 }
 
@@ -249,6 +403,26 @@ impl MemcachedRule {
             &self.key_suffix,
         )
     }
+}
+
+fn match_memcached_rule(
+    rules: &MemcachedRules,
+    target_port: u16,
+    key: &[u8],
+    exchange: &super::MemcachedExchangeEvent,
+) -> Option<BackgroundDependencyMatch> {
+    rules
+        .by_port
+        .get(&target_port)?
+        .iter()
+        .find(|rule| rule.matches(key))
+        .map(|rule| BackgroundDependencyMatch {
+            rule_name: rule.name.clone(),
+            initial_load: Some(rule.initial_load.clone()),
+            completed_response: exchange.outcome == DependencyExchangeOutcome::Response
+                && !exchange.no_response
+                && exchange.replay_safe,
+        })
 }
 
 fn decode_capture(capture: &BodyCapture) -> Option<Vec<u8>> {
@@ -309,7 +483,7 @@ mod tests {
     }
 
     fn memcached_rule(identity: String) -> BackgroundDependencyRuleConfig {
-        memcached_rule_with(identity, 4095, 30_000)
+        memcached_rule_with(identity, 4095, 60_000)
     }
 
     fn event(port: u16, command: &str, key: &[u8]) -> RecorderEvent {
@@ -345,13 +519,13 @@ mod tests {
     }
 
     #[test]
-    fn resolves_port_first_then_matches_exact_get_key_series() {
+    fn matches_exact_get_key_series_on_an_existing_descriptor() {
         let temp = tempfile::tempdir().unwrap();
         let filename = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
         std::fs::write(temp.path().join(filename), "").unwrap();
         let identity = filename.replace(":9448", "");
         let matcher =
-            BackgroundDependencyMatcher::resolve_in(&[memcached_rule(identity)], temp.path())
+            BackgroundDependencyMatcher::from_rules_in(&[memcached_rule(identity)], temp.path())
                 .unwrap();
 
         assert_eq!(
@@ -393,13 +567,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn resolves_source_registered_descriptor_after_recorder_initialization() {
+        let temp = tempfile::tempdir().unwrap();
+        let filename = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
+        let identity = filename.replace(":9448", "");
+        let matcher =
+            BackgroundDependencyMatcher::from_rules_in(&[memcached_rule(identity)], temp.path())
+                .unwrap();
+
+        assert!(matcher.ensure_resources_resolved().is_err());
+        assert!(
+            matcher
+                .matching_rule(&event(9449, "get", b"0.pl_video"))
+                .is_none()
+        );
+
+        std::fs::write(temp.path().join(filename), "").unwrap();
+
+        assert_eq!(
+            matcher
+                .matching_rule(&event(9448, "get", b"0.pl_video"))
+                .map(|matched| matched.rule_name().to_string()),
+            Some("planet-video-cache-warm".to_string())
+        );
+        assert!(matcher.pending_resource_summary().is_empty());
+        matcher.ensure_resources_resolved().unwrap();
+    }
+
     #[tokio::test]
     async fn initial_load_completion_uses_matching_exchange_count() {
         let temp = tempfile::tempdir().unwrap();
         let filename = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
         std::fs::write(temp.path().join(filename), "").unwrap();
         let identity = filename.replace(":9448", "");
-        let matcher = BackgroundDependencyMatcher::resolve_in(
+        let matcher = BackgroundDependencyMatcher::from_rules_in(
             &[memcached_rule_with(identity, 2, 50)],
             temp.path(),
         )
@@ -412,16 +614,16 @@ mod tests {
             matcher.record_completed_match(&matched);
         }
 
-        matcher.wait_for_initial_loads().await.unwrap();
+        matcher.wait_for_initial_loads().await;
     }
 
     #[tokio::test]
-    async fn initial_load_timeout_reports_matching_exchange_progress() {
+    async fn initial_load_timeout_is_non_fatal() {
         let temp = tempfile::tempdir().unwrap();
         let filename = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc:9448@cs";
         std::fs::write(temp.path().join(filename), "").unwrap();
         let identity = filename.replace(":9448", "");
-        let matcher = BackgroundDependencyMatcher::resolve_in(
+        let matcher = BackgroundDependencyMatcher::from_rules_in(
             &[memcached_rule_with(identity, 1, 5)],
             temp.path(),
         )
@@ -431,7 +633,7 @@ mod tests {
             .unwrap();
         matcher.record_completed_match(&matched);
 
-        let error = matcher.wait_for_initial_loads().await.unwrap_err();
-        assert!(error.to_string().contains("planet-video-cache-warm=1/2"));
+        matcher.wait_for_initial_loads().await;
+        assert_eq!(matcher.pending_initial_loads().len(), 1);
     }
 }

@@ -98,5 +98,6 @@ resources, modes, identity_source, descriptor_behavior,
 changed_packages, application_wiring, checks, blockers
 ```
 
-When blocked, identify the missing or conflicting identity evidence, the
-responsible owner, the acceptance check, and the safe resume point.
+For any startup blocker, identify the missing or conflicting identity
+evidence, the responsible owner, the acceptance check, and the safe resume
+point. Let the invoking workflow determine the overall task status.

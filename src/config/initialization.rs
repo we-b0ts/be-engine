@@ -346,10 +346,11 @@ redact_headers = [
 # key_end = 4095
 # key_separator = "."
 # key_suffix = "pl_video"
-# Once HTTP readiness succeeds, fail Recorder readiness if this rule has not
-# reached key_end - key_start + 1 completed matching exchanges within the
-# configured timeout. No applied Memcached rule means no additional wait.
-# initial_load_timeout_ms = 30000
+# Once HTTP readiness succeeds, observe this rule for up to the configured
+# window and log progress every 10 seconds. If the expected count remains
+# incomplete, warn and continue case admission. No applied Memcached rule
+# means no additional observation window.
+# initial_load_timeout_ms = 60000
 # response_role = "runtime_state"
 # source_revision = "0123456789abcdef"
 # source_evidence = "TopUserServiceImpl.java:691 scheduled local-cache warm"
@@ -454,8 +455,10 @@ mod tests {
         assert_eq!(config.recording.post_ready_settle_ms, 10_000);
         assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);
         assert!(config.recording.background_dependencies.is_empty());
-        assert!(raw.contains("# initial_load_timeout_ms = 30000"));
-        assert!(raw.contains("No applied Memcached rule means no additional wait."));
+        assert!(raw.contains("# initial_load_timeout_ms = 60000"));
+        assert!(raw.contains("# incomplete, warn and continue case admission."));
+        assert!(raw.contains("No applied Memcached rule"));
+        assert!(raw.contains("means no additional observation window."));
         assert!(raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
         assert!(!raw.contains("verified_excludes"));
         assert!(!raw.contains("allow_side_effecting_methods"));

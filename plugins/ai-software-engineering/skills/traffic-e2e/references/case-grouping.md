@@ -5,6 +5,13 @@ collection or run contains more than one canonical case directory. The goal is
 to process exactly one source API group at a time without changing published
 recordings.
 
+## Contents
+
+- Incremental selection
+- Required invocation
+- Canonical tool contract
+- Immutability
+
 ## Incremental Selection
 
 1. Select one unprocessed canonical input directory. Ignore `failed`,

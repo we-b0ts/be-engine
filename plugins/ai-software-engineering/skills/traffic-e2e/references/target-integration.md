@@ -5,6 +5,14 @@ clients. The replay boundary intercepts or routes emitted traffic; the target
 must not replace dependencies with recordings, fixtures, mocks, or in-process
 fakes.
 
+## Contents
+
+- Normal runtime
+- Standard project facade
+- Identity and staging
+- Environment materialization
+- Generated state boundary
+
 ## Normal Runtime
 
 Keep a normal startup path that does not load recordings. Follow the target

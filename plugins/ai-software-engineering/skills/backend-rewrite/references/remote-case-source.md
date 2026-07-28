@@ -4,6 +4,14 @@ Use this reference only when the user supplies a remote IPv4 address instead of
 a local case source. Remote acquisition materializes an immutable local case
 source; it does not change the `traffic-e2e` replay contract.
 
+## Contents
+
+- Inputs and helper
+- Freeze one snapshot
+- Cache and download
+- Select the oldest unprocessed recording
+- Handoff
+
 ## Inputs And Helper
 
 Require one canonical IPv4 address with four decimal octets in the range

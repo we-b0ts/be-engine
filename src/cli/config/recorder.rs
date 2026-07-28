@@ -104,7 +104,7 @@ struct BackgroundDependencyArgs {
     key_separator: String,
     #[arg(long)]
     key_suffix: Option<String>,
-    #[arg(long, default_value_t = 30_000)]
+    #[arg(long, default_value_t = 60_000)]
     initial_load_timeout_ms: u64,
     #[arg(long)]
     replay_report: PathBuf,
