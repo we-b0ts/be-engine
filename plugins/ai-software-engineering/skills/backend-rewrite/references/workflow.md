@@ -63,11 +63,9 @@ instead of regenerating it.
 
 ## Establish One Case Source
 
-Preserve an explicit local source exactly. For a remote IPv4 source, follow
-[remote-case-source.md](remote-case-source.md) and select at most one recording
-for the invocation. Otherwise invoke the repository's `scripts/start-recording`
-with a unique UTC run ID, explicit `--duration-seconds 60`, and one `--api`
-selector for the active API.
+Preserve an explicit local source exactly. Invoke the repository's
+`scripts/start-recording` with a unique UTC run ID, explicit
+`--duration-seconds 60`, and one `--api` selector for the active API.
 
 When the user has not named an API and traffic is expected on port 18061,
 listen only long enough to identify one concrete method and path while no
