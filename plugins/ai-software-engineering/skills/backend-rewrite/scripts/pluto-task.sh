@@ -205,9 +205,9 @@ prepare_pluto_rs() {
   printf 'Preparing pluto-rs in %s/%s (container %s)\n' \
     "$SYNC_NAMESPACE" "$SYNC_POD" "$SYNC_CONTAINER" >&2
 
-  local remote_binary="/opt/pluto-rs/bin/pluto-rs"
-  local remote_config="/opt/pluto-rs/config/default.yaml"
-  local remote_config_env="/opt/pluto-rs/config/.env"
+  local remote_binary="/data1/weibo/pluto-rs/bin/pluto-rs"
+  local remote_config="/data1/weibo/pluto-rs/config/default.yaml"
+  local remote_config_env="/data1/weibo/pluto-rs/config/.env"
   local binary_hash config_hash config_env_hash
   local current_binary_hash current_config_hash current_config_env_hash
   binary_hash="$(local_sha256 "$binary")"
@@ -245,7 +245,7 @@ prepare_pluto_rs() {
 
   target_exec -- sh -c '
     set -eu
-    install -d -m 0755 /opt/pluto-rs/bin /opt/pluto-rs/config
+    install -d -m 0755 /data1/weibo/pluto-rs/bin /data1/weibo/pluto-rs/config
     if [ "$1" = 1 ]; then
       install -o trp-record -g trp-record -m 0500 "$4/pluto-rs" "$5"
     fi
