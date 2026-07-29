@@ -42,23 +42,18 @@ behavior, and treat traffic from that diagnostic lifecycle as non-evidence.
 
 ## Materialize Local Runtime Inputs
 
-Use the Git-ignored `.traffic-e2e/runtime/` directory only when source-proven
-runtime inputs must be materialized locally. Initialization creates only this
-root directory; do not precreate an environment file or configuration
-subdirectory.
+When source-proven runtime inputs must be materialized locally, use the
+repository's Git-ignored runtime-input location. It is permitted to copy the
+necessary authoritative configuration artifacts out of an authorized source
+image or runtime without modifying that source. Preserve their supplied format
+and any filename or directory relationships required by the source loader.
 
-Create `.traffic-e2e/runtime/.env` only when process-environment values must be
-materialized. Source configuration artifacts required for local target startup
-may be placed under `.traffic-e2e/runtime/`; create a `config/` subtree only
-when the discovered artifacts benefit from one, and preserve their supplied
-format and any filename or directory relationships required by the source
-loader. Copy only inputs needed by startup or the active capability, keep
-sensitive values out of commands and reports, and never commit this directory.
-
-Treat this directory as local staging, not as a new product configuration
-contract. Pass its paths through the target's normal startup boundary; do not
-hard-code `.traffic-e2e` into product configuration loading or translate the
-source artifacts into a parallel target-only format.
+Materialize only environment values and configuration artifacts needed by
+startup or the active capability. Keep sensitive values out of commands and
+reports, and never commit local runtime inputs. Treat the local location as
+staging, not as a new product configuration contract: pass its paths through
+the target's normal startup boundary and do not translate the source artifacts
+into a parallel target-only format.
 
 ## Implement Compatible Loading
 
