@@ -61,7 +61,11 @@ or validating the candidate facade or `scripts/start-recording-comparison`.
    settle interval and encrypted `authorization` request-header policy;
    `recording wait-ready` owns the wait. Keep `authorization` in
    `redact_headers` for response-side protection; request encryption takes
-   precedence.
+   precedence. Create the private `.traffic-e2e/runtime/` root, but do not
+   precreate its contents. Reserve `runtime/config/` for files or directories
+   synchronized from the source container and `runtime/.env` for materialized
+   environment variables. Create purpose-named directories for other local
+   runtime dependencies only when needed.
 5. Copy the fixed Breeze Mesh patch assets unchanged into
    `.traffic-e2e/adapters/source/`. This bundled patch is the only permitted
    source-class patch and is a closed recording-infrastructure exception, not
@@ -112,7 +116,7 @@ Append only missing ignore entries for:
 
 ```text
 /.traffic-e2e/local/
-/.traffic-e2e/.env/
+/.traffic-e2e/runtime/
 /.traffic-e2e/data/
 /.traffic-e2e/artifacts/
 ```
@@ -131,8 +135,8 @@ bash -n scripts/brz-no-fallback.sh
 bash -n scripts/start-recording
 bash -n scripts/start-recording-comparison
 bash -n scripts/<project>-cli
-./scripts/start-recording --duration-seconds 1
-./scripts/start-recording-comparison --duration-seconds 1
+./scripts/start-recording --duration-seconds 1 --case-limit 1
+./scripts/start-recording-comparison --duration-seconds 1 --case-limit 1
 ```
 
 Run the two bounded recording commands with a valid, unlogged

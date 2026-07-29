@@ -67,7 +67,26 @@ that boundary is a source or recording-configuration readiness error.
 
 ## Evidence-Gated Commands
 
-Preview before applying:
+For source-proven independent HTTP traffic, preview one exact selector:
+
+```bash
+traffic-e2e config recorder plan background-dependencies \
+  --target-root <target> \
+  --name <stable-background-rule-name> \
+  --authority <exact-authority> \
+  --method <exact-method> \
+  --path-prefix <exact-path-prefix> \
+  --replay-report <same-finalized-replay-report.json> \
+  --source-revision <same-source-revision> \
+  --evidence '<source file/symbol and ownership explanation>'
+```
+
+Review the selector and matched case IDs, then repeat with `apply`. The command
+requires at least one matching unused case exchange, rejects selectors that
+also match unmatched or unsupported target requests, and replans from current
+config and evidence before writing atomically.
+
+For a Memcached `runtime_state` rule, preview before applying:
 
 ```bash
 traffic-e2e config recorder plan background-dependencies \

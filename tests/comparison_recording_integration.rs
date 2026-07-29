@@ -18,7 +18,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
 use traffic_e2e::{
     AppConfig, ArtifactsConfig, ComparisonRecordingConfig, ComparisonRecordingRunOptions,
-    HttpGatewayReadyConfig, HttpGatewayRuleConfig,
+    HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig,
+    HttpGatewayRuleConfig,
 };
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
@@ -138,7 +139,7 @@ async fn returns_baseline_without_waiting_for_candidate_and_records_both() {
     let started = Instant::now();
     assert!(raw_get(gateway, "/api/users/42").await.contains("baseline"));
     assert!(started.elapsed() < Duration::from_millis(250));
-    assert!(raw_get(gateway, "/api/ignored").await.contains("baseline"));
+    assert!(raw_get(gateway, "/api/ignored").await.contains("fixed"));
 
     let group = run_dir(&temp, run_id).join("api/api-users-wildcard");
     let case = wait_for_only_child(&group).await;
@@ -223,13 +224,14 @@ async fn optional_baseline_recheck_records_source_candidate_source_in_order() {
 }
 
 #[tokio::test]
-async fn case_limit_suppresses_files_but_keeps_mirroring() {
+async fn case_limit_returns_fixed_response_without_more_mirroring() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
-    let (baseline, _) = spawn_counting_upstream(StatusCode::OK, "baseline", 2, None).await;
+    let (baseline, baseline_requests) =
+        spawn_counting_upstream(StatusCode::OK, "baseline", 1, None).await;
     let (candidate, candidate_requests) =
-        spawn_counting_upstream(StatusCode::OK, "candidate", 2, None).await;
+        spawn_counting_upstream(StatusCode::OK, "candidate", 1, None).await;
     let gateway = free_addr();
     let run_id = "20260722160001";
     let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
@@ -241,8 +243,9 @@ async fn case_limit_suppresses_files_but_keeps_mirroring() {
     wait_for_port(gateway).await;
 
     assert!(raw_get(gateway, "/api/one").await.contains("baseline"));
-    assert!(raw_get(gateway, "/api/one").await.contains("baseline"));
-    wait_for_counter(&candidate_requests, 2).await;
+    assert!(raw_get(gateway, "/api/one").await.contains("fixed"));
+    wait_for_counter(&candidate_requests, 1).await;
+    assert_eq!(baseline_requests.load(Ordering::SeqCst), 1);
     let group = run_dir(&temp, run_id).join("api/api-one");
     let _ = wait_for_only_child(&group).await;
     assert_eq!(std::fs::read_dir(&group).unwrap().count(), 1);
@@ -252,7 +255,9 @@ async fn case_limit_suppresses_files_but_keeps_mirroring() {
         1,
     )
     .await;
-    assert_eq!(summary["counts"]["dual_dispatched"], 2);
+    assert_eq!(summary["counts"]["dual_dispatched"], 1);
+    assert_eq!(summary["counts"]["fixed_response"], 1);
+    assert_eq!(summary["counts"]["baseline_only"], 0);
     assert_eq!(summary["apis"]["api:/api/one"]["last_baseline_status"], 200);
     assert_eq!(
         summary["apis"]["api:/api/one"]["last_candidate_status"],
@@ -330,18 +335,19 @@ async fn non_read_request_is_never_mirrored() {
         b"POST /api/write HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\nConnection: close\r\n\r\n12345",
     )
     .await;
-    assert!(response.contains("baseline"));
-    wait_for_counter(&baseline_requests, 1).await;
+    assert!(response.contains("fixed"));
+    assert_eq!(baseline_requests.load(Ordering::SeqCst), 0);
     assert_eq!(candidate_requests.load(Ordering::SeqCst), 0);
     task.abort();
 }
 
 #[tokio::test]
-async fn overload_forwards_only_to_baseline() {
+async fn overload_returns_fixed_response_without_single_sided_dispatch() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
-    let (baseline, _) = spawn_counting_upstream(StatusCode::OK, "baseline", 2, None).await;
+    let (baseline, baseline_requests) =
+        spawn_counting_upstream(StatusCode::OK, "baseline", 1, None).await;
     let (candidate, candidate_requests) = spawn_counting_upstream(
         StatusCode::OK,
         "candidate",
@@ -360,15 +366,16 @@ async fn overload_forwards_only_to_baseline() {
     wait_for_port(gateway).await;
 
     assert!(raw_get(gateway, "/api/one").await.contains("baseline"));
-    assert!(raw_get(gateway, "/api/two").await.contains("baseline"));
+    assert!(raw_get(gateway, "/api/two").await.contains("fixed"));
     wait_for_counter(&candidate_requests, 1).await;
+    assert_eq!(baseline_requests.load(Ordering::SeqCst), 1);
     let summary = wait_for_count(
         &run_dir(&temp, run_id).join("comparison-recording-run.json"),
         "overloaded",
         1,
     )
     .await;
-    assert_eq!(summary["counts"]["baseline_only"], 1);
+    assert_eq!(summary["counts"]["fixed_response"], 1);
     assert_eq!(summary["counts"]["dual_dispatched"], 1);
     task.abort();
 }
@@ -415,7 +422,7 @@ async fn request_limit_rejects_before_either_upstream() {
 }
 
 #[tokio::test]
-async fn unmatched_request_forwards_only_to_baseline() {
+async fn unmatched_request_returns_fixed_response_without_upstream_dispatch() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
@@ -432,8 +439,8 @@ async fn unmatched_request_forwards_only_to_baseline() {
     ));
     wait_for_port(gateway).await;
 
-    assert!(raw_get(gateway, "/health").await.contains("baseline"));
-    wait_for_counter(&baseline_requests, 1).await;
+    assert!(raw_get(gateway, "/health").await.contains("fixed"));
+    assert_eq!(baseline_requests.load(Ordering::SeqCst), 0);
     assert_eq!(candidate_requests.load(Ordering::SeqCst), 0);
     let summary = wait_for_count(
         &run_dir(&temp, run_id).join("comparison-recording-run.json"),
@@ -441,12 +448,12 @@ async fn unmatched_request_forwards_only_to_baseline() {
         1,
     )
     .await;
-    assert_eq!(summary["counts"]["baseline_only"], 1);
+    assert_eq!(summary["counts"]["fixed_response"], 1);
     task.abort();
 }
 
 #[tokio::test]
-async fn not_ready_request_forwards_only_to_baseline() {
+async fn not_ready_request_returns_fixed_response_without_single_sided_dispatch() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
@@ -470,8 +477,8 @@ async fn not_ready_request_forwards_only_to_baseline() {
     wait_for_port(gateway).await;
     wait_for_counter(&candidate_requests, 1).await;
 
-    assert!(raw_get(gateway, "/api/one").await.contains("baseline"));
-    wait_for_counter(&baseline_requests, 2).await;
+    assert!(raw_get(gateway, "/api/one").await.contains("fixed"));
+    assert_eq!(baseline_requests.load(Ordering::SeqCst), 1);
     assert_eq!(candidate_requests.load(Ordering::SeqCst), 1);
     let summary = wait_for_count(
         &run_dir(&temp, run_id).join("comparison-recording-run.json"),
@@ -479,7 +486,7 @@ async fn not_ready_request_forwards_only_to_baseline() {
         1,
     )
     .await;
-    assert_eq!(summary["counts"]["baseline_only"], 1);
+    assert_eq!(summary["counts"]["fixed_response"], 1);
     task.abort();
 }
 
@@ -507,6 +514,12 @@ fn comparison_recording_config(
     };
     config.http_gateway.listen = gateway;
     config.http_gateway.matched_upstream = format!("http://{baseline}");
+    config.http_gateway.fallback_mode = HttpGatewayFallbackMode::FixedResponse;
+    config.http_gateway.fixed_response = Some(HttpGatewayFixedResponseConfig {
+        status: 200,
+        body: "fixed".to_string(),
+        ..Default::default()
+    });
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
         name: Some("api".to_string()),
         methods: vec!["GET".to_string()],

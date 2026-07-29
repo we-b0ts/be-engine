@@ -182,6 +182,66 @@ mod tests {
             ])
             .is_err()
         );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "config",
+                "comparison",
+                "plan",
+                "response-rule",
+                "--kind",
+                "counter",
+                "--source-evidence",
+                "src/user.rs:load live follower count",
+                "--source-example",
+                "100",
+                "--target-example",
+                "101",
+                "--api",
+                "GET /api/users/show",
+                "--json-pointer",
+                "/followers_count",
+                "--comparison-report",
+                "comparison-report.json",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "config",
+                "replay",
+                "plan",
+                "response-rule",
+                "--kind",
+                "counter",
+                "--api",
+                "GET /api/users/show",
+                "--json-pointer",
+                "/followers_count",
+                "--comparison-report",
+                "comparison-report.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "config",
+                "comparison",
+                "plan",
+                "response-rule",
+                "--kind",
+                "dynamic",
+                "--api",
+                "GET /api/token",
+                "--json-pointer",
+                "/token",
+                "--comparison-report",
+                "comparison-report.json",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

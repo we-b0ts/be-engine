@@ -299,19 +299,6 @@ pub(super) async fn collect_limited(
     Ok(collected.freeze())
 }
 
-pub(super) async fn collect_unlimited(
-    mut body: Incoming,
-) -> std::result::Result<Bytes, LimitedBodyError> {
-    let mut collected = BytesMut::new();
-    while let Some(frame) = body.frame().await {
-        let frame = frame.map_err(|error| LimitedBodyError::Read(error.into()))?;
-        if let Ok(data) = frame.into_data() {
-            collected.extend_from_slice(&data);
-        }
-    }
-    Ok(collected.freeze())
-}
-
 pub(super) fn request_body_capture(
     bytes: &[u8],
     truncated: bool,

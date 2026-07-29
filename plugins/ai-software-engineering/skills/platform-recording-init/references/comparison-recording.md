@@ -60,6 +60,7 @@ Generate `scripts/start-recording-comparison` with these accepted forms:
 ./scripts/start-recording-comparison --baseline-recheck
 ./scripts/start-recording-comparison --brz-no-fallback <true|false>
 ./scripts/start-recording-comparison --api 'GET /api/widgets/*'
+./scripts/start-recording-comparison --case-limit <positive-integer>
 ```
 
 Default the duration to `60` seconds when omitted. AI and automated invocations
@@ -68,9 +69,10 @@ Default `brz_no_fallback` to `true` and accept only literal `true` or `false`.
 When provided, require `--run-id` to be a valid 14-digit UTC timestamp. Allow
 every option to combine, reject missing option values, invalid values, or
 duplicate options before changing runtime state, and accept repeatable
-canonical `--api` selectors. Consume `--brz-no-fallback` in the wrapper; pass
-the run ID, duration, baseline recheck, and API selectors through unchanged to
-`traffic-e2e record-comparison`.
+canonical `--api` selectors plus one optional positive `--case-limit`. Consume
+`--brz-no-fallback` in the wrapper; pass the run ID, duration, baseline recheck,
+API selectors, and case limit through unchanged to `traffic-e2e
+record-comparison`.
 
 Require `TRAFFIC_E2E_ENCRYPTION_KEY_B64` during the same argument validation
 and verify, without printing decoded bytes, that it is strict Base64 for
@@ -111,8 +113,8 @@ Use this lifecycle:
    applicable ready application container;
 6. run `traffic-e2e record-comparison --config
    .traffic-e2e/recorder.toml`, passing through `--run-id`,
-   `--duration-seconds`, every `--api`, and the enable-only
-   `--baseline-recheck` flag when set;
+   `--duration-seconds`, every `--api`, optional `--case-limit`, and the
+   enable-only `--baseline-recheck` flag when set;
 7. forward termination to `traffic-e2e`, allow it to finalize artifacts, then
    stop only the owned candidate, source, shared Breeze, and network resources;
    and
@@ -129,7 +131,10 @@ must fail before startup for every other method. Keep
 `comparison_recording.baseline_recheck = false` during initialization. A later
 verification run may explicitly pass `--baseline-recheck` to capture
 source-before, candidate, and source-after in that order when source-time drift
-evidence is needed.
+evidence is needed. The initialized verification policy independently defaults
+`response_rules.comparison.source_match` to `before`; a later traffic
+verification task may select `before_or_after`, which requires the recheck
+artifact for every case.
 
 ## Offline Verification
 
@@ -142,13 +147,15 @@ traffic-e2e compare \
 ```
 
 This command is file-only and must not enable isolation. It writes
-`comparison-report.json` by default and reuses only the shared verification
+`comparison-report.json` by default and reuses only the target verification
 policy's response rules. A changed optional source recheck is reported as
 `source_change` only for candidate differences at the same response location;
 unrelated candidate differences remain candidate behavior. Source change is
 inconclusive evidence, not a cause or exemption. Use `--comparison-report` with
 `traffic-e2e config replay plan|apply response-rule` when reviewed online
 evidence proves that another dynamic or unordered field should be exempted.
+Use `traffic-e2e config comparison plan|apply response-rule` only for a
+source-proven comparison-only strategy.
 
 ## Validation
 
@@ -158,7 +165,7 @@ evidence proves that another dynamic or unordered field should be exempted.
   `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is absent, malformed, or decodes to a length
   other than 32 bytes.
 - With a valid unlogged key, run
-  `./scripts/start-recording-comparison --duration-seconds 1`.
+  `./scripts/start-recording-comparison --duration-seconds 1 --case-limit 1`.
 - Prove the source and candidate reused exactly one Breeze instance, require
   both upstreams to become ready, and require a finalized
   `comparison-recording-run.json`.

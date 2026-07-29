@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::response::{ResponseRules, response_rule_ids, validate_response_rules};
+use super::response::{
+    ComparisonVerificationPolicy, ResponseRules, response_rule_ids, validate_response_rules,
+};
 
 const MIN_POLICY_VERSION: u8 = 1;
 const MAX_POLICY_VERSION: u8 = 2;
@@ -131,6 +133,7 @@ pub struct ReplayPolicyValidationReport {
     pub path: String,
     pub fingerprint: String,
     pub expected_response: ExpectedResponseUsage,
+    pub comparison: ComparisonVerificationPolicy,
     pub rule_ids: Vec<String>,
     pub response_rule_ids: Vec<String>,
     pub runner_owned_response_assertions: bool,
@@ -146,11 +149,15 @@ pub(in crate::replay) struct LoadedReplayPolicy {
 pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationReport> {
     let loaded = load_replay_policy(path)?;
     let response_rule_ids = response_rule_ids(&loaded.document.response_rules);
+    let comparison = ComparisonVerificationPolicy {
+        source_match: loaded.document.response_rules.comparison.source_match,
+    };
     Ok(ReplayPolicyValidationReport {
         version: loaded.document.version,
         path: loaded.path.display().to_string(),
         fingerprint: loaded.fingerprint,
         expected_response: loaded.document.expected_response,
+        comparison,
         rule_ids: loaded
             .document
             .rules

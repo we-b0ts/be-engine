@@ -54,7 +54,8 @@ Install or build the requested binary once, then run:
 ```bash
 traffic-e2e record --config .traffic-e2e/recorder.toml
 traffic-e2e record --config .traffic-e2e/recorder.toml \
-  --api 'GET /api/widgets/*'
+  --api 'GET /api/widgets/*' \
+  --case-limit 250
 ```
 
 Use an explicit run identifier only when orchestration needs to know the output
@@ -70,6 +71,10 @@ Use repeatable `--api 'METHOD /path-or-pattern'` values when the intended API
 scope is known. They filter only the current run, are intersected with the
 configured rules, define the selected cases' API grouping, and do not authorize
 editing recorder TOML.
+
+Use a positive `--case-limit N` only when every resolved API or static path in
+the current run needs the same limit. It overrides both the configured default
+and every pattern-specific limit in memory and does not edit recorder TOML.
 
 Managed recording enables local DNS and fake-IP redirects by default. Use
 `--no-dns` only when the target already routes relevant dependencies through

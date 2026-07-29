@@ -226,7 +226,7 @@ impl ComparisonRecordingStore {
         quota.published += 1;
     }
 
-    async fn release(&self, reservation: Reservation) {
+    pub(super) async fn release(&self, reservation: Reservation) {
         if let Some(quota) = self.quotas.lock().await.get_mut(&reservation.key) {
             quota.reserved = quota.reserved.saturating_sub(1);
         }

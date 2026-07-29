@@ -89,6 +89,10 @@ project or dependency is available.
 
 ## Non-Negotiable Runtime Rules
 
+- Treat the configured Breeze descriptor and snapshot directories as shared
+  runtime state used in place across processes, not as application
+  configuration. Never copy, mirror, cache, relocate, or stage them into a
+  project-local location.
 - `RequireExisting`: reuse one exact descriptor; fail when it is absent.
 - `EnsurePresent`: reuse one exact descriptor; register it when absent.
 - `CreateNew`: fail when the exact descriptor exists; register it when absent.

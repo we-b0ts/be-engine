@@ -67,8 +67,12 @@ rules:
             relative_to: replay_now
             tolerance: 2s
 
-# Add only source-proven non-deterministic response fields from finalized E2E
-# or comparison reports through `traffic-e2e config replay apply response-rule`.
+# Add source-proven replay fields through `config replay` and comparison-only
+# fields through `config comparison`. Comparison applies both sets.
 response_rules:
   dynamic: {}
   unordered: {}
+  comparison:
+    # Use before_or_after only when comparison recording captures source rechecks.
+    source_match: before
+    counter: {}

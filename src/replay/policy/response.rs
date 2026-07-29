@@ -5,6 +5,21 @@ use serde::{Deserialize, Serialize};
 
 use super::pattern::path_pattern_matches;
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ComparisonSourceMatch {
+    #[default]
+    Before,
+    BeforeOrAfter,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ComparisonVerificationPolicy {
+    #[serde(default)]
+    pub source_match: ComparisonSourceMatch,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct ResponseRules {
@@ -12,14 +27,34 @@ pub(in crate::replay) struct ResponseRules {
     pub(in crate::replay) dynamic: BTreeMap<String, Vec<DynamicResponseRule>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in crate::replay) unordered: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "ComparisonResponseRules::is_empty")]
+    pub(in crate::replay) comparison: ComparisonResponseRules,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::replay) struct ComparisonResponseRules {
+    #[serde(default)]
+    pub(in crate::replay) source_match: ComparisonSourceMatch,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in crate::replay) counter: BTreeMap<String, Vec<CounterResponseRule>>,
+}
+
+impl ComparisonResponseRules {
+    fn is_empty(&self) -> bool {
+        self.source_match == ComparisonSourceMatch::Before
+            && self.counter.values().all(Vec::is_empty)
+    }
 }
 
 impl ResponseRules {
     pub(in crate::replay) fn is_empty(&self) -> bool {
-        self.dynamic.values().all(Vec::is_empty) && self.unordered.values().all(Vec::is_empty)
+        self.dynamic.values().all(Vec::is_empty)
+            && self.unordered.values().all(Vec::is_empty)
+            && self.comparison.is_empty()
     }
 
-    pub(in crate::replay) fn matching_fields(
+    pub(in crate::replay) fn matching_replay_fields(
         &self,
         method: &str,
         path: &str,
@@ -33,6 +68,21 @@ impl ResponseRules {
             ))
             .collect()
     }
+
+    pub(in crate::replay) fn matching_comparison_fields(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> Vec<ResponseField> {
+        self.matching_replay_fields(method, path)
+            .into_iter()
+            .chain(matching_counter_fields(
+                &self.comparison.counter,
+                method,
+                path,
+            ))
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +90,7 @@ impl ResponseRules {
 pub enum ResponseRuleKind {
     Dynamic,
     Unordered,
+    Counter,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -65,6 +116,15 @@ pub(in crate::replay) struct DynamicResponseRule {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::replay) struct CounterResponseRule {
+    pub(in crate::replay) pointer: String,
+    pub(in crate::replay) source_evidence: String,
+    pub(in crate::replay) source_example: String,
+    pub(in crate::replay) target_example: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ResponseField {
     pub id: String,
     pub api: String,
@@ -80,6 +140,7 @@ pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Resul
         &rules.unordered,
         &mut locations,
     )?;
+    validate_counter_rule_map(&rules.comparison.counter, &mut locations)?;
     for (index, left) in locations.iter().enumerate() {
         for right in locations.iter().skip(index + 1) {
             if left.0.eq_ignore_ascii_case(right.0)
@@ -109,6 +170,7 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
             &rules.unordered,
             ResponseRuleKind::Unordered,
         ))
+        .chain(counter_rule_ids(&rules.comparison.counter))
         .collect()
 }
 
@@ -117,11 +179,12 @@ pub(in crate::replay) fn response_rule_id(
     api: &str,
     pointer: &str,
 ) -> String {
-    let kind = match kind {
-        ResponseRuleKind::Dynamic => "dynamic",
-        ResponseRuleKind::Unordered => "unordered",
+    let (namespace, kind) = match kind {
+        ResponseRuleKind::Dynamic => ("response", "dynamic"),
+        ResponseRuleKind::Unordered => ("response", "unordered"),
+        ResponseRuleKind::Counter => ("response:comparison", "counter"),
     };
-    format!("response:{kind}:{api}:{pointer}")
+    format!("{namespace}:{kind}:{api}:{pointer}")
 }
 
 pub(in crate::replay) fn parse_api(api: &str) -> Result<(&str, &str)> {
@@ -204,6 +267,27 @@ fn validate_pointer_rule_map<'a>(
     Ok(())
 }
 
+fn validate_counter_rule_map<'a>(
+    rules: &'a BTreeMap<String, Vec<CounterResponseRule>>,
+    locations: &mut Vec<RuleLocation<'a>>,
+) -> Result<()> {
+    for (api, fields) in rules {
+        let (method, path) = validate_rule_api(api, fields.is_empty())?;
+        let mut unique = BTreeSet::new();
+        for field in fields {
+            validate_json_pointer(&field.pointer)?;
+            ensure!(
+                unique.insert(field.pointer.as_str()),
+                "response rule API {api:?} repeats JSON Pointer {:?}",
+                field.pointer
+            );
+            validate_counter_rule(field)?;
+            locations.push((method, path, &field.pointer, ResponseRuleKind::Counter));
+        }
+    }
+    Ok(())
+}
+
 fn validate_rule_api(api: &str, empty: bool) -> Result<(&str, &str)> {
     let (method, path) = parse_api(api)?;
     ensure!(
@@ -245,18 +329,30 @@ fn validate_dynamic_rule(rule: &DynamicResponseRule) -> Result<()> {
     Ok(())
 }
 
+fn validate_counter_rule(rule: &CounterResponseRule) -> Result<()> {
+    validate_audit_text(&rule.source_evidence, "source_evidence", 512)?;
+    validate_audit_text(&rule.source_example, "source_example", 1024)?;
+    validate_audit_text(&rule.target_example, "target_example", 1024)?;
+    ensure!(
+        rule.source_example != rule.target_example,
+        "counter response rule {} requires different source and target examples",
+        rule.pointer
+    );
+    Ok(())
+}
+
 fn validate_audit_text(value: &str, label: &str, max_len: usize) -> Result<()> {
     ensure!(
         !value.trim().is_empty(),
-        "dynamic response rule {label} must not be blank"
+        "response rule {label} must not be blank"
     );
     ensure!(
         !value.contains(['\r', '\n']),
-        "dynamic response rule {label} must be a single line"
+        "response rule {label} must be a single line"
     );
     ensure!(
         value.len() <= max_len,
-        "dynamic response rule {label} exceeds {max_len} bytes"
+        "response rule {label} exceeds {max_len} bytes"
     );
     Ok(())
 }
@@ -308,6 +404,29 @@ fn matching_pointer_fields<'a>(
         })
 }
 
+fn matching_counter_fields<'a>(
+    rules: &'a BTreeMap<String, Vec<CounterResponseRule>>,
+    method: &'a str,
+    path: &'a str,
+) -> impl Iterator<Item = ResponseField> + 'a {
+    rules
+        .iter()
+        .filter_map(move |(api, fields)| {
+            let (candidate_method, candidate_path) = parse_api(api).ok()?;
+            (candidate_method.eq_ignore_ascii_case(method)
+                && path_pattern_matches(candidate_path, path))
+            .then_some((api, fields))
+        })
+        .flat_map(move |(api, fields)| {
+            fields.iter().map(move |field| ResponseField {
+                id: response_rule_id(ResponseRuleKind::Counter, api, &field.pointer),
+                api: api.clone(),
+                pointer: field.pointer.clone(),
+                kind: ResponseRuleKind::Counter,
+            })
+        })
+}
+
 fn dynamic_rule_ids(
     rules: &BTreeMap<String, Vec<DynamicResponseRule>>,
 ) -> impl Iterator<Item = String> + '_ {
@@ -326,6 +445,16 @@ fn pointer_rule_ids(
         pointers
             .iter()
             .map(move |pointer| response_rule_id(kind, api, pointer))
+    })
+}
+
+fn counter_rule_ids(
+    rules: &BTreeMap<String, Vec<CounterResponseRule>>,
+) -> impl Iterator<Item = String> + '_ {
+    rules.iter().flat_map(|(api, fields)| {
+        fields
+            .iter()
+            .map(move |field| response_rule_id(ResponseRuleKind::Counter, api, &field.pointer))
     })
 }
 
@@ -363,6 +492,15 @@ mod tests {
         }
     }
 
+    fn counter(pointer: &str) -> CounterResponseRule {
+        CounterResponseRule {
+            pointer: pointer.to_string(),
+            source_evidence: "src/user.rs:load live count".to_string(),
+            source_example: "100".to_string(),
+            target_example: "101".to_string(),
+        }
+    }
+
     #[test]
     fn matches_exact_and_segment_pattern_apis() {
         let rules = ResponseRules {
@@ -374,11 +512,12 @@ mod tests {
                 ("GET /api/sessions/*".to_string(), vec![dynamic("/data/id")]),
             ]),
             unordered: BTreeMap::new(),
+            comparison: ComparisonResponseRules::default(),
         };
 
         assert_eq!(
             rules
-                .matching_fields("GET", "/api/resource/token")
+                .matching_replay_fields("GET", "/api/resource/token")
                 .iter()
                 .map(|field| field.pointer.as_str())
                 .collect::<Vec<_>>(),
@@ -386,7 +525,7 @@ mod tests {
         );
         assert_eq!(
             rules
-                .matching_fields("GET", "/api/sessions/42")
+                .matching_replay_fields("GET", "/api/sessions/42")
                 .iter()
                 .map(|field| field.pointer.as_str())
                 .collect::<Vec<_>>(),
@@ -405,6 +544,7 @@ mod tests {
                 ),
             ]),
             unordered: BTreeMap::new(),
+            comparison: ComparisonResponseRules::default(),
         };
 
         assert!(validate_response_rules(&rules).is_err());
@@ -421,6 +561,27 @@ mod tests {
                 "GET /api/resource".to_string(),
                 vec!["/content".to_string()],
             )]),
+            comparison: ComparisonResponseRules::default(),
+        };
+
+        assert!(validate_response_rules(&rules).is_err());
+    }
+
+    #[test]
+    fn rejects_overlapping_replay_and_comparison_subtrees() {
+        let rules = ResponseRules {
+            dynamic: BTreeMap::from([(
+                "GET /api/users/show".to_string(),
+                vec![dynamic("/followers_count")],
+            )]),
+            comparison: ComparisonResponseRules {
+                counter: BTreeMap::from([(
+                    "GET /api/users/show".to_string(),
+                    vec![counter("/followers_count")],
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
         };
 
         assert!(validate_response_rules(&rules).is_err());
@@ -434,15 +595,43 @@ mod tests {
                 "GET /api/config/ansible_facts".to_string(),
                 vec!["/general/sudo_users".to_string()],
             )]),
+            comparison: ComparisonResponseRules::default(),
         };
 
-        let fields = rules.matching_fields("GET", "/api/config/ansible_facts");
+        let fields = rules.matching_replay_fields("GET", "/api/config/ansible_facts");
 
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].kind, ResponseRuleKind::Unordered);
         assert_eq!(
             fields[0].id,
             "response:unordered:GET /api/config/ansible_facts:/general/sudo_users"
+        );
+    }
+
+    #[test]
+    fn counter_fields_are_available_only_to_comparison_matching() {
+        let rules = ResponseRules {
+            comparison: ComparisonResponseRules {
+                counter: BTreeMap::from([(
+                    "GET /api/users/show".to_string(),
+                    vec![counter("/followers_count")],
+                )]),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(
+            rules
+                .matching_replay_fields("GET", "/api/users/show")
+                .is_empty()
+        );
+        let fields = rules.matching_comparison_fields("GET", "/api/users/show");
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].kind, ResponseRuleKind::Counter);
+        assert_eq!(
+            fields[0].id,
+            "response:comparison:counter:GET /api/users/show:/followers_count"
         );
     }
 
@@ -465,6 +654,7 @@ mod tests {
                 }],
             )]),
             unordered: BTreeMap::new(),
+            comparison: ComparisonResponseRules::default(),
         };
 
         assert!(validate_response_rules(&rules).is_err());

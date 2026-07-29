@@ -15,6 +15,9 @@ rules: []
 response_rules:
   dynamic: {}
   unordered: {}
+  comparison:
+    source_match: before
+    counter: {}
 "#;
 
 #[derive(Debug, Clone)]
@@ -60,7 +63,7 @@ mod tests {
     use crate::replay::validate_replay_policy;
 
     #[test]
-    fn initializes_empty_shared_verification_policy_once() {
+    fn initializes_empty_verification_policy_once() {
         let target = tempdir().unwrap();
         let result = initialize_replay_policy(ReplayPolicyInitOptions {
             target_root: target.path().to_path_buf(),
@@ -69,6 +72,10 @@ mod tests {
         let report = validate_replay_policy(&result.policy).unwrap();
         assert!(result.policy.ends_with(".traffic-e2e/verification.yaml"));
         assert_eq!(report.version, 2);
+        assert_eq!(
+            report.comparison.source_match,
+            crate::replay::ComparisonSourceMatch::Before
+        );
         assert!(report.rule_ids.is_empty());
         assert!(report.response_rule_ids.is_empty());
 

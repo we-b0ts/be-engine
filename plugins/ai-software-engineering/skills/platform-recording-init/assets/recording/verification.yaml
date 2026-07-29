@@ -5,3 +5,6 @@ rules: []
 response_rules:
   dynamic: {}
   unordered: {}
+  comparison:
+    source_match: before
+    counter: {}

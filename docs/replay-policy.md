@@ -37,7 +37,21 @@ rules: []
 response_rules:
   dynamic: {}
   unordered: {}
+  comparison:
+    source_match: before
+    counter: {}
 ```
+
+Standard replay loads only the root `dynamic` and `unordered` rules.
+Comparison loads those replay rules plus the nested `comparison` rules.
+Strategies across both sets must select disjoint JSON subtrees.
+
+`response_rules.comparison.source_match` controls which complete source
+observation may serve as the comparison oracle. `before` is the default. Set
+`before_or_after` only for runs that record `expected-response-after.json` for
+every case. The candidate must match either complete source response under the
+active response rules; fields from the two source observations are never
+combined. Standard replay ignores this comparison-only setting.
 
 `expected-response.json` is an assertion oracle only. Target product code,
 dependency mocks, E2E setup, and verification policy generation must not read its
@@ -50,10 +64,13 @@ verification. `traffic-e2e compare <comparison-recording-run> --policy
 <verification.yaml>` treats the baseline `expected-response.json` as the
 oracle and the candidate `response.json` as actual output. When
 `expected-response-after.json` exists, it also checks source-before against
-source-after. A source change makes only candidate differences at the same
-response location inconclusive; unrelated candidate differences remain target
-differences. Replay dependency rules are ignored during this file-only
-operation, and no interception or isolation is enabled.
+source-after. With `source_match: before_or_after`, a complete candidate match
+against source-after also passes and is recorded as `matched_source: after`.
+When the candidate matches neither observation, a source change makes only
+candidate differences at the same response location inconclusive; unrelated
+candidate differences remain target differences. Replay dependency rules are
+ignored during this file-only operation, and no interception or isolation is
+enabled.
 
 Do not put recorded values, response bodies, secrets, absolute case paths, or
 case-id exceptions in the policy. Use selectors and semantic validation only.
@@ -204,8 +221,9 @@ mechanisms are `timestamp`, `duration`, `uuid`, `random`, `nonce`,
 `random-salt`, and `dynamic-derived`; a derived digest or signature must also
 declare its underlying dynamic input. It replans
 against current evidence before writing; `plan` is optional diagnostics with
-the same strategy and arguments. Apply exactly one JSON Pointer at a time
-because the citation and examples belong to that field:
+the same strategy and arguments. Multiple Pointers may be submitted together
+only when the same citation, mechanism, and examples prove each selected
+field; otherwise plan and apply them separately:
 
 ```bash
 traffic-e2e config replay apply response-rule \
@@ -255,3 +273,36 @@ runner-owned assertions using the current policy fingerprint, exact
 focused-case coverage, and complete, clean aggregate evidence. Apply is
 additive, sorted, and atomic. Rerun the entire affected API group after every
 policy change.
+
+Comparison-only live counter semantics are nested separately:
+
+```yaml
+response_rules:
+  comparison:
+    counter:
+      "GET /api/users/show":
+        - pointer: /followers_count
+          source_evidence: src/user.rs:load live follower count
+          source_example: "100"
+          target_example: "101"
+```
+
+Standard replay ignores this subtree. Do not infer counter behavior from the
+field name. After source inspection proves a live count and a current
+comparison report contains differing observations, use:
+
+```bash
+traffic-e2e config comparison plan response-rule \
+  --target-root . \
+  --kind counter \
+  --source-evidence 'src/user.rs:load live follower count' \
+  --source-example '100' \
+  --target-example '101' \
+  --api 'GET /api/users/show' \
+  --json-pointer /followers_count \
+  --comparison-report .traffic-e2e/artifacts/comparison-recordings/.../comparison-report.json
+```
+
+Review the plan, then repeat with `apply`. Number matches only number. String
+matches only string, and empty strings match only empty strings. Presence and
+all unsupported JSON kinds remain exact.

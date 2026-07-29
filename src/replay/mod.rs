@@ -90,16 +90,18 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
+pub(crate) use assertion::unobserved_response_rule_ids;
 pub(crate) use assertion::{ComparisonResponseAssertionOptions, assert_comparison_response};
 pub use assertion::{
     ResponseAssertionCaseReport, ResponseAssertionOptions, assert_recorded_response,
 };
 pub(crate) use policy::response_locations_overlap;
 pub use policy::{
-    ComparisonResponseRuleFeedback, DynamicResponseMechanism, DynamicResponseRuleFeedback,
-    DynamicResponseRulePlan, DynamicResponseRuleReport, ReplayPolicyInitOptions,
-    ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind,
-    ResponseRulePlan, ResponseRuleReport, initialize_replay_policy, plan_comparison_response_rule,
+    ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
+    DynamicResponseMechanism, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
+    DynamicResponseRuleReport, ReplayPolicyInitOptions, ReplayPolicyInitResult,
+    ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
+    ResponseRuleReport, initialize_replay_policy, plan_comparison_response_rule,
     plan_dynamic_response_rule, plan_response_rule, validate_replay_policy,
 };
 pub use report::aggregate::{

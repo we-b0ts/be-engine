@@ -96,9 +96,10 @@ defects before they become scale defects.
 - Read [architecture.md](references/architecture.md) when choosing modules,
   ownership, configuration, APIs, or runtime boundaries.
 - Read [large-rust-backend-architecture.md](references/large-rust-backend-architecture.md)
-  before structuring or extending a Rust backend with multiple deployable
-  roles, product capabilities, service dependencies, remote clients, API
-  adapters, or complex configuration.
+  before structuring or extending a Platform Rust backend, or a repository
+  that explicitly adopts that architecture standard, when it has multiple
+  deployable roles, product capabilities, service dependencies, remote
+  clients, API adapters, or complex configuration.
 - Read [concurrency-and-backpressure.md](references/concurrency-and-backpressure.md)
   when adding async work, threads, queues, batching, fan-out, or background work.
 - Read [dependency-clients.md](references/dependency-clients.md) whenever the

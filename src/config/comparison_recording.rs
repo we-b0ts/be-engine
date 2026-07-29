@@ -2,7 +2,7 @@ use anyhow::{Result, bail, ensure};
 use hyper::Uri;
 use serde::{Deserialize, Serialize};
 
-use super::HttpGatewayConfig;
+use super::{HttpGatewayConfig, HttpGatewayFallbackMode};
 
 const SAFE_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
 
@@ -21,6 +21,10 @@ pub struct ComparisonRecordingConfig {
 
 impl ComparisonRecordingConfig {
     pub(super) fn validate(&self, gateway: &HttpGatewayConfig) -> Result<()> {
+        ensure!(
+            gateway.fallback_mode == HttpGatewayFallbackMode::FixedResponse,
+            "comparison recording requires http_gateway.fallback_mode = \"fixed_response\" so rejected requests reach neither upstream"
+        );
         let baseline = validate_upstream(
             self.baseline_upstream
                 .as_deref()
@@ -141,10 +145,16 @@ impl Default for ComparisonRecordingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{AppConfig, HttpGatewayRuleConfig};
+    use crate::config::{AppConfig, HttpGatewayFixedResponseConfig, HttpGatewayRuleConfig};
 
     fn gateway(methods: &[&str]) -> HttpGatewayConfig {
         HttpGatewayConfig {
+            fallback_mode: HttpGatewayFallbackMode::FixedResponse,
+            fixed_response: Some(HttpGatewayFixedResponseConfig {
+                status: 200,
+                body: "fixed".to_string(),
+                ..Default::default()
+            }),
             rules: vec![HttpGatewayRuleConfig {
                 name: Some("api".to_string()),
                 methods: methods.iter().map(|value| (*value).to_string()).collect(),
@@ -166,6 +176,19 @@ mod tests {
     fn rejects_side_effecting_methods_even_without_baseline_recheck() {
         let config = ComparisonRecordingConfig::default();
         assert!(config.validate(&gateway(&["POST"])).is_err());
+    }
+
+    #[test]
+    fn requires_fixed_response_for_non_admitted_requests() {
+        let mut gateway = gateway(&["GET"]);
+        gateway.fallback_mode = HttpGatewayFallbackMode::Upstream;
+        gateway.fixed_response = None;
+
+        let error = ComparisonRecordingConfig::default()
+            .validate(&gateway)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("fixed_response"));
     }
 
     #[test]
@@ -222,6 +245,11 @@ mod tests {
 
             [http_gateway]
             matched_upstream = "http://127.0.0.1:8081"
+            fallback_mode = "fixed_response"
+
+            [http_gateway.fixed_response]
+            status = 200
+            body = "fixed"
 
             [[http_gateway.rules]]
             name = "api"

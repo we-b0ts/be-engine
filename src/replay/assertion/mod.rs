@@ -11,6 +11,7 @@ use self::artifact::{
     ActualResponse, ComparisonResponse, ExpectedResponse, RecordedRequest, decode_body,
 };
 use self::compare::compare_json;
+pub(crate) use self::model::unobserved_response_rule_ids;
 pub use self::model::{ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference};
 use super::policy::{fingerprint, load_replay_policy, uri_path};
 use crate::http::content_encoding;
@@ -69,6 +70,7 @@ pub fn assert_recorded_response(
     let expected_body = decode_body(expected_body, "expected response")?;
     let actual_body = decode_body(&actual.body, "actual response")?;
     evaluate_response(AssertionInputs {
+        mode: AssertionMode::Replay,
         case_id: options.case_id,
         request,
         expected_status,
@@ -115,6 +117,7 @@ pub(crate) fn assert_comparison_response(
     let actual_status = captured_status(&response, "response")?;
     let actual_body = captured_body(&response, "response")?;
     evaluate_response(AssertionInputs {
+        mode: AssertionMode::Comparison,
         case_id: options.case_id,
         request,
         expected_status,
@@ -181,6 +184,7 @@ fn captured_body(response: &ComparisonResponse, label: &str) -> Result<Vec<u8>> 
 }
 
 struct AssertionInputs {
+    mode: AssertionMode,
     case_id: String,
     request: RecordedRequest,
     expected_status: u16,
@@ -194,8 +198,15 @@ struct AssertionInputs {
     policy: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum AssertionMode {
+    Replay,
+    Comparison,
+}
+
 fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseReport> {
     let AssertionInputs {
+        mode,
         case_id,
         request,
         expected_status,
@@ -214,10 +225,16 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         "runner-owned response assertions require replay policy version 2"
     );
     let path = uri_path(&request.uri);
-    let response_fields = loaded
-        .document
-        .response_rules
-        .matching_fields(&request.method, &path);
+    let response_fields = match mode {
+        AssertionMode::Replay => loaded
+            .document
+            .response_rules
+            .matching_replay_fields(&request.method, &path),
+        AssertionMode::Comparison => loaded
+            .document
+            .response_rules
+            .matching_comparison_fields(&request.method, &path),
+    };
     let mut report = ResponseAssertionCaseReport::new(
         case_id,
         request.method,
@@ -241,6 +258,23 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         (Ok(expected), Ok(actual)) => {
             report.body_mode = ResponseBodyMode::JsonStructural;
             compare_json(&expected, &actual, &response_fields, &mut report);
+            let applicable_fields = response_fields
+                .iter()
+                .filter(|field| {
+                    expected.pointer(&field.pointer).is_some()
+                        && actual.pointer(&field.pointer).is_some()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let unobserved_fields = response_fields
+                .iter()
+                .filter(|field| {
+                    expected.pointer(&field.pointer).is_none()
+                        && actual.pointer(&field.pointer).is_none()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            report.finish(&applicable_fields, &unobserved_fields);
         }
         _ => {
             report.body_mode = ResponseBodyMode::ExactBytes;
@@ -253,9 +287,9 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                     .differences
                     .push(ResponseDifference::exact_body_mismatch());
             }
+            report.finish(&[], &[]);
         }
     }
-    report.finish(&response_fields);
     Ok(report)
 }
 

@@ -1,4 +1,5 @@
 use std::num::NonZeroU64;
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -25,6 +26,9 @@ pub(super) struct RecordComparisonArgs {
     /// Record only this API for the current run; repeat for multiple METHOD/path selectors.
     #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
     apis: Vec<RecordingApi>,
+    /// Override the case limit for every API in this run.
+    #[arg(long, value_name = "N")]
+    case_limit: Option<NonZeroUsize>,
 }
 
 pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
@@ -39,6 +43,9 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
             args.config.display()
         )
     })?;
+    if let Some(case_limit) = args.case_limit {
+        config.override_case_limits_for_run(case_limit);
+    }
     if args.baseline_recheck {
         config
             .comparison_recording
@@ -93,6 +100,8 @@ mod tests {
             "--baseline-recheck",
             "--api",
             "GET /api/users/*",
+            "--case-limit",
+            "250",
         ])
         .unwrap();
         assert_eq!(
@@ -104,6 +113,10 @@ mod tests {
         assert_eq!(
             parsed.record_comparison.apis[0].to_string(),
             "GET /api/users/*"
+        );
+        assert_eq!(
+            parsed.record_comparison.case_limit.map(NonZeroUsize::get),
+            Some(250)
         );
         assert!(
             TestCli::try_parse_from([
@@ -127,6 +140,10 @@ mod tests {
                 "0",
             ])
             .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--case-limit", "0",])
+                .is_err()
         );
 
         let defaults = TestCli::try_parse_from(["test", "--config", "recorder.toml"]).unwrap();

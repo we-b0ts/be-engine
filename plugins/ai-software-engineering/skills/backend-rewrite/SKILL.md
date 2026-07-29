@@ -15,6 +15,13 @@ evidence, and advance only on current proof.
   Preserve responses, dependency roles, side effects, ordering, error
   semantics, metrics, configuration provenance, and lifecycle behavior unless
   the user approves a contract change.
+- Treat the source configuration interface as an operational compatibility
+  contract. Make target startup consume the same authoritative configuration
+  and preserve its externally supplied formats, keys, parsing semantics,
+  defaults, precedence, validation, and behavior-relevant reload behavior.
+  Whenever source startup uses configuration files or directories, trace the
+  loader from the source runtime and implement compatible target
+  initialization and loading before accepting target startup.
 - Treat the source repository and source application implementation as
   immutable evidence. Never edit source code, replace source classes through a
   recording adapter, patch source artifacts, or change source business
@@ -71,6 +78,12 @@ defines discovery and resume behavior, PR-base resolution, initialization,
 case acquisition, target-code delegation, runtime evidence, E2E/comparison
 loops, delivery, and the final decision record.
 
+Read
+[configuration-compatibility.md](references/configuration-compatibility.md)
+before implementing or accepting target configuration loading and startup. It
+defines how to discover the source configuration contract, load it compatibly,
+and verify target startup with it.
+
 The phase order is:
 
 ```text
@@ -104,19 +117,14 @@ Response compatibility is the primary repair loop:
    and response independence.
 7. A recorder-rule change requires a new standard recording and E2E run.
 
-Every non-complete result with a response mismatch must include one
-representative failed case:
-
-```text
-case_id, case_path, failed_fields, expected_shape, actual_shape,
-cause, cause_status: proven | unresolved, evidence, exact_missing_link
-```
-
-Use a small set of fields that share one causal path. A generic conclusion
-without this case evidence is not a valid handoff or final decision. Do not
-enumerate every failed case, and do not claim that the representative explains
-other cases without shared difference and code-path evidence. Use
-`exact_missing_link: none` only when the cause is proven.
+Every non-complete result with a response mismatch must begin with the
+traffic-e2e handoff model exactly as defined; do not rename or omit its keys,
+and do not define a backend-rewrite variant. A generic conclusion without its
+one real case, one Pointer, concrete source/candidate observations, and
+diagnosis is not a valid handoff or final decision. Do not enumerate every
+failed case, and do not claim that the representative explains other cases
+without shared difference and code-path evidence. Delivery fields never
+determine verification status.
 
 An unrelated unused dependency must not preempt response diagnosis. Preserve
 all independently evidenced categories so a capability blocker does not hide a
@@ -131,8 +139,8 @@ Keep one explicit record for the active slice:
 
 ```text
 scope, stage, case_source, source_revision, e2e_evidence,
-comparison_evidence, response_status, dependency_status,
-failure_categories, next_todo, todo_owner, resume_stage
+comparison_evidence, repaired_case_evidence, response_status,
+dependency_status, failure_categories, next_todo, todo_owner, resume_stage
 ```
 
 Use `complete` only when the active slice is `slice_done`, current E2E and
@@ -152,5 +160,13 @@ was not recorded or provided and the missing information prevents target-code
 implementation. Dirty evidence alone never proves `blocked`. Every
 non-complete result needs an owner, concrete TODO, acceptance check, and resume
 stage.
+
+Use `inconclusive` only when a target repair has passed E2E against the same
+immutable case that evidenced it, but the first valid fresh comparison after
+that repair does not observe the repaired case. This is terminal for the
+current execution, not success. Do not start another standard or comparison
+recording automatically. Keep `resume_stage: compare`; if code, policy,
+configuration, and E2E evidence remain current, a later requested resume
+returns directly to comparison.
 
 A draft PR or code change is delivery evidence, not verification success.

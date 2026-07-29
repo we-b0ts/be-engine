@@ -28,6 +28,7 @@ The generated script must accept:
 ./scripts/start-recording --duration-seconds <positive-integer>
 ./scripts/start-recording --brz-no-fallback <true|false>
 ./scripts/start-recording --api 'GET /api/widgets/*'
+./scripts/start-recording --case-limit <positive-integer>
 ```
 
 Default `brz_no_fallback` to `true`. Accept only the literal values `true` and
@@ -36,8 +37,9 @@ invocations must explicitly pass `--duration-seconds 60` or another positive
 integer. When provided, require `--run-id` to be a valid 14-digit UTC
 timestamp. Reject missing option values, invalid values, or duplicate options
 before changing runtime state, allow all options to combine, accept repeatable
-canonical `--api` selectors, and pass the run ID and API selectors through
-unchanged to `traffic-e2e record`.
+canonical `--api` selectors, accept one optional positive `--case-limit`, and
+pass the run ID, API selectors, and case limit through unchanged to
+`traffic-e2e record`.
 
 Require `TRAFFIC_E2E_ENCRYPTION_KEY_B64` during the same argument validation
 and verify, without printing decoded bytes, that it is strict Base64 for
@@ -101,7 +103,7 @@ the normal Recorder shutdown path.
   `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is absent, malformed, or decodes to a length
   other than 32 bytes.
 - With a valid unlogged key, run
-  `./scripts/start-recording --duration-seconds 1`.
+  `./scripts/start-recording --duration-seconds 1 --case-limit 1`.
 - Require finalized standard recording metadata with no Recorder startup or
   shutdown error, then require the complete exact run tree to have the
   invoking host UID/GID and remain writable for runner-owned artifacts.

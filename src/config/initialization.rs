@@ -124,8 +124,9 @@ pub fn initialize_recorder_config(
                  by {} before invoking its start and status commands, run `traffic-e2e \
                  record-comparison --config .traffic-e2e/recorder.toml`, accept \
                  `--run-id YYYYMMDDHHMMSS`, `--duration-seconds <positive-integer>`, and \
-                 `--baseline-recheck`, plus repeatable `--api 'METHOD /path-or-pattern'`, default \
-                 the duration to 60 seconds when omitted, and accept \
+                 `--baseline-recheck`, plus repeatable `--api 'METHOD /path-or-pattern'` and one \
+                 optional positive `--case-limit <positive-integer>`, default the duration to 60 \
+                 seconds when omitted, and accept \
                  `--brz-no-fallback <true|false>` defaulting to true. Start exactly one shared \
                  Breeze for the genuine source and candidate containers. Consume the Breeze \
                  option in this wrapper, apply executable `scripts/brz-no-fallback.sh` to each \
@@ -431,6 +432,7 @@ mod tests {
         assert!(result.required_ai_actions[1].contains("explicitly pass `--duration-seconds 60`"));
         assert!(result.required_ai_actions[1].contains("--baseline-recheck"));
         assert!(result.required_ai_actions[1].contains("--api 'METHOD /path-or-pattern'"));
+        assert!(result.required_ai_actions[1].contains("--case-limit <positive-integer>"));
         assert!(result.required_ai_actions[1].contains("--brz-no-fallback <true|false>"));
         assert!(result.required_ai_actions[1].contains("one shared Breeze"));
         assert!(result.required_ai_actions[1].contains("scripts/brz-no-fallback.sh"));

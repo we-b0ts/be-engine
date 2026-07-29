@@ -36,30 +36,61 @@ does not choose migration order, implement target behavior, declare a whole
 migration complete, modify the traffic-e2e product from an operation task, or
 deliver a PR.
 
-Return a concise handoff after each operation:
+Return a concise handoff after each operation. When any selected response
+assertion is non-passing, begin the handoff with this model and fill every
+applicable key; do not replace it with prose:
 
 ```text
-status: passed | action_required | incomplete | blocked
-stage, scope, exact evidence
-```
+status: passed | action_required | incomplete | inconclusive | blocked
+stage: <current stage>
+scope: <canonical API or capability>
 
-When any selected response assertion fails, the handoff is invalid unless it
-also contains:
+counts:
+  apis:
+    selected: <integer>
+    evaluated: <integer>
+    passed: <integer>
+    nonpassing: <integer>
+  cases:
+    selected: <integer>
+    executed: <integer>
+    response_passed: <integer>
+    response_nonpassing: <integer>
 
-```text
 representative_case:
-  case_id, case_path, failed_fields, expected_shape, actual_shape
-  cause, cause_status: proven | unresolved, evidence, exact_missing_link
+  api: <METHOD path>
+  case_id: <case id>
+  pointer: <exactly one JSON Pointer>
+  difference_kind: <kind>
+  source_before: <JSON value>
+  candidate: <JSON value>
+  source_after: <JSON value | not_recorded>
+  cause: <concrete cause or unresolved>
+  cause_status: proven | unresolved
+  evidence: <source/runtime/artifact evidence>
+  missing_evidence: <required only when unresolved>
 ```
 
-Choose one real failed case and only a small set of fields with one causal
-path. Do not substitute aggregate mismatch counts, a field list, dependency
-cleanliness, or a generic blocker for this evidence. Use
-`exact_missing_link: none` only when the cause is proven.
+Choose one real failed case and exactly one representative Pointer on one
+causal path. Read `source_before`, `candidate`, and `source_after` at that
+Pointer from `expected-response.json`, `response.json`, and
+`expected-response-after.json`. Render concrete bounded JSON values, with
+strings quoted. Use `<missing>` only when the Pointer is absent, and
+`not_recorded` only when the complete source-after artifact is absent. Preserve
+`null` and `""` distinctly. Redact sensitive content while retaining length or
+a stable digest that proves the values differ. When `cause_status` is `proven`,
+omit `missing_evidence`; when it is `unresolved`, name the exact evidence still
+needed. Do not substitute aggregate mismatch counts, a field list, dependency
+cleanliness, or a generic blocker for this evidence. When every selected
+response passes, omit `representative_case`.
 
 Use `action_required` while response or other repairable behavior remains.
 Use `incomplete` only when all selected response assertions pass but dirty
 dependency evidence remains and no source-proven rule can be safely applied.
+Use `inconclusive` only when the first valid comparison after an evidenced
+target repair does not observe the repaired case, while that same immutable
+case has current passing E2E evidence. End the current operation without
+automatically recording again and use the comparison reference's handoff.
 Use `blocked` only when response-driving external-system information was not
 recorded or provided and the missing information prevents target behavior from
 being implemented.
@@ -81,7 +112,7 @@ Use stable evidence categories:
 target_behavior, target_environment, background_dependency,
 recording_configuration, recording_no_traffic, recorder_capability_gap,
 replay_capability_gap, verification_policy, intentional_nondeterminism,
-source_change, unresolved
+source_change, repaired_case_not_observed, unresolved
 ```
 
 ## Mandatory Sequence
@@ -159,8 +190,11 @@ operations do not require either reference.
 - When request-header encryption is configured, require the named key
   environment and keep its value out of commands, logs, reports, cases, policy,
   and target configuration.
-- Make recorder or replay policy changes only through the supported
-  evidence-validating `config ... plan|apply` interface.
+- Make recorder-rule and response-rule changes only through the supported
+  evidence-validating `config ... plan|apply` interface. The typed
+  `response_rules.comparison.source_match` behavior may be reviewed and changed
+  directly in the source-controlled verification config when its reference
+  defines that operation.
 - Never hand-edit generated state or parse partial output to manufacture
   completion.
 
@@ -183,5 +217,7 @@ target workaround or alter the source to manufacture the missing evidence.
 
 Repeated failures without capability proof remain `action_required`, not
 `blocked`. Use `incomplete` only for response-passing dirty evidence without a
-safe source-proven rule. Never invent requests, responses, dependency values,
-side effects, routes, or completion artifacts.
+safe source-proven rule. A valid comparison that does not observe a repaired
+case follows the comparison reference and terminates as `inconclusive`; it is
+not a retry signal. Never invent requests, responses, dependency values, side
+effects, routes, or completion artifacts.

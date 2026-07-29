@@ -10,6 +10,7 @@ ownership, repair priority, and completion gates.
 - Initialize only when needed
 - Establish one case source
 - Inspect runtime evidence
+- Preserve configuration compatibility
 - Delegate target-code work
 - Run the evidence loops
 - Route non-passing evidence
@@ -103,12 +104,25 @@ or hard-code a runtime observation. Record the last proven link and exact
 missing link; use `blocked` only when the missing external observation prevents
 target implementation.
 
+## Preserve Configuration Compatibility
+
+Before implementing target configuration loading or accepting target startup,
+follow [configuration-compatibility.md](configuration-compatibility.md).
+Discover the source loader and effective configuration behavior, then make the
+target consume the same authoritative configuration and compatible format.
+Reading authorized source configuration is valid runtime investigation; keep
+sensitive values out of commands, logs, reports, and commits.
+
+Keep configuration repair under `target_behavior` until the target starts from
+the source-compatible configuration contract.
+
 ## Delegate Target-Code Work
 
 Confirm source behavior, target facade, verification policy, dependency wiring,
-and genuine runtime clients. Delegate `target_behavior` with the active scope,
-immutable case source and IDs, structured response difference, causal
-dependency evidence, source behavior, and requested outcome.
+configuration contract, and genuine runtime clients. Delegate
+`target_behavior` with the active scope, immutable case source and IDs,
+structured response difference, causal dependency evidence, source behavior,
+and requested outcome.
 
 Before the first genuine target E2E and after every target startup or
 dependency-wiring change, re-review the complete `scripts/<project>-cli`
@@ -149,13 +163,21 @@ next state.
    `--duration-seconds 60`, and the same affected `--api` scope. Preserve
    wrapper-owned runtime options and the encryption-key boundary.
 5. Run offline `traffic-e2e compare` against that exact finalized run and the
-   shared verification policy. Only the report's per-API passing result is
+   target's verification policy. Only the report's per-API passing result is
    current comparison evidence.
 6. Delegate comparison differences to traffic-e2e diagnosis. Fix every
    candidate-only field, re-record a field-scoped inconclusive source change,
    or change policy only for source-proven intentional non-determinism.
 7. After every code or policy change, pass affected E2E again and create a new
    comparison recording. Never reinterpret an older report for changed code.
+
+When one concrete recorded case directly causes a target repair, retain its
+immutable case source, case ID, repaired response locations, proven cause, and
+distinguishing evidence. After that case passes E2E, follow traffic-e2e's
+repaired-case coverage procedure for one valid fresh comparison. If it does not
+observe the repaired case, stop with
+`inconclusive/repaired_case_not_observed`; do not record again automatically.
+An invalid comparison does not consume this bounded observation.
 
 ## Route Non-Passing Evidence
 
@@ -188,6 +210,10 @@ next state.
 - `source_change`: require source-before/source-after change at the same
   response location; preserve unrelated candidate-only fields as
   `target_behavior`.
+- `repaired_case_not_observed`: preserve the passing repaired-case E2E and
+  valid comparison evidence, return `inconclusive`, and resume at comparison
+  only when requested; do not change code or policy and do not record again
+  automatically.
 - `verification_policy`: remove or replace stale and unsupported response rules
   through the evidence-validating interface, rerun E2E, then create a new
   comparison recording.
@@ -230,21 +256,31 @@ the resolved base before the final response. A blocked or incomplete replay
 does not waive delivery. Skip a PR only when the user explicitly requests no
 PR or no deliverable target change exists.
 
-Use the main skill's state and representative-case contracts. Begin a
-non-passing E2E report with current selected, executed, passing, and mismatching
-counts followed by exactly one representative case.
+Use the traffic-e2e handoff model without deleting or renaming keys; this
+workflow defines no second template. Begin a non-passing E2E or comparison
+report with API and case counts followed immediately by exactly one
+representative case and Pointer. For that Pointer, show the concrete bounded
+source-before and candidate values, plus source-after when recorded; types or
+shapes alone are insufficient.
 
-Use a response-mismatching case for `blocked` and a response-passing dirty case
-for `incomplete`. Connect the selected fields to one causal path; never replace
-it with a field list or generic dependency issue. When provenance remains
-unresolved, report the last proven link, exact next missing link, and the
-repository path, packaged symbol, configuration key, runtime path, or resource
-already checked. Never summarize these states as “insufficient source-code
-evidence” or “drift”.
+Use a response-mismatching case for `action_required` or `blocked`. For
+`incomplete`, all response assertions already pass: omit `representative_case`
+and report the exact dirty dependency evidence separately. When response
+provenance remains unresolved, report the last proven link, the specific
+missing evidence, and the repository path, packaged symbol, configuration key,
+runtime path, or resource already checked. Never summarize these states as
+“insufficient source-code evidence” or “drift”.
+
+For `inconclusive`, omit a fabricated comparison difference. Report the
+original repaired case source and ID, repaired response locations and cause,
+its passing post-repair E2E report, the valid comparison run and evaluated case
+count, zero repaired-case observations, and `resume_stage: compare`.
 
 Then report dependency cleanliness, independent blockers, delivery, status,
 scope, stage, conclusion, exact E2E/comparison reports, and a next TODO with
 owner, action, acceptance check, resume stage, and required transitions.
+Never lead with “completed” or equivalent success wording while E2E or
+comparison is non-passing; a commit or draft PR is delivery, not completion.
 
 For a remote source, also retain its IPv4 address, frozen snapshot boundary,
 recording ID, cache root, archive SHA-256, canonical case sources, and runner

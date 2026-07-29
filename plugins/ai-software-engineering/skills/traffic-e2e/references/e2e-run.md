@@ -137,8 +137,11 @@ startup, and writes:
 Command success means the actual response was captured, not that it matched.
 The runner reads expected and actual artifacts, applies the response policy,
 and persists field-level differences, diagnostic candidates, applied rules,
-unused applicable rules, and policy fingerprints. Version-one policies retain
-the legacy target-owned assertion contract for existing repositories.
+unused applicable rules, response-shape-unobserved rules, and policy
+fingerprints. A rule omitted by both sides of one response variant does not
+fail that case; it becomes a policy mismatch only when no case in the affected
+API group exercises it. Version-one policies retain the legacy target-owned
+assertion contract for existing repositories.
 
 Run `run-api` only until the current complete API group passes. Once it passes,
 stop.
@@ -151,35 +154,18 @@ API. If later shared behavior changes may invalidate an earlier focused pass,
 rerun the affected groups or use one full regression round.
 
 After response assertions pass, when a recorded case HTTP exchange remains
-unused, apply the failure-diagnosis contract loaded from the main skill and
-inspect the request's source owner. If source proves that the exact authority,
-method, and path family is owned by an API-independent process-level task and
-the selected API response is independent of it, run:
+unused, use [failure-diagnosis.md](failure-diagnosis.md) to establish its source
+owner and independence. When that proof succeeds, follow the evidence-gated
+selector and `plan|apply` contract in
+[background-dependencies.md](background-dependencies.md). That reference is
+the authority for rule shape, command arguments, evidence validation, and
+matched-case review.
 
-```bash
-traffic-e2e config recorder apply background-dependencies \
-  --target-root <target> \
-  --name <stable-background-rule-name> \
-  --authority <exact-authority> \
-  --method <exact-method> \
-  --path-prefix <exact-path-prefix> \
-  --replay-report <same-finalized-replay-report.json> \
-  --source-revision <same-source-revision> \
-  --evidence '<same source evidence>'
-```
-
-The command accepts only one exact selector per rule, requires a finalized
-report with at least one matching unused case exchange, rejects selectors that
-also match unmatched or unsupported target requests, and refuses stale config
-or report input at apply time. Retain its selector, matched case IDs, source
-revision, evidence, and diff. `apply` performs validation and planning before
-the atomic update, so a separate `plan` invocation is optional diagnostics.
-
-Applying the rule changes future recording attribution only. Create a new
-recording and replay that new case source; restarting replay against the old
-immutable recording cannot make it clean. Do not apply recorder feedback during
-a full round; return to focused diagnosis and restart the full round with the
-new recording afterward.
+Applying a background rule changes future recording attribution only. Create a
+new recording and replay that new case source; restarting replay against the
+old immutable recording cannot make it clean. Do not apply recorder feedback
+during a full round; return to focused diagnosis and restart the full round
+with the new recording afterward.
 
 For an immutable older recording that cannot be replaced, use
 `allowed-unused-http-hosts plan/apply` only when source proves every request to

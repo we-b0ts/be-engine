@@ -114,18 +114,18 @@ matched_upstream = "http://127.0.0.1:7171"
 # "upstream" preserves the existing forwarding behavior. Use
 # "fixed_response" to answer fallback requests inside Recorder without
 # starting a separate fallback service.
-fallback_mode = "upstream"
+fallback_mode = "fixed_response"
 fallback_upstream = "http://10.37.254.56:7171"
 preserve_host = true
 
-# Example in-process fallback. Uncomment this table and change fallback_mode
-# to "fixed_response". Status is required; 201 is appropriate only when the
-# response represents resource creation.
-# [http_gateway.fixed_response]
-# status = 200
-# content_type = "application/json"
-# headers = { x-recorder-fallback = "fixed" }
-# body = '{"code":"xxx","msg":"xxx"}'
+# Comparison recording requires this in-process fallback so a request is
+# either admitted to both upstreams or reaches neither one. Status is required;
+# 201 is appropriate only when the response represents resource creation.
+[http_gateway.fixed_response]
+status = 200
+content_type = "application/json"
+headers = { x-recorder-fallback = "fixed" }
+body = '{"code":"xxx","msg":"xxx"}'
 
 [http_gateway.ready]
 # The recorder actively probes matched_upstream until this path returns the

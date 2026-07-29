@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,14 @@ impl HttpGatewayCaseLimitsConfig {
             .get(case_pattern)
             .copied()
             .unwrap_or(self.default)
+    }
+
+    pub(super) fn override_for_run(&mut self, limit: NonZeroUsize) {
+        let limit = limit.get();
+        self.default = limit;
+        for configured_limit in self.overrides.values_mut() {
+            *configured_limit = limit;
+        }
     }
 
     pub(super) fn validate(&self, rules: &[HttpGatewayRuleConfig]) -> Result<()> {
@@ -98,6 +107,24 @@ mod tests {
         assert_eq!(limits.limit_for("/api/users/*"), 2);
         assert_eq!(limits.limit_for("/api/health"), 0);
         assert_eq!(limits.limit_for("/api/projects/*"), 10);
+    }
+
+    #[test]
+    fn runtime_override_applies_to_default_and_every_pattern() {
+        let mut limits = HttpGatewayCaseLimitsConfig {
+            default: 10,
+            overrides: [
+                ("/api/users/*".to_string(), 2),
+                ("/api/health".to_string(), 0),
+            ]
+            .into(),
+        };
+
+        limits.override_for_run(NonZeroUsize::new(25).unwrap());
+
+        assert_eq!(limits.limit_for("/api/users/*"), 25);
+        assert_eq!(limits.limit_for("/api/health"), 25);
+        assert_eq!(limits.limit_for("/api/projects/*"), 25);
     }
 
     #[test]

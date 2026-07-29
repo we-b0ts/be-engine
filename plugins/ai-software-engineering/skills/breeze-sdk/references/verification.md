@@ -43,8 +43,9 @@ it supports.
 - Validate startup, configuration, health, normal operations, reuse, and
   shutdown.
 - Bound connection, operation, retry, and shutdown waits.
-- Exercise resource-specific error mapping and fallback behavior without
-  moving business semantics into the SDK.
+- Exercise resource-specific error mapping and transport-level
+  failover/degradation behavior without moving business fallback policy into
+  the SDK.
 - For Motan, verify the complete reusable SDK boundary: protocol, discovery,
   routing, codec, transport, deadlines, retries, connection reuse, health, and
   shutdown, independently from any business service interface or method

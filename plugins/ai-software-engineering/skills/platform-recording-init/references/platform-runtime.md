@@ -75,8 +75,18 @@ environment variable.
 Inspect the source and Breeze containers for image identity, platform,
 entrypoint, command, working directory, environment, bind mounts, capabilities,
 security options, and ulimits. Preserve values required for genuine startup.
-Store sensitive environment values only under `.traffic-e2e/.env/` with mode
-`0600`; never print or commit them.
+Initialize only the private `.traffic-e2e/runtime/` root. Store sensitive local
+runtime inputs there when source evidence requires them:
+
+- use `.traffic-e2e/runtime/config/` for files or directories synchronized from
+  the source container, preserving the relationships required by their
+  consumers;
+- use `.traffic-e2e/runtime/.env` for materialized environment variables;
+- create purpose-named child directories for other local runtime dependencies
+  only when needed.
+
+Do not precreate child entries during initialization. Use mode `0600` for
+sensitive files; never print or commit runtime inputs.
 
 Preserve the inspected Breeze image and project-specific service pool. The
 standard Breeze launch remains rooted in Vintage discovery, snapshot

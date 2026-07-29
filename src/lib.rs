@@ -59,8 +59,8 @@ pub use case_group::{
 pub use comparison_recording::{
     ComparisonRecordingRunOptions, ComparisonVerificationApi, ComparisonVerificationApiCounts,
     ComparisonVerificationCase, ComparisonVerificationClassification, ComparisonVerificationCounts,
-    ComparisonVerificationOptions, ComparisonVerificationReport, run as run_comparison_recording,
-    run_with_duration as run_comparison_recording_with_duration,
+    ComparisonVerificationOptions, ComparisonVerificationReport, MatchedSourceObservation,
+    run as run_comparison_recording, run_with_duration as run_comparison_recording_with_duration,
     run_with_options as run_comparison_recording_with_options, verify_comparison_recording,
 };
 pub use config::{
@@ -109,15 +109,16 @@ pub use recording_control::{
     RecordingReadiness, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
 };
 pub use replay::{
-    ComparisonResponseRuleFeedback, DynamicResponseMechanism, DynamicResponseRuleFeedback,
-    DynamicResponseRulePlan, DynamicResponseRuleReport, MysqlReplayConfig,
-    MysqlReplayControlConfig, ReplayAggregateOptions, ReplayAggregateReport,
-    ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig, ReplayPolicyInitOptions,
-    ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind,
-    ResponseRulePlan, ResponseRuleReport, aggregate_replay_reports,
-    aggregate_replay_reports_with_options, initialize_replay_policy, plan_comparison_response_rule,
-    plan_dynamic_response_rule, plan_response_rule, run_mysql_replay, run_mysql_replay_control,
-    run_replay, run_replay_control, validate_replay_policy,
+    ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
+    DynamicResponseMechanism, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
+    DynamicResponseRuleReport, MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions,
+    ReplayAggregateReport, ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig,
+    ReplayPolicyInitOptions, ReplayPolicyInitResult, ReplayPolicyValidationReport,
+    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport,
+    aggregate_replay_reports, aggregate_replay_reports_with_options, initialize_replay_policy,
+    plan_comparison_response_rule, plan_dynamic_response_rule, plan_response_rule,
+    run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
+    validate_replay_policy,
 };
 pub use tls::MitmCa;
 

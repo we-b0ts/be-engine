@@ -10,5 +10,6 @@ pub use runtime::{ComparisonRecordingRunOptions, run, run_with_duration, run_wit
 pub use verification::{
     ComparisonVerificationApi, ComparisonVerificationApiCounts, ComparisonVerificationCase,
     ComparisonVerificationClassification, ComparisonVerificationCounts,
-    ComparisonVerificationOptions, ComparisonVerificationReport, verify_comparison_recording,
+    ComparisonVerificationOptions, ComparisonVerificationReport, MatchedSourceObservation,
+    verify_comparison_recording,
 };

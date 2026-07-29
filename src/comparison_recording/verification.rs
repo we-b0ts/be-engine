@@ -1,13 +1,14 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use serde::{Deserialize, Serialize};
 
 use crate::config::edit::{create_atomic, write_atomic};
 use crate::replay::{
-    ComparisonResponseAssertionOptions, ResponseAssertionCaseReport, assert_comparison_response,
-    response_locations_overlap, validate_replay_policy,
+    ComparisonResponseAssertionOptions, ComparisonSourceMatch, ResponseAssertionCaseReport,
+    assert_comparison_response, response_locations_overlap, unobserved_response_rule_ids,
+    validate_replay_policy,
 };
 
 const RUN_SUMMARY_FILE: &str = "comparison-recording-run.json";
@@ -48,6 +49,8 @@ pub struct ComparisonVerificationApiCounts {
 pub struct ComparisonVerificationApi {
     pub passed: bool,
     pub counts: ComparisonVerificationApiCounts,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_mismatch_rule_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +61,13 @@ pub enum ComparisonVerificationClassification {
     SourceChange,
     PolicyMismatch,
     Unevaluable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchedSourceObservation {
+    Before,
+    After,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +81,10 @@ pub struct ComparisonVerificationCase {
     pub response: Option<ResponseAssertionCaseReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub baseline_recheck: Option<ResponseAssertionCaseReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_after: Option<ResponseAssertionCaseReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_source: Option<MatchedSourceObservation>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub source_change_pointers: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -91,6 +105,8 @@ pub struct ComparisonVerificationReport {
     pub expected_response: String,
     pub assertion_mode: String,
     pub baseline_recheck: String,
+    #[serde(default)]
+    pub source_match: ComparisonSourceMatch,
     pub policy_path: String,
     pub policy_fingerprint: String,
     pub report_path: String,
@@ -212,29 +228,59 @@ pub fn verify_comparison_recording(
             policy: options.policy.clone(),
         });
         let recheck_path = case_dir.join("expected-response-after.json");
-        let baseline_recheck = if path_is_present(&recheck_path)? {
+        let has_recheck = path_is_present(&recheck_path)?;
+        let baseline_recheck = if has_recheck {
             Some(assert_comparison_response(
                 ComparisonResponseAssertionOptions {
                     case_id: case_id.clone(),
                     request: case_dir.join("request.json"),
                     expected_response: case_dir.join("expected-response.json"),
-                    response: recheck_path,
+                    response: recheck_path.clone(),
                     policy: options.policy.clone(),
                 },
             ))
         } else {
             None
         };
-        match (response, baseline_recheck.transpose()) {
-            (Ok(response), Ok(baseline_recheck)) => {
+        let response_after = match policy.comparison.source_match {
+            ComparisonSourceMatch::Before => Ok(None),
+            ComparisonSourceMatch::BeforeOrAfter if has_recheck => {
+                assert_comparison_response(ComparisonResponseAssertionOptions {
+                    case_id: case_id.clone(),
+                    request: case_dir.join("request.json"),
+                    expected_response: recheck_path,
+                    response: case_dir.join("response.json"),
+                    policy: options.policy.clone(),
+                })
+                .map(Some)
+            }
+            ComparisonSourceMatch::BeforeOrAfter => Err(anyhow!(
+                "response_rules.comparison.source_match=before_or_after requires expected-response-after.json"
+            )),
+        };
+        match (response, baseline_recheck.transpose(), response_after) {
+            (Ok(response), Ok(baseline_recheck), Ok(response_after)) => {
                 let source_change_pointers = baseline_recheck
                     .as_ref()
                     .map(difference_pointers)
                     .unwrap_or_default();
                 let candidate_only_pointers =
                     unexplained_candidate_pointers(&response, baseline_recheck.as_ref());
-                let policy_mismatch_rule_ids =
-                    policy_mismatch_rule_ids(&response, baseline_recheck.as_ref());
+                let policy_mismatch_rule_ids = policy_mismatch_rule_ids(
+                    &response,
+                    baseline_recheck.as_ref(),
+                    response_after.as_ref(),
+                );
+                let matched_source = if response.differences.is_empty() {
+                    Some(MatchedSourceObservation::Before)
+                } else if response_after
+                    .as_ref()
+                    .is_some_and(|report| report.differences.is_empty())
+                {
+                    Some(MatchedSourceObservation::After)
+                } else {
+                    None
+                };
                 let api_entry = api_counts.entry(api.clone()).or_default();
                 if !source_change_pointers.is_empty() {
                     counts.source_changed_cases += 1;
@@ -244,11 +290,11 @@ pub fn verify_comparison_recording(
                     counts.policy_mismatch += 1;
                     api_entry.policy_mismatch += 1;
                 }
-                let (classification, passed) = if response.differences.is_empty()
+                let (classification, passed) = if matched_source.is_some()
                     && !policy_mismatch_rule_ids.is_empty()
                 {
                     (ComparisonVerificationClassification::PolicyMismatch, false)
-                } else if response.differences.is_empty() {
+                } else if matched_source.is_some() {
                     counts.passed += 1;
                     (ComparisonVerificationClassification::Passed, true)
                 } else if candidate_only_pointers.is_empty() && !source_change_pointers.is_empty() {
@@ -270,13 +316,15 @@ pub fn verify_comparison_recording(
                     passed,
                     response: Some(response),
                     baseline_recheck,
+                    response_after,
+                    matched_source,
                     source_change_pointers,
                     candidate_only_pointers,
                     policy_mismatch_rule_ids,
                     error: None,
                 });
             }
-            (response, baseline_recheck) => {
+            (response, baseline_recheck, response_after) => {
                 counts.unevaluable += 1;
                 update_api_counts(
                     api_counts.entry(api.clone()).or_default(),
@@ -286,6 +334,7 @@ pub fn verify_comparison_recording(
                     .err()
                     .into_iter()
                     .chain(baseline_recheck.err())
+                    .chain(response_after.err())
                     .map(|error| format!("{error:#}"))
                     .collect::<Vec<_>>()
                     .join("; ");
@@ -297,6 +346,8 @@ pub fn verify_comparison_recording(
                     passed: false,
                     response: None,
                     baseline_recheck: None,
+                    response_after: None,
+                    matched_source: None,
                     source_change_pointers: Vec::new(),
                     candidate_only_pointers: Vec::new(),
                     policy_mismatch_rule_ids: Vec::new(),
@@ -305,20 +356,41 @@ pub fn verify_comparison_recording(
             }
         }
     }
+    let api_policy_mismatch_rule_ids = api_policy_mismatch_rule_ids(&cases);
+    for api in api_policy_mismatch_rule_ids.keys() {
+        counts.policy_mismatch += 1;
+        api_counts.entry(api.clone()).or_default().policy_mismatch += 1;
+    }
     let apis = api_counts
         .into_iter()
         .map(|(api, counts)| {
-            let passed = counts.total > 0 && counts.passed == counts.total;
-            (api, ComparisonVerificationApi { passed, counts })
+            let policy_mismatch_rule_ids = api_policy_mismatch_rule_ids
+                .get(&api)
+                .cloned()
+                .unwrap_or_default();
+            let passed = counts.total > 0
+                && counts.passed == counts.total
+                && policy_mismatch_rule_ids.is_empty();
+            (
+                api,
+                ComparisonVerificationApi {
+                    passed,
+                    counts,
+                    policy_mismatch_rule_ids,
+                },
+            )
         })
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     counts.apis_total = apis.len();
     counts.apis_passed = apis.values().filter(|api| api.passed).count();
     counts.apis_failed = counts.apis_total.saturating_sub(counts.apis_passed);
     let complete = counts.unevaluable == 0;
-    let passed = complete && counts.failed == 0 && counts.passed == counts.total;
+    let passed = complete
+        && counts.failed == 0
+        && counts.passed == counts.total
+        && apis.values().all(|api| api.passed);
     let report = ComparisonVerificationReport {
-        version: 3,
+        version: 4,
         kind: "comparison_recording_verification".to_string(),
         case_source: case_source.display().to_string(),
         recording_summary_path: summary_path.display().to_string(),
@@ -326,6 +398,7 @@ pub fn verify_comparison_recording(
         expected_response: "assertions_only".to_string(),
         assertion_mode: "comparison_recording".to_string(),
         baseline_recheck: "optional_source_consistency".to_string(),
+        source_match: policy.comparison.source_match,
         policy_path: policy.path,
         policy_fingerprint: policy.fingerprint,
         report_path: options.report.display().to_string(),
@@ -337,6 +410,29 @@ pub fn verify_comparison_recording(
     };
     write_report(&options.report, &report)?;
     Ok(report)
+}
+
+fn api_policy_mismatch_rule_ids(
+    cases: &[ComparisonVerificationCase],
+) -> BTreeMap<String, Vec<String>> {
+    let mut reports = BTreeMap::<&str, Vec<&ResponseAssertionCaseReport>>::new();
+    for case in cases {
+        for report in case
+            .response
+            .iter()
+            .chain(case.baseline_recheck.iter())
+            .chain(case.response_after.iter())
+        {
+            reports.entry(&case.api).or_default().push(report);
+        }
+    }
+    reports
+        .into_iter()
+        .filter_map(|(api, rule_ids)| {
+            let stale = unobserved_response_rule_ids(rule_ids);
+            (!stale.is_empty()).then(|| (api.to_string(), stale))
+        })
+        .collect()
 }
 
 fn update_api_counts(
@@ -387,36 +483,31 @@ fn unexplained_candidate_pointers(
 fn policy_mismatch_rule_ids(
     response: &ResponseAssertionCaseReport,
     baseline_recheck: Option<&ResponseAssertionCaseReport>,
+    response_after: Option<&ResponseAssertionCaseReport>,
 ) -> Vec<String> {
-    let applied = response
-        .applied_dynamic_rule_ids
+    let reports = [Some(response), baseline_recheck, response_after]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    let applied = reports
         .iter()
-        .chain(&response.applied_unordered_rule_ids)
-        .chain(
-            baseline_recheck
-                .into_iter()
-                .flat_map(|report| &report.applied_dynamic_rule_ids),
-        )
-        .chain(
-            baseline_recheck
-                .into_iter()
-                .flat_map(|report| &report.applied_unordered_rule_ids),
-        )
+        .flat_map(|report| {
+            report
+                .applied_dynamic_rule_ids
+                .iter()
+                .chain(&report.applied_unordered_rule_ids)
+                .chain(&report.applied_counter_rule_ids)
+        })
         .collect::<BTreeSet<_>>();
-    response
-        .unused_applicable_dynamic_rule_ids
+    reports
         .iter()
-        .chain(&response.unused_applicable_unordered_rule_ids)
-        .chain(
-            baseline_recheck
-                .into_iter()
-                .flat_map(|report| &report.unused_applicable_dynamic_rule_ids),
-        )
-        .chain(
-            baseline_recheck
-                .into_iter()
-                .flat_map(|report| &report.unused_applicable_unordered_rule_ids),
-        )
+        .flat_map(|report| {
+            report
+                .unused_applicable_dynamic_rule_ids
+                .iter()
+                .chain(&report.unused_applicable_unordered_rule_ids)
+                .chain(&report.unused_applicable_counter_rule_ids)
+        })
         .filter(|rule_id| !applied.contains(rule_id))
         .cloned()
         .collect::<BTreeSet<_>>()
