@@ -44,16 +44,17 @@ behavior, and treat traffic from that diagnostic lifecycle as non-evidence.
 
 When source-proven runtime inputs must be materialized locally, use the
 repository's Git-ignored runtime-input location. It is permitted to copy the
-necessary authoritative configuration artifacts out of an authorized source
-image or runtime without modifying that source. Preserve their supplied format
-and any filename or directory relationships required by the source loader.
+authoritative configuration out of an authorized source image or runtime
+without modifying that source. Preserve its supplied format and the file and
+directory relationships required by the source loader.
 
-Materialize only environment values and configuration artifacts needed by
-startup or the active capability. Keep sensitive values out of commands and
-reports, and never commit local runtime inputs. Treat the local location as
-staging, not as a new product configuration contract: pass its paths through
-the target's normal startup boundary and do not translate the source artifacts
-into a parallel target-only format.
+Let the discovered configuration contract determine whether to copy one file,
+a related file set, or a complete configuration directory. Environment values
+and file configuration may both be materialized locally. Keep sensitive values
+out of commands and reports, and never commit local runtime inputs. Treat the
+local location as staging, not as a new product configuration contract: pass
+its paths through the target's normal startup boundary and do not translate
+the source artifacts into a parallel target-only format.
 
 ## Implement Compatible Loading
 
