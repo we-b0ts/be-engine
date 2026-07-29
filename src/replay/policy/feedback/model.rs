@@ -72,6 +72,10 @@ pub struct ResponseRuleReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_example: Option<String>,
     pub matching_cases: usize,
+    pub selected_difference_cases: usize,
+    pub unselected_difference_pointers: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aggregate_dirty: Option<bool>,
     pub changed: bool,
     pub applied: bool,
     pub added_rule_ids: Vec<String>,

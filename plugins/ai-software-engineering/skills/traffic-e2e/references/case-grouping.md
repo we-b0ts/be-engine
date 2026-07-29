@@ -25,7 +25,7 @@ recordings.
    published case in the directory, require every method and path to resolve to
    that same source route, return the current directory as `group_dir`, and
    record `already_canonical` with its exact case ids. A mixed-route directory
-   is `blocked_grouping`.
+   receives the internal diagnostic `blocked_grouping`.
 4. When the source route is dynamic, derive the candidate recorder pattern
    using the route-pattern feedback contract loaded from the main skill, then
    run `traffic-e2e prepare` with the original case source, current directory,
@@ -38,8 +38,8 @@ recordings.
    marker.
 6. Inspect or verify the selected group only after grouping reaches a valid
    terminal result. Focused verification may proceed before every other API is
-   grouped, but the full round is blocked until every published case is covered
-   exactly once.
+   grouped, but the full round cannot advance until every published case is
+   covered exactly once.
 
 The first case is a route-discovery sample, not evidence that the whole
 directory is homogeneous. The exact selected case ids come from the complete
@@ -99,6 +99,10 @@ Treat missing commands, mixed or unmatched routes, ambiguous patterns,
 overlapping groups, missing cases, duplicate case ids, stale group inventory,
 or a changed source revision as `blocked_grouping`. Do not replace the command
 with an AI-authored target script or a hand-maintained case list.
+`blocked_grouping` is a grouping diagnostic, not the operation handoff status;
+return `action_required` with its exact cause, owner, acceptance check, and
+resume point unless the main skill's separate recording-data blocker proof is
+satisfied.
 
 `traffic-e2e prepare` delegates to
 `traffic-e2e diagnose case-group ensure`; direct low-level invocation is for
@@ -118,6 +122,6 @@ separate explicit user authorization and is not part of this workflow.
 
 For a multi-group task, completion additionally requires every selected case id
 to occur in exactly one group, every group to reach a terminal state, and the
-final aggregate to cover the exact completion case set. A blocker is a valid
-terminal state for ending work on one group, but it leaves the parent collection
-or run incomplete and cannot be counted as a passed group.
+final aggregate to cover the exact completion case set. A
+`blocked_grouping` diagnostic ends that grouping attempt, leaves the parent
+collection non-passing, and cannot be counted as a passed group.

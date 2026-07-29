@@ -12,6 +12,7 @@ mod artifacts;
 pub(crate) mod background_dependencies;
 mod background_feedback;
 mod background_memcached_feedback;
+mod breeze_capture_feedback;
 mod case_limits;
 mod comparison_recording;
 mod dns;
@@ -38,6 +39,10 @@ pub use background_feedback::{
 pub use background_memcached_feedback::{
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyReport, plan_breeze_memcached_background_dependency,
+};
+pub use breeze_capture_feedback::{
+    BreezeResourceCaptureFeedback, BreezeResourceCapturePlan, BreezeResourceCaptureReport,
+    plan_breeze_resource_capture,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use comparison_recording::ComparisonRecordingConfig;
@@ -691,6 +696,7 @@ mod tests {
             [[dns_mock.bypass_strategies]]
             strategy = "breeze"
             snapshot_dir = "/data1/breeze/snapshot"
+            capture_resources = ["static.config+3+config+cloud+redis+user+usercounter"]
 
             [dns_mock.hosts]
             "db-10-185-28-119.test" = ["10.185.28.119"]
@@ -731,7 +737,10 @@ mod tests {
         assert_eq!(
             config.dns_mock.bypass_strategies,
             vec![DnsBypassStrategyConfig::Breeze {
-                snapshot_dir: PathBuf::from("/data1/breeze/snapshot")
+                snapshot_dir: PathBuf::from("/data1/breeze/snapshot"),
+                capture_resources: vec![
+                    "static.config+3+config+cloud+redis+user+usercounter".to_string()
+                ],
             }]
         );
         assert_eq!(

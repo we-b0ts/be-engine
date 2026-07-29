@@ -43,12 +43,31 @@ status: passed | action_required | incomplete | blocked
 stage, scope, exact evidence
 ```
 
+When any selected response assertion fails, the handoff is invalid unless it
+also contains:
+
+```text
+representative_case:
+  case_id, case_path, failed_fields, expected_shape, actual_shape
+  cause, cause_status: proven | unresolved, evidence, exact_missing_link
+```
+
+Choose one real failed case and only a small set of fields with one causal
+path. Do not substitute aggregate mismatch counts, a field list, dependency
+cleanliness, or a generic blocker for this evidence. Use
+`exact_missing_link: none` only when the cause is proven.
+
 Use `action_required` while response or other repairable behavior remains.
 Use `incomplete` only when all selected response assertions pass but dirty
 dependency evidence remains and no source-proven rule can be safely applied.
 Use `blocked` only when response-driving external-system information was not
 recorded or provided and the missing information prevents target behavior from
 being implemented.
+
+Artifact terms such as an incomplete case, session, report, or rule describe
+evidence validity, not the handoff status. Map them to `action_required` while
+response repair or an in-scope system/configuration repair remains; never infer
+`blocked` or `incomplete` from an artifact label or retry count.
 
 For non-passing results, add every evidenced category, capability owner,
 concrete next TODO, acceptance check, and resume stage. Use capability owners
@@ -73,14 +92,17 @@ source_change, unresolved
 3. After the first failure, diagnose all applicable gates. Report structured
    response differences and causal dependency evidence before remaining
    dependency coverage.
-4. Return target behavior or runtime defects to the caller. When source
+4. When response-driving dependency evidence appears absent, run the
+   missing-evidence checkpoint, including Breeze snapshot/resource-capture
+   diagnosis when applicable, before classifying a recording-data blocker.
+5. Return target behavior or runtime defects to the caller. When source
    evidence proves process-owned dependency traffic builds response-driving
    local state, apply a narrow `runtime_state` background rule as part of that
    repair. Rerun the same cases after repair until response assertions pass.
-5. Only after response assertions pass, classify remaining unused dependencies.
+6. Only after response assertions pass, classify remaining unused dependencies.
    Apply an `independent` background rule only when source evidence proves
    process ownership and response independence; then create a new recording.
-6. Start comparison only after current runner-generated evidence proves the
+7. Start comparison only after current runner-generated evidence proves the
    affected replay E2E scope passes. Any behavior or policy change makes prior
    comparison evidence stale.
 
@@ -90,28 +112,39 @@ not a stop signal while any response assertion still fails.
 
 ## Reference Routing
 
-- Managed recording or recording failure:
-  [recording.md](references/recording.md)
-- Artifact validity: [case-format.md](references/case-format.md)
-- Canonical groups: [case-grouping.md](references/case-grouping.md), plus
-  [route-pattern-feedback.md](references/route-pattern-feedback.md) for a
-  confirmed dynamic source route
-- Startup, identity, configuration, and genuine clients:
-  [target-integration.md](references/target-integration.md)
-- Dependency behavior: [dependency-replay.md](references/dependency-replay.md)
-- Process-owned runtime-state or independent dependency traffic:
-  [background-dependencies.md](references/background-dependencies.md)
-- Assertion and replay policy: [replay-policy.md](references/replay-policy.md)
-- Standard project runner: [e2e-run.md](references/e2e-run.md)
-- First failed attempt: [failure-diagnosis.md](references/failure-diagnosis.md)
-- Comparison after current E2E passes:
-  [comparison-verification.md](references/comparison-verification.md)
-- Direct low-level replay lifecycle:
-  [replay-lifecycle.md](references/replay-lifecycle.md)
-- Low-level multi-case/session aggregation:
-  [aggregate-report.md](references/aggregate-report.md)
+Read the smallest phase bundle before acting, then add only references selected
+by evidence from that phase:
 
-Read every reference selected by the operation before acting.
+- **Record:** read [recording.md](references/recording.md). Add
+  [background-dependencies.md](references/background-dependencies.md) only for
+  source-proven process-owned traffic.
+- **Inspect or prepare cases:** read
+  [case-grouping.md](references/case-grouping.md). Add
+  [case-format.md](references/case-format.md) for HTTP artifact validity,
+  [dependency-case-format.md](references/dependency-case-format.md) for
+  semantic dependency artifacts, [mysql-case-format.md](references/mysql-case-format.md)
+  for MySQL, and [route-pattern-feedback.md](references/route-pattern-feedback.md)
+  only for a confirmed dynamic source route.
+- **Run standard E2E:** read [e2e-run.md](references/e2e-run.md). Add
+  [target-integration.md](references/target-integration.md) when initializing
+  or repairing target startup/configuration,
+  [dependency-replay.md](references/dependency-replay.md) when dependency
+  matching or genuine-client behavior is in question, and
+  [replay-policy.md](references/replay-policy.md) only when inspecting or
+  changing assertion policy.
+- **Diagnose a non-passing attempt:** read
+  [failure-diagnosis.md](references/failure-diagnosis.md), then load only the
+  operation reference it selects: recording/resource capture, background
+  classification, dependency replay or format, target integration, or replay
+  policy.
+- **Compare after current E2E passes:** read
+  [comparison-verification.md](references/comparison-verification.md), adding
+  replay policy only for source-proven policy feedback.
+
+Read [replay-lifecycle.md](references/replay-lifecycle.md) or
+[aggregate-report.md](references/aggregate-report.md) only when directly using
+their low-level diagnostic commands. Normal `prepare`, `run-api`, and `run`
+operations do not require either reference.
 
 ## Operation Invariants
 
@@ -136,6 +169,9 @@ Read every reference selected by the operation before acting.
 The selected reference defines the full gate. In all phases, evidence must be
 finalized, complete, canonical, current for the latest behavior and policy, and
 free of invalidating capture, replay, assertion, or aggregation failures.
+During dynamic response-rule repair, the replay-policy reference may admit
+complete dependency-dirty evidence; the dirty dependency remains a separate
+failing gate and never becomes passing evidence.
 
 Return a Recorder or Replay capability gap as `action_required` while an
 in-scope system repair can recover the evidence or replay behavior. Use

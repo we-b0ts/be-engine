@@ -5,9 +5,10 @@ use anyhow::{Result, anyhow};
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     AllowedUnusedHttpHostFeedback, BackgroundDependencyFeedback,
-    BreezeMemcachedBackgroundDependencyFeedback, CasePathPatternAuthority, CasePathPatternFeedback,
-    RecorderConfigInitOptions, initialize_recorder_config, plan_allowed_unused_http_hosts,
-    plan_background_dependency, plan_breeze_memcached_background_dependency,
+    BreezeMemcachedBackgroundDependencyFeedback, BreezeResourceCaptureFeedback,
+    CasePathPatternAuthority, CasePathPatternFeedback, RecorderConfigInitOptions,
+    initialize_recorder_config, plan_allowed_unused_http_hosts, plan_background_dependency,
+    plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
     plan_case_path_pattern_feedback,
 };
 
@@ -56,6 +57,7 @@ struct PlanArgs {
 enum PlanStrategy {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostArgs),
     BackgroundDependencies(BackgroundDependencyArgs),
+    BreezeResourceCapture(BreezeResourceCaptureArgs),
     CasePathPatterns(PatternFeedbackArgs),
 }
 
@@ -69,6 +71,7 @@ struct ApplyArgs {
 enum ApplyStrategy {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostArgs),
     BackgroundDependencies(BackgroundDependencyArgs),
+    BreezeResourceCapture(BreezeResourceCaptureArgs),
     CasePathPatterns(ApplyPatternFeedbackArgs),
 }
 
@@ -78,6 +81,19 @@ struct AllowedUnusedHttpHostArgs {
     rule: String,
     #[arg(long = "host", required = true)]
     hosts: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct BreezeResourceCaptureArgs {
+    /// Unique Breeze snapshot resource name or exact descriptor identity.
+    #[arg(long)]
+    resource: String,
+    /// Immutable source revision used for the response-driving diagnosis.
+    #[arg(long)]
+    source_revision: String,
+    /// Single-line source file/symbol evidence connecting the response to this resource.
+    #[arg(long)]
+    evidence: String,
 }
 
 #[derive(Debug, Args)]
@@ -200,6 +216,10 @@ fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
         PlanStrategy::BackgroundDependencies(args) => {
             plan_background_dependency_args(config, args, false)
         }
+        PlanStrategy::BreezeResourceCapture(args) => {
+            let plan = plan_breeze_resource_capture(breeze_capture_feedback(config, args))?;
+            super::print_json(plan.report())
+        }
         PlanStrategy::CasePathPatterns(args) => {
             let plan = plan_case_path_pattern_feedback(pattern_feedback(config, args))?;
             super::print_json(plan.report())
@@ -218,11 +238,28 @@ fn apply(target_root: PathBuf, strategy: ApplyStrategy) -> Result<()> {
         ApplyStrategy::BackgroundDependencies(args) => {
             plan_background_dependency_args(config, args, true)
         }
+        ApplyStrategy::BreezeResourceCapture(args) => {
+            let report =
+                plan_breeze_resource_capture(breeze_capture_feedback(config, args))?.apply()?;
+            super::print_json(&report)
+        }
         ApplyStrategy::CasePathPatterns(args) => {
             let report = plan_case_path_pattern_feedback(pattern_feedback(config, args.feedback))?
                 .apply(args.allow_delete)?;
             super::print_json(&report)
         }
+    }
+}
+
+fn breeze_capture_feedback(
+    config_path: PathBuf,
+    args: BreezeResourceCaptureArgs,
+) -> BreezeResourceCaptureFeedback {
+    BreezeResourceCaptureFeedback {
+        config_path,
+        resource: args.resource,
+        source_revision: args.source_revision,
+        source_evidence: args.evidence,
     }
 }
 

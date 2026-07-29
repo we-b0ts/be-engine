@@ -1,6 +1,6 @@
 ---
 name: platform-recording-init
-description: "Initialize Platform Java/Tomcat repositories for managed traffic recording from an existing source application container. Use when a Platform backend rewrite needs the standard Breeze and Vintage recording environment. Do not use for generic repository setup, recording or replay execution, or target SDK implementation."
+description: "Initialize Platform Java/Tomcat repositories for managed standard and comparison traffic recording from an existing source application container. Use for the recording-initialization phase of a Platform backend rewrite, not generic repository setup, recording or replay execution, or target SDK implementation."
 ---
 
 # Platform Recording Init

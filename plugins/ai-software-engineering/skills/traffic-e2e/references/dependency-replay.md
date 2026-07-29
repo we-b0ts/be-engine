@@ -84,8 +84,10 @@ fetch, and delivery evidence. Match stable topic, key, headers, and value
 semantics, preserve Fetch-to-delivery association, and reserve an exchange
 until its delayed response is delivered or its expected client termination is
 observed. Transactions, authentication, compression, unsupported APIs, unsafe
-captures, or broker errors remain incomplete unless the recorder explicitly
-supports them.
+captures, or broker errors remain unsupported evidence unless the recorder
+explicitly supports them. Return the corresponding capability
+`action_required`; the artifact condition does not determine the handoff
+status.
 
 For other dependency types, require recorder-supported semantic input, output,
 ordering, and error evidence. Do not synthesize downstream HTTP payloads, cache

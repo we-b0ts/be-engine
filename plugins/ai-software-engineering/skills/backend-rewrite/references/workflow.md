@@ -84,43 +84,41 @@ configuration, and supporting services.
 ## Inspect Runtime Evidence
 
 When repository files and artifacts do not establish effective behavior,
-inspect an available authorized source or target runtime read-only. Limit the
-inspection to effective configuration names and provenance, startup arguments,
-working directory, mounts, deployment metadata, network wiring, and dependency
-endpoints.
+inspect an available authorized source or target runtime read-only. Trace each
+response-driving value until its implementation and effective input are known:
 
-Keep the source repository, source image application classes, and source
-business behavior read-only. A target-owned recording adapter does not
-authorize replacing a source class or patching an application JAR. If the
-required observation cannot be obtained without changing the source, preserve
-the failed evidence and route the exact recording capability gap instead.
+```text
+response assignment -> process-local state -> backend call -> framework wiring
+-> configuration key -> effective runtime configuration -> resource hostname
+```
 
-Do not print or persist secret values. Runtime inspection is diagnostic
-evidence, not authority to hard-code observed values. If essential evidence is
-unavailable and target behavior cannot be implemented without it, report the
-missing observation and owner as `blocked`.
+Search pinned dependency source; inspect or decompile the exact packaged
+artifact when necessary. If static files stop at a placeholder, inspect the
+effective runtime configuration. Restart or recreate the source container
+through its authoritative entrypoint only when startup is required to
+materialize that configuration. Preserve its image, arguments, mounts,
+network, and business behavior, and treat traffic from that diagnostic
+lifecycle as non-evidence.
+
+Never patch source code or artifacts, alter business switches, print secrets,
+or hard-code a runtime observation. Record the last proven link and exact
+missing link; use `blocked` only when the missing external observation prevents
+target implementation.
 
 ## Delegate Target-Code Work
 
 Confirm source behavior, target facade, verification policy, dependency wiring,
-and genuine runtime clients. Before delegating `target_behavior`, provide:
-
-```text
-active scope, immutable case source and IDs, structured response difference,
-causal dependency evidence, source behavior evidence, requested outcome
-```
+and genuine runtime clients. Delegate `target_behavior` with the active scope,
+immutable case source and IDs, structured response difference, causal
+dependency evidence, source behavior, and requested outcome.
 
 Before the first genuine target E2E and after every target startup or
 dependency-wiring change, re-review the complete `scripts/<project>-cli`
 facade. Replace initialization-only mock behavior rather than layering runtime
 inference onto it. Target commands must not parse replay sessions or dependency
-artifacts to derive configuration. When the wiring is Breeze-managed, also
-apply the [`breeze-sdk` skill](../../breeze-sdk/SKILL.md). The facade may pass
-one generic descriptor policy and Breeze topology settings, but it must not
-enumerate resource identities, invoke a descriptor resolver per resource,
-resolve ports, export descriptor-derived addresses, or infer the policy from
-runner state. Resource packages must call the shared descriptor library and
-construct their own clients.
+artifacts to derive configuration. For Breeze-managed wiring, apply the
+[`breeze-sdk` skill](../../breeze-sdk/SKILL.md); resource packages, not the
+facade, own descriptor-library use and client construction.
 
 Source-process local caches belong to target implementation. Inspect and
 reproduce cache-key derivation, bounded capacity and eviction, expiry or
@@ -128,44 +126,16 @@ refresh timing, negative caching, concurrent-load behavior, startup or warmup
 behavior, and miss/error fallback only where they affect the active behavior
 or operational contract. Equivalent target architecture is allowed.
 
-When target-code work designs, implements, integrates, migrates, or reviews
-business-independent remote-resource access managed through Breeze, read the
-[`breeze-sdk` skill](../../breeze-sdk/SKILL.md) completely before delegating or
-writing that code, and use it for that work. This explicitly includes
-Memcached, Redis, MySQL, Kafka, queues such as MCQ or QueueService, Motan, and
-other Breeze-managed remote resources. Add the resource type, source access
-semantics, business/resource boundary, and relevant runtime or recorded
-dependency evidence to the target-code packet. Let `breeze-sdk` determine the
-reusable resource identity, descriptor policy, and client lifecycle; keep SQL,
-keys, messages, RPC contracts, provider mapping, and orchestration in the
-target capability.
+For Breeze-managed work, include the resource type, source access semantics,
+business/resource boundary, and relevant runtime evidence. Let `breeze-sdk`
+own reusable identity, descriptor policy, and client lifecycle; keep business
+contracts in the target capability. Adding a resource must not require a
+project-CLI change.
 
-Map traffic topology to the generic Breeze policy outside the SDK:
-
-- use `RequireExisting` when the target must reuse descriptors established by
-  the source or recording topology;
-- use `EnsurePresent` for ordinary startup that may register missing resources;
-  and
-- use `CreateNew` only when the caller explicitly requires an isolated empty
-  descriptor state and an existing exact descriptor must fail startup.
-
-Do not put recording, replay, comparison, or task-specific branches in Breeze
-SDK code. Adding one Breeze-managed resource may change the target composition
-root and capability adapter; it must not require a project-CLI change.
-
-Use the
-[`backend-engineering` skill](../../backend-engineering/SKILL.md) for
-target-owned implementation and local checks. Record its result as:
-
-```text
-todo_status, changed_behavior, affected_apis, changed_resources,
-resource_runtime_behavior, local_checks
-```
-
-The target-code task must not declare migration completion, start comparison,
-change background attribution or replay policy, modify traffic-e2e, decrypt
-recordings, or receive a recording key. This orchestration reruns E2E and
-decides the next state.
+Use [`backend-engineering`](../../backend-engineering/SKILL.md) for target
+implementation and local checks. Companion work cannot declare migration
+completion or change traffic policy; this workflow reruns E2E and decides the
+next state.
 
 ## Run The Evidence Loops
 
@@ -196,31 +166,30 @@ decides the next state.
 - `target_environment`: repair target runtime wiring, then rerun E2E.
 - Response-driving dependency failure: repair target or Replay wiring needed
   to reproduce the source response, then rerun E2E.
+- Suspected missing dependency recording: resolve the source resource hostname,
+  then follow traffic-e2e's missing-evidence checkpoint. A Breeze snapshot
+  match is Recorder bypass; let resource-capture `plan/apply` own the config
+  update. A changed apply requires a new standard recording; an unchanged plan
+  returns to recording-path diagnosis. Keep this
+  `recording_configuration/action_required`.
 - Response-driving process state: when source and recording evidence prove a
   scheduled dependency call builds local state required by the response,
-  use traffic-e2e's evidence-validating interface to plan and apply the narrow
-  supported `runtime_state` rule, then make a new standard recording, prepare
-  it, and continue response repair. If no supported rule can express the
-  proven traffic, return the exact Recorder or Replay capability gap and
-  acceptance check to `traffic-e2e-system`. If the target still differs
-  because its corresponding local state has not completed initialization,
-  repair target startup, readiness, or cache lifecycle from source evidence;
-  do not treat target timing as a Replay capability gap.
+  follow traffic-e2e's guarded `runtime_state` procedure and record again. If
+  target local state still differs, repair target startup, readiness, or cache
+  lifecycle rather than treating target timing as a Replay gap.
 - `background_dependency`: only after response assertions pass and source
   proves ownership plus independence, apply a narrow `independent` rule, make
   a new standard recording, prepare it, and rerun E2E.
 - `recording_configuration`: repair supported configuration, make a new
   recording, prepare it, and rerun E2E.
-- Missing or invalid configured request-header key: obtain the authorized
-  secret and resume the same stage; use `blocked` when unavailable. A
-  Recorder or Replay inability to honor configured encryption is a system
-  capability gap.
+- Missing configured request-header key: obtain the authorized secret and
+  resume the same stage; this remains `action_required`, not a recording-data
+  blocker.
 - `intentional_nondeterminism`: apply only source-proven policy, rerun E2E, and
   then make a new comparison recording.
 - `source_change`: require source-before/source-after change at the same
-  response location as every candidate difference it claims to explain.
-  Preserve unrelated candidate-only fields as `target_behavior`; otherwise
-  obtain a new comparison observation and keep the state `action_required`.
+  response location; preserve unrelated candidate-only fields as
+  `target_behavior`.
 - `verification_policy`: remove or replace stale and unsupported response rules
   through the evidence-validating interface, rerun E2E, then create a new
   comparison recording.
@@ -263,38 +232,22 @@ the resolved base before the final response. A blocked or incomplete replay
 does not waive delivery. Skip a PR only when the user explicitly requests no
 PR or no deliverable target change exists.
 
-For a remote source, identify the IPv4 address, frozen snapshot boundary,
-selected recording ID, cache root, archive SHA-256, canonical case sources,
-and exact runner states.
+Use the main skill's state and representative-case contracts. Begin a
+non-passing E2E report with current selected, executed, passing, and mismatching
+counts followed by exactly one representative case.
 
-Begin every report for a non-passing E2E run with response diagnosis:
+Use a response-mismatching case for `blocked` and a response-passing dirty case
+for `incomplete`. Connect the selected fields to one causal path; never replace
+it with a field list or generic dependency issue. When provenance remains
+unresolved, report the last proven link, exact next missing link, and the
+repository path, packaged symbol, configuration key, runtime path, or resource
+already checked. Never summarize these states as “insufficient source-code
+evidence” or “drift”.
 
-```text
-response: selected cases, executed cases, passing cases, mismatching cases
-representative case: case ID, fields, expected/actual shape, cause, evidence
-```
+Then report dependency cleanliness, independent blockers, delivery, status,
+scope, stage, conclusion, exact E2E/comparison reports, and a next TODO with
+owner, action, acceptance check, resume stage, and required transitions.
 
-The counts must come from the exact current report. Explain exactly one
-representative non-passing case in detail; do not enumerate every failed case
-in the final report. Use a response-mismatching case for `blocked` and a
-response-passing dirty case for `incomplete`. Describe its structured fields
-and expected-versus-actual shape without exposing secrets, connect it to source
-and target behavior or a response-driving dependency, and state whether the
-cause is proven. Do not claim the representative explains other cases without
-shared difference and code-path evidence. A list of differing fields, unused
-dependencies, or generic “dependency issue” is not a causal explanation.
-
-After response diagnosis, report dependency cleanliness and other blockers,
-then status, exact evidence paths, delivery, and next action. For a completed
-slice, report its scope, current passing E2E and comparison reports, delivery
-artifact, and one explicit conclusion. For any non-complete result also report:
-
-```text
-status, scope, stage, conclusion
-E2E and comparison state with exact reports when available
-all independently evidenced failure categories
-next TODO: owner, action, acceptance, resume stage, required transitions
-```
-
-Do not emit placeholders or vague TODOs. Never use success wording while an
-applicable gate is missing.
+For a remote source, also retain its IPv4 address, frozen snapshot boundary,
+recording ID, cache root, archive SHA-256, canonical case sources, and runner
+states. Never use success wording while an applicable gate is missing.

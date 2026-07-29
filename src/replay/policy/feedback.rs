@@ -19,7 +19,8 @@ use super::pattern::path_pattern_matches;
 #[cfg(test)]
 use super::response::DynamicResponseMechanism;
 use super::response::{
-    DynamicResponseRule, ResponseRuleKind, parse_api, response_rule_id, validate_json_pointer,
+    DynamicResponseRule, ResponseRuleKind, parse_api, response_locations_overlap, response_rule_id,
+    validate_json_pointer,
 };
 use crate::config::edit::write_atomic;
 
@@ -97,8 +98,12 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
     let aggregate: AggregateEvidence =
         serde_json::from_slice(&aggregate_bytes).context("invalid aggregate report")?;
     ensure!(
-        aggregate.complete && !aggregate.dirty,
-        "aggregate replay evidence must be complete and clean"
+        aggregate.complete,
+        "aggregate replay evidence must be complete"
+    );
+    ensure!(
+        feedback.kind == ResponseRuleKind::Dynamic || !aggregate.dirty,
+        "unordered response rule evidence requires clean aggregate replay evidence"
     );
     ensure!(
         assertions.case_source == aggregate.case_source,
@@ -117,7 +122,7 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         assertion_cases == aggregate_cases,
         "assertion and aggregate reports must cover the same focused API cases"
     );
-    let matching_cases = validate_response_evidence(
+    let response_evidence = validate_response_evidence(
         &prepared,
         feedback.kind,
         &feedback.api,
@@ -129,13 +134,14 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         feedback.kind,
         feedback.api,
         prepared,
-        matching_cases,
+        response_evidence,
         justification,
         ResponseRuleEvidence::Replay {
             assertion_report: feedback.assertion_report,
             assertion_fingerprint: fingerprint(&assertion_bytes),
             aggregate_report: feedback.aggregate_report,
             aggregate_fingerprint: fingerprint(&aggregate_bytes),
+            aggregate_dirty: aggregate.dirty,
         },
     )
 }
@@ -192,7 +198,7 @@ pub fn plan_comparison_response_rule(
             ),
         "comparison evidence with unused applicable response rules cannot authorize a new rule"
     );
-    let matching_cases = validate_response_evidence(
+    let response_evidence = validate_response_evidence(
         &prepared,
         feedback.kind,
         &feedback.api,
@@ -204,7 +210,7 @@ pub fn plan_comparison_response_rule(
         feedback.kind,
         feedback.api,
         prepared,
-        matching_cases,
+        response_evidence,
         justification,
         ResponseRuleEvidence::Comparison {
             comparison_report: feedback.comparison_report,
@@ -227,6 +233,7 @@ enum ResponseRuleEvidence {
         assertion_fingerprint: String,
         aggregate_report: PathBuf,
         aggregate_fingerprint: String,
+        aggregate_dirty: bool,
     },
     Comparison {
         comparison_report: PathBuf,
@@ -277,7 +284,7 @@ fn validate_response_evidence(
     api: &str,
     cases: &[AssertionCaseEvidence],
     require_all_cases: bool,
-) -> Result<usize> {
+) -> Result<ResponseEvidenceValidation> {
     let matching = cases
         .iter()
         .filter_map(|case| {
@@ -296,6 +303,8 @@ fn validate_response_evidence(
         "response evidence contains cases outside the requested canonical API group"
     );
     let mut observed_difference = false;
+    let mut selected_difference_cases = 0;
+    let mut unselected_difference_pointers = BTreeSet::new();
     for (case, response) in &matching {
         ensure!(
             case.policy_mismatch_rule_ids.is_empty(),
@@ -311,21 +320,43 @@ fn validate_response_evidence(
             response.body_mode == "json_structural",
             "response rules require structural JSON assertion evidence"
         );
+        let mut case_has_selected_difference = false;
         for difference in &response.differences {
-            ensure!(
-                difference_supports_rule(kind, difference, &prepared.requested),
-                "case {:?} has an unsupported or undeclared response difference at {}",
-                case.case_id,
-                difference.pointer
-            );
-            observed_difference = true;
+            let overlaps_requested = prepared
+                .requested
+                .iter()
+                .any(|pointer| response_locations_overlap(pointer, &difference.pointer));
+            if overlaps_requested {
+                ensure!(
+                    difference_supports_rule(kind, difference, &prepared.requested),
+                    "case {:?} has an unsupported response difference at selected location {}",
+                    case.case_id,
+                    difference.pointer
+                );
+                observed_difference = true;
+                case_has_selected_difference = true;
+            } else if kind == ResponseRuleKind::Dynamic {
+                unselected_difference_pointers.insert(difference.pointer.clone());
+            } else {
+                anyhow::bail!(
+                    "case {:?} has an unsupported or undeclared response difference at {}",
+                    case.case_id,
+                    difference.pointer
+                );
+            }
         }
+        selected_difference_cases += usize::from(case_has_selected_difference);
         for pointer in &prepared.requested {
+            let has_overlapping_difference = response
+                .differences
+                .iter()
+                .any(|difference| response_locations_overlap(pointer, &difference.pointer));
             ensure!(
                 response.candidates(kind).contains(pointer)
                     || response
                         .applied_rule_ids(kind)
                         .contains(&response_rule_id(kind, api, pointer))
+                    || (kind == ResponseRuleKind::Dynamic && !has_overlapping_difference)
                     || response.differences.is_empty(),
                 "case {:?} does not provide {:?} evidence for {}",
                 case.case_id,
@@ -341,7 +372,17 @@ fn validate_response_evidence(
             }),
         "response evidence contains no differing field selected by the proposed rule"
     );
-    Ok(matching.len())
+    Ok(ResponseEvidenceValidation {
+        matching_cases: matching.len(),
+        selected_difference_cases,
+        unselected_difference_pointers: unselected_difference_pointers.into_iter().collect(),
+    })
+}
+
+struct ResponseEvidenceValidation {
+    matching_cases: usize,
+    selected_difference_cases: usize,
+    unselected_difference_pointers: Vec<String>,
 }
 
 fn build_response_rule_plan(
@@ -349,7 +390,7 @@ fn build_response_rule_plan(
     kind: ResponseRuleKind,
     api: String,
     prepared: PreparedResponseRule,
-    matching_cases: usize,
+    response_evidence: ResponseEvidenceValidation,
     justification: ResponseRuleJustification,
     evidence: ResponseRuleEvidence,
 ) -> Result<ResponseRulePlan> {
@@ -432,12 +473,14 @@ fn build_response_rule_plan(
         aggregate_fingerprint,
         comparison_report,
         comparison_fingerprint,
+        aggregate_dirty,
     ) = match evidence {
         ResponseRuleEvidence::Replay {
             assertion_report,
             assertion_fingerprint,
             aggregate_report,
             aggregate_fingerprint,
+            aggregate_dirty,
         } => (
             Some(assertion_report),
             Some(assertion_fingerprint),
@@ -445,6 +488,7 @@ fn build_response_rule_plan(
             Some(aggregate_fingerprint),
             None,
             None,
+            Some(aggregate_dirty),
         ),
         ResponseRuleEvidence::Comparison {
             comparison_report,
@@ -456,6 +500,7 @@ fn build_response_rule_plan(
             None,
             Some(comparison_report),
             Some(comparison_fingerprint),
+            None,
         ),
     };
     Ok(ResponseRulePlan {
@@ -478,7 +523,10 @@ fn build_response_rule_plan(
             source_evidence: justification.source_evidence,
             source_example: justification.source_example,
             target_example: justification.target_example,
-            matching_cases,
+            matching_cases: response_evidence.matching_cases,
+            selected_difference_cases: response_evidence.selected_difference_cases,
+            unselected_difference_pointers: response_evidence.unselected_difference_pointers,
+            aggregate_dirty,
             changed,
             applied: false,
             added_rule_ids: added,

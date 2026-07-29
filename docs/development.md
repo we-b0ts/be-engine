@@ -500,6 +500,30 @@ changes. One host applies to every case selected by that recording rule,
 independent of which active API window happened to capture the process-level
 task.
 
+When a response-driving source hostname is absent from dependency evidence but
+occurs in the configured Breeze snapshot, preview and enable its logical
+resource instead of listing dynamic ports or backend domains:
+
+```bash
+traffic-e2e config recorder plan breeze-resource-capture \
+  --target-root ../target \
+  --resource usercounter \
+  --source-revision <source-commit> \
+  --evidence 'src/UserCounter.java:load uses usercounter'
+
+traffic-e2e config recorder apply breeze-resource-capture \
+  --target-root ../target \
+  --resource usercounter \
+  --source-revision <source-commit> \
+  --evidence 'src/UserCounter.java:load uses usercounter'
+```
+
+The short resource name must resolve uniquely. The plan reports and persists
+the exact descriptor identity, refuses IP-only resources because DNS bypass
+does not include literal IPs, and identifies resources sharing captured
+domains. Apply is add-only, atomic, and stale-safe. Start a new recording after
+the change; existing artifacts remain unchanged.
+
 Pass the config and rule together for direct replay:
 
 ```bash

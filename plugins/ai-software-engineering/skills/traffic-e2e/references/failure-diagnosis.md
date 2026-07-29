@@ -8,11 +8,10 @@ attempt.
 - Diagnosis order
 - Missing response-driving external evidence
 - Replay failure signals
-- MySQL-specific risks
 - Response assertion mismatches
 - Target behavior evidence
 - Recorder feedback
-- Blocked output
+- Non-passing handoff
 
 ## Diagnosis Order
 
@@ -67,6 +66,27 @@ unused exchanges, unmatched target calls, or dirty dependency coverage can
 exist without preventing response implementation. Continue response diagnosis
 unless the causal proof above is complete.
 
+When a response-driving dependency appears absent, first resolve its exact
+source hostname. Trace the response assignment through process-local state,
+the backend call, framework wiring, configuration key, and effective runtime
+configuration. Search pinned dependency repositories; when implementation is
+packaged, identify and inspect or decompile the exact artifact and class or
+symbol. If static files stop at a placeholder, inspect the ready source
+runtime. It is permitted to restart or recreate the source container through
+its authoritative entrypoint when startup is required to materialize that
+configuration; preserve its image and startup contract and inspect it
+read-only.
+
+Search the resolved hostname or logical resource in the Recorder-configured
+Breeze snapshot. A descriptor match proves that Recorder bypassed the resource;
+it is not evidence that source behavior or source code is missing. Follow the
+resource-capture procedure in [recording.md](recording.md). A changed apply is
+`recording_configuration/action_required` and requires a new standard
+recording; verify the expected semantic exchange in that new run. An unchanged
+plan returns to recording-path diagnosis. Do not maintain endpoint ports or
+hostname lists manually, and do not use traffic from a diagnostic container
+restart as recording evidence.
+
 Do not infer missing rows, messages, cache entries, or third-party responses
 from `expected-response.json` alone.
 
@@ -94,7 +114,8 @@ when all of these facts are explicit in source:
 
 Timing overlap, repetition, polling-like names, a successful response, and an
 unused replay exchange are not ownership evidence. If any ownership fact is
-unclear, keep the dependency case-owned and the replay incomplete.
+unclear, keep the dependency case-owned and the aggregate non-passing. Use the
+main skill's response and evidence conditions for the handoff status.
 
 After source proves HTTP independence and response assertions pass, follow
 [background-dependencies.md](background-dependencies.md) and use the guarded
@@ -128,30 +149,6 @@ signals for the later dependency-coverage gate:
 Record enough evidence in the working notes to know which dependency matched,
 missed, or leaked to the network.
 
-## MySQL-Specific Risks
-
-Treat these as replay risks:
-
-- missing `sql` for a SQL-bearing command such as `COM_QUERY`,
-  `COM_STMT_PREPARE`, or `COM_STMT_EXECUTE`
-- missing MySQL dependency identity fields: business `target_host`,
-  `target_port`, default `database`/schema, or `username`
-- use of fake IPs or upstream IPs instead of the business/original target host
-  for replay matching
-- `COM_STMT_EXECUTE` without parsed `params`
-- resultsets without semantic `response.columns` schema fields such as
-  `family`, `sql_type`, `nullable`, or numeric signedness
-- non-empty `parse_warnings`
-- `response.rows_truncated == true`
-- use of `statement_id` as a global key
-- transaction, lock, temp table, session variable, or repeated SQL behavior
-  replayed without ordering or connection state
-- `mysql_tls_rejected`, because MySQL TLS MITM is intentionally unsupported
-
-Use `dependencies-debug.jsonl` to explain parser gaps, not as the primary replay
-source. Raw/base64 payloads are less reliable than semantic `mysql_exchange`
-records.
-
 ## Response Assertion Mismatches
 
 Inspect every structured response difference and compare source and target
@@ -182,7 +179,8 @@ Identify the exact JSON Pointer for a runtime-varying body field. Check whether
 the current replay-policy version supports a narrowly scoped strategy and use
 its plan/apply operation. A scalar mismatch or generated diagnostic candidate
 does not by itself justify a policy change. If no supported strategy exists,
-keep the case incomplete. Never add a broad ignore or weaken stable fields.
+return `verification_policy/action_required` with the missing policy capability
+and acceptance check. Never add a broad ignore or weaken stable fields.
 
 ## Target Behavior Evidence
 
@@ -241,17 +239,17 @@ work. Examples of useful feedback categories are: add semantic capture for a
 dependency type, enrich `mysql_exchange`, improve case dependency correlation,
 avoid truncating needed values, or surface unstable response fields.
 
-## Blocked Output
+## Non-Passing Handoff
 
-When blocked, output:
+Use the main skill's representative-case and status contract. For `blocked`,
+also report the proven response-to-runtime chain, exact missing link, absent or
+inconsistent external evidence, why inventing it is unsafe, and the concrete
+capture or semantic-recording action that would unblock implementation. Name
+the exact source path or packaged symbol, wiring, configuration key, runtime
+source, and resource hostname already proven; never collapse them into
+“insufficient source-code evidence”, “source drift”, or “count drift”.
 
-- exactly one representative case path
-- missing evidence or incomplete dependency records
-- why it is unsafe to invent the data
-- recommended next step, such as re-recording with the missing service captured
-  or adding recorder-supported semantic capture for that dependency
-- recorder feedback, when the missing evidence suggests a recorder improvement
-
-Use `incomplete` only when all selected response assertions pass, dirty
-dependency evidence remains, and source inspection proves no safe rule to
-apply. Dirty evidence never stops diagnosis or repair of a response mismatch.
+Include recorder feedback when the missing evidence identifies a recorder
+improvement. Use `incomplete` only for response-passing dirty evidence with no
+safe source-proven rule; dirty evidence never stops response diagnosis or
+repair.

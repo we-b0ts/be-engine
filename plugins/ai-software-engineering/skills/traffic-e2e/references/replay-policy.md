@@ -146,8 +146,9 @@ rules:
 Version one supports only its recorder-declared scalar fields. It does not
 support background allowlists, case-id exceptions, dependency payload fixtures,
 response ignores, or arbitrary JSON-body transformations. A case requiring an
-unsupported rule remains incomplete; do not compensate in target code or the
-test harness.
+unsupported rule remains non-passing; return
+`verification_policy/action_required` with the missing capability and
+acceptance check. Do not compensate in target code or the test harness.
 
 ## Dynamic Response Fields
 
@@ -217,6 +218,13 @@ traffic-e2e config replay apply response-rule \
   --aggregate-report .traffic-e2e/local/.../aggregate.json
 ```
 
+Complete aggregate evidence may remain dependency-dirty while applying a
+dynamic rule. Other response differences may also remain in the same report.
+Neither condition authorizes the selected Pointer, and neither blocks its
+independent evidence from being applied. The plan reports aggregate dirtiness
+and every unselected difference Pointer; those failures remain exact gates and
+must still be diagnosed after the policy change.
+
 ## Unordered Response Arrays
 
 `response_rules.unordered` selects an exact JSON array by canonical API group
@@ -249,10 +257,12 @@ traffic-e2e config replay apply response-rule \
 ```
 
 Both actions require runner-owned structural assertion evidence using the
-current policy fingerprint and complete, clean aggregate evidence. They accept
-only the difference kind selected by `--kind` and reject status, shape, type,
-non-JSON, content, or undeclared field differences. Apply is additive, sorted,
-and atomic.
+current policy fingerprint and complete aggregate evidence. A dynamic action
+validates only its selected Pointer and may retain dirty dependencies or
+unselected response differences as independent failing gates. An unordered
+action still requires clean aggregate evidence and rejects undeclared response
+differences. Both reject unsupported differences at a selected location.
+Apply is additive, sorted, and atomic.
 
 After every policy change, revalidate and rerun the entire affected API group.
 Earlier replay and aggregate artifacts are stale. Completion requires zero

@@ -1,11 +1,9 @@
 use std::collections::HashSet;
-use std::fs;
-use std::net::IpAddr;
-use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use tracing::{info, trace};
 
+use crate::breeze::snapshot::Snapshot;
 use crate::{DnsBypassStrategyConfig, DnsMockConfig};
 
 #[derive(Debug, Clone, Default)]
@@ -21,21 +19,43 @@ impl DomainMatcher {
 
         for strategy in &config.bypass_strategies {
             match strategy {
-                DnsBypassStrategyConfig::Breeze { snapshot_dir } => {
-                    let snapshot = load_breeze_snapshot(snapshot_dir)?;
-                    let loaded_domains = snapshot.domains.len();
-                    let loaded_files = snapshot.files;
+                DnsBypassStrategyConfig::Breeze {
+                    snapshot_dir,
+                    capture_resources,
+                } => {
+                    let snapshot = Snapshot::load(snapshot_dir)?;
+                    let mut bypass_domains = snapshot.domains();
+                    ensure!(
+                        !bypass_domains.is_empty(),
+                        "Breeze bypass snapshot contains no hostname:port backends: {}",
+                        snapshot_dir.display()
+                    );
+                    let mut captured_domains = HashSet::new();
+                    for selector in capture_resources {
+                        let resource = snapshot.resolve(selector)?;
+                        ensure!(
+                            !resource.domains.is_empty(),
+                            "Breeze capture resource {:?} contains no hostname backend; IP literals are not part of DNS bypass",
+                            resource.identity
+                        );
+                        captured_domains.extend(resource.domains.iter().cloned());
+                    }
+                    bypass_domains.retain(|domain| !captured_domains.contains(domain));
+                    let loaded_domains = bypass_domains.len();
+                    let loaded_files = snapshot.file_count();
                     trace!(
                         snapshot_dir = %snapshot_dir.display(),
-                        domains = ?snapshot.domains,
+                        domains = ?bypass_domains,
                         "loaded Breeze bypass domains"
                     );
-                    matcher.exact.extend(snapshot.domains);
+                    matcher.exact.extend(bypass_domains);
                     info!(
                         strategy = "breeze",
                         snapshot_dir = %snapshot_dir.display(),
                         files = loaded_files,
                         domains = loaded_domains,
+                        capture_resources = capture_resources.len(),
+                        captured_domains = captured_domains.len(),
                         "DNS bypass strategy loaded"
                     );
                 }
@@ -97,117 +117,6 @@ impl DomainMatcher {
     }
 }
 
-struct BreezeSnapshot {
-    files: usize,
-    domains: HashSet<String>,
-}
-
-fn load_breeze_snapshot(snapshot_dir: &Path) -> Result<BreezeSnapshot> {
-    ensure!(
-        snapshot_dir.is_dir(),
-        "Breeze bypass snapshot directory does not exist or is not a directory: {}",
-        snapshot_dir.display()
-    );
-
-    let files = snapshot_files(snapshot_dir)?;
-    ensure!(
-        !files.is_empty(),
-        "Breeze bypass snapshot directory contains no regular files: {}",
-        snapshot_dir.display()
-    );
-
-    let mut domains = HashSet::new();
-    for path in &files {
-        let source = fs::read_to_string(path)
-            .with_context(|| format!("failed to read Breeze snapshot {}", path.display()))?;
-        extract_backend_domains(&source, &mut domains);
-    }
-    ensure!(
-        !domains.is_empty(),
-        "Breeze bypass snapshot contains no hostname:port backends: {}",
-        snapshot_dir.display()
-    );
-
-    Ok(BreezeSnapshot {
-        files: files.len(),
-        domains,
-    })
-}
-
-fn snapshot_files(snapshot_dir: &Path) -> Result<Vec<PathBuf>> {
-    let mut pending = vec![snapshot_dir.to_path_buf()];
-    let mut files = Vec::new();
-    while let Some(directory) = pending.pop() {
-        for entry in fs::read_dir(&directory).with_context(|| {
-            format!(
-                "failed to list Breeze snapshot directory {}",
-                directory.display()
-            )
-        })? {
-            let entry = entry.with_context(|| {
-                format!(
-                    "failed to read an entry under Breeze snapshot directory {}",
-                    directory.display()
-                )
-            })?;
-            let file_type = entry.file_type().with_context(|| {
-                format!(
-                    "failed to inspect Breeze snapshot {}",
-                    entry.path().display()
-                )
-            })?;
-            if file_type.is_dir() {
-                pending.push(entry.path());
-            } else if file_type.is_file() {
-                files.push(entry.path());
-            }
-        }
-    }
-    files.sort();
-    Ok(files)
-}
-
-fn extract_backend_domains(source: &str, domains: &mut HashSet<String>) {
-    for token in source.split(|character: char| {
-        character.is_ascii_whitespace()
-            || matches!(character, ',' | '[' | ']' | '{' | '}' | '(' | ')' | ';')
-    }) {
-        let token =
-            token.trim_matches(|character: char| matches!(character, '-' | '\'' | '"' | '`'));
-        let Some((host, port)) = token.rsplit_once(':') else {
-            continue;
-        };
-        if port.parse::<u16>().ok().filter(|port| *port > 0).is_none() {
-            continue;
-        }
-        let host = normalize_domain(host);
-        if is_hostname(&host) {
-            domains.insert(host);
-        }
-    }
-}
-
-fn is_hostname(value: &str) -> bool {
-    if value.len() > 253 || !value.contains('.') || value.parse::<IpAddr>().is_ok() {
-        return false;
-    }
-    value.split('.').all(|label| {
-        !label.is_empty()
-            && label.len() <= 63
-            && label
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-            && label
-                .as_bytes()
-                .first()
-                .is_some_and(u8::is_ascii_alphanumeric)
-            && label
-                .as_bytes()
-                .last()
-                .is_some_and(u8::is_ascii_alphanumeric)
-    })
-}
-
 pub(super) fn normalize_domain(domain: &str) -> String {
     domain.trim_end_matches('.').to_ascii_lowercase()
 }
@@ -242,6 +151,8 @@ fn wildcard_matches(pattern: &str, value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -276,6 +187,7 @@ mod tests {
         let config = DnsMockConfig {
             bypass_strategies: vec![DnsBypassStrategyConfig::Breeze {
                 snapshot_dir: directory.path().to_path_buf(),
+                capture_resources: Vec::new(),
             }],
             ..DnsMockConfig::default()
         };
@@ -296,6 +208,7 @@ mod tests {
         let config = DnsMockConfig {
             bypass_strategies: vec![DnsBypassStrategyConfig::Breeze {
                 snapshot_dir: directory.path().to_path_buf(),
+                capture_resources: Vec::new(),
             }],
             ..DnsMockConfig::default()
         };
@@ -303,5 +216,33 @@ mod tests {
         let error = DomainMatcher::from_config(&config).unwrap_err();
 
         assert!(error.to_string().contains("no hostname:port backends"));
+    }
+
+    #[test]
+    fn breeze_capture_resource_removes_its_domains_from_bypass() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("usercounter-descriptor"),
+            "123\nusercounter\nbackends:\n- counter.example.com:7917,shared.example.com:7917\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("other-descriptor"),
+            "123\nother\nbackends:\n- other.example.com:6379,shared.example.com:6379\n",
+        )
+        .unwrap();
+        let config = DnsMockConfig {
+            bypass_strategies: vec![DnsBypassStrategyConfig::Breeze {
+                snapshot_dir: directory.path().to_path_buf(),
+                capture_resources: vec!["usercounter-descriptor".to_string()],
+            }],
+            ..DnsMockConfig::default()
+        };
+
+        let matcher = DomainMatcher::from_config(&config).unwrap();
+
+        assert!(!matcher.matches("counter.example.com"));
+        assert!(!matcher.matches("shared.example.com"));
+        assert!(matcher.matches("other.example.com"));
     }
 }

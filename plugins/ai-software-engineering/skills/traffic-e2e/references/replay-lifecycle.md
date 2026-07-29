@@ -72,8 +72,11 @@ inputs, and target-owned output directories.
 
 Target tests, facades, docs, and state MUST NOT pass or emulate `--owner-uid`,
 `--user`, `--all-users`, `OWNER_UID`, or another owner-selection mechanism. If
-the fixed identity or target process identity cannot be verified, stop with
-`blocked_replay_isolation`.
+the fixed identity or target process identity cannot be verified, stop with the
+internal diagnostic `blocked_replay_isolation`. Return
+`target_environment/action_required` or `replay_capability_gap/action_required`
+for the operation; this diagnostic does not satisfy the main skill's
+recording-data proof for a `blocked` handoff.
 
 Use `--no-intercept` only when every dependency is explicitly routed to replay
 listeners; it is not an isolation bypass.
@@ -127,7 +130,9 @@ selection, or substitute target test output for recorder evidence.
 
 After a failure, apply the failure-diagnosis contract loaded from the main
 skill. Continue while each cycle adds evidence or fixes a distinct evidenced
-defect. If the same root cause repeats for three consecutive cycles without
-progress, stop as `blocked` or `incomplete`. Always rerun the entire affected
-group after a behavior, wiring, policy, assertion, or lifecycle change; the
-mandatory final verification is never counted as a retry.
+defect. Repeated attempts do not determine status. If an iteration adds no new
+evidence or repair, return the unresolved cause, owner, next diagnostic or
+system change, acceptance check, and resume point as `action_required`; use
+`blocked` or `incomplete` only when the main skill's evidence conditions are
+independently satisfied. Always rerun the entire affected group after a
+behavior, wiring, policy, assertion, or lifecycle change.

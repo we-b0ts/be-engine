@@ -32,6 +32,8 @@ bypass_domains = [
 # [[dns_mock.bypass_strategies]]
 # strategy = "breeze"
 # snapshot_dir = "/data1/breeze/snapshot"
+# Response-driving resources excluded by this snapshot must be enabled only
+# through `config recorder plan|apply breeze-resource-capture`.
 
 [dns_mock.hosts]
 "db-10-185-28-119.test" = ["10.185.28.119"]

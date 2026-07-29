@@ -75,31 +75,6 @@ runtime dependency with an environment variable inferred from traffic.
 - Production behavior MUST NOT depend on tests, recordings, fixtures, debug
   branches, or developer-only defaults.
 
-## Large Rust Backend Structure
-
-For large Rust backends:
-
-- The primary product package MUST live at the repository root. The root
-  `Cargo.toml` MUST contain both `[package]` and `[workspace]`, primary product
-  source MUST live under root `src/`, and library packages MUST live under
-  `crates/`. Do not move the primary package under `apps/`.
-- Put only additional independently deployed runtime roles in separate binary
-  packages, conventionally under `apps/<role>/`.
-- Binary entrypoints own configuration loading, dependency construction,
-  startup, and shutdown; they MUST NOT own business behavior.
-- Organize business libraries by cohesive product capability. Use modules
-  inside a capability for application logic, domain policy, dependency
-  contracts, and adapters. Do not create repository-wide `service`, `model`,
-  `common`, or `utils` packages that collect unrelated capabilities.
-- Construct runtime dependencies explicitly in each binary's composition root
-  and pass them through constructors. The dependency graph MUST remain
-  acyclic and visible from code; do not use a global service locator,
-  component scanning, or a catch-all application context.
-- Keep HTTP JSON DTOs and generated Protobuf, RPC, or storage types at their
-  respective adapter boundaries. Application and domain code MUST use
-  transport-independent business types, with explicit conversion at each
-  boundary.
-
 ## Risk-Scaled Decisions
 
 Do not add caches, pools, batching, lock-free structures, circuit breakers, or
