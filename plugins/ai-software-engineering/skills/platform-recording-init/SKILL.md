@@ -62,7 +62,10 @@ or validating the candidate facade or `scripts/start-recording-comparison`.
    `recording wait-ready` owns the wait. Keep `authorization` in
    `redact_headers` for response-side protection; request encryption takes
    precedence. Create the private `.traffic-e2e/runtime/` root, but do not
-   precreate `.env`, `config/`, or other runtime inputs.
+   precreate its contents. Reserve `runtime/config/` for files or directories
+   synchronized from the source container and `runtime/.env` for materialized
+   environment variables. Create purpose-named directories for other local
+   runtime dependencies only when needed.
 5. Copy the fixed Breeze Mesh patch assets unchanged into
    `.traffic-e2e/adapters/source/`. This bundled patch is the only permitted
    source-class patch and is a closed recording-infrastructure exception, not

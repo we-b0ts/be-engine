@@ -98,14 +98,15 @@ widening interception.
 
 Use the Git-ignored `.traffic-e2e/runtime/` directory only for local inputs
 proven to come directly from source process environment, startup arguments, or
-machine-local configuration. Store environment values in
-`.traffic-e2e/runtime/.env` when needed. When source-compatible file
-configuration must be materialized locally, it may live under
-`.traffic-e2e/runtime/` and must retain the source format and required file
-relationships. Initialize only the runtime root; create `.env`, `config/`, or
-other contents only when source evidence requires them. The target facade passes
-these paths through normal startup inputs; product code must not hard-code the
-traffic-e2e directory.
+machine-local configuration. Use `.traffic-e2e/runtime/config/` for files or
+directories synchronized from the source container and preserve the
+relationships required by their consumers. Use `.traffic-e2e/runtime/.env` for
+materialized environment variables. Other local runtime dependencies may use
+purpose-named child directories when needed.
+
+Initialize only the runtime root; create its contents only when source evidence
+requires them. The target facade passes these paths through normal startup
+inputs; product code must not hard-code the traffic-e2e directory.
 
 Use this precedence unless the target repository defines a stricter
 equivalent:
