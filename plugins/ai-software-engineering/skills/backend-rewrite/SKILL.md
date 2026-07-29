@@ -84,11 +84,6 @@ before implementing or accepting target configuration loading and startup. It
 defines how to discover the source configuration contract, load it compatibly,
 and verify target startup with it.
 
-For a remote task-service IPv4 source, also read
-[remote-case-source.md](references/remote-case-source.md) before network
-access. Freeze one snapshot and materialize at most one oldest unprocessed
-recording without changing downloaded evidence.
-
 The phase order is:
 
 ```text

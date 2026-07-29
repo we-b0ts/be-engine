@@ -26,6 +26,7 @@ pub(crate) mod motan;
 pub(crate) mod mysql;
 pub(crate) mod redis;
 mod run;
+mod storage;
 mod summary;
 mod writer;
 
@@ -245,7 +246,7 @@ impl Recorder {
         let mut payload =
             serde_json::to_vec_pretty(value).context("failed to serialize case recording file")?;
         payload.push(b'\n');
-        tokio::fs::write(&path, payload)
+        storage::write(&path, &payload)
             .await
             .with_context(|| format!("failed to write case recording file {}", path.display()))
     }
