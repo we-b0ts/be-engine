@@ -71,11 +71,6 @@ defines discovery and resume behavior, PR-base resolution, initialization,
 case acquisition, target-code delegation, runtime evidence, E2E/comparison
 loops, delivery, and the final decision record.
 
-For a remote task-service IPv4 source, also read
-[remote-case-source.md](references/remote-case-source.md) before network
-access. Freeze one snapshot and materialize at most one oldest unprocessed
-recording without changing downloaded evidence.
-
 The phase order is:
 
 ```text
