@@ -106,18 +106,19 @@ traffic-e2e compare \
   --policy <target>/.traffic-e2e/verification.yaml
 ```
 
-The command is file-only. It applies the top-level `comparison` behavior and
-`response_rules`; dependency replay rules are ignored. Preserve the generated
-`comparison-report.json` and the policy fingerprint used to produce it. The
-report groups cases by canonical `METHOD + api_pattern` and publishes
+The command is file-only. It applies the shared and comparison-only behavior
+under `response_rules`; dependency replay rules are ignored. Preserve the
+generated `comparison-report.json` and the policy fingerprint used to produce
+it. The report groups cases by canonical `METHOD + api_pattern` and publishes
 `apis_total`, `apis_passed`, and `apis_failed`; an API passes only when all of
 its comparison cases pass.
 
 The verification policy defaults to the first source observation:
 
 ```yaml
-comparison:
-  source_match: before
+response_rules:
+  comparison:
+    source_match: before
 ```
 
 Use `before_or_after` when normal runtime data may change during one admitted
@@ -187,7 +188,7 @@ Useful interpretation of the optional source recheck:
   provides no source-stability evidence under `before`; under
   `before_or_after`, the case is unevaluable;
 - candidate equals source-after as a complete response: pass only when
-  `comparison.source_match` is `before_or_after`, and retain
+  `response_rules.comparison.source_match` is `before_or_after`, and retain
   `matched_source: after`;
 - source-before equals source-after, candidate differs: stronger candidate
   difference evidence, but still inspect code and environment;

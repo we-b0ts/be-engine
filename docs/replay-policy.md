@@ -33,13 +33,12 @@ Version two enables runner-owned response assertions:
 ```yaml
 version: 2
 expected_response: assertions_only
-comparison:
-  source_match: before
 rules: []
 response_rules:
   dynamic: {}
   unordered: {}
   comparison:
+    source_match: before
     counter: {}
 ```
 
@@ -47,8 +46,8 @@ Standard replay loads only the root `dynamic` and `unordered` rules.
 Comparison loads those replay rules plus the nested `comparison` rules.
 Strategies across both sets must select disjoint JSON subtrees.
 
-Top-level `comparison.source_match` controls which complete source observation
-may serve as the comparison oracle. `before` is the default. Set
+`response_rules.comparison.source_match` controls which complete source
+observation may serve as the comparison oracle. `before` is the default. Set
 `before_or_after` only for runs that record `expected-response-after.json` for
 every case. The candidate must match either complete source response under the
 active response rules; fields from the two source observations are never

@@ -130,8 +130,9 @@ must fail before startup for every other method. Keep
 verification run may explicitly pass `--baseline-recheck` to capture
 source-before, candidate, and source-after in that order when source-time drift
 evidence is needed. The initialized verification policy independently defaults
-`comparison.source_match` to `before`; a later traffic verification task may
-select `before_or_after`, which requires the recheck artifact for every case.
+`response_rules.comparison.source_match` to `before`; a later traffic
+verification task may select `before_or_after`, which requires the recheck
+artifact for every case.
 
 ## Offline Verification
 

@@ -31,7 +31,7 @@ fn validates_comparison_source_match_and_requires_version_two() {
     let path = temp.path().join("verification.yaml");
     fs::write(
         &path,
-        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 
@@ -43,11 +43,11 @@ fn validates_comparison_source_match_and_requires_version_two() {
 
     fs::write(
         &path,
-        "version: 1\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+        "version: 1\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("requires replay policy version 2"));
+    assert!(format!("{error:#}").contains("response_rules require replay policy version 2"));
 }
 
 #[test]

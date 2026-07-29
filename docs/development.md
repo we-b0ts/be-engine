@@ -167,8 +167,9 @@ source-controlled default.
 The verification policy separately controls source-observation acceptance:
 
 ```yaml
-comparison:
-  source_match: before_or_after
+response_rules:
+  comparison:
+    source_match: before_or_after
 ```
 
 The default is `before`. `before_or_after` requires a source recheck for every
@@ -218,10 +219,10 @@ traffic-e2e compare \
 The command writes `comparison-report.json` in the run directory by default
 and exits non-zero when a response differs from every permitted source
 observation, source-before/source-after drift makes a case inconclusive, or a
-case cannot be evaluated. The top-level `comparison` behavior and
-`response_rules` from `verification.yaml` participate in this phase; dependency
-matching rules remain replay-only. Comparison applies both replay response
-rules and rules nested under `response_rules.comparison`. The report records
+case cannot be evaluated. The comparison behavior and field rules under
+`response_rules` participate in this phase; dependency matching rules remain
+replay-only. Comparison applies both shared response rules and rules nested
+under `response_rules.comparison`. The report records
 `matched_source` for a passing case and groups cases by the recorded
 `METHOD + api_pattern`; `apis_passed` is the current validation-success count,
 while E2E progress uses only replay `passed` wording. Dynamic and unordered

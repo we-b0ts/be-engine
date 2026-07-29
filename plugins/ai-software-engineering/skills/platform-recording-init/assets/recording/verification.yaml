@@ -2,10 +2,9 @@
 version: 2
 expected_response: assertions_only
 rules: []
-comparison:
-  source_match: before
 response_rules:
   dynamic: {}
   unordered: {}
   comparison:
+    source_match: before
     counter: {}

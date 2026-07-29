@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::response::{ResponseRules, response_rule_ids, validate_response_rules};
+use super::response::{
+    ComparisonVerificationPolicy, ResponseRules, response_rule_ids, validate_response_rules,
+};
 
 const MIN_POLICY_VERSION: u8 = 1;
 const MAX_POLICY_VERSION: u8 = 2;
@@ -19,29 +21,12 @@ pub(in crate::replay) struct ReplayPolicyDocument {
     pub(super) rules: Vec<ReplayPolicyRule>,
     #[serde(default, skip_serializing_if = "ResponseRules::is_empty")]
     pub(in crate::replay) response_rules: ResponseRules,
-    #[serde(default)]
-    pub(in crate::replay) comparison: ComparisonVerificationPolicy,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExpectedResponseUsage {
     AssertionsOnly,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ComparisonSourceMatch {
-    #[default]
-    Before,
-    BeforeOrAfter,
-}
-
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct ComparisonVerificationPolicy {
-    #[serde(default)]
-    pub source_match: ComparisonSourceMatch,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -164,12 +149,15 @@ pub(in crate::replay) struct LoadedReplayPolicy {
 pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationReport> {
     let loaded = load_replay_policy(path)?;
     let response_rule_ids = response_rule_ids(&loaded.document.response_rules);
+    let comparison = ComparisonVerificationPolicy {
+        source_match: loaded.document.response_rules.comparison.source_match,
+    };
     Ok(ReplayPolicyValidationReport {
         version: loaded.document.version,
         path: loaded.path.display().to_string(),
         fingerprint: loaded.fingerprint,
         expected_response: loaded.document.expected_response,
-        comparison: loaded.document.comparison,
+        comparison,
         rule_ids: loaded
             .document
             .rules
@@ -207,10 +195,6 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     ensure!(
         document.version >= 2 || document.response_rules.is_empty(),
         "response_rules require replay policy version 2"
-    );
-    ensure!(
-        document.version >= 2 || document.comparison == ComparisonVerificationPolicy::default(),
-        "comparison verification behavior requires replay policy version 2"
     );
     validate_response_rules(&document.response_rules)?;
     let mut ids = BTreeSet::new();

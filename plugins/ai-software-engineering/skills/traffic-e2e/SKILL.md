@@ -187,10 +187,10 @@ operations do not require either reference.
   environment and keep its value out of commands, logs, reports, cases, policy,
   and target configuration.
 - Make recorder-rule and response-rule changes only through the supported
-  evidence-validating `config ... plan|apply` interface. A typed top-level
-  comparison behavior may be reviewed and changed directly in the
-  source-controlled verification config when its reference defines that
-  operation.
+  evidence-validating `config ... plan|apply` interface. The typed
+  `response_rules.comparison.source_match` behavior may be reviewed and changed
+  directly in the source-controlled verification config when its reference
+  defines that operation.
 - Never hand-edit generated state or parse partial output to manufacture
   completion.
 

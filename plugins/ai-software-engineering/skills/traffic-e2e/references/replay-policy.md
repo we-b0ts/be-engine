@@ -31,13 +31,12 @@ Use version two when the standard runner owns response assertions:
 ```yaml
 version: 2
 expected_response: assertions_only
-comparison:
-  source_match: before
 rules: []
 response_rules:
   dynamic: {}
   unordered: {}
   comparison:
+    source_match: before
     counter: {}
 ```
 
@@ -46,8 +45,8 @@ loads those replay rules and then adds `comparison` rules. Replay and
 comparison-only rules must select disjoint JSON subtrees; overlapping
 strategies are rejected rather than ordered by precedence.
 
-Top-level `comparison.source_match` is verification behavior, not a response
-rule. `before` is the default. `before_or_after` requires
+`response_rules.comparison.source_match` is whole-response verification
+behavior, not a Pointer rule. `before` is the default. `before_or_after` requires
 `expected-response-after.json` for every comparison case and accepts the
 candidate only when it matches either complete source observation under all
 active response rules. Never combine fields from source-before and

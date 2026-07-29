@@ -255,7 +255,7 @@ pub fn verify_comparison_recording(
                 .map(Some)
             }
             ComparisonSourceMatch::BeforeOrAfter => Err(anyhow!(
-                "comparison.source_match=before_or_after requires expected-response-after.json"
+                "response_rules.comparison.source_match=before_or_after requires expected-response-after.json"
             )),
         };
         match (response, baseline_recheck.transpose(), response_after) {

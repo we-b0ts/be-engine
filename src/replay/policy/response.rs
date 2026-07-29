@@ -5,6 +5,21 @@ use serde::{Deserialize, Serialize};
 
 use super::pattern::path_pattern_matches;
 
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ComparisonSourceMatch {
+    #[default]
+    Before,
+    BeforeOrAfter,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ComparisonVerificationPolicy {
+    #[serde(default)]
+    pub source_match: ComparisonSourceMatch,
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct ResponseRules {
@@ -19,13 +34,16 @@ pub(in crate::replay) struct ResponseRules {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct ComparisonResponseRules {
+    #[serde(default)]
+    pub(in crate::replay) source_match: ComparisonSourceMatch,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in crate::replay) counter: BTreeMap<String, Vec<CounterResponseRule>>,
 }
 
 impl ComparisonResponseRules {
     fn is_empty(&self) -> bool {
-        self.counter.values().all(Vec::is_empty)
+        self.source_match == ComparisonSourceMatch::Before
+            && self.counter.values().all(Vec::is_empty)
     }
 }
 
@@ -561,6 +579,7 @@ mod tests {
                     "GET /api/users/show".to_string(),
                     vec![counter("/followers_count")],
                 )]),
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -597,6 +616,7 @@ mod tests {
                     "GET /api/users/show".to_string(),
                     vec![counter("/followers_count")],
                 )]),
+                ..Default::default()
             },
             ..Default::default()
         };

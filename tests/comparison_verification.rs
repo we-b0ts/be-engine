@@ -413,7 +413,7 @@ fn before_or_after_accepts_a_complete_source_after_match() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 
@@ -457,7 +457,7 @@ fn before_or_after_does_not_mix_fields_from_source_observations() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 
@@ -493,7 +493,7 @@ fn before_or_after_requires_a_source_after_artifact() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 

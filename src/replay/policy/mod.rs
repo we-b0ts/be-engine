@@ -10,10 +10,7 @@ mod value;
 #[cfg(test)]
 mod tests;
 
-pub use config::{
-    ComparisonSourceMatch, ComparisonVerificationPolicy, ReplayPolicyValidationReport,
-    validate_replay_policy,
-};
+pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
 pub(in crate::replay) use config::{fingerprint, load_replay_policy};
 pub use feedback::{
     ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
@@ -29,4 +26,7 @@ pub(in crate::replay) use matcher::{
 pub(in crate::replay) use pattern::uri_path;
 pub(in crate::replay) use report::ReplayPolicyReport;
 pub(crate) use response::response_locations_overlap;
-pub use response::{DynamicResponseMechanism, ResponseField, ResponseRuleKind};
+pub use response::{
+    ComparisonSourceMatch, ComparisonVerificationPolicy, DynamicResponseMechanism, ResponseField,
+    ResponseRuleKind,
+};
