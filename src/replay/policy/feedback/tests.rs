@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -98,6 +100,151 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
     assert!(updated.contains("source_example: <redacted source UUID>"));
     assert!(updated.contains("target_example: <redacted target UUID>"));
     validate_replay_policy(&policy).unwrap();
+}
+
+#[test]
+fn dynamic_field_plan_preserves_unselected_differences_and_dirty_dependencies() {
+    let temp = tempdir().unwrap();
+    let feedback = write_dynamic_replay_feedback(
+        temp.path(),
+        json!([
+            {
+                "case_id": "case-1",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/resource/token",
+                    "body_mode": "json_structural",
+                    "differences": [
+                        {
+                            "pointer": "/content",
+                            "kind": "value_mismatch",
+                            "expected_type": "string",
+                            "actual_type": "string"
+                        },
+                        {
+                            "pointer": "/avatar",
+                            "kind": "value_mismatch",
+                            "expected_type": "string",
+                            "actual_type": "string"
+                        },
+                        {
+                            "pointer": "/stable_count",
+                            "kind": "value_mismatch",
+                            "expected_type": "number",
+                            "actual_type": "number"
+                        }
+                    ],
+                    "applied_dynamic_rule_ids": [],
+                    "dynamic_candidates": ["/content", "/avatar"]
+                }
+            },
+            {
+                "case_id": "case-2",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/resource/token",
+                    "body_mode": "json_structural",
+                    "differences": [{
+                        "pointer": "/stable_count",
+                        "kind": "value_mismatch",
+                        "expected_type": "number",
+                        "actual_type": "number"
+                    }],
+                    "applied_dynamic_rule_ids": [],
+                    "dynamic_candidates": []
+                }
+            }
+        ]),
+        json!(["case-1", "case-2"]),
+        true,
+        true,
+    );
+
+    let plan = plan_response_rule(feedback).unwrap();
+    assert_eq!(plan.report().matching_cases, 2);
+    assert_eq!(plan.report().selected_difference_cases, 1);
+    assert_eq!(plan.report().aggregate_dirty, Some(true));
+    assert_eq!(
+        plan.report().unselected_difference_pointers,
+        vec!["/avatar".to_string(), "/stable_count".to_string()]
+    );
+
+    plan.apply().unwrap();
+    let updated = fs::read_to_string(temp.path().join("replay.yaml")).unwrap();
+    assert!(updated.contains("pointer: /content"));
+    assert!(!updated.contains("pointer: /avatar"));
+    assert!(!updated.contains("pointer: /stable_count"));
+}
+
+#[test]
+fn dynamic_field_plan_still_requires_complete_aggregate_evidence() {
+    let temp = tempdir().unwrap();
+    let feedback = write_dynamic_replay_feedback(
+        temp.path(),
+        json!([{
+            "case_id": "case-1",
+            "response": {
+                "method": "GET",
+                "path": "/api/resource/token",
+                "body_mode": "json_structural",
+                "differences": [{
+                    "pointer": "/content",
+                    "kind": "value_mismatch",
+                    "expected_type": "string",
+                    "actual_type": "string"
+                }],
+                "applied_dynamic_rule_ids": [],
+                "dynamic_candidates": ["/content"]
+            }
+        }]),
+        json!(["case-1"]),
+        false,
+        false,
+    );
+
+    let error = plan_response_rule(feedback)
+        .err()
+        .expect("incomplete replay evidence must not authorize a response rule");
+    assert_eq!(
+        error.to_string(),
+        "aggregate replay evidence must be complete"
+    );
+}
+
+#[test]
+fn dynamic_field_plan_rejects_structural_differences_at_selected_location() {
+    let temp = tempdir().unwrap();
+    let feedback = write_dynamic_replay_feedback(
+        temp.path(),
+        json!([{
+            "case_id": "case-1",
+            "response": {
+                "method": "GET",
+                "path": "/api/resource/token",
+                "body_mode": "json_structural",
+                "differences": [{
+                    "pointer": "/content/value",
+                    "kind": "value_mismatch",
+                    "expected_type": "string",
+                    "actual_type": "string"
+                }],
+                "applied_dynamic_rule_ids": [],
+                "dynamic_candidates": ["/content"]
+            }
+        }]),
+        json!(["case-1"]),
+        true,
+        false,
+    );
+
+    let error = plan_response_rule(feedback)
+        .err()
+        .expect("a parent dynamic rule must not cover a child difference");
+    assert!(
+        error
+            .to_string()
+            .contains("unsupported response difference at selected location /content/value")
+    );
 }
 
 #[test]
@@ -331,4 +478,57 @@ fn source_change_can_block_only_an_overlapping_response_rule() {
         &case,
         &BTreeSet::from(["/counts/followers".to_string()])
     ));
+}
+
+fn write_dynamic_replay_feedback(
+    root: &Path,
+    cases: serde_json::Value,
+    selected_case_ids: serde_json::Value,
+    complete: bool,
+    dirty: bool,
+) -> ResponseRuleFeedback {
+    let policy = root.join("replay.yaml");
+    let assertions = root.join("assertions.json");
+    let aggregate = root.join("aggregate.json");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+    let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
+    fs::write(
+        &assertions,
+        serde_json::to_vec(&json!({
+            "case_source": "/cases",
+            "expected_response": "assertions_only",
+            "assertion_mode": "runner_owned",
+            "policy_fingerprint": fingerprint,
+            "cases": cases
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &aggregate,
+        serde_json::to_vec(&json!({
+            "case_source": "/cases",
+            "selected_case_ids": selected_case_ids,
+            "complete": complete,
+            "dirty": dirty
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    ResponseRuleFeedback {
+        policy_path: policy,
+        kind: ResponseRuleKind::Dynamic,
+        api: "GET /api/resource/token".to_string(),
+        json_pointers: vec!["/content".to_string()],
+        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
+        source_evidence: Some("src/token.rs:issue_token".to_string()),
+        source_example: Some("<redacted source UUID>".to_string()),
+        target_example: Some("<redacted target UUID>".to_string()),
+        assertion_report: assertions,
+        aggregate_report: aggregate,
+    }
 }

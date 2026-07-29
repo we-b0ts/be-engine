@@ -77,6 +77,31 @@ the recorder. A bypassed domain is deliberately not recorded; verify that the
 bypass rule matches the intended dependency ownership rather than using a broad
 wildcard to reduce load.
 
+When source evidence connects a response mismatch to a hostname found in the
+configured Breeze snapshot, enable that logical resource through the guarded
+interface:
+
+```bash
+traffic-e2e config recorder plan breeze-resource-capture \
+  --target-root <target-root> \
+  --resource <logical-resource> \
+  --source-revision <immutable-source-revision> \
+  --evidence '<single-line source file/symbol explanation>'
+
+traffic-e2e config recorder apply breeze-resource-capture \
+  --target-root <target-root> \
+  --resource <logical-resource> \
+  --source-revision <immutable-source-revision> \
+  --evidence '<same explanation>'
+```
+
+The command resolves a unique snapshot descriptor, reports every hostname and
+any resource sharing one, and stores its exact descriptor identity in an
+AI-managed `capture_resources` block. It rejects missing, ambiguous, IP-only,
+manually owned, or changed snapshot/config evidence. `apply` removes the
+resource's hostnames from DNS bypass; it does not change ports, protocols, or
+the immutable old recording. Create a new standard recording after applying.
+
 For a container source, run Recorder in the same anchored network namespace as
 the source and dependency-producing sidecars. Start the anchor with
 `--network host` by default, then join every managed component with

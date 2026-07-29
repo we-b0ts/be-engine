@@ -7,8 +7,9 @@ description: "Design, implement, integrate, migrate, or review business-independ
 
 Build reusable consumer SDKs that turn logical remote-resource identities into
 correctly registered Breeze listeners and long-lived application clients.
-Preserve Java SDK compatibility without coupling business code to descriptor
-filenames, caller-selected ports, or resource lifecycle.
+Preserve established Breeze descriptor and runtime compatibility without
+coupling business code to descriptor filenames, caller-selected ports, or
+resource lifecycle.
 
 The consumer path is:
 

@@ -87,7 +87,9 @@ case_path_patterns = [
 - Require `traffic-e2e` from `PATH`. Never edit the target TOML
   directly and never create the config or managed markers on the target's
   behalf. If the command is unavailable or rejects an existing managed block,
-  report `blocked` with the confirmed patterns and stop the config-update step.
+  report `recording_configuration/action_required` with the confirmed patterns,
+  exact tool or managed-block failure, and acceptance check; stop only the
+  config-update step.
   If the source repo or managed target config is absent, record exactly
   `not_applicable_missing_source_repo` or
   `not_applicable_missing_managed_config`; generic `not-applicable` is invalid.

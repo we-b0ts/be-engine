@@ -143,10 +143,14 @@ pub(super) fn managed_block_diff(
 }
 
 fn http_rule_ranges(raw: &str) -> Vec<Range<usize>> {
+    array_table_ranges(raw, RULE_HEADER)
+}
+
+pub(super) fn array_table_ranges(raw: &str, header: &str) -> Vec<Range<usize>> {
     let lines = source_lines(raw);
     let mut ranges = Vec::new();
     for (line_index, line) in lines.iter().enumerate() {
-        if raw[line.clone()].trim() != RULE_HEADER {
+        if raw[line.clone()].trim() != header {
             continue;
         }
         let end = lines

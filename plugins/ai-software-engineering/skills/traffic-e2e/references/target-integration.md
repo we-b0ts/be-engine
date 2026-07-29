@@ -90,8 +90,9 @@ If a container target shares an anchored network namespace with supporting
 containers, keep dependency-producing execution identity and interception
 scope explicit. Sharing a namespace does not authorize recording unrelated
 support-container traffic. When the target cannot satisfy the fixed identity or
-supported routing boundary, report the replay blocked instead of widening
-interception.
+supported routing boundary, return `target_environment/action_required` or
+`replay_capability_gap/action_required` with an acceptance check instead of
+widening interception.
 
 ## Environment Materialization
 

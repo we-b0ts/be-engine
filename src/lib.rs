@@ -68,9 +68,10 @@ pub use config::{
     AppConfig, ArtifactsConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan,
     BackgroundDependencyReport, BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
-    BreezeMemcachedBackgroundDependencyReport, CasePathPatternAuthority, CasePathPatternFeedback,
-    CasePathPatternPlan, CasePathPatternReport, ComparisonRecordingConfig, DEFAULT_FAKE_CIDR,
-    DEFAULT_RECORDING_RULE, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
+    BreezeMemcachedBackgroundDependencyReport, BreezeResourceCaptureFeedback,
+    BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,
+    CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport, ComparisonRecordingConfig,
+    DEFAULT_FAKE_CIDR, DEFAULT_RECORDING_RULE, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
     HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
@@ -79,7 +80,8 @@ pub use config::{
     TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
     TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode, UdpGatewayConfig,
     initialize_recorder_config, plan_allowed_unused_http_hosts, plan_background_dependency,
-    plan_breeze_memcached_background_dependency, plan_case_path_pattern_feedback,
+    plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
+    plan_case_path_pattern_feedback,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};

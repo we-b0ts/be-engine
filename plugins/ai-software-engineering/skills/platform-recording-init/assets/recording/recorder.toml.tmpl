@@ -26,6 +26,8 @@ bypass_domains = []
 [[dns_mock.bypass_strategies]]
 strategy = "breeze"
 snapshot_dir = "/data1/breeze/snapshot"
+# Resource capture exceptions are owned by
+# `traffic-e2e config recorder plan|apply breeze-resource-capture`.
 
 [dns_mock.hosts]
 "breeze.recording" = ["127.0.0.1"]

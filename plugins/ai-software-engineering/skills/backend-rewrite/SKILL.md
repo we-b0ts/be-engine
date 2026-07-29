@@ -1,6 +1,6 @@
 ---
 name: backend-rewrite
-description: "Plan, implement, verify, and deliver backend service rewrites and migrations using production engineering standards and traffic-e2e behavior contracts. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements using local recordings, newly recorded traffic, or recordings fetched from a remote task-service IPv4 address; this skill owns migration sequencing, repair routing, completion state, and pull-request delivery."
+description: "Plan, implement, verify, and deliver backend service rewrites and migrations from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns migration sequencing, repair routing, completion state, and pull-request delivery."
 ---
 
 # Backend Rewrite And Migration
@@ -95,15 +95,33 @@ Response compatibility is the primary repair loop:
 2. Group every structured response difference by field and proven cause.
    State the response cause before dependency cleanliness or blockers; if it is
    not yet proven, say so and continue diagnosis.
-3. Repair target behavior or any response-driving dependency wiring. When a
+3. When required dependency evidence appears absent, require traffic-e2e's
+   missing-evidence checkpoint before calling it a recording-data blocker.
+   Follow its Breeze resource-capture result when applicable; re-record only
+   after a changed apply, and otherwise continue diagnosis.
+4. Repair target behavior or any response-driving dependency wiring. When a
    source-owned cache warm is causally required, apply a source-proven
    `runtime_state` background rule and make a new recording as part of this
    repair.
-4. Rerun the same immutable cases until response assertions pass.
-5. Only then classify remaining unused dependencies and apply an
+5. Rerun the same immutable cases until response assertions pass.
+6. Only then classify remaining unused dependencies and apply an
    `independent` background rule when source evidence proves process ownership
    and response independence.
-6. A background-rule change requires a new standard recording and E2E run.
+7. A recorder-rule change requires a new standard recording and E2E run.
+
+Every non-complete result with a response mismatch must include one
+representative failed case:
+
+```text
+case_id, case_path, failed_fields, expected_shape, actual_shape,
+cause, cause_status: proven | unresolved, evidence, exact_missing_link
+```
+
+Use a small set of fields that share one causal path. A generic conclusion
+without this case evidence is not a valid handoff or final decision. Do not
+enumerate every failed case, and do not claim that the representative explains
+other cases without shared difference and code-path evidence. Use
+`exact_missing_link: none` only when the cause is proven.
 
 An unrelated unused dependency must not preempt response diagnosis. Preserve
 all independently evidenced categories so a capability blocker does not hide a
