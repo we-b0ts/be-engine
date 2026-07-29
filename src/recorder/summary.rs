@@ -47,9 +47,15 @@ async fn write_dependency_summary(
     summary_filename: &str,
 ) -> Result<()> {
     let dependencies_path = dir.join(dependencies_filename);
-    let raw = match tokio::fs::read_to_string(&dependencies_path).await {
+    let raw = match super::storage::read_to_string(&dependencies_path).await {
         Ok(raw) => raw,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err)
+            if err
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(());
+        }
         Err(err) => {
             return Err(err).with_context(|| {
                 format!(
@@ -64,7 +70,7 @@ async fn write_dependency_summary(
         serde_json::to_vec_pretty(&summary).context("failed to serialize dependency summary")?;
     payload.push(b'\n');
     let summary_path = dir.join(summary_filename);
-    tokio::fs::write(&summary_path, payload)
+    super::storage::write(&summary_path, &payload)
         .await
         .with_context(|| {
             format!(

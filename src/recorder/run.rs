@@ -4,8 +4,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
 use tracing::info;
 use uuid::Uuid;
 
@@ -402,19 +400,9 @@ impl Recorder {
         let mut line =
             serde_json::to_vec(summary).context("failed to serialize recording error summary")?;
         line.push(b'\n');
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
+        super::storage::append(&path, &line)
             .await
-            .with_context(|| format!("failed to open recording errors file {}", path.display()))?;
-        file.write_all(&line)
-            .await
-            .context("failed to append recording error")?;
-        file.flush()
-            .await
-            .context("failed to flush recording error")?;
-        Ok(())
+            .with_context(|| format!("failed to append recording error {}", path.display()))
     }
 
     pub(crate) async fn write_run_report(&self, status: &'static str) -> Result<()> {
@@ -443,7 +431,7 @@ pub(crate) async fn write_pretty_json<T: Serialize>(path: &Path, value: &T) -> R
     }
     let mut payload = serde_json::to_vec_pretty(value).context("failed to serialize JSON file")?;
     payload.push(b'\n');
-    tokio::fs::write(path, payload)
+    super::storage::write(path, &payload)
         .await
         .with_context(|| format!("failed to write JSON file {}", path.display()))
 }
