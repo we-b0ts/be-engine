@@ -31,6 +31,8 @@ pub(super) struct AssertionCaseEvidence {
     #[serde(default)]
     pub(super) classification: Option<String>,
     #[serde(default)]
+    pub(super) matched_source: Option<String>,
+    #[serde(default)]
     pub(super) source_change_pointers: Vec<String>,
     #[serde(default)]
     pub(super) policy_mismatch_rule_ids: Vec<String>,
@@ -51,6 +53,8 @@ pub(super) struct ResponseCaseEvidence {
     applied_unordered_rule_ids: Vec<String>,
     #[serde(default)]
     unordered_candidates: Vec<String>,
+    #[serde(default)]
+    applied_counter_rule_ids: Vec<String>,
 }
 
 impl ResponseCaseEvidence {
@@ -58,6 +62,7 @@ impl ResponseCaseEvidence {
         match kind {
             ResponseRuleKind::Dynamic => &self.dynamic_candidates,
             ResponseRuleKind::Unordered => &self.unordered_candidates,
+            ResponseRuleKind::Counter => &[],
         }
     }
 
@@ -65,6 +70,7 @@ impl ResponseCaseEvidence {
         match kind {
             ResponseRuleKind::Dynamic => &self.applied_dynamic_rule_ids,
             ResponseRuleKind::Unordered => &self.applied_unordered_rule_ids,
+            ResponseRuleKind::Counter => &self.applied_counter_rule_ids,
         }
     }
 }
@@ -107,6 +113,14 @@ pub(super) fn difference_supports_rule(
                 && difference.expected_type.as_deref() == Some("array")
                 && difference.actual_type.as_deref() == Some("array")
         }
+        ResponseRuleKind::Counter => {
+            difference.kind == "value_mismatch"
+                && difference.expected_type == difference.actual_type
+                && difference
+                    .expected_type
+                    .as_deref()
+                    .is_some_and(|kind| matches!(kind, "string" | "number"))
+        }
     }
 }
 
@@ -125,6 +139,11 @@ pub(super) fn response_rule_exists(
             .unordered
             .get(api)
             .is_some_and(|pointers| pointers.iter().any(|candidate| candidate == pointer)),
+        ResponseRuleKind::Counter => rules
+            .comparison
+            .counter
+            .get(api)
+            .is_some_and(|fields| fields.iter().any(|field| field.pointer == pointer)),
     }
 }
 

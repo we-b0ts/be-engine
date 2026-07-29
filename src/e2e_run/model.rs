@@ -115,6 +115,8 @@ pub(super) struct ApiExecution {
     pub method: String,
     pub api_pattern: String,
     pub case_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_mismatch_rule_ids: Vec<String>,
     pub total: u32,
     pub passed: u32,
     pub failed: u32,

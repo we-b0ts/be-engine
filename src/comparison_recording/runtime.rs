@@ -22,13 +22,13 @@ use super::store::{ComparisonRecordingStore, Reservation};
 use super::tasks::BackgroundTasks;
 use super::upstream::{
     LimitedBodyError, ResponseDisposition, UpstreamCapture, UpstreamErrorKind, collect_limited,
-    collect_unlimited, downstream_response, fetch_upstream, request_body_capture, run_ready_probe,
+    downstream_response, fetch_upstream, request_body_capture, run_ready_probe,
 };
 use crate::config::{AppConfig, ComparisonRecordingConfig, HttpGatewayConfig};
 use crate::gateway::http::rules::{
     RuleDecision, evaluate_request, request_authority, resolve_case_group,
 };
-use crate::gateway::http::transport::{GatewayBody, simple_response};
+use crate::gateway::http::transport::{GatewayBody, build_fixed_response, simple_response};
 use crate::recording_api::{RecordingApi, validate_selection};
 use crate::request_headers::RequestHeaderCapture;
 
@@ -330,19 +330,34 @@ async fn handle_request(
         None
     };
 
-    let mirrored = matched.is_some() && permit.is_some();
-    let body_result = if mirrored {
-        collect_limited(
-            request.into_body(),
-            runtime.comparison_recording.max_request_bytes,
-        )
-        .await
-    } else {
-        collect_unlimited(request.into_body()).await
+    let Some(rule) = matched else {
+        return fixed_response(&runtime).await;
     };
+    let Some(permit) = permit else {
+        return fixed_response(&runtime).await;
+    };
+    let group = recording_api_pattern.as_ref().map_or_else(
+        || resolve_case_group(&uri, &rule.case_path_patterns),
+        |pattern| resolve_case_group(&uri, std::slice::from_ref(pattern)),
+    );
+    let limit = runtime.gateway.case_limits.limit_for(&group.pattern);
+    let Some(reservation) = runtime
+        .store
+        .try_reserve(&rule.name, &group.pattern, limit)
+        .await
+    else {
+        return fixed_response(&runtime).await;
+    };
+
+    let body_result = collect_limited(
+        request.into_body(),
+        runtime.comparison_recording.max_request_bytes,
+    )
+    .await;
     let body = match body_result {
         Ok(body) => body,
         Err(LimitedBodyError::TooLarge) => {
+            runtime.store.release(reservation).await;
             runtime
                 .store
                 .summary()
@@ -354,29 +369,15 @@ async fn handle_request(
             );
         }
         Err(LimitedBodyError::Read(error)) => {
+            runtime.store.release(reservation).await;
             return simple_response(StatusCode::BAD_REQUEST, &error.to_string());
         }
     };
 
-    let Some(rule) = matched else {
-        runtime
-            .store
-            .summary()
-            .update(|counts| counts.baseline_only += 1)
-            .await;
-        return forward_baseline(&runtime, &method, &uri, &headers, body).await;
-    };
-    let Some(permit) = permit else {
-        runtime
-            .store
-            .summary()
-            .update(|counts| counts.baseline_only += 1)
-            .await;
-        return forward_baseline(&runtime, &method, &uri, &headers, body).await;
-    };
     let protected_headers = match runtime.request_header_capture.capture(&headers) {
         Ok(headers) => headers,
         Err(error) => {
+            runtime.store.release(reservation).await;
             warn!(error = %error, "failed to protect comparison request headers");
             return simple_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -403,15 +404,6 @@ async fn handle_request(
         )
         .await;
 
-    let group = recording_api_pattern.as_ref().map_or_else(
-        || resolve_case_group(&uri, &rule.case_path_patterns),
-        |pattern| resolve_case_group(&uri, std::slice::from_ref(pattern)),
-    );
-    let limit = runtime.gateway.case_limits.limit_for(&group.pattern);
-    let reservation = runtime
-        .store
-        .try_reserve(&rule.name, &group.pattern, limit)
-        .await;
     let request_record = ComparisonRecordingRequest {
         timestamp: Utc::now(),
         client_addr,
@@ -462,7 +454,7 @@ async fn run_dual(
     group: String,
     pattern: String,
     request: ComparisonRecordingRequest,
-    reservation: Option<Reservation>,
+    reservation: Reservation,
     _permit: OwnedSemaphorePermit,
     baseline_sender: oneshot::Sender<UpstreamCapture>,
 ) {
@@ -529,24 +521,22 @@ async fn run_dual(
                 .and_then(|capture| capture.record.error.clone());
         })
         .await;
-    if let Some(reservation) = reservation {
-        let case = ComparisonRecordingCase {
-            id: Uuid::new_v4(),
-            rule,
-            group,
-            pattern,
-            request,
-            baseline: baseline.record,
-            candidate: candidate.record,
-            baseline_recheck: baseline_recheck.map(|capture| capture.record),
-        };
-        if let Err(error) = runtime.store.publish(&case, reservation).await {
-            warn!(
-                %error,
-                case_id = %case.id,
-                "failed to publish comparison recording case"
-            );
-        }
+    let case = ComparisonRecordingCase {
+        id: Uuid::new_v4(),
+        rule,
+        group,
+        pattern,
+        request,
+        baseline: baseline.record,
+        candidate: candidate.record,
+        baseline_recheck: baseline_recheck.map(|capture| capture.record),
+    };
+    if let Err(error) = runtime.store.publish(&case, reservation).await {
+        warn!(
+            %error,
+            case_id = %case.id,
+            "failed to publish comparison recording case"
+        );
     }
     runtime
         .store
@@ -561,25 +551,19 @@ async fn run_dual(
         .await;
 }
 
-async fn forward_baseline(
-    runtime: &ComparisonRecordingRuntime,
-    method: &Method,
-    uri: &Uri,
-    headers: &HeaderMap,
-    body: Bytes,
-) -> Response<GatewayBody> {
-    let capture = fetch_upstream(
-        runtime,
-        &runtime.baseline_upstream,
-        method,
-        uri,
-        headers,
-        body,
-        ResponseDisposition::Downstream,
+async fn fixed_response(runtime: &ComparisonRecordingRuntime) -> Response<GatewayBody> {
+    runtime
+        .store
+        .summary()
+        .update(|counts| counts.fixed_response += 1)
+        .await;
+    build_fixed_response(
+        runtime
+            .gateway
+            .fixed_response
+            .as_ref()
+            .expect("validated comparison fixed response configuration"),
     )
-    .await;
-    update_upstream_counts(runtime, UpstreamRole::Baseline, &capture).await;
-    downstream_response(&capture)
 }
 
 #[derive(Clone, Copy)]

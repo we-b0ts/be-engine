@@ -9,7 +9,7 @@ use flate2::write::GzEncoder;
 use serde_json::json;
 use tempfile::tempdir;
 use traffic_e2e::{
-    ComparisonVerificationClassification, ComparisonVerificationOptions,
+    ComparisonVerificationClassification, ComparisonVerificationOptions, MatchedSourceObservation,
     verify_comparison_recording,
 };
 
@@ -64,6 +64,129 @@ response_rules:
         1
     );
     assert!(report_path.is_file());
+}
+
+#[test]
+fn applies_explicit_comparison_counter_rules_by_representation_class() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({
+            "followers_count": 100,
+            "followers_count_str": "100",
+            "empty_count_str": ""
+        }),
+        json!({
+            "followers_count": 101,
+            "followers_count_str": "101",
+            "empty_count_str": ""
+        }),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        r#"version: 2
+expected_response: assertions_only
+rules: []
+response_rules:
+  comparison:
+    counter:
+      "GET /api/token":
+        - pointer: /empty_count_str
+          source_evidence: src/user.rs:load live counters
+          source_example: <empty>
+          target_example: <nonempty observation>
+        - pointer: /followers_count
+          source_evidence: src/user.rs:load live counters
+          source_example: "100"
+          target_example: "101"
+        - pointer: /followers_count_str
+          source_evidence: src/user.rs:load live counters
+          source_example: "100"
+          target_example: "101"
+"#,
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(report.passed);
+    assert_eq!(
+        report.cases[0]
+            .response
+            .as_ref()
+            .unwrap()
+            .applied_counter_rule_ids
+            .len(),
+        3
+    );
+}
+
+#[test]
+fn comparison_counter_rules_preserve_type_presence_and_empty_string() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({
+            "followers_count": 100,
+            "followers_count_str": "",
+            "friends_count": 3
+        }),
+        json!({
+            "followers_count": "101",
+            "followers_count_str": "0"
+        }),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        r#"version: 2
+expected_response: assertions_only
+rules: []
+response_rules:
+  comparison:
+    counter:
+      "GET /api/token":
+        - pointer: /followers_count
+          source_evidence: src/user.rs:load live counters
+          source_example: "100"
+          target_example: "101"
+        - pointer: /followers_count_str
+          source_evidence: src/user.rs:load live counters
+          source_example: <empty>
+          target_example: "0"
+        - pointer: /friends_count
+          source_evidence: src/user.rs:load live counters
+          source_example: "3"
+          target_example: <missing>
+"#,
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.passed);
+    let response = report.cases[0].response.as_ref().unwrap();
+    assert_eq!(response.differences.len(), 3);
+    assert_eq!(
+        response
+            .differences
+            .iter()
+            .map(|difference| difference.pointer.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/followers_count", "/followers_count_str", "/friends_count"]
+    );
+    assert!(response.applied_counter_rule_ids.is_empty());
 }
 
 #[test]
@@ -239,6 +362,161 @@ fn classifies_an_overlapping_baseline_change_as_source_change() {
 }
 
 #[test]
+fn source_after_is_not_an_alternate_oracle_by_default() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({"left": "before", "right": "before"}),
+        json!({"left": "after", "right": "after"}),
+    );
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    write_response(
+        &case.join("expected-response-after.json"),
+        json!({"left": "after", "right": "after"}),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(
+        report.cases[0].classification,
+        ComparisonVerificationClassification::SourceChange
+    );
+    assert_eq!(report.cases[0].matched_source, None);
+    assert!(report.cases[0].response_after.is_none());
+}
+
+#[test]
+fn before_or_after_accepts_a_complete_source_after_match() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({"left": "before", "right": "before"}),
+        json!({"left": "after", "right": "after"}),
+    );
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    write_response(
+        &case.join("expected-response-after.json"),
+        json!({"left": "after", "right": "after"}),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(report.complete);
+    assert!(report.passed);
+    assert_eq!(report.counts.passed, 1);
+    assert_eq!(
+        report.cases[0].matched_source,
+        Some(MatchedSourceObservation::After)
+    );
+    assert!(
+        report.cases[0]
+            .response_after
+            .as_ref()
+            .unwrap()
+            .differences
+            .is_empty()
+    );
+}
+
+#[test]
+fn before_or_after_does_not_mix_fields_from_source_observations() {
+    let temp = tempdir().unwrap();
+    let run = create_run(
+        temp.path(),
+        json!({"left": "before", "right": "before"}),
+        json!({"left": "before", "right": "after"}),
+    );
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    write_response(
+        &case.join("expected-response-after.json"),
+        json!({"left": "after", "right": "after"}),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(
+        report.cases[0].classification,
+        ComparisonVerificationClassification::SourceChange
+    );
+    assert_eq!(report.cases[0].matched_source, None);
+    assert_eq!(
+        report.cases[0]
+            .response_after
+            .as_ref()
+            .unwrap()
+            .differences
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn before_or_after_requires_a_source_after_artifact() {
+    let temp = tempdir().unwrap();
+    let body = json!({"value": "stable"});
+    let run = create_run(temp.path(), body.clone(), body);
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.complete);
+    assert!(!report.passed);
+    assert_eq!(report.counts.unevaluable, 1);
+    assert!(
+        report.cases[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("requires expected-response-after.json")
+    );
+}
+
+#[test]
 fn unrelated_source_change_does_not_hide_a_candidate_difference() {
     let temp = tempdir().unwrap();
     let run = create_run(
@@ -312,7 +590,7 @@ fn source_change_is_diagnostic_when_candidate_matches_source_before() {
 }
 
 #[test]
-fn classifies_an_unused_response_rule_as_policy_mismatch() {
+fn classifies_a_rule_unobserved_by_the_entire_api_as_policy_mismatch() {
     let temp = tempdir().unwrap();
     let body = json!({"value": "stable"});
     let run = create_run(temp.path(), body.clone(), body);
@@ -344,10 +622,14 @@ response_rules:
     assert!(!report.passed);
     assert_eq!(
         report.cases[0].classification,
-        ComparisonVerificationClassification::PolicyMismatch
+        ComparisonVerificationClassification::Passed
     );
     assert_eq!(report.counts.policy_mismatch, 1);
-    assert_eq!(report.cases[0].policy_mismatch_rule_ids.len(), 1);
+    assert!(report.cases[0].policy_mismatch_rule_ids.is_empty());
+    assert_eq!(
+        report.apis["GET /api/token"].policy_mismatch_rule_ids.len(),
+        1
+    );
 }
 
 #[test]
@@ -390,7 +672,11 @@ response_rules:
     assert_eq!(report.counts.failed, 1);
     assert_eq!(report.counts.policy_mismatch, 1);
     assert_eq!(report.apis["GET /api/token"].counts.policy_mismatch, 1);
-    assert_eq!(report.cases[0].policy_mismatch_rule_ids.len(), 1);
+    assert!(report.cases[0].policy_mismatch_rule_ids.is_empty());
+    assert_eq!(
+        report.apis["GET /api/token"].policy_mismatch_rule_ids.len(),
+        1
+    );
 }
 
 #[test]

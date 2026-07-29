@@ -49,6 +49,12 @@ with the configured HTTP rules, define the selected cases' API grouping, and
 are recorded in the run summary. Do not edit recorder TOML or create a
 plan/apply step for this temporary scope.
 
+Comparison admission is symmetric. A selected request reaches both source and
+candidate only after readiness, concurrency, and API case-quota admission. A
+request that is unselected, excluded, unmatched, not ready, overloaded, or
+over quota reaches neither service and receives the configured fixed response.
+Never treat source-only forwarding as valid comparison traffic.
+
 Comparison recording accepts only explicitly configured `GET`, `HEAD`, and
 `OPTIONS` rules. A non-read method is a configuration error because forwarding
 one request to both services could duplicate a side effect.
@@ -69,8 +75,10 @@ source before -> candidate -> source after
 ```
 
 The frontend receives the first source response without waiting for the
-candidate or source recheck. The optional recheck increases source traffic and
-is diagnostic evidence, not proof that the source is deterministic.
+candidate or source recheck. The optional recheck increases source traffic,
+runs only for an admitted case, and is diagnostic evidence rather than proof
+that the source is deterministic. Recording the recheck does not by itself
+change comparison acceptance.
 
 ## Artifacts And Command
 
@@ -98,11 +106,28 @@ traffic-e2e compare \
   --policy <target>/.traffic-e2e/verification.yaml
 ```
 
-The command is file-only. It applies only `response_rules`; dependency replay
-rules are ignored. Preserve the generated `comparison-report.json` and the
-policy fingerprint used to produce it. The report groups cases by canonical
-`METHOD + api_pattern` and publishes `apis_total`, `apis_passed`, and
-`apis_failed`; an API passes only when all of its comparison cases pass.
+The command is file-only. It applies the top-level `comparison` behavior and
+`response_rules`; dependency replay rules are ignored. Preserve the generated
+`comparison-report.json` and the policy fingerprint used to produce it. The
+report groups cases by canonical `METHOD + api_pattern` and publishes
+`apis_total`, `apis_passed`, and `apis_failed`; an API passes only when all of
+its comparison cases pass.
+
+The verification policy defaults to the first source observation:
+
+```yaml
+comparison:
+  source_match: before
+```
+
+Use `before_or_after` when normal runtime data may change during one admitted
+comparison and the recording captured a source recheck for every case. The
+candidate then passes only if its complete response matches source-before or
+source-after under all active response rules. The report records
+`matched_source: before|after` and retains the corresponding assertion
+evidence. Never accept a field-by-field mixture of the two source responses.
+If an after artifact is missing, the case is unevaluable. This global
+comparison behavior is not a Pointer rule and does not weaken replay.
 
 ## Required Diagnosis
 
@@ -122,32 +147,48 @@ change code or policy from a scalar mismatch alone.
    case, capture a standard recording and establish a passing replay contract
    before prescribing implementation from comparison artifacts.
 2. **Source change between observations.** `source_change` is an observed
-   comparison condition, not a root cause or exemption. Use it only when every
-   candidate difference is covered by a source-before/source-after difference
-   at the same response location. The report must retain
+   comparison condition, not a root cause or exemption. Under `before`, or
+   when a candidate matches neither permitted observation, use it only when
+   every candidate difference is covered by a source-before/source-after
+   difference at the same response location. The report must retain
    `source_change_pointers`; a source-only change is diagnostic when the
    candidate otherwise matches and does not make the case fail. For a
    classified source change, report one representative case with API, case ID,
-   Pointer, difference kind, redacted source-before/source-after examples, and
-   confirmation that `candidate_only_pointers` is empty. Resolve ownership and
-   timing, then record again in a quiet or snapshot-consistent window or use a
-   domain-specific comparison strategy. Keep the operation `action_required`;
-   do not call it `incomplete`, attribute it to candidate code, or add a
-   blanket exemption.
+   one Pointer, difference kind, concrete bounded source-before, candidate, and
+   source-after values, and confirmation that `candidate_only_pointers` is
+   empty. Types or shapes alone are insufficient. Redact sensitive content
+   while retaining type, length, and a stable digest that proves the values
+   differ. Resolve ownership and timing, then record again in a quiet or
+   snapshot-consistent window or use a domain-specific comparison strategy.
+   Keep the operation `action_required`; do not call it `incomplete`, attribute
+   it to candidate code, or add a blanket exemption.
 3. **Intentional non-determinism.** Only after source review proves that an
    exact scalar is generated from current time, duration, random/UUID/nonce
    behavior, or that an array has no business ordering, use an evidence-backed
-   `dynamic` or `unordered` response rule. Apply it to the shared verification
-   policy, rerun replay E2E for the affected API, and create a new comparison
-   report. Process-local cache state is target behavior, not intentional
-   non-determinism; cache hit, miss, staleness, refresh, warmup, or missing
-   implementation must never be exempted.
+   `dynamic` or `unordered` replay response rule. Rerun replay E2E for the
+   affected API, then create a new comparison report. Process-local cache state
+   is target behavior, not intentional non-determinism; cache hit, miss,
+   staleness, refresh, warmup, or missing implementation must never be
+   exempted.
+4. **Live counters.** A field name, including a `count`-like name, is only a
+   clue. Do not infer counter semantics from naming. After source ownership
+   proves that an exact scalar is a live count whose value may change between
+   valid observations, plan and apply a comparison-only `counter` rule for the
+   exact API and JSON Pointer. Preserve the source path/symbol or equivalent
+   inspected runtime artifact and two differing observations as evidence.
+   Standard replay remains exact. Counter comparison requires the field on both
+   sides; number matches only number, string matches only string, and an empty
+   string matches only another empty string. Null, boolean, arrays, and objects
+   are not counter representations.
 
 Useful interpretation of the optional source recheck:
 
 - no source-after artifact: `candidate_difference` identifies a mismatch but
-  provides no source-stability evidence; inspect source ownership and timing
-  before attributing it;
+  provides no source-stability evidence under `before`; under
+  `before_or_after`, the case is unevaluable;
+- candidate equals source-after as a complete response: pass only when
+  `comparison.source_match` is `before_or_after`, and retain
+  `matched_source: after`;
 - source-before equals source-after, candidate differs: stronger candidate
   difference evidence, but still inspect code and environment;
 - source-before differs from source-after at an unrelated location: retain the
@@ -159,47 +200,42 @@ Useful interpretation of the optional source recheck:
 - source-before equals source-after by chance: still possible for random or
   periodic fields, so source semantics remain required.
 
-An applicable response rule is unused for a comparison case only when neither
-the candidate leg nor the optional source-recheck leg exercises it. One leg
-remaining exact does not make a rule stale when the other leg uses it. A rule
-unused by both legs is `policy_mismatch`, not source change or candidate
-behavior. Preserve this diagnostic alongside any independent candidate
-difference, remove or replace the stale rule through evidence-backed policy
-feedback, rerun affected replay E2E, and create a new comparison recording.
+A route match alone does not make a response rule applicable to every response
+shape. The selected Pointer must resolve in both compared responses. A Pointer
+absent from both sides is unobserved for that case; a one-sided omission
+remains an exact structural difference. One case remaining unobserved does not
+make a rule stale when another case in the same API group exercises it. A rule
+unobserved by the entire API group is a group-level `policy_mismatch`, not
+source change or candidate behavior. Preserve this diagnostic alongside any
+independent candidate difference, remove or replace the stale rule through
+evidence-backed policy feedback, rerun affected replay E2E, and create a new
+comparison recording.
 
 ## Evidence-Backed Policy Feedback
 
-After diagnosis proves an existing supported rule is correct:
+After diagnosis proves a supported strategy, read
+[replay-policy.md](replay-policy.md) and use its evidence-validating
+`plan|apply` contract. It is the authority for rule semantics, evidence fields,
+Pointer applicability, overlap, and configuration shape.
 
-```bash
-traffic-e2e config replay apply response-rule \
-  --target-root <target> \
-  --kind dynamic \
-  --dynamic-mechanism uuid \
-  --source-evidence 'src/token.rs:issue_token UUID generation' \
-  --source-example '<redacted UUID from source>' \
-  --target-example '<redacted UUID from target>' \
-  --api 'GET /api/resource/token' \
-  --json-pointer /content \
-  --comparison-report <comparison-recording-run>/comparison-report.json
-```
-
-Use `--kind unordered` only for a proven order-insensitive array. The operation
-must remain additive, narrow, and backed by the current policy fingerprint.
-Never use response rules for ordinary mutable business data, missing fields,
-wrong types, status differences, dependency/configuration defects,
-process-local cache differences, or broad subtrees. Do not exempt a whole
-scalar containing stable structure when only one component is dynamic.
+Use `config replay ... response-rule` for source-proven `dynamic` or
+`unordered` behavior; a current comparison report may supply its structural
+comparison evidence. Use `config comparison ... response-rule --kind counter`
+only for a source-proven live counter and a current comparison report. Multiple
+Pointers may be submitted together only when the same evidence proves each
+one. After any policy change, rerun replay E2E for the affected API and create
+a new comparison recording.
 
 ## Completion
 
 Comparison verification is complete only when the recording finalized cleanly,
 every published case was evaluated, no case remains classified
 `source_change`, `policy_mismatch`, or `unevaluable`, every affected API and
-candidate comparison passes under the reviewed policy, and the latest
-candidate code still passes the affected replay E2E scope. A source-only change
-recorded as diagnostics does not invalidate an otherwise exact candidate
-match. This comparison report is the validation-success authority. It is
-current evidence, not a permanent API-verified state. After every code or
-policy change, use a new comparison recording; never overwrite or reinterpret
-the old candidate response as fresh evidence.
+candidate comparison passes against one complete permitted source observation
+under the reviewed policy, and the latest candidate code still passes the
+affected replay E2E scope. A source-only change recorded as diagnostics does
+not invalidate an otherwise exact candidate match. This comparison report is
+the validation-success authority. It is current evidence, not a permanent
+API-verified state. After every code or policy change, use a new comparison
+recording; never overwrite or reinterpret the old candidate response as fresh
+evidence.

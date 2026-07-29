@@ -15,7 +15,7 @@ use crate::replay::{
 const CASE_ID: &str = "case-1";
 
 #[test]
-fn validates_shared_verification_policy_example() {
+fn validates_verification_policy_example() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("config")
         .join("verification.example.yaml");
@@ -23,6 +23,31 @@ fn validates_shared_verification_policy_example() {
 
     assert_eq!(report.version, 2);
     assert!(report.runner_owned_response_assertions);
+}
+
+#[test]
+fn validates_comparison_source_match_and_requires_version_two() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("verification.yaml");
+    fs::write(
+        &path,
+        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = validate_replay_policy(&path).unwrap();
+    assert_eq!(
+        report.comparison.source_match,
+        crate::replay::ComparisonSourceMatch::BeforeOrAfter
+    );
+
+    fs::write(
+        &path,
+        "version: 1\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+    )
+    .unwrap();
+    let error = validate_replay_policy(&path).unwrap_err();
+    assert!(format!("{error:#}").contains("requires replay policy version 2"));
 }
 
 #[test]

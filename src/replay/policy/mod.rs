@@ -10,7 +10,10 @@ mod value;
 #[cfg(test)]
 mod tests;
 
-pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
+pub use config::{
+    ComparisonSourceMatch, ComparisonVerificationPolicy, ReplayPolicyValidationReport,
+    validate_replay_policy,
+};
 pub(in crate::replay) use config::{fingerprint, load_replay_policy};
 pub use feedback::{
     ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, DynamicResponseRulePlan,

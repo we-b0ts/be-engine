@@ -10,6 +10,7 @@ response rules.
 - Dependency dynamic rules
 - Dynamic response fields
 - Unordered response arrays
+- Comparison-only response fields
 
 ## Ownership
 
@@ -30,11 +31,28 @@ Use version two when the standard runner owns response assertions:
 ```yaml
 version: 2
 expected_response: assertions_only
+comparison:
+  source_match: before
 rules: []
 response_rules:
   dynamic: {}
   unordered: {}
+  comparison:
+    counter: {}
 ```
+
+Standard replay loads only root `dynamic` and `unordered` rules. Comparison
+loads those replay rules and then adds `comparison` rules. Replay and
+comparison-only rules must select disjoint JSON subtrees; overlapping
+strategies are rejected rather than ordered by precedence.
+
+Top-level `comparison.source_match` is verification behavior, not a response
+rule. `before` is the default. `before_or_after` requires
+`expected-response-after.json` for every comparison case and accepts the
+candidate only when it matches either complete source observation under all
+active response rules. Never combine fields from source-before and
+source-after. Standard replay ignores this setting. Do not create Pointer
+rules merely because the permitted complete source-after response matches.
 
 `traffic-e2e config replay init` validates the initial policy, every
 evidence-driven `apply` validates the resulting policy, and the runner validates
@@ -172,13 +190,17 @@ response_rules:
         target_example: <redacted target UUID>
 ```
 
-The selected field must exist in expected and actual JSON, and both values must
-have the same scalar JSON kind. Only literal equality is skipped. Status, body
-structure, undeclared fields, missing fields, nulls, arrays, and non-JSON bodies
-remain exact. The rule does not validate UUID shape, randomness, timestamps, or
-other generation semantics. Its persisted mechanism, source citation, and
-distinct redacted source/target examples make the decision reviewable but do
-not replace source review, unit tests, or real-traffic integration tests.
+For a response pair, the rule applies only when the selected field exists in
+both expected and actual JSON; both values must have the same scalar JSON kind.
+If both responses omit the Pointer because that API has another response
+shape, the rule is unobserved for that case and does not make the case fail. If
+only one response omits it, the missing field remains an exact structural
+difference. Only literal equality is skipped. Status, body structure,
+undeclared fields, nulls, arrays, and non-JSON bodies remain exact. The rule
+does not validate UUID shape, randomness, timestamps, or other generation
+semantics. Its persisted mechanism, source citation, and distinct redacted
+source/target examples make the decision reviewable but do not replace source
+review, unit tests, or real-traffic integration tests.
 
 On an exact scalar mismatch the assertion report may expose the pointer as a
 diagnostic candidate. That mechanical candidate is not authorization to weaken
@@ -198,11 +220,12 @@ the underlying dynamic input when a digest, signature, or encoding is derived
 from it.
 The command requires the mechanism, a single-line source file/symbol citation,
 and different redacted source and target examples. It writes all four evidence
-fields into the policy beside the selected pointer. Apply exactly one dynamic
-JSON Pointer at a time so the evidence cannot ambiguously cover several
-fields. These declarations make the decision auditable; they do not replace
-source review. The command replans from the current evidence before writing;
-`plan` is available with the same arguments for optional diagnostics:
+fields into the policy beside each selected Pointer. Multiple Pointers may be
+submitted together only when the same evidence proves every selected field;
+otherwise plan and apply them separately. These declarations make the decision
+auditable; they do not replace source review. The command replans from the
+current evidence before writing; `plan` is available with the same arguments
+for optional diagnostics:
 
 ```bash
 traffic-e2e config replay apply response-rule \
@@ -237,10 +260,13 @@ response_rules:
       - /general/sudo_users
 ```
 
-The selected field must exist in both responses and both values must be arrays.
-Comparison preserves length, exact JSON elements, and duplicate counts while
-ignoring only the outer array order. Other response locations remain exact.
-Dynamic and unordered rules cannot overlap the same JSON subtree.
+For a response pair, the rule applies only when the selected field exists in
+both responses and both values are arrays. A Pointer omitted by both response
+shapes is unobserved for that case; a one-sided omission remains an exact
+structural difference. Comparison preserves length, exact JSON elements, and
+duplicate counts while ignoring only the outer array order. Other response
+locations remain exact. Response strategies cannot overlap the same JSON
+subtree.
 
 An exact reorder-only mismatch may expose an `unordered_candidates` diagnostic.
 It does not prove that order is irrelevant. Inspect source behavior, target
@@ -264,7 +290,26 @@ action still requires clean aggregate evidence and rejects undeclared response
 differences. Both reject unsupported differences at a selected location.
 Apply is additive, sorted, and atomic.
 
+## Comparison Counter Fields
+
+`response_rules.comparison.counter` is ignored by standard replay and loaded
+only by comparison verification. Never infer it from a Pointer name. After
+source inspection proves a selected scalar is a live count, use
+`traffic-e2e config comparison plan|apply response-rule --kind counter` with a
+current comparison report, the exact API and Pointer, a source path/symbol or
+equivalent runtime artifact, and two differing observed examples.
+
+The selected Pointer must exist on both sides. Any JSON number matches another
+number. A string matches another string only when both are empty or both are
+nonempty. Number/string changes, one-sided omission, empty/nonempty string
+changes, null, boolean, arrays, and objects remain failures. The report records
+the applied counter rule ID. This comparison relaxation never weakens replay
+E2E, which remains the exact target-behavior gate.
+
 After every policy change, revalidate and rerun the entire affected API group.
-Earlier replay and aggregate artifacts are stale. Completion requires zero
-unused applicable rules and a direct audit proving the expected response and
-dependency recordings did not flow into actual behavior.
+Earlier replay and aggregate artifacts are stale. A response rule may be
+unobserved by one response variant, but it must be exercised by at least one
+case in the affected API group; otherwise the group reports a policy mismatch.
+Completion requires zero unused applicable rules, zero group-level unobserved
+rules, and a direct audit proving the expected response and dependency
+recordings did not flow into actual behavior.

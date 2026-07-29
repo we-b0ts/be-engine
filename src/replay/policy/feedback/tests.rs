@@ -261,7 +261,7 @@ fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
     fs::write(
         &comparison,
         serde_json::to_vec(&json!({
-            "version": 3,
+            "version": 4,
             "kind": "comparison_recording_verification",
             "expected_response": "assertions_only",
             "assertion_mode": "comparison_recording",
@@ -308,6 +308,139 @@ fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
     assert!(plan.report().assertion_report.is_none());
     plan.apply().unwrap();
     assert!(fs::read_to_string(policy).unwrap().contains("/content"));
+}
+
+#[test]
+fn plans_and_applies_comparison_only_counter_fields() {
+    let temp = tempdir().unwrap();
+    let policy = temp.path().join("verification.yaml");
+    let comparison = temp.path().join("comparison-report.json");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+    let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
+    fs::write(
+        &comparison,
+        serde_json::to_vec(&json!({
+            "version": 3,
+            "kind": "comparison_recording_verification",
+            "expected_response": "assertions_only",
+            "assertion_mode": "comparison_recording",
+            "baseline_recheck": "optional_source_consistency",
+            "policy_fingerprint": fingerprint,
+            "complete": true,
+            "cases": [{
+                "case_id": "case-1",
+                "classification": "source_change",
+                "source_change_pointers": ["/followers_count"],
+                "response": {
+                    "method": "GET",
+                    "path": "/api/users/show",
+                    "body_mode": "json_structural",
+                    "differences": [{
+                        "pointer": "/followers_count",
+                        "kind": "value_mismatch",
+                        "expected_type": "number",
+                        "actual_type": "number"
+                    }],
+                }
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let feedback = ComparisonResponseRuleFeedback {
+        policy_path: policy.clone(),
+        kind: ResponseRuleKind::Counter,
+        api: "GET /api/users/show".to_string(),
+        json_pointers: vec!["/followers_count".to_string()],
+        dynamic_mechanisms: vec![],
+        source_evidence: Some("src/user.rs:load live follower count".to_string()),
+        source_example: Some("100".to_string()),
+        target_example: Some("101".to_string()),
+        comparison_report: comparison,
+    };
+
+    let plan = plan_comparison_response_rule(feedback).unwrap();
+
+    assert!(plan.report().changed);
+    assert_eq!(plan.report().kind, ResponseRuleKind::Counter);
+    assert_eq!(
+        plan.report().added_rule_ids,
+        ["response:comparison:counter:GET /api/users/show:/followers_count"]
+    );
+    plan.apply().unwrap();
+    let updated = fs::read_to_string(&policy).unwrap();
+    assert!(updated.contains("comparison:"));
+    assert!(updated.contains("counter:"));
+    assert!(updated.contains("src/user.rs:load live follower count"));
+    validate_replay_policy(&policy).unwrap();
+}
+
+#[test]
+fn a_permitted_source_after_match_does_not_authorize_a_response_rule() {
+    let temp = tempdir().unwrap();
+    let policy = temp.path().join("verification.yaml");
+    let comparison = temp.path().join("comparison-report.json");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\ncomparison:\n  source_match: before_or_after\nrules: []\n",
+    )
+    .unwrap();
+    let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
+    fs::write(
+        &comparison,
+        serde_json::to_vec(&json!({
+            "version": 4,
+            "kind": "comparison_recording_verification",
+            "expected_response": "assertions_only",
+            "assertion_mode": "comparison_recording",
+            "baseline_recheck": "optional_source_consistency",
+            "policy_fingerprint": fingerprint,
+            "complete": true,
+            "cases": [{
+                "case_id": "case-1",
+                "classification": "passed",
+                "matched_source": "after",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/users/show",
+                    "body_mode": "json_structural",
+                    "differences": [{
+                        "pointer": "/followers_count",
+                        "kind": "value_mismatch",
+                        "expected_type": "number",
+                        "actual_type": "number"
+                    }]
+                }
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let feedback = ComparisonResponseRuleFeedback {
+        policy_path: policy,
+        kind: ResponseRuleKind::Counter,
+        api: "GET /api/users/show".to_string(),
+        json_pointers: vec!["/followers_count".to_string()],
+        dynamic_mechanisms: vec![],
+        source_evidence: Some("src/user.rs:load live follower count".to_string()),
+        source_example: Some("100".to_string()),
+        target_example: Some("101".to_string()),
+        comparison_report: comparison,
+    };
+
+    let error = plan_comparison_response_rule(feedback)
+        .err()
+        .expect("source-after match must not authorize a response rule");
+
+    assert!(
+        error
+            .to_string()
+            .contains("already matches the permitted source-after observation")
+    );
 }
 
 #[test]
@@ -441,23 +574,43 @@ fn dynamic_rule_requires_auditable_mechanism_evidence() {
 }
 
 #[test]
-fn dynamic_rule_evidence_cannot_cover_multiple_fields() {
-    let error = plan_response_rule(ResponseRuleFeedback {
-        policy_path: "verification.yaml".into(),
-        kind: ResponseRuleKind::Dynamic,
-        api: "GET /api/resource".to_string(),
-        json_pointers: vec!["/first".to_string(), "/second".to_string()],
-        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
-        source_evidence: Some("src/token.rs:issue_token".to_string()),
-        source_example: Some("<redacted source UUID>".to_string()),
-        target_example: Some("<redacted target UUID>".to_string()),
-        assertion_report: "assertions.json".into(),
-        aggregate_report: "aggregate.json".into(),
-    })
-    .err()
-    .expect("one evidence bundle must not authorize multiple fields");
+fn one_evidence_bundle_can_cover_multiple_dynamic_fields() {
+    let temp = tempdir().unwrap();
+    let mut feedback = write_dynamic_replay_feedback(
+        temp.path(),
+        json!([{
+            "case_id": "case-1",
+            "response": {
+                "method": "GET",
+                "path": "/api/resource/token",
+                "body_mode": "json_structural",
+                "differences": [
+                    {
+                        "pointer": "/first",
+                        "kind": "value_mismatch",
+                        "expected_type": "string",
+                        "actual_type": "string"
+                    },
+                    {
+                        "pointer": "/second",
+                        "kind": "value_mismatch",
+                        "expected_type": "string",
+                        "actual_type": "string"
+                    }
+                ],
+                "dynamic_candidates": ["/first", "/second"]
+            }
+        }]),
+        json!(["case-1"]),
+        true,
+        false,
+    );
+    feedback.json_pointers = vec!["/first".to_string(), "/second".to_string()];
 
-    assert!(error.to_string().contains("exactly one --json-pointer"));
+    let plan = plan_response_rule(feedback).unwrap();
+
+    assert_eq!(plan.report().json_pointers, ["/first", "/second"]);
+    assert_eq!(plan.report().added_rule_ids.len(), 2);
 }
 
 #[test]
@@ -465,6 +618,7 @@ fn source_change_can_block_only_an_overlapping_response_rule() {
     let case = AssertionCaseEvidence {
         case_id: "case-1".to_string(),
         classification: Some("candidate_difference".to_string()),
+        matched_source: None,
         source_change_pointers: vec!["/profile/avatar".to_string()],
         policy_mismatch_rule_ids: Vec::new(),
         response: None,

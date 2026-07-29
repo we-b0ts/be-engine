@@ -129,7 +129,9 @@ must fail before startup for every other method. Keep
 `comparison_recording.baseline_recheck = false` during initialization. A later
 verification run may explicitly pass `--baseline-recheck` to capture
 source-before, candidate, and source-after in that order when source-time drift
-evidence is needed.
+evidence is needed. The initialized verification policy independently defaults
+`comparison.source_match` to `before`; a later traffic verification task may
+select `before_or_after`, which requires the recheck artifact for every case.
 
 ## Offline Verification
 
@@ -142,13 +144,15 @@ traffic-e2e compare \
 ```
 
 This command is file-only and must not enable isolation. It writes
-`comparison-report.json` by default and reuses only the shared verification
+`comparison-report.json` by default and reuses only the target verification
 policy's response rules. A changed optional source recheck is reported as
 `source_change` only for candidate differences at the same response location;
 unrelated candidate differences remain candidate behavior. Source change is
 inconclusive evidence, not a cause or exemption. Use `--comparison-report` with
 `traffic-e2e config replay plan|apply response-rule` when reviewed online
 evidence proves that another dynamic or unordered field should be exempted.
+Use `traffic-e2e config comparison plan|apply response-rule` only for a
+source-proven comparison-only strategy.
 
 ## Validation
 

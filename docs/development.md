@@ -80,8 +80,8 @@ assigns only the exact run tree back to the invoking host user.
 
 Use `traffic-e2e config ... init` for one-time target configuration and
 `traffic-e2e prepare|run-api|run|status|recover|abort` for the standard
-workflow. Use `traffic-e2e config recorder|replay plan|apply` for
-evidence-driven managed changes. Use `traffic-e2e diagnose ...` only for
+workflow. Use `traffic-e2e config recorder|replay|comparison plan|apply` for
+evidence-driven managed rule changes. Use `traffic-e2e diagnose ...` only for
 recorder development or focused low-level diagnosis. Managed record, replay,
 target isolation, and host interception are implemented in the Rust binary.
 Repository scripts are development checks or explicit host trust-store tools
@@ -143,17 +143,38 @@ Explicit named HTTP gateway rules and methods are required. Only GET, HEAD, and
 OPTIONS may be mirrored. Any configured POST, PUT, PATCH, DELETE, or other
 non-read method fails configuration validation before the listener starts, so
 comparison recording cannot duplicate a write across both upstreams. Reaching
-an API case limit suppresses later case files for that API but does not stop
-mirroring.
+an API case limit stops later requests for that API from reaching either
+upstream.
+
+Comparison recording requires
+`http_gateway.fallback_mode = "fixed_response"`. A request is admitted only
+when it is selected, both upstreams are ready, a concurrency slot is available,
+and its API still has case quota. An admitted request reaches both source and
+candidate and creates one case. A request that is unselected, excluded,
+unmatched, not ready, overloaded, or over quota reaches neither upstream and
+receives the configured fixed response. The runtime never intentionally
+forwards comparison traffic only to the source.
 
 By default the source baseline is requested once. Set
 `[comparison_recording].baseline_recheck = true` to capture the same read-only
 request in strict source-before, candidate, source-after order. The frontend
 still receives the first source response without waiting for the later
 captures. The recheck adds `expected-response-after.json` and is diagnostic
-evidence for source-time drift; it is not automatic proof that a candidate
-difference is safe to ignore. Use the enable-only `--baseline-recheck` flag for
-one run without changing the source-controlled default.
+evidence for source-time drift by default. It runs only for admitted cases.
+Use the enable-only `--baseline-recheck` flag for one run without changing the
+source-controlled default.
+
+The verification policy separately controls source-observation acceptance:
+
+```yaml
+comparison:
+  source_match: before_or_after
+```
+
+The default is `before`. `before_or_after` requires a source recheck for every
+case and passes only when the candidate matches one complete source response
+under the active response rules. It never combines fields from source-before
+and source-after. Standard replay ignores this setting.
 
 Comparison recording artifacts carry `case-kind.json` with
 `kind = comparison_recording` and are not replay inputs. `prepare`, case
@@ -195,14 +216,17 @@ traffic-e2e compare \
 ```
 
 The command writes `comparison-report.json` in the run directory by default
-and exits non-zero when a response differs, source-before/source-after drift
-makes a case inconclusive, or a case cannot be evaluated. Only
+and exits non-zero when a response differs from every permitted source
+observation, source-before/source-after drift makes a case inconclusive, or a
+case cannot be evaluated. The top-level `comparison` behavior and
 `response_rules` from `verification.yaml` participate in this phase; dependency
-matching rules remain replay-only. The report groups cases by the recorded
+matching rules remain replay-only. Comparison applies both replay response
+rules and rules nested under `response_rules.comparison`. The report records
+`matched_source` for a passing case and groups cases by the recorded
 `METHOD + api_pattern`; `apis_passed` is the current validation-success count,
 while E2E progress uses only replay `passed` wording. Dynamic and unordered
-candidates in the report can be fed back through the existing response-rule
-workflow:
+candidates, plus source-proven live counters, can be fed back through the
+evidence-validating response-rule workflow:
 
 ```bash
 traffic-e2e config replay plan response-rule \
@@ -225,8 +249,15 @@ source recheck plus a candidate mismatch is stronger implementation-defect
 evidence. A changed source recheck is `source_change` only for candidate
 differences at the same response location; unrelated candidate differences
 remain target behavior. Ordinary mutable business data must be re-recorded in
-a quieter or snapshot-consistent window, not exempted. Only source-proven current-time/random scalar fields or
-order-insensitive arrays may use the shared dynamic/unordered rules.
+a quieter or snapshot-consistent window, not exempted. Only source-proven
+current-time/random scalar fields or order-insensitive arrays may use replay
+dynamic/unordered rules. A live count may use
+`config comparison ... --kind counter` only with exact API/Pointer,
+comparison-report evidence, source ownership evidence, and two different
+observations. The resulting `response_rules.comparison.counter` rule checks
+presence and representation class only during comparison; standard replay
+remains exact. Number matches only number, string matches only string, and an
+empty string does not match a nonempty string.
 
 Run the service with:
 

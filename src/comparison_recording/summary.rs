@@ -19,6 +19,7 @@ pub(super) struct ComparisonRecordingCounts {
     pub(super) overloaded: usize,
     pub(super) request_too_large: usize,
     pub(super) baseline_only: usize,
+    pub(super) fixed_response: usize,
     pub(super) dual_dispatched: usize,
     pub(super) dual_completed: usize,
     pub(super) baseline_success: usize,

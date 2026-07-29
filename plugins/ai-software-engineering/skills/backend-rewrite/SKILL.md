@@ -15,6 +15,10 @@ evidence, and advance only on current proof.
   Preserve responses, dependency roles, side effects, ordering, error
   semantics, metrics, configuration provenance, and lifecycle behavior unless
   the user approves a contract change.
+- Treat the source configuration interface as an operational compatibility
+  contract. Make target startup consume the same authoritative configuration
+  and preserve its externally supplied formats, keys, parsing semantics,
+  defaults, precedence, validation, and behavior-relevant reload behavior.
 - Treat the source repository and source application implementation as
   immutable evidence. Never edit source code, replace source classes through a
   recording adapter, patch source artifacts, or change source business
@@ -71,6 +75,12 @@ defines discovery and resume behavior, PR-base resolution, initialization,
 case acquisition, target-code delegation, runtime evidence, E2E/comparison
 loops, delivery, and the final decision record.
 
+Read
+[configuration-compatibility.md](references/configuration-compatibility.md)
+before implementing or accepting target configuration loading and startup. It
+defines how to discover the source configuration contract, load it compatibly,
+and verify target startup with it.
+
 For a remote task-service IPv4 source, also read
 [remote-case-source.md](references/remote-case-source.md) before network
 access. Freeze one snapshot and materialize at most one oldest unprocessed
@@ -109,19 +119,14 @@ Response compatibility is the primary repair loop:
    and response independence.
 7. A recorder-rule change requires a new standard recording and E2E run.
 
-Every non-complete result with a response mismatch must include one
-representative failed case:
-
-```text
-case_id, case_path, failed_fields, expected_shape, actual_shape,
-cause, cause_status: proven | unresolved, evidence, exact_missing_link
-```
-
-Use a small set of fields that share one causal path. A generic conclusion
-without this case evidence is not a valid handoff or final decision. Do not
-enumerate every failed case, and do not claim that the representative explains
-other cases without shared difference and code-path evidence. Use
-`exact_missing_link: none` only when the cause is proven.
+Every non-complete result with a response mismatch must begin with the
+traffic-e2e handoff model exactly as defined; do not rename or omit its keys,
+and do not define a backend-rewrite variant. A generic conclusion without its
+one real case, one Pointer, concrete source/candidate observations, and
+diagnosis is not a valid handoff or final decision. Do not enumerate every
+failed case, and do not claim that the representative explains other cases
+without shared difference and code-path evidence. Delivery fields never
+determine verification status.
 
 An unrelated unused dependency must not preempt response diagnosis. Preserve
 all independently evidenced categories so a capability blocker does not hide a

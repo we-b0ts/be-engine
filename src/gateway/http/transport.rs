@@ -87,7 +87,7 @@ pub(crate) fn simple_response(status: StatusCode, body: &str) -> Response<Gatewa
         .expect("valid static response")
 }
 
-pub(super) fn build_fixed_response(
+pub(crate) fn build_fixed_response(
     config: &HttpGatewayFixedResponseConfig,
 ) -> Response<GatewayBody> {
     let mut builder = Response::builder().status(config.status);

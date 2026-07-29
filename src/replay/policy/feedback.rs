@@ -19,8 +19,8 @@ use super::pattern::path_pattern_matches;
 #[cfg(test)]
 use super::response::DynamicResponseMechanism;
 use super::response::{
-    DynamicResponseRule, ResponseRuleKind, parse_api, response_locations_overlap, response_rule_id,
-    validate_json_pointer,
+    CounterResponseRule, DynamicResponseRule, ResponseRuleKind, parse_api,
+    response_locations_overlap, response_rule_id, validate_json_pointer,
 };
 use crate::config::edit::write_atomic;
 
@@ -67,8 +67,8 @@ impl ResponseRulePlan {
 
 pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRulePlan> {
     ensure!(
-        feedback.kind != ResponseRuleKind::Dynamic || feedback.json_pointers.len() == 1,
-        "dynamic response rule evidence applies to exactly one --json-pointer"
+        feedback.kind != ResponseRuleKind::Counter,
+        "counter response rules require `config comparison` and --comparison-report"
     );
     let justification = justification::validate(
         feedback.kind,
@@ -149,10 +149,6 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
 pub fn plan_comparison_response_rule(
     feedback: ComparisonResponseRuleFeedback,
 ) -> Result<ResponseRulePlan> {
-    ensure!(
-        feedback.kind != ResponseRuleKind::Dynamic || feedback.json_pointers.len() == 1,
-        "dynamic response rule evidence applies to exactly one --json-pointer"
-    );
     let justification = justification::validate(
         feedback.kind,
         feedback.dynamic_mechanisms,
@@ -169,7 +165,7 @@ pub fn plan_comparison_response_rule(
     let comparison: ComparisonEvidence =
         serde_json::from_slice(&comparison_bytes).context("invalid comparison report")?;
     ensure!(
-        comparison.version == 3
+        matches!(comparison.version, 3 | 4)
             && comparison.kind == "comparison_recording_verification"
             && comparison.expected_response == "assertions_only"
             && comparison.assertion_mode == "comparison_recording"
@@ -307,15 +303,22 @@ fn validate_response_evidence(
     let mut unselected_difference_pointers = BTreeSet::new();
     for (case, response) in &matching {
         ensure!(
+            case.matched_source.as_deref() != Some("after") || response.differences.is_empty(),
+            "case {:?} already matches the permitted source-after observation",
+            case.case_id
+        );
+        ensure!(
             case.policy_mismatch_rule_ids.is_empty(),
             "case {:?} has unused applicable response rules",
             case.case_id
         );
-        ensure!(
-            !source_change_overlaps(case, &prepared.requested),
-            "case {:?} has source changes overlapping the proposed response rule",
-            case.case_id
-        );
+        if kind != ResponseRuleKind::Counter {
+            ensure!(
+                !source_change_overlaps(case, &prepared.requested),
+                "case {:?} has source changes overlapping the proposed response rule",
+                case.case_id
+            );
+        }
         ensure!(
             response.body_mode == "json_structural",
             "response rules require structural JSON assertion evidence"
@@ -335,7 +338,7 @@ fn validate_response_evidence(
                 );
                 observed_difference = true;
                 case_has_selected_difference = true;
-            } else if kind == ResponseRuleKind::Dynamic {
+            } else if matches!(kind, ResponseRuleKind::Dynamic | ResponseRuleKind::Counter) {
                 unselected_difference_pointers.insert(difference.pointer.clone());
             } else {
                 anyhow::bail!(
@@ -357,6 +360,7 @@ fn validate_response_evidence(
                         .applied_rule_ids(kind)
                         .contains(&response_rule_id(kind, api, pointer))
                     || (kind == ResponseRuleKind::Dynamic && !has_overlapping_difference)
+                    || (kind == ResponseRuleKind::Counter && has_overlapping_difference)
                     || response.differences.is_empty(),
                 "case {:?} does not provide {:?} evidence for {}",
                 case.case_id,
@@ -410,6 +414,14 @@ fn build_response_rule_plan(
             .flatten()
             .cloned()
             .collect::<BTreeSet<_>>(),
+        ResponseRuleKind::Counter => updated_rules
+            .comparison
+            .counter
+            .get(&api)
+            .into_iter()
+            .flatten()
+            .map(|field| field.pointer.clone())
+            .collect::<BTreeSet<_>>(),
     };
     match kind {
         ResponseRuleKind::Dynamic => {
@@ -444,6 +456,36 @@ fn build_response_rule_plan(
             fields.extend(prepared.requested.iter().cloned());
             fields.sort();
             fields.dedup();
+        }
+        ResponseRuleKind::Counter => {
+            let fields = updated_rules
+                .comparison
+                .counter
+                .entry(api.clone())
+                .or_default();
+            for pointer in &prepared.requested {
+                let proposed = CounterResponseRule {
+                    pointer: pointer.clone(),
+                    source_evidence: justification
+                        .source_evidence
+                        .clone()
+                        .expect("counter justification requires source evidence"),
+                    source_example: justification
+                        .source_example
+                        .clone()
+                        .expect("counter justification requires a source example"),
+                    target_example: justification
+                        .target_example
+                        .clone()
+                        .expect("counter justification requires a target example"),
+                };
+                if let Some(existing) = fields.iter_mut().find(|field| field.pointer == *pointer) {
+                    *existing = proposed;
+                } else {
+                    fields.push(proposed);
+                }
+            }
+            fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
         }
     }
     let added = prepared

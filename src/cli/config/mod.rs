@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 
+mod comparison;
 mod project;
 mod recorder;
 mod replay;
@@ -20,8 +21,10 @@ pub(super) struct ConfigArgs {
 enum ConfigCommand {
     /// Create or update .traffic-e2e/recorder.toml.
     Recorder(recorder::RecorderArgs),
-    /// Create or update .traffic-e2e/verification.yaml.
+    /// Configure dependency replay and response rules inherited by comparison.
     Replay(replay::ReplayArgs),
+    /// Configure additional comparison-only response rules.
+    Comparison(comparison::ComparisonArgs),
     /// Create .traffic-e2e/project.yaml from repository conventions.
     Project(project::ProjectArgs),
 }
@@ -30,6 +33,7 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
     match args.command {
         ConfigCommand::Recorder(command) => recorder::run(args.target_root, command),
         ConfigCommand::Replay(command) => replay::run(args.target_root, command),
+        ConfigCommand::Comparison(command) => comparison::run(args.target_root, command),
         ConfigCommand::Project(command) => project::run(args.target_root, command),
     }
 }
