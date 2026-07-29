@@ -135,8 +135,8 @@ bash -n scripts/brz-no-fallback.sh
 bash -n scripts/start-recording
 bash -n scripts/start-recording-comparison
 bash -n scripts/<project>-cli
-./scripts/start-recording --duration-seconds 1
-./scripts/start-recording-comparison --duration-seconds 1
+./scripts/start-recording --duration-seconds 1 --case-limit 1
+./scripts/start-recording-comparison --duration-seconds 1 --case-limit 1
 ```
 
 Run the two bounded recording commands with a valid, unlogged

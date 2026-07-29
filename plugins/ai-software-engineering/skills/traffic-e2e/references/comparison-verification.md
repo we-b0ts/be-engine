@@ -50,6 +50,10 @@ with the configured HTTP rules, define the selected cases' API grouping, and
 are recorded in the run summary. Do not edit recorder TOML or create a
 plan/apply step for this temporary scope.
 
+Use a positive `--case-limit N` when every resolved API or static path in this
+comparison run needs the same limit. It overrides the configured default and
+all pattern-specific limits in memory and does not edit recorder TOML.
+
 Comparison admission is symmetric. A selected request reaches both source and
 candidate only after readiness, concurrency, and API case-quota admission. A
 request that is unselected, excluded, unmatched, not ready, overloaded, or

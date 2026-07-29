@@ -96,7 +96,8 @@ traffic-e2e record-comparison --config config/recorder.example.toml
 traffic-e2e record-comparison \
   --config config/recorder.example.toml \
   --duration-seconds 60 \
-  --api 'GET /api/widgets/*'
+  --api 'GET /api/widgets/*' \
+  --case-limit 250
 traffic-e2e record-comparison \
   --config config/recorder.example.toml \
   --baseline-recheck
@@ -371,6 +372,11 @@ Dynamic override keys must already exist in a recording rule's
 later matching requests use the configured fallback strategy without creating
 a case. Failed cases do not consume the limit, and restarting Recorder starts
 a new run with fresh counts.
+
+`record` and `record-comparison` accept a positive `--case-limit N` for one
+run. When present, it replaces both the configured default and every
+pattern-specific override in memory, so every resolved API or static path uses
+`N`; it never rewrites the recorder TOML.
 
 After an upstream HTTP response completes, Recorder continues accepting new
 case dependencies for the fixed
@@ -733,7 +739,8 @@ selectors are run-local and intersect the configured HTTP rules. They are
 persisted in the run summary and used as the selected cases' `api_pattern`, but
 never rewrite
 `.traffic-e2e/recorder.toml`; no plan/apply workflow is needed for a temporary
-recording scope.
+recording scope. Use `--case-limit N` when the same positive run-local case
+limit must apply to every selected API.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup

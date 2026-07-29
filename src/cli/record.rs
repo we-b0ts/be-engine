@@ -1,6 +1,7 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -29,6 +30,9 @@ pub(super) struct RecordArgs {
     /// Record only this API for the current run; repeat for multiple METHOD/path selectors.
     #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
     apis: Vec<RecordingApi>,
+    /// Override the case limit for every API in this run.
+    #[arg(long, value_name = "N")]
+    case_limit: Option<NonZeroUsize>,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -51,6 +55,9 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
         );
     }
     let mut config = AppConfig::load(&args.config)?;
+    if let Some(case_limit) = args.case_limit {
+        config.override_case_limits_for_run(case_limit);
+    }
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
     let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
@@ -410,6 +417,19 @@ mod tests {
                 "get /api/users",
             ])
             .is_err()
+        );
+    }
+
+    #[test]
+    fn accepts_only_positive_runtime_case_limits() {
+        let cli =
+            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--case-limit", "250"])
+                .unwrap();
+
+        assert_eq!(cli.record.case_limit.map(NonZeroUsize::get), Some(250));
+        assert!(
+            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--case-limit", "0",])
+                .is_err()
         );
     }
 

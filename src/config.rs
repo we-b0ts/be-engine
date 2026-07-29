@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -283,6 +284,10 @@ impl AppConfig {
             .as_ref()
             .map(|artifacts| artifacts.root_dir.join("comparison-recordings"))
             .unwrap_or_else(|| self.recording.output_dir.join("comparison-recordings"))
+    }
+
+    pub fn override_case_limits_for_run(&mut self, limit: NonZeroUsize) {
+        self.http_gateway.case_limits.override_for_run(limit);
     }
 
     fn validate_artifacts(&self) -> Result<()> {
