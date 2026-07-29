@@ -8,6 +8,7 @@ against frontend traffic; it does not replace replay evidence.
 
 - Runtime boundary
 - Artifacts and command
+- Repaired case coverage
 - Required diagnosis
 - Evidence-backed policy feedback
 - Completion
@@ -130,6 +131,48 @@ evidence. Never accept a field-by-field mixture of the two source responses.
 If an after artifact is missing, the case is unevaluable. This global
 comparison behavior is not a Pointer rule and does not weaken replay.
 
+## Repaired Case Coverage
+
+When a concrete recorded case directly caused a target repair, carry its
+immutable case source and ID, canonical API, repaired response locations and
+cause, passing post-repair E2E report, and the smallest source-proven request
+and source-response facts that recognize it in new traffic. API route alone
+and the candidate response cannot establish observation. This evidence is not
+a recorder selector or response rule; do not synthesize traffic or edit
+recording scope.
+
+After the repaired case passes E2E, execute exactly one new comparison
+recording using the configured duration. A recording that fails readiness,
+capture, finalization, or evaluation is not the bounded observation; return
+`action_required`, repair that failure, and obtain one valid recording.
+
+For the first valid recording:
+
+- when the repaired case is observed and passes, continue normal completion;
+- when it is observed and does not pass, diagnose the current difference;
+- when it is not observed, stop with
+  `inconclusive/repaired_case_not_observed`.
+
+Do not start another standard recording or comparison automatically after a
+valid zero-observation result. Preserve other comparison evidence and return:
+
+```text
+status: inconclusive
+reason: repaired_case_not_observed
+repaired_case: <immutable case source>#<case id>
+repaired_locations: <bounded JSON Pointer list>
+post_repair_e2e: <report path or run identity>
+comparison_run: <run identity>
+comparison_cases_evaluated: <integer>
+repaired_case_observations: 0
+resume_stage: comparison
+```
+
+This result is terminal for the current operation but is not validation
+success. If code, policy, configuration, and the passing E2E evidence remain
+unchanged, a later requested resume starts from a new comparison rather than
+repeating standard recording or E2E.
+
 ## Required Diagnosis
 
 Classify every non-passing case from artifacts and source ownership. Never
@@ -196,7 +239,7 @@ Useful interpretation of the optional source recheck:
   candidate-only difference and diagnose target behavior;
 - source-before differs from source-after at every candidate-difference
   location: field-scoped `source_change`, still not a cause or exemption;
-- all three differ at the same location: keep the field inconclusive until
+- all three differ at the same location: keep the field unresolved until
   ownership and mechanism are proven;
 - source-before equals source-after by chance: still possible for random or
   periodic fields, so source semantics remain required.
@@ -233,10 +276,11 @@ Comparison verification is complete only when the recording finalized cleanly,
 every published case was evaluated, no case remains classified
 `source_change`, `policy_mismatch`, or `unevaluable`, every affected API and
 candidate comparison passes against one complete permitted source observation
-under the reviewed policy, and the latest candidate code still passes the
-affected replay E2E scope. A source-only change recorded as diagnostics does
-not invalidate an otherwise exact candidate match. This comparison report is
-the validation-success authority. It is current evidence, not a permanent
+under the reviewed policy, every repaired case requiring current live
+comparison coverage was observed, and the latest candidate code still passes
+the affected replay E2E scope. A source-only change recorded as diagnostics
+does not invalidate an otherwise exact candidate match. This comparison report
+is the validation-success authority. It is current evidence, not a permanent
 API-verified state. After every code or policy change, use a new comparison
 recording; never overwrite or reinterpret the old candidate response as fresh
 evidence.

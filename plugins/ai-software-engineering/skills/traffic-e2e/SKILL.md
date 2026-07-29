@@ -41,7 +41,7 @@ assertion is non-passing, begin the handoff with this model and fill every
 applicable key; do not replace it with prose:
 
 ```text
-status: passed | action_required | incomplete | blocked
+status: passed | action_required | incomplete | inconclusive | blocked
 stage: <current stage>
 scope: <canonical API or capability>
 
@@ -87,6 +87,10 @@ response passes, omit `representative_case`.
 Use `action_required` while response or other repairable behavior remains.
 Use `incomplete` only when all selected response assertions pass but dirty
 dependency evidence remains and no source-proven rule can be safely applied.
+Use `inconclusive` only when the first valid comparison after an evidenced
+target repair does not observe the repaired case, while that same immutable
+case has current passing E2E evidence. End the current operation without
+automatically recording again and use the comparison reference's handoff.
 Use `blocked` only when response-driving external-system information was not
 recorded or provided and the missing information prevents target behavior from
 being implemented.
@@ -108,7 +112,7 @@ Use stable evidence categories:
 target_behavior, target_environment, background_dependency,
 recording_configuration, recording_no_traffic, recorder_capability_gap,
 replay_capability_gap, verification_policy, intentional_nondeterminism,
-source_change, unresolved
+source_change, repaired_case_not_observed, unresolved
 ```
 
 ## Mandatory Sequence
@@ -213,5 +217,7 @@ target workaround or alter the source to manufacture the missing evidence.
 
 Repeated failures without capability proof remain `action_required`, not
 `blocked`. Use `incomplete` only for response-passing dirty evidence without a
-safe source-proven rule. Never invent requests, responses, dependency values,
-side effects, routes, or completion artifacts.
+safe source-proven rule. A valid comparison that does not observe a repaired
+case follows the comparison reference and terminates as `inconclusive`; it is
+not a retry signal. Never invent requests, responses, dependency values, side
+effects, routes, or completion artifacts.

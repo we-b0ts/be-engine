@@ -173,6 +173,14 @@ next state.
 7. After every code or policy change, pass affected E2E again and create a new
    comparison recording. Never reinterpret an older report for changed code.
 
+When one concrete recorded case directly causes a target repair, retain its
+immutable case source, case ID, repaired response locations, proven cause, and
+distinguishing evidence. After that case passes E2E, follow traffic-e2e's
+repaired-case coverage procedure for one valid fresh comparison. If it does not
+observe the repaired case, stop with
+`inconclusive/repaired_case_not_observed`; do not record again automatically.
+An invalid comparison does not consume this bounded observation.
+
 ## Route Non-Passing Evidence
 
 - `target_behavior`: delegate target code, then rerun E2E against the same
@@ -204,6 +212,10 @@ next state.
 - `source_change`: require source-before/source-after change at the same
   response location; preserve unrelated candidate-only fields as
   `target_behavior`.
+- `repaired_case_not_observed`: preserve the passing repaired-case E2E and
+  valid comparison evidence, return `inconclusive`, and resume at comparison
+  only when requested; do not change code or policy and do not record again
+  automatically.
 - `verification_policy`: remove or replace stale and unsupported response rules
   through the evidence-validating interface, rerun E2E, then create a new
   comparison recording.
@@ -260,6 +272,11 @@ provenance remains unresolved, report the last proven link, the specific
 missing evidence, and the repository path, packaged symbol, configuration key,
 runtime path, or resource already checked. Never summarize these states as
 “insufficient source-code evidence” or “drift”.
+
+For `inconclusive`, omit a fabricated comparison difference. Report the
+original repaired case source and ID, repaired response locations and cause,
+its passing post-repair E2E report, the valid comparison run and evaluated case
+count, zero repaired-case observations, and `resume_stage: compare`.
 
 Then report dependency cleanliness, independent blockers, delivery, status,
 scope, stage, conclusion, exact E2E/comparison reports, and a next TODO with
