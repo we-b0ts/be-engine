@@ -42,12 +42,12 @@ Use:
 /data1/breeze/socks
 ```
 
-The descriptor directory, `/data1/breeze/snapshot`, and
-`/data1/breeze/logs` are fixed runtime directories shared by independent
-application, SDK, and Breeze service processes. They are live topology and
-state, not application configuration. Every producer and consumer must use
-them in place; never copy, mirror, cache, relocate, or stage them into a
-project-local directory.
+This fixed descriptor directory and `/data1/breeze/snapshot` are shared by
+independent application, SDK, and Breeze service processes. The descriptor
+directory is live registration state and the snapshot directory is shared
+discovery input; neither is application configuration. Every producer and
+consumer must use them in place; never copy, mirror, cache, relocate, or stage
+them into a project-local directory.
 
 An application or service startup lifecycle may clear registered executor or
 descriptor entries and reconstruct them before readiness. A copied directory
