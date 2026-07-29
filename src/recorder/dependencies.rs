@@ -64,9 +64,15 @@ impl Recorder {
         self.writer
             .flush_case(path.parent().expect("case dependency has a parent"))
             .await?;
-        let raw = match tokio::fs::read_to_string(&path).await {
+        let raw = match super::storage::read_to_string(&path).await {
             Ok(raw) => raw,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err)
+                if err
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|err| err.kind() == std::io::ErrorKind::NotFound) =>
+            {
+                return Ok(None);
+            }
             Err(err) => {
                 return Err(err).with_context(|| {
                     format!("failed to inspect case dependencies {}", path.display())

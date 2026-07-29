@@ -16,6 +16,8 @@ pub(super) struct BufferedJsonlWriter {
     writer: BufWriter<File>,
     flush_interval: Duration,
     last_flush: Instant,
+    evicted_until: u64,
+    dirty: bool,
 }
 
 impl BufferedJsonlWriter {
@@ -35,6 +37,8 @@ impl BufferedJsonlWriter {
             writer: BufWriter::with_capacity(settings.capacity, file),
             flush_interval: settings.flush_interval,
             last_flush: Instant::now(),
+            evicted_until: 0,
+            dirty: false,
         })
     }
 
@@ -43,6 +47,7 @@ impl BufferedJsonlWriter {
             .write_all(line)
             .await
             .context("failed to append JSONL record")?;
+        self.dirty = true;
         if self.last_flush.elapsed() >= self.flush_interval {
             self.flush().await?;
         }
@@ -50,10 +55,17 @@ impl BufferedJsonlWriter {
     }
 
     pub(super) async fn flush(&mut self) -> Result<()> {
+        if !self.dirty {
+            self.last_flush = Instant::now();
+            return Ok(());
+        }
         self.writer
             .flush()
             .await
             .context("failed to flush JSONL records")?;
+        self.evicted_until =
+            super::storage::flush_and_evict(self.writer.get_mut(), self.evicted_until).await?;
+        self.dirty = false;
         self.last_flush = Instant::now();
         Ok(())
     }
@@ -140,9 +152,11 @@ mod tests {
         let mut writer = BufferedJsonlWriter::open(&path, settings()).await.unwrap();
 
         writer.append(b"{\"event\":1}\n").await.unwrap();
+        assert!(writer.dirty);
         assert_eq!(tokio::fs::read(&path).await.unwrap(), b"");
 
         writer.flush().await.unwrap();
+        assert!(!writer.dirty);
         assert_eq!(tokio::fs::read(&path).await.unwrap(), b"{\"event\":1}\n");
     }
 
