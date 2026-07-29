@@ -19,6 +19,9 @@ evidence, and advance only on current proof.
   contract. Make target startup consume the same authoritative configuration
   and preserve its externally supplied formats, keys, parsing semantics,
   defaults, precedence, validation, and behavior-relevant reload behavior.
+  Whenever source startup uses configuration files or directories, trace the
+  loader from the source runtime and implement compatible target
+  initialization and loading before accepting target startup.
 - Treat the source repository and source application implementation as
   immutable evidence. Never edit source code, replace source classes through a
   recording adapter, patch source artifacts, or change source business

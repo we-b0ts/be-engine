@@ -18,6 +18,25 @@ or service startup:
 - source-defined selection, layering, override, and precedence behavior;
 - behavior-relevant startup, refresh, and dynamic-reload semantics.
 
+## Mandatory Loader Boundary
+
+Configuration files or directories used by source startup trigger this
+requirement. Inspect the authoritative source runtime loading path before
+constructing target configuration or dependency clients. When the target lacks
+a compatible loader, implement it in product code and initialize it once from
+the composition root before constructing its consumers.
+
+The active rewrite scope may limit which typed configuration and consumers are
+implemented now. It does not permit narrowing the source loader's external
+input unit, file selection, layering, merge, override, validation, or refresh
+contract.
+
+A project CLI or startup script may pass the configuration root and
+source-defined selectors to the target. It MUST NOT open configuration files,
+extract selected keys, translate them into target-only environment variables,
+hard-code their values, or implement parsing, merge, defaulting, or validation
+on behalf of product code.
+
 ## Discover The Source Loader
 
 Trace configuration from the source startup path to its consumers:
@@ -34,11 +53,12 @@ authorized source image or runtime read-only. Reading source configuration for
 rewrite diagnosis and implementation is allowed and expected; do not print,
 copy into reports, or commit credentials and other sensitive values.
 
-Determine only the behavior relevant to startup and the active rewrite scope.
-Record configuration provenance and key names, not secret values. If startup
-materializes or updates effective configuration, recreate or restart the
-source through its authoritative entrypoint without changing its business
-behavior, and treat traffic from that diagnostic lifecycle as non-evidence.
+Trace the complete external loader boundary even when the active rewrite scope
+uses only part of the resulting configuration. Record configuration provenance
+and key names, not secret values. If startup materializes or updates effective
+configuration, recreate or restart the source through its authoritative
+entrypoint without changing its business behavior, and treat traffic from that
+diagnostic lifecycle as non-evidence.
 
 ## Materialize Local Runtime Inputs
 
@@ -49,19 +69,29 @@ without modifying that source. Preserve its supplied format and the file and
 directory relationships required by the source loader.
 
 Let the discovered configuration contract determine whether to copy one file,
-a related file set, or a complete configuration directory. Environment values
-and file configuration may both be materialized locally. Keep sensitive values
-out of commands and reports, and never commit local runtime inputs. Treat the
-local location as staging, not as a new product configuration contract: pass
-its paths through the target's normal startup boundary and do not translate
-the source artifacts into a parallel target-only format.
+a related file set, or a complete configuration directory. Materialize one
+file only when the source loader's authoritative external input is itself that
+single file; never cherry-pick files or keys from a directory-based or layered
+loader. Environment values and file configuration may both be materialized
+locally. Keep sensitive values out of commands and reports, and never commit
+local runtime inputs. Treat the local location as staging, not as a new product
+configuration contract: pass its paths through the target's normal startup
+boundary and do not translate the source artifacts into a parallel target-only
+format.
 
 ## Implement Compatible Loading
 
 Make the target read the same supplied configuration rather than requiring an
-operator to transform it first. A cross-language target may parse the source
-format into typed internal structures, but it must preserve the source
-configuration contract at the external boundary.
+operator or launcher to transform it first. Implement source-compatible
+selection, parsing, layering, merge, precedence, validation, and applicable
+refresh behavior behind one target-owned configuration boundary. Initialize
+that boundary once during application composition and supply typed
+configuration to dependency clients and capability modules.
+
+A cross-language target may parse the complete source format into a generic
+property or document model and expose typed structures only for current
+consumers. It need not model every unused key immediately, but it must preserve
+the complete source loading contract at the external boundary.
 
 ## Verify
 
@@ -70,11 +100,14 @@ Before accepting target startup or configuration-dependent behavior:
 1. Identify the source loader, authoritative configuration artifact, and
    behavior-driving consumer.
 2. Identify the target compatibility loader and corresponding consumer.
-3. Start the target with the same unmodified authoritative configuration
+3. Confirm the project CLI transports only configuration paths and
+   source-defined selectors; reject launcher-owned key extraction or
+   translation.
+4. Start the target with the same unmodified authoritative configuration
    supplied to the source environment.
-4. Verify relevant defaults, overrides, validation, and refresh behavior when
-   they affect startup or the active capability.
-5. Record the artifact provenance, loader path, consumed keys or structures,
+5. Verify relevant selection, layering, precedence, defaults, validation, and
+   refresh behavior when they affect startup or the active capability.
+6. Record the artifact provenance, loader path, consumed keys or structures,
    and startup result without recording sensitive values.
 
 If the target cannot start from the source configuration contract, keep the
