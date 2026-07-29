@@ -10,7 +10,7 @@ fakes.
 - Normal runtime
 - Standard project facade
 - Identity and staging
-- Environment materialization
+- Runtime input materialization
 - Generated state boundary
 
 ## Normal Runtime
@@ -74,8 +74,8 @@ For a prebuilt in-process target, prefer:
 
 ```bash
 traffic-e2e target exec \
-  --env-file path/to/local.env \
-  --copy-env APP_CONFIG=path/to/e2e.yaml \
+  --env-file .traffic-e2e/runtime/.env \
+  --copy-env APP_CONFIG=.traffic-e2e/runtime/config/application.yaml \
   --path-env CASE_DIR=path/to/readable/case-group \
   --write-dir logs \
   -- path/to/prebuilt-target
@@ -94,21 +94,31 @@ supported routing boundary, return `target_environment/action_required` or
 `replay_capability_gap/action_required` with an acceptance check instead of
 widening interception.
 
-## Environment Materialization
+## Runtime Input Materialization
 
-Generate a Git-ignored `.traffic-e2e/.env` only for values proven to come
-directly from source process environment, startup arguments, or machine-local
-configuration. Use this precedence unless the target repository defines a
-stricter equivalent:
+Use the Git-ignored `.traffic-e2e/runtime/` directory only for local inputs
+proven to come directly from source process environment, startup arguments, or
+machine-local configuration. Store environment values in
+`.traffic-e2e/runtime/.env` when needed. When source-compatible file
+configuration must be materialized locally, it may live under
+`.traffic-e2e/runtime/` and must retain the source format and required file
+relationships. Initialize only the runtime root; create `.env`, `config/`, or
+other contents only when source evidence requires them. The target facade passes
+these paths through normal startup inputs; product code must not hard-code the
+traffic-e2e directory.
+
+Use this precedence unless the target repository defines a stricter
+equivalent:
 
 1. explicitly supplied process environment;
-2. `.traffic-e2e/.env`;
+2. `.traffic-e2e/runtime/.env`;
 3. ordinary local application environment;
 4. committed non-sensitive defaults.
 
 Record variable names and provenance without printing values. Target runtime
-receives ordinary environment values; it never parses recording files to
-materialize them.
+receives ordinary environment values and source-compatible configuration; it
+never parses recording files to materialize them. Never commit
+`.traffic-e2e/runtime/`.
 
 ## Generated State Boundary
 

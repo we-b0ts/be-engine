@@ -585,8 +585,8 @@ granting the fixed user access to the workspace or build cache:
 
 ```bash
 traffic-e2e target exec \
-  --env-file path/to/local.env \
-  --copy-env APP_CONFIG=path/to/e2e.yaml \
+  --env-file .traffic-e2e/runtime/.env \
+  --copy-env APP_CONFIG=.traffic-e2e/runtime/config/application.yaml \
   --copy-env REPLAY_CA=path/to/replay-ca.pem \
   --path-env CASE_DIR=path/to/readable/case-group \
   --write-dir logs \
