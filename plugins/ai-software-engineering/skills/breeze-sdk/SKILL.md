@@ -1,6 +1,6 @@
 ---
 name: breeze-sdk
-description: "Design, implement, integrate, migrate, or review business-independent remote-resource SDK clients used with Breeze. Use for Memcached, Redis, MySQL, Kafka, queues such as MCQ or QueueService, Motan, or other remote resources; keep business behavior in the owning backend capability."
+description: "Design, implement, integrate, migrate, or review business-independent remote-resource SDK clients used with Breeze. Use for Memcached, Redis, MySQL, Kafka, queues such as MCQ or QueueService, Motan, Vintage service discovery, or other remote resources; keep business behavior in the owning backend capability."
 ---
 
 # Breeze SDK
@@ -28,9 +28,9 @@ The project CLI is not part of this resource path.
 Use this skill for business-independent remote-resource access whose identity,
 discovery, listener, or connection lifecycle is managed through Breeze.
 This explicitly includes Memcached, Redis, MySQL, Kafka, queues such as MCQ or
-QueueService, and Motan. Treat Motan itself as business-independent platform
-infrastructure, not as a capability-owned provider client. The set remains
-open to new Breeze-managed resource types.
+QueueService, Motan, and Vintage service discovery. Treat Motan and Vintage as
+business-independent platform infrastructure, not as capability-owned provider
+clients. The set remains open to new Breeze-managed resource types.
 
 - logical resource identity and descriptor parsing;
 - descriptor resolution and permitted registration through one generic policy;
@@ -82,9 +82,13 @@ project or dependency is available.
    reusable resource layer separately from its business adapter, and implement
    only the needed resource packages. Construct long-lived clients in the
    composition root and keep business semantics in the owning capability.
-5. Read [verification.md](references/verification.md), run focused checks for
+5. For Motan or Vintage work, read
+   [motan-vintage.md](references/motan-vintage.md) and preserve the source
+   service's pinned discovery, failover, node protection, and snapshot
+   semantics.
+6. Read [verification.md](references/verification.md), run focused checks for
    every affected mode and resource, then run repository-required gates.
-6. Return exact resources, modes, changed behavior, checks, and blockers to the
+7. Return exact resources, modes, changed behavior, checks, and blockers to the
    invoking workflow. Do not declare a rewrite, replay, or migration complete.
 
 ## Non-Negotiable Runtime Rules
