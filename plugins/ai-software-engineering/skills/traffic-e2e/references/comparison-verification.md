@@ -124,7 +124,7 @@ it. The report groups cases by canonical `METHOD + api_pattern` and publishes
 its comparison cases pass. For a non-passing response, the top-level
 `representative_difference` identifies one deterministic case and Pointer with
 bounded `source_before`, `candidate`, and `source_after` values. A response-rule
-coverage failure instead appears in `representative_policy_mismatch`.
+applicability failure instead appears in `representative_policy_mismatch`.
 
 The verification policy defaults to the first source observation:
 
@@ -259,14 +259,9 @@ Useful interpretation of the optional source recheck:
 
 A route match alone does not make a response rule applicable to every response
 shape. The selected Pointer must resolve in both compared responses. A Pointer
-absent from both sides is unobserved for that case; a one-sided omission
-remains an exact structural difference. One case remaining unobserved does not
-make a rule stale when another case in the same API group exercises it. A rule
-unobserved by the entire API group is a group-level `policy_mismatch`, not
-source change or candidate behavior. Preserve this diagnostic alongside any
-independent candidate difference, remove or replace the stale rule through
-evidence-backed policy feedback, rerun affected replay E2E, and create a new
-comparison recording.
+absent from both sides does not participate in that case and does not require
+coverage elsewhere in the sampled API group. A one-sided omission remains an
+exact structural difference.
 
 ## Evidence-Backed Policy Feedback
 

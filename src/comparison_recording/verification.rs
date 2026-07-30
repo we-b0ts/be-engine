@@ -10,8 +10,7 @@ use super::representative::{
 use crate::config::edit::{create_atomic, write_atomic};
 use crate::replay::{
     ComparisonResponseAssertionOptions, ComparisonSourceMatch, ResponseAssertionCaseReport,
-    assert_comparison_response, response_locations_overlap, unobserved_response_rule_ids,
-    validate_replay_policy,
+    assert_comparison_response, response_locations_overlap, validate_replay_policy,
 };
 
 const RUN_SUMMARY_FILE: &str = "comparison-recording-run.json";
@@ -52,8 +51,6 @@ pub struct ComparisonVerificationApiCounts {
 pub struct ComparisonVerificationApi {
     pub passed: bool,
     pub counts: ComparisonVerificationApiCounts,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub policy_mismatch_rule_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,43 +360,25 @@ pub fn verify_comparison_recording(
             }
         }
     }
-    let api_policy_mismatch_rule_ids = api_policy_mismatch_rule_ids(&cases);
-    for api in api_policy_mismatch_rule_ids.keys() {
-        counts.policy_mismatch += 1;
-        api_counts.entry(api.clone()).or_default().policy_mismatch += 1;
-    }
     let apis = api_counts
         .into_iter()
         .map(|(api, counts)| {
-            let policy_mismatch_rule_ids = api_policy_mismatch_rule_ids
-                .get(&api)
-                .cloned()
-                .unwrap_or_default();
-            let passed = counts.total > 0
-                && counts.passed == counts.total
-                && policy_mismatch_rule_ids.is_empty();
-            (
-                api,
-                ComparisonVerificationApi {
-                    passed,
-                    counts,
-                    policy_mismatch_rule_ids,
-                },
-            )
+            let passed = counts.total > 0 && counts.passed == counts.total;
+            (api, ComparisonVerificationApi { passed, counts })
         })
         .collect::<BTreeMap<_, _>>();
     counts.apis_total = apis.len();
     counts.apis_passed = apis.values().filter(|api| api.passed).count();
     counts.apis_failed = counts.apis_total.saturating_sub(counts.apis_passed);
     let representative_difference = super::representative::difference(&cases)?;
-    let representative_policy_mismatch = super::representative::policy_mismatch(&cases, &apis);
+    let representative_policy_mismatch = super::representative::policy_mismatch(&cases);
     let complete = counts.unevaluable == 0;
     let passed = complete
         && counts.failed == 0
         && counts.passed == counts.total
         && apis.values().all(|api| api.passed);
     let report = ComparisonVerificationReport {
-        version: 4,
+        version: 5,
         kind: "comparison_recording_verification".to_string(),
         case_source: case_source.display().to_string(),
         recording_summary_path: summary_path.display().to_string(),
@@ -421,29 +400,6 @@ pub fn verify_comparison_recording(
     };
     write_report(&options.report, &report)?;
     Ok(report)
-}
-
-fn api_policy_mismatch_rule_ids(
-    cases: &[ComparisonVerificationCase],
-) -> BTreeMap<String, Vec<String>> {
-    let mut reports = BTreeMap::<&str, Vec<&ResponseAssertionCaseReport>>::new();
-    for case in cases {
-        for report in case
-            .response
-            .iter()
-            .chain(case.baseline_recheck.iter())
-            .chain(case.response_after.iter())
-        {
-            reports.entry(&case.api).or_default().push(report);
-        }
-    }
-    reports
-        .into_iter()
-        .filter_map(|(api, rule_ids)| {
-            let stale = unobserved_response_rule_ids(rule_ids);
-            (!stale.is_empty()).then(|| (api.to_string(), stale))
-        })
-        .collect()
 }
 
 fn update_api_counts(

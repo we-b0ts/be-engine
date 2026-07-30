@@ -90,8 +90,6 @@ pub struct ResponseAssertionCaseReport {
     pub applied_counter_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_applicable_counter_rule_ids: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unobserved_response_rule_ids: Vec<String>,
     pub unordered_candidates: Vec<String>,
     pub passed: bool,
 }
@@ -129,13 +127,12 @@ impl ResponseAssertionCaseReport {
             unused_applicable_unordered_rule_ids: Vec::new(),
             applied_counter_rule_ids: Vec::new(),
             unused_applicable_counter_rule_ids: Vec::new(),
-            unobserved_response_rule_ids: Vec::new(),
             unordered_candidates: Vec::new(),
             passed: false,
         }
     }
 
-    pub(super) fn finish(&mut self, applicable: &[ResponseField], unobserved: &[ResponseField]) {
+    pub(super) fn finish(&mut self, applicable: &[ResponseField]) {
         let applied_dynamic = self
             .applied_dynamic_rule_ids
             .iter()
@@ -169,8 +166,6 @@ impl ResponseAssertionCaseReport {
             .filter(|field| !applied_counter.contains(&field.id))
             .map(|field| field.id.clone())
             .collect();
-        self.unobserved_response_rule_ids =
-            unobserved.iter().map(|field| field.id.clone()).collect();
         self.dynamic_candidates = self
             .differences
             .iter()
@@ -195,28 +190,4 @@ impl ResponseAssertionCaseReport {
             && self.unused_applicable_unordered_rule_ids.is_empty()
             && self.unused_applicable_counter_rule_ids.is_empty();
     }
-}
-
-pub(crate) fn unobserved_response_rule_ids<'a>(
-    reports: impl IntoIterator<Item = &'a ResponseAssertionCaseReport>,
-) -> Vec<String> {
-    let reports = reports.into_iter().collect::<Vec<_>>();
-    let applied = reports
-        .iter()
-        .flat_map(|report| {
-            report
-                .applied_dynamic_rule_ids
-                .iter()
-                .chain(&report.applied_unordered_rule_ids)
-                .chain(&report.applied_counter_rule_ids)
-        })
-        .collect::<BTreeSet<_>>();
-    reports
-        .iter()
-        .flat_map(|report| &report.unobserved_response_rule_ids)
-        .filter(|rule_id| !applied.contains(rule_id))
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
 }

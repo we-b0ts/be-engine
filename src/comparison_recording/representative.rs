@@ -1,13 +1,10 @@
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::verification::{
-    ComparisonVerificationApi, ComparisonVerificationCase, ComparisonVerificationClassification,
-};
+use super::verification::{ComparisonVerificationCase, ComparisonVerificationClassification};
 use crate::replay::{
     ComparisonResponseObservation, ResponseDifferenceKind, read_comparison_response_observation,
 };
@@ -109,30 +106,16 @@ pub(super) fn difference(
 
 pub(super) fn policy_mismatch(
     cases: &[ComparisonVerificationCase],
-    apis: &BTreeMap<String, ComparisonVerificationApi>,
 ) -> Option<ComparisonRepresentativePolicyMismatch> {
-    cases
-        .iter()
-        .find_map(|case| {
-            case.policy_mismatch_rule_ids.first().map(|rule_id| {
-                ComparisonRepresentativePolicyMismatch {
-                    api: case.api.clone(),
-                    case_id: Some(case.case_id.clone()),
-                    rule_id: rule_id.clone(),
-                }
-            })
+    cases.iter().find_map(|case| {
+        case.policy_mismatch_rule_ids.first().map(|rule_id| {
+            ComparisonRepresentativePolicyMismatch {
+                api: case.api.clone(),
+                case_id: Some(case.case_id.clone()),
+                rule_id: rule_id.clone(),
+            }
         })
-        .or_else(|| {
-            apis.iter().find_map(|(api, report)| {
-                report.policy_mismatch_rule_ids.first().map(|rule_id| {
-                    ComparisonRepresentativePolicyMismatch {
-                        api: api.clone(),
-                        case_id: None,
-                        rule_id: rule_id.clone(),
-                    }
-                })
-            })
-        })
+    })
 }
 
 fn value(path: &Path, label: &str, pointer: &str) -> Result<Value> {

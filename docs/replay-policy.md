@@ -205,12 +205,14 @@ response_rules:
 ```
 
 The field must exist in both responses and keep the same scalar JSON kind.
-Only literal equality is skipped; status, structure, other fields, and non-JSON
-bodies stay exact. Every dynamic field persists its declared mechanism,
-single-line source citation, and distinct redacted source/target examples in
-the policy. These audit fields do not make the comparator infer or validate the
-generation mechanism; verify that semantic claim through source review, unit
-tests, or real-traffic integration tests.
+When both responses omit it, the rule does not participate and creates no
+coverage requirement; a one-sided omission remains an exact structural
+difference. Only literal equality is skipped; status, structure, other fields,
+and non-JSON bodies stay exact. Every dynamic field persists its declared
+mechanism, single-line source citation, and distinct redacted source/target
+examples in the policy. These audit fields do not make the comparator infer or
+validate the generation mechanism; verify that semantic claim through source
+review, unit tests, or real-traffic integration tests.
 
 Never use a dynamic rule for a difference caused by process-local cache state
 or implementation. Do not exempt an entire scalar when it contains stable

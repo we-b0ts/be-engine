@@ -236,7 +236,7 @@ replay-only. Comparison applies both shared response rules and rules nested
 under `response_rules.comparison`. A failed response report includes one
 top-level `representative_difference` with the API, case ID, Pointer,
 difference kind, and bounded source-before/candidate/source-after values. A
-response-rule coverage failure appears in
+response-rule applicability failure appears in
 `representative_policy_mismatch`. The report records
 `matched_source` for a passing case and groups cases by the recorded
 `METHOD + api_pattern`; `apis_passed` is the current validation-success count,

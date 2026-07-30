@@ -11,7 +11,6 @@ use self::artifact::{
     ActualResponse, ComparisonResponse, ExpectedResponse, RecordedRequest, decode_body,
 };
 use self::compare::compare_json;
-pub(crate) use self::model::unobserved_response_rule_ids;
 pub use self::model::{
     ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference, ResponseDifferenceKind,
 };
@@ -291,15 +290,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            let unobserved_fields = response_fields
-                .iter()
-                .filter(|field| {
-                    expected.pointer(&field.pointer).is_none()
-                        && actual.pointer(&field.pointer).is_none()
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            report.finish(&applicable_fields, &unobserved_fields);
+            report.finish(&applicable_fields);
         }
         _ => {
             report.body_mode = ResponseBodyMode::ExactBytes;
@@ -312,7 +303,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                     .differences
                     .push(ResponseDifference::exact_body_mismatch());
             }
-            report.finish(&[], &[]);
+            report.finish(&[]);
         }
     }
     Ok(report)

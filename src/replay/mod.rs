@@ -91,7 +91,6 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
-pub(crate) use assertion::unobserved_response_rule_ids;
 pub(crate) use assertion::{
     ComparisonResponseAssertionOptions, ComparisonResponseObservation, assert_comparison_response,
     read_comparison_response_observation,
