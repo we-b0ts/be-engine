@@ -1,5 +1,6 @@
 mod access_policy;
 mod active_case;
+mod artifact_file;
 mod breeze;
 mod case_group;
 mod case_kind;
