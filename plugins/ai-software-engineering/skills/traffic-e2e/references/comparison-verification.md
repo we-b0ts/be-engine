@@ -64,16 +64,21 @@ Comparison recording accepts only explicitly configured `GET`, `HEAD`, and
 `OPTIONS` rules. A non-read method is a configuration error because forwarding
 one request to both services could duplicate a side effect.
 
-The default recording sends the request once to the source baseline and once
-to the candidate:
+`record-comparison` reads the verification policy passed through `--policy`,
+defaulting to `verification.yaml` next to the recorder config. It validates
+that policy before creating the run. The default recording sends the request
+once to the source baseline and once to the candidate:
 
 ```text
 source baseline -> candidate
 ```
 
-Set `[comparison_recording].baseline_recheck = true` or pass the enable-only
-`record-comparison --baseline-recheck` flag only when an additional source
-observation is useful. The recorder then preserves this order:
+When `response_rules.comparison.source_match` is `before_or_after`,
+`record-comparison` automatically enables the source recheck and logs the
+policy reason. With `source_match: before`, set
+`[comparison_recording].baseline_recheck = true` or pass the enable-only
+`record-comparison --baseline-recheck` flag only when an additional diagnostic
+source observation is useful. The recorder then preserves this order:
 
 ```text
 source before -> candidate -> source after
@@ -116,7 +121,10 @@ under `response_rules`; dependency replay rules are ignored. Preserve the
 generated `comparison-report.json` and the policy fingerprint used to produce
 it. The report groups cases by canonical `METHOD + api_pattern` and publishes
 `apis_total`, `apis_passed`, and `apis_failed`; an API passes only when all of
-its comparison cases pass.
+its comparison cases pass. For a non-passing response, the top-level
+`representative_difference` identifies one deterministic case and Pointer with
+bounded `source_before`, `candidate`, and `source_after` values. A response-rule
+coverage failure instead appears in `representative_policy_mismatch`.
 
 The verification policy defaults to the first source observation:
 
@@ -127,9 +135,10 @@ response_rules:
 ```
 
 Use `before_or_after` when normal runtime data may change during one admitted
-comparison and the recording captured a source recheck for every case. The
-candidate then passes only if its complete response matches source-before or
-source-after under all active response rules. The report records
+comparison. Record with the same verification policy so the required source
+recheck is enabled automatically for every admitted case. The candidate then
+passes only if its complete response matches source-before or source-after
+under all active response rules. The report records
 `matched_source: before|after` and retains the corresponding assertion
 evidence. Never accept a field-by-field mixture of the two source responses.
 If an after artifact is missing, the case is unevaluable. This global

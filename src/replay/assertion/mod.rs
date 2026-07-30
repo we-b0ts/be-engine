@@ -12,7 +12,9 @@ use self::artifact::{
 };
 use self::compare::compare_json;
 pub(crate) use self::model::unobserved_response_rule_ids;
-pub use self::model::{ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference};
+pub use self::model::{
+    ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference, ResponseDifferenceKind,
+};
 use super::policy::{fingerprint, load_replay_policy, uri_path};
 use crate::http::content_encoding;
 
@@ -32,6 +34,11 @@ pub(crate) struct ComparisonResponseAssertionOptions {
     pub expected_response: PathBuf,
     pub response: PathBuf,
     pub policy: PathBuf,
+}
+
+pub(crate) struct ComparisonResponseObservation {
+    pub(crate) status: u16,
+    pub(crate) body: Vec<u8>,
 }
 
 pub fn assert_recorded_response(
@@ -129,6 +136,24 @@ pub(crate) fn assert_comparison_response(
         actual_path: options.response,
         actual_bytes: response_bytes,
         policy: options.policy,
+    })
+}
+
+pub(crate) fn read_comparison_response_observation(
+    path: &Path,
+    label: &str,
+) -> Result<ComparisonResponseObservation> {
+    let bytes = read_regular(path, label)?;
+    let response: ComparisonResponse = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid {label} {}", path.display()))?;
+    ensure!(
+        response.version == 1,
+        "unsupported {label} version {}; expected 1",
+        response.version
+    );
+    Ok(ComparisonResponseObservation {
+        status: captured_status(&response, label)?,
+        body: captured_body(&response, label)?,
     })
 }
 

@@ -73,6 +73,6 @@ response_rules:
   dynamic: {}
   unordered: {}
   comparison:
-    # Use before_or_after only when comparison recording captures source rechecks.
+    # before_or_after automatically enables source rechecks during record-comparison.
     source_match: before
     counter: {}

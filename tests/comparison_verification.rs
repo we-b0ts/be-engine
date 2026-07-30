@@ -10,7 +10,7 @@ use serde_json::json;
 use tempfile::tempdir;
 use traffic_e2e::{
     ComparisonVerificationClassification, ComparisonVerificationOptions, MatchedSourceObservation,
-    verify_comparison_recording,
+    ResponseDifferenceKind, verify_comparison_recording,
 };
 
 #[test]
@@ -49,6 +49,7 @@ response_rules:
 
     assert!(report.complete);
     assert!(report.passed);
+    assert!(report.representative_difference.is_none());
     assert_eq!(report.counts.passed, 1);
     assert_eq!(report.counts.apis_total, 1);
     assert_eq!(report.counts.apis_passed, 1);
@@ -315,6 +316,20 @@ fn writes_a_failed_report_for_an_unexempted_difference() {
             .dynamic_candidates,
         ["/token"]
     );
+    let representative = report.representative_difference.as_ref().unwrap();
+    assert_eq!(representative.api, "GET /api/token");
+    assert_eq!(
+        representative.case_id,
+        "00000000-0000-4000-8000-000000000001"
+    );
+    assert_eq!(representative.pointer, "/token");
+    assert_eq!(
+        representative.difference_kind,
+        ResponseDifferenceKind::ValueMismatch
+    );
+    assert_eq!(representative.source_before, json!("baseline"));
+    assert_eq!(representative.candidate, json!("candidate"));
+    assert_eq!(representative.source_after, json!("not_recorded"));
     assert_eq!(
         serde_json::from_slice::<serde_json::Value>(&fs::read(report_path).unwrap()).unwrap()["passed"],
         false
@@ -359,6 +374,11 @@ fn classifies_an_overlapping_baseline_change_as_source_change() {
     assert_eq!(report.cases[0].source_change_pointers, ["/value"]);
     assert!(report.cases[0].candidate_only_pointers.is_empty());
     assert!(!report.cases[0].baseline_recheck.as_ref().unwrap().passed);
+    let representative = report.representative_difference.as_ref().unwrap();
+    assert_eq!(representative.pointer, "/value");
+    assert_eq!(representative.source_before, json!("before"));
+    assert_eq!(representative.candidate, json!("candidate"));
+    assert_eq!(representative.source_after, json!("after"));
 }
 
 #[test]
@@ -630,6 +650,10 @@ response_rules:
         report.apis["GET /api/token"].policy_mismatch_rule_ids.len(),
         1
     );
+    let representative = report.representative_policy_mismatch.as_ref().unwrap();
+    assert_eq!(representative.api, "GET /api/token");
+    assert!(representative.case_id.is_none());
+    assert!(representative.rule_id.contains("/missing"));
 }
 
 #[test]
