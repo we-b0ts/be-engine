@@ -14,7 +14,9 @@ allowlist. Current and expected examples include:
 - `mcq` (`brz-mcq`); and
 - `queueservice` (`brz-queueservice`);
 - `motan` (`brz-motan`) or another reusable RPC/service transport whose
-  resource identity or connection lifecycle is managed through Breeze; and
+  resource identity or connection lifecycle is managed through Breeze;
+- `vintage`, the reusable discovery library used by Motan and other
+  infrastructure clients; and
 - future database, cache, queue, messaging, storage, or remote-service
   resources with the same business-independent ownership.
 
@@ -65,6 +67,13 @@ reuse, framing and generic codec integration, deadline propagation, transport
 errors, retries, health, and shutdown. The business capability owns only the
 remote business service interface, method inputs and outputs, application
 errors, and the decision about when or why to call it.
+
+Keep Motan and Vintage as separate libraries. When the repository already has
+a Breeze package group, place them as siblings such as `breeze/motan` and
+`breeze/vintage`; let Motan depend on Vintage. Without that group, use
+independent `motan` and `vintage` libraries instead of creating an otherwise
+empty Breeze layer. Read
+[motan-vintage.md](motan-vintage.md) before implementing either library.
 
 Do not move a complete business client into Breeze and then hide its domain
 coupling behind a generic name. Expose the smallest reusable resource client;

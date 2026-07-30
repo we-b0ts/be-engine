@@ -99,6 +99,18 @@ plugin = { name = "pluto-eci-kubeconfig", kubectl_binary = "kubectl", proxy_list
 # content_types = ["application/json"]
 # plugin = { name = "vintage-naming" }
 
+# Vintage cache configuration embeds YAML in body.nodes[].value. This plugin
+# rewrites IPv4:port values under master/slave and their l1 variants without
+# relying on fixed backend ports.
+# [[http_response_rewrite.rules]]
+# name = "vintage-cache-config"
+# authorities = ["config.api.demo.test", "static.config.api.demo.test"]
+# methods = ["GET"]
+# path = "/1/config/service"
+# status_codes = [200]
+# content_types = ["application/json"]
+# plugin = { name = "vintage-cache-config" }
+
 [udp_gateway]
 # Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP
 # recording is side-effect capture; it does not wait for or synthesize replies.

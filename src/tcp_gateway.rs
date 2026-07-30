@@ -37,6 +37,10 @@ mod tests;
 pub(crate) use connection::run;
 use connection::upstream_addr;
 use detection::DetectedProtocol;
+pub(crate) use detection::{
+    DetectedProtocol as DetectedClientProtocol, Detection as ClientProtocolDetection,
+    detect_client_protocol,
+};
 use http_transport::{
     GatewayBody, build_downstream_response, build_origin_form_uri, build_upstream_request,
     build_upstream_uri, simple_response,
@@ -302,6 +306,7 @@ async fn handle_http_request(
                 state.dns_registry(),
                 state.kubectl_proxy_manager(),
                 state.ca().ca_cert_pem_ref(),
+                state.config().recording.decoded_body_limit(),
                 RewriteInput {
                     method: &method,
                     uri: &original_uri,
@@ -567,6 +572,7 @@ async fn handle_https_request(
                 state.dns_registry(),
                 state.kubectl_proxy_manager(),
                 state.ca().ca_cert_pem_ref(),
+                state.config().recording.decoded_body_limit(),
                 RewriteInput {
                     method: &method,
                     uri: &original_uri,

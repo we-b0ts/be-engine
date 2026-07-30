@@ -124,7 +124,7 @@ it. The report groups cases by canonical `METHOD + api_pattern` and publishes
 its comparison cases pass. For a non-passing response, the top-level
 `representative_difference` identifies one deterministic case and Pointer with
 bounded `source_before`, `candidate`, and `source_after` values. A response-rule
-coverage failure instead appears in `representative_policy_mismatch`.
+applicability failure instead appears in `representative_policy_mismatch`.
 
 The verification policy defaults to the first source observation:
 
@@ -163,28 +163,34 @@ For the first valid recording:
 
 - when the repaired case is observed and passes, continue normal completion;
 - when it is observed and does not pass, diagnose the current difference;
-- when it is not observed, stop with
-  `inconclusive/repaired_case_not_observed`.
+- when it is not observed and all comparison gates otherwise pass, retain
+  `passed` and attach a non-blocking `repaired_case_not_observed` attention;
+- when it is not observed but another comparison gate fails, diagnose that
+  actual failure without using the absent observation as its cause.
 
-Do not start another standard recording or comparison automatically after a
-valid zero-observation result. Preserve other comparison evidence and return:
+Do not start another standard recording or comparison solely because a valid
+run has zero repaired-case observations. Preserve the passing comparison
+evidence and return:
 
 ```text
-status: inconclusive
-reason: repaired_case_not_observed
-repaired_case: <immutable case source>#<case id>
-repaired_locations: <bounded JSON Pointer list>
-post_repair_e2e: <report path or run identity>
-comparison_run: <run identity>
-comparison_cases_evaluated: <integer>
-repaired_case_observations: 0
-resume_stage: comparison
+status: passed
+attention:
+  kind: repaired_case_not_observed
+  blocking: false
+  repaired_case: <immutable case source>#<case id>
+  repaired_locations: <bounded JSON Pointer list>
+  post_repair_e2e: <report path or run identity>
+  comparison_run: <run identity>
+  comparison_cases_evaluated: <integer>
+  repaired_case_observations: 0
 ```
 
-This result is terminal for the current operation but is not validation
-success. If code, policy, configuration, and the passing E2E evidence remain
-unchanged, a later requested resume starts from a new comparison rather than
-repeating standard recording or E2E.
+The operating AI derives this attention from the repaired-case evidence and
+comparison artifacts; it is not a field emitted by the comparator. It is not a
+failure category, does not require `next_todo` or `resume_stage`, and does not
+block migration completion. A later explicitly requested observation may run
+another comparison if code, policy, configuration, and E2E evidence remain
+unchanged.
 
 ## Required Diagnosis
 
@@ -259,14 +265,9 @@ Useful interpretation of the optional source recheck:
 
 A route match alone does not make a response rule applicable to every response
 shape. The selected Pointer must resolve in both compared responses. A Pointer
-absent from both sides is unobserved for that case; a one-sided omission
-remains an exact structural difference. One case remaining unobserved does not
-make a rule stale when another case in the same API group exercises it. A rule
-unobserved by the entire API group is a group-level `policy_mismatch`, not
-source change or candidate behavior. Preserve this diagnostic alongside any
-independent candidate difference, remove or replace the stale rule through
-evidence-backed policy feedback, rerun affected replay E2E, and create a new
-comparison recording.
+absent from both sides does not participate in that case and does not require
+coverage elsewhere in the sampled API group. A one-sided omission remains an
+exact structural difference.
 
 ## Evidence-Backed Policy Feedback
 
@@ -289,11 +290,12 @@ Comparison verification is complete only when the recording finalized cleanly,
 every published case was evaluated, no case remains classified
 `source_change`, `policy_mismatch`, or `unevaluable`, every affected API and
 candidate comparison passes against one complete permitted source observation
-under the reviewed policy, every repaired case requiring current live
-comparison coverage was observed, and the latest candidate code still passes
-the affected replay E2E scope. A source-only change recorded as diagnostics
-does not invalidate an otherwise exact candidate match. This comparison report
-is the validation-success authority. It is current evidence, not a permanent
+under the reviewed policy, and the latest candidate code still passes the
+affected replay E2E scope. A repaired case with current same-case passing E2E
+need not recur in the finite live sample; retain zero observation as a
+non-blocking attention. A source-only change recorded as diagnostics does not
+invalidate an otherwise exact candidate match. This comparison report is the
+validation-success authority. It is current evidence, not a permanent
 API-verified state. After every code or policy change, use a new comparison
 recording; never overwrite or reinterpret the old candidate response as fresh
 evidence.

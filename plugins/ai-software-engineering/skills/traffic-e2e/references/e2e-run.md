@@ -137,11 +137,10 @@ startup, and writes:
 Command success means the actual response was captured, not that it matched.
 The runner reads expected and actual artifacts, applies the response policy,
 and persists field-level differences, diagnostic candidates, applied rules,
-unused applicable rules, response-shape-unobserved rules, and policy
-fingerprints. A rule omitted by both sides of one response variant does not
-fail that case; it becomes a policy mismatch only when no case in the affected
-API group exercises it. Version-one policies retain the legacy target-owned
-assertion contract for existing repositories.
+unused applicable rules, and policy fingerprints. A response rule whose
+Pointer is absent from both sides does not participate in that case and does
+not require coverage elsewhere in the API group. Version-one policies retain
+the legacy target-owned assertion contract for existing repositories.
 
 Run `run-api` only until the current complete API group passes. Once it passes,
 stop.

@@ -125,7 +125,10 @@ pub(super) fn register_http_exchange(
 ) -> Result<()> {
     for discovered in &record.discovered_tcp_targets {
         let protocol = match discovered.protocol.as_str() {
+            "auto" => ReplayProtocol::Auto,
             "motan" => ReplayProtocol::Motan,
+            "redis" => ReplayProtocol::Redis,
+            "memcached" => ReplayProtocol::Memcached,
             other => {
                 return Err(anyhow!(
                     "http_exchange {} advertises unsupported TCP protocol {other:?}",
@@ -244,7 +247,8 @@ pub(super) async fn handle_http_replay_connection(
                 })?;
             serve_http_io(tls, target, state, report_writer).await
         }
-        ReplayProtocol::Mysql
+        ReplayProtocol::Auto
+        | ReplayProtocol::Mysql
         | ReplayProtocol::Redis
         | ReplayProtocol::Memcached
         | ReplayProtocol::Kafka

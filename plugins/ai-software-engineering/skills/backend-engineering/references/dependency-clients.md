@@ -8,9 +8,9 @@ When source or repository evidence shows that Breeze manages a remote
 resource's identity, discovery, listener, or connection lifecycle, read the
 [`breeze-sdk` skill](../../breeze-sdk/SKILL.md) and use it for the reusable
 resource layer. Apply that routing explicitly to Memcached, Redis, MySQL,
-Kafka, queues such as MCQ or QueueService, Motan, and future Breeze-managed
-remote-resource types. Treat this list as trigger examples, not a closed
-protocol allowlist.
+Kafka, queues such as MCQ or QueueService, Motan, Vintage service discovery,
+and future Breeze-managed remote-resource types. Treat this list as trigger
+examples, not a closed protocol allowlist.
 
 Keep business SQL, keys, messages, remote service contracts, provider DTO
 mapping, fallback decisions, and orchestration in a capability-owned adapter.

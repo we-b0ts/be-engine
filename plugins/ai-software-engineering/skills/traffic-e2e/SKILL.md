@@ -41,7 +41,7 @@ assertion is non-passing, begin the handoff with this model and fill every
 applicable key; do not replace it with prose:
 
 ```text
-status: passed | action_required | incomplete | inconclusive | blocked
+status: passed | action_required | incomplete | blocked
 stage: <current stage>
 scope: <canonical API or capability>
 
@@ -87,13 +87,16 @@ response passes, omit `representative_case`.
 Use `action_required` while response or other repairable behavior remains.
 Use `incomplete` only when all selected response assertions pass but dirty
 dependency evidence remains and no source-proven rule can be safely applied.
-Use `inconclusive` only when the first valid comparison after an evidenced
-target repair does not observe the repaired case, while that same immutable
-case has current passing E2E evidence. End the current operation without
-automatically recording again and use the comparison reference's handoff.
 Use `blocked` only when response-driving external-system information was not
 recorded or provided and the missing information prevents target behavior from
 being implemented.
+
+When the first valid comparison after an evidenced target repair does not
+observe that repaired case, the absence is not failing evidence. If the same
+immutable case has current passing E2E evidence and the valid comparison
+otherwise passes, return `passed` with the comparison reference's non-blocking
+`repaired_case_not_observed` attention. Do not record again solely to obtain
+that observation.
 
 Artifact terms such as an incomplete case, session, report, or rule describe
 evidence validity, not the handoff status. Map them to `action_required` while
@@ -112,8 +115,11 @@ Use stable evidence categories:
 target_behavior, target_environment, background_dependency,
 recording_configuration, recording_no_traffic, recorder_capability_gap,
 replay_capability_gap, verification_policy, intentional_nondeterminism,
-source_change, repaired_case_not_observed, unresolved
+source_change, unresolved
 ```
+
+`repaired_case_not_observed` is an attention kind, not an evidence category or
+non-passing status.
 
 ## Mandatory Sequence
 
@@ -218,6 +224,7 @@ target workaround or alter the source to manufacture the missing evidence.
 Repeated failures without capability proof remain `action_required`, not
 `blocked`. Use `incomplete` only for response-passing dirty evidence without a
 safe source-proven rule. A valid comparison that does not observe a repaired
-case follows the comparison reference and terminates as `inconclusive`; it is
-not a retry signal. Never invent requests, responses, dependency values, side
-effects, routes, or completion artifacts.
+case follows the comparison reference: retain the passing result, add a
+non-blocking attention, and do not retry solely for observation coverage.
+Never invent requests, responses, dependency values, side effects, routes, or
+completion artifacts.

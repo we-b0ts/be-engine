@@ -2,14 +2,14 @@ use anyhow::{Context, Result, ensure};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::model::{
-    ActiveRunState, ApiExecution, AssertionCase, AssertionReport, CaseExecution, CaseStatus,
+    ActiveRunState, ApiExecution, AssertionCase, AssertionReport, CaseStatus,
     ResolvedProjectConfig, RunLayout,
 };
 use super::store;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport,
-    aggregate_replay_reports_with_options, unobserved_response_rule_ids,
+    aggregate_replay_reports_with_options,
 };
 
 pub(super) fn build_final_evidence(
@@ -101,7 +101,6 @@ fn build_api_evidence(
             .count() as u32;
         let total = case_ids.len() as u32;
         let incomplete = total - passed - failed;
-        let policy_mismatch_rule_ids = policy_mismatch_rule_ids(&case_ids, &cases);
         let api_pattern = group
             .pattern
             .clone()
@@ -112,31 +111,17 @@ fn build_api_evidence(
             method: group.method.clone(),
             api_pattern,
             case_ids,
-            policy_mismatch_rule_ids: policy_mismatch_rule_ids.clone(),
             total,
             passed,
             failed,
             incomplete,
             complete_pass: passed == total
                 && api_aggregate.is_complete()
-                && !api_aggregate.is_dirty()
-                && policy_mismatch_rule_ids.is_empty(),
+                && !api_aggregate.is_dirty(),
             report_dir,
         });
     }
     Ok(apis)
-}
-
-fn policy_mismatch_rule_ids(
-    case_ids: &[String],
-    cases: &BTreeMap<&str, &CaseExecution>,
-) -> Vec<String> {
-    unobserved_response_rule_ids(
-        case_ids
-            .iter()
-            .filter_map(|case_id| cases.get(case_id.as_str()))
-            .filter_map(|case| case.response_assertion.as_ref()),
-    )
 }
 
 fn aggregate_view(
@@ -251,7 +236,6 @@ pub(super) fn summarize_apis_without_aggregate(
                 method: group.method.clone(),
                 api_pattern,
                 case_ids,
-                policy_mismatch_rule_ids: Vec::new(),
                 total,
                 passed,
                 failed,

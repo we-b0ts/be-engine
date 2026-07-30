@@ -43,7 +43,6 @@ fn state(api_passed: u32, api_failed: u32, sequence: u64) -> ActiveRunState {
             method: "GET".to_string(),
             api_pattern: "/api/orders/*".to_string(),
             case_ids: Vec::new(),
-            policy_mismatch_rule_ids: Vec::new(),
             total: api_passed + api_failed,
             passed: api_passed,
             failed: api_failed,

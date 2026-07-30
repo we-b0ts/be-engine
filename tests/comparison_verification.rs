@@ -191,7 +191,7 @@ response_rules:
 }
 
 #[test]
-fn a_rule_used_by_the_candidate_is_not_stale_when_the_source_recheck_is_stable() {
+fn applies_a_candidate_rule_when_the_source_recheck_is_stable() {
     let temp = tempdir().unwrap();
     let run = create_run(
         temp.path(),
@@ -610,7 +610,7 @@ fn source_change_is_diagnostic_when_candidate_matches_source_before() {
 }
 
 #[test]
-fn classifies_a_rule_unobserved_by_the_entire_api_as_policy_mismatch() {
+fn allows_a_rule_absent_from_the_entire_api_sample() {
     let temp = tempdir().unwrap();
     let body = json!({"value": "stable"});
     let run = create_run(temp.path(), body.clone(), body);
@@ -639,25 +639,19 @@ response_rules:
     })
     .unwrap();
 
-    assert!(!report.passed);
+    assert!(report.passed);
     assert_eq!(
         report.cases[0].classification,
         ComparisonVerificationClassification::Passed
     );
-    assert_eq!(report.counts.policy_mismatch, 1);
+    assert_eq!(report.counts.policy_mismatch, 0);
     assert!(report.cases[0].policy_mismatch_rule_ids.is_empty());
-    assert_eq!(
-        report.apis["GET /api/token"].policy_mismatch_rule_ids.len(),
-        1
-    );
-    let representative = report.representative_policy_mismatch.as_ref().unwrap();
-    assert_eq!(representative.api, "GET /api/token");
-    assert!(representative.case_id.is_none());
-    assert!(representative.rule_id.contains("/missing"));
+    assert!(report.apis["GET /api/token"].passed);
+    assert!(report.representative_policy_mismatch.is_none());
 }
 
 #[test]
-fn preserves_policy_mismatch_diagnostics_with_a_candidate_difference() {
+fn an_absent_rule_does_not_mask_a_candidate_difference() {
     let temp = tempdir().unwrap();
     let run = create_run(
         temp.path(),
@@ -694,13 +688,11 @@ response_rules:
         ComparisonVerificationClassification::CandidateDifference
     );
     assert_eq!(report.counts.failed, 1);
-    assert_eq!(report.counts.policy_mismatch, 1);
-    assert_eq!(report.apis["GET /api/token"].counts.policy_mismatch, 1);
+    assert_eq!(report.counts.policy_mismatch, 0);
+    assert_eq!(report.apis["GET /api/token"].counts.policy_mismatch, 0);
     assert!(report.cases[0].policy_mismatch_rule_ids.is_empty());
-    assert_eq!(
-        report.apis["GET /api/token"].policy_mismatch_rule_ids.len(),
-        1
-    );
+    assert!(report.representative_policy_mismatch.is_none());
+    assert!(report.representative_difference.is_some());
 }
 
 #[test]

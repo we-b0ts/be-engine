@@ -165,7 +165,7 @@ pub fn plan_comparison_response_rule(
     let comparison: ComparisonEvidence =
         serde_json::from_slice(&comparison_bytes).context("invalid comparison report")?;
     ensure!(
-        matches!(comparison.version, 3 | 4)
+        matches!(comparison.version, 3..=5)
             && comparison.kind == "comparison_recording_verification"
             && comparison.expected_response == "assertions_only"
             && comparison.assertion_mode == "comparison_recording"

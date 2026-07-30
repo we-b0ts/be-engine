@@ -4,23 +4,23 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use tracing::debug;
-use url::form_urlencoded;
 
 use crate::dependency::DiscoveredTcpTarget;
 use crate::dns_mock::FakeDnsEntry;
 
-use super::{DiscoveredTarget, Plugin, PluginResult, RewriteInput, RewrittenBody};
+use super::super::{DiscoveredTarget, Plugin, PluginResult, RewriteInput, RewrittenBody};
+use super::{alias_for_ip, application_error_code, parse_outer, query, required_query};
 
 const PLUGIN_NAME: &str = "vintage-naming";
 const MAX_DISCOVERED_NODES: usize = 4096;
 
-pub(super) struct Naming {
+pub(in crate::http::rewrite) struct Naming {
     services: BTreeSet<String>,
     clusters: BTreeSet<String>,
 }
 
 impl Naming {
-    pub(super) fn new(services: &[String], clusters: &[String]) -> Self {
+    pub(in crate::http::rewrite) fn new(services: &[String], clusters: &[String]) -> Self {
         Self {
             services: services.iter().cloned().collect(),
             clusters: clusters.iter().cloned().collect(),
@@ -39,7 +39,7 @@ impl Plugin for Naming {
     }
 
     fn rewrite(&self, input: &RewriteInput<'_>) -> Result<PluginResult> {
-        let query = query(input)?;
+        let query = query(input);
         let action = required_query(&query, "action")?;
         let service = required_query(&query, "service")?;
         let cluster = required_query(&query, "cluster")?;
@@ -75,7 +75,7 @@ impl Plugin for Naming {
                     })
                     .collect();
                 Ok(PluginResult::Rewritten {
-                    body: Box::new(RewrittenBody::Vintage(plan)),
+                    body: Box::new(RewrittenBody::VintageNaming(plan)),
                     targets,
                     kubectl_proxy: None,
                 })
@@ -90,7 +90,7 @@ enum ParsedResponse {
     ApplicationError { code: String },
 }
 
-pub(super) struct ResponsePlan {
+pub(in crate::http::rewrite) struct ResponsePlan {
     outer: Value,
     inner: Value,
     service: String,
@@ -138,7 +138,7 @@ impl ResponsePlan {
         self.nodes.iter().map(|node| *node.ip()).collect()
     }
 
-    pub(super) fn render(
+    pub(in crate::http::rewrite) fn render(
         mut self,
         registered: &BTreeMap<Ipv4Addr, FakeDnsEntry>,
     ) -> Result<(Vec<u8>, Vec<DiscoveredTcpTarget>)> {
@@ -171,42 +171,6 @@ impl ResponsePlan {
             )
             .collect();
         Ok((body, targets))
-    }
-}
-
-fn query(input: &RewriteInput<'_>) -> Result<BTreeMap<String, String>> {
-    Ok(
-        form_urlencoded::parse(input.uri.query().unwrap_or_default().as_bytes())
-            .into_owned()
-            .collect(),
-    )
-}
-
-fn required_query<'a>(query: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str> {
-    query
-        .get(name)
-        .map(String::as_str)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| anyhow!("Vintage naming request has no {name} query parameter"))
-}
-
-fn parse_outer(body: &[u8]) -> Result<Value> {
-    let outer: Value =
-        serde_json::from_slice(body).context("Vintage response body is not valid JSON")?;
-    if !outer.is_object() {
-        bail!("Vintage response root is not an object");
-    }
-    Ok(outer)
-}
-
-fn application_error_code(outer: &Value) -> Result<Option<String>> {
-    match outer.get("code") {
-        Some(Value::String(code)) if code == "200" => Ok(None),
-        Some(Value::Number(code)) if code.as_u64() == Some(200) => Ok(None),
-        Some(Value::String(code)) if !code.is_empty() => Ok(Some(code.clone())),
-        Some(Value::Number(code)) => Ok(Some(code.to_string())),
-        Some(_) => bail!("Vintage response application code is not a string or number"),
-        None => bail!("Vintage response has no application code"),
     }
 }
 
@@ -262,10 +226,6 @@ fn rewrite_nodes(inner: &mut Value, registered: &BTreeMap<Ipv4Addr, FakeDnsEntry
         }
     }
     Ok(())
-}
-
-fn alias_for_ip(ip: Ipv4Addr) -> String {
-    format!("vintage-node-{}.trp.test", ip.to_string().replace('.', "-"))
 }
 
 #[cfg(test)]
@@ -339,7 +299,7 @@ mod tests {
             panic!("expected rewrite");
         };
         assert_eq!(targets.len(), 2);
-        let RewrittenBody::Vintage(plan) = *body else {
+        let RewrittenBody::VintageNaming(plan) = *body else {
             panic!("expected Vintage plan");
         };
         let mut registered = BTreeMap::new();

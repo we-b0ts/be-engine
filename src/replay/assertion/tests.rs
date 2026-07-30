@@ -226,7 +226,7 @@ fn unordered_field_requires_arrays_on_both_sides() {
 }
 
 #[test]
-fn a_rule_absent_from_both_response_shapes_is_unobserved() {
+fn an_unordered_rule_absent_from_both_response_shapes_is_irrelevant() {
     let (_temp, options) = write_case(
         "response_rules:\n  unordered:\n    \"GET /api/resource/token\":\n      - /missing\n",
         json!(["same"]),
@@ -238,11 +238,10 @@ fn a_rule_absent_from_both_response_shapes_is_unobserved() {
     assert!(report.passed);
     assert!(report.differences.is_empty());
     assert!(report.unused_applicable_unordered_rule_ids.is_empty());
-    assert_eq!(report.unobserved_response_rule_ids.len(), 1);
 }
 
 #[test]
-fn a_dynamic_rule_absent_from_both_response_shapes_is_unobserved() {
+fn a_dynamic_rule_absent_from_both_response_shapes_is_irrelevant() {
     let (_temp, options) = write_case(
         "response_rules:\n  dynamic:\n    \"GET /api/resource/token\":\n      - pointer: /missing\n        mechanisms: [uuid]\n        source_evidence: src/token.rs:issue_token\n        source_example: <redacted source UUID>\n        target_example: <redacted target UUID>\n",
         json!("same"),
@@ -254,7 +253,6 @@ fn a_dynamic_rule_absent_from_both_response_shapes_is_unobserved() {
     assert!(report.passed);
     assert!(report.differences.is_empty());
     assert!(report.unused_applicable_dynamic_rule_ids.is_empty());
-    assert_eq!(report.unobserved_response_rule_ids.len(), 1);
 }
 
 #[test]
@@ -274,19 +272,4 @@ fn a_rule_present_on_only_one_side_remains_an_exact_difference() {
         ResponseDifferenceKind::MissingActual
     );
     assert!(report.unused_applicable_dynamic_rule_ids.is_empty());
-    assert!(report.unobserved_response_rule_ids.is_empty());
-}
-
-#[test]
-fn a_rule_observed_by_one_response_variant_is_not_stale_for_the_api() {
-    let response_rules = "response_rules:\n  dynamic:\n    \"GET /api/resource/token\":\n      - pointer: /content\n        mechanisms: [uuid]\n        source_evidence: src/token.rs:issue_token\n        source_example: <redacted source UUID>\n        target_example: <redacted target UUID>\n";
-    let (_unobserved_temp, unobserved_options) = write_raw_case(response_rules, "{}", "{}");
-    let unobserved = assert_recorded_response(unobserved_options).unwrap();
-    let (_applied_temp, applied_options) =
-        write_case(response_rules, json!("recorded"), json!("actual"));
-    let applied = assert_recorded_response(applied_options).unwrap();
-
-    assert_eq!(unobserved.unobserved_response_rule_ids.len(), 1);
-    assert_eq!(applied.applied_dynamic_rule_ids.len(), 1);
-    assert!(unobserved_response_rule_ids([&unobserved, &applied]).is_empty());
 }

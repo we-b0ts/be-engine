@@ -24,6 +24,7 @@ pub(super) struct ReplayTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ReplayProtocol {
+    Auto,
     Mysql,
     Http,
     Https,
@@ -78,15 +79,19 @@ pub(super) fn register_replay_target_at(
     protocol: ReplayProtocol,
     advertised_ip: Option<Ipv4Addr>,
 ) -> Result<()> {
-    if let Some(existing) = targets.get(target) {
+    if let Some(existing) = targets.get_mut(target) {
         if existing.protocol != protocol {
-            return Err(anyhow!(
-                "replay target {}:{} is recorded as both {:?} and {:?}",
-                target.host,
-                target.port,
-                existing.protocol,
-                protocol
-            ));
+            if existing.protocol == ReplayProtocol::Auto {
+                existing.protocol = protocol;
+            } else if protocol != ReplayProtocol::Auto {
+                return Err(anyhow!(
+                    "replay target {}:{} is recorded as both {:?} and {:?}",
+                    target.host,
+                    target.port,
+                    existing.protocol,
+                    protocol
+                ));
+            }
         }
         if let Some(advertised_ip) = advertised_ip
             && existing.fake_ip != Ipv4Addr::UNSPECIFIED
@@ -101,10 +106,7 @@ pub(super) fn register_replay_target_at(
             ));
         }
         if let Some(advertised_ip) = advertised_ip {
-            targets
-                .get_mut(target)
-                .expect("existing replay target")
-                .fake_ip = advertised_ip;
+            existing.fake_ip = advertised_ip;
         }
         return Ok(());
     }
@@ -383,6 +385,28 @@ mod comparison_recording_tests {
             .unwrap();
         assert_eq!(vintage.fake_ip, "198.19.0.1".parse::<Ipv4Addr>().unwrap());
         assert_ne!(config.fake_ip, vintage.fake_ip);
+    }
+
+    #[test]
+    fn recorded_exchange_resolves_auto_discovered_target_protocol() {
+        let mut targets = BTreeMap::new();
+        let target = TargetKey {
+            host: "vintage-node.trp.test".to_string(),
+            port: 3120,
+        };
+        register_replay_target_at(
+            &mut targets,
+            &target,
+            ReplayProtocol::Auto,
+            Some("198.19.0.8".parse().unwrap()),
+        )
+        .unwrap();
+
+        register_replay_target(&mut targets, &target, ReplayProtocol::Memcached).unwrap();
+
+        let target = targets.get(&target).unwrap();
+        assert_eq!(target.protocol, ReplayProtocol::Memcached);
+        assert_eq!(target.fake_ip, "198.19.0.8".parse::<Ipv4Addr>().unwrap());
     }
 
     #[test]

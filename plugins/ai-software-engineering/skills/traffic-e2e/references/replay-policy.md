@@ -192,7 +192,7 @@ response_rules:
 For a response pair, the rule applies only when the selected field exists in
 both expected and actual JSON; both values must have the same scalar JSON kind.
 If both responses omit the Pointer because that API has another response
-shape, the rule is unobserved for that case and does not make the case fail. If
+shape, the rule does not participate and produces no coverage requirement. If
 only one response omits it, the missing field remains an exact structural
 difference. Only literal equality is skipped. Status, body structure,
 undeclared fields, nulls, arrays, and non-JSON bodies remain exact. The rule
@@ -261,7 +261,7 @@ response_rules:
 
 For a response pair, the rule applies only when the selected field exists in
 both responses and both values are arrays. A Pointer omitted by both response
-shapes is unobserved for that case; a one-sided omission remains an exact
+shapes does not participate; a one-sided omission remains an exact
 structural difference. Comparison preserves length, exact JSON elements, and
 duplicate counts while ignoring only the outer array order. Other response
 locations remain exact. Response strategies cannot overlap the same JSON
@@ -306,9 +306,8 @@ the applied counter rule ID. This comparison relaxation never weakens replay
 E2E, which remains the exact target-behavior gate.
 
 After every policy change, revalidate and rerun the entire affected API group.
-Earlier replay and aggregate artifacts are stale. A response rule may be
-unobserved by one response variant, but it must be exercised by at least one
-case in the affected API group; otherwise the group reports a policy mismatch.
-Completion requires zero unused applicable rules, zero group-level unobserved
-rules, and a direct audit proving the expected response and dependency
-recordings did not flow into actual behavior.
+Earlier replay and aggregate artifacts are stale. A response rule participates
+only in response pairs where its Pointer resolves on both sides; absence from
+the sampled response shapes does not affect case or API completion. Completion
+requires zero unused applicable rules and a direct audit proving the expected
+response and dependency recordings did not flow into actual behavior.

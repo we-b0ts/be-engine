@@ -236,7 +236,7 @@ replay-only. Comparison applies both shared response rules and rules nested
 under `response_rules.comparison`. A failed response report includes one
 top-level `representative_difference` with the API, case ID, Pointer,
 difference kind, and bounded source-before/candidate/source-after values. A
-response-rule coverage failure appears in
+response-rule applicability failure appears in
 `representative_policy_mismatch`. The report records
 `matched_source` for a passing case and groups cases by the recorded
 `METHOD + api_pattern`; `apis_passed` is the current validation-success count,
@@ -426,7 +426,8 @@ publish a later connection target. The `pluto-eci-kubeconfig` built-in plugin
 rewrites the Kubernetes API server in Pluto ECI's
 `user_config` JSON response from an IPv4 address to a synthetic `.test` domain.
 The `vintage-naming` plugin rewrites legacy Motan node addresses published by
-Vintage naming responses.
+Vintage naming responses. The `vintage-cache-config` plugin rewrites cache
+node addresses published inside Vintage `/1/config/service` responses.
 
 For Pluto ECI, that synthetic domain is registered in the recorder's fake-DNS
 registry and routed to a local `kubectl proxy`, allowing the later HTTPS traffic
@@ -477,6 +478,23 @@ same fake IP before assigning any other target, so an SDK that caches the
 recorded naming response still connects to the Motan replay endpoint. A fake-IP
 collision or an address outside the configured replay CIDR fails replay
 startup instead of silently routing to a different target.
+
+For Vintage cache configuration, configure an exact `/1/config/service` rule.
+The plugin handles `action=lookup` responses whose outer `body.nodes[].value`
+fields contain YAML. Within each top-level cache resource, it rewrites every
+`IPv4:port` scalar below `master`, `slave`, `master_l1`, and `slave_l1`,
+including nested lists, while preserving all other YAML values. The response
+rewrite only discovers and reserves addresses; normal Recorder protocol
+detection classifies later Redis or Memcached traffic, and replay resolves an
+address's protocol from the recorded dependency exchanges or, if necessary,
+from the incoming connection.
+
+Matched response bodies with `gzip`, `x-gzip`, or `deflate` content encoding
+are decoded within `recording.max_decoded_body_bytes` before rewriting. The
+rewritten response is returned with identity encoding and corrected entity
+headers. Unsupported encodings or decoded bodies over the configured limit
+fail the exchange rather than returning an unmodified address-bearing
+response.
 
 Enable the example `[http_response_rewrite]` configuration in
 `config/recorder.example.toml` and ensure the configured `kubectl_binary` is
