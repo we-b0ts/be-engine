@@ -27,19 +27,14 @@ Use these source areas as navigation, adjusting paths for the pinned version:
 
 ## Required Boundaries
 
-Keep Motan and Vintage as separate libraries. Let Motan depend on Vintage.
-
-When the repository already has a Breeze package group, place them as sibling
-libraries:
+Keep Motan and Vintage as separate sibling libraries under the Breeze package
+root. Let Motan depend on Vintage:
 
 ```text
 breeze/
   motan/
   vintage/
 ```
-
-Without that group, use independent `motan` and `vintage` libraries; do not
-create an empty Breeze layer only for naming.
 
 Vintage owns reusable discovery, node state, subscription, snapshot generation
 and loading, and excision behavior. Motan owns protocol, transport, referers,

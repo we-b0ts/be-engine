@@ -50,8 +50,14 @@ Read-only inspection of an available authorized runtime is allowed when
 repository files do not establish effective configuration or startup behavior.
 Inspect only necessary configuration, environment variable names and
 provenance, startup arguments, deployment metadata, and dependency wiring.
-Never print, persist, or hard-code secret values, and do not replace a genuine
-runtime dependency with an environment variable inferred from traffic.
+Never print or persist secret values observed in source-process memory. Never
+manually dump or persist values obtained from a remote system; persistence is
+allowed only through a source-compatible SDK-owned snapshot lifecycle proven
+by source behavior. Otherwise keep runtime state in memory and use its genuine
+retrieval and refresh path. Never hard-code externally supplied secrets. A
+constant present in the source repository or pinned compiled artifact may be
+migrated directly into target source code as source behavior. Do not replace a
+genuine runtime dependency with an environment variable inferred from traffic.
 
 ## Non-Negotiable Baseline
 
@@ -105,10 +111,10 @@ defects before they become scale defects.
 - Read [dependency-clients.md](references/dependency-clients.md) whenever the
   change touches databases, caches, HTTP/RPC, queues, discovery, or another
   remote system.
-- When a remote resource is managed through Breeze, also read and use the
-  [`breeze-sdk` skill](../breeze-sdk/SKILL.md) for its business-independent
-  resource client; keep business behavior under this skill in the owning
-  capability.
+- For a Breeze-owned platform foundation such as logging or TAuth2, or a
+  Breeze-managed remote resource, also read and use the
+  [`breeze-sdk` skill](../breeze-sdk/SKILL.md); keep business behavior under
+  this skill in the owning capability.
 - Read [data-and-memory.md](references/data-and-memory.md) for JSON, large
   payloads, serialization, buffering, compression, or allocation-sensitive paths.
 - Read [resilience-and-observability.md](references/resilience-and-observability.md)

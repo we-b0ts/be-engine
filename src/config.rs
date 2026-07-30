@@ -13,6 +13,7 @@ mod artifacts;
 pub(crate) mod background_dependencies;
 mod background_feedback;
 mod background_memcached_feedback;
+mod background_motan_feedback;
 mod breeze_capture_feedback;
 mod case_limits;
 mod comparison_recording;
@@ -40,6 +41,10 @@ pub use background_feedback::{
 pub use background_memcached_feedback::{
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyReport, plan_breeze_memcached_background_dependency,
+};
+pub use background_motan_feedback::{
+    MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
+    MotanBackgroundDependencyReport, plan_motan_background_dependency,
 };
 pub use breeze_capture_feedback::{
     BreezeResourceCaptureFeedback, BreezeResourceCapturePlan, BreezeResourceCaptureReport,

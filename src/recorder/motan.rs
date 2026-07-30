@@ -34,6 +34,7 @@ struct PendingRequest {
     sequence: u64,
     frame: Frame,
     identity: RequestIdentity,
+    group: Option<String>,
     started: Instant,
 }
 
@@ -97,8 +98,8 @@ pub(crate) async fn handle_connected(
                 if !frame.request {
                     return Err(anyhow!("Motan client sent a response frame"));
                 }
-                let identity = frame
-                    .request_identity()
+                let metadata = frame
+                    .request_metadata()
                     .context("failed to decode Motan request identity")?;
                 sequence += 1;
                 bytes = bytes.saturating_add(frame.raw.len() as u64);
@@ -106,7 +107,8 @@ pub(crate) async fn handle_connected(
                 let request = PendingRequest {
                     sequence,
                     frame,
-                    identity,
+                    identity: metadata.identity,
+                    group: metadata.group,
                     started: Instant::now(),
                 };
                 let raw = request.frame.raw.clone();
@@ -322,6 +324,7 @@ async fn record_exchange(
             advertised_ip: context.advertised_ip,
             upstream_addr: context.upstream_addr.clone(),
             codec_version: request.frame.codec_version,
+            group: request.group,
             interface_name: request.identity.interface_name,
             method_name: request.identity.method_name,
             parameter_desc: request.identity.parameter_desc,

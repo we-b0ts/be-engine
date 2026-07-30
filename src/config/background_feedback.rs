@@ -372,6 +372,24 @@ fn ensure_same_selector(
                 && existing_separator == requested_separator
                 && existing_suffix == requested_suffix
         }
+        (
+            BackgroundDependencyRuleConfig::Motan {
+                group: existing_group,
+                interface_name: existing_interface,
+                method_name: existing_method,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Motan {
+                group: requested_group,
+                interface_name: requested_interface,
+                method_name: requested_method,
+                ..
+            },
+        ) => {
+            existing_group == requested_group
+                && existing_interface == requested_interface
+                && existing_method == requested_method
+        }
         _ => false,
     };
     ensure!(
@@ -458,6 +476,22 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
                 newline,
             );
             push_line(output, "response_role = \"runtime_state\"", newline);
+            push_assignment(output, "source_revision", source_revision, newline);
+            push_assignment(output, "source_evidence", source_evidence, newline);
+        }
+        BackgroundDependencyRuleConfig::Motan {
+            name,
+            group,
+            interface_name,
+            method_name,
+            source_revision,
+            source_evidence,
+        } => {
+            push_assignment(output, "name", name, newline);
+            push_line(output, "protocol = \"motan\"", newline);
+            push_assignment(output, "group", group, newline);
+            push_assignment(output, "interface_name", interface_name, newline);
+            push_assignment(output, "method_name", method_name, newline);
             push_assignment(output, "source_revision", source_revision, newline);
             push_assignment(output, "source_evidence", source_evidence, newline);
         }

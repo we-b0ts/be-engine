@@ -78,13 +78,15 @@ pub use config::{
     HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
-    MysqlConfig, MysqlRouteConfig, RecorderConfigInitOptions, RecorderConfigInitResult,
-    RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
-    TcpApplicationProtocol, TcpGatewayConfig, TcpProtocolDetectionConfig,
-    TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode, UdpGatewayConfig,
-    initialize_recorder_config, plan_allowed_unused_http_hosts, plan_background_dependency,
-    plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
-    plan_case_path_pattern_feedback,
+    MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
+    MotanBackgroundDependencyReport, MysqlConfig, MysqlRouteConfig, RecorderConfigInitOptions,
+    RecorderConfigInitResult, RecordingAccessPolicy, RecordingAccessRuleConfig,
+    RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol, TcpGatewayConfig,
+    TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
+    UdpGatewayConfig, initialize_recorder_config, plan_allowed_unused_http_hosts,
+    plan_background_dependency, plan_breeze_memcached_background_dependency,
+    plan_breeze_resource_capture, plan_case_path_pattern_feedback,
+    plan_motan_background_dependency,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};

@@ -1,17 +1,16 @@
 ---
 name: breeze-sdk
-description: "Design, implement, integrate, migrate, or review business-independent remote-resource SDK clients used with Breeze. Use for Memcached, Redis, MySQL, Kafka, queues such as MCQ or QueueService, Motan, Vintage service discovery, or other remote resources; keep business behavior in the owning backend capability."
+description: "Design, implement, integrate, migrate, or review shared Rust platform libraries under Breeze. Use for platform logging, TAuth2 authentication, Motan, Vintage service discovery, Memcached, Redis, MySQL, Kafka, queues such as MCQ or QueueService, and other reusable platform capabilities; keep business behavior in the owning backend capability."
 ---
 
 # Breeze SDK
 
-Build reusable consumer SDKs that turn logical remote-resource identities into
-correctly registered Breeze listeners and long-lived application clients.
-Preserve established Breeze descriptor and runtime compatibility without
-coupling business code to descriptor filenames, caller-selected ports, or
-resource lifecycle.
+Build the shared Rust platform library collection under Breeze. It includes
+platform foundations such as logging and authentication as well as reusable
+remote-resource SDKs. Preserve established platform contracts without coupling
+business code to platform implementation details.
 
-The consumer path is:
+For descriptor-backed resources, the consumer path is:
 
 ```text
 application composition root
@@ -25,36 +24,45 @@ The project CLI is not part of this resource path.
 
 ## Ownership
 
-Use this skill for business-independent remote-resource access whose identity,
-discovery, listener, or connection lifecycle is managed through Breeze.
-This explicitly includes Memcached, Redis, MySQL, Kafka, queues such as MCQ or
-QueueService, Motan, and Vintage service discovery. Treat Motan and Vintage as
-business-independent platform infrastructure, not as capability-owned provider
-clients. The set remains open to new Breeze-managed resource types.
+Use this skill for platform-wide reusable libraries owned under Breeze,
+including both platform foundations and business-independent remote-resource
+access. This explicitly includes logging, TAuth2 authentication, Motan,
+Vintage service discovery, Memcached, Redis, MySQL, Kafka, and queues such as
+MCQ or QueueService. Treat these as platform infrastructure, not as
+capability-owned implementations. The set remains open to new platform
+capabilities.
 
+- shared logging and observability foundations;
+- shared authentication and discovery lifecycles;
 - logical resource identity and descriptor parsing;
 - descriptor resolution and permitted registration through one generic policy;
 - reusable client, pool, producer, consumer, channel, or transport lifecycle;
 - `brz-*` package boundaries and application wiring; and
 - Breeze-specific tests and compatibility evidence.
 
-Classify by ownership, not by class name or protocol. Logging, serialization,
-authentication, metrics, and ordinary provider SDKs do not belong here merely
-because they are reusable. A remote-service client belongs only to the extent
-that it provides reusable Breeze-managed resource access.
+Classify by platform ownership, not by class name or protocol. Logging and
+TAuth2 are explicit platform-owned packages. Serialization, metrics,
+authentication, and ordinary provider SDKs do not belong merely because they
+are reusable; include them only when Breeze owns a platform-wide contract.
+
+Keep every Breeze-owned package under one Breeze package root, using
+`breeze/<package>` or the workspace-equivalent `crates/breeze/<package>`.
+Do not place Breeze-owned packages at unrelated top-level paths.
 
 Keep every business contract outside this skill: SQL and tables, cache keys and
 cache policy, queue topics and message schemas, RPC service interfaces and
-method semantics, provider request/response mapping, fallback decisions, and
-cross-resource orchestration. Put those concerns in a capability-owned adapter
-that depends on the narrow Breeze SDK client. This boundary applies even when
-the business behavior is currently simple; complexity is not the ownership
-test. For Motan, this exclusion applies to the invoked business service
-contract, not to the Motan SDK or protocol implementation.
+method semantics, authorization policy and whitelists, provider
+request/response mapping, fallback decisions, and cross-resource orchestration.
+Put those concerns in a capability-owned adapter that depends on the narrow
+Breeze SDK client. This boundary applies even when the business behavior is
+currently simple; complexity is not the ownership test. For Motan, this
+exclusion applies to the invoked business service contract, not to the Motan
+SDK or protocol implementation.
 
-Use the [`backend-engineering` skill](../backend-engineering/SKILL.md) for
-general code quality. The invoking workflow retains scope, sequencing,
-evidence gates, and delivery. The
+If it is not already active, read and use the
+[`backend-engineering` skill](../backend-engineering/SKILL.md) for general code
+quality. The invoking workflow retains scope, sequencing, evidence gates, and
+delivery. The
 [`traffic-e2e` skill](../traffic-e2e/SKILL.md) owns recording and replay
 operations; the
 [`platform-recording-init` skill](../platform-recording-init/SKILL.md) owns the
@@ -67,70 +75,46 @@ project or dependency is available.
 
 ## Required Workflow
 
-1. Inspect the source Java SDK behavior, existing descriptors, target
-   composition root, dependency configuration, and applicable repository
-   instructions. Do not infer resource identity from a package name or
-   protocol default.
-2. Enumerate each resource's complete logical identity and select one
-   descriptor policy: `RequireExisting`, `EnsurePresent`, or `CreateNew`.
-   Do not put recording, replay, comparison, test, or deployment scenario
-   names in Breeze SDK types or branches.
-3. Read [descriptor-lifecycle.md](references/descriptor-lifecycle.md) and
-   implement one shared, deterministic descriptor layer before resource
-   clients. Keep policy-specific mutation authority explicit.
-4. Read [resource-clients.md](references/resource-clients.md), classify the
-   reusable resource layer separately from its business adapter, and implement
-   only the needed resource packages. Construct long-lived clients in the
-   composition root and keep business semantics in the owning capability.
-5. For Motan or Vintage work, read
+1. Inspect the authoritative source SDK behavior and pinned implementation,
+   target composition root, dependency configuration, applicable repository
+   instructions, and existing descriptors when relevant. Inspect Java
+   artifacts when they are the applicable source evidence. Do not infer
+   resource identity from a package name or protocol default.
+2. For each descriptor-backed resource, enumerate its complete logical
+   identity and select one descriptor policy: `RequireExisting`,
+   `EnsurePresent`, or `CreateNew`. Do not put recording, replay, comparison,
+   test, or deployment scenario names in Breeze SDK types or branches.
+3. For descriptor-backed resources, read
+   [descriptor-lifecycle.md](references/descriptor-lifecycle.md) and implement
+   one shared, deterministic descriptor layer before resource clients. Keep
+   policy-specific mutation authority explicit.
+4. For logging or TAuth2 work, read
+   [platform-foundations.md](references/platform-foundations.md), implement
+   only the needed foundation, and initialize it in the composition root.
+5. For a remote-resource package, read
+   [resource-packages.md](references/resource-packages.md), separate the
+   reusable resource lifecycle from its business adapter, and construct the
+   long-lived client in the composition root.
+6. For Motan or Vintage work, also read
    [motan-vintage.md](references/motan-vintage.md) and preserve the source
    service's pinned discovery, failover, node protection, and snapshot
    semantics.
-6. Read [verification.md](references/verification.md), run focused checks for
-   every affected mode and resource, then run repository-required gates.
-7. Return exact resources, modes, changed behavior, checks, and blockers to the
+7. For remote-resource work, read
+   [verification.md](references/verification.md). Run the checks selected by
+   each applicable reference, then run repository-required gates.
+8. Return exact packages, modes, changed behavior, checks, and blockers to the
    invoking workflow. Do not declare a rewrite, replay, or migration complete.
-
-## Non-Negotiable Runtime Rules
-
-- Treat the configured Breeze descriptor and snapshot directories as shared
-  runtime state used in place across processes, not as application
-  configuration. Never copy, mirror, cache, relocate, or stage them into a
-  project-local location.
-- `RequireExisting`: reuse one exact descriptor; fail when it is absent.
-- `EnsurePresent`: reuse one exact descriptor; register it when absent.
-- `CreateNew`: fail when the exact descriptor exists; register it when absent.
-- Every policy rejects malformed, duplicate, or conflicting claims. No policy
-  may rewrite, rename, delete, replace, or renumber an existing descriptor.
-- Registration must lock the shared directory, rescan under the lock, select
-  an eligible random port, create the descriptor atomically, and wait with a
-  bounded deadline for the Breeze listener.
-- The application composition root supplies complete logical identities and
-  generic Breeze settings. Each `brz-*` resource package calls the shared
-  descriptor library and constructs its own long-lived client.
-- A project CLI or runner may pass one generic descriptor policy and topology
-  settings selected by its caller. It MUST NOT infer that policy by inspecting
-  runner state, enumerate resources, invoke a descriptor resolver per resource,
-  resolve ports, export descriptor-derived `host:port` values, or change when
-  a resource is added.
-- Treat the descriptor implementation as an internal SDK library. A diagnostic
-  executable may inspect it manually, but normal application startup MUST NOT
-  depend on a descriptor executable.
-- Never parse replay sessions, dependency JSONL, recorded commands, keys, or
-  target ports to infer resource identity or configuration.
-- Never substitute a protocol-default port for missing Breeze evidence.
-- Keep parsing independent of directory iteration order, bound all waits and
-  operations, and do not log secrets.
 
 ## Result Contract
 
 Report:
 
 ```text
-resources, descriptor_policies, identity_source, descriptor_behavior,
-changed_packages, application_wiring, checks, blockers
+packages, platform_contracts, lifecycle, application_wiring, checks, blockers
 ```
 
-For any startup blocker, identify the missing or conflicting identity
-evidence, the responsible owner, the acceptance check, and the safe resume
-point. Let the invoking workflow determine the overall task status.
+For descriptor-backed packages, also report `descriptor_policies`,
+`identity_source`, and `descriptor_behavior`. For any startup blocker, identify
+the missing or conflicting platform evidence, the responsible owner, the
+acceptance check, and the safe resume point. Let the invoking workflow
+determine the overall task status.

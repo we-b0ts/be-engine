@@ -29,6 +29,12 @@ pub(crate) struct RequestIdentity {
     pub(crate) method_sign: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RequestMetadata {
+    pub(crate) identity: RequestIdentity,
+    pub(crate) group: Option<String>,
+}
+
 impl RequestIdentity {
     pub(crate) fn command(&self) -> String {
         match (&self.interface_name, &self.method_name, &self.method_sign) {
@@ -131,6 +137,10 @@ fn parse_frame(raw: Vec<u8>) -> Result<Frame> {
 
 impl Frame {
     pub(crate) fn request_identity(&self) -> Result<RequestIdentity> {
+        Ok(self.request_metadata()?.identity)
+    }
+
+    pub(crate) fn request_metadata(&self) -> Result<RequestMetadata> {
         if !self.request {
             bail!("cannot decode request identity from Motan response");
         }
@@ -143,7 +153,7 @@ impl Frame {
         } else {
             body.to_vec()
         };
-        parse_java_method_block(&decoded, self.codec_version)
+        parse_java_request_metadata(&decoded, self.codec_version)
     }
 }
 
@@ -186,7 +196,7 @@ fn decompress_identity(body: &[u8]) -> Result<Vec<u8>> {
     Ok(decoded)
 }
 
-fn parse_java_method_block(body: &[u8], codec_version: u8) -> Result<RequestIdentity> {
+fn parse_java_request_metadata(body: &[u8], codec_version: u8) -> Result<RequestMetadata> {
     if body.get(..4) != Some([0xAC, 0xED, 0x00, 0x05].as_slice()) {
         bail!("Motan body does not start with a Java serialization stream");
     }
@@ -194,19 +204,86 @@ fn parse_java_method_block(body: &[u8], codec_version: u8) -> Result<RequestIden
     let mut cursor = 0;
     let first = read_modified_utf(block, &mut cursor)?;
     if codec_version == 2 && first == "1" {
-        return Ok(RequestIdentity {
+        let identity = RequestIdentity {
             interface_name: None,
             method_name: None,
             parameter_desc: None,
             method_sign: Some(read_modified_utf(block, &mut cursor)?),
+        };
+        return Ok(RequestMetadata {
+            group: request_group(body, block.get(cursor..).unwrap_or_default()),
+            identity,
         });
     }
-    Ok(RequestIdentity {
+    let identity = RequestIdentity {
         interface_name: Some(first),
         method_name: Some(read_modified_utf(block, &mut cursor)?),
         parameter_desc: Some(read_modified_utf(block, &mut cursor)?),
         method_sign: None,
+    };
+    Ok(RequestMetadata {
+        group: request_group(body, block.get(cursor..).unwrap_or_default()),
+        identity,
     })
+}
+
+fn request_group(body: &[u8], first_block_remainder: &[u8]) -> Option<String> {
+    if let Some(group) = parse_attachment_group(first_block_remainder) {
+        return group;
+    }
+    for block in terminal_block_data(body) {
+        if let Some(group) = parse_attachment_group(block) {
+            return group;
+        }
+    }
+    None
+}
+
+fn terminal_block_data(body: &[u8]) -> Vec<&[u8]> {
+    let mut candidates = Vec::new();
+    for index in 4..body.len() {
+        let Some(token) = body.get(index).copied() else {
+            continue;
+        };
+        let (payload_start, payload_len) = match token {
+            TC_BLOCKDATA => {
+                let Some(len) = body.get(index + 1).copied() else {
+                    continue;
+                };
+                (index + 2, usize::from(len))
+            }
+            TC_BLOCKDATALONG => {
+                let Some(raw_len) = body.get(index + 1..index + 5) else {
+                    continue;
+                };
+                let len =
+                    u32::from_be_bytes([raw_len[0], raw_len[1], raw_len[2], raw_len[3]]) as usize;
+                (index + 5, len)
+            }
+            _ => continue,
+        };
+        if payload_start.checked_add(payload_len) == Some(body.len()) {
+            candidates.push(&body[payload_start..]);
+        }
+    }
+    candidates
+}
+
+fn parse_attachment_group(block: &[u8]) -> Option<Option<String>> {
+    let count = u32::from_be_bytes(block.get(..4)?.try_into().ok()?) as usize;
+    if count > 1024 {
+        return None;
+    }
+    let mut cursor = 4;
+    let mut group = None;
+    for _ in 0..count {
+        let name = read_modified_utf(block, &mut cursor).ok()?;
+        let value = read_modified_utf(block, &mut cursor).ok()?;
+        if name == "group" {
+            group = Some(value);
+        }
+    }
+    (cursor == block.len()).then_some(group)
 }
 
 fn first_block_data(body: &[u8]) -> Result<&[u8]> {
@@ -277,12 +354,26 @@ mod tests {
     fn java_method_body(values: &[&str]) -> Vec<u8> {
         let mut block = Vec::new();
         for value in values {
-            block.extend_from_slice(&(value.len() as u16).to_be_bytes());
-            block.extend_from_slice(value.as_bytes());
+            push_utf(&mut block, value);
         }
         let mut body = vec![0xAC, 0xED, 0x00, 0x05, TC_BLOCKDATA, block.len() as u8];
         body.extend_from_slice(&block);
         body
+    }
+
+    fn push_utf(output: &mut Vec<u8>, value: &str) {
+        output.extend_from_slice(&(value.len() as u16).to_be_bytes());
+        output.extend_from_slice(value.as_bytes());
+    }
+
+    fn attachment_block(values: &[(&str, &str)]) -> Vec<u8> {
+        let mut block = Vec::new();
+        block.extend_from_slice(&(values.len() as u32).to_be_bytes());
+        for (name, value) in values {
+            push_utf(&mut block, name);
+            push_utf(&mut block, value);
+        }
+        block
     }
 
     pub(crate) fn frame(
@@ -329,6 +420,34 @@ mod tests {
                 parameter_desc: Some("long".to_string()),
                 method_sign: None,
             }
+        );
+    }
+
+    #[test]
+    fn extracts_group_from_inline_and_terminal_request_attachments() {
+        let values = ["example.UserService", "refresh", "void"];
+        let attachments =
+            attachment_block(&[("application", "example-client"), ("group", "example-rpc")]);
+
+        let mut inline = java_method_body(&values);
+        let block_len = usize::from(inline[5]);
+        inline.extend_from_slice(&attachments);
+        inline[5] = u8::try_from(block_len + attachments.len()).unwrap();
+        let inline_frame = parse_frame(frame(1, true, 1, 0, &inline)).unwrap();
+        assert_eq!(
+            inline_frame.request_metadata().unwrap().group.as_deref(),
+            Some("example-rpc")
+        );
+
+        let mut terminal = java_method_body(&values);
+        terminal.extend_from_slice(&[0x75, 0x70, 0x00, 0x00]);
+        terminal.push(TC_BLOCKDATA);
+        terminal.push(u8::try_from(attachments.len()).unwrap());
+        terminal.extend_from_slice(&attachments);
+        let terminal_frame = parse_frame(frame(2, true, 1, 0, &terminal)).unwrap();
+        assert_eq!(
+            terminal_frame.request_metadata().unwrap().group.as_deref(),
+            Some("example-rpc")
         );
     }
 

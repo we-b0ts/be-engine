@@ -3,6 +3,15 @@
 Use this reference before implementing target configuration loading or
 accepting target startup as migration-compatible.
 
+## Contents
+
+- Contract
+- Mandatory loader boundary
+- Discover the source loader
+- Materialize local runtime inputs
+- Implement compatible loading
+- Verify
+
 ## Contract
 
 Treat the source service's configuration as an external runtime contract.
@@ -63,21 +72,30 @@ diagnostic lifecycle as non-evidence.
 ## Materialize Local Runtime Inputs
 
 When source-proven runtime inputs must be materialized locally, use the
-repository's Git-ignored runtime-input location. It is permitted to copy the
-authoritative configuration out of an authorized source image or runtime
-without modifying that source. Preserve its supplied format and the file and
-directory relationships required by the source loader.
+repository's Git-ignored runtime-input location. Only an authoritative startup
+configuration or SDK-owned snapshot directory that already exists in the
+source container may be copied. Copy the smallest complete root; never copy one
+selected file, a selected file set, or extracted keys. Preserve its supplied
+format and directory relationships.
 
-Let the discovered configuration contract determine whether to copy one file,
-a related file set, or a complete configuration directory. Materialize one
-file only when the source loader's authoritative external input is itself that
-single file; never cherry-pick files or keys from a directory-based or layered
-loader. Environment values and file configuration may both be materialized
-locally. Keep sensitive values out of commands and reports, and never commit
-local runtime inputs. Treat the local location as staging, not as a new product
-configuration contract: pass its paths through the target's normal startup
-boundary and do not translate the source artifacts into a parallel target-only
-format.
+Treat an artifact as a snapshot only when the source SDK or loader creates and
+loads it during its normal lifecycle using a source-defined path and format. A
+one-off dump, export, decryption, or diagnostic artifact is not a snapshot,
+regardless of its name or location.
+
+Never create a runtime input by dumping, decrypting, extracting, or translating
+source-process memory, remote responses, logs, or debug output. A constant
+present in the source repository or pinned compiled artifact may be inspected,
+decompiled when necessary, and migrated directly into target source code. For
+remote-backed configuration, discovery, registry, or secrets, implement the
+source SDK's initialization, retrieval, refresh, fallback, and any
+source-defined snapshot lifecycle. If the source SDK keeps remotely obtained
+state only in memory, the target must not invent a snapshot or local cache. A
+copied source-owned snapshot is only compatible bootstrap input, not a static
+target configuration contract. Keep sensitive values out of commands and
+reports, never commit local runtime inputs, and pass an allowed configuration
+root through the target's normal startup boundary without translating it into
+a target-only format.
 
 ## Implement Compatible Loading
 

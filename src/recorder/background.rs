@@ -21,7 +21,7 @@ const INITIAL_LOAD_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub(crate) struct BackgroundDependencyMatcher {
-    http_rules: Vec<BackgroundDependencyRuleConfig>,
+    independent_rules: Vec<BackgroundDependencyRuleConfig>,
     socks_dir: PathBuf,
     memcached: Mutex<MemcachedRules>,
     initial_loads: InitialLoads,
@@ -82,13 +82,14 @@ impl BackgroundDependencyMatcher {
     }
 
     fn from_rules_in(rules: &[BackgroundDependencyRuleConfig], socks_dir: &Path) -> Result<Self> {
-        let mut http_rules = Vec::new();
+        let mut independent_rules = Vec::new();
         let mut memcached = MemcachedRules::default();
         let mut initial_loads = InitialLoads::default();
         for rule in rules {
             match rule {
-                BackgroundDependencyRuleConfig::Http { .. } => {
-                    http_rules.push(rule.clone());
+                BackgroundDependencyRuleConfig::Http { .. }
+                | BackgroundDependencyRuleConfig::Motan { .. } => {
+                    independent_rules.push(rule.clone());
                 }
                 BackgroundDependencyRuleConfig::Memcached {
                     name,
@@ -124,7 +125,7 @@ impl BackgroundDependencyMatcher {
         }
 
         let matcher = Self {
-            http_rules,
+            independent_rules,
             socks_dir: socks_dir.to_path_buf(),
             memcached: Mutex::new(memcached),
             initial_loads,
@@ -171,7 +172,7 @@ impl BackgroundDependencyMatcher {
             }
             return matched;
         }
-        self.http_rules
+        self.independent_rules
             .iter()
             .find(|rule| rule.matches(event))
             .map(|rule| BackgroundDependencyMatch {

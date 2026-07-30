@@ -22,6 +22,16 @@ evidence, and advance only on current proof.
   Whenever source startup uses configuration files or directories, trace the
   loader from the source runtime and implement compatible target
   initialization and loading before accepting target startup.
+- Never turn source-process state or remotely obtained values into target
+  configuration. Do not dump, decrypt, extract, or translate in-memory values,
+  remote responses, logs, or debug output into target-local files. A constant
+  present in the source repository or pinned compiled artifact may be
+  inspected, decompiled when necessary, and migrated directly into target
+  source code. Use the source runtime's authoritative configuration and any
+  source-defined SDK-owned snapshot mechanism, and implement compatible
+  initialization, retrieval, loading, refresh, and fallback behavior. Do not
+  invent a snapshot when the source SDK keeps remotely obtained state only in
+  memory.
 - Treat the source repository and source application implementation as
   immutable evidence. Never edit source code, replace source classes through a
   recording adapter, patch source artifacts, or change source business
@@ -54,18 +64,14 @@ owns production code quality and local verification. Companion results inform
 this workflow but cannot advance, terminate, or declare the migration
 complete.
 
-When target-code work designs, implements, integrates, migrates, or reviews
-business-independent remote-resource access managed through Breeze, read the
-[`breeze-sdk` skill](../breeze-sdk/SKILL.md) completely before that work and
-use it for that work. This explicitly includes Memcached, Redis, MySQL, Kafka,
-queues such as MCQ or QueueService, Motan, Vintage service discovery, and other
-Breeze-managed remote resources. Breeze owns reusable resource identity,
-discovery, runtime lifecycle, and client construction; business contracts and
-behavior remain in the target capability, while rewrite retains slice
-sequencing, evidence gates, completion, and delivery. Require target resource
-packages to use the shared Breeze descriptor library directly. Do not accept a
-project CLI that enumerates resources, invokes a descriptor resolver, or
-injects descriptor-derived ports.
+When migration work identifies a Breeze-owned platform-library gap, keep slice
+sequencing, evidence gates, completion, and delivery under this skill, and
+route target-code work through `backend-engineering`; its `breeze-sdk` routing
+owns the reusable platform contract and lifecycle. Business contracts and
+behavior remain in the target capability. Require descriptor-backed target
+resource packages to use the shared Breeze descriptor library directly. Do not
+accept a project CLI that enumerates resources, invokes a descriptor resolver,
+or injects descriptor-derived ports.
 
 Do not modify traffic-e2e to complete a rewrite. Route a proven Recorder or
 Replay capability gap to `traffic-e2e-system`, and do not add a

@@ -6,10 +6,11 @@ use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     AllowedUnusedHttpHostFeedback, BackgroundDependencyFeedback,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeResourceCaptureFeedback,
-    CasePathPatternAuthority, CasePathPatternFeedback, RecorderConfigInitOptions,
-    initialize_recorder_config, plan_allowed_unused_http_hosts, plan_background_dependency,
-    plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
-    plan_case_path_pattern_feedback,
+    CasePathPatternAuthority, CasePathPatternFeedback, MotanBackgroundDependencyFeedback,
+    RecorderConfigInitOptions, initialize_recorder_config, plan_allowed_unused_http_hosts,
+    plan_background_dependency, plan_breeze_memcached_background_dependency,
+    plan_breeze_resource_capture, plan_case_path_pattern_feedback,
+    plan_motan_background_dependency,
 };
 
 #[derive(Debug, Args)]
@@ -56,7 +57,7 @@ struct PlanArgs {
 #[derive(Debug, Subcommand)]
 enum PlanStrategy {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostArgs),
-    BackgroundDependencies(BackgroundDependencyArgs),
+    BackgroundDependencies(Box<BackgroundDependencyArgs>),
     BreezeResourceCapture(BreezeResourceCaptureArgs),
     CasePathPatterns(PatternFeedbackArgs),
 }
@@ -70,7 +71,7 @@ struct ApplyArgs {
 #[derive(Debug, Subcommand)]
 enum ApplyStrategy {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostArgs),
-    BackgroundDependencies(BackgroundDependencyArgs),
+    BackgroundDependencies(Box<BackgroundDependencyArgs>),
     BreezeResourceCapture(BreezeResourceCaptureArgs),
     CasePathPatterns(ApplyPatternFeedbackArgs),
 }
@@ -109,6 +110,12 @@ struct BackgroundDependencyArgs {
     #[arg(long)]
     path_prefix: Option<String>,
     #[arg(long)]
+    group: Option<String>,
+    #[arg(long)]
+    interface_name: Option<String>,
+    #[arg(long)]
+    method_name: Option<String>,
+    #[arg(long)]
     breeze_resource: Option<String>,
     #[arg(long, default_value = "get")]
     command: String,
@@ -128,7 +135,7 @@ struct BackgroundDependencyArgs {
     source_revision: String,
     #[arg(
         long,
-        help = "Single-line source evidence proving process-level ownership and the selected response role"
+        help = "Single-line source evidence proving process-level ownership and the protocol's required response relationship"
     )]
     evidence: String,
 }
@@ -137,6 +144,7 @@ struct BackgroundDependencyArgs {
 enum BackgroundProtocolArg {
     Http,
     Memcached,
+    Motan,
 }
 
 #[derive(Debug, Args)]
@@ -214,7 +222,7 @@ fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
             super::print_json(plan.report())
         }
         PlanStrategy::BackgroundDependencies(args) => {
-            plan_background_dependency_args(config, args, false)
+            plan_background_dependency_args(config, *args, false)
         }
         PlanStrategy::BreezeResourceCapture(args) => {
             let plan = plan_breeze_resource_capture(breeze_capture_feedback(config, args))?;
@@ -236,7 +244,7 @@ fn apply(target_root: PathBuf, strategy: ApplyStrategy) -> Result<()> {
             super::print_json(&report)
         }
         ApplyStrategy::BackgroundDependencies(args) => {
-            plan_background_dependency_args(config, args, true)
+            plan_background_dependency_args(config, *args, true)
         }
         ApplyStrategy::BreezeResourceCapture(args) => {
             let report =
@@ -324,6 +332,24 @@ fn plan_background_dependency_args(
                 super::print_json(plan.report())
             }
         }
+        BackgroundProtocolArg::Motan => {
+            let feedback = MotanBackgroundDependencyFeedback {
+                config_path,
+                replay_report_path: args.replay_report,
+                name: args.name,
+                group: required(args.group, "--group", "motan")?,
+                interface_name: required(args.interface_name, "--interface-name", "motan")?,
+                method_name: required(args.method_name, "--method-name", "motan")?,
+                source_revision: args.source_revision,
+                source_evidence: args.evidence,
+            };
+            let plan = plan_motan_background_dependency(feedback)?;
+            if apply {
+                super::print_json(&plan.apply()?)
+            } else {
+                super::print_json(plan.report())
+            }
+        }
     }
 }
 
@@ -354,6 +380,12 @@ mod tests {
     struct TestCli {
         #[command(flatten)]
         init: InitArgs,
+    }
+
+    #[derive(Parser)]
+    struct BackgroundTestCli {
+        #[command(flatten)]
+        background: BackgroundDependencyArgs,
     }
 
     #[test]
@@ -387,5 +419,46 @@ mod tests {
         assert_eq!(explicit.init.readiness_path, "/ready");
         assert_eq!(explicit.init.readiness_status, 200);
         assert_eq!(explicit.init.candidate_http_port, 8181);
+    }
+
+    #[test]
+    fn accepts_exact_motan_background_selector() {
+        let parsed = BackgroundTestCli::try_parse_from([
+            "test",
+            "--protocol",
+            "motan",
+            "--name",
+            "kunpeng-refresh",
+            "--group",
+            "kunpeng-config-rpc",
+            "--interface-name",
+            "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc",
+            "--method-name",
+            "getConfigByName",
+            "--replay-report",
+            "replay-report.json",
+            "--source-revision",
+            "0123456789abcdef",
+            "--evidence",
+            "MapiConfigLoader.java:init scheduled refresh",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            parsed.background.protocol,
+            BackgroundProtocolArg::Motan
+        ));
+        assert_eq!(
+            parsed.background.group.as_deref(),
+            Some("kunpeng-config-rpc")
+        );
+        assert_eq!(
+            parsed.background.interface_name.as_deref(),
+            Some("com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc")
+        );
+        assert_eq!(
+            parsed.background.method_name.as_deref(),
+            Some("getConfigByName")
+        );
     }
 }

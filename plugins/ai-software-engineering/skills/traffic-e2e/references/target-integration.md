@@ -96,13 +96,29 @@ widening interception.
 
 ## Runtime Input Materialization
 
-Use the Git-ignored `.traffic-e2e/runtime/` directory only for local inputs
-proven to come directly from source process environment, startup arguments, or
-machine-local configuration. Use `.traffic-e2e/runtime/config/` for files or
-directories synchronized from the source container and preserve the
-relationships required by their consumers. Use `.traffic-e2e/runtime/.env` for
-materialized environment variables. Other local runtime dependencies may use
-purpose-named child directories when needed.
+Use the Git-ignored `.traffic-e2e/runtime/` directory only for source-proven
+runtime inputs allowed below: process environment, startup arguments,
+machine-local configuration, or a complete authoritative configuration or
+SDK-owned snapshot root already present in the source container. Use
+`.traffic-e2e/runtime/config/` only for the smallest complete allowed root.
+Never copy one selected file or selected subset. Preserve the directory
+relationships required by the source loader.
+
+Treat an artifact as a snapshot only when the source SDK or loader creates and
+loads it during its normal lifecycle using a source-defined path and format. A
+one-off dump, export, decryption, or diagnostic artifact is not a snapshot,
+regardless of its name or location.
+
+Never populate it by dumping, decrypting, extracting, or translating
+source-process memory, remote responses, logs, or debug output. A constant
+present in the source repository or pinned compiled artifact may be inspected,
+decompiled when necessary, and migrated directly into target source code. For
+remote-backed configuration, discovery, registry, or secrets, the target must
+implement the source SDK's initialization, retrieval, refresh, fallback, and
+any source-defined snapshot loading. It must not invent a snapshot when the
+source SDK keeps that state only in memory. Use `.traffic-e2e/runtime/.env` for
+materialized environment variables. Other source-proven machine-local runtime
+dependencies may use purpose-named child directories when needed.
 
 Initialize only the runtime root; create its contents only when source evidence
 requires them. The target facade passes these paths through normal startup

@@ -1,4 +1,4 @@
 interface:
   display_name: "Breeze SDK"
-  short_description: "Build Breeze-managed remote resource SDKs"
-  default_prompt: "Use $breeze-sdk to implement or review business-independent Breeze remote-resource clients while keeping business contracts and behavior in capability adapters."
+  short_description: "Shared Rust platform libraries for Breeze"
+  default_prompt: "Use $breeze-sdk to implement or review shared Breeze platform libraries while keeping business behavior in capability adapters."

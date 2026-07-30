@@ -1063,6 +1063,27 @@ replans against the current recorder config and replay report immediately
 before its atomic write. One rule owns one exact authority, method, and path
 prefix; use separate rules for distinct request families.
 
+Source-proven independent Motan process traffic uses one exact RPC identity:
+
+```bash
+traffic-e2e config recorder apply background-dependencies \
+  --target-root . \
+  --protocol motan \
+  --name kunpeng-refresh \
+  --group kunpeng-config-rpc \
+  --interface-name com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc \
+  --method-name getConfigByName \
+  --replay-report <same-finalized-replay-report.json> \
+  --source-revision 0123456789abcdef \
+  --evidence 'MapiConfigLoader.java:init scheduled refresh unrelated to selected API'
+```
+
+The rule stores no node hostname, port, Vintage alias, or request payload. It
+matches Motan exchanges with the exact Vintage service group, interface, and
+method. Planning requires a matching unused case exchange and rejects the
+selector when the same RPC command appears in unmatched, unsupported, or unsafe
+target traffic.
+
 A source scheduler that builds response-driving local cache state can instead
 use the current narrow Breeze Memcached rule:
 

@@ -40,65 +40,90 @@ pub enum BackgroundDependencyRuleConfig {
         source_revision: String,
         source_evidence: String,
     },
+    Motan {
+        name: String,
+        group: String,
+        interface_name: String,
+        method_name: String,
+        source_revision: String,
+        source_evidence: String,
+    },
 }
 
 impl BackgroundDependencyRuleConfig {
     pub fn name(&self) -> &str {
         match self {
-            Self::Http { name, .. } | Self::Memcached { name, .. } => name,
+            Self::Http { name, .. } | Self::Memcached { name, .. } | Self::Motan { name, .. } => {
+                name
+            }
         }
     }
 
     pub(crate) fn matches(&self, event: &RecorderEvent) -> bool {
-        let Self::Http {
-            authorities,
-            methods,
-            path_prefixes,
-            ..
-        } = self
-        else {
-            return false;
-        };
-        let RecorderEvent::HttpExchange(exchange) = event else {
-            return false;
-        };
-        let Some(authority) = exchange
-            .authority
-            .as_deref()
-            .and_then(normalize_authority)
-            .or_else(|| {
-                exchange
+        match (self, event) {
+            (
+                Self::Http {
+                    authorities,
+                    methods,
+                    path_prefixes,
+                    ..
+                },
+                RecorderEvent::HttpExchange(exchange),
+            ) => {
+                let Some(authority) = exchange
+                    .authority
+                    .as_deref()
+                    .and_then(normalize_authority)
+                    .or_else(|| {
+                        exchange
+                            .uri
+                            .parse::<Uri>()
+                            .ok()
+                            .and_then(|uri| uri.authority().map(ToString::to_string))
+                            .as_deref()
+                            .and_then(normalize_authority)
+                    })
+                else {
+                    return false;
+                };
+                let path = exchange
                     .uri
                     .parse::<Uri>()
                     .ok()
-                    .and_then(|uri| uri.authority().map(ToString::to_string))
-                    .as_deref()
-                    .and_then(normalize_authority)
-            })
-        else {
-            return false;
-        };
-        let path = exchange
-            .uri
-            .parse::<Uri>()
-            .ok()
-            .map(|uri| uri.path().to_string())
-            .unwrap_or_else(|| {
-                exchange
-                    .uri
-                    .split('?')
-                    .next()
-                    .unwrap_or(&exchange.uri)
-                    .to_string()
-            });
+                    .map(|uri| uri.path().to_string())
+                    .unwrap_or_else(|| {
+                        exchange
+                            .uri
+                            .split('?')
+                            .next()
+                            .unwrap_or(&exchange.uri)
+                            .to_string()
+                    });
 
-        authorities
-            .iter()
-            .any(|candidate| normalize_authority(candidate).as_deref() == Some(&authority))
-            && methods
-                .iter()
-                .any(|candidate| candidate.eq_ignore_ascii_case(&exchange.method))
-            && path_prefixes.iter().any(|prefix| path.starts_with(prefix))
+                authorities
+                    .iter()
+                    .any(|candidate| normalize_authority(candidate).as_deref() == Some(&authority))
+                    && methods
+                        .iter()
+                        .any(|candidate| candidate.eq_ignore_ascii_case(&exchange.method))
+                    && path_prefixes.iter().any(|prefix| path.starts_with(prefix))
+            }
+            (
+                Self::Motan {
+                    group,
+                    interface_name,
+                    method_name,
+                    ..
+                },
+                RecorderEvent::MotanExchange(exchange),
+            ) => {
+                !exchange.heartbeat
+                    && exchange.group.as_deref() == Some(group)
+                    && exchange.interface_name.as_deref() == Some(interface_name)
+                    && exchange.method_name.as_deref() == Some(method_name)
+            }
+            _ => false,
+        }
     }
 }
 
@@ -158,6 +183,26 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 if *response_role != BackgroundDependencyResponseRole::RuntimeState {
                     bail!(
                         "Memcached background dependency rule {name:?} must use response_role = \"runtime_state\""
+                    );
+                }
+                validate_source_metadata(source_revision, source_evidence)?;
+            }
+            BackgroundDependencyRuleConfig::Motan {
+                group,
+                interface_name,
+                method_name,
+                source_revision,
+                source_evidence,
+                ..
+            } => {
+                validate_motan_identity(name, "group", group, 256)?;
+                validate_motan_identity(name, "interface_name", interface_name, 512)?;
+                validate_motan_identity(name, "method_name", method_name, 256)?;
+                if interface_name == "com.weibo.api.motan.rpc.heartbeat"
+                    && method_name == "heartbeat"
+                {
+                    bail!(
+                        "Motan heartbeat is protocol-owned and cannot be configured as a background dependency rule"
                     );
                 }
                 validate_source_metadata(source_revision, source_evidence)?;
@@ -261,8 +306,45 @@ fn rules_overlap(
                 && left_start <= right_end
                 && right_start <= left_end
         }
+        (
+            BackgroundDependencyRuleConfig::Motan {
+                group: left_group,
+                interface_name: left_interface,
+                method_name: left_method,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Motan {
+                group: right_group,
+                interface_name: right_interface,
+                method_name: right_method,
+                ..
+            },
+        ) => {
+            left_group == right_group
+                && left_interface == right_interface
+                && left_method == right_method
+        }
         _ => false,
     }
+}
+
+fn validate_motan_identity(
+    rule_name: &str,
+    field: &str,
+    value: &str,
+    max_len: usize,
+) -> Result<()> {
+    validate_single_line(
+        &format!("Motan background dependency {field}"),
+        value,
+        max_len,
+    )?;
+    if value.contains(['*', '#']) {
+        bail!(
+            "Motan background dependency rule {rule_name:?} {field} must be exact and cannot contain wildcards or '#'"
+        );
+    }
+    Ok(())
 }
 
 fn validate_breeze_identity(rule_name: &str, identity: &str) -> Result<()> {
@@ -433,7 +515,8 @@ mod tests {
 
     use super::*;
     use crate::config::AppConfig;
-    use crate::recorder::{BodyCapture, HttpExchangeEvent};
+    use crate::dependency::DependencyExchangeOutcome;
+    use crate::recorder::{BodyCapture, HttpExchangeEvent, MotanExchangeEvent};
 
     fn http_event(authority: &str, method: &str, uri: &str) -> RecorderEvent {
         RecorderEvent::HttpExchange(HttpExchangeEvent {
@@ -476,6 +559,41 @@ mod tests {
             source_revision: "0123456789abcdef".to_string(),
             source_evidence: "TopUserServiceImpl.java:691 scheduled local cache warm".to_string(),
         }
+    }
+
+    fn motan_event(
+        group: &str,
+        interface_name: &str,
+        method_name: &str,
+        heartbeat: bool,
+    ) -> RecorderEvent {
+        RecorderEvent::MotanExchange(MotanExchangeEvent {
+            id: Uuid::new_v4(),
+            connection_id: Uuid::new_v4(),
+            sequence: 1,
+            timestamp: Utc::now(),
+            client_addr: None,
+            target_host: "vintage-node-10-145-1-1.trp.test".to_string(),
+            target_port: 8882,
+            target_addr: "vintage-node-10-145-1-1.trp.test:8882".to_string(),
+            advertised_ip: "198.19.0.10".parse().unwrap(),
+            upstream_addr: "10.145.1.1:8882".to_string(),
+            codec_version: 1,
+            group: Some(group.to_string()),
+            interface_name: Some(interface_name.to_string()),
+            method_name: Some(method_name.to_string()),
+            parameter_desc: None,
+            method_sign: None,
+            command: format!("{interface_name}#{method_name}"),
+            request: crate::recorder::capture_body(&[], 0),
+            response_status: "value".to_string(),
+            response: crate::recorder::capture_body(&[], 0),
+            heartbeat,
+            outcome: DependencyExchangeOutcome::Response,
+            duration_ms: 1,
+            replay_safe: true,
+            parse_warnings: Vec::new(),
+        })
     }
 
     #[test]
@@ -532,6 +650,107 @@ mod tests {
             .background_dependencies
             .push(duplicate.recording.background_dependencies[0].clone());
         assert!(duplicate.validate().is_err());
+    }
+
+    #[test]
+    fn motan_rule_matches_exact_business_method_but_never_heartbeat() {
+        let interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc";
+        let method_name = "getConfigByName";
+        let rule = BackgroundDependencyRuleConfig::Motan {
+            name: "kunpeng-refresh".to_string(),
+            group: "kunpeng-config-rpc".to_string(),
+            interface_name: interface_name.to_string(),
+            method_name: method_name.to_string(),
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "MapiConfigLoader.java:init scheduled refresh".to_string(),
+        };
+
+        assert!(rule.matches(&motan_event(
+            "kunpeng-config-rpc",
+            interface_name,
+            method_name,
+            false
+        )));
+        assert!(!rule.matches(&motan_event(
+            "kunpeng-config-rpc-sandbox",
+            interface_name,
+            method_name,
+            false
+        )));
+        assert!(!rule.matches(&motan_event(
+            "kunpeng-config-rpc",
+            interface_name,
+            "getOtherConfig",
+            false
+        )));
+        let heartbeat_rule = BackgroundDependencyRuleConfig::Motan {
+            name: "invalid-heartbeat-background".to_string(),
+            group: "motan-heartbeat".to_string(),
+            interface_name: "com.weibo.api.motan.rpc.heartbeat".to_string(),
+            method_name: "heartbeat".to_string(),
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "heartbeat must remain protocol-owned".to_string(),
+        };
+        assert!(!heartbeat_rule.matches(&motan_event(
+            "motan-heartbeat",
+            "com.weibo.api.motan.rpc.heartbeat",
+            "heartbeat",
+            true,
+        )));
+    }
+
+    #[test]
+    fn parses_and_validates_exact_motan_background_rules() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [recording]
+
+            [[recording.background_dependencies]]
+            name = "kunpeng-refresh"
+            protocol = "motan"
+            group = "kunpeng-config-rpc"
+            interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc"
+            method_name = "getConfigByName"
+            source_revision = "0123456789abcdef"
+            source_evidence = "MapiConfigLoader.java:init scheduled refresh"
+            "#,
+        )
+        .unwrap();
+        config.validate().unwrap();
+
+        let mut overlapping = config.clone();
+        let mut duplicate = overlapping.recording.background_dependencies[0].clone();
+        let BackgroundDependencyRuleConfig::Motan { name, .. } = &mut duplicate else {
+            panic!("expected Motan background rule");
+        };
+        *name = "duplicate-kunpeng-refresh".to_string();
+        overlapping
+            .recording
+            .background_dependencies
+            .push(duplicate);
+        assert!(overlapping.validate().is_err());
+
+        let mut distinct_group = config.clone();
+        let mut sandbox = distinct_group.recording.background_dependencies[0].clone();
+        let BackgroundDependencyRuleConfig::Motan { name, group, .. } = &mut sandbox else {
+            panic!("expected Motan background rule");
+        };
+        *name = "sandbox-kunpeng-refresh".to_string();
+        *group = "kunpeng-config-rpc-sandbox".to_string();
+        distinct_group
+            .recording
+            .background_dependencies
+            .push(sandbox);
+        distinct_group.validate().unwrap();
+
+        let mut invalid = config;
+        let BackgroundDependencyRuleConfig::Motan { method_name, .. } =
+            &mut invalid.recording.background_dependencies[0]
+        else {
+            panic!("expected Motan background rule");
+        };
+        *method_name = "get*".to_string();
+        assert!(invalid.validate().is_err());
     }
 
     #[test]

@@ -8,6 +8,7 @@ attempt.
 - Diagnosis order
 - Missing response-driving external evidence
 - Replay failure signals
+- Vintage node aliases
 - Response assertion mismatches
 - Target behavior evidence
 - Recorder feedback
@@ -148,6 +149,34 @@ signals for the later dependency-coverage gate:
 
 Record enough evidence in the working notes to know which dependency matched,
 missed, or leaked to the network.
+
+## Vintage Node Aliases
+
+Treat `vintage-node-<ipv4-with-dashes>.trp.test` as a Recorder-generated
+internal target alias, not as a source-owned domain, Vintage response address,
+or target configuration value. For supported Vintage endpoint fields, Recorder
+preserves the IP-shaped contract: it rewrites the real `IPv4:port` to an
+allocated fake-CIDR `IPv4:port`, the application connects to that fake IP, and
+semantic Motan evidence renders the registry's stable alias for the same
+target.
+
+When Motan replay shows a Vintage alias but the target connects to a real
+numeric IP, inspect target startup, CLI, configuration, and runtime wiring for
+Vintage node data dumped from source-process memory or a remote response, a
+copied individual naming file, a locally parsed node snapshot, or an injected
+endpoint list. These paths bypass the normal Vintage response rewrite and fake
+IP interception. Restore the source-compatible flow through the reusable
+`breeze-sdk` Vintage loader and Motan client: obtain and refresh nodes through
+Vintage, consume its returned IP endpoints, and let Motan connect to them.
+When source evidence proves an SDK-native snapshot exists, keep it complete
+and loader-owned; never turn it into application configuration or direct
+endpoint injection.
+
+Accept the repair only when the target's normal Vintage lookup yields a
+fake-CIDR IP under Recorder or Replay, the Motan connection uses that IP, and
+the semantic dependency matches the stable Vintage alias. Never synthesize or
+connect to the alias in application code, rewrite a snapshot to contain it, or
+treat its absence as a recording-data blocker by itself.
 
 ## Response Assertion Mismatches
 
