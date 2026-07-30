@@ -348,6 +348,7 @@ async fn handle_gateway_request(
                     state.dns_registry(),
                     state.kubectl_proxy_manager(),
                     state.ca().ca_cert_pem_ref(),
+                    state.config().recording.decoded_body_limit(),
                     RewriteInput {
                         method: &method,
                         uri: &original_uri,

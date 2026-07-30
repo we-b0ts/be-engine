@@ -39,6 +39,7 @@ pub enum HttpResponseRewritePluginConfig {
         #[serde(default)]
         clusters: Vec<String>,
     },
+    VintageCacheConfig,
 }
 
 impl HttpResponseRewriteConfig {
@@ -103,6 +104,7 @@ impl HttpResponseRewritePluginConfig {
                 validate_values(rule_name, "plugin.services", services)?;
                 validate_values(rule_name, "plugin.clusters", clusters)
             }
+            Self::VintageCacheConfig => Ok(()),
         }
     }
 }
@@ -205,5 +207,38 @@ mod tests {
             clusters,
             &["cn.sina.api.data.service.SinaUserService/service"]
         );
+    }
+
+    #[test]
+    fn parses_vintage_cache_config_rule() {
+        let config: crate::AppConfig = toml::from_str(
+            r#"
+            [http_response_rewrite]
+            enabled = true
+
+            [dns_mock]
+            enabled = true
+
+            [tcp_gateway]
+            enabled = true
+            record_http = true
+
+            [[http_response_rewrite.rules]]
+            name = "vintage-cache-config"
+            authorities = ["config.api.demo.test"]
+            methods = ["GET"]
+            path = "/1/config/service"
+            status_codes = [200]
+            content_types = ["application/json"]
+            plugin = { name = "vintage-cache-config" }
+            "#,
+        )
+        .unwrap();
+
+        config.validate().unwrap();
+        assert!(matches!(
+            config.http_response_rewrite.rules[0].plugin,
+            HttpResponseRewritePluginConfig::VintageCacheConfig
+        ));
     }
 }

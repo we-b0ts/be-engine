@@ -63,6 +63,19 @@ status_codes = [200]
 content_types = ["application/json"]
 plugin = { name = "vintage-naming" }
 
+[[http_response_rewrite.rules]]
+name = "platform-vintage-cache-config"
+authorities = [
+  "config.api.demo.test",
+  "static.config.api.demo.test",
+  "register.kailash.demo.test",
+]
+methods = ["GET"]
+path = "/1/config/service"
+status_codes = [200]
+content_types = ["application/json"]
+plugin = { name = "vintage-cache-config" }
+
 [udp_gateway]
 enabled = false
 listen = "127.0.0.1:15002"

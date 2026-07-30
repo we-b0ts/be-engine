@@ -21,6 +21,7 @@ use uuid::Uuid;
 use crate::MitmCa;
 use crate::request_headers::validate_request_file;
 mod assertion;
+mod auto_protocol;
 mod command_matching;
 #[cfg(test)]
 mod command_protocol_tests;
@@ -538,6 +539,20 @@ async fn handle_gateway_connection(
 ) -> Result<()> {
     let target = replay_target_for_stream(&stream, &state).await;
     match target.as_ref().map(|target| target.protocol) {
+        Some(ReplayProtocol::Auto) => {
+            let target = target.context("auto replay connection has no target")?;
+            match auto_protocol::detect(&stream).await? {
+                ReplayProtocol::Redis => {
+                    redis::handle_connection(stream, target, state, report_writer).await
+                }
+                ReplayProtocol::Memcached => {
+                    memcached::handle_connection(stream, target, state, report_writer).await
+                }
+                protocol => Err(anyhow!(
+                    "auto replay target resolved to unsupported protocol {protocol:?}"
+                )),
+            }
+        }
         Some(ReplayProtocol::Http) | Some(ReplayProtocol::Https) => {
             http::handle_http_replay_connection(
                 stream,
