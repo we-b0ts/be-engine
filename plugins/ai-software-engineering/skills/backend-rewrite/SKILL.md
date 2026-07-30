@@ -141,12 +141,14 @@ Keep one explicit record for the active slice:
 ```text
 scope, stage, case_source, source_revision, e2e_evidence,
 comparison_evidence, repaired_case_evidence, response_status,
-dependency_status, failure_categories, next_todo, todo_owner, resume_stage
+dependency_status, failure_categories, attention, next_todo, todo_owner,
+resume_stage
 ```
 
 Use `complete` only when the active slice is `slice_done`, current E2E and
 comparison evidence both pass, all repository gates pass, and deliverable
-changes have been delivered as required.
+changes have been delivered as required. A non-blocking
+`repaired_case_not_observed` attention does not prevent `complete`.
 
 Use `action_required` while a response mismatch has an in-scope target,
 environment, dependency-wiring, or configuration repair. Continue diagnosis
@@ -162,12 +164,11 @@ implementation. Dirty evidence alone never proves `blocked`. Every
 non-complete result needs an owner, concrete TODO, acceptance check, and resume
 stage.
 
-Use `inconclusive` only when a target repair has passed E2E against the same
-immutable case that evidenced it, but the first valid fresh comparison after
-that repair does not observe the repaired case. This is terminal for the
-current execution, not success. Do not start another standard or comparison
-recording automatically. Keep `resume_stage: compare`; if code, policy,
-configuration, and E2E evidence remain current, a later requested resume
-returns directly to comparison.
+When a target repair passes E2E against the same immutable case that evidenced
+it and the first valid fresh comparison passes without observing that case,
+complete the slice and retain `repaired_case_not_observed` only as a
+non-blocking attention. Do not put it in `failure_categories`, and do not
+create `next_todo` or `resume_stage` for it. Do not start another standard or
+comparison recording solely to observe the case.
 
 A draft PR or code change is delivery evidence, not verification success.

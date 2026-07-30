@@ -166,7 +166,7 @@ next state.
    target's verification policy. Only the report's per-API passing result is
    current comparison evidence.
 6. Delegate comparison differences to traffic-e2e diagnosis. Fix every
-   candidate-only field, re-record a field-scoped inconclusive source change,
+   candidate-only field, re-record a field-scoped source change,
    or change policy only for source-proven intentional non-determinism.
 7. After every code or policy change, pass affected E2E again and create a new
    comparison recording. Never reinterpret an older report for changed code.
@@ -175,9 +175,10 @@ When one concrete recorded case directly causes a target repair, retain its
 immutable case source, case ID, repaired response locations, proven cause, and
 distinguishing evidence. After that case passes E2E, follow traffic-e2e's
 repaired-case coverage procedure for one valid fresh comparison. If it does not
-observe the repaired case, stop with
-`inconclusive/repaired_case_not_observed`; do not record again automatically.
-An invalid comparison does not consume this bounded observation.
+observe the repaired case but otherwise passes, complete normally and retain
+the non-blocking `repaired_case_not_observed` attention; do not record again
+solely for observation coverage. An invalid comparison does not consume this
+bounded observation.
 
 ## Route Non-Passing Evidence
 
@@ -210,10 +211,6 @@ An invalid comparison does not consume this bounded observation.
 - `source_change`: require source-before/source-after change at the same
   response location; preserve unrelated candidate-only fields as
   `target_behavior`.
-- `repaired_case_not_observed`: preserve the passing repaired-case E2E and
-  valid comparison evidence, return `inconclusive`, and resume at comparison
-  only when requested; do not change code or policy and do not record again
-  automatically.
 - `verification_policy`: remove or replace stale and unsupported response rules
   through the evidence-validating interface, rerun E2E, then create a new
   comparison recording.
@@ -222,6 +219,12 @@ An invalid comparison does not consume this bounded observation.
   workaround.
 - `unresolved`: continue diagnosis without changing code, policy, or
   attribution.
+
+`repaired_case_not_observed` is not non-passing evidence. When same-case E2E
+and the valid comparison both pass, keep it only as a non-blocking attention
+and advance to `slice_done`. Do not change code or policy, add a failure
+category, create a next TODO or resume stage, or record again solely for that
+attention.
 
 A capability gap blocks the affected gate but does not suppress an independent
 response repair. Stop the whole rewrite only when it prevents exercising the
@@ -271,14 +274,14 @@ missing evidence, and the repository path, packaged symbol, configuration key,
 runtime path, or resource already checked. Never summarize these states as
 “insufficient source-code evidence” or “drift”.
 
-For `inconclusive`, omit a fabricated comparison difference. Report the
-original repaired case source and ID, repaired response locations and cause,
-its passing post-repair E2E report, the valid comparison run and evaluated case
-count, zero repaired-case observations, and `resume_stage: compare`.
-
 Then report dependency cleanliness, independent blockers, delivery, status,
-scope, stage, conclusion, exact E2E/comparison reports, and a next TODO with
-owner, action, acceptance check, resume stage, and required transitions.
+scope, stage, conclusion, and exact E2E/comparison reports. For every
+non-complete result, include a next TODO with owner, action, acceptance check,
+resume stage, and required transitions. For a completed slice whose repaired
+case was not re-observed, report the original case, repair cause, passing
+same-case E2E, valid passing comparison, evaluated-case count, and the
+non-blocking attention; do not fabricate a comparison difference or a next
+TODO.
 Never lead with “completed” or equivalent success wording while E2E or
 comparison is non-passing; a commit or draft PR is delivery, not completion.
 
