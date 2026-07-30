@@ -25,6 +25,9 @@ registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f3
 
 Recorder:
 registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
+
+Breeze:
+registry.api.demo.test/weibo_rd_if/breeze:v0.1.21-e2e@sha256:5aba065755724d43c7da3f6b79ac82890a0a0a08c6ae3f43af12558b5e52462f
 ```
 
 Start one anchor with `--network host`. Start Recorder, Breeze, and the source
@@ -88,12 +91,11 @@ runtime inputs there when source evidence requires them:
 Do not precreate child entries during initialization. Use mode `0600` for
 sensitive files; never print or commit runtime inputs.
 
-Preserve the inspected Breeze image and project-specific service pool. The
-standard Breeze launch remains rooted in Vintage discovery, snapshot
-`/data1/breeze/snapshot`, service path `/data1/breeze/socks`, log directory
-`/data1/breeze/logs`, port `9984`, URL prefix
-`static.config.api.demo.test`, and region `cn1`. Reproduce the actual container
-command when its flag spelling or additional parameters differ.
+Use the pinned Breeze E2E image and preserve the inspected project-specific
+service pool. The standard Breeze launch remains rooted in Vintage discovery,
+snapshot `/data1/breeze/snapshot`, service path `/data1/breeze/socks`, log
+directory `/data1/breeze/logs`, and port `9984`. Reproduce the actual container
+command and its remaining runtime values from inspected evidence.
 
 The source image and start command are derived values, not user inputs. Keep
 the source container's root initialization path. Replace only the final Java

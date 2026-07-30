@@ -7,6 +7,7 @@ root_dir = "./.traffic-e2e/artifacts"
 # project CLI serves a fixed-response candidate on port 8081.
 # Comparison recording rejects every configured method except GET/HEAD/OPTIONS.
 candidate_upstream = "http://127.0.0.1:8081"
+# source_match: before_or_after in verification.yaml enables this automatically.
 baseline_recheck = false
 upstream_timeout_ms = 30000
 max_in_flight = 256

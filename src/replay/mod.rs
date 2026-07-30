@@ -91,9 +91,13 @@ pub struct ReplayControlConfig {
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
 pub(crate) use assertion::unobserved_response_rule_ids;
-pub(crate) use assertion::{ComparisonResponseAssertionOptions, assert_comparison_response};
+pub(crate) use assertion::{
+    ComparisonResponseAssertionOptions, ComparisonResponseObservation, assert_comparison_response,
+    read_comparison_response_observation,
+};
 pub use assertion::{
-    ResponseAssertionCaseReport, ResponseAssertionOptions, assert_recorded_response,
+    ResponseAssertionCaseReport, ResponseAssertionOptions, ResponseDifferenceKind,
+    assert_recorded_response,
 };
 pub(crate) use policy::response_locations_overlap;
 pub use policy::{

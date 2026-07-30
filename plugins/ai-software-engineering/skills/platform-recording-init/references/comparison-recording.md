@@ -72,7 +72,9 @@ duplicate options before changing runtime state, and accept repeatable
 canonical `--api` selectors plus one optional positive `--case-limit`. Consume
 `--brz-no-fallback` in the wrapper; pass the run ID, duration, baseline recheck,
 API selectors, and case limit through unchanged to `traffic-e2e
-record-comparison`.
+record-comparison`. Always pass the fixed
+`.traffic-e2e/verification.yaml` through `--policy`; do not expose another
+wrapper option for it.
 
 Require `TRAFFIC_E2E_ENCRYPTION_KEY_B64` during the same argument validation
 and verify, without printing decoded bytes, that it is strict Base64 for
@@ -112,9 +114,9 @@ Use this lifecycle:
 5. when `brz_no_fallback` is true, apply `scripts/brz-no-fallback.sh` to each
    applicable ready application container;
 6. run `traffic-e2e record-comparison --config
-   .traffic-e2e/recorder.toml`, passing through `--run-id`,
-   `--duration-seconds`, every `--api`, optional `--case-limit`, and the
-   enable-only `--baseline-recheck` flag when set;
+   .traffic-e2e/recorder.toml --policy .traffic-e2e/verification.yaml`, passing
+   through `--run-id`, `--duration-seconds`, every `--api`, optional
+   `--case-limit`, and the enable-only `--baseline-recheck` flag when set;
 7. forward termination to `traffic-e2e`, allow it to finalize artifacts, then
    stop only the owned candidate, source, shared Breeze, and network resources;
    and
@@ -129,12 +131,12 @@ isolation for `record-comparison`.
 Comparison rules may contain only `GET`, `HEAD`, and `OPTIONS`; configuration
 must fail before startup for every other method. Keep
 `comparison_recording.baseline_recheck = false` during initialization. A later
-verification run may explicitly pass `--baseline-recheck` to capture
-source-before, candidate, and source-after in that order when source-time drift
-evidence is needed. The initialized verification policy independently defaults
-`response_rules.comparison.source_match` to `before`; a later traffic
-verification task may select `before_or_after`, which requires the recheck
-artifact for every case.
+verification run may explicitly pass `--baseline-recheck` under
+`source_match: before` to capture diagnostic source-before, candidate, and
+source-after observations. The initialized verification policy defaults
+`response_rules.comparison.source_match` to `before`; when a later traffic
+verification task selects `before_or_after`, `record-comparison` automatically
+enables the required recheck from that policy.
 
 ## Offline Verification
 
@@ -148,7 +150,10 @@ traffic-e2e compare \
 
 This command is file-only and must not enable isolation. It writes
 `comparison-report.json` by default and reuses only the target verification
-policy's response rules. A changed optional source recheck is reported as
+policy's response rules. A non-passing response report includes one top-level
+`representative_difference` with its API, case, Pointer, difference kind, and
+bounded source-before/candidate/source-after values. A changed optional source
+recheck is reported as
 `source_change` only for candidate differences at the same response location;
 unrelated candidate differences remain candidate behavior. Source change is
 inconclusive evidence, not a cause or exemption. Use `--comparison-report` with

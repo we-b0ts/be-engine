@@ -122,7 +122,8 @@ pub fn initialize_recorder_config(
                 "Generate executable {}. It must validate arguments before changing state, start \
                  the genuine baseline from inspected runtime facts, stop any stale candidate owned \
                  by {} before invoking its start and status commands, run `traffic-e2e \
-                 record-comparison --config .traffic-e2e/recorder.toml`, accept \
+                 record-comparison --config .traffic-e2e/recorder.toml --policy \
+                 .traffic-e2e/verification.yaml`, accept \
                  `--run-id YYYYMMDDHHMMSS`, `--duration-seconds <positive-integer>`, and \
                  `--baseline-recheck`, plus repeatable `--api 'METHOD /path-or-pattern'` and one \
                  optional positive `--case-limit <positive-integer>`, default the duration to 60 \
@@ -145,7 +146,8 @@ pub fn initialize_recorder_config(
             "After replay E2E passes and a comparison recording run finalizes, verify it with \
              `traffic-e2e compare <comparison-recording-run> --policy \
              .traffic-e2e/verification.yaml`. The comparison report, including its per-API passed \
-             counts, is the validation-success authority; E2E pass alone is not. Classify failures as candidate implementation \
+             counts and representative response difference, is the validation-success authority; \
+             E2E pass alone is not. Classify failures as candidate implementation \
              differences, source-time data drift, or source-proven time/random/unordered \
              non-determinism before changing code or response rules. Both record-comparison and \
              compare must remain outside fixed-user and network interception or isolation \
@@ -216,6 +218,7 @@ root_dir = "./.traffic-e2e/artifacts"
 # the generated project CLI serves a fixed-response candidate on this port.
 # Comparison recording rejects every configured method except GET/HEAD/OPTIONS.
 candidate_upstream = "http://127.0.0.1:__CANDIDATE_HTTP_PORT__"
+# source_match: before_or_after in verification.yaml enables this automatically.
 baseline_recheck = false
 upstream_timeout_ms = 30000
 max_in_flight = 256
@@ -437,9 +440,11 @@ mod tests {
         assert!(result.required_ai_actions[1].contains("one shared Breeze"));
         assert!(result.required_ai_actions[1].contains("scripts/brz-no-fallback.sh"));
         assert!(result.required_ai_actions[1].contains("traffic-e2e record-comparison"));
+        assert!(result.required_ai_actions[1].contains("--policy .traffic-e2e/verification.yaml"));
         assert!(result.required_ai_actions[1].contains("TRAFFIC_E2E_ENCRYPTION_KEY_B64"));
         assert!(result.required_ai_actions[2].contains("traffic-e2e compare"));
         assert!(result.required_ai_actions[2].contains("per-API passed counts"));
+        assert!(result.required_ai_actions[2].contains("representative response difference"));
         assert!(result.required_ai_actions[2].contains("outside fixed-user"));
         assert_eq!(
             result.candidate_mock_response,
