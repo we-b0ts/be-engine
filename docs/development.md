@@ -92,14 +92,18 @@ only.
 Record baseline/candidate responses from live frontend traffic with:
 
 ```bash
-traffic-e2e record-comparison --config config/recorder.example.toml
 traffic-e2e record-comparison \
   --config config/recorder.example.toml \
+  --policy config/verification.example.yaml
+traffic-e2e record-comparison \
+  --config config/recorder.example.toml \
+  --policy config/verification.example.yaml \
   --duration-seconds 60 \
   --api 'GET /api/widgets/*' \
   --case-limit 250
 traffic-e2e record-comparison \
   --config config/recorder.example.toml \
+  --policy config/verification.example.yaml \
   --baseline-recheck
 ```
 
@@ -136,10 +140,14 @@ response and records the request plus baseline and candidate responses under
 `<artifacts.root_dir>/comparison-recordings/<run-id>/`. It uses
 `http_gateway.matched_upstream` as the baseline unless
 `comparison_recording.baseline_upstream` is explicitly set. It does not load
-the verification policy, record dependencies, install interception rules, or
-initialize a MITM CA. Response bodies are decoded according to their own
-`Content-Encoding` before being stored for semantic comparison, while the
-baseline response returned to the frontend retains its original encoding.
+response rules while recording, record dependencies, install interception
+rules, or initialize a MITM CA. It validates the verification policy and reads
+only `response_rules.comparison.source_match` to decide whether source recheck
+evidence is required. The policy defaults to `verification.yaml` next to the
+recorder config and may be provided explicitly with `--policy`. Response bodies
+are decoded according to their own `Content-Encoding` before being stored for
+semantic comparison, while the baseline response returned to the frontend
+retains its original encoding.
 Explicit named HTTP gateway rules and methods are required. Only GET, HEAD, and
 OPTIONS may be mirrored. Any configured POST, PUT, PATCH, DELETE, or other
 non-read method fails configuration validation before the listener starts, so
@@ -162,8 +170,9 @@ request in strict source-before, candidate, source-after order. The frontend
 still receives the first source response without waiting for the later
 captures. The recheck adds `expected-response-after.json` and is diagnostic
 evidence for source-time drift by default. It runs only for admitted cases.
-Use the enable-only `--baseline-recheck` flag for one run without changing the
-source-controlled default.
+Use the enable-only `--baseline-recheck` flag for one diagnostic run without
+changing the source-controlled default. A policy with
+`source_match: before_or_after` enables the recheck automatically.
 
 The verification policy separately controls source-observation acceptance:
 
@@ -173,10 +182,11 @@ response_rules:
     source_match: before_or_after
 ```
 
-The default is `before`. `before_or_after` requires a source recheck for every
-case and passes only when the candidate matches one complete source response
-under the active response rules. It never combines fields from source-before
-and source-after. Standard replay ignores this setting.
+The default is `before`. `before_or_after` automatically records a source
+recheck for every admitted case and passes only when the candidate matches one
+complete source response under the active response rules. It never combines
+fields from source-before and source-after. Standard replay ignores this
+setting.
 
 Comparison recording artifacts carry `case-kind.json` with
 `kind = comparison_recording` and are not replay inputs. `prepare`, case
@@ -223,7 +233,11 @@ observation, source-before/source-after drift makes a case inconclusive, or a
 case cannot be evaluated. The comparison behavior and field rules under
 `response_rules` participate in this phase; dependency matching rules remain
 replay-only. Comparison applies both shared response rules and rules nested
-under `response_rules.comparison`. The report records
+under `response_rules.comparison`. A failed response report includes one
+top-level `representative_difference` with the API, case ID, Pointer,
+difference kind, and bounded source-before/candidate/source-after values. A
+response-rule coverage failure appears in
+`representative_policy_mismatch`. The report records
 `matched_source` for a passing case and groups cases by the recorded
 `METHOD + api_pattern`; `apis_passed` is the current validation-success count,
 while E2E progress uses only replay `passed` wording. Dynamic and unordered

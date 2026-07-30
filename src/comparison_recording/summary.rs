@@ -136,7 +136,9 @@ impl ComparisonRecordingSummary {
             .await
             .with_context(|| format!("failed to open {}", temporary.display()))?;
         file.write_all(&payload).await?;
-        file.sync_all().await?;
+        crate::artifact_file::flush_all_and_evict(&mut file, 0)
+            .await
+            .with_context(|| format!("failed to finalize {}", temporary.display()))?;
         drop(file);
         tokio::fs::rename(&temporary, self.path.as_ref())
             .await

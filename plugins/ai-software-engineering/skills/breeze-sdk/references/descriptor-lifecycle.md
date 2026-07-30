@@ -49,11 +49,6 @@ discovery input; neither is application configuration. Every producer and
 consumer must use them in place; never copy, mirror, cache, relocate, or stage
 them into a project-local directory.
 
-An application or service startup lifecycle may clear registered executor or
-descriptor entries and reconstruct them before readiness. A copied directory
-can therefore become stale immediately and must never become an authority for
-discovery, registration, or listener construction.
-
 The Java Breeze SDK creates empty files whose names encode configuration. The
 common TCP forms are:
 

@@ -244,7 +244,9 @@ async fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
         .await
         .with_context(|| format!("failed to create {}", path.display()))?;
     file.write_all(&payload).await?;
-    file.sync_all().await?;
+    crate::artifact_file::flush_all_and_evict(&mut file, 0)
+        .await
+        .with_context(|| format!("failed to finalize {}", path.display()))?;
     Ok(())
 }
 

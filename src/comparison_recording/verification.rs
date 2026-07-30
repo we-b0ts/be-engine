@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, ensure};
 use serde::{Deserialize, Serialize};
 
+use super::representative::{
+    ComparisonRepresentativeDifference, ComparisonRepresentativePolicyMismatch,
+};
 use crate::config::edit::{create_atomic, write_atomic};
 use crate::replay::{
     ComparisonResponseAssertionOptions, ComparisonSourceMatch, ResponseAssertionCaseReport,
@@ -114,6 +117,10 @@ pub struct ComparisonVerificationReport {
     pub passed: bool,
     pub counts: ComparisonVerificationCounts,
     pub apis: std::collections::BTreeMap<String, ComparisonVerificationApi>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub representative_difference: Option<ComparisonRepresentativeDifference>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub representative_policy_mismatch: Option<ComparisonRepresentativePolicyMismatch>,
     pub cases: Vec<ComparisonVerificationCase>,
 }
 
@@ -384,6 +391,8 @@ pub fn verify_comparison_recording(
     counts.apis_total = apis.len();
     counts.apis_passed = apis.values().filter(|api| api.passed).count();
     counts.apis_failed = counts.apis_total.saturating_sub(counts.apis_passed);
+    let representative_difference = super::representative::difference(&cases)?;
+    let representative_policy_mismatch = super::representative::policy_mismatch(&cases, &apis);
     let complete = counts.unevaluable == 0;
     let passed = complete
         && counts.failed == 0
@@ -406,6 +415,8 @@ pub fn verify_comparison_recording(
         passed,
         counts,
         apis,
+        representative_difference,
+        representative_policy_mismatch,
         cases,
     };
     write_report(&options.report, &report)?;

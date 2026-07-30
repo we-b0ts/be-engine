@@ -7,6 +7,7 @@ root_dir = "./.traffic-e2e/artifacts"
 candidate_upstream = "http://127.0.0.1:6161"
 # Optional: capture baseline -> candidate -> baseline so source-side time or
 # mutable-data drift is visible to offline verification.
+# source_match: before_or_after in verification.yaml enables this automatically.
 baseline_recheck = false
 upstream_timeout_ms = 30000
 max_in_flight = 256
