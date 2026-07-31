@@ -608,6 +608,7 @@ mod tests {
             advertised_ip: "198.19.0.20".parse().unwrap(),
             upstream_addr: "10.0.0.1:8881".to_string(),
             codec_version: 1,
+            group: None,
             interface_name: Some(if heartbeat {
                 "com.weibo.api.motan.rpc.heartbeat".to_string()
             } else {

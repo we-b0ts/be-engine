@@ -1,7 +1,8 @@
-# Breeze SDK Verification
+# Breeze Resource Package Verification
 
-Verify every new or changed resource package against the descriptor policies
-it supports.
+Verify every new or changed remote-resource package against its applicable
+contract. Run descriptor and registration checks only for descriptor-backed
+packages.
 
 ## Descriptor Tests
 
@@ -34,8 +35,9 @@ it supports.
 
 ## Client Lifecycle Tests
 
-- Prove each `brz-*` package takes a logical identity and descriptor policy,
-  invokes the shared descriptor library, and constructs its own client.
+- Prove each descriptor-backed `brz-*` package takes a logical identity and
+  descriptor policy, invokes the shared descriptor library, and constructs its
+  own client.
 - Prove normal application startup does not depend on a descriptor executable,
   per-resource CLI enumeration, or descriptor-derived address variables.
 - Prove adding a resource does not require changing the project CLI.

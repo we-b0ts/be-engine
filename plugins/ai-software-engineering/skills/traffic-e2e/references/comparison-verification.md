@@ -119,7 +119,14 @@ traffic-e2e compare \
 The command is file-only. It applies the shared and comparison-only behavior
 under `response_rules`; dependency replay rules are ignored. Preserve the
 generated `comparison-report.json` and the policy fingerprint used to produce
-it. The report groups cases by canonical `METHOD + api_pattern` and publishes
+it. A complete report updates `.traffic-e2e/comparison-progress.yaml` next to
+the policy. The progress report uses the same schema as replay progress and
+tracks lifetime totals, the current global and per-API success streaks, and the
+latest run. Reprocessing the same recording and evidence is idempotent; a
+different policy cannot reinterpret an already counted recording. An
+incomplete report does not update progress.
+
+The report groups cases by canonical `METHOD + api_pattern` and publishes
 `apis_total`, `apis_passed`, and `apis_failed`; an API passes only when all of
 its comparison cases pass. For a non-passing response, the top-level
 `representative_difference` identifies one deterministic case and Pointer with
@@ -235,10 +242,12 @@ change code or policy from a scalar mismatch alone.
    exempted.
 4. **Live counters.** A field name, including a `count`-like name, is only a
    clue. Do not infer counter semantics from naming. After source ownership
-   proves that an exact scalar is a live count whose value may change between
-   valid observations, plan and apply a comparison-only `counter` rule for the
-   exact API and JSON Pointer. Preserve the source path/symbol or equivalent
-   inspected runtime artifact and two differing observations as evidence.
+   proves that an exact scalar is a count whose value may change between valid
+   observations, configure a comparison `counter` rule for the exact API and
+   JSON Pointer. Preserve the source path/symbol or equivalent inspected
+   runtime artifact and differing source and candidate examples as evidence.
+   Source-before and source-after may be equal; their equality does not make
+   the rule inapplicable.
    Standard replay remains exact. Counter comparison requires the field on both
    sides; number matches only number, string matches only string, and an empty
    string matches only another empty string. Null, boolean, arrays, and objects

@@ -1,4 +1,5 @@
 mod model;
+mod progress;
 mod representative;
 mod runtime;
 mod store;
@@ -7,6 +8,7 @@ mod tasks;
 mod upstream;
 mod verification;
 
+pub use progress::update_comparison_progress;
 pub use representative::{
     ComparisonRepresentativeDifference, ComparisonRepresentativePolicyMismatch,
 };

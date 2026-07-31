@@ -8,7 +8,7 @@ use tokio::process::Child;
 use super::case_progress;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout, RunStatus};
-use super::progress::{build_progress, update_focused_index, update_index};
+use super::progress::{ReplayRunKind, update_focused_index, update_index, write_replay_progress};
 use super::request_view::RequestCaseView;
 use super::runtime::{
     best_effort_stop, control, finalize_replay, run_project, spawn_replay, stop_replay_process,
@@ -182,9 +182,11 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         update_focused_index(&mut index, &previous, &inventory, inventory_complete);
         store::write_yaml(&previous_path, &previous)?;
         store::write_yaml(&global_layout.index_path, &index)?;
-        store::write_yaml(
+        write_replay_progress(
             &global_layout.progress_path,
-            &build_progress(&index, &previous),
+            &global_layout.legacy_progress_path,
+            &previous,
+            ReplayRunKind::Focused,
         )?;
     }
     let attempt = if layout.latest_dir.join("state.yaml").is_file() {
@@ -250,14 +252,18 @@ fn finish_focused_and_publish(
         "focused run state is not terminal"
     );
     update_focused_index(index, state, inventory, inventory_complete);
-    let progress = build_progress(index, state);
     store::publish_snapshot(
         &focused_layout.active_dir,
         &focused_layout.latest_dir,
         state,
     )?;
     store::write_yaml(&global_layout.index_path, index)?;
-    store::write_yaml(&global_layout.progress_path, &progress)
+    write_replay_progress(
+        &global_layout.progress_path,
+        &global_layout.legacy_progress_path,
+        state,
+        ReplayRunKind::Focused,
+    )
 }
 
 pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
@@ -286,7 +292,12 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
     let state: ActiveRunState = store::read_yaml(&latest_path)?;
     let index = store::load_or_create_index(&layout, &layout.run_key, &layout.case_source)?;
     store::write_yaml(&latest_path, &state)?;
-    store::write_yaml(&layout.progress_path, &build_progress(&index, &state))?;
+    write_replay_progress(
+        &layout.progress_path,
+        &layout.legacy_progress_path,
+        &state,
+        ReplayRunKind::Full,
+    )?;
     store::write_yaml(&layout.index_path, &index)?;
     Ok(result(&layout, &state))
 }
@@ -569,9 +580,13 @@ fn finish_and_publish(
     state.finished_at.get_or_insert_with(Utc::now);
     ensure!(state.status.is_terminal(), "run state is not terminal");
     update_index(index, state);
-    let progress = build_progress(index, state);
     store::publish_terminal(layout, state, index)?;
-    store::write_yaml(&layout.progress_path, &progress)?;
+    write_replay_progress(
+        &layout.progress_path,
+        &layout.legacy_progress_path,
+        state,
+        ReplayRunKind::Full,
+    )?;
     Ok(result(layout, state))
 }
 

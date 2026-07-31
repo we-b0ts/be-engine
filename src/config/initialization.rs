@@ -338,6 +338,17 @@ redact_headers = [
 # source_revision = "0123456789abcdef"
 # source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
 
+# Independent Motan process traffic uses an exact logical RPC identity. Do not
+# persist node IPs, ports, Vintage aliases, or payload values.
+# [[recording.background_dependencies]]
+# name = "kunpeng-refresh"
+# protocol = "motan"
+# group = "kunpeng-config-rpc"
+# interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc"
+# method_name = "getConfigByName"
+# source_revision = "0123456789abcdef"
+# source_evidence = "MapiConfigLoader.java:init scheduled refresh unrelated to selected API"
+
 # Breeze-backed Memcached local-cache warm rules use a stable descriptor
 # identity without its dynamic port. The tool resolves the business resource
 # and writes this identity after validating finalized replay evidence.

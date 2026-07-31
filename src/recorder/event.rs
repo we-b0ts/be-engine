@@ -363,6 +363,8 @@ pub struct MotanExchangeEvent {
     pub advertised_ip: std::net::Ipv4Addr,
     pub upstream_addr: String,
     pub codec_version: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     pub interface_name: Option<String>,
     pub method_name: Option<String>,
     pub parameter_desc: Option<String>,

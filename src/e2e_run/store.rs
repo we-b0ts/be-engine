@@ -8,7 +8,6 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 use super::model::{ActiveRunState, CurrentPointer, RunIndex, RunLayout, STATE_VERSION};
-use super::progress;
 
 pub(super) fn begin_active(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
     let parent = layout
@@ -93,11 +92,10 @@ pub(super) fn load_or_create_index(
         );
         return Ok(index);
     }
-    progress::load_progress_baseline(
-        &layout.progress_path,
+    Ok(RunIndex::empty(
         run_key.to_string(),
         case_source.to_path_buf(),
-    )
+    ))
 }
 
 pub(super) fn publish_terminal(

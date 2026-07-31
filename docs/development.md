@@ -240,8 +240,8 @@ response-rule applicability failure appears in
 `representative_policy_mismatch`. The report records
 `matched_source` for a passing case and groups cases by the recorded
 `METHOD + api_pattern`; `apis_passed` is the current validation-success count,
-while E2E progress uses only replay `passed` wording. Dynamic and unordered
-candidates, plus source-proven live counters, can be fed back through the
+while both stage progress files use the generic `passed` wording. Dynamic and
+unordered candidates, plus source-proven live counters, can be fed back through the
 evidence-validating response-rule workflow:
 
 ```bash
@@ -845,8 +845,9 @@ traffic-e2e run-api \
 
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
-logical run in `e2e-progress.yaml`; repeating one run does not add runs or
-cases. Focused evidence never replaces the global full-round `latest`.
+logical run, while each finalized attempt is counted once in
+`replay-progress.yaml`. Reprocessing the same published attempt is idempotent.
+Focused evidence never replaces the global full-round `latest`.
 
 After every published case is prepared exactly once and every focused group
 passes, the grouped result is sufficient unless behavior-affecting code changed
@@ -862,15 +863,51 @@ The full command starts replay once, loads bootstrap and all selected cases
 once, starts the target once, executes cases sequentially, finalizes and
 aggregates once, atomically publishes
 `.traffic-e2e/local/<run-key>/latest/`, and updates the Git-eligible
-`.traffic-e2e/e2e-progress.yaml`.
+`.traffic-e2e/replay-progress.yaml`.
 
-Progress reaches `status: complete` when every grouped API in the current
-logical run has finalized, complete, clean passing evidence. This is an E2E
-pass, not a long-term verification terminal state. A grouped focused pass is
-sufficient unless later behavior changes
+The current logical run passes when every grouped API has finalized, complete,
+clean passing evidence. This is a replay E2E pass, not a long-term verification
+terminal state. A grouped focused pass is sufficient unless later behavior changes
 may invalidate it; then use one full regression round. Use `status`, `abort`,
 and `recover` for interrupted global rounds. Generated local JSON/YAML is
 tool-owned and must not be edited by AI or by target scripts.
+
+Replay and comparison publish separate Git-eligible progress files with one
+schema:
+
+```yaml
+version: 1
+stage: replay # or comparison
+updated_at: 2026-07-31T00:00:00Z
+totals:
+  runs: { executed: 3, passed: 3 }
+  cases: { executed: 300, passed: 300 }
+  apis: { total: 1 }
+success_streak:
+  runs: 3
+  cases: 300
+latest_run:
+  key: <runner-owned-identity>
+  evidence_fingerprint: <runner-owned-fingerprint>
+  number: 3
+  passed: true
+  cases: { executed: 100, passed: 100 }
+  apis: { executed: 1, passed: 1 }
+  scope: [GET /api/widgets/*]
+apis:
+  GET /api/widgets/*:
+    totals:
+      runs: { executed: 3, passed: 3 }
+      cases: { executed: 300, passed: 300 }
+    success_streak: { runs: 3, cases: 300 }
+```
+
+`run-api` and `run` update `.traffic-e2e/replay-progress.yaml`; a complete
+`compare` updates `.traffic-e2e/comparison-progress.yaml` next to its policy.
+Any selected API failure resets the global streak, while an API failure resets
+only that API's streak. A different selected API scope starts a new global
+streak. The next finalized replay attempt automatically migrates legacy
+`.traffic-e2e/e2e-progress.yaml`.
 
 When managing host interception directly, always pair `up` with `down`:
 
@@ -1062,6 +1099,27 @@ a selector that also matches unmatched or unsupported target requests. It
 replans against the current recorder config and replay report immediately
 before its atomic write. One rule owns one exact authority, method, and path
 prefix; use separate rules for distinct request families.
+
+Source-proven independent Motan process traffic uses one exact RPC identity:
+
+```bash
+traffic-e2e config recorder apply background-dependencies \
+  --target-root . \
+  --protocol motan \
+  --name kunpeng-refresh \
+  --group kunpeng-config-rpc \
+  --interface-name com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc \
+  --method-name getConfigByName \
+  --replay-report <same-finalized-replay-report.json> \
+  --source-revision 0123456789abcdef \
+  --evidence 'MapiConfigLoader.java:init scheduled refresh unrelated to selected API'
+```
+
+The rule stores no node hostname, port, Vintage alias, or request payload. It
+matches Motan exchanges with the exact Vintage service group, interface, and
+method. Planning requires a matching unused case exchange and rejects the
+selector when the same RPC command appears in unmatched, unsupported, or unsafe
+target traffic.
 
 A source scheduler that builds response-driving local cache state can instead
 use the current narrow Breeze Memcached rule:

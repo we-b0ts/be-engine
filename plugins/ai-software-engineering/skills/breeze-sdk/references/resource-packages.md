@@ -1,6 +1,13 @@
-# Breeze Resource Clients
+# Breeze Remote-Resource Packages
 
-Use this reference for SDK package ownership and application integration.
+Use this reference for business-independent remote-resource package ownership
+and application integration.
+
+## Contents
+
+- Package scope
+- Package responsibility
+- Application integration
 
 ## Package Scope
 
@@ -11,33 +18,25 @@ allowlist. Current and expected examples include:
 - `redis` (`brz-redis`);
 - `memcached` (`brz-memcached`);
 - `kafka` (`brz-kafka`);
-- `mcq` (`brz-mcq`); and
+- `mcq` (`brz-mcq`);
 - `queueservice` (`brz-queueservice`);
 - `motan` (`brz-motan`) or another reusable RPC/service transport whose
   resource identity or connection lifecycle is managed through Breeze;
 - `vintage`, the reusable discovery library used by Motan and other
   infrastructure clients; and
-- future database, cache, queue, messaging, storage, or remote-service
+- future database, cache, queue, messaging, storage, and remote-service
   resources with the same business-independent ownership.
 
-Do not use `brz-*` merely because a class is called an SDK or its traffic
-crosses Breeze infrastructure. Logging, serialization, authentication,
-metrics, and ordinary provider clients remain with their actual platform or
-capability owner. Motan is an explicit business-independent platform resource:
-its reusable SDK, protocol, discovery, routing, transport, codec, and
-connection lifecycle belong in the Breeze package. Keep only the invoked
-business service contract and capability adapter outside. For ordinary HTTP or
-provider-specific RPC clients, do not infer Breeze ownership without the same
-reusable resource boundary.
-
-Prefer a standalone, versioned Breeze SDK project as the permanent owner. When
-an application must carry a transitional local implementation, keep
-`crates/breeze/` closed to the same package set and do not duplicate the SDK
-across services after a shared dependency exists.
+Do not use `brz-*` merely because a class is called an SDK or is reusable.
+Include it when Breeze owns the business-independent resource lifecycle. Motan
+is an explicit platform resource: its reusable SDK, protocol, discovery,
+routing, transport, codec, and connection lifecycle belong in the Breeze
+package. Keep only the invoked business service contract and capability
+adapter outside.
 
 ## Package Responsibility
 
-Each resource package owns:
+Each descriptor-backed remote-resource package owns:
 
 - typed logical resource identity;
 - shared descriptor resolution and permitted registration;
@@ -68,11 +67,8 @@ errors, retries, health, and shutdown. The business capability owns only the
 remote business service interface, method inputs and outputs, application
 errors, and the decision about when or why to call it.
 
-Keep Motan and Vintage as separate libraries. When the repository already has
-a Breeze package group, place them as siblings such as `breeze/motan` and
-`breeze/vintage`; let Motan depend on Vintage. Without that group, use
-independent `motan` and `vintage` libraries instead of creating an otherwise
-empty Breeze layer. Read
+Keep Motan and Vintage as separate sibling libraries under the Breeze package
+root, and let Motan depend on Vintage. Read
 [motan-vintage.md](motan-vintage.md) before implementing either library.
 
 Do not move a complete business client into Breeze and then hide its domain
@@ -81,11 +77,11 @@ let the business adapter translate it into a capability-facing port.
 
 ## Application Integration
 
-Expose logical identity and bounded operation settings to the composition
-root. Do not expose arbitrary caller-selected Breeze ports as application
-configuration.
+For descriptor-backed remote resources, expose logical identity and bounded
+operation settings in the composition root; do not expose arbitrary
+caller-selected Breeze ports as application configuration.
 
-Use this integration shape:
+Use this shape for descriptor-backed resources:
 
 ```text
 composition root declares ResourceIdentity

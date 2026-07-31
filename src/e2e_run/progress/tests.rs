@@ -89,7 +89,7 @@ fn inventory() -> CaseGroupInventory {
 }
 
 #[test]
-fn repeated_attempts_replace_the_current_logical_run() {
+fn repeated_attempts_replace_the_current_logical_run_state() {
     let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
     update_index(&mut index, &state(2, 1, 1));
     update_index(&mut index, &state(3, 0, 2));
@@ -102,7 +102,7 @@ fn repeated_attempts_replace_the_current_logical_run() {
 }
 
 #[test]
-fn focused_attempt_updates_the_same_current_run() {
+fn focused_attempt_updates_the_current_logical_run_state() {
     let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
     let completed = state(3, 0, 1);
 
@@ -110,40 +110,94 @@ fn focused_attempt_updates_the_same_current_run() {
 
     assert_eq!(index.executions, 1);
     assert_eq!(index.apis["GET /api/orders/*"].executions, 1);
-    assert_eq!(build_progress(&index, &completed).status, "complete");
+    assert!(index.current_run.passed);
 }
 
 #[test]
-fn published_run_progress_is_loaded_as_the_next_run_baseline() {
+fn replay_progress_counts_each_finalized_attempt_and_is_idempotent() {
     let directory = tempfile::tempdir().unwrap();
-    let progress_path = directory.path().join("e2e-progress.yaml");
-    let completed = state(3, 0, 1);
-    let mut first = RunIndex::empty("run-1".to_string(), PathBuf::from("/cases"));
-    update_index(&mut first, &completed);
-    store::write_yaml(&progress_path, &build_progress(&first, &completed)).unwrap();
+    let progress_path = directory.path().join("replay-progress.yaml");
+    let legacy_path = directory.path().join("e2e-progress.yaml");
+    let first = state(3, 0, 1);
+    let second = state(3, 0, 2);
 
-    let second = load_progress_baseline(
-        &progress_path,
-        "run-2".to_string(),
-        PathBuf::from("/next-cases"),
+    write_replay_progress(&progress_path, &legacy_path, &first, ReplayRunKind::Full).unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &first, ReplayRunKind::Full).unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &second, ReplayRunKind::Full).unwrap();
+
+    let report = load(&progress_path, VerificationStage::Replay)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.cases.executed, 6);
+    assert_eq!(report.success_streak.runs, 2);
+    assert_eq!(report.success_streak.cases, 6);
+}
+
+#[test]
+fn migrates_legacy_e2e_progress_before_counting_the_next_attempt() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("replay-progress.yaml");
+    let legacy_path = directory.path().join("e2e-progress.yaml");
+    std::fs::write(
+        &legacy_path,
+        r#"version: 3
+updated_at: 2026-07-30T13:34:17Z
+status: complete
+run:
+  key: old-run
+progress:
+  runs: { executed: 27, passed: 6 }
+  cases: { executed: 1240, passed: 630 }
+  apis: { total: 1 }
+latest_run:
+  number: 27
+  passed: true
+  cases: { executed: 100, passed: 100 }
+  apis: { executed: 1, passed: 1 }
+apis:
+  GET /api/orders/*:
+    runs: { executed: 27, passed: 6 }
+    cases: { executed: 1178, passed: 625 }
+"#,
     )
     .unwrap();
 
-    assert_eq!(second.executions, 1);
-    assert_eq!(second.passed_runs, 1);
-    assert_eq!(second.apis["GET /api/orders/*"].passed_cases, 3);
+    write_replay_progress(
+        &progress_path,
+        &legacy_path,
+        &state(3, 0, 1),
+        ReplayRunKind::Focused,
+    )
+    .unwrap();
+
+    let report = load(&progress_path, VerificationStage::Replay)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.totals.runs.executed, 28);
+    assert_eq!(report.totals.runs.passed, 7);
+    assert_eq!(report.apis["GET /api/orders/*"].totals.runs.executed, 28);
+    assert_eq!(report.success_streak.runs, 1);
+    assert!(!legacy_path.exists());
 }
 
 #[test]
-fn human_progress_uses_e2e_pass_wording_without_verified_state() {
-    let completed = state(3, 0, 1);
-    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
-    update_index(&mut index, &completed);
-    let yaml = serde_yaml::to_string(&build_progress(&index, &completed)).unwrap();
+fn replay_progress_uses_passed_wording_without_verified_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("replay-progress.yaml");
+    write_replay_progress(
+        &progress_path,
+        &directory.path().join("e2e-progress.yaml"),
+        &state(3, 0, 1),
+        ReplayRunKind::Full,
+    )
+    .unwrap();
+    let yaml = std::fs::read_to_string(progress_path).unwrap();
 
-    assert!(yaml.contains("version: 3"));
+    assert!(yaml.contains("stage: replay"));
+    assert!(yaml.contains("totals:"));
+    assert!(yaml.contains("success_streak:"));
     assert!(yaml.contains("passed: 3"));
     assert!(!yaml.contains("successful"));
     assert!(!yaml.contains("verified"));
-    assert!(!yaml.contains("consecutive"));
 }

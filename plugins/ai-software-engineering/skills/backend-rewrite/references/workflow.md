@@ -128,9 +128,9 @@ Before the first genuine target E2E and after every target startup or
 dependency-wiring change, re-review the complete `scripts/<project>-cli`
 facade. Replace initialization-only mock behavior rather than layering runtime
 inference onto it. Target commands must not parse replay sessions or dependency
-artifacts to derive configuration. For Breeze-managed wiring, apply the
-[`breeze-sdk` skill](../../breeze-sdk/SKILL.md); resource packages, not the
-facade, own descriptor-library use and client construction.
+artifacts to derive configuration. For descriptor-backed Breeze resources,
+resource packages, not the facade, own descriptor-library use and client
+construction.
 
 Source-process local caches belong to target implementation. Inspect and
 reproduce cache-key derivation, bounded capacity and eviction, expiry or
@@ -138,11 +138,12 @@ refresh timing, negative caching, concurrent-load behavior, startup or warmup
 behavior, and miss/error fallback only where they affect the active behavior
 or operational contract. Equivalent target architecture is allowed.
 
-For Breeze-managed work, include the resource type, source access semantics,
-business/resource boundary, and relevant runtime evidence. Let `breeze-sdk`
-own reusable identity, descriptor policy, and client lifecycle; keep business
-contracts in the target capability. Adding a resource must not require a
-project-CLI change.
+For Breeze-owned platform work, include the platform package, source contract,
+platform/business boundary, and relevant runtime evidence, then route
+target-code work through `backend-engineering`. For descriptor-backed
+resources, also include resource type, identity, descriptor policy, and client
+lifecycle. Keep business contracts in the target capability. Adding a resource
+must not require a project-CLI change.
 
 Use [`backend-engineering`](../../backend-engineering/SKILL.md) for target
 implementation and local checks. Companion work cannot declare migration
@@ -164,12 +165,19 @@ next state.
    wrapper-owned runtime options and the encryption-key boundary.
 5. Run offline `traffic-e2e compare` against that exact finalized run and the
    target's verification policy. Only the report's per-API passing result is
-   current comparison evidence.
+   current comparison evidence. Read runner-owned replay and comparison totals,
+   latest results, and success streaks from their separate progress files;
+   never aggregate report directories manually.
 6. Delegate comparison differences to traffic-e2e diagnosis. Fix every
    candidate-only field, re-record a field-scoped source change,
    or change policy only for source-proven intentional non-determinism.
 7. After every code or policy change, pass affected E2E again and create a new
    comparison recording. Never reinterpret an older report for changed code.
+
+After a valid non-passing comparison, resolve its observed differences before
+recording again. Do not start another comparison until the corresponding
+target behavior, verification policy, or evidenced comparison condition has
+changed.
 
 When one concrete recorded case directly causes a target repair, retain its
 immutable case source, case ID, repaired response locations, proven cause, and

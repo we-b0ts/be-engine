@@ -9,6 +9,13 @@ Classify by causality, not by timing alone:
 - `runtime_state`: process work whose responses build response-driving local state;
 - `independent`: process work unrelated to selected responses and side effects.
 
+Treat Motan background rules as `independent` only. If an asynchronous Motan
+result is consumed by business behavior, it is not eligible for this rule even
+when a scheduler owns the call; repair the normal target initialization or
+refresh path instead. AI proves ownership and independence from source and
+runtime evidence. Recorder does not infer either fact from timing, repetition,
+threading, or protocol.
+
 Apply `runtime_state` during response repair when evidence proves Replay must
 serve it for target-local state. Classify `independent` only after responses
 pass. Timing, a shared host, or an unused exchange is not ownership proof.
@@ -44,6 +51,9 @@ The current narrow rule types are:
 
 - exact HTTP authority, method, and path prefix with
   `response_role=independent`;
+- exact Vintage service group plus Motan interface and method, always
+  independent and with no endpoint, Vintage alias, or payload persisted in the
+  rule;
 - Breeze-backed Memcached `get` with `response_role=runtime_state`, one exact
   resolved resource identity, and a bounded numeric key series
   `<start..end><separator><suffix>`.
@@ -85,6 +95,27 @@ Review the selector and matched case IDs, then repeat with `apply`. The command
 requires at least one matching unused case exchange, rejects selectors that
 also match unmatched or unsupported target requests, and replans from current
 config and evidence before writing atomically.
+
+For source-proven independent Motan process traffic:
+
+```bash
+traffic-e2e config recorder plan background-dependencies \
+  --target-root <target> \
+  --protocol motan \
+  --name <stable-background-rule-name> \
+  --group <exact-vintage-service-group> \
+  --interface-name <exact-interface> \
+  --method-name <exact-method> \
+  --replay-report <same-finalized-replay-report.json> \
+  --source-revision <same-source-revision> \
+  --evidence '<source file/symbol and independence explanation>'
+```
+
+The selector is the exact Vintage service group plus Motan interface and method;
+the Vintage cluster is derived from the interface as `<interface>/service`.
+Planning requires a matching unused case Motan exchange and rejects the RPC
+command when it also appears as unmatched, unsupported, or unsafe target
+traffic. Apply uses the same arguments.
 
 For a Memcached `runtime_state` rule, preview before applying:
 

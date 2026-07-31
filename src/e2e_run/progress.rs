@@ -1,52 +1,57 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::model::{ActiveRunState, ApiExecution, ApiProgress, RunIndex};
+use super::model::{ActiveRunState, ApiExecution, RunIndex};
 use super::store;
 use crate::case_group::CaseGroupInventory;
+use crate::verification_progress::{
+    ApiCounts, ApiObservation, ApiTotals, LatestCounts, LatestRun, ProgressApi,
+    ProgressObservation, ProgressReport, ProgressTotals, SuccessCounts, SuccessStreak,
+    VerificationStage, fingerprint, load, write,
+};
 
-const PROGRESS_VERSION: u32 = 3;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct ProgressReport {
-    version: u32,
-    updated_at: String,
-    status: String,
-    run: ProgressRun,
-    progress: ProgressSummary,
-    latest_run: LatestRun,
-    apis: BTreeMap<String, ProgressApi>,
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ReplayRunKind {
+    Full,
+    Focused,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProgressRun {
+#[derive(Debug, Deserialize)]
+struct LegacyProgressReport {
+    version: u32,
+    updated_at: String,
+    run: LegacyProgressRun,
+    progress: LegacyProgressSummary,
+    latest_run: LegacyLatestRun,
+    apis: BTreeMap<String, LegacyProgressApi>,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyProgressRun {
     key: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProgressSummary {
-    runs: SuccessCounts,
-    cases: SuccessCounts,
+#[derive(Debug, Deserialize)]
+struct LegacyProgressSummary {
+    runs: LegacySuccessCounts,
+    cases: LegacySuccessCounts,
     apis: ApiCounts,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct SuccessCounts {
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct LegacySuccessCounts {
     executed: u64,
     #[serde(default, alias = "successful")]
     passed: u64,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct ApiCounts {
-    total: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LatestRun {
+#[derive(Debug, Deserialize)]
+struct LegacyLatestRun {
     number: u64,
     #[serde(alias = "successful")]
     passed: bool,
@@ -54,55 +59,10 @@ struct LatestRun {
     apis: LatestCounts,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-struct LatestCounts {
-    executed: u32,
-    #[serde(alias = "successful")]
-    passed: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProgressApi {
-    runs: SuccessCounts,
-    cases: SuccessCounts,
-}
-
-pub(super) fn load_progress_baseline(
-    progress_path: &Path,
-    run_key: String,
-    case_source: PathBuf,
-) -> Result<RunIndex> {
-    if !progress_path.is_file() {
-        return Ok(RunIndex::empty(run_key, case_source));
-    }
-    let report: ProgressReport = store::read_yaml(progress_path)?;
-    ensure!(
-        matches!(report.version, 1 | 2 | PROGRESS_VERSION),
-        "unsupported E2E progress version {}",
-        report.version
-    );
-    let mut index = RunIndex::empty(run_key, case_source);
-    index.executions = report.progress.runs.executed;
-    index.passed_runs = report.progress.runs.passed;
-    index.replayed_cases = report.progress.cases.executed;
-    index.passed_cases = report.progress.cases.passed;
-    index.apis = report
-        .apis
-        .into_iter()
-        .map(|(api_key, api)| {
-            (
-                api_key,
-                ApiProgress {
-                    executions: api.runs.executed,
-                    passed_runs: api.runs.passed,
-                    executed_cases: api.cases.executed,
-                    passed_cases: api.cases.passed,
-                    ..ApiProgress::default()
-                },
-            )
-        })
-        .collect();
-    Ok(index)
+#[derive(Debug, Deserialize)]
+struct LegacyProgressApi {
+    runs: LegacySuccessCounts,
+    cases: LegacySuccessCounts,
 }
 
 pub(super) fn update_index(index: &mut RunIndex, state: &ActiveRunState) {
@@ -168,6 +128,214 @@ pub(super) fn update_focused_index(
         state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
     update_api_progress(index, api, global_evidence_clean);
     update_current_run_totals(index, state);
+}
+
+pub(super) fn write_replay_progress(
+    progress_path: &Path,
+    legacy_progress_path: &Path,
+    state: &ActiveRunState,
+    kind: ReplayRunKind,
+) -> Result<()> {
+    let mut migrated = false;
+    let mut report = match load(progress_path, VerificationStage::Replay)? {
+        Some(report) => report,
+        None if legacy_progress_path.is_file() => {
+            migrated = true;
+            load_legacy_progress(legacy_progress_path)?
+        }
+        None => ProgressReport::new(VerificationStage::Replay),
+    };
+    let applied = report.apply(observation(state, kind)?)?;
+    if applied || migrated {
+        write(progress_path, &report)?;
+    }
+    if progress_path != legacy_progress_path && legacy_progress_path.exists() {
+        remove_legacy_progress(legacy_progress_path)?;
+    }
+    Ok(())
+}
+
+fn observation(state: &ActiveRunState, kind: ReplayRunKind) -> Result<ProgressObservation> {
+    ensure!(
+        state.status.is_terminal(),
+        "replay progress requires a terminal run"
+    );
+    ensure!(
+        !state.apis.is_empty(),
+        "replay progress requires at least one summarized API"
+    );
+    if matches!(kind, ReplayRunKind::Focused) {
+        ensure!(
+            state.apis.len() == 1,
+            "focused replay progress requires exactly one API"
+        );
+    }
+    let evidence_clean =
+        state.replay_finalized && state.aggregate_complete && state.aggregate_clean;
+    let apis = state
+        .apis
+        .iter()
+        .map(|api| {
+            (
+                api.api_key.clone(),
+                ApiObservation {
+                    cases: LatestCounts {
+                        executed: u64::from(api.total),
+                        passed: u64::from(api.passed),
+                    },
+                    passed: evidence_clean && api.complete_pass,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let scope = state
+        .apis
+        .iter()
+        .map(|api| ReplayApiEvidence {
+            api: &api.api_key,
+            total: api.total,
+            passed: api.passed,
+            failed: api.failed,
+            incomplete: api.incomplete,
+            complete_pass: api.complete_pass,
+        })
+        .collect::<Vec<_>>();
+    let evidence = ReplayEvidence {
+        run_key: &state.run_key,
+        sequence: state.sequence,
+        kind,
+        source_revision: &state.source_revision,
+        case_inventory_id: &state.case_inventory_id,
+        replay_finalized: state.replay_finalized,
+        aggregate_complete: state.aggregate_complete,
+        aggregate_clean: state.aggregate_clean,
+        apis: scope,
+    };
+    let evidence_bytes = serde_json::to_vec(&evidence)?;
+    let scope_key = state
+        .apis
+        .iter()
+        .map(|api| api.api_key.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    Ok(ProgressObservation {
+        key: format!(
+            "{}|{}|{}|{}",
+            state.run_key,
+            match kind {
+                ReplayRunKind::Full => "full",
+                ReplayRunKind::Focused => "focused",
+            },
+            scope_key,
+            state.sequence
+        ),
+        evidence_fingerprint: fingerprint(&evidence_bytes),
+        finished_at: state
+            .finished_at
+            .context("terminal replay run is missing finished_at")?
+            .to_rfc3339(),
+        apis,
+    })
+}
+
+#[derive(Serialize)]
+struct ReplayEvidence<'a> {
+    run_key: &'a str,
+    sequence: u64,
+    kind: ReplayRunKind,
+    source_revision: &'a str,
+    case_inventory_id: &'a str,
+    replay_finalized: bool,
+    aggregate_complete: bool,
+    aggregate_clean: bool,
+    apis: Vec<ReplayApiEvidence<'a>>,
+}
+
+#[derive(Serialize)]
+struct ReplayApiEvidence<'a> {
+    api: &'a str,
+    total: u32,
+    passed: u32,
+    failed: u32,
+    incomplete: u32,
+    complete_pass: bool,
+}
+
+fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
+    let legacy: LegacyProgressReport = store::read_yaml(path)?;
+    ensure!(
+        matches!(legacy.version, 1..=3),
+        "unsupported legacy E2E progress version {}",
+        legacy.version
+    );
+    let success_streak = if legacy.latest_run.passed {
+        SuccessStreak {
+            runs: 1,
+            cases: legacy.latest_run.cases.executed,
+        }
+    } else {
+        SuccessStreak::default()
+    };
+    Ok(ProgressReport {
+        version: crate::verification_progress::PROGRESS_VERSION,
+        stage: VerificationStage::Replay,
+        updated_at: legacy.updated_at,
+        totals: ProgressTotals {
+            runs: SuccessCounts {
+                executed: legacy.progress.runs.executed,
+                passed: legacy.progress.runs.passed,
+            },
+            cases: SuccessCounts {
+                executed: legacy.progress.cases.executed,
+                passed: legacy.progress.cases.passed,
+            },
+            apis: legacy.progress.apis,
+        },
+        success_streak,
+        latest_run: Some(LatestRun {
+            key: legacy.run.key.clone(),
+            evidence_fingerprint: format!("legacy-v{}:{}", legacy.version, legacy.run.key),
+            number: legacy.latest_run.number,
+            passed: legacy.latest_run.passed,
+            cases: legacy.latest_run.cases,
+            apis: legacy.latest_run.apis,
+            scope: Vec::new(),
+        }),
+        apis: legacy
+            .apis
+            .into_iter()
+            .map(|(api, progress)| {
+                (
+                    api,
+                    ProgressApi {
+                        totals: ApiTotals {
+                            runs: SuccessCounts {
+                                executed: progress.runs.executed,
+                                passed: progress.runs.passed,
+                            },
+                            cases: SuccessCounts {
+                                executed: progress.cases.executed,
+                                passed: progress.cases.passed,
+                            },
+                        },
+                        success_streak: SuccessStreak::default(),
+                    },
+                )
+            })
+            .collect(),
+    })
+}
+
+fn remove_legacy_progress(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect legacy progress {}", path.display()))?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "legacy progress must be a regular file and not a symlink: {}",
+        path.display()
+    );
+    fs::remove_file(path)
+        .with_context(|| format!("failed to remove migrated progress {}", path.display()))
 }
 
 fn reconcile_baseline(index: &mut RunIndex, state: &ActiveRunState) {
@@ -263,93 +431,6 @@ fn update_current_run_totals(index: &mut RunIndex, state: &ActiveRunState) {
     index.current_run.executed_cases = executed_cases;
     index.current_run.passed_cases = passed_cases;
     index.latest_status = Some(state.status);
-}
-
-pub(super) fn build_progress(index: &RunIndex, state: &ActiveRunState) -> ProgressReport {
-    let passed_apis = index
-        .current_run
-        .api_keys
-        .iter()
-        .filter(|api_key| {
-            index
-                .current_run
-                .apis
-                .get(*api_key)
-                .is_some_and(|api| api.counted && api.passed)
-        })
-        .count() as u32;
-    let executed_apis = index
-        .current_run
-        .api_keys
-        .iter()
-        .filter(|api_key| {
-            index
-                .current_run
-                .apis
-                .get(*api_key)
-                .is_some_and(|api| api.counted)
-        })
-        .count() as u32;
-
-    ProgressReport {
-        version: PROGRESS_VERSION,
-        updated_at: state
-            .finished_at
-            .unwrap_or_else(chrono::Utc::now)
-            .to_rfc3339(),
-        status: if index.current_run.passed {
-            "complete".to_string()
-        } else {
-            "in_progress".to_string()
-        },
-        run: ProgressRun {
-            key: state.run_key.clone(),
-        },
-        progress: ProgressSummary {
-            runs: SuccessCounts {
-                executed: index.executions,
-                passed: index.passed_runs,
-            },
-            cases: SuccessCounts {
-                executed: index.replayed_cases,
-                passed: index.passed_cases,
-            },
-            apis: ApiCounts {
-                total: index.apis.len() as u32,
-            },
-        },
-        latest_run: LatestRun {
-            number: index.executions,
-            passed: index.current_run.passed,
-            cases: LatestCounts {
-                executed: u32::try_from(index.current_run.executed_cases).unwrap_or(u32::MAX),
-                passed: u32::try_from(index.current_run.passed_cases).unwrap_or(u32::MAX),
-            },
-            apis: LatestCounts {
-                executed: executed_apis,
-                passed: passed_apis,
-            },
-        },
-        apis: index
-            .apis
-            .iter()
-            .map(|(api_key, api)| {
-                (
-                    api_key.clone(),
-                    ProgressApi {
-                        runs: SuccessCounts {
-                            executed: api.executions,
-                            passed: api.passed_runs,
-                        },
-                        cases: SuccessCounts {
-                            executed: api.executed_cases,
-                            passed: api.passed_cases,
-                        },
-                    },
-                )
-            })
-            .collect(),
-    }
 }
 
 #[cfg(test)]
