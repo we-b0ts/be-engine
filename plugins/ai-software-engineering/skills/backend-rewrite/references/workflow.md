@@ -25,10 +25,21 @@ configuration, recording scripts, source routes, case sources, and current
 implementation state. Ask only for a fact that cannot be discovered safely and
 would materially change the implementation or authorize a new external effect.
 
+Treat a new task as a new user-requested rewrite objective, not a resumed turn,
+context compaction, or automatic continuation. After any required
+initialization, default to acquiring a new standard recording for the selected
+scope even when an earlier task has passing evidence. This is a case-acquisition
+preference, not a gate: earlier artifacts remain available for interim
+diagnosis and replay.
+
+After the current task finalizes its own standard recording, use that exact
+finalized case source for repeated replay-backed E2E diagnosis and repair
+attempts. One failed attempt alone is not a reason to record again.
+
 Determine the earliest required phase: initialization, standard recording,
-implementation/E2E, or comparison. Resume from valid evidence and keep
-unrelated worktree changes out of scope. Generate unique UTC run IDs, pass
-explicit recording durations, and retain exact artifact paths.
+implementation/E2E, or comparison. Resume valid phase evidence from the same
+task and keep unrelated worktree changes out of scope. Generate unique UTC run
+IDs, pass explicit recording durations, and retain exact artifact paths.
 
 When `scripts/<project>-cli` already exists, inspect it during discovery before
 accepting target startup or replay integration as valid. Check it against the

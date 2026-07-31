@@ -100,11 +100,17 @@ The phase order is:
 select_slice -> record -> prepare -> e2e -> compare -> slice_done
 ```
 
-Work on one active slice at a time. Resume valid existing evidence; do not
-repeat completed phases or enter comparison without current runner-generated
-proof that the affected E2E scope passes. When the exact case source contains
-multiple canonical API groups, preserve a finite ordered inventory and advance
-to the next group only after the current group reaches `slice_done`.
+Work on one active slice at a time. Treat a new user-requested rewrite task,
+not a resumed turn, context compaction, or automatic continuation, as a fresh
+case-acquisition opportunity. Default to a new standard recording for its
+selected scope even when an earlier task passed. Within the active task, use
+that task's exact finalized case source for repeated replay-backed E2E
+diagnosis and repair; one failed attempt alone does not call for another
+recording. Resume valid phase evidence from the same task, and do not
+enter comparison without current runner-generated proof that the affected E2E
+scope passes. When the exact case source contains multiple canonical API
+groups, preserve a finite ordered inventory and advance to the next group only
+after the current group reaches `slice_done`.
 
 ## Repair Priority
 
