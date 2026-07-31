@@ -165,12 +165,19 @@ next state.
    wrapper-owned runtime options and the encryption-key boundary.
 5. Run offline `traffic-e2e compare` against that exact finalized run and the
    target's verification policy. Only the report's per-API passing result is
-   current comparison evidence.
+   current comparison evidence. Read runner-owned replay and comparison totals,
+   latest results, and success streaks from their separate progress files;
+   never aggregate report directories manually.
 6. Delegate comparison differences to traffic-e2e diagnosis. Fix every
    candidate-only field, re-record a field-scoped source change,
    or change policy only for source-proven intentional non-determinism.
 7. After every code or policy change, pass affected E2E again and create a new
    comparison recording. Never reinterpret an older report for changed code.
+
+After a valid non-passing comparison, resolve its observed differences before
+recording again. Do not start another comparison until the corresponding
+target behavior, verification policy, or evidenced comparison condition has
+changed.
 
 When one concrete recorded case directly causes a target repair, retain its
 immutable case source, case ID, repaired response locations, proven cause, and

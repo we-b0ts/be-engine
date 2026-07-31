@@ -27,6 +27,7 @@ mod request_headers;
 mod tcp_gateway;
 mod tls;
 mod udp_gateway;
+mod verification_progress;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -64,7 +65,8 @@ pub use comparison_recording::{
     ComparisonVerificationClassification, ComparisonVerificationCounts,
     ComparisonVerificationOptions, ComparisonVerificationReport, MatchedSourceObservation,
     run as run_comparison_recording, run_with_duration as run_comparison_recording_with_duration,
-    run_with_options as run_comparison_recording_with_options, verify_comparison_recording,
+    run_with_options as run_comparison_recording_with_options, update_comparison_progress,
+    verify_comparison_recording,
 };
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,

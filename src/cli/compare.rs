@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use clap::Args;
-use traffic_e2e::{ComparisonVerificationOptions, verify_comparison_recording};
+use traffic_e2e::{
+    ComparisonVerificationOptions, update_comparison_progress, verify_comparison_recording,
+};
 
 #[derive(Debug, Args)]
 pub(super) struct CompareArgs {
@@ -28,14 +30,23 @@ pub(super) async fn run(args: CompareArgs) -> Result<()> {
         "verification policy not found: {}",
         args.policy.display()
     );
+    let policy = args
+        .policy
+        .canonicalize()
+        .with_context(|| format!("failed to resolve policy {}", args.policy.display()))?;
+    let progress_path = policy
+        .parent()
+        .context("verification policy has no parent directory")?
+        .join("comparison-progress.yaml");
     let report_path = args
         .report
         .unwrap_or_else(|| args.case_source.join("comparison-report.json"));
     let report = verify_comparison_recording(ComparisonVerificationOptions {
         case_source: args.case_source,
-        policy: args.policy,
+        policy,
         report: report_path,
     })?;
+    update_comparison_progress(&report, &progress_path)?;
     super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&report)?))?;
     ensure!(
         report.passed,

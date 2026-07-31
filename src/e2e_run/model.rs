@@ -59,6 +59,7 @@ pub(super) struct RunLayout {
     pub run_key: String,
     pub case_source: PathBuf,
     pub progress_path: PathBuf,
+    pub legacy_progress_path: PathBuf,
     pub local_root: PathBuf,
     pub current_path: PathBuf,
     pub run_root: PathBuf,

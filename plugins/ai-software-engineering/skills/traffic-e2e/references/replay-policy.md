@@ -293,10 +293,13 @@ Apply is additive, sorted, and atomic.
 
 `response_rules.comparison.counter` is ignored by standard replay and loaded
 only by comparison verification. Never infer it from a Pointer name. After
-source inspection proves a selected scalar is a live count, use
+source implementation evidence proves a selected scalar is a count that may
+change between valid observations, use
 `traffic-e2e config comparison plan|apply response-rule --kind counter` with a
 current comparison report, the exact API and Pointer, a source path/symbol or
-equivalent runtime artifact, and two differing observed examples.
+equivalent runtime artifact, and differing source and candidate examples.
+Source-before and source-after may be equal; their equality does not make the
+rule inapplicable.
 
 The selected Pointer must exist on both sides. Any JSON number matches another
 number. A string matches another string only when both are empty or both are

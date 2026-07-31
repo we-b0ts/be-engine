@@ -145,7 +145,9 @@ active attempts, sessions, reports, snapshots, logs, current pointers, and
 temporary files under that directory. AI and target scripts MUST NOT create,
 edit, merge, repair, copy, stage, commit, or force-add them.
 
-`.traffic-e2e/e2e-progress.yaml` is a runner-generated concise project report
-and may be committed when the repository workflow requires it. Never hand-edit
-or reconstruct its counters. Local evidence, progress, and target exit codes
+`.traffic-e2e/replay-progress.yaml` and
+`.traffic-e2e/comparison-progress.yaml` are runner-generated concise project
+reports and may be committed when the repository workflow requires it. They
+share one schema but have separate stage owners. Never hand-edit, merge, or
+reconstruct their counters. Local evidence, progress, and target exit codes
 each have distinct authority; delivery status remains outside runner evidence.
