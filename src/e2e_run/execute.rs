@@ -11,8 +11,9 @@ use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout,
 use super::progress::{ReplayRunKind, update_focused_index, update_index, write_replay_progress};
 use super::request_view::RequestCaseView;
 use super::runtime::{
-    best_effort_stop, control, finalize_replay, run_project, spawn_replay, stop_replay_process,
-    wait_for_replay, wait_for_replay_ready,
+    best_effort_stop, control, finalize_replay, replay_ca_cert_path, run_project,
+    run_project_with_replay_ca, spawn_replay, stop_replay_process, wait_for_replay,
+    wait_for_replay_ready,
 };
 use super::store;
 use super::support::{allocate_replay_report, api_directory, process_exists, status_label};
@@ -360,15 +361,17 @@ async fn run_active_with_replay(
         state.session_id.is_some(),
         "replay session has no session id"
     );
+    let replay_ca_cert_path = replay_ca_cert_path(&ready)?;
     store::write_active(layout, state)?;
 
     state.target_started = true;
     store::write_active(layout, state)?;
-    let start = run_project(
+    let start = run_project_with_replay_ca(
         config,
         layout,
         &["start"],
         &layout.active_dir.join("reports/target-start.json"),
+        &replay_ca_cert_path,
     )
     .await?;
     ensure!(start.success, "project CLI start failed");

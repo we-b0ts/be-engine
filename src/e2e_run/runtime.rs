@@ -17,6 +17,8 @@ use crate::case_group::CaseGroupInventory;
 use crate::replay::{ReplayControlConfig, run_replay_control};
 use crate::request_headers::ENCRYPTION_KEY_ENV;
 
+pub(super) const REPLAY_CA_CERT_ENV: &str = "TRAFFIC_E2E_REPLAY_CA_CERT_PATH";
+
 const PROXY_ENVIRONMENT: &[&str] = &[
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -108,9 +110,39 @@ pub(super) async fn run_project(
     args: &[&str],
     evidence_path: &Path,
 ) -> Result<CommandEvidence> {
+    run_project_with_environment(config, layout, args, evidence_path, None).await
+}
+
+pub(super) async fn run_project_with_replay_ca(
+    config: &ResolvedProjectConfig,
+    layout: &RunLayout,
+    args: &[&str],
+    evidence_path: &Path,
+    replay_ca_cert_path: &Path,
+) -> Result<CommandEvidence> {
+    run_project_with_environment(
+        config,
+        layout,
+        args,
+        evidence_path,
+        Some(replay_ca_cert_path),
+    )
+    .await
+}
+
+async fn run_project_with_environment(
+    config: &ResolvedProjectConfig,
+    layout: &RunLayout,
+    args: &[&str],
+    evidence_path: &Path,
+    replay_ca_cert_path: Option<&Path>,
+) -> Result<CommandEvidence> {
     let mut command = Command::new(&config.project_cli);
     command.current_dir(&layout.target_root).args(args);
     sanitize_project_environment(&mut command);
+    if let Some(path) = replay_ca_cert_path {
+        command.env(REPLAY_CA_CERT_ENV, path);
+    }
     let output = command.output().await.with_context(|| {
         format!(
             "failed to run project CLI {} {}",
@@ -129,6 +161,32 @@ pub(super) async fn run_project(
     };
     store::write_json(evidence_path, &evidence)?;
     Ok(evidence)
+}
+
+pub(super) fn replay_ca_cert_path(ready: &serde_json::Value) -> Result<PathBuf> {
+    let value = ready
+        .pointer("/session/ca_cert_path")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("replay_capability_gap: replay readiness has no CA certificate path")?;
+    let path = PathBuf::from(value);
+    ensure!(
+        path.is_absolute(),
+        "replay_capability_gap: replay CA certificate path is not absolute: {}",
+        path.display()
+    );
+    let metadata = std::fs::metadata(&path).with_context(|| {
+        format!(
+            "replay_capability_gap: failed to inspect replay CA certificate {}",
+            path.display()
+        )
+    })?;
+    ensure!(
+        metadata.is_file(),
+        "replay_capability_gap: replay CA certificate is not a regular file: {}",
+        path.display()
+    );
+    Ok(path)
 }
 
 fn sanitize_project_environment(command: &mut Command) {
@@ -340,6 +398,9 @@ pub(super) async fn best_effort_stop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::e2e_run::model::{ResolvedProjectConfig, RunLayout};
+    use std::fs;
+    use std::time::Duration;
 
     #[test]
     fn replay_startup_progress_filter_only_accepts_dependency_loading() {
@@ -349,6 +410,113 @@ mod tests {
         assert!(!is_replay_startup_progress(
             "local replay owner filter enabled"
         ));
+    }
+
+    #[test]
+    fn replay_ca_path_requires_an_absolute_regular_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let cert = directory.path().join("replay-ca.pem");
+        fs::write(&cert, "certificate").unwrap();
+
+        assert_eq!(
+            replay_ca_cert_path(&serde_json::json!({
+                "session": {"ca_cert_path": cert}
+            }))
+            .unwrap(),
+            cert
+        );
+        assert!(
+            replay_ca_cert_path(&serde_json::json!({
+                "session": {"ca_cert_path": "relative/replay-ca.pem"}
+            }))
+            .unwrap_err()
+            .to_string()
+            .contains("not absolute")
+        );
+        assert!(
+            replay_ca_cert_path(&serde_json::json!({"session": {}}))
+                .unwrap_err()
+                .to_string()
+                .contains("replay_capability_gap")
+        );
+        assert!(
+            replay_ca_cert_path(&serde_json::json!({
+                "session": {"ca_cert_path": directory.path()}
+            }))
+            .unwrap_err()
+            .to_string()
+            .contains("not a regular file")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn replay_ca_environment_is_explicit_and_absent_from_evidence() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let project_cli = directory.path().join("project-cli");
+        fs::write(
+            &project_cli,
+            format!("#!/bin/sh\nprintf '%s' \"${{{REPLAY_CA_CERT_ENV}:-unset}}\"\n"),
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&project_cli).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&project_cli, permissions).unwrap();
+        let config = ResolvedProjectConfig {
+            project_cli,
+            replay_policy: directory.path().join("verification.yaml"),
+            replay_startup_timeout: Duration::from_secs(1),
+            pr_base: "dev-migration".to_string(),
+            recorder_config: None,
+            recording_rule: None,
+            runner_owned_response_assertions: true,
+        };
+        let layout = RunLayout {
+            target_root: directory.path().to_path_buf(),
+            run_key: "run".to_string(),
+            case_source: directory.path().join("cases"),
+            progress_path: directory.path().join("progress.yaml"),
+            legacy_progress_path: directory.path().join("legacy-progress.yaml"),
+            local_root: directory.path().join("local"),
+            current_path: directory.path().join("current.yaml"),
+            run_root: directory.path().join("run"),
+            index_path: directory.path().join("index.yaml"),
+            group_index_path: directory.path().join("groups.json"),
+            active_dir: directory.path().join("active"),
+            latest_dir: directory.path().join("latest"),
+        };
+        fs::create_dir_all(&layout.active_dir).unwrap();
+        let ca_cert = directory.path().join("replay-ca.pem");
+        fs::write(&ca_cert, "certificate").unwrap();
+
+        let ordinary = run_project(
+            &config,
+            &layout,
+            &["status"],
+            &directory.path().join("ordinary.json"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ordinary.stdout, "unset");
+
+        let start = run_project_with_replay_ca(
+            &config,
+            &layout,
+            &["start"],
+            &directory.path().join("start.json"),
+            &ca_cert,
+        )
+        .await
+        .unwrap();
+        assert_eq!(start.stdout, ca_cert.display().to_string());
+        let evidence: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.path().join("start.json")).unwrap())
+                .unwrap();
+        let command = evidence.pointer("/command").unwrap().to_string();
+        assert!(!command.contains(REPLAY_CA_CERT_ENV));
+        assert!(!command.contains(&ca_cert.display().to_string()));
     }
 
     #[tokio::test]
