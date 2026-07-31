@@ -126,9 +126,6 @@ Append only missing ignore entries for:
 /.traffic-e2e/artifacts/
 ```
 
-Do not migrate or reuse a legacy `.traffic-e2e/runtime/` tree during init. Leave
-an existing tree untouched and report it for provenance review.
-
 Do not modify business source, build files, deployment files, CI, README, or
 repository instructions beyond the exact managed `AGENTS.md` block. The
 adapter output allowance does not authorize copying or replacing business

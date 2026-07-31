@@ -127,11 +127,6 @@ an allowed authoritative input. The target facade passes these paths through
 normal startup inputs; product code must not hard-code the traffic-e2e
 directory.
 
-Never rename, copy, or reuse a legacy `.traffic-e2e/runtime/` tree wholesale.
-For each still-required allowed input, return to its authoritative origin,
-revalidate its provenance and complete-root boundary, and materialize it
-directly into `.traffic-e2e/boot/`.
-
 Use this precedence unless the target repository defines a stricter
 equivalent:
 

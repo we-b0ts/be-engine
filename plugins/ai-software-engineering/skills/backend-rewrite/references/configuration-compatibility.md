@@ -98,11 +98,6 @@ reports, never commit local boot inputs, and pass an allowed configuration
 root through the target's normal startup boundary without translating it into
 a target-only format.
 
-Never rename, copy, or reuse a legacy `.traffic-e2e/runtime/` tree wholesale.
-For each still-required allowed input, return to its authoritative origin,
-revalidate its provenance and complete-root boundary, and materialize it
-directly into `.traffic-e2e/boot/`.
-
 ## Implement Compatible Loading
 
 Make the target read the same supplied configuration rather than requiring an

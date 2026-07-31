@@ -9,6 +9,5 @@
 - Never generate its contents from source-process memory, remote responses,
   recordings, logs, debug output, or diagnostics. The directory name or
   Git-ignore status does not establish provenance.
-- Never migrate `.traffic-e2e/runtime/` wholesale. Never print or commit boot
-  inputs.
+- Never print or commit boot inputs.
 <!-- traffic-e2e:boot-boundary:end -->

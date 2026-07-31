@@ -45,8 +45,7 @@ evidence, and advance only on current proof.
   default to one canonical API group.
 - Preserve genuine dependency paths. Only a value proven to come directly from
   process environment, startup arguments, or machine-local configuration may
-  move to an equivalent target input. Never move, copy, or reinterpret a
-  legacy `.traffic-e2e/runtime/` tree as boot input wholesale.
+  move to an equivalent target input.
 - Treat source-process local caches as target behavior. Reproduce the source
   cache semantics that affect responses or runtime behavior.
 - Keep recordings immutable and assertion-only. Target code, configuration,

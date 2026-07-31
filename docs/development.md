@@ -647,7 +647,6 @@ outside the target process.
 `.traffic-e2e/boot/` is input-only transport for source-proven startup inputs.
 Its name or Git-ignore status does not authorize generating content from a
 source process, remote response, recording, log, debug output, or diagnostic.
-Do not migrate a legacy `.traffic-e2e/runtime/` tree wholesale.
 
 For a case collection, start one replay session and control active case
 ownership through the CLI:

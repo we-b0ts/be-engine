@@ -90,8 +90,7 @@ content. Later source-proven setup may place allowed startup inputs there:
   other machine-local startup dependencies only when needed.
 
 Never derive boot content from source-process memory, remote responses,
-recordings, logs, debug output, or diagnostics. Do not migrate or reuse a
-legacy `.traffic-e2e/runtime/` tree wholesale. Use mode `0600` for sensitive
+recordings, logs, debug output, or diagnostics. Use mode `0600` for sensitive
 files; never print or commit boot inputs.
 
 Merge the exact
