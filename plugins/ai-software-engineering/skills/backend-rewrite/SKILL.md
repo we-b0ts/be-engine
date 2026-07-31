@@ -99,7 +99,9 @@ select_slice -> record -> prepare -> e2e -> compare -> slice_done
 
 Work on one active slice at a time. Resume valid existing evidence; do not
 repeat completed phases or enter comparison without current runner-generated
-proof that the affected E2E scope passes.
+proof that the affected E2E scope passes. When the exact case source contains
+multiple canonical API groups, preserve a finite ordered inventory and advance
+to the next group only after the current group reaches `slice_done`.
 
 ## Repair Priority
 

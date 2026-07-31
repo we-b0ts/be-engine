@@ -894,6 +894,8 @@ latest_run:
   cases: { executed: 100, passed: 100 }
   apis: { executed: 1, passed: 1 }
   scope: [GET /api/widgets/*]
+counted_runs:
+  <runner-owned-identity>: <runner-owned-fingerprint>
 apis:
   GET /api/widgets/*:
     totals:
@@ -907,7 +909,10 @@ apis:
 Any selected API failure resets the global streak, while an API failure resets
 only that API's streak. A different selected API scope starts a new global
 streak. The next finalized replay attempt automatically migrates legacy
-`.traffic-e2e/e2e-progress.yaml`.
+`.traffic-e2e/e2e-progress.yaml`. The runner-owned `counted_runs` ledger keeps
+up to 10,000 attempt identities so reprocessing older evidence cannot change
+lifetime totals; when full, progress updates fail instead of silently
+double-counting.
 
 When managing host interception directly, always pair `up` with `down`:
 

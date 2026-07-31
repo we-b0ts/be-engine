@@ -80,6 +80,12 @@ newest. When request-header encryption is configured, require the named key
 environment and keep its value out of commands, logs, cases, target
 configuration, and supporting services.
 
+When a supplied finalized case source contains multiple canonical API groups,
+keep its finite ordered inventory. Select one unprocessed group as the active
+slice and keep it active through E2E and comparison. A non-passing or invalid
+comparison does not advance the inventory; select the next group only after
+the current group reaches `slice_done`.
+
 ## Inspect Runtime Evidence
 
 When repository files and artifacts do not establish effective behavior,

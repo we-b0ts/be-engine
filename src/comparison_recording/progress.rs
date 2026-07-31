@@ -162,9 +162,13 @@ mod tests {
         let path = directory.path().join("comparison-progress.yaml");
 
         update_comparison_progress(&report("run-1", "policy-1", 100, 0), &path).unwrap();
+        update_comparison_progress(&report("run-2", "policy-1", 100, 0), &path).unwrap();
+        assert!(!update_comparison_progress(&report("run-1", "policy-1", 100, 0), &path).unwrap());
         let error =
             update_comparison_progress(&report("run-1", "policy-2", 100, 0), &path).unwrap_err();
 
         assert!(error.to_string().contains("different evidence"));
+        let progress = load(&path, VerificationStage::Comparison).unwrap().unwrap();
+        assert_eq!(progress.totals.runs.executed, 2);
     }
 }

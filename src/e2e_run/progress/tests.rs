@@ -124,6 +124,7 @@ fn replay_progress_counts_each_finalized_attempt_and_is_idempotent() {
     write_replay_progress(&progress_path, &legacy_path, &first, ReplayRunKind::Full).unwrap();
     write_replay_progress(&progress_path, &legacy_path, &first, ReplayRunKind::Full).unwrap();
     write_replay_progress(&progress_path, &legacy_path, &second, ReplayRunKind::Full).unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &first, ReplayRunKind::Full).unwrap();
 
     let report = load(&progress_path, VerificationStage::Replay)
         .unwrap()
@@ -132,6 +133,37 @@ fn replay_progress_counts_each_finalized_attempt_and_is_idempotent() {
     assert_eq!(report.totals.cases.executed, 6);
     assert_eq!(report.success_streak.runs, 2);
     assert_eq!(report.success_streak.cases, 6);
+}
+
+#[test]
+fn replay_progress_does_not_recount_an_older_focused_attempt_after_a_full_run() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("replay-progress.yaml");
+    let legacy_path = directory.path().join("e2e-progress.yaml");
+    let focused = state(3, 0, 1);
+    let full = state(3, 0, 2);
+
+    write_replay_progress(
+        &progress_path,
+        &legacy_path,
+        &focused,
+        ReplayRunKind::Focused,
+    )
+    .unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &full, ReplayRunKind::Full).unwrap();
+    write_replay_progress(
+        &progress_path,
+        &legacy_path,
+        &focused,
+        ReplayRunKind::Focused,
+    )
+    .unwrap();
+
+    let report = load(&progress_path, VerificationStage::Replay)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.cases.executed, 6);
 }
 
 #[test]
