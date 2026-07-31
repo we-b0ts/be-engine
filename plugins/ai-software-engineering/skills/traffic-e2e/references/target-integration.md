@@ -51,6 +51,14 @@ recorded dependencies to produce results, read the expected response, or decide
 whether assertions passed. Its E2E exit code proves request execution and
 capture only.
 
+After Replay reports readiness, the managed runner invokes `start` with
+`TRAFFIC_E2E_REPLAY_CA_CERT_PATH` set to the absolute path of Replay's current
+CA certificate. This is a runner-owned read-only public certificate input.
+The facade may stage that file for a genuine target client to trust, but MUST
+NOT derive its path from a replay UUID, inspect `TRP_REPLAY_SESSION`, parse a
+session file, or receive the CA private key. Normal startup outside managed
+Replay does not receive this environment variable.
+
 For Breeze-managed target resources, the facade may forward one generic
 descriptor policy selected by its caller and generic Breeze topology settings.
 It must not infer the policy from runner state, enumerate resources, invoke a
