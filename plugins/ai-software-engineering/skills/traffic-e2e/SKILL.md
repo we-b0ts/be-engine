@@ -22,6 +22,9 @@ case-owned dependency call, and every required side effect.
   recorder-owned replay may consume case or Global dependency files.
 - Target code, configuration, tests, and support must use genuine runtime
   clients and must never turn recorded outputs into fixtures or behavior.
+- Treat `.traffic-e2e/boot/` as input-only transport for already authoritative
+  startup inputs, never as a destination for values observed or inferred from
+  recordings, source processes, remote responses, logs, or diagnostics.
 - A response difference caused by a missing, cold, stale, partially loaded, or
   behaviorally different process-local cache is target behavior. Never exempt
   it with a dynamic response rule.

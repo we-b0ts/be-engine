@@ -623,8 +623,8 @@ granting the fixed user access to the workspace or build cache:
 
 ```bash
 traffic-e2e target exec \
-  --env-file .traffic-e2e/runtime/.env \
-  --copy-env APP_CONFIG=.traffic-e2e/runtime/config/application.yaml \
+  --env-file .traffic-e2e/boot/.env \
+  --copy-env APP_CONFIG=.traffic-e2e/boot/config/application.yaml \
   --copy-env REPLAY_CA=path/to/replay-ca.pem \
   --path-env CASE_DIR=path/to/readable/case-group \
   --write-dir logs \
@@ -643,6 +643,11 @@ cannot already read the path. The
 helper clears inherited proxy and shell-hook variables, verifies the effective
 UID, and never accepts a user or UID option. Keep replay lifecycle commands
 outside the target process.
+
+`.traffic-e2e/boot/` is input-only transport for source-proven startup inputs.
+Its name or Git-ignore status does not authorize generating content from a
+source process, remote response, recording, log, debug output, or diagnostic.
+Do not migrate a legacy `.traffic-e2e/runtime/` tree wholesale.
 
 For a case collection, start one replay session and control active case
 ownership through the CLI:

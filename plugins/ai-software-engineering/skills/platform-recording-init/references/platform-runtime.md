@@ -78,18 +78,34 @@ environment variable.
 Inspect the source and Breeze containers for image identity, platform,
 entrypoint, command, working directory, environment, bind mounts, capabilities,
 security options, and ulimits. Preserve values required for genuine startup.
-Initialize only the private `.traffic-e2e/runtime/` root. Store sensitive local
-runtime inputs there when source evidence requires them:
+Initialize only the private `.traffic-e2e/boot/` root and do not populate it
+during init. This is an input-only transport boundary; its name, existence,
+and Git-ignore status do not establish provenance or authorize creating
+content. Later source-proven setup may place allowed startup inputs there:
 
-- use `.traffic-e2e/runtime/config/` for files or directories synchronized from
-  the source container, preserving the relationships required by their
-  consumers;
-- use `.traffic-e2e/runtime/.env` for materialized environment variables;
-- create purpose-named child directories for other local runtime dependencies
-  only when needed.
+- use `.traffic-e2e/boot/config/` for complete files or directories
+  synchronized from the source container, preserving their relationships;
+- use `.traffic-e2e/boot/.env` for direct materialized environment variables;
+- create purpose-named child directories for source-defined SDK snapshots or
+  other machine-local startup dependencies only when needed.
 
-Do not precreate child entries during initialization. Use mode `0600` for
-sensitive files; never print or commit runtime inputs.
+Never derive boot content from source-process memory, remote responses,
+recordings, logs, debug output, or diagnostics. Do not migrate or reuse a
+legacy `.traffic-e2e/runtime/` tree wholesale. Use mode `0600` for sensitive
+files; never print or commit boot inputs.
+
+Merge the exact
+[managed boot-input block](../assets/agents/boot-boundary.md) into the
+repository-root `AGENTS.md`:
+
+- create `AGENTS.md` when absent and append the block when its markers are
+  absent;
+- preserve all content outside the managed marker pair;
+- replace only the managed range when one matched pair exists;
+- reject unmatched markers or more than one marker pair.
+
+The managed block contains policy only. Never write paths, names, or values
+discovered from boot inputs into it.
 
 Use the pinned Breeze E2E image and preserve the inspected project-specific
 service pool. The standard Breeze launch remains rooted in Vintage discovery,

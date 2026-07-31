@@ -32,6 +32,9 @@ evidence, and advance only on current proof.
   initialization, retrieval, loading, refresh, and fallback behavior. Do not
   invent a snapshot when the source SDK keeps remotely obtained state only in
   memory.
+- Treat `.traffic-e2e/boot/` as an input-only transport boundary for already
+  authoritative startup inputs. Its name, existence, or Git-ignore status does
+  not prove provenance or authorize creating content.
 - Treat the source repository and source application implementation as
   immutable evidence. Never edit source code, replace source classes through a
   recording adapter, patch source artifacts, or change source business
@@ -42,7 +45,8 @@ evidence, and advance only on current proof.
   default to one canonical API group.
 - Preserve genuine dependency paths. Only a value proven to come directly from
   process environment, startup arguments, or machine-local configuration may
-  move to an equivalent target input.
+  move to an equivalent target input. Never move, copy, or reinterpret a
+  legacy `.traffic-e2e/runtime/` tree as boot input wholesale.
 - Treat source-process local caches as target behavior. Reproduce the source
   cache semantics that affect responses or runtime behavior.
 - Keep recordings immutable and assertion-only. Target code, configuration,

@@ -8,7 +8,7 @@ accepting target startup as migration-compatible.
 - Contract
 - Mandatory loader boundary
 - Discover the source loader
-- Materialize local runtime inputs
+- Materialize local boot inputs
 - Implement compatible loading
 - Verify
 
@@ -69,21 +69,22 @@ configuration, recreate or restart the source through its authoritative
 entrypoint without changing its business behavior, and treat traffic from that
 diagnostic lifecycle as non-evidence.
 
-## Materialize Local Runtime Inputs
+## Materialize Local Boot Inputs
 
-When source-proven runtime inputs must be materialized locally, use the
-repository's Git-ignored runtime-input location. Only an authoritative startup
-configuration or SDK-owned snapshot directory that already exists in the
-source container may be copied. Copy the smallest complete root; never copy one
-selected file, a selected file set, or extracted keys. Preserve its supplied
-format and directory relationships.
+Use the repository's Git-ignored `.traffic-e2e/boot/` only to transport
+source-proven startup inputs. The directory name, existence, and Git-ignore
+status do not establish provenance or authorize creating content. Only an
+authoritative startup configuration or SDK-owned snapshot directory that
+already exists in the source container may be copied. Copy the smallest
+complete root; never copy one selected file, a selected file set, or extracted
+keys. Preserve its supplied format and directory relationships.
 
 Treat an artifact as a snapshot only when the source SDK or loader creates and
 loads it during its normal lifecycle using a source-defined path and format. A
 one-off dump, export, decryption, or diagnostic artifact is not a snapshot,
 regardless of its name or location.
 
-Never create a runtime input by dumping, decrypting, extracting, or translating
+Never create a boot input by dumping, decrypting, extracting, or translating
 source-process memory, remote responses, logs, or debug output. A constant
 present in the source repository or pinned compiled artifact may be inspected,
 decompiled when necessary, and migrated directly into target source code. For
@@ -93,9 +94,14 @@ source-defined snapshot lifecycle. If the source SDK keeps remotely obtained
 state only in memory, the target must not invent a snapshot or local cache. A
 copied source-owned snapshot is only compatible bootstrap input, not a static
 target configuration contract. Keep sensitive values out of commands and
-reports, never commit local runtime inputs, and pass an allowed configuration
+reports, never commit local boot inputs, and pass an allowed configuration
 root through the target's normal startup boundary without translating it into
 a target-only format.
+
+Never rename, copy, or reuse a legacy `.traffic-e2e/runtime/` tree wholesale.
+For each still-required allowed input, return to its authoritative origin,
+revalidate its provenance and complete-root boundary, and materialize it
+directly into `.traffic-e2e/boot/`.
 
 ## Implement Compatible Loading
 

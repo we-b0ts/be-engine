@@ -53,7 +53,7 @@ or validating the candidate facade or `scripts/start-recording-comparison`.
 3. Create or reuse a named initialization branch based on `dev-migration` and
    switch to it before writing files. Never write initialization outputs on
    the default branch or directly on `dev-migration`.
-4. Copy and render the runtime files under
+4. Copy and render the recording files under
    [assets/recording](assets/recording). Replace only the documented
    `__PROJECT_SCOPE__` and `__PROJECT_CLI__` placeholders in configuration
    templates. Copy `brz-no-fallback.sh` unchanged to
@@ -61,39 +61,43 @@ or validating the candidate facade or `scripts/start-recording-comparison`.
    settle interval and encrypted `authorization` request-header policy;
    `recording wait-ready` owns the wait. Keep `authorization` in
    `redact_headers` for response-side protection; request encryption takes
-   precedence. Create the private `.traffic-e2e/runtime/` root, but do not
-   precreate its contents. Reserve `runtime/config/` for files or directories
-   synchronized from the source container and `runtime/.env` for materialized
-   environment variables. Create purpose-named directories for other local
-   runtime dependencies only when needed.
-5. Copy the fixed Breeze Mesh patch assets unchanged into
+   precedence. Create only the private `.traffic-e2e/boot/` root; init must not
+   populate it. `boot/` is input-only transport, not authorization to derive
+   content from a source process, remote response, recording, log, or
+   diagnostic.
+5. Merge the exact managed block from
+   [boot-boundary.md](assets/agents/boot-boundary.md) into the repository-root
+   `AGENTS.md` according to the runtime reference. Preserve all unmanaged
+   content and reject unmatched or duplicate managed markers.
+6. Copy the fixed Breeze Mesh patch assets unchanged into
    `.traffic-e2e/adapters/source/`. This bundled patch is the only permitted
    source-class patch and is a closed recording-infrastructure exception, not
    a pattern for new adapters. Generate only the remaining source adapter
    Dockerfile and launchers from inspected evidence; invoke the bundled patch
    applicator and recursively assign `/data1/weibo` to numeric `998:998`
    during the image build. Never add another Java override or JAR patch.
-6. Generate `scripts/start-recording` for the inspected startup parameters and
+7. Generate `scripts/start-recording` for the inspected startup parameters and
    follow the exact wrapper, lifecycle, ownership, encryption, and validation
    contract in the standard-recording reference. Do not reconstruct it from
    another repository.
-7. Before target implementation exists, generate an extensible
+8. Before target implementation exists, generate an extensible
    `scripts/<project>-cli` whose initialization-time minimum is a
    fixed-response candidate mock behind `start`, `status`, and `stop`, then
    generate `scripts/start-recording-comparison` against that stable lifecycle
    subset. Follow the exact facade, wrapper, shared-Breeze, encryption,
    isolation, and validation contract in the comparison-recording reference.
-8. Create empty recording bind sources by translating each private source
+9. Create empty recording bind sources by translating each private source
    mount from `/data1/<project>/<path>` to
    `/data1/<project>-recording/<path>`. Keep container destinations unchanged,
    copy no original content, and recursively assign the new writable sources
    to numeric `998:998`. Before every start, also normalize the fixed shared
    Breeze directories as specified by the runtime reference.
-9. Complete the shared runtime, standard recording, and comparison recording
-   validation sections. Do not generate target Breeze SDK packages or
-   repository development rules; those belong to the
+10. Complete the shared runtime, standard recording, and comparison recording
+   validation sections. Do not generate target Breeze SDK packages or other
+   repository development rules beyond the managed boot-input block; those
+   belong to the
    [`breeze-sdk` skill](../breeze-sdk/SKILL.md).
-10. Commit only the initialization outputs, push the initialization branch, and
+11. Commit only the initialization outputs, push the initialization branch, and
    create or update its draft PR targeting `dev-migration`.
 
 ## Source-Controlled Output
@@ -105,6 +109,7 @@ Limit initialization changes to:
 .traffic-e2e/recorder.toml
 .traffic-e2e/verification.yaml
 .traffic-e2e/adapters/source/*
+AGENTS.md
 scripts/start-recording
 scripts/start-recording-comparison
 scripts/<project>-cli
@@ -116,15 +121,19 @@ Append only missing ignore entries for:
 
 ```text
 /.traffic-e2e/local/
-/.traffic-e2e/runtime/
+/.traffic-e2e/boot/
 /.traffic-e2e/data/
 /.traffic-e2e/artifacts/
 ```
 
+Do not migrate or reuse a legacy `.traffic-e2e/runtime/` tree during init. Leave
+an existing tree untouched and report it for provenance review.
+
 Do not modify business source, build files, deployment files, CI, README, or
-repository instructions. The adapter output allowance does not authorize
-copying or replacing business classes, changing caches or feature switches, or
-otherwise changing source behavior.
+repository instructions beyond the exact managed `AGENTS.md` block. The
+adapter output allowance does not authorize copying or replacing business
+classes, changing caches or feature switches, or otherwise changing source
+behavior.
 
 ## Completion
 
@@ -142,6 +151,9 @@ bash -n scripts/<project>-cli
 Run the two bounded recording commands with a valid, unlogged
 `TRAFFIC_E2E_ENCRYPTION_KEY_B64`; each command must fail before runtime changes
 when the variable is absent or invalid.
+
+Also verify that `.traffic-e2e/boot/` is ignored and empty after init, and that
+the root `AGENTS.md` contains exactly one current managed boot-input block.
 
 Report completion only after every validation gate in the three selected
 references passes, `dev-migration` and the initialization branch are

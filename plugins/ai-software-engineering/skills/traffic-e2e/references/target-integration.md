@@ -10,7 +10,7 @@ fakes.
 - Normal runtime
 - Standard project facade
 - Identity and staging
-- Runtime input materialization
+- Boot input materialization
 - Generated state boundary
 
 ## Normal Runtime
@@ -74,8 +74,8 @@ For a prebuilt in-process target, prefer:
 
 ```bash
 traffic-e2e target exec \
-  --env-file .traffic-e2e/runtime/.env \
-  --copy-env APP_CONFIG=.traffic-e2e/runtime/config/application.yaml \
+  --env-file .traffic-e2e/boot/.env \
+  --copy-env APP_CONFIG=.traffic-e2e/boot/config/application.yaml \
   --path-env CASE_DIR=path/to/readable/case-group \
   --write-dir logs \
   -- path/to/prebuilt-target
@@ -94,15 +94,17 @@ supported routing boundary, return `target_environment/action_required` or
 `replay_capability_gap/action_required` with an acceptance check instead of
 widening interception.
 
-## Runtime Input Materialization
+## Boot Input Materialization
 
-Use the Git-ignored `.traffic-e2e/runtime/` directory only for source-proven
-runtime inputs allowed below: process environment, startup arguments,
-machine-local configuration, or a complete authoritative configuration or
-SDK-owned snapshot root already present in the source container. Use
-`.traffic-e2e/runtime/config/` only for the smallest complete allowed root.
-Never copy one selected file or selected subset. Preserve the directory
-relationships required by the source loader.
+Use the Git-ignored `.traffic-e2e/boot/` directory only to transport
+source-proven startup inputs allowed below: process environment, startup
+arguments, machine-local configuration, or a complete authoritative
+configuration or SDK-owned snapshot root already present in the source
+container. Its name, existence, or Git-ignore status does not establish
+provenance or authorize creating content. Use `.traffic-e2e/boot/config/` only
+for the smallest complete allowed root. Never copy one selected file or
+selected subset. Preserve the directory relationships required by the source
+loader.
 
 Treat an artifact as a snapshot only when the source SDK or loader creates and
 loads it during its normal lifecycle using a source-defined path and format. A
@@ -116,26 +118,32 @@ decompiled when necessary, and migrated directly into target source code. For
 remote-backed configuration, discovery, registry, or secrets, the target must
 implement the source SDK's initialization, retrieval, refresh, fallback, and
 any source-defined snapshot loading. It must not invent a snapshot when the
-source SDK keeps that state only in memory. Use `.traffic-e2e/runtime/.env` for
-materialized environment variables. Other source-proven machine-local runtime
+source SDK keeps that state only in memory. Use `.traffic-e2e/boot/.env` for
+materialized environment variables. Other source-proven machine-local startup
 dependencies may use purpose-named child directories when needed.
 
-Initialize only the runtime root; create its contents only when source evidence
-requires them. The target facade passes these paths through normal startup
-inputs; product code must not hard-code the traffic-e2e directory.
+Initialize only the boot root; create contents only when source evidence proves
+an allowed authoritative input. The target facade passes these paths through
+normal startup inputs; product code must not hard-code the traffic-e2e
+directory.
+
+Never rename, copy, or reuse a legacy `.traffic-e2e/runtime/` tree wholesale.
+For each still-required allowed input, return to its authoritative origin,
+revalidate its provenance and complete-root boundary, and materialize it
+directly into `.traffic-e2e/boot/`.
 
 Use this precedence unless the target repository defines a stricter
 equivalent:
 
 1. explicitly supplied process environment;
-2. `.traffic-e2e/runtime/.env`;
+2. `.traffic-e2e/boot/.env`;
 3. ordinary local application environment;
 4. committed non-sensitive defaults.
 
 Record variable names and provenance without printing values. Target runtime
 receives ordinary environment values and source-compatible configuration; it
 never parses recording files to materialize them. Never commit
-`.traffic-e2e/runtime/`.
+`.traffic-e2e/boot/`.
 
 ## Generated State Boundary
 
