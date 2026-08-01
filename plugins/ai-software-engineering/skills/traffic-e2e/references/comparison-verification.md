@@ -123,8 +123,9 @@ it. A complete report updates `.traffic-e2e/comparison-progress.yaml` next to
 the policy. The progress report uses the same schema as replay progress and
 tracks lifetime totals, the current global and per-API success streaks, and the
 latest run. Reprocessing the same recording and evidence is idempotent; a
-different policy cannot reinterpret an already counted recording. An
-incomplete report does not update progress.
+different policy cannot reinterpret an already counted recording, even after
+newer recordings have updated progress. An incomplete report does not update
+progress.
 
 The report groups cases by canonical `METHOD + api_pattern` and publishes
 `apis_total`, `apis_passed`, and `apis_failed`; an API passes only when all of

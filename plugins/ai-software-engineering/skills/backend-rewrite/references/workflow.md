@@ -25,10 +25,21 @@ configuration, recording scripts, source routes, case sources, and current
 implementation state. Ask only for a fact that cannot be discovered safely and
 would materially change the implementation or authorize a new external effect.
 
+Treat a new task as a new user-requested rewrite objective, not a resumed turn,
+context compaction, or automatic continuation. After any required
+initialization, default to acquiring a new standard recording for the selected
+scope even when an earlier task has passing evidence. This is a case-acquisition
+preference, not a gate: earlier artifacts remain available for interim
+diagnosis and replay.
+
+After the current task finalizes its own standard recording, use that exact
+finalized case source for repeated replay-backed E2E diagnosis and repair
+attempts. One failed attempt alone is not a reason to record again.
+
 Determine the earliest required phase: initialization, standard recording,
-implementation/E2E, or comparison. Resume from valid evidence and keep
-unrelated worktree changes out of scope. Generate unique UTC run IDs, pass
-explicit recording durations, and retain exact artifact paths.
+implementation/E2E, or comparison. Resume valid phase evidence from the same
+task and keep unrelated worktree changes out of scope. Generate unique UTC run
+IDs, pass explicit recording durations, and retain exact artifact paths.
 
 When `scripts/<project>-cli` already exists, inspect it during discovery before
 accepting target startup or replay integration as valid. Check it against the
@@ -79,6 +90,12 @@ Resolve the exact finalized run; never choose a run merely because it is
 newest. When request-header encryption is configured, require the named key
 environment and keep its value out of commands, logs, cases, target
 configuration, and supporting services.
+
+When a supplied finalized case source contains multiple canonical API groups,
+keep its finite ordered inventory. Select one unprocessed group as the active
+slice and keep it active through E2E and comparison. A non-passing or invalid
+comparison does not advance the inventory; select the next group only after
+the current group reaches `slice_done`.
 
 ## Inspect Runtime Evidence
 
@@ -153,12 +170,17 @@ next state.
 ## Run The Evidence Loops
 
 1. Run repository-focused checks and focused traffic E2E against the immutable
-   cases.
+   cases. Consume the terminal runner JSON and its exact report paths; do not
+   infer gate state from the generic exit error or report recency.
 2. Use traffic-e2e diagnosis before changing product behavior, policy,
    dependency wiring, or recorder attribution.
-3. Follow the main skill's response-first repair priority until the selected
-   groups pass. Run a full round after shared behavior-affecting changes when
-   required.
+3. Dispatch the returned gates in order: repair `gates.responses` unless it is
+   `passed`; repair replay evidence unless `gates.replay=complete`; and enter
+   dirty-dependency diagnosis only for `gates.dependencies=dirty` after the
+   first two gates pass. Treat `gates.dependencies=unknown` as incomplete replay
+   evidence, not dirty traffic. Follow the main skill's response-first repair
+   priority until the selected groups pass. Run a full round after shared
+   behavior-affecting changes when required.
 4. Only after affected replay E2E passes, invoke
    `scripts/start-recording-comparison` with a new UTC run ID, explicit
    `--duration-seconds 60`, and the same affected `--api` scope. Preserve

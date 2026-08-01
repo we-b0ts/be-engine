@@ -276,6 +276,8 @@ fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
     } else {
         SuccessStreak::default()
     };
+    let legacy_run_key = legacy.run.key.clone();
+    let legacy_evidence_fingerprint = format!("legacy-v{}:{legacy_run_key}", legacy.version);
     Ok(ProgressReport {
         version: crate::verification_progress::PROGRESS_VERSION,
         stage: VerificationStage::Replay,
@@ -293,14 +295,15 @@ fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
         },
         success_streak,
         latest_run: Some(LatestRun {
-            key: legacy.run.key.clone(),
-            evidence_fingerprint: format!("legacy-v{}:{}", legacy.version, legacy.run.key),
+            key: legacy_run_key.clone(),
+            evidence_fingerprint: legacy_evidence_fingerprint.clone(),
             number: legacy.latest_run.number,
             passed: legacy.latest_run.passed,
             cases: legacy.latest_run.cases,
             apis: legacy.latest_run.apis,
             scope: Vec::new(),
         }),
+        counted_runs: BTreeMap::from([(legacy_run_key, legacy_evidence_fingerprint)]),
         apis: legacy
             .apis
             .into_iter()

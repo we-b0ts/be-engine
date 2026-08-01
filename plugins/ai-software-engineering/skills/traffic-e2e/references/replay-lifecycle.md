@@ -121,9 +121,11 @@ case and session ids and both fail-on-incomplete and fail-on-dirty gates.
 
 Focused attempts retain their own aggregate for diagnosis and use it to replace
 the selected API's contribution to the current logical run and update any
-current E2E pass progress. Repeating one run does not add counts. Focused
-attempts never replace the global full-round `latest`. Only one published case
-replayed in exactly one finalized session may record
+current E2E pass progress. Every distinct finalized attempt contributes once;
+processing an already counted runner-owned identity and evidence does not add
+counts, even after newer attempts. Focused attempts never replace the global
+full-round `latest`. Only one published case replayed in exactly one finalized
+session may record
 `not_applicable_single_case_single_session`. Never enumerate report paths,
 manually total counters, merge overlapping attempts without exact session
 selection, or substitute target test output for recorder evidence.

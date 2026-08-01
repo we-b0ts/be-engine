@@ -349,6 +349,20 @@ redact_headers = [
 # source_revision = "0123456789abcdef"
 # source_evidence = "MapiConfigLoader.java:init scheduled refresh unrelated to selected API"
 
+# Source-proven independent Redis process traffic uses the stable service port
+# set plus one exact command and bounded key shape. Domains are diagnostic only
+# and are intentionally not persisted.
+# [[recording.background_dependencies]]
+# name = "interest-tag-mining-cache-refresh"
+# protocol = "redis"
+# ports = [20917, 20918, 20919]
+# command = "ZCOUNT"
+# key_prefix = "1042015:"
+# key_suffix = ".wtm2"
+# response_role = "independent"
+# source_revision = "0123456789abcdef"
+# source_evidence = "InterestTagCardServiceImpl.java:init process-owned WAIC cache refresh"
+
 # Breeze-backed Memcached local-cache warm rules use a stable descriptor
 # identity without its dynamic port. The tool resolves the business resource
 # and writes this identity after validating finalized replay evidence.

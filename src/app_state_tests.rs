@@ -53,6 +53,36 @@ fn motan_dependency(group: &str, interface_name: &str, method_name: &str) -> Rec
     })
 }
 
+fn redis_dependency(host: &str, port: u16, key: &str) -> RecorderEvent {
+    RecorderEvent::RedisExchange(RedisExchangeEvent {
+        id: Uuid::new_v4(),
+        connection_id: Uuid::new_v4(),
+        sequence: 1,
+        timestamp: Utc::now(),
+        client_addr: None,
+        target_host: host.to_string(),
+        target_port: port,
+        target_addr: format!("{host}:{port}"),
+        upstream_addr: format!("127.0.0.1:{port}"),
+        resp_version: 2,
+        database: 0,
+        username: None,
+        command: "ZCOUNT".to_string(),
+        args: vec![
+            capture_body(key.as_bytes(), key.len()),
+            capture_body(b"1550.0", 6),
+            capture_body(b"1.7976931348623157E308", 22),
+        ],
+        response_kind: "integer".to_string(),
+        response: capture_body(b":1\r\n", 4),
+        session_setup: false,
+        outcome: DependencyExchangeOutcome::Response,
+        duration_ms: 1,
+        replay_safe: true,
+        parse_warnings: Vec::new(),
+    })
+}
+
 #[tokio::test]
 async fn background_http_enters_global_pool_but_not_case_dependencies() {
     let temp = tempfile::tempdir().unwrap();
@@ -158,4 +188,59 @@ async fn background_motan_enters_global_pool_but_not_case_dependencies() {
     assert!(global.contains(&format!("\"interface_name\":\"{interface_name}\"")));
     assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
     assert!(global.contains("\"global_dependency_matched_by\":\"kunpeng-refresh\""));
+}
+
+#[tokio::test]
+async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.recording.background_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
+        name: "interest-tag-mining-cache-refresh".to_string(),
+        ports: vec![20917, 20918, 20919],
+        command: "ZCOUNT".to_string(),
+        key_prefix: "1042015:".to_string(),
+        key_suffix: ".wtm2".to_string(),
+        response_role: BackgroundDependencyResponseRole::Independent,
+        source_revision: "0123456789abcdef".to_string(),
+        source_evidence: "InterestTagCardServiceImpl.java:init process-owned refresh".to_string(),
+    }];
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    config.dns_mock.registry_path = temp.path().join("fake-dns.json");
+    config.http_gateway.ready.enabled = false;
+    let state = AppState::new(config).await.unwrap();
+    let case = CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: "api".to_string(),
+        uri_group: None,
+    };
+    let guard = state.try_reserve_active_case(case.clone()).unwrap();
+    state.activate_case_dependencies(&guard).unwrap();
+
+    state.record_event(redis_dependency(
+        "new-operations-domain.example",
+        20918,
+        "1042015:202607:financeStock.wtm2",
+    ));
+    drop(guard);
+    state.recorder().publish_case(&case).await.unwrap();
+    state.recorder().finish_run().await.unwrap();
+
+    let dependencies =
+        tokio::fs::read_to_string(state.recorder().case_dir(&case).join("dependencies.jsonl"))
+            .await
+            .unwrap();
+    assert!(dependencies.is_empty());
+    let global =
+        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
+            .await
+            .unwrap();
+    assert_eq!(global.lines().count(), 1);
+    assert!(global.contains("\"target_host\":\"new-operations-domain.example\""));
+    assert!(global.contains("\"target_port\":20918"));
+    assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
+    assert!(
+        global.contains("\"global_dependency_matched_by\":\"interest-tag-mining-cache-refresh\"")
+    );
 }

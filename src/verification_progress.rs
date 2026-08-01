@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::edit::{create_atomic, write_atomic};
 
 pub(crate) const PROGRESS_VERSION: u8 = 1;
+const MAX_COUNTED_RUNS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -25,6 +26,8 @@ pub(crate) struct ProgressReport {
     pub(crate) totals: ProgressTotals,
     pub(crate) success_streak: SuccessStreak,
     pub(crate) latest_run: Option<LatestRun>,
+    #[serde(default)]
+    pub(crate) counted_runs: BTreeMap<String, String>,
     pub(crate) apis: BTreeMap<String, ProgressApi>,
 }
 
@@ -113,6 +116,7 @@ impl ProgressReport {
             totals: ProgressTotals::default(),
             success_streak: SuccessStreak::default(),
             latest_run: None,
+            counted_runs: BTreeMap::new(),
             apis: BTreeMap::new(),
         }
     }
@@ -152,16 +156,18 @@ impl ProgressReport {
             );
         }
 
-        if let Some(latest) = &self.latest_run
-            && latest.key == observation.key
-        {
+        if let Some(evidence_fingerprint) = self.counted_runs.get(&observation.key) {
             ensure!(
-                latest.evidence_fingerprint == observation.evidence_fingerprint,
+                evidence_fingerprint == &observation.evidence_fingerprint,
                 "progress run {:?} was already counted with different evidence",
                 observation.key
             );
             return Ok(false);
         }
+        ensure!(
+            self.counted_runs.len() < MAX_COUNTED_RUNS,
+            "progress counted-run limit of {MAX_COUNTED_RUNS} was reached"
+        );
 
         let scope = observation.apis.keys().cloned().collect::<Vec<_>>();
         let same_scope = self
@@ -229,6 +235,10 @@ impl ProgressReport {
         }
         self.totals.apis.total = self.apis.len() as u64;
         self.updated_at = observation.finished_at;
+        self.counted_runs.insert(
+            observation.key.clone(),
+            observation.evidence_fingerprint.clone(),
+        );
         self.latest_run = Some(LatestRun {
             key: observation.key,
             evidence_fingerprint: observation.evidence_fingerprint,
@@ -261,7 +271,7 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
     );
     let payload =
         fs::read(path).with_context(|| format!("failed to read progress {}", path.display()))?;
-    let report: ProgressReport = serde_yaml::from_slice(&payload)
+    let mut report: ProgressReport = serde_yaml::from_slice(&payload)
         .with_context(|| format!("failed to parse progress {}", path.display()))?;
     ensure!(
         report.version == PROGRESS_VERSION,
@@ -276,6 +286,31 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
         report.stage,
         stage
     );
+    ensure!(
+        report.counted_runs.len() <= MAX_COUNTED_RUNS,
+        "{} contains more than {MAX_COUNTED_RUNS} counted runs",
+        path.display()
+    );
+    if let Some(latest) = &report.latest_run {
+        match report.counted_runs.get(&latest.key) {
+            Some(evidence_fingerprint) => ensure!(
+                evidence_fingerprint == &latest.evidence_fingerprint,
+                "{} contains conflicting evidence for its latest run",
+                path.display()
+            ),
+            None if report.counted_runs.is_empty() => {
+                report
+                    .counted_runs
+                    .insert(latest.key.clone(), latest.evidence_fingerprint.clone());
+            }
+            None => {
+                anyhow::bail!(
+                    "{} does not include its latest run in counted_runs",
+                    path.display()
+                );
+            }
+        }
+    }
     Ok(Some(report))
 }
 
@@ -407,14 +442,34 @@ mod tests {
     #[test]
     fn duplicate_evidence_is_idempotent_and_conflicting_evidence_is_rejected() {
         let mut report = ProgressReport::new(VerificationStage::Comparison);
-        let current = observation("1", &[("GET /users", 100, 100)]);
-        assert!(report.apply(current.clone()).unwrap());
-        assert!(!report.apply(current).unwrap());
+        let first = observation("1", &[("GET /users", 100, 100)]);
+        assert!(report.apply(first.clone()).unwrap());
+        assert!(
+            report
+                .apply(observation("2", &[("GET /users", 100, 100)]))
+                .unwrap()
+        );
+        assert!(!report.apply(first).unwrap());
 
         let mut conflicting = observation("1", &[("GET /users", 100, 100)]);
         conflicting.evidence_fingerprint = "other".to_string();
         assert!(report.apply(conflicting).is_err());
-        assert_eq!(report.totals.runs.executed, 1);
+        assert_eq!(report.totals.runs.executed, 2);
+    }
+
+    #[test]
+    fn rejects_new_runs_when_the_idempotency_ledger_is_full() {
+        let mut report = ProgressReport::new(VerificationStage::Replay);
+        report.counted_runs = (0..MAX_COUNTED_RUNS)
+            .map(|index| (format!("run-{index}"), format!("evidence-{index}")))
+            .collect();
+
+        let error = report
+            .apply(observation("new", &[("GET /users", 1, 1)]))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("counted-run limit"));
+        assert_eq!(report.totals.runs.executed, 0);
     }
 
     #[test]
@@ -433,6 +488,31 @@ mod tests {
             let loaded = load(&path, stage).unwrap().unwrap();
             assert_eq!(loaded.stage, stage);
             assert_eq!(loaded.success_streak.cases, 100);
+            assert_eq!(
+                loaded.counted_runs.get("1").map(String::as_str),
+                Some("fingerprint-1")
+            );
         }
+    }
+
+    #[test]
+    fn loading_an_older_report_seeds_the_latest_run_in_the_ledger() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("replay-progress.yaml");
+        let mut report = ProgressReport::new(VerificationStage::Replay);
+        let first = observation("1", &[("GET /users", 100, 100)]);
+        report.apply(first.clone()).unwrap();
+        let payload = serde_yaml::to_string(&report).unwrap();
+        let legacy_payload = payload
+            .lines()
+            .filter(|line| !line.starts_with("counted_runs:") && !line.starts_with("  '1':"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, legacy_payload).unwrap();
+
+        let mut loaded = load(&path, VerificationStage::Replay).unwrap().unwrap();
+
+        assert!(!loaded.apply(first).unwrap());
+        assert_eq!(loaded.totals.runs.executed, 1);
     }
 }

@@ -7,10 +7,11 @@ use traffic_e2e::{
     AllowedUnusedHttpHostFeedback, BackgroundDependencyFeedback,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeResourceCaptureFeedback,
     CasePathPatternAuthority, CasePathPatternFeedback, MotanBackgroundDependencyFeedback,
-    RecorderConfigInitOptions, initialize_recorder_config, plan_allowed_unused_http_hosts,
-    plan_background_dependency, plan_breeze_memcached_background_dependency,
-    plan_breeze_resource_capture, plan_case_path_pattern_feedback,
-    plan_motan_background_dependency,
+    RecorderConfigInitOptions, RedisBackgroundDependencyFeedback, initialize_recorder_config,
+    plan_allowed_unused_http_hosts, plan_background_dependency,
+    plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
+    plan_case_path_pattern_feedback, plan_motan_background_dependency,
+    plan_redis_background_dependency,
 };
 
 #[derive(Debug, Args)]
@@ -103,6 +104,8 @@ struct BackgroundDependencyArgs {
     protocol: BackgroundProtocolArg,
     #[arg(long)]
     name: String,
+    #[arg(long = "port")]
+    ports: Vec<u16>,
     #[arg(long)]
     authority: Option<String>,
     #[arg(long)]
@@ -127,6 +130,8 @@ struct BackgroundDependencyArgs {
     key_separator: String,
     #[arg(long)]
     key_suffix: Option<String>,
+    #[arg(long)]
+    key_prefix: Option<String>,
     #[arg(long, default_value_t = 60_000)]
     initial_load_timeout_ms: u64,
     #[arg(long)]
@@ -145,6 +150,7 @@ enum BackgroundProtocolArg {
     Http,
     Memcached,
     Motan,
+    Redis,
 }
 
 #[derive(Debug, Args)]
@@ -350,11 +356,39 @@ fn plan_background_dependency_args(
                 super::print_json(plan.report())
             }
         }
+        BackgroundProtocolArg::Redis => {
+            let feedback = RedisBackgroundDependencyFeedback {
+                config_path,
+                replay_report_path: args.replay_report,
+                name: args.name,
+                ports: required_nonempty(args.ports, "--port", "redis")?,
+                command: args.command,
+                key_prefix: required(args.key_prefix, "--key-prefix", "redis")?,
+                key_suffix: required(args.key_suffix, "--key-suffix", "redis")?,
+                source_revision: args.source_revision,
+                source_evidence: args.evidence,
+            };
+            let plan = plan_redis_background_dependency(feedback)?;
+            if apply {
+                super::print_json(&plan.apply()?)
+            } else {
+                super::print_json(plan.report())
+            }
+        }
     }
 }
 
 fn required<T>(value: Option<T>, flag: &str, protocol: &str) -> Result<T> {
     value.ok_or_else(|| anyhow!("{flag} is required for --protocol {protocol}"))
+}
+
+fn required_nonempty<T>(values: Vec<T>, flag: &str, protocol: &str) -> Result<Vec<T>> {
+    if values.is_empty() {
+        return Err(anyhow!(
+            "at least one {flag} is required for --protocol {protocol}"
+        ));
+    }
+    Ok(values)
 }
 
 fn pattern_feedback(config_path: PathBuf, args: PatternFeedbackArgs) -> CasePathPatternFeedback {
@@ -460,5 +494,41 @@ mod tests {
             parsed.background.method_name.as_deref(),
             Some("getConfigByName")
         );
+    }
+
+    #[test]
+    fn accepts_port_scoped_redis_background_selector() {
+        let parsed = BackgroundTestCli::try_parse_from([
+            "test",
+            "--protocol",
+            "redis",
+            "--name",
+            "interest-tag-mining-cache-refresh",
+            "--port",
+            "20917",
+            "--port",
+            "20918",
+            "--command",
+            "ZCOUNT",
+            "--key-prefix",
+            "1042015:",
+            "--key-suffix",
+            ".wtm2",
+            "--replay-report",
+            "replay-report.json",
+            "--source-revision",
+            "0123456789abcdef",
+            "--evidence",
+            "InterestTagCardServiceImpl.java:init scheduled refresh",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            parsed.background.protocol,
+            BackgroundProtocolArg::Redis
+        ));
+        assert_eq!(parsed.background.ports, [20917, 20918]);
+        assert_eq!(parsed.background.key_prefix.as_deref(), Some("1042015:"));
+        assert_eq!(parsed.background.key_suffix.as_deref(), Some(".wtm2"));
     }
 }

@@ -623,8 +623,8 @@ granting the fixed user access to the workspace or build cache:
 
 ```bash
 traffic-e2e target exec \
-  --env-file .traffic-e2e/runtime/.env \
-  --copy-env APP_CONFIG=.traffic-e2e/runtime/config/application.yaml \
+  --env-file .traffic-e2e/boot/.env \
+  --copy-env APP_CONFIG=.traffic-e2e/boot/config/application.yaml \
   --copy-env REPLAY_CA=path/to/replay-ca.pem \
   --path-env CASE_DIR=path/to/readable/case-group \
   --write-dir logs \
@@ -643,6 +643,10 @@ cannot already read the path. The
 helper clears inherited proxy and shell-hook variables, verifies the effective
 UID, and never accepts a user or UID option. Keep replay lifecycle commands
 outside the target process.
+
+`.traffic-e2e/boot/` is input-only transport for source-proven startup inputs.
+Its name or Git-ignore status does not authorize generating content from a
+source process, remote response, recording, log, debug output, or diagnostic.
 
 For a case collection, start one replay session and control active case
 ownership through the CLI:
@@ -843,6 +847,16 @@ traffic-e2e run-api \
   --api 'GET /api/widgets/*'
 ```
 
+The terminal JSON keeps `status` and `passed` as the overall result and also
+reports independent evidence gates: `responses` is `passed`, `nonpassing`, or
+`incomplete`; `replay` is `complete` or `incomplete`; and `dependencies` is
+`clean`, `dirty`, or `unknown` while replay evidence is incomplete. Returned
+`reports` paths point to the finalized replay, assertion, and aggregate
+artifacts that exist for the attempt. Diagnose response evidence first, then
+replay completeness, then dirty dependency coverage. If all three gates pass
+but the overall result does not, inspect `latest_state` for execution or
+lifecycle errors.
+
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
 logical run, while each finalized attempt is counted once in
@@ -894,6 +908,8 @@ latest_run:
   cases: { executed: 100, passed: 100 }
   apis: { executed: 1, passed: 1 }
   scope: [GET /api/widgets/*]
+counted_runs:
+  <runner-owned-identity>: <runner-owned-fingerprint>
 apis:
   GET /api/widgets/*:
     totals:
@@ -907,7 +923,10 @@ apis:
 Any selected API failure resets the global streak, while an API failure resets
 only that API's streak. A different selected API scope starts a new global
 streak. The next finalized replay attempt automatically migrates legacy
-`.traffic-e2e/e2e-progress.yaml`.
+`.traffic-e2e/e2e-progress.yaml`. The runner-owned `counted_runs` ledger keeps
+up to 10,000 attempt identities so reprocessing older evidence cannot change
+lifetime totals; when full, progress updates fail instead of silently
+double-counting.
 
 When managing host interception directly, always pair `up` with `down`:
 

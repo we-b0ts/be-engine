@@ -32,6 +32,9 @@ evidence, and advance only on current proof.
   initialization, retrieval, loading, refresh, and fallback behavior. Do not
   invent a snapshot when the source SDK keeps remotely obtained state only in
   memory.
+- Treat `.traffic-e2e/boot/` as an input-only transport boundary for already
+  authoritative startup inputs. Its name, existence, or Git-ignore status does
+  not prove provenance or authorize creating content.
 - Treat the source repository and source application implementation as
   immutable evidence. Never edit source code, replace source classes through a
   recording adapter, patch source artifacts, or change source business
@@ -97,9 +100,17 @@ The phase order is:
 select_slice -> record -> prepare -> e2e -> compare -> slice_done
 ```
 
-Work on one active slice at a time. Resume valid existing evidence; do not
-repeat completed phases or enter comparison without current runner-generated
-proof that the affected E2E scope passes.
+Work on one active slice at a time. Treat a new user-requested rewrite task,
+not a resumed turn, context compaction, or automatic continuation, as a fresh
+case-acquisition opportunity. Default to a new standard recording for its
+selected scope even when an earlier task passed. Within the active task, use
+that task's exact finalized case source for repeated replay-backed E2E
+diagnosis and repair; one failed attempt alone does not call for another
+recording. Resume valid phase evidence from the same task, and do not
+enter comparison without current runner-generated proof that the affected E2E
+scope passes. When the exact case source contains multiple canonical API
+groups, preserve a finite ordered inventory and advance to the next group only
+after the current group reaches `slice_done`.
 
 ## Repair Priority
 
@@ -147,8 +158,8 @@ Keep one explicit record for the active slice:
 ```text
 scope, stage, case_source, source_revision, e2e_evidence,
 comparison_evidence, repaired_case_evidence, response_status,
-dependency_status, failure_categories, attention, next_todo, todo_owner,
-resume_stage
+replay_status, dependency_status, failure_categories, attention, next_todo,
+todo_owner, resume_stage
 ```
 
 Use `complete` only when the active slice is `slice_done`, current E2E and

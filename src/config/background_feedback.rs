@@ -373,6 +373,29 @@ fn ensure_same_selector(
                 && existing_suffix == requested_suffix
         }
         (
+            BackgroundDependencyRuleConfig::Redis {
+                ports: existing_ports,
+                command: existing_command,
+                key_prefix: existing_prefix,
+                key_suffix: existing_suffix,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Redis {
+                ports: requested_ports,
+                command: requested_command,
+                key_prefix: requested_prefix,
+                key_suffix: requested_suffix,
+                ..
+            },
+        ) => {
+            existing_ports
+                .iter()
+                .all(|port| requested_ports.contains(port))
+                && existing_command == requested_command
+                && existing_prefix == requested_prefix
+                && existing_suffix == requested_suffix
+        }
+        (
             BackgroundDependencyRuleConfig::Motan {
                 group: existing_group,
                 interface_name: existing_interface,
@@ -479,6 +502,26 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             push_assignment(output, "source_revision", source_revision, newline);
             push_assignment(output, "source_evidence", source_evidence, newline);
         }
+        BackgroundDependencyRuleConfig::Redis {
+            name,
+            ports,
+            command,
+            key_prefix,
+            key_suffix,
+            source_revision,
+            source_evidence,
+            ..
+        } => {
+            push_assignment(output, "name", name, newline);
+            push_line(output, "protocol = \"redis\"", newline);
+            push_u16_array(output, "ports", ports, newline);
+            push_assignment(output, "command", command, newline);
+            push_assignment(output, "key_prefix", key_prefix, newline);
+            push_assignment(output, "key_suffix", key_suffix, newline);
+            push_line(output, "response_role = \"independent\"", newline);
+            push_assignment(output, "source_revision", source_revision, newline);
+            push_assignment(output, "source_evidence", source_evidence, newline);
+        }
         BackgroundDependencyRuleConfig::Motan {
             name,
             group,
@@ -502,6 +545,15 @@ fn push_array(output: &mut String, field: &str, values: &[String], newline: &str
     let values = values
         .iter()
         .map(|value| toml::Value::String(value.clone()).to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    push_line(output, &format!("{field} = [{values}]"), newline);
+}
+
+fn push_u16_array(output: &mut String, field: &str, values: &[u16], newline: &str) {
+    let values = values
+        .iter()
+        .map(u16::to_string)
         .collect::<Vec<_>>()
         .join(", ");
     push_line(output, &format!("{field} = [{values}]"), newline);

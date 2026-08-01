@@ -22,6 +22,9 @@ case-owned dependency call, and every required side effect.
   recorder-owned replay may consume case or Global dependency files.
 - Target code, configuration, tests, and support must use genuine runtime
   clients and must never turn recorded outputs into fixtures or behavior.
+- Treat `.traffic-e2e/boot/` as input-only transport for already authoritative
+  startup inputs, never as a destination for values observed or inferred from
+  recordings, source processes, remote responses, logs, or diagnostics.
 - A response difference caused by a missing, cold, stale, partially loaded, or
   behaviorally different process-local cache is target behavior. Never exempt
   it with a dynamic response rule.
@@ -173,7 +176,10 @@ by evidence from that phase:
   [failure-diagnosis.md](references/failure-diagnosis.md), then load only the
   operation reference it selects: recording/resource capture, background
   classification, dependency replay or format, target integration, or replay
-  policy.
+  policy. When `gates.responses=passed`, `gates.replay=complete`, and
+  `gates.dependencies=dirty`, read
+  [dirty-dependencies.md](references/dirty-dependencies.md) before deciding the
+  next action. Never route `gates.dependencies=unknown` as dirty evidence.
 - **Compare after current E2E passes:** read
   [comparison-verification.md](references/comparison-verification.md), adding
   replay policy only for source-proven policy feedback.
