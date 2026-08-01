@@ -75,7 +75,7 @@ For a prebuilt in-process target, prefer:
 ```bash
 traffic-e2e target exec \
   --env-file .traffic-e2e/boot/.env \
-  --copy-env APP_CONFIG=.traffic-e2e/boot/config/application.yaml \
+  --copy-env APP_CONFIG=.traffic-e2e/boot/app-config/application.yaml \
   --path-env CASE_DIR=path/to/readable/case-group \
   --write-dir logs \
   -- path/to/prebuilt-target
@@ -101,10 +101,11 @@ source-proven startup inputs allowed below: process environment, startup
 arguments, machine-local configuration, or a complete authoritative
 configuration or SDK-owned snapshot root already present in the source
 container. Its name, existence, or Git-ignore status does not establish
-provenance or authorize creating content. Use `.traffic-e2e/boot/config/` only
-for the smallest complete allowed root. Never copy one selected file or
-selected subset. Preserve the directory relationships required by the source
-loader.
+provenance or authorize creating content. Place each smallest complete allowed
+configuration root at `.traffic-e2e/boot/<root-name>/`, where `root-name`
+preserves the source directory's stable name. Never copy one selected file or
+selected subset, and do not introduce a generic `boot/config/` layer. Preserve
+the directory relationships required by the source loader.
 
 Treat an artifact as a snapshot only when the source SDK or loader creates and
 loads it during its normal lifecycle using a source-defined path and format. A
@@ -124,8 +125,10 @@ dependencies may use purpose-named child directories when needed.
 
 Initialize only the boot root; create contents only when source evidence proves
 an allowed authoritative input. The target facade passes these paths through
-normal startup inputs; product code must not hard-code the traffic-e2e
-directory.
+normal startup inputs. For a source configuration directory, product code
+defaults its `--<root-name>-dir` option to the exact source-container path and
+the local facade explicitly passes `.traffic-e2e/boot/<root-name>/`; product
+code must not hard-code the traffic-e2e directory.
 
 Use this precedence unless the target repository defines a stricter
 equivalent:

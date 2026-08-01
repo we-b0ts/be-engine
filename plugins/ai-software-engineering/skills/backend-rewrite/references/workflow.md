@@ -170,12 +170,17 @@ next state.
 ## Run The Evidence Loops
 
 1. Run repository-focused checks and focused traffic E2E against the immutable
-   cases.
+   cases. Consume the terminal runner JSON and its exact report paths; do not
+   infer gate state from the generic exit error or report recency.
 2. Use traffic-e2e diagnosis before changing product behavior, policy,
    dependency wiring, or recorder attribution.
-3. Follow the main skill's response-first repair priority until the selected
-   groups pass. Run a full round after shared behavior-affecting changes when
-   required.
+3. Dispatch the returned gates in order: repair `gates.responses` unless it is
+   `passed`; repair replay evidence unless `gates.replay=complete`; and enter
+   dirty-dependency diagnosis only for `gates.dependencies=dirty` after the
+   first two gates pass. Treat `gates.dependencies=unknown` as incomplete replay
+   evidence, not dirty traffic. Follow the main skill's response-first repair
+   priority until the selected groups pass. Run a full round after shared
+   behavior-affecting changes when required.
 4. Only after affected replay E2E passes, invoke
    `scripts/start-recording-comparison` with a new UTC run ID, explicit
    `--duration-seconds 60`, and the same affected `--api` scope. Preserve

@@ -83,18 +83,20 @@ pub use config::{
     MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
     MotanBackgroundDependencyReport, MysqlConfig, MysqlRouteConfig, RecorderConfigInitOptions,
     RecorderConfigInitResult, RecordingAccessPolicy, RecordingAccessRuleConfig,
-    RecordingAccessRuleEffect, RecordingConfig, TcpApplicationProtocol, TcpGatewayConfig,
-    TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
-    UdpGatewayConfig, initialize_recorder_config, plan_allowed_unused_http_hosts,
+    RecordingAccessRuleEffect, RecordingConfig, RedisBackgroundDependencyFeedback,
+    RedisBackgroundDependencyPlan, RedisBackgroundDependencyReport, TcpApplicationProtocol,
+    TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
+    TrafficJsonlMode, UdpGatewayConfig, initialize_recorder_config, plan_allowed_unused_http_hosts,
     plan_background_dependency, plan_breeze_memcached_background_dependency,
     plan_breeze_resource_capture, plan_case_path_pattern_feedback,
-    plan_motan_background_dependency,
+    plan_motan_background_dependency, plan_redis_background_dependency,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
-    E2eApiRunResult, E2eFocusedApiStatus, E2eRunContext, E2eRunInitOptions, E2eRunInitResult,
-    E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus, abort_e2e_run,
+    E2eApiRunResult, E2eDependencyGate, E2eFocusedApiStatus, E2eReplayGate, E2eReportPaths,
+    E2eResponseGate, E2eRunContext, E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions,
+    E2eRunPrepareResult, E2eRunResult, E2eRunStatus, E2eVerificationGates, abort_e2e_run,
     initialize_e2e_run, initialize_standard_e2e_project,
     initialize_standard_e2e_project_with_force, prepare_e2e_run, recover_e2e_run, run_e2e_api,
     run_e2e_round, status_e2e_run,

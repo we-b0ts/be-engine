@@ -158,8 +158,8 @@ Keep one explicit record for the active slice:
 ```text
 scope, stage, case_source, source_revision, e2e_evidence,
 comparison_evidence, repaired_case_evidence, response_status,
-dependency_status, failure_categories, attention, next_todo, todo_owner,
-resume_stage
+replay_status, dependency_status, failure_categories, attention, next_todo,
+todo_owner, resume_stage
 ```
 
 Use `complete` only when the active slice is `slice_done`, current E2E and

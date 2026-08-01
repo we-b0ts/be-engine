@@ -88,7 +88,8 @@ impl BackgroundDependencyMatcher {
         for rule in rules {
             match rule {
                 BackgroundDependencyRuleConfig::Http { .. }
-                | BackgroundDependencyRuleConfig::Motan { .. } => {
+                | BackgroundDependencyRuleConfig::Motan { .. }
+                | BackgroundDependencyRuleConfig::Redis { .. } => {
                     independent_rules.push(rule.clone());
                 }
                 BackgroundDependencyRuleConfig::Memcached {

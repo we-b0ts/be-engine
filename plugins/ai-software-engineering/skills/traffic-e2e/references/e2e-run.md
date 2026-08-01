@@ -142,6 +142,21 @@ Pointer is absent from both sides does not participate in that case and does
 not require coverage elsewhere in the API group. Version-one policies retain
 the legacy target-owned assertion contract for existing repositories.
 
+The terminal `run-api` and `run` JSON separates the overall result from three
+evidence gates:
+
+- `gates.responses`: `passed`, `nonpassing`, or `incomplete`;
+- `gates.replay`: `complete` or `incomplete`;
+- `gates.dependencies`: `clean`, `dirty`, or `unknown` when replay evidence is
+  incomplete.
+
+Diagnose them in that order. Repair response behavior before unrelated dirty
+traffic; repair incomplete replay evidence before interpreting dependency
+coverage; and use the dirty-dependency workflow only when responses pass and
+replay is complete. If all three gates pass but the overall result is still
+non-passing, inspect `latest_state` for an execution or lifecycle failure. Use
+the returned report paths rather than discovering a report by recency.
+
 Run `run-api` only until the current complete API group passes. Once it passes,
 stop.
 Terminal focused attempts replace that API's final contribution to the current
@@ -153,13 +168,13 @@ After the calling orchestrator fixes an evidenced target defect, rerun the same
 API. If later shared behavior changes may invalidate an earlier focused pass,
 rerun the affected groups or use one full regression round.
 
-After response assertions pass, when a recorded case HTTP exchange remains
-unused, use [failure-diagnosis.md](failure-diagnosis.md) to establish its source
-owner and independence. When that proof succeeds, follow the evidence-gated
-selector and `plan|apply` contract in
-[background-dependencies.md](background-dependencies.md). That reference is
-the authority for rule shape, command arguments, evidence validation, and
-matched-case review.
+When `gates.responses=passed`, `gates.replay=complete`, and
+`gates.dependencies=dirty`, follow
+[dirty-dependencies.md](dirty-dependencies.md). It establishes source ownership
+and response causality before routing supported HTTP, Memcached, Redis, Motan,
+or other dependency evidence to replay repair or the evidence-gated selector
+and `plan|apply` contract in
+[background-dependencies.md](background-dependencies.md).
 
 Applying a background rule changes future recording attribution only. Create a
 new recording and replay that new case source; restarting replay against the

@@ -33,10 +33,18 @@ signature verification, and expiry handling.
 
 Fetch the token once during process startup, keep the token and derived
 verification state in memory, and refresh the token periodically using the
-source-configured interval. TAuth2 does not use a snapshot: never persist its
-token or derived seed state to configuration or a local file.
+source-configured interval. TAuth2 does not use an SDK-owned token snapshot:
+never persist a fetched token or remotely obtained or derived verification
+state to configuration or a local file.
+
+When the source runtime loads authoritative startup configuration such as a
+complete authentication or seed configuration root, consume that same input
+through the source-compatible configuration loader. Such supplied input is
+configuration, not a TAuth2 snapshot. Never synthesize it from a token, process
+memory, remote responses, logs, or diagnostics.
 
 Keep application authorization policy, option-pass whitelists, and
 endpoint-specific error mapping in the capability. Verify one startup token
-fetch, periodic refresh, and that token and derived verification state remain
-in memory without a snapshot or local token/seed file.
+fetch, periodic refresh, applicable authoritative configuration loading, and
+that fetched tokens and derived verification state remain in memory without a
+generated snapshot or derived local state file.

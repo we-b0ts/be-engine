@@ -46,6 +46,22 @@ extract selected keys, translate them into target-only environment variables,
 hard-code their values, or implement parsing, merge, defaulting, or validation
 on behalf of product code.
 
+Only a literal proven to be consumed as a constant or default by the same
+source runtime code path may become a target code constant or default. Keep
+every value obtained through configuration loading or references, including
+`${a.b.c.d}`, properties, XML or YAML keys, environment variables, and startup
+arguments, configuration-driven with its environment-specific resolution.
+Never copy one environment's resolved value into target code as a constant,
+default, or fallback.
+
+Expose each source configuration directory through a target startup option
+named `--<root-name>-dir`, and default it to the directory's exact source-
+container path. When local execution uses a copied boot input, pass that option
+explicitly with `.traffic-e2e/boot/<root-name>/`; keep configuration loading in
+product code. For example, source `/data1/authconfs` becomes
+`--authconfs-dir`, defaults to `/data1/authconfs`, and local E2E startup passes
+`--authconfs-dir .traffic-e2e/boot/authconfs`.
+
 ## Discover The Source Loader
 
 Trace configuration from the source startup path to its consumers:
@@ -77,7 +93,11 @@ status do not establish provenance or authorize creating content. Only an
 authoritative startup configuration or SDK-owned snapshot directory that
 already exists in the source container may be copied. Copy the smallest
 complete root; never copy one selected file, a selected file set, or extracted
-keys. Preserve its supplied format and directory relationships.
+keys. When that complete root exists only inside the source container, copy it
+verbatim to `.traffic-e2e/boot/<root-name>/` as the standard transport path and
+continue the workflow. Preserve its supplied format and directory
+relationships; do not treat the transport mechanism as an operator-selected
+design choice.
 
 Treat an artifact as a snapshot only when the source SDK or loader creates and
 loads it during its normal lifecycle using a source-defined path and format. A
@@ -119,14 +139,17 @@ Before accepting target startup or configuration-dependent behavior:
 1. Identify the source loader, authoritative configuration artifact, and
    behavior-driving consumer.
 2. Identify the target compatibility loader and corresponding consumer.
-3. Confirm the project CLI transports only configuration paths and
+3. For every behavior-driving source placeholder or configuration key, confirm
+   that the target loader supplies it to the corresponding consumer; reject a
+   resolved environment value used as a target constant, default, or fallback.
+4. Confirm the project CLI transports only configuration paths and
    source-defined selectors; reject launcher-owned key extraction or
    translation.
-4. Start the target with the same unmodified authoritative configuration
+5. Start the target with the same unmodified authoritative configuration
    supplied to the source environment.
-5. Verify relevant selection, layering, precedence, defaults, validation, and
+6. Verify relevant selection, layering, precedence, defaults, validation, and
    refresh behavior when they affect startup or the active capability.
-6. Record the artifact provenance, loader path, consumed keys or structures,
+7. Record the artifact provenance, loader path, consumed keys or structures,
    and startup result without recording sensitive values.
 
 If the target cannot start from the source configuration contract, keep the

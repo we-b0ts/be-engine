@@ -176,7 +176,10 @@ by evidence from that phase:
   [failure-diagnosis.md](references/failure-diagnosis.md), then load only the
   operation reference it selects: recording/resource capture, background
   classification, dependency replay or format, target integration, or replay
-  policy.
+  policy. When `gates.responses=passed`, `gates.replay=complete`, and
+  `gates.dependencies=dirty`, read
+  [dirty-dependencies.md](references/dirty-dependencies.md) before deciding the
+  next action. Never route `gates.dependencies=unknown` as dirty evidence.
 - **Compare after current E2E passes:** read
   [comparison-verification.md](references/comparison-verification.md), adding
   replay policy only for source-proven policy feedback.

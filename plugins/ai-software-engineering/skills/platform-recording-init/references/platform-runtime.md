@@ -83,8 +83,9 @@ during init. This is an input-only transport boundary; its name, existence,
 and Git-ignore status do not establish provenance or authorize creating
 content. Later source-proven setup may place allowed startup inputs there:
 
-- use `.traffic-e2e/boot/config/` for complete files or directories
-  synchronized from the source container, preserving their relationships;
+- use `.traffic-e2e/boot/<root-name>/` for each complete configuration root
+  synchronized from the source container, preserving its stable source
+  directory name and internal relationships;
 - use `.traffic-e2e/boot/.env` for direct materialized environment variables;
 - create purpose-named child directories for source-defined SDK snapshots or
   other machine-local startup dependencies only when needed.

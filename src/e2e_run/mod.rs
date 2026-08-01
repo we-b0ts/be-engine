@@ -6,6 +6,7 @@ mod final_evidence;
 mod model;
 mod progress;
 mod request_view;
+mod result;
 mod runtime;
 mod store;
 mod support;
@@ -20,10 +21,12 @@ use crate::case_group::{
     load_complete_case_group_inventory,
 };
 
-pub use execute::{
-    E2eApiRunResult, E2eRunResult, abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round,
-};
+pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 use model::RunStatus;
+pub use result::{
+    E2eApiRunResult, E2eDependencyGate, E2eReplayGate, E2eReportPaths, E2eResponseGate,
+    E2eRunResult, E2eVerificationGates,
+};
 
 #[derive(Debug, Clone)]
 pub struct E2eRunInitOptions {

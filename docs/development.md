@@ -847,6 +847,16 @@ traffic-e2e run-api \
   --api 'GET /api/widgets/*'
 ```
 
+The terminal JSON keeps `status` and `passed` as the overall result and also
+reports independent evidence gates: `responses` is `passed`, `nonpassing`, or
+`incomplete`; `replay` is `complete` or `incomplete`; and `dependencies` is
+`clean`, `dirty`, or `unknown` while replay evidence is incomplete. Returned
+`reports` paths point to the finalized replay, assertion, and aggregate
+artifacts that exist for the attempt. Diagnose response evidence first, then
+replay completeness, then dirty dependency coverage. If all three gates pass
+but the overall result does not, inspect `latest_state` for execution or
+lifecycle errors.
+
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
 logical run, while each finalized attempt is counted once in

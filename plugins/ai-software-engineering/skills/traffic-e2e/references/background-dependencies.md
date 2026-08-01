@@ -54,6 +54,8 @@ The current narrow rule types are:
 - exact Vintage service group plus Motan interface and method, always
   independent and with no endpoint, Vintage alias, or payload persisted in the
   rule;
+- Redis `ZCOUNT` with `response_role=independent`, one stable service port set,
+  and exact key prefix and suffix, with no hostname persisted in the rule;
 - Breeze-backed Memcached `get` with `response_role=runtime_state`, one exact
   resolved resource identity, and a bounded numeric key series
   `<start..end><separator><suffix>`.
@@ -116,6 +118,39 @@ the Vintage cluster is derived from the interface as `<interface>/service`.
 Planning requires a matching unused case Motan exchange and rejects the RPC
 command when it also appears as unmatched, unsupported, or unsafe target
 traffic. Apply uses the same arguments.
+
+For source-proven independent Redis process traffic, use the stable service
+port set rather than domains. Repeat `--port` for every source-proven member of
+the logical service group:
+
+```bash
+traffic-e2e config recorder plan background-dependencies \
+  --target-root <target> \
+  --protocol redis \
+  --name interest-tag-mining-cache-refresh \
+  --port 20917 \
+  --port 20918 \
+  --port 20919 \
+  --command ZCOUNT \
+  --key-prefix '1042015:' \
+  --key-suffix '.wtm2' \
+  --replay-report <same-finalized-replay-report.json> \
+  --source-revision <same-source-revision> \
+  --evidence '<source file/symbol and independence explanation>'
+```
+
+The rule is process-level and applies regardless of which API is being
+recorded. Ports identify the stable Redis business group; source or fake-DNS
+hostnames are diagnostic evidence only and are not written to configuration.
+Planning requires a finalized version-6 replay report, at least one matching
+unused case exchange, immutable case dependency evidence with a replay-safe
+matching key, and no unmatched, unsupported, or unsafe target `ZCOUNT` on the
+configured ports. `apply` rechecks the config, replay report, and case evidence
+before writing atomically. Use only source-proven group ports; a port need not
+be observed in the current sample when source configuration proves it belongs
+to the same group. The same named Redis rule may add source-proven ports through
+another `plan|apply`, but cannot remove ports or change its command or key
+shape. Apply uses the same arguments, then create a new standard recording.
 
 For a Memcached `runtime_state` rule, preview before applying:
 

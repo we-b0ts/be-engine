@@ -12,6 +12,7 @@ attempt.
 - Response assertion mismatches
 - Target behavior evidence
 - Recorder feedback
+- Dirty dependencies
 - Non-passing handoff
 
 ## Diagnosis Order
@@ -27,6 +28,11 @@ Diagnose a non-passing run in this order:
 4. Assertion drift in source-proven unstable response fields
 5. Remaining dependency coverage, side-effect, and background-attribution
    failures after response assertions pass
+
+For managed `run-api` and `run` results, use `gates.responses`, then
+`gates.replay`, then `gates.dependencies` as the dispatch evidence. A dependency
+gate of `unknown` means replay evidence is incomplete; do not treat it as dirty
+dependency evidence.
 
 The response contract is the primary diagnostic output during migration.
 Inspect and report every response mismatch before applying background
@@ -102,31 +108,6 @@ repair. Whether the mismatch comes from a cache hit, miss, stale entry,
 different refresh timing, incomplete warmup, or a missing target cache,
 never classify the response field as intentional nondeterminism and never
 apply a dynamic response rule.
-
-For every unused case HTTP exchange, group observations by normalized
-authority, method, and path only for diagnosis, then inspect the source that
-initiates the request. Classify the narrow request family as background only
-when all of these facts are explicit in source:
-
-- startup, lifecycle, scheduler, or permanent-worker code owns the trigger;
-- request context, API parameters, and API-scoped state do not control it;
-- the selected API does not await, start, stop, or consume its result;
-- the selected API response and required side effects do not depend on it.
-
-Timing overlap, repetition, polling-like names, a successful response, and an
-unused replay exchange are not ownership evidence. If any ownership fact is
-unclear, keep the dependency case-owned and the aggregate non-passing. Use the
-main skill's response and evidence conditions for the handoff status.
-
-After source proves HTTP independence and response assertions pass, follow
-[background-dependencies.md](background-dependencies.md) and use the guarded
-`background-dependencies plan` command. Inspect its narrow selector and matched
-case IDs before `apply`, then create a new recording; the command cannot repair
-the immutable old case. Record the source revision and a single-line
-file/symbol explanation, never raw query values, credentials, headers, or
-bodies. Use host-wide `allowed_unused_http_hosts` only as a compatibility
-exception when an older recording cannot be replaced and source proves the
-entire host is unrelated.
 
 ## Replay Failure Signals
 
@@ -267,6 +248,15 @@ Phrase feedback as a small upstream improvement note, not as target-project
 work. Examples of useful feedback categories are: add semantic capture for a
 dependency type, enrich `mysql_exchange`, improve case dependency correlation,
 avoid truncating needed values, or surface unstable response fields.
+
+## Dirty Dependencies
+
+When `gates.responses=passed`, `gates.replay=complete`, and
+`gates.dependencies=dirty`, continue with
+[dirty-dependencies.md](dirty-dependencies.md). Do not end the operation merely
+because response behavior is correct, and do not start comparison while the
+current replay evidence is dirty. Treat `gates.dependencies=unknown` as replay
+evidence repair instead.
 
 ## Non-Passing Handoff
 

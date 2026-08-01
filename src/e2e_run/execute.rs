@@ -1,8 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
-use serde::Serialize;
 use tokio::process::Child;
 
 use super::case_progress;
@@ -10,39 +9,19 @@ use super::final_evidence::{build_final_evidence, summarize_apis_without_aggrega
 use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout, RunStatus};
 use super::progress::{ReplayRunKind, update_focused_index, update_index, write_replay_progress};
 use super::request_view::RequestCaseView;
+use super::result::{E2eApiRunResult, E2eRunResult, api_result, run_result};
 use super::runtime::{
     best_effort_stop, control, finalize_replay, run_project, spawn_replay, stop_replay_process,
     wait_for_replay, wait_for_replay_ready,
 };
 use super::store;
-use super::support::{allocate_replay_report, api_directory, process_exists, status_label};
+use super::support::{allocate_replay_report, api_directory, process_exists};
 use super::{E2eRunContext, require_executable};
 use super::{branch, config};
 use crate::case_group::{
     CaseGroupInventory, load_case_group_inventory, load_complete_case_group_inventory,
 };
 use crate::replay::{ResponseAssertionOptions, assert_recorded_response, validate_replay_policy};
-
-#[derive(Debug, Clone, Serialize)]
-pub struct E2eRunResult {
-    pub run_key: String,
-    pub sequence: u64,
-    pub status: String,
-    pub passed: bool,
-    pub latest_state: PathBuf,
-    pub progress: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct E2eApiRunResult {
-    pub run_key: String,
-    pub api: String,
-    pub attempt: u64,
-    pub status: String,
-    pub passed: bool,
-    pub latest_state: PathBuf,
-    pub progress: PathBuf,
-}
 
 pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
     let (config, layout) = resolve_for_execution(&context)?;
@@ -225,16 +204,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         inventory_complete,
         &mut state,
     )?;
-    let passed = state.status == RunStatus::Successful;
-    Ok(E2eApiRunResult {
-        run_key: state.run_key,
-        api: api_key.to_string(),
-        attempt,
-        status: status_label(state.status).to_string(),
-        passed,
-        latest_state: layout.latest_dir.join("state.yaml"),
-        progress: global_layout.progress_path,
-    })
+    Ok(api_result(&layout, &state, api_key, attempt))
 }
 
 fn finish_focused_and_publish(
@@ -299,7 +269,7 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
         ReplayRunKind::Full,
     )?;
     store::write_yaml(&layout.index_path, &index)?;
-    Ok(result(&layout, &state))
+    Ok(run_result(&layout, &state))
 }
 
 fn resolve_for_execution(context: &E2eRunContext) -> Result<(ResolvedProjectConfig, RunLayout)> {
@@ -587,16 +557,5 @@ fn finish_and_publish(
         state,
         ReplayRunKind::Full,
     )?;
-    Ok(result(layout, state))
-}
-
-fn result(layout: &RunLayout, state: &ActiveRunState) -> E2eRunResult {
-    E2eRunResult {
-        run_key: state.run_key.clone(),
-        sequence: state.sequence,
-        status: status_label(state.status).to_string(),
-        passed: state.status == RunStatus::Successful,
-        latest_state: layout.latest_dir.join("state.yaml"),
-        progress: layout.progress_path.clone(),
-    }
+    Ok(run_result(layout, state))
 }

@@ -167,7 +167,8 @@ When source inspection proves process-owned traffic was mixed into cases, read
 gated `background-dependencies plan|apply` path; never hand-edit rules. A
 response-driving `runtime_state` rule belongs in response repair. Classify
 remaining `independent` traffic only after response assertions pass. Every
-rule change requires a new standard recording.
+rule change requires a new standard recording. Background rules are
+process-level and are not scoped to the API selected by `record --api`.
 
 Case limits apply per resolved static path or configured case pattern. Requests
 after the limit use fallback and create no case. Failed cases do not consume the
