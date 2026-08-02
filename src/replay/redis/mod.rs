@@ -24,8 +24,9 @@ use super::{
 
 mod builtins;
 use super::command_matching::{
-    CaseConnectionBinding, CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic,
-    preferred_match, unmatched_diagnostic,
+    CaseConnectionBinding, CommandExchangeScope, PreferredMatch,
+    is_connection_independent_runtime_state, lane_blocked_diagnostic, preferred_match,
+    unmatched_diagnostic,
 };
 use super::report::command::{
     CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
@@ -58,6 +59,10 @@ pub(super) struct RecordedExchange {
     #[serde(default)]
     duration_ms: u64,
     replay_safe: bool,
+    #[serde(default)]
+    global_dependency_reason: Option<String>,
+    #[serde(default)]
+    global_dependency_response_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,6 +82,7 @@ struct ReplayExchange {
     response: Vec<u8>,
     status: ReplayExchangeStatus,
     timing: ReplayExchangeTiming,
+    connection_independent: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +91,7 @@ struct MatchedRedisExchange {
     connection_id: Uuid,
     response: Vec<u8>,
     timing: ReplayExchangeTiming,
+    connection_independent: bool,
     report: CommandMatchedReport,
 }
 
@@ -162,6 +169,14 @@ impl RedisReplayState {
             .collect::<Result<Vec<_>>>()?;
         let response = record.response.decode()?;
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
+        let connection_independent = is_connection_independent_runtime_state(
+            source,
+            record.global_dependency_reason.as_deref(),
+            record.global_dependency_response_role.as_deref(),
+            "Redis",
+            &record.command,
+            "GET",
+        )?;
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -170,6 +185,7 @@ impl RedisReplayState {
             response,
             status: ReplayExchangeStatus::Available,
             timing,
+            connection_independent,
         });
         Ok(())
     }
@@ -188,7 +204,8 @@ impl RedisReplayState {
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
-                && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
+                && (exchange.connection_independent
+                    || bound_connection.is_none_or(|id| exchange.record.connection_id == id))
                 && target_matches(
                     target,
                     &exchange.record.target_host,
@@ -236,6 +253,7 @@ impl RedisReplayState {
             connection_id: exchange.record.connection_id,
             response: exchange.response.clone(),
             timing: exchange.timing,
+            connection_independent: exchange.connection_independent,
             report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
@@ -290,6 +308,7 @@ impl RedisReplayState {
             connection_id: exchange.record.connection_id,
             response: exchange.response.clone(),
             timing: exchange.timing,
+            connection_independent: false,
             report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
@@ -430,7 +449,9 @@ pub(super) async fn handle_connection(
             (None, None)
         };
         if let Some(matched) = recorded_failure {
-            connection_binding.bind(recorded_failure_case_id.as_deref(), matched.connection_id);
+            if !matched.connection_independent {
+                connection_binding.bind(recorded_failure_case_id.as_deref(), matched.connection_id);
+            }
             if deliver_redis_exchange(&mut reader, &state, &matched).await? {
                 report_writer.request();
                 break;
@@ -463,7 +484,9 @@ pub(super) async fn handle_connection(
                 &command.args,
             ) {
                 Ok(matched) => {
-                    connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
+                    if !matched.connection_independent {
+                        connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
+                    }
                     Some(matched)
                 }
                 Err(diagnostic) => {
@@ -642,6 +665,10 @@ impl CommandExchangeScope for ReplayExchange {
     fn is_consumed(&self) -> bool {
         self.status.is_consumed()
     }
+
+    fn preserves_connection_order(&self) -> bool {
+        !self.connection_independent
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -656,7 +683,9 @@ fn redis_mismatch_fields(
     args: &[Vec<u8>],
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
-    if bound_connection.is_some_and(|id| exchange.record.connection_id != id) {
+    if !exchange.connection_independent
+        && bound_connection.is_some_and(|id| exchange.record.connection_id != id)
+    {
         fields.push("connection");
     }
     if !target_matches(

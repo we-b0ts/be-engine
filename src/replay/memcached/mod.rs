@@ -23,8 +23,9 @@ use crate::memcached::{
 
 mod builtins;
 use super::command_matching::{
-    CaseConnectionBinding, CommandExchangeScope, PreferredMatch, lane_blocked_diagnostic,
-    preferred_match, unmatched_diagnostic,
+    CaseConnectionBinding, CommandExchangeScope, PreferredMatch,
+    is_connection_independent_runtime_state, lane_blocked_diagnostic, preferred_match,
+    unmatched_diagnostic,
 };
 use super::report::command::{
     CommandMatchDiagnostic, CommandMatchedReport, CommandProtocolReport, CommandRequestReport,
@@ -66,6 +67,10 @@ pub(super) struct RecordedExchange {
     #[serde(default)]
     duration_ms: u64,
     replay_safe: bool,
+    #[serde(default)]
+    global_dependency_reason: Option<String>,
+    #[serde(default)]
+    global_dependency_response_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,6 +93,7 @@ struct ReplayExchange {
     response_frames: Vec<Vec<u8>>,
     status: ReplayExchangeStatus,
     timing: ReplayExchangeTiming,
+    connection_independent: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -96,6 +102,7 @@ struct MatchedMemcachedExchange {
     connection_id: Uuid,
     response_frames: Vec<Vec<u8>>,
     timing: ReplayExchangeTiming,
+    connection_independent: bool,
     report: CommandMatchedReport,
 }
 
@@ -211,6 +218,14 @@ impl MemcachedReplayState {
             record.outcome
         };
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, outcome);
+        let connection_independent = is_connection_independent_runtime_state(
+            source,
+            record.global_dependency_reason.as_deref(),
+            record.global_dependency_response_role.as_deref(),
+            "Memcached",
+            &record.command,
+            "get",
+        )?;
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),
@@ -222,6 +237,7 @@ impl MemcachedReplayState {
             response_frames,
             status: ReplayExchangeStatus::Available,
             timing,
+            connection_independent,
         });
         Ok(())
     }
@@ -237,7 +253,8 @@ impl MemcachedReplayState {
         let wire = wire_protocol.as_str();
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
             exchange.status.is_available()
-                && bound_connection.is_none_or(|id| exchange.record.connection_id == id)
+                && (exchange.connection_independent
+                    || bound_connection.is_none_or(|id| exchange.record.connection_id == id))
                 && target_matches(
                     target,
                     &exchange.record.target_host,
@@ -284,6 +301,7 @@ impl MemcachedReplayState {
             connection_id: exchange.record.connection_id,
             response_frames: exchange.response_frames.clone(),
             timing: exchange.timing,
+            connection_independent: exchange.connection_independent,
             report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
                 source: exchange.source,
@@ -582,7 +600,9 @@ async fn match_memcached_request(
         request,
     ) {
         Ok(matched) => {
-            connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
+            if !matched.connection_independent {
+                connection_binding.bind(active_case_id.as_deref(), matched.connection_id);
+            }
             Some(matched)
         }
         Err(diagnostic) => {
@@ -676,6 +696,10 @@ impl CommandExchangeScope for ReplayExchange {
     fn is_consumed(&self) -> bool {
         self.status.is_consumed()
     }
+
+    fn preserves_connection_order(&self) -> bool {
+        !self.connection_independent
+    }
 }
 
 fn memcached_mismatch_fields(
@@ -686,7 +710,9 @@ fn memcached_mismatch_fields(
     request: &MemcachedRequest,
 ) -> Vec<&'static str> {
     let mut fields = Vec::new();
-    if bound_connection.is_some_and(|id| exchange.record.connection_id != id) {
+    if !exchange.connection_independent
+        && bound_connection.is_some_and(|id| exchange.record.connection_id != id)
+    {
         fields.push("connection");
     }
     if !target_matches(

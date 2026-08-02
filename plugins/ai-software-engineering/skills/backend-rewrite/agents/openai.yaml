@@ -1,4 +1,4 @@
 interface:
   display_name: "Backend Rewrite & Migration"
-  short_description: "Orchestrate migrations with traffic E2E"
-  default_prompt: "Use $backend-rewrite to plan, implement, verify, and deliver this backend rewrite or migration with $backend-engineering quality standards and $traffic-e2e behavior evidence."
+  short_description: "Orchestrate evidence-driven backend rewrites"
+  default_prompt: "Use $backend-rewrite to diagnose, implement, verify, and deliver this backend rewrite through the self-contained rewrite coordinator."

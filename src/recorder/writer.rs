@@ -12,7 +12,7 @@ use super::dependencies::{case_dependency_filename, dependency_line, global_depe
 use super::jsonl::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
 use super::summary::should_append_case_dependency;
 use crate::active_case::DependencyTargets;
-use crate::config::TrafficJsonlMode;
+use crate::config::{BackgroundDependencyResponseRole, TrafficJsonlMode};
 
 use super::{CaseContext, RecorderEvent, should_write_traffic_event};
 
@@ -21,7 +21,7 @@ type WriterAck = oneshot::Sender<std::result::Result<(), String>>;
 pub(super) struct RecordEnvelope {
     pub(super) event: RecorderEvent,
     pub(super) targets: DependencyTargets,
-    pub(super) background_rule_name: Option<String>,
+    pub(super) background_rule: Option<(String, BackgroundDependencyResponseRole)>,
 }
 
 enum WriterCommand {
@@ -283,7 +283,7 @@ async fn process_command(
             acknowledge(
                 ack,
                 state
-                    .append_global(&event, &reason, &phase, &matched_by)
+                    .append_global(&event, &reason, &phase, &matched_by, None)
                     .await,
                 failure,
             );
@@ -328,13 +328,13 @@ impl WriterState {
         let RecordEnvelope {
             event,
             targets,
-            background_rule_name,
+            background_rule,
         } = envelope;
         self.append_traffic(&event).await?;
         if !should_append_case_dependency(&event) {
             return Ok(());
         }
-        if let Some(rule_name) = background_rule_name {
+        if let Some((rule_name, response_role)) = background_rule {
             self.append_global(
                 &event,
                 "background_rule",
@@ -344,13 +344,20 @@ impl WriterState {
                     "runtime"
                 },
                 &rule_name,
+                Some(response_role),
             )
             .await?;
             return Ok(());
         }
         if targets.bootstrap_open {
-            self.append_global(&event, "bootstrap_window", "bootstrap", "bootstrap_window")
-                .await?;
+            self.append_global(
+                &event,
+                "bootstrap_window",
+                "bootstrap",
+                "bootstrap_window",
+                None,
+            )
+            .await?;
         }
         if targets.ambiguous_active_cases > 0 {
             warn!(
@@ -400,12 +407,13 @@ impl WriterState {
         reason: &str,
         phase: &str,
         matched_by: &str,
+        response_role: Option<BackgroundDependencyResponseRole>,
     ) -> Result<()> {
         if !should_append_case_dependency(event) {
             return Ok(());
         }
         let path = self.run_dir.join(global_dependency_filename(event));
-        let line = global_dependency_line(event, reason, phase, matched_by)?;
+        let line = global_dependency_line(event, reason, phase, matched_by, response_role)?;
         self.dependency_files.append(&path, &line).await
     }
 
@@ -439,6 +447,7 @@ fn global_dependency_line(
     reason: &str,
     phase: &str,
     matched_by: &str,
+    response_role: Option<BackgroundDependencyResponseRole>,
 ) -> Result<Vec<u8>> {
     let mut value = serde_json::to_value(event)?;
     if let serde_json::Value::Object(object) = &mut value {
@@ -454,6 +463,12 @@ fn global_dependency_line(
             "global_dependency_matched_by".to_string(),
             serde_json::Value::String(matched_by.to_string()),
         );
+        if let Some(response_role) = response_role {
+            object.insert(
+                "global_dependency_response_role".to_string(),
+                serde_json::Value::String(response_role.as_str().to_string()),
+            );
+        }
     }
     let mut line = serde_json::to_vec(&value)?;
     line.push(b'\n');

@@ -47,11 +47,8 @@ pub(super) fn allocate_control_socket() -> PathBuf {
 }
 
 pub(super) async fn wait_for_pid_exit(pid: u32) {
-    for _ in 0..100 {
-        if !process_exists(pid) {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
+    if wait_until_pid_exits(pid, 100).await {
+        return;
     }
     #[cfg(unix)]
     if let Ok(pid) = i32::try_from(pid) {
@@ -59,6 +56,26 @@ pub(super) async fn wait_for_pid_exit(pid: u32) {
             libc::kill(-pid, libc::SIGTERM);
         }
     }
+    if wait_until_pid_exits(pid, 40).await {
+        return;
+    }
+    #[cfg(unix)]
+    if let Ok(pid) = i32::try_from(pid) {
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = wait_until_pid_exits(pid, 20).await;
+}
+
+async fn wait_until_pid_exits(pid: u32, attempts: usize) -> bool {
+    for _ in 0..attempts {
+        if !process_exists(pid) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    !process_exists(pid)
 }
 
 pub(super) fn process_exists(pid: u32) -> bool {

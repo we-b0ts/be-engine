@@ -1,4 +1,0 @@
-interface:
-  display_name: "Platform Recording Init"
-  short_description: "Initialize Platform traffic recording"
-  default_prompt: "Use $platform-recording-init to initialize the current repository for traffic recording from source application container <name-or-id>."

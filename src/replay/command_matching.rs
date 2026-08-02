@@ -1,3 +1,4 @@
+use anyhow::{Result, bail};
 use uuid::Uuid;
 
 use super::ReplaySource;
@@ -11,6 +12,41 @@ pub(super) trait CommandExchangeScope {
     fn command(&self) -> &str;
     fn is_available(&self) -> bool;
     fn is_consumed(&self) -> bool;
+    fn preserves_connection_order(&self) -> bool {
+        true
+    }
+}
+
+pub(super) fn is_connection_independent_runtime_state(
+    source: ReplaySource,
+    reason: Option<&str>,
+    response_role: Option<&str>,
+    protocol: &str,
+    command: &str,
+    supported_command: &str,
+) -> Result<bool> {
+    let Some(response_role) = response_role else {
+        return Ok(false);
+    };
+    if !matches!(response_role, "independent" | "runtime_state") {
+        bail!(
+            "recorded {protocol} dependency has unsupported Global response role {response_role:?}"
+        );
+    }
+    if source != ReplaySource::Global || reason != Some("background_rule") {
+        bail!(
+            "recorded {protocol} dependency response role is valid only on a background-rule Global exchange"
+        );
+    }
+    if response_role == "independent" {
+        return Ok(false);
+    }
+    if !command.eq_ignore_ascii_case(supported_command) {
+        bail!(
+            "recorded {protocol} runtime-state dependency supports only command {supported_command:?}"
+        );
+    }
+    Ok(true)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,8 +196,12 @@ where
     T: CommandExchangeScope,
 {
     let exchange = &exchanges[candidate];
+    if !exchange.preserves_connection_order() {
+        return None;
+    }
     exchanges.iter().enumerate().find_map(|(index, other)| {
-        (!other.is_consumed()
+        (other.preserves_connection_order()
+            && !other.is_consumed()
             && other.source() == exchange.source()
             && other.case_id() == exchange.case_id()
             && other.connection_id() == exchange.connection_id()
@@ -201,6 +241,7 @@ mod tests {
         connection_id: Uuid,
         sequence: u64,
         consumed: bool,
+        preserves_connection_order: bool,
     }
 
     impl CommandExchangeScope for Exchange {
@@ -231,6 +272,10 @@ mod tests {
         fn is_consumed(&self) -> bool {
             self.consumed
         }
+
+        fn preserves_connection_order(&self) -> bool {
+            self.preserves_connection_order
+        }
     }
 
     #[test]
@@ -243,6 +288,7 @@ mod tests {
                 connection_id,
                 sequence: 1,
                 consumed: false,
+                preserves_connection_order: true,
             },
             Exchange {
                 source: ReplaySource::Case,
@@ -250,6 +296,7 @@ mod tests {
                 connection_id,
                 sequence: 2,
                 consumed: false,
+                preserves_connection_order: true,
             },
         ];
 
@@ -269,6 +316,7 @@ mod tests {
                 connection_id,
                 sequence: 1,
                 consumed: false,
+                preserves_connection_order: true,
             },
             Exchange {
                 source: ReplaySource::Case,
@@ -276,6 +324,7 @@ mod tests {
                 connection_id,
                 sequence: 2,
                 consumed: false,
+                preserves_connection_order: true,
             },
         ];
 
@@ -287,6 +336,34 @@ mod tests {
                 candidate: 1,
                 blocker: 0,
             }
+        );
+    }
+
+    #[test]
+    fn connection_independent_runtime_state_ignores_earlier_lane_entries() {
+        let connection_id = Uuid::new_v4();
+        let exchanges = [
+            Exchange {
+                source: ReplaySource::Global,
+                case_id: None,
+                connection_id,
+                sequence: 1,
+                consumed: false,
+                preserves_connection_order: true,
+            },
+            Exchange {
+                source: ReplaySource::Global,
+                case_id: None,
+                connection_id,
+                sequence: 2,
+                consumed: false,
+                preserves_connection_order: false,
+            },
+        ];
+
+        assert_eq!(
+            preferred_match(&exchanges, None, |exchange| exchange.sequence == 2),
+            PreferredMatch::Matched(1)
         );
     }
 

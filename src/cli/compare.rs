@@ -47,7 +47,16 @@ pub(super) async fn run(args: CompareArgs) -> Result<()> {
         report: report_path,
     })?;
     update_comparison_progress(&report, &progress_path)?;
-    super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&report)?))?;
+    let summary = serde_json::json!({
+        "complete": report.complete,
+        "passed": report.passed,
+        "counts": &report.counts,
+        "apis": &report.apis,
+        "representative_difference": &report.representative_difference,
+        "representative_policy_mismatch": &report.representative_policy_mismatch,
+        "progress": progress_path,
+    });
+    super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&summary)?))?;
     ensure!(
         report.passed,
         "comparison recording verification failed; see {}",

@@ -3,9 +3,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    ComparisonResponseRuleFeedback, DynamicResponseMechanism, ReplayPolicyInitOptions,
-    ResponseRuleFeedback, ResponseRuleKind, initialize_replay_policy,
-    plan_comparison_response_rule, plan_response_rule,
+    ComparisonResponseRuleFeedback, DynamicResponseMechanism, E2eRunContext, ResponseRuleFeedback,
+    ResponseRuleKind, plan_comparison_response_rule, plan_response_rule,
+    resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Args)]
@@ -16,8 +16,6 @@ pub(super) struct ReplayArgs {
 
 #[derive(Debug, Subcommand)]
 enum ReplayCommand {
-    /// Create an empty dependency replay and response verification policy.
-    Init,
     /// Validate evidence and preview one policy strategy.
     Plan(PlanArgs),
     /// Validate evidence and atomically apply one policy strategy.
@@ -46,7 +44,7 @@ enum ReplayStrategy {
 #[command(group(
     ArgGroup::new("evidence")
         .required(true)
-        .args(["assertion_report", "comparison_report"])
+        .args(["case_source", "comparison_run"])
 ))]
 struct ResponseRuleArgs {
     #[arg(long, value_enum)]
@@ -67,20 +65,12 @@ struct ResponseRuleArgs {
     source_example: Option<String>,
     #[arg(long, required_if_eq("kind", "dynamic"))]
     target_example: Option<String>,
-    #[arg(
-        long,
-        requires = "aggregate_report",
-        conflicts_with = "comparison_report"
-    )]
-    assertion_report: Option<PathBuf>,
-    #[arg(
-        long,
-        requires = "assertion_report",
-        conflicts_with = "comparison_report"
-    )]
-    aggregate_report: Option<PathBuf>,
-    #[arg(long, conflicts_with_all = ["assertion_report", "aggregate_report"])]
-    comparison_report: Option<PathBuf>,
+    /// Exact finalized replay case source; runner-owned evidence is resolved internally.
+    #[arg(long, conflicts_with = "comparison_run")]
+    case_source: Option<PathBuf>,
+    /// Exact finalized comparison recording directory; its report is resolved internally.
+    #[arg(long, conflicts_with = "case_source")]
+    comparison_run: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -125,11 +115,6 @@ impl From<ResponseRuleKindArg> for ResponseRuleKind {
 
 pub(super) fn run(target_root: PathBuf, args: ReplayArgs) -> Result<()> {
     match args.command {
-        ReplayCommand::Init => {
-            super::print_json(&initialize_replay_policy(ReplayPolicyInitOptions {
-                target_root,
-            })?)
-        }
         ReplayCommand::Plan(args) => plan(target_root, args.strategy),
         ReplayCommand::Apply(args) => apply(target_root, args.strategy),
     }
@@ -164,7 +149,7 @@ fn response_rule_plan(
         .into_iter()
         .map(Into::into)
         .collect();
-    if let Some(comparison_report) = args.comparison_report {
+    if let Some(comparison_run) = args.comparison_run {
         plan_comparison_response_rule(ComparisonResponseRuleFeedback {
             policy_path,
             kind,
@@ -174,9 +159,19 @@ fn response_rule_plan(
             source_evidence: args.source_evidence,
             source_example: args.source_example,
             target_example: args.target_example,
-            comparison_report,
+            comparison_report: comparison_run.join("comparison-report.json"),
         })
     } else {
+        let evidence = resolve_e2e_response_rule_evidence(
+            E2eRunContext {
+                target_root: target_root.clone(),
+                case_source: args
+                    .case_source
+                    .expect("clap requires replay or comparison evidence"),
+                run_key: None,
+            },
+            &args.api,
+        )?;
         plan_response_rule(ResponseRuleFeedback {
             policy_path,
             kind,
@@ -186,12 +181,71 @@ fn response_rule_plan(
             source_evidence: args.source_evidence,
             source_example: args.source_example,
             target_example: args.target_example,
-            assertion_report: args
-                .assertion_report
-                .expect("clap requires replay assertion evidence"),
-            aggregate_report: args
-                .aggregate_report
-                .expect("clap requires replay aggregate evidence"),
+            assertion_report: evidence.assertions,
+            aggregate_report: evidence.aggregate,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        replay: ReplayArgs,
+    }
+
+    #[test]
+    fn response_rule_uses_case_source_or_comparison_run_instead_of_report_paths() {
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "plan",
+                "response-rule",
+                "--kind",
+                "unordered",
+                "--api",
+                "GET /api",
+                "--json-pointer",
+                "/items",
+                "--case-source",
+                "/cases/run",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "plan",
+                "response-rule",
+                "--kind",
+                "unordered",
+                "--api",
+                "GET /api",
+                "--json-pointer",
+                "/items",
+                "--comparison-run",
+                "/comparison/run",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "plan",
+                "response-rule",
+                "--kind",
+                "unordered",
+                "--api",
+                "GET /api",
+                "--json-pointer",
+                "/items",
+            ])
+            .is_err()
+        );
     }
 }

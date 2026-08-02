@@ -16,6 +16,15 @@ pub enum BackgroundDependencyResponseRole {
     RuntimeState,
 }
 
+impl BackgroundDependencyResponseRole {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Independent => "independent",
+            Self::RuntimeState => "runtime_state",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
@@ -33,8 +42,8 @@ pub enum BackgroundDependencyRuleConfig {
         name: String,
         breeze_identity: String,
         command: String,
-        key_start: u32,
-        key_end: u32,
+        key_start: u64,
+        key_end: u64,
         key_separator: String,
         key_suffix: String,
         initial_load_timeout_ms: u64,
@@ -46,8 +55,14 @@ pub enum BackgroundDependencyRuleConfig {
         name: String,
         ports: Vec<u16>,
         command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        keys: Vec<String>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         key_prefix: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         key_suffix: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        initial_load_timeout_ms: Option<u64>,
         response_role: BackgroundDependencyResponseRole,
         source_revision: String,
         source_evidence: String,
@@ -125,6 +140,7 @@ impl BackgroundDependencyRuleConfig {
                 Self::Redis {
                     ports,
                     command,
+                    keys,
                     key_prefix,
                     key_suffix,
                     ..
@@ -136,7 +152,12 @@ impl BackgroundDependencyRuleConfig {
                     && ports.contains(&exchange.target_port)
                     && exchange.command.eq_ignore_ascii_case(command)
                     && exchange.args.first().is_some_and(|key| {
-                        capture_matches_redis_key(key, key_prefix.as_bytes(), key_suffix.as_bytes())
+                        capture_matches_redis_key(
+                            key,
+                            keys,
+                            key_prefix.as_bytes(),
+                            key_suffix.as_bytes(),
+                        )
                     })
             }
             (
@@ -154,6 +175,15 @@ impl BackgroundDependencyRuleConfig {
                     && exchange.method_name.as_deref() == Some(method_name)
             }
             _ => false,
+        }
+    }
+
+    pub(crate) fn response_role(&self) -> BackgroundDependencyResponseRole {
+        match self {
+            Self::Http { response_role, .. }
+            | Self::Memcached { response_role, .. }
+            | Self::Redis { response_role, .. } => *response_role,
+            Self::Motan { .. } => BackgroundDependencyResponseRole::Independent,
         }
     }
 }
@@ -221,25 +251,57 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
             BackgroundDependencyRuleConfig::Redis {
                 ports,
                 command,
+                keys,
                 key_prefix,
                 key_suffix,
+                initial_load_timeout_ms,
                 response_role,
                 source_revision,
                 source_evidence,
                 ..
             } => {
                 validate_redis_ports(name, ports)?;
-                if command != "ZCOUNT" {
-                    bail!(
-                        "Redis background dependency rule {name:?} currently supports only command \"ZCOUNT\""
-                    );
-                }
-                validate_single_line("Redis background dependency key prefix", key_prefix, 512)?;
-                validate_single_line("Redis background dependency key suffix", key_suffix, 512)?;
-                if *response_role != BackgroundDependencyResponseRole::Independent {
-                    bail!(
-                        "Redis background dependency rule {name:?} must use response_role = \"independent\""
-                    );
+                match response_role {
+                    BackgroundDependencyResponseRole::Independent => {
+                        if command != "ZCOUNT" {
+                            bail!(
+                                "independent Redis background dependency rule {name:?} currently supports only command \"ZCOUNT\""
+                            );
+                        }
+                        if !keys.is_empty() || initial_load_timeout_ms.is_some() {
+                            bail!(
+                                "independent Redis background dependency rule {name:?} must use key_prefix/key_suffix without keys or initial_load_timeout_ms"
+                            );
+                        }
+                        validate_single_line(
+                            "Redis background dependency key prefix",
+                            key_prefix,
+                            512,
+                        )?;
+                        validate_single_line(
+                            "Redis background dependency key suffix",
+                            key_suffix,
+                            512,
+                        )?;
+                    }
+                    BackgroundDependencyResponseRole::RuntimeState => {
+                        if command != "GET" {
+                            bail!(
+                                "runtime-state Redis background dependency rule {name:?} currently supports only command \"GET\""
+                            );
+                        }
+                        if !key_prefix.is_empty() || !key_suffix.is_empty() {
+                            bail!(
+                                "runtime-state Redis background dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
+                            );
+                        }
+                        validate_exact_redis_keys(name, keys)?;
+                        if initial_load_timeout_ms.is_none_or(|timeout| timeout == 0) {
+                            bail!(
+                                "runtime-state Redis background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
+                            );
+                        }
+                    }
                 }
                 validate_source_metadata(source_revision, source_evidence)?;
             }
@@ -366,6 +428,7 @@ fn rules_overlap(
             BackgroundDependencyRuleConfig::Redis {
                 ports: left_ports,
                 command: left_command,
+                keys: left_keys,
                 key_prefix: left_prefix,
                 key_suffix: left_suffix,
                 ..
@@ -373,6 +436,7 @@ fn rules_overlap(
             BackgroundDependencyRuleConfig::Redis {
                 ports: right_ports,
                 command: right_command,
+                keys: right_keys,
                 key_prefix: right_prefix,
                 key_suffix: right_suffix,
                 ..
@@ -380,12 +444,16 @@ fn rules_overlap(
         ) => {
             left_ports.iter().any(|port| right_ports.contains(port))
                 && left_command == right_command
-                && byte_affixes_overlap(
-                    left_prefix.as_bytes(),
-                    left_suffix.as_bytes(),
-                    right_prefix.as_bytes(),
-                    right_suffix.as_bytes(),
-                )
+                && if left_keys.is_empty() && right_keys.is_empty() {
+                    byte_affixes_overlap(
+                        left_prefix.as_bytes(),
+                        left_suffix.as_bytes(),
+                        right_prefix.as_bytes(),
+                        right_suffix.as_bytes(),
+                    )
+                } else {
+                    left_keys.iter().any(|key| right_keys.contains(key))
+                }
         }
         (
             BackgroundDependencyRuleConfig::Motan {
@@ -420,6 +488,25 @@ fn validate_redis_ports(rule_name: &str, ports: &[u16]) -> Result<()> {
         }
         if !unique.insert(*port) {
             bail!("Redis background dependency rule {rule_name:?} has duplicate port {port}");
+        }
+    }
+    Ok(())
+}
+
+fn validate_exact_redis_keys(rule_name: &str, keys: &[String]) -> Result<()> {
+    const MAX_KEYS: usize = 4_096;
+    if keys.is_empty() || keys.len() > MAX_KEYS {
+        bail!(
+            "runtime-state Redis background dependency rule {rule_name:?} must include between 1 and {MAX_KEYS} exact keys"
+        );
+    }
+    let mut unique = HashSet::new();
+    for key in keys {
+        validate_single_line("runtime-state Redis background dependency key", key, 512)?;
+        if !unique.insert(key) {
+            bail!(
+                "runtime-state Redis background dependency rule {rule_name:?} has duplicate key {key:?}"
+            );
         }
     }
     Ok(())
@@ -479,8 +566,8 @@ fn validate_breeze_identity(rule_name: &str, identity: &str) -> Result<()> {
 
 fn validate_key_series(
     rule_name: &str,
-    start: u32,
-    end: u32,
+    start: u64,
+    end: u64,
     separator: &str,
     suffix: &str,
 ) -> Result<()> {
@@ -490,7 +577,7 @@ fn validate_key_series(
             "Memcached background dependency rule {rule_name:?} key_start must not exceed key_end"
         );
     }
-    if u64::from(end) - u64::from(start) + 1 > MAX_KEYS {
+    if u128::from(end) - u128::from(start) + 1 > u128::from(MAX_KEYS) {
         bail!(
             "Memcached background dependency rule {rule_name:?} exceeds the {MAX_KEYS} key safety limit"
         );
@@ -509,8 +596,8 @@ fn validate_key_series(
 
 pub(crate) fn matches_memcached_key_series(
     key: &[u8],
-    start: u32,
-    end: u32,
+    start: u64,
+    end: u64,
     separator: u8,
     suffix: &[u8],
 ) -> bool {
@@ -519,7 +606,7 @@ pub(crate) fn matches_memcached_key_series(
     };
     let (prefix, actual_suffix) = key.split_at(separator_index);
     if prefix.is_empty()
-        || prefix.len() > 10
+        || prefix.len() > 20
         || prefix.iter().any(|byte| !byte.is_ascii_digit())
         || actual_suffix.get(1..) != Some(suffix)
     {
@@ -528,7 +615,7 @@ pub(crate) fn matches_memcached_key_series(
     let Ok(prefix) = std::str::from_utf8(prefix) else {
         return false;
     };
-    let Ok(value) = prefix.parse::<u32>() else {
+    let Ok(value) = prefix.parse::<u64>() else {
         return false;
     };
     value >= start && value <= end && value.to_string() == prefix
@@ -538,8 +625,13 @@ pub(crate) fn matches_redis_key(key: &[u8], prefix: &[u8], suffix: &[u8]) -> boo
     key.starts_with(prefix) && key.ends_with(suffix)
 }
 
+pub(crate) fn matches_exact_redis_key(key: &[u8], keys: &[String]) -> bool {
+    keys.iter().any(|candidate| candidate.as_bytes() == key)
+}
+
 fn capture_matches_redis_key(
     capture: &crate::recorder::BodyCapture,
+    keys: &[String],
     prefix: &[u8],
     suffix: &[u8],
 ) -> bool {
@@ -547,10 +639,21 @@ fn capture_matches_redis_key(
         return false;
     }
     match capture.encoding {
-        "utf8" => matches_redis_key(capture.data.as_bytes(), prefix, suffix),
-        "base64" => STANDARD
-            .decode(capture.data.as_bytes())
-            .is_ok_and(|key| matches_redis_key(&key, prefix, suffix)),
+        "utf8" => {
+            let key = capture.data.as_bytes();
+            if keys.is_empty() {
+                matches_redis_key(key, prefix, suffix)
+            } else {
+                matches_exact_redis_key(key, keys)
+            }
+        }
+        "base64" => STANDARD.decode(capture.data.as_bytes()).is_ok_and(|key| {
+            if keys.is_empty() {
+                matches_redis_key(&key, prefix, suffix)
+            } else {
+                matches_exact_redis_key(&key, keys)
+            }
+        }),
         _ => false,
     }
 }

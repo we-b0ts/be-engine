@@ -33,6 +33,7 @@ mod writer;
 pub use artifact_owner::ArtifactOwner;
 pub use capture::*;
 pub use event::*;
+pub(crate) use summary::load_pre_readiness_traffic_summary;
 
 struct RecorderOptions {
     access_policy: RecordingAccessPolicy,
@@ -215,12 +216,12 @@ impl Recorder {
         &self,
         event: RecorderEvent,
         targets: crate::active_case::DependencyTargets,
-        background_rule_name: Option<String>,
+        background_rule: Option<(String, crate::config::BackgroundDependencyResponseRole)>,
     ) -> Result<()> {
         self.writer.try_record(writer::RecordEnvelope {
             event,
             targets,
-            background_rule_name,
+            background_rule,
         })
     }
 

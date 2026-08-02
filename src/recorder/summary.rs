@@ -11,6 +11,7 @@ use crate::recorder::RecorderEvent;
 mod kafka;
 mod memcached;
 mod motan;
+mod pre_readiness;
 mod redis;
 mod udp;
 use kafka::{
@@ -38,7 +39,14 @@ pub(crate) async fn write_global_dependency_summary(dir: &Path) -> Result<()> {
         "global-dependencies.jsonl",
         "global-dependencies-summary.json",
     )
-    .await
+    .await?;
+    pre_readiness::write(dir).await
+}
+
+pub(crate) fn load_pre_readiness_traffic_summary(
+    dir: &Path,
+) -> Result<Option<pre_readiness::PreReadinessTrafficSummary>> {
+    pre_readiness::load_or_build(dir)
 }
 
 async fn write_dependency_summary(

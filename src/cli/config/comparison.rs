@@ -52,8 +52,9 @@ struct ResponseRuleArgs {
     source_example: String,
     #[arg(long)]
     target_example: String,
+    /// Exact finalized comparison recording directory.
     #[arg(long)]
-    comparison_report: PathBuf,
+    comparison_run: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -103,6 +104,45 @@ fn response_rule_plan(
         source_evidence: Some(args.source_evidence),
         source_example: Some(args.source_example),
         target_example: Some(args.target_example),
-        comparison_report: args.comparison_report,
+        comparison_report: args.comparison_run.join("comparison-report.json"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        comparison: ComparisonArgs,
+    }
+
+    #[test]
+    fn counter_rule_accepts_a_comparison_run() {
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "plan",
+                "response-rule",
+                "--kind",
+                "counter",
+                "--api",
+                "GET /api",
+                "--json-pointer",
+                "/count",
+                "--source-evidence",
+                "src/api.rs:count",
+                "--source-example",
+                "1",
+                "--target-example",
+                "2",
+                "--comparison-run",
+                "/comparison/run",
+            ])
+            .is_ok()
+        );
+    }
 }

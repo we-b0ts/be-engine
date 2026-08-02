@@ -376,15 +376,19 @@ fn ensure_same_selector(
             BackgroundDependencyRuleConfig::Redis {
                 ports: existing_ports,
                 command: existing_command,
+                keys: existing_keys,
                 key_prefix: existing_prefix,
                 key_suffix: existing_suffix,
+                response_role: existing_role,
                 ..
             },
             BackgroundDependencyRuleConfig::Redis {
                 ports: requested_ports,
                 command: requested_command,
+                keys: requested_keys,
                 key_prefix: requested_prefix,
                 key_suffix: requested_suffix,
+                response_role: requested_role,
                 ..
             },
         ) => {
@@ -392,8 +396,10 @@ fn ensure_same_selector(
                 .iter()
                 .all(|port| requested_ports.contains(port))
                 && existing_command == requested_command
+                && existing_keys == requested_keys
                 && existing_prefix == requested_prefix
                 && existing_suffix == requested_suffix
+                && existing_role == requested_role
         }
         (
             BackgroundDependencyRuleConfig::Motan {
@@ -506,8 +512,11 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             name,
             ports,
             command,
+            keys,
             key_prefix,
             key_suffix,
+            initial_load_timeout_ms,
+            response_role,
             source_revision,
             source_evidence,
             ..
@@ -516,9 +525,20 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             push_line(output, "protocol = \"redis\"", newline);
             push_u16_array(output, "ports", ports, newline);
             push_assignment(output, "command", command, newline);
-            push_assignment(output, "key_prefix", key_prefix, newline);
-            push_assignment(output, "key_suffix", key_suffix, newline);
-            push_line(output, "response_role = \"independent\"", newline);
+            if keys.is_empty() {
+                push_assignment(output, "key_prefix", key_prefix, newline);
+                push_assignment(output, "key_suffix", key_suffix, newline);
+            } else {
+                push_array(output, "keys", keys, newline);
+            }
+            if let Some(timeout_ms) = initial_load_timeout_ms {
+                push_line(
+                    output,
+                    &format!("initial_load_timeout_ms = {timeout_ms}"),
+                    newline,
+                );
+            }
+            push_assignment(output, "response_role", response_role.as_str(), newline);
             push_assignment(output, "source_revision", source_revision, newline);
             push_assignment(output, "source_evidence", source_evidence, newline);
         }

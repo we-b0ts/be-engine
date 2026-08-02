@@ -300,3 +300,21 @@ fn memcached_runtime_state_requires_ready_probe_and_positive_timeout() {
     let error = config.validate().unwrap_err();
     assert!(error.to_string().contains("initial_load_timeout_ms"));
 }
+
+#[test]
+fn memcached_runtime_state_accepts_u64_profile_keys() {
+    assert!(matches_memcached_key_series(
+        b"5000000000.profile",
+        5_000_000_000,
+        5_000_000_000,
+        b'.',
+        b"profile",
+    ));
+    assert!(!matches_memcached_key_series(
+        b"5000000001.profile",
+        5_000_000_000,
+        5_000_000_000,
+        b'.',
+        b"profile",
+    ));
+}

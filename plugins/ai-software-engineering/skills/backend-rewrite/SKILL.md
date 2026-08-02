@@ -3,189 +3,119 @@ name: backend-rewrite
 description: "Plan, implement, verify, and deliver backend service rewrites and migrations from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns migration sequencing, repair routing, completion state, and pull-request delivery."
 ---
 
-# Backend Rewrite And Migration
+# Backend Rewrite
 
-Own the migration from contract discovery through delivery. Select one
-independently verifiable slice, coordinate target implementation and traffic
-evidence, and advance only on current proof.
+Use the traffic-e2e rewrite coordinator for migration sequence and bounded
+traffic evidence. The target AI owns source-code attribution and target-code
+implementation; it does not operate the traffic engine or parse its files.
 
-## Core Contract
+This skill is self-contained for ordinary rewrites. Do not load the
+`traffic-e2e` skill. `traffic-e2e rewrite ...` is an executable coordinator
+interface, not a Skill dependency. Load `backend-engineering` only when an
+action requires target-code implementation or review.
 
-- Rewrite observable behavior and operational contracts, not source syntax.
-  Preserve responses, dependency roles, side effects, ordering, error
-  semantics, metrics, configuration provenance, and lifecycle behavior unless
-  the user approves a contract change.
-- Treat the source configuration interface as an operational compatibility
-  contract. Make target startup consume the same authoritative configuration
-  and preserve its externally supplied formats, keys, parsing semantics,
-  defaults, precedence, validation, and behavior-relevant reload behavior.
-  Whenever source startup uses configuration files or directories, trace the
-  loader from the source runtime and implement compatible target
-  initialization and loading before accepting target startup.
-- Never turn source-process state or remotely obtained values into target
-  configuration. Do not dump, decrypt, extract, or translate in-memory values,
-  remote responses, logs, or debug output into target-local files. A constant
-  present in the source repository or pinned compiled artifact may be
-  inspected, decompiled when necessary, and migrated directly into target
-  source code. Use the source runtime's authoritative configuration and any
-  source-defined SDK-owned snapshot mechanism, and implement compatible
-  initialization, retrieval, loading, refresh, and fallback behavior. Do not
-  invent a snapshot when the source SDK keeps remotely obtained state only in
-  memory.
-- Treat `.traffic-e2e/boot/` as an input-only transport boundary for already
-  authoritative startup inputs. Its name, existence, or Git-ignore status does
-  not prove provenance or authorize creating content.
-- Treat the source repository and source application implementation as
-  immutable evidence. Never edit source code, replace source classes through a
-  recording adapter, patch source artifacts, or change source business
-  behavior to manufacture traffic or make verification pass. This skill
-  authorizes no source patch; never invent or extend one.
-- Treat source structure as evidence, not as target architecture. Use the
-  smallest independently triggerable and verifiable slice; for HTTP traffic,
-  default to one canonical API group.
-- Preserve genuine dependency paths. Only a value proven to come directly from
-  process environment, startup arguments, or machine-local configuration may
-  move to an equivalent target input.
-- Treat source-process local caches as target behavior. Reproduce the source
-  cache semantics that affect responses or runtime behavior.
-- Keep recordings immutable and assertion-only. Target code, configuration,
-  tests, and fixtures must never consume expected responses or recorded
-  dependency outputs.
-- Verify existing target behavior before changing it. Preserve passing behavior
-  and make only evidence-backed compatibility changes.
+## Control Protocol
 
-## Ownership
+From the initialized target repository, begin and resume with:
 
-This skill alone owns migration scope, sequence, active-slice state, repair
-priority, completion, branch/PR delivery, and the final decision.
-
-Before traffic work, read and use the
-[`traffic-e2e` skill](../traffic-e2e/SKILL.md); it owns recording, replay,
-comparison, diagnosis, and their evidence gates. Before target-code work, read
-and use the [`backend-engineering` skill](../backend-engineering/SKILL.md); it
-owns production code quality and local verification. Companion results inform
-this workflow but cannot advance, terminate, or declare the migration
-complete.
-
-When migration work identifies a Breeze-owned platform-library gap, keep slice
-sequencing, evidence gates, completion, and delivery under this skill, and
-route target-code work through `backend-engineering`; its `breeze-sdk` routing
-owns the reusable platform contract and lifecycle. Business contracts and
-behavior remain in the target capability. Require descriptor-backed target
-resource packages to use the shared Breeze descriptor library directly. Do not
-accept a project CLI that enumerates resources, invokes a descriptor resolver,
-or injects descriptor-derived ports.
-
-Do not modify traffic-e2e to complete a rewrite. Route a proven Recorder or
-Replay capability gap to `traffic-e2e-system`, and do not add a
-recording-backed workaround to target code. Likewise, never route a missing
-recording capability into a source modification.
-
-## Required Workflow
-
-Read [workflow.md](references/workflow.md) before executing a rewrite. It
-defines discovery and resume behavior, PR-base resolution, initialization,
-case acquisition, target-code delegation, runtime evidence, E2E/comparison
-loops, delivery, and the final decision record.
-
-Read
-[configuration-compatibility.md](references/configuration-compatibility.md)
-before implementing or accepting target configuration loading and startup. It
-defines how to discover the source configuration contract, load it compatibly,
-and verify target startup with it.
-
-The phase order is:
-
-```text
-select_slice -> record -> prepare -> e2e -> compare -> slice_done
+```bash
+traffic-e2e rewrite next
 ```
 
-Work on one active slice at a time. Treat a new user-requested rewrite task,
-not a resumed turn, context compaction, or automatic continuation, as a fresh
-case-acquisition opportunity. Default to a new standard recording for its
-selected scope even when an earlier task passed. Within the active task, use
-that task's exact finalized case source for repeated replay-backed E2E
-diagnosis and repair; one failed attempt alone does not call for another
-recording. Resume valid phase evidence from the same task, and do not
-enter comparison without current runner-generated proof that the affected E2E
-scope passes. When the exact case source contains multiple canonical API
-groups, preserve a finite ordered inventory and advance to the next group only
-after the current group reaches `slice_done`.
+For a new workflow, select one canonical API:
 
-## Repair Priority
-
-Response compatibility is the primary repair loop:
-
-1. Count selected and executed cases, response-passing cases, and
-   response-mismatching cases.
-2. Group every structured response difference by field and proven cause.
-   State the response cause before dependency cleanliness or blockers; if it is
-   not yet proven, say so and continue diagnosis.
-3. When required dependency evidence appears absent, require traffic-e2e's
-   missing-evidence checkpoint before calling it a recording-data blocker.
-   Follow its Breeze resource-capture result when applicable; re-record only
-   after a changed apply, and otherwise continue diagnosis.
-4. Repair target behavior or any response-driving dependency wiring. When a
-   source-owned cache warm is causally required, apply a source-proven
-   `runtime_state` background rule and make a new recording as part of this
-   repair.
-5. Rerun the same immutable cases until response assertions pass.
-6. Only then classify remaining unused dependencies and apply an
-   `independent` background rule when source evidence proves process ownership
-   and response independence.
-7. A recorder-rule change requires a new standard recording and E2E run.
-
-Every non-complete result with a response mismatch must begin with the
-traffic-e2e handoff model exactly as defined; do not rename or omit its keys,
-and do not define a backend-rewrite variant. A generic conclusion without its
-one real case, one Pointer, concrete source/candidate observations, and
-diagnosis is not a valid handoff or final decision. Do not enumerate every
-failed case, and do not claim that the representative explains other cases
-without shared difference and code-path evidence. Delivery fields never
-determine verification status.
-
-An unrelated unused dependency must not preempt response diagnosis. Preserve
-all independently evidenced categories so a capability blocker does not hide a
-repairable response defect. Do not present a dependency or tool limitation as
-the cause of a response mismatch without a demonstrated causal path. A dirty
-dependency report is a later gate, never a stop signal while any response
-assertion still fails.
-
-## State And Decisions
-
-Keep one explicit record for the active slice:
-
-```text
-scope, stage, case_source, source_revision, e2e_evidence,
-comparison_evidence, repaired_case_evidence, response_status,
-replay_status, dependency_status, failure_categories, attention, next_todo,
-todo_owner, resume_stage
+```bash
+traffic-e2e rewrite next --api '<METHOD path-or-pattern>'
 ```
 
-Use `complete` only when the active slice is `slice_done`, current E2E and
-comparison evidence both pass, all repository gates pass, and deliverable
-changes have been delivered as required. A non-blocking
-`repaired_case_not_observed` attention does not prevent `complete`.
+Add `--source-route '<source-registration-route>'` when the selector is
+dynamic. The coordinator keeps one API and one active issue, executes every
+deterministic Prepare/E2E/Compare step, invalidates stale evidence, and returns
+exactly one action. Execute only that action, then call `rewrite next` again.
 
-Use `action_required` while a response mismatch has an in-scope target,
-environment, dependency-wiring, or configuration repair. Continue diagnosis
-and implementation rather than ending on difficulty or failed attempts.
-`action_required` is a working state, not a terminal outcome while authorized
-in-scope repair remains.
+Action commands are argv arrays. Do not reconstruct, combine, shell-evaluate,
+or change their arguments. Supply named required environment variables without
+printing their values.
 
-Use `incomplete` only after every selected response assertion passes and the
-remaining dirty dependency evidence has no source-proven rule that can be
-safely applied. Use `blocked` only when response-driving external-system data
-was not recorded or provided and the missing information prevents target-code
-implementation. Dirty evidence alone never proves `blocked`. Every
-non-complete result needs an owner, concrete TODO, acceptance check, and resume
-stage.
+Read [workflow.md](references/workflow.md) for action semantics, phase order,
+and recovery behavior.
 
-When a target repair passes E2E against the same immutable case that evidenced
-it and the first valid fresh comparison passes without observing that case,
-complete the slice and retain `repaired_case_not_observed` only as a
-non-blocking attention. Do not put it in `failure_categories`, and do not
-create `next_todo` or `resume_stage` for it. Do not start another standard or
-comparison recording solely to observe the case.
+## Problem Diagnosis And Repair
 
-A draft PR or code change is delivery evidence, not verification success.
+Problem diagnosis is mandatory for every `implementation_required` action. It
+selects the one evidence-backed repair attempted before the next replay; it is
+not an optional fallback after speculative implementation.
+
+When the action is `implementation_required`:
+
+1. Run only the returned `rewrite evidence <query-id>` commands for traffic
+   facts.
+2. Read [problem-diagnosis.md](references/problem-diagnosis.md) and follow its
+   issue-specific evidence and source-proof route.
+3. Inspect the matching immutable source code and target implementation and
+   prove one cause.
+4. Use [`backend-engineering`](../backend-engineering/SKILL.md) for the target
+   repair and repository checks.
+5. Call `traffic-e2e rewrite next`; it detects the repository change and
+   reruns the same immutable cases.
+
+Treat coordinator `possible_causes` as hypotheses, never conclusions. Preserve
+source cache keys, expiry, bounds, eviction, negative caching, warmup,
+concurrent load, refresh, and fallback semantics when they affect behavior.
+
+When source code proves a supported response rule, use only the coordinator's
+`rewrite rule plan|apply` interface with a current `evidence_id`. When source
+and bounded evidence prove a Recorder/Replay gap, external-data blocker, or
+source change, use `rewrite route`; a failed route leaves the active target
+repair in place.
+
+## Forbidden Inputs
+
+During an ordinary rewrite, never open or parse:
+
+- `.traffic-e2e/local/**`, `.active`, `latest`, or generated state;
+- assertion, aggregate, Replay, or comparison reports;
+- expected, actual, or dependency case artifacts;
+- recording manifests except through coordinator actions.
+
+Do not use `jq`, Python, or ad-hoc shell to derive traffic facts. Do not make
+target code, configuration, tests, or fixtures consume recorded responses or
+dependency outputs. Never modify source business behavior to manufacture
+evidence.
+
+## Repository Contract
+
+Initialize once with:
+
+```bash
+traffic-e2e config init --source-container <container> [--breeze]
+```
+
+The target provides only its ordinary implementation, source-compatible
+configuration, and:
+
+```text
+scripts/<project>-cli start --e2e --start-breeze off \
+  --boot-dir .traffic-e2e/boot --port <port>
+scripts/<project>-cli stop
+```
+
+Every E2E start compiles once; use the compile command's `--release` mode when
+available and launch that artifact. `stop` is idempotent. The target CLI must
+not read traffic cases, Replay sessions, expected responses, or reports.
+
+Read [configuration-compatibility.md](references/configuration-compatibility.md)
+for target configuration work. For Platform+Breeze recording lifecycle, read
+[platform-breeze-runtime.md](references/platform-breeze-runtime.md). The
+traffic engine owns source/Breeze/Recorder/Replay containers and capture-only
+source adaptation; the target repository owns none of that control flow.
+
+## Completion
+
+Continue while `terminal_allowed` is false. `implementation_required` and
+`system_repair_required` are working states, not final answers. Retries,
+diminishing returns, code changes, or a draft PR never authorize stopping.
+
+Only `action.kind=complete` with `terminal_allowed=true` completes the active
+API slice. Whole-rewrite delivery still requires the user-requested repository
+checks and delivery outcome.

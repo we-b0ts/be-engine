@@ -25,6 +25,7 @@ mod http_gateway;
 mod http_response_rewrite;
 mod initialization;
 mod recording;
+mod repository_initialization;
 mod rule_document;
 
 pub use allowed_unused_http::{
@@ -73,6 +74,10 @@ pub use initialization::{
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     TrafficJsonlMode,
+};
+pub use repository_initialization::{
+    InspectedContainer, RepositoryConfigInitOptions, RepositoryConfigInitResult,
+    initialize_repository_config,
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -260,11 +265,11 @@ impl AppConfig {
             .recording
             .background_dependencies
             .iter()
-            .any(|rule| matches!(rule, BackgroundDependencyRuleConfig::Memcached { .. }))
+            .any(|rule| rule.response_role() == BackgroundDependencyResponseRole::RuntimeState)
             && (!self.http_gateway.enabled || !self.http_gateway.ready.enabled)
         {
             bail!(
-                "Memcached runtime-state background dependency rules require an enabled HTTP gateway ready probe"
+                "runtime-state background dependency rules require an enabled HTTP gateway ready probe"
             );
         }
         if self.tcp_gateway.backlog == 0 || self.tcp_gateway.backlog > i32::MAX as u32 {

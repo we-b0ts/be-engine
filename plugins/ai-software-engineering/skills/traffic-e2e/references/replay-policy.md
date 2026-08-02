@@ -53,7 +53,7 @@ active response rules. Never combine fields from source-before and
 source-after. Standard replay ignores this setting. Do not create Pointer
 rules merely because the permitted complete source-after response matches.
 
-`traffic-e2e config replay init` validates the initial policy, every
+`traffic-e2e config init` validates the initial policy, every
 evidence-driven `apply` validates the resulting policy, and the runner validates
 it again before replay. Retain its canonical path, fingerprint, applicable
 rules, usage, and unused applicable rules from the final report.
@@ -236,8 +236,7 @@ traffic-e2e config replay apply response-rule \
   --target-example '<redacted UUID from target>' \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
-  --assertion-report .traffic-e2e/local/.../assertions.json \
-  --aggregate-report .traffic-e2e/local/.../aggregate.json
+  --case-source <exact-finalized-case-source>
 ```
 
 Complete aggregate evidence may remain dependency-dirty while applying a
@@ -277,8 +276,7 @@ traffic-e2e config replay apply response-rule \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
-  --assertion-report .traffic-e2e/local/.../assertions.json \
-  --aggregate-report .traffic-e2e/local/.../aggregate.json
+  --case-source <exact-finalized-case-source>
 ```
 
 Both actions require runner-owned structural assertion evidence using the
@@ -295,8 +293,8 @@ Apply is additive, sorted, and atomic.
 only by comparison verification. Never infer it from a Pointer name. After
 source implementation evidence proves a selected scalar is a count that may
 change between valid observations, use
-`traffic-e2e config comparison plan|apply response-rule --kind counter` with a
-current comparison report, the exact API and Pointer, a source path/symbol or
+`traffic-e2e config comparison plan|apply response-rule --kind counter` with an
+exact finalized comparison run, the exact API and Pointer, a source path/symbol or
 equivalent runtime artifact, and differing source and candidate examples.
 Source-before and source-after may be equal; their equality does not make the
 rule inapplicable.

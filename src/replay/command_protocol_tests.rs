@@ -86,6 +86,88 @@ async fn reports_redis_lane_blocker_without_exposing_arguments() {
 }
 
 #[tokio::test]
+async fn runtime_state_redis_gets_are_connection_independent_only_when_recorder_marked() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), b"")
+        .await
+        .unwrap();
+    let first_connection = Uuid::new_v4();
+    let second_connection = Uuid::new_v4();
+    let blocker = redis_dependency(first_connection, 1, "unrelated", b"$1\r\n0\r\n");
+    let mut first = redis_dependency(first_connection, 2, "one", b"$1\r\n1\r\n");
+    let mut second = redis_dependency(second_connection, 1, "two", b"$1\r\n2\r\n");
+    for dependency in [&mut first, &mut second] {
+        dependency["global_dependency_reason"] = Value::String("background_rule".to_string());
+        dependency["global_dependency_response_role"] = Value::String("runtime_state".to_string());
+    }
+    let global = [blocker, first, second]
+        .map(|value| serde_json::to_string(&value).unwrap())
+        .join("\n");
+    tokio::fs::write(case_dir.join("global-dependencies.jsonl"), global)
+        .await
+        .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    client
+        .write_all(b"*2\r\n$3\r\nGET\r\n$3\r\none\r\n*2\r\n$3\r\nGET\r\n$3\r\ntwo\r\n")
+        .await
+        .unwrap();
+    let mut response = vec![0_u8; 14];
+    client.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, b"$1\r\n1\r\n$1\r\n2\r\n");
+
+    let report = wait_for_matched_count(&report_path, "redis", 2).await;
+    assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn rejects_runtime_state_metadata_outside_background_global_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    let mut dependency = redis_dependency(Uuid::new_v4(), 1, "key", b"$1\r\n1\r\n");
+    dependency["global_dependency_reason"] = Value::String("background_rule".to_string());
+    dependency["global_dependency_response_role"] = Value::String("runtime_state".to_string());
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    let result = ReplayRuntime::load(
+        MysqlReplayConfig {
+            case_dir: case_dir.clone(),
+            selected_case_ids: Vec::new(),
+            dns_listen: "127.0.0.1:0".parse().unwrap(),
+            tcp_listen: "127.0.0.1:0".parse().unwrap(),
+            fake_cidr: "198.18.0.0/15".to_string(),
+            report_path: None,
+            session_path: None,
+            control_socket_path: None,
+            ca_cert_path: Some(case_dir.join(".replay/ca.pem")),
+            ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
+            policy_path: None,
+            http_ignore_query_params: Vec::new(),
+            allowed_unused_http: None,
+        },
+        "127.0.0.1:0".parse().unwrap(),
+        "127.0.0.1:0".parse().unwrap(),
+    )
+    .await;
+    let error = match result {
+        Ok(_) => panic!("case-owned runtime-state metadata unexpectedly loaded"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("Global exchange"));
+}
+
+#[tokio::test]
 async fn delays_redis_response_by_recorded_duration() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case");
@@ -203,6 +285,64 @@ async fn replays_memcached_binary_with_live_opaque() {
 
     let report = wait_for_matched_count(&report_path, "memcached", 1).await;
     assert_eq!(report["memcached"]["matched"].as_array().unwrap().len(), 1);
+    task.abort();
+}
+
+#[tokio::test]
+async fn runtime_state_memcached_gets_are_connection_independent_only_when_recorder_marked() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), b"")
+        .await
+        .unwrap();
+    let first_connection = Uuid::new_v4();
+    let second_connection = Uuid::new_v4();
+    let blocker = memcached_binary_dependency(first_connection, 1, b"unrelated");
+    let mut first = memcached_binary_dependency(first_connection, 2, b"one");
+    let mut second = memcached_binary_dependency(second_connection, 1, b"two");
+    for dependency in [&mut first, &mut second] {
+        dependency["global_dependency_reason"] = Value::String("background_rule".to_string());
+        dependency["global_dependency_response_role"] = Value::String("runtime_state".to_string());
+    }
+    let global = [blocker, first, second]
+        .map(|value| serde_json::to_string(&value).unwrap())
+        .join("\n");
+    tokio::fs::write(case_dir.join("global-dependencies.jsonl"), global)
+        .await
+        .unwrap();
+    let report_path = temp.path().join("report.json");
+    let (addr, task) = spawn_replay(&case_dir, Some(report_path.clone())).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    client
+        .write_all(&binary_get_request_for(41, b"one"))
+        .await
+        .unwrap();
+    let mut first_response = vec![0_u8; 24];
+    client.read_exact(&mut first_response).await.unwrap();
+    assert_eq!(
+        u32::from_be_bytes(first_response[12..16].try_into().unwrap()),
+        41
+    );
+    client
+        .write_all(&binary_get_request_for(42, b"two"))
+        .await
+        .unwrap();
+    let mut second_response = vec![0_u8; 24];
+    client.read_exact(&mut second_response).await.unwrap();
+    assert_eq!(
+        u32::from_be_bytes(second_response[12..16].try_into().unwrap()),
+        42
+    );
+
+    let report = wait_for_matched_count(&report_path, "memcached", 2).await;
+    assert!(
+        report["memcached"]["unmatched"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     task.abort();
 }
 
@@ -511,14 +651,45 @@ fn capture_json(bytes: &[u8]) -> Value {
 }
 
 fn binary_get_request(opaque: u32) -> Vec<u8> {
+    binary_get_request_for(opaque, b"key")
+}
+
+fn binary_get_request_for(opaque: u32, key: &[u8]) -> Vec<u8> {
     let mut request = vec![0_u8; 24];
     request[0] = 0x80;
     request[1] = 0x00;
-    request[2..4].copy_from_slice(&3_u16.to_be_bytes());
-    request[8..12].copy_from_slice(&3_u32.to_be_bytes());
+    request[2..4].copy_from_slice(&u16::try_from(key.len()).unwrap().to_be_bytes());
+    request[8..12].copy_from_slice(&u32::try_from(key.len()).unwrap().to_be_bytes());
     request[12..16].copy_from_slice(&opaque.to_be_bytes());
-    request.extend_from_slice(b"key");
+    request.extend_from_slice(key);
     request
+}
+
+fn memcached_binary_dependency(connection_id: Uuid, sequence: u64, key: &[u8]) -> Value {
+    let mut response = vec![0_u8; 24];
+    response[0] = 0x81;
+    response[1] = 0x00;
+    serde_json::json!({
+        "event_type": "memcached_exchange",
+        "connection_id": connection_id,
+        "sequence": sequence,
+        "target_host": "cache.internal",
+        "target_port": 11211,
+        "wire_protocol": "binary",
+        "command": "get",
+        "opcode": 0,
+        "key": capture_json(key),
+        "args": [],
+        "value": null,
+        "extras": null,
+        "cas": null,
+        "quiet": false,
+        "noreply": false,
+        "response_status": "0",
+        "response_frames": [capture_json(&response)],
+        "no_response": false,
+        "replay_safe": true
+    })
 }
 
 fn motan_dependency(

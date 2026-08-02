@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io::{BufRead as _, BufReader, Read as _};
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -23,8 +23,8 @@ pub struct BreezeMemcachedBackgroundDependencyFeedback {
     pub name: String,
     pub breeze_resource: String,
     pub command: String,
-    pub key_start: u32,
-    pub key_end: u32,
+    pub key_start: u64,
+    pub key_end: u64,
     pub key_separator: String,
     pub key_suffix: String,
     pub initial_load_timeout_ms: u64,
@@ -43,8 +43,8 @@ pub struct BreezeMemcachedBackgroundDependencyReport {
     pub breeze_identity: String,
     pub resolved_port: u16,
     pub command: String,
-    pub key_start: u32,
-    pub key_end: u32,
+    pub key_start: u64,
+    pub key_end: u64,
     pub key_separator: String,
     pub key_suffix: String,
     pub initial_load_timeout_ms: u64,
@@ -209,13 +209,13 @@ struct ReplayCaseEvidence {
 #[derive(Debug, Default, Deserialize)]
 struct CommandProtocolEvidence {
     #[serde(default)]
-    unmatched: Vec<CommandRequestEvidence>,
-    #[serde(default)]
     unsupported: Vec<CommandRequestEvidence>,
     #[serde(default)]
     unsafe_events: Vec<CommandRequestEvidence>,
     #[serde(default)]
     unused_case: Vec<CommandUnusedEvidence>,
+    #[serde(default)]
+    unused_global: Vec<CommandUnusedEvidence>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -254,8 +254,8 @@ fn parse_replay_evidence(
     raw: &str,
     report_path: &Path,
     port: u16,
-    key_start: u32,
-    key_end: u32,
+    key_start: u64,
+    key_end: u64,
     key_separator: u8,
     key_suffix: &[u8],
 ) -> Result<EvidenceMatch> {
@@ -272,87 +272,74 @@ fn parse_replay_evidence(
     ensure!(
         !report
             .memcached
-            .unmatched
+            .unsupported
             .iter()
-            .chain(&report.memcached.unsupported)
             .chain(&report.memcached.unsafe_events)
             .any(|event| event.target.port == port && event.command.eq_ignore_ascii_case("get")),
-        "Memcached background selector shares its Breeze port and command with unmatched, unsupported, or unsafe target traffic"
+        "Memcached background selector shares its Breeze port and command with unsupported or unsafe target traffic"
     );
-    let unused = report
+    let unused_case = report
         .memcached
         .unused_case
         .iter()
         .filter(|event| event.target.port == port && event.command.eq_ignore_ascii_case("get"))
         .map(|event| (event.index, event))
         .collect::<BTreeMap<_, _>>();
+    let unused_global = report
+        .memcached
+        .unused_global
+        .iter()
+        .filter(|event| event.target.port == port && event.command.eq_ignore_ascii_case("get"))
+        .map(|event| (event.index, event))
+        .collect::<BTreeMap<_, _>>();
     ensure!(
-        !unused.is_empty(),
-        "Memcached background selector matches no unused case exchange on the resolved Breeze port"
+        !unused_case.is_empty() || !unused_global.is_empty(),
+        "Memcached background selector matches no unused case or Global exchange on the resolved Breeze port"
     );
 
     let mut files = Vec::new();
-    let mut exchange_index = if let Some(recorded) = report.global_dependencies_path {
-        let path = resolve_evidence_path(report_path, &recorded);
-        let count = memcached_exchange_count(&path)?;
-        files.push(snapshot_file(&path, "Global dependency evidence")?);
-        count
-    } else {
-        0
-    };
+    let mut exchange_index = 0;
     let mut count = 0_usize;
     let mut case_ids = BTreeSet::new();
+    if let Some(recorded) = report.global_dependencies_path {
+        let path = resolve_evidence_path(report_path, &recorded);
+        let contents = read_file(&path, "Global dependency evidence")?;
+        scan_memcached_dependency_file(
+            &contents,
+            &path,
+            &unused_global,
+            None,
+            &mut exchange_index,
+            key_start,
+            key_end,
+            key_separator,
+            key_suffix,
+            &mut count,
+            &mut case_ids,
+        )?;
+        files.push(snapshot_bytes(path, contents.as_bytes()));
+    }
     for case in report.cases {
         let path = resolve_evidence_path(report_path, &case.dependencies_path);
         let contents = read_file(&path, "case dependency evidence")?;
-        for (line_index, line) in contents.lines().enumerate() {
-            let value: serde_json::Value = serde_json::from_str(line).with_context(|| {
-                format!(
-                    "invalid dependency JSON at {} line {}",
-                    path.display(),
-                    line_index + 1
-                )
-            })?;
-            if value.get("event_type").and_then(|value| value.as_str())
-                != Some("memcached_exchange")
-            {
-                continue;
-            }
-            let current_index = exchange_index;
-            exchange_index += 1;
-            let Some(recorded) = unused.get(&current_index) else {
-                continue;
-            };
-            ensure!(
-                recorded.case_id.as_deref() == Some(case.case_id.as_str()),
-                "replay report Memcached exchange index {current_index} does not match its case dependency evidence"
-            );
-            ensure!(
-                value.get("target_port").and_then(|value| value.as_u64())
-                    == Some(u64::from(recorded.target.port))
-                    && value
-                        .get("command")
-                        .and_then(|value| value.as_str())
-                        .is_some_and(|command| command.eq_ignore_ascii_case(&recorded.command)),
-                "replay report Memcached exchange index {current_index} does not match its recorded target or command"
-            );
-            let Some(key) = decode_key(&value)? else {
-                continue;
-            };
-            if matches_memcached_key_series(&key, key_start, key_end, key_separator, key_suffix) {
-                ensure!(
-                    value.get("replay_safe").and_then(|value| value.as_bool()) == Some(true),
-                    "Memcached background selector matches replay-unsafe evidence"
-                );
-                count += 1;
-                case_ids.insert(case.case_id.clone());
-            }
-        }
+        scan_memcached_dependency_file(
+            &contents,
+            &path,
+            &unused_case,
+            Some(&case.case_id),
+            &mut exchange_index,
+            key_start,
+            key_end,
+            key_separator,
+            key_suffix,
+            &mut count,
+            &mut case_ids,
+        )?;
         files.push(snapshot_bytes(path, contents.as_bytes()));
     }
     ensure!(
         count > 0,
-        "Memcached background selector matches no unused case key in immutable dependency evidence"
+        "Memcached background selector matches no unused case or Global key in immutable dependency evidence"
     );
     Ok(EvidenceMatch {
         count,
@@ -361,34 +348,69 @@ fn parse_replay_evidence(
     })
 }
 
-fn memcached_exchange_count(path: &Path) -> Result<usize> {
-    let file = fs::File::open(path).with_context(|| {
-        format!(
-            "failed to read Global dependency evidence {}",
-            path.display()
-        )
-    })?;
-    let mut count = 0;
-    for (line_index, line) in BufReader::new(file).lines().enumerate() {
-        let line = line.with_context(|| {
-            format!(
-                "failed to read Global dependency evidence {} line {}",
-                path.display(),
-                line_index + 1
-            )
-        })?;
-        let value: serde_json::Value = serde_json::from_str(&line).with_context(|| {
+#[allow(clippy::too_many_arguments)]
+fn scan_memcached_dependency_file(
+    contents: &str,
+    path: &Path,
+    unused: &BTreeMap<usize, &CommandUnusedEvidence>,
+    expected_case_id: Option<&str>,
+    exchange_index: &mut usize,
+    key_start: u64,
+    key_end: u64,
+    key_separator: u8,
+    key_suffix: &[u8],
+    count: &mut usize,
+    case_ids: &mut BTreeSet<String>,
+) -> Result<()> {
+    for (line_index, line) in contents.lines().enumerate() {
+        let value: serde_json::Value = serde_json::from_str(line).with_context(|| {
             format!(
                 "invalid dependency JSON at {} line {}",
                 path.display(),
                 line_index + 1
             )
         })?;
-        count += usize::from(
-            value.get("event_type").and_then(|value| value.as_str()) == Some("memcached_exchange"),
+        if value.get("event_type").and_then(serde_json::Value::as_str) != Some("memcached_exchange")
+        {
+            continue;
+        }
+        let current_index = *exchange_index;
+        *exchange_index += 1;
+        let Some(recorded) = unused.get(&current_index) else {
+            continue;
+        };
+        ensure!(
+            recorded.case_id.as_deref() == expected_case_id,
+            "replay report Memcached exchange index {current_index} does not match its immutable dependency evidence scope"
         );
+        ensure!(
+            value.get("target_port").and_then(serde_json::Value::as_u64)
+                == Some(u64::from(recorded.target.port))
+                && value
+                    .get("command")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|command| command.eq_ignore_ascii_case(&recorded.command)),
+            "replay report Memcached exchange index {current_index} does not match its recorded target or command"
+        );
+        let Some(key) = decode_key(&value)? else {
+            continue;
+        };
+        if !matches_memcached_key_series(&key, key_start, key_end, key_separator, key_suffix) {
+            continue;
+        }
+        ensure!(
+            value
+                .get("replay_safe")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true),
+            "Memcached background selector matches replay-unsafe evidence"
+        );
+        *count += 1;
+        if let Some(case_id) = expected_case_id {
+            case_ids.insert(case_id.to_string());
+        }
     }
-    Ok(count)
+    Ok(())
 }
 
 fn snapshot_file(path: &Path, label: &str) -> Result<EvidenceSnapshot> {

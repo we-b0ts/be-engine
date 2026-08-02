@@ -1,17 +1,16 @@
-use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    AllowedUnusedHttpHostFeedback, BackgroundDependencyFeedback,
+    AllowedUnusedHttpHostFeedback, BackgroundDependencyFeedback, BackgroundDependencyResponseRole,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeResourceCaptureFeedback,
-    CasePathPatternAuthority, CasePathPatternFeedback, MotanBackgroundDependencyFeedback,
-    RecorderConfigInitOptions, RedisBackgroundDependencyFeedback, initialize_recorder_config,
+    CasePathPatternAuthority, CasePathPatternFeedback, E2eRunContext,
+    MotanBackgroundDependencyFeedback, RedisBackgroundDependencyFeedback,
     plan_allowed_unused_http_hosts, plan_background_dependency,
     plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
     plan_case_path_pattern_feedback, plan_motan_background_dependency,
-    plan_redis_background_dependency,
+    plan_redis_background_dependency, resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Args)]
@@ -22,31 +21,10 @@ pub(super) struct RecorderArgs {
 
 #[derive(Debug, Subcommand)]
 enum RecorderCommand {
-    /// Create a complete recorder template from source runtime facts.
-    Init(InitArgs),
     /// Validate evidence and preview one recorder strategy.
     Plan(PlanArgs),
     /// Validate evidence and atomically apply one recorder strategy.
     Apply(ApplyArgs),
-}
-
-#[derive(Debug, Args)]
-struct InitArgs {
-    /// Genuine source HTTP port inside the shared recording network namespace.
-    #[arg(long)]
-    source_http_port: u16,
-    /// Candidate HTTP port initially served by the generated fixed-response project CLI.
-    #[arg(long, default_value_t = 8081)]
-    candidate_http_port: u16,
-    /// Genuine application readiness path.
-    #[arg(long = "readiness", default_value = "/healthz")]
-    readiness_path: String,
-    /// Exact final HTTP status proving application readiness.
-    #[arg(long, default_value_t = 404)]
-    readiness_status: u16,
-    /// Reachable upstream resolver used after Recorder intercepts target DNS.
-    #[arg(long)]
-    upstream_dns: SocketAddr,
 }
 
 #[derive(Debug, Args)]
@@ -123,9 +101,11 @@ struct BackgroundDependencyArgs {
     #[arg(long, default_value = "get")]
     command: String,
     #[arg(long)]
-    key_start: Option<u32>,
+    key_start: Option<u64>,
     #[arg(long)]
-    key_end: Option<u32>,
+    key_end: Option<u64>,
+    #[arg(long = "key")]
+    keys: Vec<String>,
     #[arg(long, default_value = ".")]
     key_separator: String,
     #[arg(long)]
@@ -134,8 +114,14 @@ struct BackgroundDependencyArgs {
     key_prefix: Option<String>,
     #[arg(long, default_value_t = 60_000)]
     initial_load_timeout_ms: u64,
+    #[arg(long, value_enum, default_value_t = BackgroundResponseRoleArg::Independent)]
+    response_role: BackgroundResponseRoleArg,
+    /// Exact finalized replay case source; replay evidence is resolved internally.
     #[arg(long)]
-    replay_report: PathBuf,
+    case_source: PathBuf,
+    /// Exact canonical API group whose focused replay evidence authorizes the rule.
+    #[arg(long)]
+    api: String,
     #[arg(long)]
     source_revision: String,
     #[arg(
@@ -151,6 +137,21 @@ enum BackgroundProtocolArg {
     Memcached,
     Motan,
     Redis,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum BackgroundResponseRoleArg {
+    Independent,
+    RuntimeState,
+}
+
+impl From<BackgroundResponseRoleArg> for BackgroundDependencyResponseRole {
+    fn from(value: BackgroundResponseRoleArg) -> Self {
+        match value {
+            BackgroundResponseRoleArg::Independent => Self::Independent,
+            BackgroundResponseRoleArg::RuntimeState => Self::RuntimeState,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -205,16 +206,6 @@ impl From<AuthorityArg> for CasePathPatternAuthority {
 
 pub(super) fn run(target_root: PathBuf, args: RecorderArgs) -> Result<()> {
     match args.command {
-        RecorderCommand::Init(args) => {
-            super::print_json(&initialize_recorder_config(RecorderConfigInitOptions {
-                target_root,
-                source_http_port: args.source_http_port,
-                candidate_http_port: args.candidate_http_port,
-                readiness_path: args.readiness_path,
-                readiness_status: args.readiness_status,
-                upstream_dns: args.upstream_dns,
-            })?)
-        }
         RecorderCommand::Plan(args) => plan(target_root, args.strategy),
         RecorderCommand::Apply(args) => apply(target_root, args.strategy),
     }
@@ -228,7 +219,7 @@ fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
             super::print_json(plan.report())
         }
         PlanStrategy::BackgroundDependencies(args) => {
-            plan_background_dependency_args(config, *args, false)
+            plan_background_dependency_args(target_root, config, *args, false)
         }
         PlanStrategy::BreezeResourceCapture(args) => {
             let plan = plan_breeze_resource_capture(breeze_capture_feedback(config, args))?;
@@ -250,7 +241,7 @@ fn apply(target_root: PathBuf, strategy: ApplyStrategy) -> Result<()> {
             super::print_json(&report)
         }
         ApplyStrategy::BackgroundDependencies(args) => {
-            plan_background_dependency_args(config, *args, true)
+            plan_background_dependency_args(target_root, config, *args, true)
         }
         ApplyStrategy::BreezeResourceCapture(args) => {
             let report =
@@ -293,15 +284,25 @@ fn allowed_unused_feedback(
 }
 
 fn plan_background_dependency_args(
+    target_root: PathBuf,
     config_path: PathBuf,
     args: BackgroundDependencyArgs,
     apply: bool,
 ) -> Result<()> {
+    let replay_report = resolve_e2e_response_rule_evidence(
+        E2eRunContext {
+            target_root,
+            case_source: args.case_source,
+            run_key: None,
+        },
+        &args.api,
+    )?
+    .replay;
     match args.protocol {
         BackgroundProtocolArg::Http => {
             let feedback = BackgroundDependencyFeedback {
                 config_path,
-                replay_report_path: args.replay_report,
+                replay_report_path: replay_report,
                 name: args.name,
                 authority: required(args.authority, "--authority", "http")?,
                 method: required(args.method, "--method", "http")?,
@@ -319,7 +320,7 @@ fn plan_background_dependency_args(
         BackgroundProtocolArg::Memcached => {
             let feedback = BreezeMemcachedBackgroundDependencyFeedback {
                 config_path,
-                replay_report_path: args.replay_report,
+                replay_report_path: replay_report,
                 name: args.name,
                 breeze_resource: required(args.breeze_resource, "--breeze-resource", "memcached")?,
                 command: args.command,
@@ -341,7 +342,7 @@ fn plan_background_dependency_args(
         BackgroundProtocolArg::Motan => {
             let feedback = MotanBackgroundDependencyFeedback {
                 config_path,
-                replay_report_path: args.replay_report,
+                replay_report_path: replay_report,
                 name: args.name,
                 group: required(args.group, "--group", "motan")?,
                 interface_name: required(args.interface_name, "--interface-name", "motan")?,
@@ -357,14 +358,30 @@ fn plan_background_dependency_args(
             }
         }
         BackgroundProtocolArg::Redis => {
+            let response_role = args.response_role.into();
+            let (key_prefix, key_suffix, initial_load_timeout_ms) = match response_role {
+                BackgroundDependencyResponseRole::Independent => (
+                    required(args.key_prefix, "--key-prefix", "redis")?,
+                    required(args.key_suffix, "--key-suffix", "redis")?,
+                    None,
+                ),
+                BackgroundDependencyResponseRole::RuntimeState => (
+                    args.key_prefix.unwrap_or_default(),
+                    args.key_suffix.unwrap_or_default(),
+                    Some(args.initial_load_timeout_ms),
+                ),
+            };
             let feedback = RedisBackgroundDependencyFeedback {
                 config_path,
-                replay_report_path: args.replay_report,
+                replay_report_path: replay_report,
                 name: args.name,
                 ports: required_nonempty(args.ports, "--port", "redis")?,
                 command: args.command,
-                key_prefix: required(args.key_prefix, "--key-prefix", "redis")?,
-                key_suffix: required(args.key_suffix, "--key-suffix", "redis")?,
+                keys: args.keys,
+                key_prefix,
+                key_suffix,
+                initial_load_timeout_ms,
+                response_role,
                 source_revision: args.source_revision,
                 source_evidence: args.evidence,
             };
@@ -411,48 +428,9 @@ mod tests {
     use super::*;
 
     #[derive(Parser)]
-    struct TestCli {
-        #[command(flatten)]
-        init: InitArgs,
-    }
-
-    #[derive(Parser)]
     struct BackgroundTestCli {
         #[command(flatten)]
         background: BackgroundDependencyArgs,
-    }
-
-    #[test]
-    fn defaults_readiness_and_accepts_explicit_overrides() {
-        let defaults = TestCli::try_parse_from([
-            "test",
-            "--source-http-port",
-            "8080",
-            "--upstream-dns",
-            "10.10.10.10:53",
-        ])
-        .unwrap();
-        assert_eq!(defaults.init.readiness_path, "/healthz");
-        assert_eq!(defaults.init.readiness_status, 404);
-        assert_eq!(defaults.init.candidate_http_port, 8081);
-
-        let explicit = TestCli::try_parse_from([
-            "test",
-            "--source-http-port",
-            "8080",
-            "--candidate-http-port",
-            "8181",
-            "--readiness",
-            "/ready",
-            "--readiness-status",
-            "200",
-            "--upstream-dns",
-            "10.10.10.10:53",
-        ])
-        .unwrap();
-        assert_eq!(explicit.init.readiness_path, "/ready");
-        assert_eq!(explicit.init.readiness_status, 200);
-        assert_eq!(explicit.init.candidate_http_port, 8181);
     }
 
     #[test]
@@ -469,8 +447,10 @@ mod tests {
             "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc",
             "--method-name",
             "getConfigByName",
-            "--replay-report",
-            "replay-report.json",
+            "--case-source",
+            "/cases/run",
+            "--api",
+            "GET /api",
             "--source-revision",
             "0123456789abcdef",
             "--evidence",
@@ -514,8 +494,10 @@ mod tests {
             "1042015:",
             "--key-suffix",
             ".wtm2",
-            "--replay-report",
-            "replay-report.json",
+            "--case-source",
+            "/cases/run",
+            "--api",
+            "GET /api",
             "--source-revision",
             "0123456789abcdef",
             "--evidence",
@@ -530,5 +512,69 @@ mod tests {
         assert_eq!(parsed.background.ports, [20917, 20918]);
         assert_eq!(parsed.background.key_prefix.as_deref(), Some("1042015:"));
         assert_eq!(parsed.background.key_suffix.as_deref(), Some(".wtm2"));
+    }
+
+    #[test]
+    fn accepts_runtime_state_redis_exact_keys_and_u64_memcached_bounds() {
+        let redis = BackgroundTestCli::try_parse_from([
+            "test",
+            "--protocol",
+            "redis",
+            "--name",
+            "startup-cache-warm",
+            "--port",
+            "20917",
+            "--command",
+            "GET",
+            "--key",
+            "cache:init:a",
+            "--key",
+            "cache:init:b",
+            "--response-role",
+            "runtime-state",
+            "--initial-load-timeout-ms",
+            "30000",
+            "--case-source",
+            "/cases/run",
+            "--api",
+            "GET /api/example",
+            "--source-revision",
+            "0123456789abcdef",
+            "--evidence",
+            "src/cache/warm.rs:init loads response-driving local state",
+        ])
+        .unwrap();
+        assert!(matches!(
+            redis.background.response_role,
+            BackgroundResponseRoleArg::RuntimeState
+        ));
+        assert_eq!(redis.background.keys, ["cache:init:a", "cache:init:b"]);
+
+        let memcached = BackgroundTestCli::try_parse_from([
+            "test",
+            "--protocol",
+            "memcached",
+            "--name",
+            "profile-warm",
+            "--breeze-resource",
+            "user-profile",
+            "--key-start",
+            "5000000000",
+            "--key-end",
+            "5000000000",
+            "--key-suffix",
+            "profile",
+            "--case-source",
+            "/cases/run",
+            "--api",
+            "GET /api/example",
+            "--source-revision",
+            "0123456789abcdef",
+            "--evidence",
+            "src/profile/cache.rs:warm reads the profile cache",
+        ])
+        .unwrap();
+        assert_eq!(memcached.background.key_start, Some(5_000_000_000));
+        assert_eq!(memcached.background.key_end, Some(5_000_000_000));
     }
 }

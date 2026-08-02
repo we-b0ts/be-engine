@@ -8,8 +8,8 @@ Kafka traffic to JSONL files, then groups, replays, and verifies recorded
 contracts.
 
 The primary crate is in `src/` and builds the `traffic-e2e` binary. Standard
-workflow commands are `config ... init`, `prepare`, `run-api`, `run`, `status`,
-`recover`, and `abort`; managed recording, replay, and target isolation are
+workflow commands are `config init`, `rewrite ...`, `record`, `record-comparison`, `prepare`,
+`run-api`, `run`, `status`, `recover`, and `abort`; managed recording, replay, and target isolation are
 also provided by the same binary, while low-level tooling is under `diagnose`.
 Recorder
 configuration starts from `config/recorder.example.toml`. Repository scripts
@@ -50,7 +50,7 @@ cargo test proxy_integration
 For local recording and replay:
 
 ```bash
-traffic-e2e record --config config/recorder.example.toml
+traffic-e2e diagnose recorder --config config/recorder.example.toml
 traffic-e2e replay path/to/case-dir
 traffic-e2e replay --no-intercept path/to/case-dir
 traffic-e2e target exec -- path/to/prebuilt-target
@@ -68,6 +68,11 @@ traffic-e2e target exec -- path/to/prebuilt-target
   detected, keep rejecting and recording the reason.
 - Keep sensitive data handling explicit. Add newly sensitive headers to
   `recording.redact_headers` defaults or document the choice.
+- In this traffic-e2e engine repository, agents are explicitly allowed to read
+  `.traffic-e2e/local/**` when developing, diagnosing, reviewing, or testing
+  engine behavior. This repository-maintainer exception does not apply to an
+  ordinary rewrite in a target repository. It does not authorize editing
+  recordings or exposing sensitive artifact contents.
 - Before changing product code, follow the backend-engineering
   [code-organization rules](plugins/ai-software-engineering/skills/backend-engineering/references/code-organization.md)
   and this repository's [module ownership](docs/code-organization.md). Treat

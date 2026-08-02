@@ -1,320 +1,69 @@
-# Backend Rewrite Workflow
+# Rewrite Coordinator Workflow
 
-Use this execution reference after the main skill establishes rewrite scope,
-ownership, repair priority, and completion gates.
-
-## Contents
-
-- Discover and resume
-- Resolve delivery base
-- Initialize only when needed
-- Establish one case source
-- Inspect runtime evidence
-- Preserve configuration compatibility
-- Delegate target-code work
-- Run the evidence loops
-- Route non-passing evidence
-- Deliver and report
-
-## Discover And Resume
-
-Treat a concise request as sufficient when it identifies the target repository,
-rewrite objective, and available traffic or runtime facts. Discover repository
-instructions, migration notes, startup paths, initialized traffic-e2e
-configuration, recording scripts, source routes, case sources, and current
-implementation state. Ask only for a fact that cannot be discovered safely and
-would materially change the implementation or authorize a new external effect.
-
-Treat a new task as a new user-requested rewrite objective, not a resumed turn,
-context compaction, or automatic continuation. After any required
-initialization, default to acquiring a new standard recording for the selected
-scope even when an earlier task has passing evidence. This is a case-acquisition
-preference, not a gate: earlier artifacts remain available for interim
-diagnosis and replay.
-
-After the current task finalizes its own standard recording, use that exact
-finalized case source for repeated replay-backed E2E diagnosis and repair
-attempts. One failed attempt alone is not a reason to record again.
-
-Determine the earliest required phase: initialization, standard recording,
-implementation/E2E, or comparison. Resume valid phase evidence from the same
-task and keep unrelated worktree changes out of scope. Generate unique UTC run
-IDs, pass explicit recording durations, and retain exact artifact paths.
-
-When `scripts/<project>-cli` already exists, inspect it during discovery before
-accepting target startup or replay integration as valid. Check it against the
-traffic-e2e [target integration contract](../../traffic-e2e/references/target-integration.md).
-If it parses replay sessions or dependency artifacts to derive target
-configuration, record a `target_behavior` dependency-wiring repair and complete
-that repair before the next E2E attempt.
-
-## Resolve Delivery Base
-
-Resolve the PR base before substantial work. If
-`<target-root>/.traffic-e2e/project.yaml` exists, use its exact `pr_base`.
-Otherwise use `dev-migration` unless the user explicitly requires another
-base. Never infer a different base from remote HEAD, ancestry, repository
-defaults, or `main`/`master` conventions.
-
-Ensure the base exists locally or on `origin`; if it exists nowhere, create it
-from the confirmed source baseline and publish it. Create a named
-initialization or implementation feature branch from that base. Traffic-e2e
-configuration initializers never create or switch branches.
-
-## Initialize Only When Needed
-
-Initialize recording only when required target configuration or scripts are
-absent. For a Platform department repository, read the
-[`platform-recording-init` skill](../../platform-recording-init/SKILL.md)
-completely and use it for that phase. Require generated project configuration
-to record the resolved `pr_base`.
-
-If initialization changes the repository, commit and push it and create the
-draft PR before implementation. Validate and reuse existing configuration
-instead of regenerating it.
-
-## Establish One Case Source
-
-Preserve an explicit local source exactly. Invoke the repository's
-`scripts/start-recording` with a unique UTC run ID, explicit
-`--duration-seconds 60`, and one `--api` selector for the active API.
-
-When the user has not named an API and traffic is expected on port 18061,
-listen only long enough to identify one concrete method and path while no
-recorder owns the port, then stop and use that selector. Do not persist or
-report headers, credentials, or bodies, and do not use an unscoped recording
-for discovery. If no qualifying traffic arrives, report `blocked` because the
-external case input was not provided.
-
-Resolve the exact finalized run; never choose a run merely because it is
-newest. When request-header encryption is configured, require the named key
-environment and keep its value out of commands, logs, cases, target
-configuration, and supporting services.
-
-When a supplied finalized case source contains multiple canonical API groups,
-keep its finite ordered inventory. Select one unprocessed group as the active
-slice and keep it active through E2E and comparison. A non-passing or invalid
-comparison does not advance the inventory; select the next group only after
-the current group reaches `slice_done`.
-
-## Inspect Runtime Evidence
-
-When repository files and artifacts do not establish effective behavior,
-inspect an available authorized source or target runtime read-only. Trace each
-response-driving value until its implementation and effective input are known:
+The coordinator owns the executable phase order:
 
 ```text
-response assignment -> process-local state -> backend call -> framework wiring
--> configuration key -> effective runtime configuration -> resource hostname
+select API -> standard recording -> prepare -> focused E2E
+           -> one active issue -> focused E2E
+           -> comparison recording -> compare -> slice complete
 ```
 
-Search pinned dependency source; inspect or decompile the exact packaged
-artifact when necessary. If static files stop at a placeholder, inspect the
-effective runtime configuration. Restart or recreate the source container
-through its authoritative entrypoint only when startup is required to
-materialize that configuration. Preserve its image, arguments, mounts,
-network, and business behavior, and treat traffic from that diagnostic
-lifecycle as non-evidence.
+The target AI repeatedly runs `traffic-e2e rewrite next`. It pauses only for:
 
-Never patch source code or artifacts, alter business switches, print secrets,
-or hard-code a runtime observation. Record the last proven link and exact
-missing link; use `blocked` only when the missing external observation prevents
-target implementation.
+- the exact standard or comparison recording command returned by the action;
+- one source/target investigation and implementation issue;
+- one evidence-backed rule decision;
+- one controlled non-target-code route;
+- completion.
 
-## Preserve Configuration Compatibility
+## Action Handling
 
-Before implementing target configuration loading or accepting target startup,
-follow [configuration-compatibility.md](configuration-compatibility.md).
-Discover the source loader and effective configuration behavior, then make the
-target consume the same authoritative configuration and compatible format.
-Reading authorized source configuration is valid runtime investigation; keep
-sensitive values out of commands, logs, reports, and commits.
+### `recording_required`
 
-Keep configuration repair under `target_behavior` until the target starts from
-the source-compatible configuration contract.
+Execute the exact argv with the named environment variables, then run `next`.
+The coordinator preallocates the run ID and validates that exact finalized
+manifest. Never discover a run by recency.
 
-## Delegate Target-Code Work
+### `implementation_required`
 
-Confirm source behavior, target facade, verification policy, dependency wiring,
-configuration contract, and genuine runtime clients. Delegate
-`target_behavior` with the active scope, immutable case source and IDs,
-structured response difference, causal dependency evidence, source behavior,
-and requested outcome.
+The action contains one bounded issue, one representative when available,
+possible causes, evidence query IDs, and the acceptance command. Traffic facts
+come only from those queries. Source inspection supplies the final business
+attribution. Apply [problem-diagnosis.md](problem-diagnosis.md), repair one
+proven cause, run local target tests, then execute the acceptance command.
 
-Before the first genuine target E2E and after every target startup or
-dependency-wiring change, re-review the complete `scripts/<project>-cli`
-facade. Replace initialization-only mock behavior rather than layering runtime
-inference onto it. Target commands must not parse replay sessions or dependency
-artifacts to derive configuration. For descriptor-backed Breeze resources,
-resource packages, not the facade, own descriptor-library use and client
-construction.
+The coordinator always evaluates gates in this order:
 
-Source-process local caches belong to target implementation. Inspect and
-reproduce cache-key derivation, bounded capacity and eviction, expiry or
-refresh timing, negative caching, concurrent-load behavior, startup or warmup
-behavior, and miss/error fallback only where they affect the active behavior
-or operational contract. Equivalent target architecture is allowed.
+```text
+responses -> replay completeness -> dependency cleanliness
+```
 
-For Breeze-owned platform work, include the platform package, source contract,
-platform/business boundary, and relevant runtime evidence, then route
-target-code work through `backend-engineering`. For descriptor-backed
-resources, also include resource type, identity, descriptor policy, and client
-lifecycle. Keep business contracts in the target capability. Adding a resource
-must not require a project-CLI change.
+Dirty dependencies cannot preempt a response mismatch. A repository change
+after a comparison mismatch returns through focused E2E before another fresh
+comparison recording.
 
-Use [`backend-engineering`](../../backend-engineering/SKILL.md) for target
-implementation and local checks. Companion work cannot declare migration
-completion or change traffic policy; this workflow reruns E2E and decides the
-next state.
+### `system_repair_required`
 
-## Run The Evidence Loops
+This action exists only after `rewrite route` accepts current evidence and a
+source reference, required system change, and acceptance command. It never
+turns a traffic limitation into a target workaround and never permits the
+target AI to stop silently.
 
-1. Run repository-focused checks and focused traffic E2E against the immutable
-   cases. Consume the terminal runner JSON and its exact report paths; do not
-   infer gate state from the generic exit error or report recency.
-2. Use traffic-e2e diagnosis before changing product behavior, policy,
-   dependency wiring, or recorder attribution.
-3. Dispatch the returned gates in order: repair `gates.responses` unless it is
-   `passed`; repair replay evidence unless `gates.replay=complete`; and enter
-   dirty-dependency diagnosis only for `gates.dependencies=dirty` after the
-   first two gates pass. Treat `gates.dependencies=unknown` as incomplete replay
-   evidence, not dirty traffic. Follow the main skill's response-first repair
-   priority until the selected groups pass. Run a full round after shared
-   behavior-affecting changes when required.
-4. Only after affected replay E2E passes, invoke
-   `scripts/start-recording-comparison` with a new UTC run ID, explicit
-   `--duration-seconds 60`, and the same affected `--api` scope. Preserve
-   wrapper-owned runtime options and the encryption-key boundary.
-5. Run offline `traffic-e2e compare` against that exact finalized run and the
-   target's verification policy. Only the report's per-API passing result is
-   current comparison evidence. Read runner-owned replay and comparison totals,
-   latest results, and success streaks from their separate progress files;
-   never aggregate report directories manually.
-6. Delegate comparison differences to traffic-e2e diagnosis. Fix every
-   candidate-only field, re-record a field-scoped source change,
-   or change policy only for source-proven intentional non-determinism.
-7. After every code or policy change, pass affected E2E again and create a new
-   comparison recording. Never reinterpret an older report for changed code.
+### `complete`
 
-After a valid non-passing comparison, resolve its observed differences before
-recording again. Do not start another comparison until the corresponding
-target behavior, verification policy, or evidenced comparison condition has
-changed.
+The active API has current passing focused E2E and comparison evidence.
+`terminal_allowed` is true only here. Repository-wide regression, delivery,
+and additional API inventory remain under the caller's rewrite objective.
 
-When one concrete recorded case directly causes a target repair, retain its
-immutable case source, case ID, repaired response locations, proven cause, and
-distinguishing evidence. After that case passes E2E, follow traffic-e2e's
-repaired-case coverage procedure for one valid fresh comparison. If it does not
-observe the repaired case but otherwise passes, complete normally and retain
-the non-blocking `repaired_case_not_observed` attention; do not record again
-solely for observation coverage. An invalid comparison does not consume this
-bounded observation.
+## State And Recovery
 
-## Route Non-Passing Evidence
+Coordinator state is one atomically replaced file under the ignored local
+root. The AI never reads or edits it. `rewrite status` returns its bounded
+projection. When an action reports `recovery_required`, execute its exact
+`rewrite recover` argv. Recovery rejects a live coordinator, removes a stale
+lock, stops an orphaned focused target/Replay attempt, and publishes that
+attempt as interrupted before returning the next coordinator command.
 
-- `target_behavior`: delegate target code, then rerun E2E against the same
-  source.
-- `target_environment`: repair target runtime wiring, then rerun E2E.
-- Response-driving dependency failure: repair target or Replay wiring needed
-  to reproduce the source response, then rerun E2E.
-- Suspected missing dependency recording: resolve the source resource hostname,
-  then follow traffic-e2e's missing-evidence checkpoint. A Breeze snapshot
-  match is Recorder bypass; let resource-capture `plan/apply` own the config
-  update. A changed apply requires a new standard recording; an unchanged plan
-  returns to recording-path diagnosis. Keep this
-  `recording_configuration/action_required`.
-- Response-driving process state: when source and recording evidence prove a
-  scheduled dependency call builds local state required by the response,
-  follow traffic-e2e's guarded `runtime_state` procedure and record again. If
-  target local state still differs, repair target startup, readiness, or cache
-  lifecycle rather than treating target timing as a Replay gap.
-- `background_dependency`: only after response assertions pass and source
-  proves ownership plus independence, apply a narrow `independent` rule, make
-  a new standard recording, prepare it, and rerun E2E.
-- `recording_configuration`: repair supported configuration, make a new
-  recording, prepare it, and rerun E2E.
-- Missing configured request-header key: obtain the authorized secret and
-  resume the same stage; this remains `action_required`, not a recording-data
-  blocker.
-- `intentional_nondeterminism`: apply only source-proven policy, rerun E2E, and
-  then make a new comparison recording.
-- `source_change`: require source-before/source-after change at the same
-  response location; preserve unrelated candidate-only fields as
-  `target_behavior`.
-- `verification_policy`: remove or replace stale and unsupported response rules
-  through the evidence-validating interface, rerun E2E, then create a new
-  comparison recording.
-- `recorder_capability_gap` or `replay_capability_gap`: assign the exact system
-  change and acceptance check to `traffic-e2e-system`; do not create a target
-  workaround.
-- `unresolved`: continue diagnosis without changing code, policy, or
-  attribution.
-
-`repaired_case_not_observed` is not non-passing evidence. When same-case E2E
-and the valid comparison both pass, keep it only as a non-blocking attention
-and advance to `slice_done`. Do not change code or policy, add a failure
-category, create a next TODO or resume stage, or record again solely for that
-attention.
-
-A capability gap blocks the affected gate but does not suppress an independent
-response repair. Stop the whole rewrite only when it prevents exercising the
-response contract, or after response repair when the remaining gate cannot
-advance.
-
-Dirty dependency evidence never stops response repair. If any response
-assertion fails, keep the result `action_required` and continue target,
-environment, or response-driving dependency work.
-
-Conclude that recording data blocks implementation only from one
-representative case that proves all of the following:
-
-- the relevant source response path, including process-local cache behavior,
-  has been inspected;
-- every corresponding behavior determinable from source code and configuration
-  has an equivalent target implementation and focused verification;
-- the exact response-driving external value or semantic exchange is absent or
-  internally inconsistent in the recording and available runtime evidence;
-- completing the response would require inventing external-system behavior.
-
-Until that proof exists, keep a response mismatch as `action_required`.
-Repeated failed implementation attempts are not evidence of a recording-data
-blocker.
-
-## Deliver And Report
-
-Run repository-required gates and review module boundaries. When deliverable
-target source, configuration, tests, scripts, or documentation exist, commit
-the intended changes, push the feature branch, and create a draft PR against
-the resolved base before the final response. A blocked or incomplete replay
-does not waive delivery. Skip a PR only when the user explicitly requests no
-PR or no deliverable target change exists.
-
-Use the traffic-e2e handoff model without deleting or renaming keys; this
-workflow defines no second template. Begin a non-passing E2E or comparison
-report with API and case counts followed immediately by exactly one
-representative case and Pointer. For that Pointer, show the concrete bounded
-source-before and candidate values, plus source-after when recorded; types or
-shapes alone are insufficient.
-
-Use a response-mismatching case for `action_required` or `blocked`. For
-`incomplete`, all response assertions already pass: omit `representative_case`
-and report the exact dirty dependency evidence separately. When response
-provenance remains unresolved, report the last proven link, the specific
-missing evidence, and the repository path, packaged symbol, configuration key,
-runtime path, or resource already checked. Never summarize these states as
-“insufficient source-code evidence” or “drift”.
-
-Then report dependency cleanliness, independent blockers, delivery, status,
-scope, stage, conclusion, and exact E2E/comparison reports. For every
-non-complete result, include a next TODO with owner, action, acceptance check,
-resume stage, and required transitions. For a completed slice whose repaired
-case was not re-observed, report the original case, repair cause, passing
-same-case E2E, valid passing comparison, evaluated-case count, and the
-non-blocking attention; do not fabricate a comparison difference or a next
-TODO.
-Never lead with “completed” or equivalent success wording while E2E or
-comparison is non-passing; a commit or draft PR is delivery, not completion.
-
-For a remote source, also retain its IPv4 address, frozen snapshot boundary,
-recording ID, cache root, archive SHA-256, canonical case sources, and runner
-states. Never use success wording while an applicable gate is missing.
+Traffic-e2e's internal runner publication may retain its own implementation
+layout, but no `.active`, `latest`, report path, or raw artifact crosses the
+rewrite interface.

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
@@ -6,14 +6,16 @@ use tokio::process::Child;
 
 use super::case_progress;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
-use super::model::{ActiveRunState, CaseStatus, ResolvedProjectConfig, RunLayout, RunStatus};
+use super::model::{
+    ActiveRunState, CaseStatus, ResolvedProjectConfig, ResponseAssertionSummary, RunLayout,
+    RunStatus,
+};
 use super::progress::{ReplayRunKind, update_focused_index, update_index, write_replay_progress};
 use super::request_view::RequestCaseView;
 use super::result::{E2eApiRunResult, E2eRunResult, api_result, run_result};
 use super::runtime::{
-    best_effort_stop, control, finalize_replay, replay_ca_cert_path, run_project,
-    run_project_with_replay_ca, spawn_replay, stop_replay_process, wait_for_replay,
-    wait_for_replay_ready,
+    best_effort_stop, control, finalize_replay, replay_ca_cert_path, run_project, spawn_replay,
+    start_project_with_replay_ca, stop_replay_process, wait_for_replay, wait_for_replay_ready,
 };
 use super::store;
 use super::support::{allocate_replay_report, api_directory, process_exists};
@@ -40,7 +42,7 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
         layout.run_key.clone(),
         sequence,
         &inventory,
-        config.recording_rule.clone(),
+        Some(config.recording_rule.clone()),
         &layout.active_dir,
     );
     state.replay_report = allocate_replay_report(
@@ -179,7 +181,7 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         layout.run_key.clone(),
         attempt,
         &focused_inventory,
-        config.recording_rule.clone(),
+        Some(config.recording_rule.clone()),
         &layout.active_dir,
     );
     state.replay_report = allocate_replay_report(
@@ -273,6 +275,72 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
     Ok(run_result(&layout, &state))
 }
 
+pub(crate) async fn recover_focused_e2e_api(context: E2eRunContext, api_key: &str) -> Result<bool> {
+    let (config, base_layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    config::require_local_ignored(&base_layout.target_root, &base_layout.local_root)?;
+    let global_layout = base_layout.clone();
+    let mut layout = base_layout;
+    let focused_root = layout.run_root.join("focused").join(api_directory(api_key));
+    layout.run_root = focused_root.clone();
+    layout.active_dir = focused_root.join(".active");
+    layout.latest_dir = focused_root.join("latest");
+    if !layout.active_dir.is_dir() {
+        return Ok(false);
+    }
+
+    let mut state = store::read_active(&layout)?;
+    if !state.status.is_terminal() {
+        best_effort_stop(&config, &layout, &mut state).await;
+        state.status = RunStatus::Interrupted;
+        state.finished_at = Some(Utc::now());
+        state.push_error("focused API attempt recovered by rewrite coordinator");
+        mark_unfinished_cases(&mut state);
+    }
+
+    let inventory =
+        load_case_group_inventory(&global_layout.group_index_path, &global_layout.case_source)
+            .context("E2E API has not been prepared or its grouping is stale")?;
+    let inventory_complete = load_complete_case_group_inventory(
+        &global_layout.group_index_path,
+        &global_layout.case_source,
+    )
+    .is_ok();
+    let group = inventory
+        .groups
+        .iter()
+        .find(|group| group.group_id == api_key)
+        .with_context(|| format!("prepared API group not found: {api_key}"))?
+        .clone();
+    let focused_inventory = CaseGroupInventory {
+        case_source: inventory.case_source.clone(),
+        source_revision: inventory.source_revision.clone(),
+        case_inventory_id: inventory.case_inventory_id.clone(),
+        groups: vec![group],
+    };
+    if state.apis.is_empty() {
+        summarize_apis_without_aggregate(&layout, &mut state, &focused_inventory);
+    }
+    let mut index = store::load_or_create_index(
+        &global_layout,
+        &global_layout.run_key,
+        &global_layout.case_source,
+    )?;
+    finish_focused_and_publish(
+        &config,
+        &global_layout,
+        &layout,
+        &mut index,
+        &inventory,
+        inventory_complete,
+        &mut state,
+    )?;
+    Ok(true)
+}
+
 fn resolve_for_execution(context: &E2eRunContext) -> Result<(ResolvedProjectConfig, RunLayout)> {
     let (config, layout) = config::resolve_layout(
         &context.target_root,
@@ -336,26 +404,15 @@ async fn run_active_with_replay(
 
     state.target_started = true;
     store::write_active(layout, state)?;
-    let start = run_project_with_replay_ca(
+    let start = start_project_with_replay_ca(
         config,
         layout,
-        &["start"],
         &layout.active_dir.join("reports/target-start.json"),
         &replay_ca_cert_path,
     )
     .await?;
     ensure!(start.success, "project CLI start failed");
-    let status = run_project(
-        config,
-        layout,
-        &["status"],
-        &layout.active_dir.join("reports/target-status.json"),
-    )
-    .await?;
-    ensure!(
-        status.success,
-        "project CLI status did not confirm a running target"
-    );
+    super::http_driver::wait_until_ready(config).await?;
 
     let total_cases = state.cases.len();
     case_progress::log_start(total_cases);
@@ -435,74 +492,93 @@ async fn execute_case(
         return;
     }
 
-    let log_path = layout
-        .active_dir
-        .join("reports")
-        .join(format!("case-{:04}.json", position + 1));
     let actual_response = layout
         .active_dir
         .join("reports")
         .join(format!("actual-response-{:04}.json", position + 1));
-    let actual_arg = actual_response.display().to_string();
     let case_view = RequestCaseView::prepare(case_dir, &layout.active_dir.join("tmp"));
     let assertion_command = match &case_view {
         Ok(case_view) => {
-            let case_arg = case_view.case_dir().display().to_string();
-            let args = if config.runner_owned_response_assertions {
-                vec![
-                    "e2e",
-                    "--case-dir",
-                    case_arg.as_str(),
-                    "--actual-response",
-                    actual_arg.as_str(),
-                ]
-            } else {
-                vec!["e2e", "--case-dir", case_arg.as_str()]
-            };
-            run_project(config, layout, &args, &log_path).await
+            super::http_driver::capture_case(
+                config,
+                &case_view.case_dir().join("request.json"),
+                &actual_response,
+            )
+            .await
         }
         Err(error) => Err(anyhow::anyhow!(
             "failed to prepare replay request for case {case_id}: {error:#}"
         )),
     };
-    let response_assertion = if config.runner_owned_response_assertions
-        && assertion_command
-            .as_ref()
-            .is_ok_and(|result| result.success)
-    {
-        let expected_response = if case_dir.join("expected-response.json").is_file() {
-            case_dir.join("expected-response.json")
+    let response_assertion =
+        if config.runner_owned_response_assertions && assertion_command.as_ref().is_ok() {
+            let expected_response = if case_dir.join("expected-response.json").is_file() {
+                case_dir.join("expected-response.json")
+            } else {
+                case_dir.join("expected_response.json")
+            };
+            assert_recorded_response(ResponseAssertionOptions {
+                case_id: case_id.to_string(),
+                request: case_dir.join("request.json"),
+                expected_response,
+                actual_response,
+                policy: config.replay_policy.clone(),
+            })
+            .map_err(|error| anyhow::anyhow!("runner-owned response assertion failed: {error:#}"))
+        } else if config.runner_owned_response_assertions {
+            Err(anyhow::anyhow!(
+                "traffic-e2e HTTP driver did not produce a usable actual response"
+            ))
         } else {
-            case_dir.join("expected_response.json")
+            Err(anyhow::anyhow!(
+                "legacy target-owned assertion has no response report"
+            ))
         };
-        assert_recorded_response(ResponseAssertionOptions {
-            case_id: case_id.to_string(),
-            request: case_dir.join("request.json"),
-            expected_response,
-            actual_response,
-            policy: config.replay_policy.clone(),
-        })
-        .map_err(|error| anyhow::anyhow!("runner-owned response assertion failed: {error:#}"))
-    } else if config.runner_owned_response_assertions {
-        Err(anyhow::anyhow!(
-            "project CLI did not produce a usable actual response"
-        ))
-    } else {
-        Err(anyhow::anyhow!(
-            "legacy target-owned assertion has no response report"
-        ))
-    };
-    let assertion_passed = if config.runner_owned_response_assertions {
+    let mut assertion_passed = if config.runner_owned_response_assertions {
         response_assertion
             .as_ref()
             .is_ok_and(|report| report.passed)
     } else {
-        assertion_command
-            .as_ref()
-            .is_ok_and(|result| result.success)
+        assertion_command.as_ref().is_ok()
     };
     match response_assertion {
-        Ok(report) => state.cases[case_index].response_assertion = Some(report),
+        Ok(report) => {
+            let detail_report = layout
+                .active_dir
+                .join("reports")
+                .join(format!("assertion-detail-{:04}.json", position + 1));
+            if let Err(error) = store::write_json(&detail_report, &report) {
+                assertion_passed = false;
+                state.push_error(format!(
+                    "case {case_id} assertion detail could not be persisted: {error:#}"
+                ));
+            } else {
+                match std::fs::read(&detail_report) {
+                    Ok(bytes) => {
+                        state.cases[case_index].response_assertion =
+                            Some(ResponseAssertionSummary {
+                                passed: report.passed,
+                                difference_count: report.differences.len(),
+                                representative_difference: report.differences.first().cloned(),
+                                detail_report,
+                                detail_fingerprint: crate::verification_progress::fingerprint(
+                                    &bytes,
+                                ),
+                                expected_response: PathBuf::from(report.expected_response_path),
+                                actual_response: PathBuf::from(report.actual_response_path),
+                                policy_path: report.policy_path,
+                                policy_fingerprint: report.policy_fingerprint,
+                            });
+                    }
+                    Err(error) => {
+                        assertion_passed = false;
+                        state.push_error(format!(
+                            "case {case_id} assertion detail could not be fingerprinted: {error}"
+                        ));
+                    }
+                }
+            }
+        }
         Err(error) if config.runner_owned_response_assertions => state.push_error(format!(
             "case {case_id} response assertion could not be evaluated: {error:#}"
         )),
@@ -510,9 +586,7 @@ async fn execute_case(
     }
     state.cases[case_index].assertion_passed = Some(assertion_passed);
     if let Err(error) = assertion_command {
-        state.push_error(format!(
-            "case {case_id} assertion command failed: {error:#}"
-        ));
+        state.push_error(format!("case {case_id} HTTP execution failed: {error:#}"));
     }
 
     let ended = control(state, "end", Some(case_id), true, false).await;

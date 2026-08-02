@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 
 use serde::Deserialize;
 
@@ -41,10 +42,18 @@ pub(super) struct AssertionCaseEvidence {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ResponseCaseEvidence {
+    #[serde(default)]
     pub(super) method: String,
+    #[serde(default)]
     pub(super) path: String,
+    #[serde(default)]
     pub(super) body_mode: String,
+    #[serde(default)]
     pub(super) differences: Vec<DifferenceEvidence>,
+    #[serde(default)]
+    pub(super) detail_report: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) detail_fingerprint: Option<String>,
     #[serde(default)]
     applied_dynamic_rule_ids: Vec<String>,
     #[serde(default)]
