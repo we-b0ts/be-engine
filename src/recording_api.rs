@@ -15,12 +15,20 @@ pub struct RecordingApi {
 }
 
 impl RecordingApi {
-    pub fn matches(&self, method: &Method, uri: &Uri) -> bool {
-        self.method == *method && matches_path_pattern(&self.path_pattern, uri.path())
+    pub fn method(&self) -> &Method {
+        &self.method
     }
 
-    pub(crate) fn path_pattern(&self) -> &str {
+    pub fn path_pattern(&self) -> &str {
         &self.path_pattern
+    }
+
+    pub fn is_dynamic(&self) -> bool {
+        self.path_pattern.contains('*')
+    }
+
+    pub fn matches(&self, method: &Method, uri: &Uri) -> bool {
+        self.method == *method && matches_path_pattern(&self.path_pattern, uri.path())
     }
 
     pub(crate) fn is_covered_by(&self, rules: &[HttpGatewayRuleConfig]) -> bool {

@@ -17,6 +17,7 @@ pub use feedback::{
     DynamicResponseRuleReport, ResponseRuleFeedback, ResponseRulePlan, ResponseRuleReport,
     plan_comparison_response_rule, plan_dynamic_response_rule, plan_response_rule,
 };
+pub(crate) use initialization::render_validated_replay_policy;
 pub use initialization::{
     ReplayPolicyInitOptions, ReplayPolicyInitResult, initialize_replay_policy,
 };

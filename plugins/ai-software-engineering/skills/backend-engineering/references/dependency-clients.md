@@ -4,17 +4,11 @@ Apply this contract to databases, caches, HTTP/RPC services, queues, discovery,
 configuration services, and storage systems. Use genuine production clients in
 normal runtime and integration paths.
 
-When source or repository evidence shows that Breeze manages a remote
-resource's identity, discovery, listener, or connection lifecycle, read the
-[`breeze-sdk` skill](../../breeze-sdk/SKILL.md) and use it for the reusable
-resource layer. Apply that routing explicitly to Memcached, Redis, MySQL,
-Kafka, queues such as MCQ or QueueService, Motan, Vintage service discovery,
-and future Breeze-managed remote-resource types. Treat this list as trigger
-examples, not a closed protocol allowlist.
-
-Keep business SQL, keys, messages, remote service contracts, provider DTO
-mapping, fallback decisions, and orchestration in a capability-owned adapter.
-Only the business-independent Breeze resource client belongs in the SDK.
+When source or repository evidence shows that Breeze owns a remote resource's
+identity, discovery, listener, or connection lifecycle, apply
+[breeze-platform.md](breeze-platform.md) to its reusable platform layer. Keep
+business SQL, keys, messages, service contracts, provider mapping, fallback
+decisions, and orchestration in the capability-owned adapter.
 
 ## Shared Contract
 

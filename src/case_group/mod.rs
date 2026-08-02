@@ -107,6 +107,36 @@ pub struct CaseGroupInventory {
     pub groups: Vec<CanonicalCaseGroup>,
 }
 
+pub fn resolve_recording_api_member(
+    case_source: &Path,
+    api: &crate::RecordingApi,
+) -> Result<PathBuf> {
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let cases = discover_published_cases(&case_source)?;
+    ensure!(!cases.is_empty(), "case source contains no published cases");
+    reject_duplicate_case_ids(&cases)?;
+    let members = cases
+        .iter()
+        .filter(|case| {
+            let Ok(method) = case.method.parse() else {
+                return false;
+            };
+            let Ok(uri) = case.path.parse() else {
+                return false;
+            };
+            api.matches(&method, &uri)
+        })
+        .map(|case| case.member_dir.clone())
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        members.len() == 1,
+        "recording API {api} must resolve to exactly one canonical member directory, found {}",
+        members.len()
+    );
+    Ok(members.into_iter().next().expect("one member was required"))
+}
+
 pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureResult> {
     validate_options(&options)?;
     let case_source = fs::canonicalize(&options.case_source).with_context(|| {

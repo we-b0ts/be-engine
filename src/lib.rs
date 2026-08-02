@@ -16,6 +16,7 @@ mod memcached;
 mod motan;
 mod mysql;
 mod path_pattern;
+mod platform;
 mod proxy;
 mod recorder;
 mod recording_api;
@@ -24,6 +25,7 @@ mod redis;
 mod replay;
 mod repository;
 mod request_headers;
+mod rewrite;
 mod tcp_gateway;
 mod tls;
 mod udp_gateway;
@@ -56,7 +58,7 @@ use crate::recording_control::{RecordingControlServer, RecordingLifecycle, Recor
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
-    ensure_case_group,
+    ensure_case_group, resolve_recording_api_member,
 };
 pub use comparison_recording::{
     ComparisonRecordingRunOptions, ComparisonRepresentativeDifference,
@@ -80,28 +82,37 @@ pub use config::{
     HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
-    MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
+    InspectedContainer, MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
     MotanBackgroundDependencyReport, MysqlConfig, MysqlRouteConfig, RecorderConfigInitOptions,
     RecorderConfigInitResult, RecordingAccessPolicy, RecordingAccessRuleConfig,
     RecordingAccessRuleEffect, RecordingConfig, RedisBackgroundDependencyFeedback,
-    RedisBackgroundDependencyPlan, RedisBackgroundDependencyReport, TcpApplicationProtocol,
-    TcpGatewayConfig, TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig,
-    TrafficJsonlMode, UdpGatewayConfig, initialize_recorder_config, plan_allowed_unused_http_hosts,
-    plan_background_dependency, plan_breeze_memcached_background_dependency,
-    plan_breeze_resource_capture, plan_case_path_pattern_feedback,
-    plan_motan_background_dependency, plan_redis_background_dependency,
+    RedisBackgroundDependencyPlan, RedisBackgroundDependencyReport, RepositoryConfigInitOptions,
+    RepositoryConfigInitResult, TcpApplicationProtocol, TcpGatewayConfig,
+    TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
+    UdpGatewayConfig, initialize_recorder_config, initialize_repository_config,
+    plan_allowed_unused_http_hosts, plan_background_dependency,
+    plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
+    plan_case_path_pattern_feedback, plan_motan_background_dependency,
+    plan_redis_background_dependency,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
-    E2eApiRunResult, E2eDependencyGate, E2eFocusedApiStatus, E2eReplayGate, E2eReportPaths,
-    E2eResponseGate, E2eRunContext, E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions,
-    E2eRunPrepareResult, E2eRunResult, E2eRunStatus, E2eVerificationGates, abort_e2e_run,
-    initialize_e2e_run, initialize_standard_e2e_project,
-    initialize_standard_e2e_project_with_force, prepare_e2e_run, recover_e2e_run, run_e2e_api,
-    run_e2e_round, status_e2e_run,
+    E2eApiRunResult, E2eDependencyCorrelation, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts,
+    E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus, E2eReplayGate,
+    E2eRepresentativeDifference, E2eResponseGate, E2eResponseRuleEvidence, E2eRunContext,
+    E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult,
+    E2eRunStatus, E2eSourceValueCount, E2eSourceVariation, E2eValueObservation, E2eValuePresence,
+    E2eVerificationGates, abort_e2e_run, initialize_e2e_run, initialize_standard_e2e_project,
+    initialize_standard_e2e_project_with_force, prepare_e2e_run, query_e2e_dependency_correlation,
+    query_e2e_dirty_counts, query_e2e_source_variation, recover_e2e_run,
+    resolve_e2e_response_rule_evidence, run_e2e_api, run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
+pub use platform::{
+    ManagedRecordingOperation, ManagedRecordingOptions, ManagedRecordingResult,
+    run_managed_recording,
+};
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
     HeaderMapSnapshot, HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent,
@@ -123,11 +134,19 @@ pub use replay::{
     DynamicResponseRuleReport, MysqlReplayConfig, MysqlReplayControlConfig, ReplayAggregateOptions,
     ReplayAggregateReport, ReplayAllowedUnusedHttpConfig, ReplayConfig, ReplayControlConfig,
     ReplayPolicyInitOptions, ReplayPolicyInitResult, ReplayPolicyValidationReport,
-    ResponseDifferenceKind, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
-    ResponseRuleReport, aggregate_replay_reports, aggregate_replay_reports_with_options,
-    initialize_replay_policy, plan_comparison_response_rule, plan_dynamic_response_rule,
-    plan_response_rule, run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
-    validate_replay_policy,
+    ResponseDifference, ResponseDifferenceKind, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, ResponseRuleReport, aggregate_replay_reports,
+    aggregate_replay_reports_with_options, initialize_replay_policy, plan_comparison_response_rule,
+    plan_dynamic_response_rule, plan_response_rule, run_mysql_replay, run_mysql_replay_control,
+    run_replay, run_replay_control, validate_replay_policy,
+};
+pub use rewrite::{
+    RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewriteContext,
+    RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue, RewriteIssueKind,
+    RewriteIssueOwner, RewriteNextOptions, RewritePhase, RewriteRecoveryReport,
+    RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport,
+    RewriteStatusReport, RewriteWorkflowView, apply_rewrite_rule, next_rewrite, plan_rewrite_rule,
+    query_rewrite_evidence, recover_rewrite, route_rewrite, status_rewrite,
 };
 pub use tls::MitmCa;
 
@@ -547,7 +566,7 @@ impl AppState {
         let background_match = self.inner.background_dependencies.matching_rule(&event);
         let background_rule_name = background_match
             .as_ref()
-            .map(|matched| matched.rule_name().to_string());
+            .map(|matched| (matched.rule_name().to_string(), matched.response_role()));
         let event_type = event.kind();
         if let Err(err) = self
             .recorder()

@@ -68,7 +68,7 @@ impl ResponseRulePlan {
 pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRulePlan> {
     ensure!(
         feedback.kind != ResponseRuleKind::Counter,
-        "counter response rules require `config comparison` and --comparison-report"
+        "counter response rules require `config comparison` and --comparison-run"
     );
     let justification = justification::validate(
         feedback.kind,
@@ -83,8 +83,9 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         &feedback.json_pointers,
     )?;
     let assertion_bytes = read_regular(&feedback.assertion_report, "assertion report")?;
-    let assertions: AssertionEvidence =
+    let mut assertions: AssertionEvidence =
         serde_json::from_slice(&assertion_bytes).context("invalid assertion report")?;
+    hydrate_assertion_details(&mut assertions)?;
     ensure!(
         assertions.expected_response == "assertions_only"
             && assertions.assertion_mode == "runner_owned",
@@ -144,6 +145,45 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
             aggregate_dirty: aggregate.dirty,
         },
     )
+}
+
+fn hydrate_assertion_details(assertions: &mut AssertionEvidence) -> Result<()> {
+    for case in &mut assertions.cases {
+        let Some(response) = &mut case.response else {
+            continue;
+        };
+        let Some(detail_report) = response.detail_report.take() else {
+            continue;
+        };
+        let expected_fingerprint = response
+            .detail_fingerprint
+            .take()
+            .context("assertion summary has no detail fingerprint")?;
+        let detail_bytes = read_regular(&detail_report, "assertion detail report")?;
+        ensure!(
+            fingerprint(&detail_bytes) == expected_fingerprint,
+            "assertion detail report fingerprint changed: {}",
+            detail_report.display()
+        );
+        let detail = serde_json::from_slice::<self::evidence::ResponseCaseEvidence>(&detail_bytes)
+            .with_context(|| {
+                format!(
+                    "invalid assertion detail report {}",
+                    detail_report.display()
+                )
+            })?;
+        ensure!(
+            !detail.method.is_empty()
+                && !detail.path.is_empty()
+                && !detail.body_mode.is_empty()
+                && detail.detail_report.is_none()
+                && detail.detail_fingerprint.is_none(),
+            "assertion detail report is incomplete: {}",
+            detail_report.display()
+        );
+        *response = detail;
+    }
+    Ok(())
 }
 
 pub fn plan_comparison_response_rule(

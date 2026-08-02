@@ -90,17 +90,11 @@ pub(super) fn spawn_replay(
 }
 
 fn recorder_config_args(config: &ResolvedProjectConfig) -> Vec<OsString> {
-    let (Some(recorder_config), Some(recording_rule)) = (
-        config.recorder_config.as_ref(),
-        config.recording_rule.as_ref(),
-    ) else {
-        return Vec::new();
-    };
     vec![
         OsString::from("--recorder-config"),
-        recorder_config.as_os_str().to_owned(),
+        config.recorder_config.as_os_str().to_owned(),
         OsString::from("--recording-rule"),
-        OsString::from(recording_rule),
+        OsString::from(&config.recording_rule),
     ]
 }
 
@@ -113,17 +107,27 @@ pub(super) async fn run_project(
     run_project_with_environment(config, layout, args, evidence_path, None).await
 }
 
-pub(super) async fn run_project_with_replay_ca(
+pub(super) async fn start_project_with_replay_ca(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
-    args: &[&str],
     evidence_path: &Path,
     replay_ca_cert_path: &Path,
 ) -> Result<CommandEvidence> {
+    let target_boot_dir = config.target_boot_dir.display().to_string();
+    let target_port = config.target_port.to_string();
     run_project_with_environment(
         config,
         layout,
-        args,
+        &[
+            "start",
+            "--e2e",
+            "--start-breeze",
+            "off",
+            "--boot-dir",
+            &target_boot_dir,
+            "--port",
+            &target_port,
+        ],
         evidence_path,
         Some(replay_ca_cert_path),
     )
@@ -391,6 +395,11 @@ pub(super) async fn best_effort_stop(
     }
     if let Some(pid) = replay_pid {
         wait_for_pid_exit(pid).await;
+        if super::support::process_exists(pid) {
+            state.push_error(format!(
+                "replay cleanup did not terminate process group owned by PID {pid}"
+            ));
+        }
     }
     state.replay_pid = None;
 }
@@ -401,6 +410,28 @@ mod tests {
     use crate::e2e_run::model::{ResolvedProjectConfig, RunLayout};
     use std::fs;
     use std::time::Duration;
+
+    fn resolved_project(project_cli: PathBuf) -> ResolvedProjectConfig {
+        ResolvedProjectConfig {
+            project_cli,
+            target_boot_dir: PathBuf::from(".traffic-e2e/boot"),
+            target_http_origin: "http://127.0.0.1:8081".to_string(),
+            target_port: 8081,
+            target_readiness_path: "/healthz".to_string(),
+            target_readiness_status: 404,
+            target_startup_timeout: Duration::from_secs(1),
+            target_request_timeout: Duration::from_secs(1),
+            target_max_response_bytes: 1024,
+            source_container: "source".to_string(),
+            breeze_container: Some("breeze".to_string()),
+            replay_policy: PathBuf::from("/target/config/replay.yaml"),
+            replay_startup_timeout: Duration::from_secs(1),
+            pr_base: "dev-migration".to_string(),
+            recorder_config: "recorder.toml".into(),
+            recording_rule: "record-api".to_string(),
+            runner_owned_response_assertions: true,
+        }
+    }
 
     #[test]
     fn replay_startup_progress_filter_only_accepts_dependency_loading() {
@@ -464,15 +495,8 @@ mod tests {
         let mut permissions = fs::metadata(&project_cli).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&project_cli, permissions).unwrap();
-        let config = ResolvedProjectConfig {
-            project_cli,
-            replay_policy: directory.path().join("verification.yaml"),
-            replay_startup_timeout: Duration::from_secs(1),
-            pr_base: "dev-migration".to_string(),
-            recorder_config: None,
-            recording_rule: None,
-            runner_owned_response_assertions: true,
-        };
+        let mut config = resolved_project(project_cli);
+        config.replay_policy = directory.path().join("verification.yaml");
         let layout = RunLayout {
             target_root: directory.path().to_path_buf(),
             run_key: "run".to_string(),
@@ -501,10 +525,9 @@ mod tests {
         .unwrap();
         assert_eq!(ordinary.stdout, "unset");
 
-        let start = run_project_with_replay_ca(
+        let start = start_project_with_replay_ca(
             &config,
             &layout,
-            &["start"],
             &directory.path().join("start.json"),
             &ca_cert,
         )
@@ -517,6 +540,20 @@ mod tests {
         let command = evidence.pointer("/command").unwrap().to_string();
         assert!(!command.contains(REPLAY_CA_CERT_ENV));
         assert!(!command.contains(&ca_cert.display().to_string()));
+        assert_eq!(
+            evidence["command"],
+            serde_json::json!([
+                config.project_cli.display().to_string(),
+                "start",
+                "--e2e",
+                "--start-breeze",
+                "off",
+                "--boot-dir",
+                ".traffic-e2e/boot",
+                "--port",
+                "8081"
+            ])
+        );
     }
 
     #[tokio::test]
@@ -554,15 +591,12 @@ mod tests {
 
     #[test]
     fn standard_runner_passes_recorder_config_and_rule_to_replay() {
-        let config = ResolvedProjectConfig {
-            project_cli: PathBuf::from("/target/scripts/project"),
-            replay_policy: PathBuf::from("/target/config/replay.yaml"),
-            replay_startup_timeout: Duration::from_secs(60),
-            pr_base: "integration".to_string(),
-            recorder_config: Some(PathBuf::from("/target/config/recorder.toml")),
-            recording_rule: Some("pluto".to_string()),
-            runner_owned_response_assertions: false,
-        };
+        let mut config = resolved_project(PathBuf::from("/target/scripts/project"));
+        config.replay_startup_timeout = Duration::from_secs(60);
+        config.pr_base = "integration".to_string();
+        config.recorder_config = PathBuf::from("/target/config/recorder.toml");
+        config.recording_rule = "pluto".to_string();
+        config.runner_owned_response_assertions = false;
 
         assert_eq!(
             recorder_config_args(&config),

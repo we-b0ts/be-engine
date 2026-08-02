@@ -272,9 +272,37 @@ redact_headers = [
 # source_revision = "0123456789abcdef"
 # source_evidence = "MapiConfigLoader.java:init scheduled refresh unrelated to selected API"
 
+# Source-proven independent Redis process traffic uses the stable service port
+# set plus one exact command and bounded key shape. Domains are diagnostic only.
+# [[recording.background_dependencies]]
+# name = "interest-tag-mining-cache-refresh"
+# protocol = "redis"
+# ports = [20917, 20918, 20919]
+# command = "ZCOUNT"
+# key_prefix = "1042015:"
+# key_suffix = ".wtm2"
+# response_role = "independent"
+# source_revision = "0123456789abcdef"
+# source_evidence = "InterestTagCardServiceImpl.java:init process-owned WAIC cache refresh"
+
+# Response-driving Redis startup reads use an exact GET key set. New recordings
+# mark these Global responses as runtime state so Replay can serve them without
+# inheriting unrelated commands from the source connection lane.
+# [[recording.background_dependencies]]
+# name = "startup-cache-warm"
+# protocol = "redis"
+# ports = [20917]
+# command = "GET"
+# keys = ["cache:init:a", "cache:init:b"]
+# initial_load_timeout_ms = 60000
+# response_role = "runtime_state"
+# source_revision = "0123456789abcdef"
+# source_evidence = "src/cache/warm.rs:init loads response-driving local state"
+
 # Breeze-backed Memcached local-cache warm rules use a stable descriptor
 # identity without its dynamic port. The tool resolves the business resource
-# and writes this identity after validating finalized replay evidence.
+# and writes this identity after validating finalized replay evidence. Numeric
+# bounds are unsigned 64-bit values so full UID-derived keys are supported.
 # [[recording.background_dependencies]]
 # name = "planet-video-cache-warm"
 # protocol = "memcached"
@@ -284,10 +312,9 @@ redact_headers = [
 # key_end = 4095
 # key_separator = "."
 # key_suffix = "pl_video"
-# Once HTTP readiness succeeds, observe this rule for up to the configured
-# window and log progress every 10 seconds. If the expected count remains
-# incomplete, warn and continue case admission. No applied Memcached rule
-# means no additional observation window.
+# Once HTTP readiness succeeds, observe runtime-state rules for up to the
+# configured window and log progress every 10 seconds. If the expected load
+# remains incomplete, warn and continue case admission.
 # initial_load_timeout_ms = 60000
 # response_role = "runtime_state"
 # source_revision = "0123456789abcdef"

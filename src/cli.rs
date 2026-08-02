@@ -6,11 +6,14 @@ mod compare;
 mod config;
 mod diagnose;
 mod interception;
+mod internal;
 mod output;
+mod platform;
 mod record;
 mod record_comparison;
 mod recording;
 mod replay;
+mod rewrite;
 mod signal;
 mod target;
 mod workflow;
@@ -40,10 +43,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run the recorder with fixed-user local interception.
-    Record(record::RecordArgs),
-    /// Record matched HTTP requests and both baseline/candidate responses for later comparison.
-    RecordComparison(record_comparison::RecordComparisonArgs),
+    /// Record source traffic through the repository's managed recording configuration.
+    Record(platform::RecordArgs),
+    /// Record source and target responses through the managed comparison runtime.
+    RecordComparison(platform::RecordComparisonArgs),
     /// Compare a finalized comparison recording with replay response rules.
     Compare(compare::CompareArgs),
     /// Wait for and inspect managed recording lifecycle state.
@@ -66,8 +69,13 @@ enum Command {
     Recover(workflow::ContextArgs),
     /// Abort an active traffic E2E run and preserve its diagnostics.
     Abort(workflow::ContextArgs),
+    /// Coordinate one API rewrite through bounded actions and evidence.
+    Rewrite(rewrite::RewriteArgs),
     /// Access low-level recorder, replay, grouping, and policy commands.
     Diagnose(diagnose::DiagnoseArgs),
+    /// Runtime-only process entrypoints used by managed containers.
+    #[command(hide = true)]
+    Internal(internal::InternalArgs),
 }
 
 pub(crate) async fn run() -> Result<()> {
@@ -84,9 +92,9 @@ pub(crate) async fn run() -> Result<()> {
         .init();
 
     match cli.command {
-        Command::RecordComparison(args) => record_comparison::run(args).await,
+        Command::RecordComparison(args) => platform::run_record_comparison(args).await,
         Command::Compare(args) => compare::run(args).await,
-        Command::Record(args) => record::run(args).await,
+        Command::Record(args) => platform::run_record(args).await,
         Command::Recording(args) => recording::run(args).await,
         Command::Replay(args) => replay::run(args).await,
         Command::Target(args) => target::run(args).await,
@@ -97,7 +105,9 @@ pub(crate) async fn run() -> Result<()> {
         Command::Status(args) => workflow::run(workflow::WorkflowCommand::Status(args)).await,
         Command::Recover(args) => workflow::run(workflow::WorkflowCommand::Recover(args)).await,
         Command::Abort(args) => workflow::run(workflow::WorkflowCommand::Abort(args)).await,
+        Command::Rewrite(args) => rewrite::run(args).await,
         Command::Diagnose(args) => diagnose::run(args).await,
+        Command::Internal(args) => internal::run(args).await,
     }
 }
 
@@ -121,6 +131,7 @@ mod tests {
         let command = Cli::command();
         let names = command
             .get_subcommands()
+            .filter(|subcommand| !subcommand.is_hide_set())
             .map(|subcommand| subcommand.get_name())
             .collect::<Vec<_>>();
 
@@ -140,6 +151,7 @@ mod tests {
                 "status",
                 "recover",
                 "abort",
+                "rewrite",
                 "diagnose"
             ]
         );
@@ -150,10 +162,9 @@ mod tests {
         let parsed = Cli::try_parse_from([
             "traffic-e2e",
             "config",
-            "replay",
             "init",
-            "--target-root",
-            ".",
+            "--source-container",
+            "source",
         ])
         .unwrap();
 
@@ -163,6 +174,24 @@ mod tests {
     #[test]
     fn rejects_the_removed_e2e_run_facade_shape() {
         assert!(Cli::try_parse_from(["traffic-e2e", "e2e-run", "status"]).is_err());
+    }
+
+    #[test]
+    fn rejects_removed_platform_and_split_initialization_commands() {
+        assert!(Cli::try_parse_from(["traffic-e2e", "platform", "record"]).is_err());
+        assert!(Cli::try_parse_from(["traffic-e2e", "config", "recorder", "init"]).is_err());
+        assert!(Cli::try_parse_from(["traffic-e2e", "config", "replay", "init"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "traffic-e2e",
+                "config",
+                "project",
+                "init",
+                "--source-container",
+                "source",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -201,8 +230,8 @@ mod tests {
                 "GET /api/users/show",
                 "--json-pointer",
                 "/followers_count",
-                "--comparison-report",
-                "comparison-report.json",
+                "--comparison-run",
+                "comparison-run",
             ])
             .is_ok()
         );
@@ -219,8 +248,8 @@ mod tests {
                 "GET /api/users/show",
                 "--json-pointer",
                 "/followers_count",
-                "--comparison-report",
-                "comparison-report.json",
+                "--comparison-run",
+                "comparison-run",
             ])
             .is_err()
         );
@@ -237,8 +266,8 @@ mod tests {
                 "GET /api/token",
                 "--json-pointer",
                 "/token",
-                "--comparison-report",
-                "comparison-report.json",
+                "--comparison-run",
+                "comparison-run",
             ])
             .is_err()
         );
@@ -295,10 +324,8 @@ mod tests {
                 "GET /api/token",
                 "--json-pointer",
                 "/token",
-                "--assertion-report",
-                "assertions.json",
-                "--aggregate-report",
-                "aggregate.json",
+                "--case-source",
+                "recordings/run/rule",
             ])
             .is_ok()
         );
@@ -323,8 +350,8 @@ mod tests {
                 "GET /api/token",
                 "--json-pointer",
                 "/token",
-                "--comparison-report",
-                "comparison-report.json",
+                "--comparison-run",
+                "comparison-run",
             ])
             .is_ok()
         );
@@ -349,12 +376,10 @@ mod tests {
                 "GET /api/token",
                 "--json-pointer",
                 "/token",
-                "--comparison-report",
-                "comparison-report.json",
-                "--assertion-report",
-                "assertions.json",
-                "--aggregate-report",
-                "aggregate.json",
+                "--comparison-run",
+                "comparison-run",
+                "--case-source",
+                "recordings/run/rule",
             ])
             .is_err()
         );
@@ -371,8 +396,8 @@ mod tests {
                 "GET /api/token",
                 "--json-pointer",
                 "/token",
-                "--comparison-report",
-                "comparison-report.json",
+                "--comparison-run",
+                "comparison-run",
             ])
             .is_err()
         );
@@ -392,8 +417,8 @@ mod tests {
             "--log-level",
             "warn",
             "record",
-            "--config",
-            "recorder.toml",
+            "--target-root",
+            ".",
         ])
         .unwrap();
 

@@ -308,6 +308,15 @@ async fn global_dependency_summary_is_generated_only_when_run_finishes() {
     let summary: serde_json::Value = serde_json::from_str(&summary_raw).unwrap();
     assert_eq!(summary["total_events"], 1);
     assert_eq!(summary["event_types"]["proxy_error"], 1);
+    let pre_readiness_raw =
+        tokio::fs::read_to_string(recorder.run_dir.join("pre-readiness-traffic-summary.json"))
+            .await
+            .unwrap();
+    let pre_readiness: serde_json::Value = serde_json::from_str(&pre_readiness_raw).unwrap();
+    assert_eq!(pre_readiness["phase"], "bootstrap");
+    assert_eq!(pre_readiness["bootstrap_events"], 1);
+    assert_eq!(pre_readiness["excluded_events"], 1);
+    assert_eq!(pre_readiness["data_interactions"], 0);
 }
 
 #[tokio::test]

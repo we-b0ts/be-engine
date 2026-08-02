@@ -115,7 +115,8 @@ configure product/replay behavior, seed database/HTTP/cache/queue dependency
 results, decide whether a dependency is called, or manufacture a cache or side
 effect. If the target cannot generate the result from request/session context,
 source behavior, product config, time/generated values, and recorded
-dependencies alone, keep the case non-passing and follow failure diagnosis.
+dependencies alone, keep the case non-passing and return the bounded engine
+fact to the caller.
 Use `blocked` only when the missing-external-evidence proof succeeds; otherwise
 return `action_required`. A passing comparison after reverse-feeding expected
 data is an invalid circular test.

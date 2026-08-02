@@ -111,10 +111,12 @@ defects before they become scale defects.
 - Read [dependency-clients.md](references/dependency-clients.md) whenever the
   change touches databases, caches, HTTP/RPC, queues, discovery, or another
   remote system.
-- For a Breeze-owned platform foundation such as logging or TAuth2, or a
-  Breeze-managed remote resource, also read and use the
-  [`breeze-sdk` skill](../breeze-sdk/SKILL.md); keep business behavior under
-  this skill in the owning capability.
+- Read [breeze-platform.md](references/breeze-platform.md) when source or
+  repository evidence assigns a platform foundation or remote-resource
+  lifecycle to Breeze. For descriptor-backed resources, also read
+  [breeze-descriptors.md](references/breeze-descriptors.md). For Motan or
+  Vintage, also read
+  [breeze-motan-vintage.md](references/breeze-motan-vintage.md).
 - Read [data-and-memory.md](references/data-and-memory.md) for JSON, large
   payloads, serialization, buffering, compression, or allocation-sensitive paths.
 - Read [resilience-and-observability.md](references/resilience-and-observability.md)

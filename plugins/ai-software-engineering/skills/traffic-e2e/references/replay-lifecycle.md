@@ -132,11 +132,8 @@ selection, or substitute target test output for recorder evidence.
 
 ## Iteration
 
-After a failure, apply the failure-diagnosis contract loaded from the main
-skill. Continue while each cycle adds evidence or fixes a distinct evidenced
-defect. Repeated attempts do not determine status. If an iteration adds no new
-evidence or repair, return the unresolved cause, owner, next diagnostic or
-system change, acceptance check, and resume point as `action_required`; use
-`blocked` or `incomplete` only when the main skill's evidence conditions are
-independently satisfied. Always rerun the entire affected group after a
-behavior, wiring, policy, assertion, or lifecycle change.
+After an engine failure, isolate lifecycle, interception, publication, or
+protocol ownership from bounded output before reading a low-level artifact.
+Return the exact engine defect or missing capability and its acceptance
+command. Do not infer target business causality, blocker status, or migration
+completion from repeated attempts.

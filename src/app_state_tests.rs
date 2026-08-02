@@ -83,6 +83,32 @@ fn redis_dependency(host: &str, port: u16, key: &str) -> RecorderEvent {
     })
 }
 
+fn redis_get_dependency(host: &str, port: u16, key: &str) -> RecorderEvent {
+    RecorderEvent::RedisExchange(RedisExchangeEvent {
+        id: Uuid::new_v4(),
+        connection_id: Uuid::new_v4(),
+        sequence: 1,
+        timestamp: Utc::now(),
+        client_addr: None,
+        target_host: host.to_string(),
+        target_port: port,
+        target_addr: format!("{host}:{port}"),
+        upstream_addr: format!("127.0.0.1:{port}"),
+        resp_version: 2,
+        database: 0,
+        username: None,
+        command: "GET".to_string(),
+        args: vec![capture_body(key.as_bytes(), key.len())],
+        response_kind: "bulk".to_string(),
+        response: capture_body(b"$5\r\nvalue\r\n", 11),
+        session_setup: false,
+        outcome: DependencyExchangeOutcome::Response,
+        duration_ms: 1,
+        replay_safe: true,
+        parse_warnings: Vec::new(),
+    })
+}
+
 #[tokio::test]
 async fn background_http_enters_global_pool_but_not_case_dependencies() {
     let temp = tempfile::tempdir().unwrap();
@@ -138,6 +164,7 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
     assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
     assert!(global.contains("\"global_dependency_phase\":\"runtime\""));
     assert!(global.contains("\"global_dependency_matched_by\":\"config-refresh\""));
+    assert!(global.contains("\"global_dependency_response_role\":\"independent\""));
 }
 
 #[tokio::test]
@@ -199,8 +226,10 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
         name: "interest-tag-mining-cache-refresh".to_string(),
         ports: vec![20917, 20918, 20919],
         command: "ZCOUNT".to_string(),
+        keys: Vec::new(),
         key_prefix: "1042015:".to_string(),
         key_suffix: ".wtm2".to_string(),
+        initial_load_timeout_ms: None,
         response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "InterestTagCardServiceImpl.java:init process-owned refresh".to_string(),
@@ -240,7 +269,45 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
     assert!(global.contains("\"target_host\":\"new-operations-domain.example\""));
     assert!(global.contains("\"target_port\":20918"));
     assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
+    assert!(global.contains("\"global_dependency_response_role\":\"independent\""));
     assert!(
         global.contains("\"global_dependency_matched_by\":\"interest-tag-mining-cache-refresh\"")
     );
+}
+
+#[tokio::test]
+async fn runtime_state_redis_records_explicit_global_role_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.recording.background_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
+        name: "startup-cache-warm".to_string(),
+        ports: vec![20917],
+        command: "GET".to_string(),
+        keys: vec!["cache:init:a".to_string()],
+        key_prefix: String::new(),
+        key_suffix: String::new(),
+        initial_load_timeout_ms: Some(1_000),
+        response_role: BackgroundDependencyResponseRole::RuntimeState,
+        source_revision: "0123456789abcdef".to_string(),
+        source_evidence: "src/cache/warm.rs:init loads response-driving local state".to_string(),
+    }];
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    config.dns_mock.registry_path = temp.path().join("fake-dns.json");
+    config.http_gateway.enabled = true;
+    config.http_gateway.ready.enabled = true;
+    let state = AppState::new(config).await.unwrap();
+
+    state.record_event(redis_get_dependency("cache.service", 20917, "cache:init:a"));
+    state.recorder().finish_run().await.unwrap();
+
+    let global =
+        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
+            .await
+            .unwrap();
+    assert_eq!(global.lines().count(), 1);
+    assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
+    assert!(global.contains("\"global_dependency_matched_by\":\"startup-cache-warm\""));
+    assert!(global.contains("\"global_dependency_response_role\":\"runtime_state\""));
 }

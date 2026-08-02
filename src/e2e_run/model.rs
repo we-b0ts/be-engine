@@ -8,49 +8,128 @@ use serde::{Deserialize, Deserializer, Serialize};
 const MAX_STATE_ERRORS: usize = 128;
 const MAX_STATE_ERROR_BYTES: usize = 2_048;
 const STATE_ERROR_OVERFLOW: &str =
-    "additional errors omitted; inspect the canonical assertion, command, and replay reports";
+    "additional internal errors omitted; use the bounded terminal diagnosis";
 
 use crate::case_group::CaseGroupInventory;
-use crate::replay::ResponseAssertionCaseReport;
+use crate::replay::ResponseDifference;
 
-pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ASSERTION_REPORT_VERSION: u32 = 1;
+pub(super) const STATE_VERSION: u32 = 2;
+pub(super) const ASSERTION_REPORT_VERSION: u32 = 2;
 pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
+pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 60;
+pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
+pub(super) const DEFAULT_TARGET_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ProjectConfig {
     pub version: u32,
-    pub project_cli: PathBuf,
-    pub replay_policy: PathBuf,
-    #[serde(default = "default_replay_startup_timeout_seconds")]
-    pub replay_startup_timeout_seconds: u64,
-    pub pr_base: String,
+    pub source: SourceProjectConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recorder_config: Option<PathBuf>,
-    #[serde(default = "default_local_root")]
-    pub local_root: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub recording_rule: Option<String>,
+    pub breeze: Option<BreezeProjectConfig>,
+    pub target: TargetProjectConfig,
+    pub replay: ReplayProjectConfig,
+    pub recording: RecordingProjectConfig,
+    pub delivery: DeliveryProjectConfig,
+    pub state: StateProjectConfig,
 }
 
-fn default_local_root() -> PathBuf {
-    PathBuf::from("local")
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SourceProjectConfig {
+    pub container: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BreezeProjectConfig {
+    pub container: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TargetProjectConfig {
+    pub cli: PathBuf,
+    pub boot_dir: PathBuf,
+    pub http_host: String,
+    pub port: u16,
+    pub readiness_path: String,
+    pub readiness_status: u16,
+    #[serde(default = "default_target_startup_timeout_seconds")]
+    pub startup_timeout_seconds: u64,
+    #[serde(default = "default_target_request_timeout_seconds")]
+    pub request_timeout_seconds: u64,
+    #[serde(default = "default_target_max_response_bytes")]
+    pub max_response_bytes: usize,
+}
+
+fn default_target_startup_timeout_seconds() -> u64 {
+    DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
+}
+
+fn default_target_request_timeout_seconds() -> u64 {
+    DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS
+}
+
+fn default_target_max_response_bytes() -> usize {
+    DEFAULT_TARGET_MAX_RESPONSE_BYTES
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ReplayProjectConfig {
+    pub policy: PathBuf,
+    #[serde(default = "default_replay_startup_timeout_seconds")]
+    pub startup_timeout_seconds: u64,
 }
 
 fn default_replay_startup_timeout_seconds() -> u64 {
     DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct ResolvedProjectConfig {
-    pub project_cli: PathBuf,
-    pub replay_policy: PathBuf,
-    pub replay_startup_timeout: Duration,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RecordingProjectConfig {
+    pub config: PathBuf,
+    pub rule: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct DeliveryProjectConfig {
     pub pr_base: String,
-    pub recorder_config: Option<PathBuf>,
-    pub recording_rule: Option<String>,
-    pub runner_owned_response_assertions: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct StateProjectConfig {
+    #[serde(default = "default_local_root")]
+    pub local_root: PathBuf,
+}
+
+fn default_local_root() -> PathBuf {
+    PathBuf::from("local")
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ResolvedProjectConfig {
+    pub(crate) project_cli: PathBuf,
+    pub(crate) target_boot_dir: PathBuf,
+    pub(crate) target_http_origin: String,
+    pub(crate) target_port: u16,
+    pub(crate) target_readiness_path: String,
+    pub(crate) target_readiness_status: u16,
+    pub(crate) target_startup_timeout: Duration,
+    pub(crate) target_request_timeout: Duration,
+    pub(crate) target_max_response_bytes: usize,
+    pub(crate) source_container: String,
+    pub(crate) breeze_container: Option<String>,
+    pub(crate) replay_policy: PathBuf,
+    pub(crate) replay_startup_timeout: Duration,
+    pub(crate) pr_base: String,
+    pub(crate) recorder_config: PathBuf,
+    pub(crate) recording_rule: String,
+    pub(crate) runner_owned_response_assertions: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +185,21 @@ pub(super) struct CaseExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub replay_clean: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub response_assertion: Option<ResponseAssertionCaseReport>,
+    pub response_assertion: Option<ResponseAssertionSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct ResponseAssertionSummary {
+    pub passed: bool,
+    pub difference_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub representative_difference: Option<ResponseDifference>,
+    pub detail_report: PathBuf,
+    pub detail_fingerprint: String,
+    pub expected_response: PathBuf,
+    pub actual_response: PathBuf,
+    pub policy_path: String,
+    pub policy_fingerprint: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -457,7 +550,7 @@ pub(super) struct AssertionCase {
     pub case_id: String,
     pub passed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub response: Option<ResponseAssertionCaseReport>,
+    pub response: Option<ResponseAssertionSummary>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

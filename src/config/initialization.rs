@@ -11,8 +11,6 @@ use super::edit::create_atomic;
 
 pub const DEFAULT_RECORDING_RULE: &str = "record-api";
 const RECORDER_CONFIG_PATH: &str = ".traffic-e2e/recorder.toml";
-const INITIAL_CANDIDATE_RESPONSE: &str =
-    r#"{"code":"COMPARISON_RECORDING_CANDIDATE_NOT_IMPLEMENTED","msg":"fixed mock response"}"#;
 
 #[derive(Debug, Clone)]
 pub struct RecorderConfigInitOptions {
@@ -22,6 +20,7 @@ pub struct RecorderConfigInitOptions {
     pub readiness_path: String,
     pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
+    pub breeze_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -33,15 +32,26 @@ pub struct RecorderConfigInitResult {
     pub readiness_path: String,
     pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
-    pub project_cli: PathBuf,
-    pub start_comparison_recording_script: PathBuf,
-    pub candidate_mock_response: &'static str,
-    pub required_ai_actions: Vec<String>,
+    pub runtime: &'static str,
+    pub managed_record_command: String,
+    pub managed_comparison_command: String,
+    pub target_start_contract: String,
+    pub target_compile_contract: &'static str,
+    pub target_stop_contract: &'static str,
 }
 
 pub fn initialize_recorder_config(
     options: RecorderConfigInitOptions,
 ) -> Result<RecorderConfigInitResult> {
+    let (target_root, rendered) = render_validated_recorder_config(&options)?;
+    let config_path = target_root.join(RECORDER_CONFIG_PATH);
+    create_atomic(&config_path, rendered.as_bytes())?;
+    Ok(init_result(&options, config_path))
+}
+
+pub(crate) fn render_validated_recorder_config(
+    options: &RecorderConfigInitOptions,
+) -> Result<(PathBuf, String)> {
     ensure!(
         options.source_http_port > 0,
         "source_http_port must be greater than zero"
@@ -70,18 +80,14 @@ pub fn initialize_recorder_config(
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
     let scope = repository_scope(&target_root)?;
-    let repository_name = crate::repository::directory_name(&target_root)?;
-    let matched_upstream = format!("http://127.0.0.1:{}", options.source_http_port);
-    let candidate_upstream = format!("http://127.0.0.1:{}", options.candidate_http_port);
-    let project_cli = PathBuf::from(format!("scripts/{repository_name}-cli"));
-    let start_comparison_recording_script = PathBuf::from("scripts/start-recording-comparison");
-    let rendered = render_recorder_config(
+    let rendered = render_recorder_template(
         &scope,
         options.source_http_port,
         options.candidate_http_port,
         &options.readiness_path,
         options.readiness_status,
         options.upstream_dns,
+        options.breeze_enabled,
     );
     let config = toml::from_str::<AppConfig>(&rendered)
         .context("generated recorder config is not valid TOML")?;
@@ -92,69 +98,40 @@ pub fn initialize_recorder_config(
         .validate_comparison_recording()
         .context("generated comparison recording config failed validation")?;
 
-    let config_path = target_root.join(RECORDER_CONFIG_PATH);
-    create_atomic(&config_path, rendered.as_bytes())?;
-    Ok(RecorderConfigInitResult {
+    Ok((target_root, rendered))
+}
+
+fn init_result(
+    options: &RecorderConfigInitOptions,
+    config_path: PathBuf,
+) -> RecorderConfigInitResult {
+    let matched_upstream = format!("http://127.0.0.1:{}", options.source_http_port);
+    let candidate_upstream = format!("http://127.0.0.1:{}", options.candidate_http_port);
+    RecorderConfigInitResult {
         config: config_path,
         recording_rule: DEFAULT_RECORDING_RULE,
         matched_upstream,
         candidate_upstream: candidate_upstream.clone(),
-        readiness_path: options.readiness_path,
+        readiness_path: options.readiness_path.clone(),
         readiness_status: options.readiness_status,
         upstream_dns: options.upstream_dns,
-        project_cli: project_cli.clone(),
-        start_comparison_recording_script: start_comparison_recording_script.clone(),
-        candidate_mock_response: INITIAL_CANDIDATE_RESPONSE,
-        required_ai_actions: vec![
-            format!(
-                "Generate extensible executable {} with at least start, status, and stop lifecycle \
-                 commands. Before target implementation exists, start must launch an owned \
-                 fixed-response HTTP mock at {candidate_upstream}; every path returns status {} \
-                 and body {}. These are the initialization-time minimum, not the complete command \
-                 set. Later replace the mock startup with the genuine target and add the e2e, test, \
-                 or check commands required by the standard traffic E2E target facade while \
-                 preserving lifecycle semantics.",
-                project_cli.display(),
-                options.readiness_status,
-                INITIAL_CANDIDATE_RESPONSE,
-            ),
-            format!(
-                "Generate executable {}. It must validate arguments before changing state, start \
-                 the genuine baseline from inspected runtime facts, stop any stale candidate owned \
-                 by {} before invoking its start and status commands, run `traffic-e2e \
-                 record-comparison --config .traffic-e2e/recorder.toml --policy \
-                 .traffic-e2e/verification.yaml`, accept \
-                 `--run-id YYYYMMDDHHMMSS`, `--duration-seconds <positive-integer>`, and \
-                 `--baseline-recheck`, plus repeatable `--api 'METHOD /path-or-pattern'` and one \
-                 optional positive `--case-limit <positive-integer>`, default the duration to 60 \
-                 seconds when omitted, and accept \
-                 `--brz-no-fallback <true|false>` defaulting to true. Start exactly one shared \
-                 Breeze for the genuine source and candidate containers. Consume the Breeze \
-                 option in this wrapper, apply executable `scripts/brz-no-fallback.sh` to each \
-                 applicable application container when enabled, and pass only traffic-e2e \
-                 options through unchanged. AI and automated invocations must \
-                 explicitly pass `--duration-seconds 60` or another positive integer. Forward \
-                 termination, allow graceful artifact finalization, stop only owned processes, \
-                 and preserve the record-comparison exit status. If \
-                 `recording.encrypt_request_headers` is nonempty, validate before changing state \
-                 that `TRAFFIC_E2E_ENCRYPTION_KEY_B64` is strict Base64 for exactly 32 bytes, then \
-                 preserve it only for the record-comparison process; never print it or inject it \
-                 into the baseline, candidate, Breeze, or other supporting services.",
-                start_comparison_recording_script.display(),
-                project_cli.display(),
-            ),
-            "After replay E2E passes and a comparison recording run finalizes, verify it with \
-             `traffic-e2e compare <comparison-recording-run> --policy \
-             .traffic-e2e/verification.yaml`. The comparison report, including its per-API passed \
-             counts and representative response difference, is the validation-success authority; \
-             E2E pass alone is not. Classify failures as candidate implementation \
-             differences, source-time data drift, or source-proven time/random/unordered \
-             non-determinism before changing code or response rules. Both record-comparison and \
-             compare must remain outside fixed-user and network interception or isolation \
-             workflows."
-                .to_string(),
-        ],
-    })
+        runtime: if options.breeze_enabled {
+            "breeze"
+        } else {
+            "generic"
+        },
+        managed_record_command: "traffic-e2e record --target-root .".to_string(),
+        managed_comparison_command: "traffic-e2e record-comparison --target-root .".to_string(),
+        target_start_contract: format!(
+            "<project>-cli start --e2e --start-breeze off --boot-dir \
+             .traffic-e2e/boot --port {}",
+            options.candidate_http_port
+        ),
+        target_compile_contract: "every start --e2e compiles once before launch; when the \
+                                  compile command supports --release, compile with --release \
+                                  and launch that artifact; never pass --release to start",
+        target_stop_contract: "<project>-cli stop",
+    }
 }
 
 fn validate_readiness_path(path: &str) -> Result<()> {
@@ -187,19 +164,35 @@ fn repository_scope(target_root: &std::path::Path) -> Result<String> {
     Ok(scope.to_string())
 }
 
-fn render_recorder_config(
+fn render_recorder_template(
     scope: &str,
     source_http_port: u16,
     candidate_http_port: u16,
     readiness_path: &str,
     readiness_status: u16,
     upstream_dns: SocketAddr,
+    breeze_enabled: bool,
 ) -> String {
     let readiness_path = toml::Value::String(readiness_path.to_string()).to_string();
     let fallback_body = toml::Value::String(format!(
         r#"{{"code":"40401","msg":"not_in_{scope}_record_api"}}"#
     ))
     .to_string();
+    let breeze_dns = if breeze_enabled {
+        PLATFORM_BREEZE_DNS
+    } else {
+        "bypass_strategies = []\n\n[dns_mock.hosts]\n"
+    };
+    let response_rewrite = if breeze_enabled {
+        PLATFORM_RESPONSE_REWRITE
+    } else {
+        "[http_response_rewrite]\nenabled = false\nrules = []"
+    };
+    let encrypted_headers = if breeze_enabled {
+        "  \"authorization\",\n"
+    } else {
+        ""
+    };
     RECORDER_TEMPLATE
         .replace("__UPSTREAM_DNS__", &upstream_dns.to_string())
         .replace("__SOURCE_HTTP_PORT__", &source_http_port.to_string())
@@ -207,9 +200,42 @@ fn render_recorder_config(
         .replace("__READINESS_PATH__", &readiness_path)
         .replace("__READINESS_STATUS__", &readiness_status.to_string())
         .replace("__FALLBACK_BODY__", &fallback_body)
+        .replace("__BREEZE_DNS__", breeze_dns)
+        .replace("__RESPONSE_REWRITE__", response_rewrite)
+        .replace("__ENCRYPTED_HEADERS__", encrypted_headers)
 }
 
-const RECORDER_TEMPLATE: &str = r#"# Generated by `traffic-e2e config recorder init`.
+const PLATFORM_BREEZE_DNS: &str = r#"[[dns_mock.bypass_strategies]]
+strategy = "breeze"
+snapshot_dir = "/data1/breeze/snapshot"
+
+[dns_mock.hosts]
+"breeze.recording" = ["127.0.0.1"]
+"#;
+
+const PLATFORM_RESPONSE_REWRITE: &str = r#"[http_response_rewrite]
+enabled = true
+
+[[http_response_rewrite.rules]]
+name = "platform-vintage-naming"
+authorities = ["config.api.demo.test", "static.config.api.demo.test", "register.kailash.demo.test"]
+methods = ["GET"]
+path = "/naming/service"
+status_codes = [200]
+content_types = ["application/json"]
+plugin = { name = "vintage-naming" }
+
+[[http_response_rewrite.rules]]
+name = "platform-vintage-cache-config"
+authorities = ["config.api.demo.test", "static.config.api.demo.test", "register.kailash.demo.test"]
+methods = ["GET"]
+path = "/1/config/service"
+status_codes = [200]
+content_types = ["application/json"]
+plugin = { name = "vintage-cache-config" }
+"#;
+
+const RECORDER_TEMPLATE: &str = r#"# Generated by `traffic-e2e config init`.
 [artifacts]
 root_dir = "./.traffic-e2e/artifacts"
 
@@ -234,9 +260,7 @@ fake_cidr = "198.19.0.0/16"
 ttl_seconds = 60
 registry_path = "./.traffic-e2e/artifacts/fake_dns_registry.json"
 bypass_domains = []
-bypass_strategies = []
-
-[dns_mock.hosts]
+__BREEZE_DNS__
 
 [tcp_gateway]
 enabled = true
@@ -253,9 +277,7 @@ memcached_port_hints = [11211]
 kafka_port_hints = [9092]
 overrides = []
 
-[http_response_rewrite]
-enabled = false
-rules = []
+__RESPONSE_REWRITE__
 
 [udp_gateway]
 enabled = true
@@ -316,7 +338,8 @@ case_dependency_post_response_window_ms = 100
 case_dependency_drain_timeout_ms = 5000
 shutdown_case_drain_timeout_ms = 5000
 access_policy = "unrestricted"
-encrypt_request_headers = []
+encrypt_request_headers = [
+__ENCRYPTED_HEADERS__]
 redact_headers = [
   "authorization",
   "cookie",
@@ -363,9 +386,24 @@ redact_headers = [
 # source_revision = "0123456789abcdef"
 # source_evidence = "InterestTagCardServiceImpl.java:init process-owned WAIC cache refresh"
 
+# Response-driving Redis startup reads use an exact GET key set. New recordings
+# mark these Global responses as runtime state so Replay can serve them without
+# inheriting unrelated commands from the source connection lane.
+# [[recording.background_dependencies]]
+# name = "startup-cache-warm"
+# protocol = "redis"
+# ports = [20917]
+# command = "GET"
+# keys = ["cache:init:a", "cache:init:b"]
+# initial_load_timeout_ms = 60000
+# response_role = "runtime_state"
+# source_revision = "0123456789abcdef"
+# source_evidence = "src/cache/warm.rs:init loads response-driving local state"
+
 # Breeze-backed Memcached local-cache warm rules use a stable descriptor
 # identity without its dynamic port. The tool resolves the business resource
-# and writes this identity after validating finalized replay evidence.
+# and writes this identity after validating finalized replay evidence. Numeric
+# bounds are unsigned 64-bit values so full UID-derived keys are supported.
 # [[recording.background_dependencies]]
 # name = "planet-video-cache-warm"
 # protocol = "memcached"
@@ -375,10 +413,9 @@ redact_headers = [
 # key_end = 4095
 # key_separator = "."
 # key_suffix = "pl_video"
-# Once HTTP readiness succeeds, observe this rule for up to the configured
-# window and log progress every 10 seconds. If the expected count remains
-# incomplete, warn and continue case admission. No applied Memcached rule
-# means no additional observation window.
+# Once HTTP readiness succeeds, observe runtime-state rules for up to the
+# configured window and log progress every 10 seconds. If the expected load
+# remains incomplete, warn and continue case admission.
 # initial_load_timeout_ms = 60000
 # response_role = "runtime_state"
 # source_revision = "0123456789abcdef"
@@ -410,6 +447,7 @@ mod tests {
             readiness_path: "/healthy".to_string(),
             readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
+            breeze_enabled: true,
         })
         .unwrap();
 
@@ -434,47 +472,25 @@ mod tests {
                 .unwrap()
                 .baseline_recheck
         );
+        assert_eq!(result.runtime, "breeze");
         assert_eq!(
-            result.project_cli.parent().unwrap(),
-            PathBuf::from("scripts")
-        );
-        assert!(
-            result
-                .project_cli
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .ends_with("-cli")
+            result.managed_record_command,
+            "traffic-e2e record --target-root ."
         );
         assert_eq!(
-            result.start_comparison_recording_script,
-            PathBuf::from("scripts/start-recording-comparison")
+            result.target_start_contract,
+            "<project>-cli start --e2e --start-breeze off --boot-dir .traffic-e2e/boot --port 8081"
         );
-        assert_eq!(result.required_ai_actions.len(), 3);
-        assert!(result.required_ai_actions[0].contains("at least start, status, and stop"));
-        assert!(result.required_ai_actions[0].contains("not the complete command set"));
-        assert!(result.required_ai_actions[0].contains("e2e, test, or check"));
-        assert!(result.required_ai_actions[1].contains("--run-id YYYYMMDDHHMMSS"));
-        assert!(result.required_ai_actions[1].contains("--duration-seconds <positive-integer>"));
-        assert!(result.required_ai_actions[1].contains("default the duration to 60 seconds"));
-        assert!(result.required_ai_actions[1].contains("explicitly pass `--duration-seconds 60`"));
-        assert!(result.required_ai_actions[1].contains("--baseline-recheck"));
-        assert!(result.required_ai_actions[1].contains("--api 'METHOD /path-or-pattern'"));
-        assert!(result.required_ai_actions[1].contains("--case-limit <positive-integer>"));
-        assert!(result.required_ai_actions[1].contains("--brz-no-fallback <true|false>"));
-        assert!(result.required_ai_actions[1].contains("one shared Breeze"));
-        assert!(result.required_ai_actions[1].contains("scripts/brz-no-fallback.sh"));
-        assert!(result.required_ai_actions[1].contains("traffic-e2e record-comparison"));
-        assert!(result.required_ai_actions[1].contains("--policy .traffic-e2e/verification.yaml"));
-        assert!(result.required_ai_actions[1].contains("TRAFFIC_E2E_ENCRYPTION_KEY_B64"));
-        assert!(result.required_ai_actions[2].contains("traffic-e2e compare"));
-        assert!(result.required_ai_actions[2].contains("per-API passed counts"));
-        assert!(result.required_ai_actions[2].contains("representative response difference"));
-        assert!(result.required_ai_actions[2].contains("outside fixed-user"));
         assert_eq!(
-            result.candidate_mock_response,
-            r#"{"code":"COMPARISON_RECORDING_CANDIDATE_NOT_IMPLEMENTED","msg":"fixed mock response"}"#
+            result.target_compile_contract,
+            "every start --e2e compiles once before launch; when the compile command supports \
+             --release, compile with --release and launch that artifact; never pass --release \
+             to start"
         );
+        assert_eq!(result.target_stop_contract, "<project>-cli stop");
+        assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
+        assert_eq!(config.dns_mock.bypass_strategies.len(), 1);
+        assert_eq!(config.http_response_rewrite.rules.len(), 2);
         assert_eq!(config.http_gateway.rules[0].methods, ["GET"]);
         assert_eq!(
             config.recording.access_policy,
@@ -488,9 +504,9 @@ mod tests {
         assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);
         assert!(config.recording.background_dependencies.is_empty());
         assert!(raw.contains("# initial_load_timeout_ms = 60000"));
-        assert!(raw.contains("# incomplete, warn and continue case admission."));
-        assert!(raw.contains("No applied Memcached rule"));
-        assert!(raw.contains("means no additional observation window."));
+        assert!(raw.contains("# keys = [\"cache:init:a\", \"cache:init:b\"]"));
+        assert!(raw.contains("# bounds are unsigned 64-bit values"));
+        assert!(raw.contains("# remains incomplete, warn and continue case admission."));
         assert!(raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
         assert!(!raw.contains("verified_excludes"));
         assert!(!raw.contains("allow_side_effecting_methods"));
@@ -503,6 +519,7 @@ mod tests {
             readiness_path: "/healthy".to_string(),
             readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
+            breeze_enabled: true,
         })
         .unwrap_err();
         assert!(error.to_string().contains("already exists"));
@@ -518,6 +535,7 @@ mod tests {
             readiness_path: "healthy".to_string(),
             readiness_status: 99,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
+            breeze_enabled: false,
         })
         .unwrap_err();
         assert!(error.to_string().contains("source_http_port"));
@@ -533,9 +551,36 @@ mod tests {
             readiness_path: "/healthz".to_string(),
             readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
+            breeze_enabled: false,
         })
         .unwrap_err();
 
         assert!(error.to_string().contains("must differ"));
+    }
+
+    #[test]
+    fn generic_initialization_does_not_install_platform_policy() {
+        let target = tempdir().unwrap();
+        let result = initialize_recorder_config(RecorderConfigInitOptions {
+            target_root: target.path().to_path_buf(),
+            source_http_port: 8080,
+            candidate_http_port: 8181,
+            readiness_path: "/healthz".to_string(),
+            readiness_status: 404,
+            upstream_dns: "10.10.10.11:53".parse().unwrap(),
+            breeze_enabled: false,
+        })
+        .unwrap();
+        let config = AppConfig::load(&result.config).unwrap();
+
+        assert_eq!(result.runtime, "generic");
+        assert_eq!(
+            result.managed_record_command,
+            "traffic-e2e record --target-root ."
+        );
+        assert!(result.target_start_contract.ends_with("--port 8181"));
+        assert!(config.recording.encrypt_request_headers.is_empty());
+        assert!(config.dns_mock.bypass_strategies.is_empty());
+        assert!(config.http_response_rewrite.rules.is_empty());
     }
 }

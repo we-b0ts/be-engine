@@ -73,7 +73,7 @@ manifest digest, and pin consumers to `tag@sha256`.
 
 Recorder remains root inside this runtime for managed DNS and interception.
 When its recording output is a host bind mount, the host wrapper must pass
-`traffic-e2e record --artifact-owner "$(id -u):$(id -g)"` so finalization
+`traffic-e2e internal recorder-run --artifact-owner "$(id -u):$(id -g)"` so finalization
 assigns only the exact run tree back to the invoking host user.
 
 ## CLI Boundaries
@@ -93,17 +93,14 @@ Record baseline/candidate responses from live frontend traffic with:
 
 ```bash
 traffic-e2e record-comparison \
-  --config config/recorder.example.toml \
-  --policy config/verification.example.yaml
+  --target-root /path/to/initialized-target
 traffic-e2e record-comparison \
-  --config config/recorder.example.toml \
-  --policy config/verification.example.yaml \
+  --target-root /path/to/initialized-target \
   --duration-seconds 60 \
   --api 'GET /api/widgets/*' \
   --case-limit 250
 traffic-e2e record-comparison \
-  --config config/recorder.example.toml \
-  --policy config/verification.example.yaml \
+  --target-root /path/to/initialized-target \
   --baseline-recheck
 ```
 
@@ -196,18 +193,13 @@ With `--duration-seconds`, the timer begins only after both configured
 readiness probes succeed, then shutdown finalizes
 `comparison-recording-run.json`. Archive and remove old runs externally.
 
-`traffic-e2e config recorder init` emits required AI actions for creating
-`scripts/<project>-cli` with `start/status/stop` and
-`scripts/start-recording-comparison`. Before project code exists, the project
-CLI's `start` command serves a fixed response on the configured candidate port.
-The wrapper accepts and passes through `--duration-seconds` and
-`--baseline-recheck`, accepts `--brz-no-fallback <true|false>`, defaults the
-duration to 60 seconds and Breeze no-fallback to `true`, and later keeps using
-the stable project CLI contract when the mock is replaced by the genuine
-service. The Platform wrapper starts exactly one Breeze instance shared by the
-source and candidate containers; it consumes the Breeze option locally rather
-than passing it to `traffic-e2e`. AI and automated wrapper calls always pass
-the duration explicitly.
+`traffic-e2e config init --source-container <container> --breeze` installs the
+Breeze-aware recorder defaults together with project and verification
+configuration. The target repository provides no recording or comparison
+wrapper. `traffic-e2e record-comparison` owns the
+genuine source, one Breeze shared with the candidate, the candidate's fixed
+start/stop contract, recording, signals, finalization, and cleanup. AI and
+automated invocations pass an explicit duration, run ID, and API scope.
 
 Each published comparison recording case contains:
 
@@ -253,7 +245,7 @@ traffic-e2e config replay plan response-rule \
   --target-example '<redacted UUID from target>' \
   --api "GET /api/token" \
   --json-pointer /token \
-  --comparison-report .traffic-e2e/artifacts/comparison-recordings/<run-id>/comparison-report.json
+  --comparison-run .traffic-e2e/artifacts/comparison-recordings/<run-id>
 ```
 
 Neither `record-comparison` nor `compare` enables the fixed recording user,
@@ -281,20 +273,20 @@ Run the service with:
 cargo run -- diagnose recorder --config config/recorder.example.toml
 ```
 
-Install the binary and run managed recording:
+Install the binary and run managed recording from an initialized target:
 
 ```bash
 cargo install --path .
-traffic-e2e record --config config/recorder.example.toml
-traffic-e2e record --config config/recorder.example.toml \
+traffic-e2e record --target-root /path/to/target
+traffic-e2e record --target-root /path/to/target \
   --api 'GET /api/widgets/*'
 ```
 
-Automation should publish Recorder lifecycle state on a Unix socket and wait
-through the public lifecycle commands:
+The managed runtime publishes Recorder lifecycle state on a Unix socket and
+waits through its internal process contract:
 
 ```bash
-traffic-e2e record \
+traffic-e2e internal recorder-run \
   --config config/recorder.example.toml \
   --control-socket /run/traffic-e2e/recording.sock
 
@@ -313,20 +305,19 @@ the configured HTTP gateway source readiness probe. Neither command parses
 recorder configuration or probes listener ports. `--timeout-seconds` defaults
 to `300`.
 
-`traffic-e2e record` enables local DNS capture and fake-IP TCP/UDP redirect by
-default, which modifies local DNS/iptables state. Use this when you
-intentionally want the recorder to intercept local traffic. To skip those
-rules:
+The internal Recorder process enables local DNS capture and fake-IP TCP/UDP
+redirect by default inside its managed container. For focused low-level
+development without those rules:
 
 ```bash
-traffic-e2e record --config config/recorder.example.toml --no-dns
+traffic-e2e diagnose recorder --config config/recorder.example.toml
 ```
 
 Managed recording uses `dns_mock.upstream_dns` from the Recorder TOML for both
 fake-DNS forwarding and the local DNS interception bypass. It does not require
 or read a separate `UPSTREAM_DNS` environment variable.
 
-`traffic-e2e record` always limits DNS and fake-IP interception to the
+The legacy fixed-user local interception path limits DNS and fake-IP interception to the
 dedicated Unix user `trp-record`. Run the source service as that user so
 bootstrap and case dependencies are not polluted by unrelated local processes.
 The owner scope cannot be overridden by CLI options, environment variables, or
@@ -540,7 +531,7 @@ a source-controlled `.traffic-e2e/verification.yaml`, not product code or record
 overrides. Initialize it once and load it explicitly:
 
 ```bash
-traffic-e2e config replay init --target-root ../target
+traffic-e2e config init --target-root ../target --source-container <container> [--breeze]
 traffic-e2e replay --policy ../target/.traffic-e2e/verification.yaml path/to/case-dir
 ```
 
@@ -784,48 +775,94 @@ failures, not product behavior evidence.
 
 ## Migration E2E Runner
 
-Use `traffic-e2e` as the high-level migration replay command. Initialize the
-target project configuration after the recorder and replay documents, project
-facade, ignored local root, and `dev-migration` branch exist:
+Use the rewrite coordinator as the normal AI-facing migration command. It
+keeps one atomic state document under the ignored local root, exposes one
+active issue, and never returns raw report paths:
 
 ```bash
-traffic-e2e config project init --target-root ../target
+traffic-e2e rewrite next --api 'GET /api/widgets/*' \
+  --source-route '/api/widgets/:id'
+traffic-e2e rewrite status
+traffic-e2e rewrite evidence <query-id>
 ```
 
-The command validates the conventional inputs and generates
-`.traffic-e2e/project.yaml`:
+`next` returns the exact standard/comparison recording argv when external
+traffic is required. After that command completes, `next` validates the
+preallocated run, prepares the API, runs focused E2E, and returns either one
+bounded implementation issue or the next comparison action. A repository or
+policy change makes prior E2E/comparison evidence stale and causes `next` to
+rerun the required stage. `terminal_allowed` is false until the current API has
+both passing E2E and comparison evidence.
+
+Only use returned `rewrite evidence` query IDs for traffic facts. Use
+`rewrite rule plan|apply` for a source-proven response rule and `rewrite route`
+for a proven Recorder/Replay capability gap, external-data blocker, or source
+change. Query IDs and evidence IDs are bound to the workflow revision and
+active issue, so stale evidence is rejected.
+
+The lower-level commands in the remainder of this section are the traffic
+engine interface used by the coordinator and by traffic-e2e maintainers. They
+are not the normal rewrite-AI workflow.
+
+Initialize all three generated documents once:
+
+```bash
+traffic-e2e config init --target-root ../target \
+  --source-container <existing-source-container> [--breeze]
+```
+
+From the target root, `--target-root` is unnecessary. `--breeze` uses the
+conventional existing container named `breeze`; use `--breeze=<container>` only
+for a non-standard name. Defaults are source port `8080`, target port `8081`,
+readiness `/healthz` with status `404`, and upstream DNS `10.10.10.11:53`.
+Override a default only when the inspected application contract proves it is
+different. Source and Breeze containers need only be inspectable, not running.
+
+The command atomically generates version-7 `.traffic-e2e/project.yaml`,
+`.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
+configuration has explicit source, optional Breeze, target, replay, recording,
+delivery, and state sections. A typical
+target section is:
 
 ```yaml
-version: 5
-project_cli: scripts/<project>-cli
-replay_policy: .traffic-e2e/verification.yaml
-replay_startup_timeout_seconds: 60
-pr_base: dev-migration
-recorder_config: .traffic-e2e/recorder.toml
-recording_rule: record-api
-local_root: local
+target:
+  cli: scripts/<project>-cli
+  boot_dir: .traffic-e2e/boot
+  http_host: 127.0.0.1
+  port: 8081
+  readiness_path: /healthz
+  readiness_status: 404
+  startup_timeout_seconds: 60
+  request_timeout_seconds: 30
+  max_response_bytes: 33554432
 ```
 
-`replay_startup_timeout_seconds` controls how long the runner waits for replay
-to finish loading cases and publish its ready session; it defaults to 60 when
-omitted from an older config. The runner prints `loaded_cases=0` when dependency
-loading starts, then relays progress about every 5% by loaded case count while
-retaining the complete replay log in the run reports directory.
+Existing configuration is never overwritten. If any generated file exists,
+the whole initialization refuses without creating another file. In-place
+migration of obsolete versions is a separate future command. The initializer
+records `.traffic-e2e/boot` but neither requires nor creates it. Do not
+hand-write generated state.
 
-Replay E2E progress reports `passed`, not `verified`: E2E proves the recorded
-contract can execute, but does not retire an API from future validation.
-Comparison reports are the authority for current validation success and
-include both case-level and API-level passed counts.
+The target exposes only:
 
-Existing configuration is never overwritten. If the file is missing, every
-other runner command points back to `config project init`; if any required
-field is missing or the configured PR base no longer resolves, every command
-fails before using traffic E2E state. Replace an obsolete generated version
-explicitly with
-`traffic-e2e config --target-root <target> project init --force`.
-`prepare`, `run-api`, and `run` require a
-named feature branch different from `pr_base`. Do not hand-write it. Prepare
-each API only after confirming whether its source URI is static or dynamic:
+```text
+scripts/<project>-cli start --e2e --start-breeze off \
+  --boot-dir .traffic-e2e/boot --port <configured-port>
+scripts/<project>-cli stop
+```
+
+Each `start --e2e` invocation must run the project's normal compile command
+once before launch, even when an artifact already exists. If that compile
+command supports `--release`, pass `--release` to the compile command and
+launch the resulting release artifact. Do not append `--release` to the
+`start` command itself. The compile runs once per target start, not once per
+replayed case.
+
+The runner sends HTTP requests itself; the target CLI does not read cases or
+write response reports. The configured port is shared by target start,
+readiness, replay requests, and comparison requests.
+
+Prepare each API after confirming whether its source URI is static or dynamic:
 
 ```bash
 traffic-e2e prepare \
@@ -847,15 +884,17 @@ traffic-e2e run-api \
   --api 'GET /api/widgets/*'
 ```
 
-The terminal JSON keeps `status` and `passed` as the overall result and also
-reports independent evidence gates: `responses` is `passed`, `nonpassing`, or
-`incomplete`; `replay` is `complete` or `incomplete`; and `dependencies` is
-`clean`, `dirty`, or `unknown` while replay evidence is incomplete. Returned
-`reports` paths point to the finalized replay, assertion, and aggregate
-artifacts that exist for the attempt. Diagnose response evidence first, then
-replay completeness, then dirty dependency coverage. If all three gates pass
-but the overall result does not, inspect `latest_state` for execution or
-lifecycle errors.
+One attempt starts Replay once, starts the target once, executes every selected
+case through the runner-owned HTTP driver, stops the target once, and finalizes
+Replay. The terminal JSON reports independent `responses`, `replay`, and
+`dependencies` gates plus a bounded `diagnosis` containing counts, clustered
+Pointer/kind differences, and one representative expected/actual observation.
+Value presence explicitly distinguishes JSON null, missing, unavailable, and
+not-applicable evidence.
+
+Normal AI operation consumes only the terminal result. It does not open
+generated state, assertion details, aggregate reports, raw cases, `.active`,
+or `latest`.
 
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
@@ -873,60 +912,14 @@ traffic-e2e run \
   --case-source recordings/<run>/<rule>
 ```
 
-The full command starts replay once, loads bootstrap and all selected cases
-once, starts the target once, executes cases sequentially, finalizes and
-aggregates once, atomically publishes
-`.traffic-e2e/local/<run-key>/latest/`, and updates the Git-eligible
+The full command uses the same single target lifetime for the complete round,
+atomically publishes runner-owned evidence, and updates
 `.traffic-e2e/replay-progress.yaml`.
 
-The current logical run passes when every grouped API has finalized, complete,
-clean passing evidence. This is a replay E2E pass, not a long-term verification
-terminal state. A grouped focused pass is sufficient unless later behavior changes
-may invalidate it; then use one full regression round. Use `status`, `abort`,
-and `recover` for interrupted global rounds. Generated local JSON/YAML is
-tool-owned and must not be edited by AI or by target scripts.
-
-Replay and comparison publish separate Git-eligible progress files with one
-schema:
-
-```yaml
-version: 1
-stage: replay # or comparison
-updated_at: 2026-07-31T00:00:00Z
-totals:
-  runs: { executed: 3, passed: 3 }
-  cases: { executed: 300, passed: 300 }
-  apis: { total: 1 }
-success_streak:
-  runs: 3
-  cases: 300
-latest_run:
-  key: <runner-owned-identity>
-  evidence_fingerprint: <runner-owned-fingerprint>
-  number: 3
-  passed: true
-  cases: { executed: 100, passed: 100 }
-  apis: { executed: 1, passed: 1 }
-  scope: [GET /api/widgets/*]
-counted_runs:
-  <runner-owned-identity>: <runner-owned-fingerprint>
-apis:
-  GET /api/widgets/*:
-    totals:
-      runs: { executed: 3, passed: 3 }
-      cases: { executed: 300, passed: 300 }
-    success_streak: { runs: 3, cases: 300 }
-```
-
-`run-api` and `run` update `.traffic-e2e/replay-progress.yaml`; a complete
-`compare` updates `.traffic-e2e/comparison-progress.yaml` next to its policy.
-Any selected API failure resets the global streak, while an API failure resets
-only that API's streak. A different selected API scope starts a new global
-streak. The next finalized replay attempt automatically migrates legacy
-`.traffic-e2e/e2e-progress.yaml`. The runner-owned `counted_runs` ledger keeps
-up to 10,000 attempt identities so reprocessing older evidence cannot change
-lifetime totals; when full, progress updates fail instead of silently
-double-counting.
+The current logical run passes only with complete response, replay, and
+dependency gates. Replay success does not replace current comparison evidence.
+Use `status`, `abort`, and `recover` for interrupted global rounds; never repair
+runner state through filesystem edits.
 
 When managing host interception directly, always pair `up` with `down`:
 
@@ -1025,6 +1018,7 @@ published inside that run:
 <run-id>/errors.jsonl
 <run-id>/global-dependencies.jsonl
 <run-id>/global-dependencies-summary.json
+<run-id>/pre-readiness-traffic-summary.json
 <run-id>/global-dependencies-debug.jsonl
 <run-id>/<rule-name>/<uri-group>/<case-id>/request.json
 <run-id>/<rule-name>/<uri-group>/<case-id>/expected-response.json
@@ -1062,6 +1056,11 @@ captured by the UDP gateway. Run-level
 Global dependency files contain replay-oriented startup traffic plus explicit
 background-rule matches. Replay discovers them by walking upward from a case
 directory, prefers Case before Global, and consumes every exchange once.
+`pre-readiness-traffic-summary.json` is a bounded projection of only source
+`bootstrap` data interactions grouped by `host:port`. It excludes connection
+lifecycle events and known ping, heartbeat, and setup exchanges. The rewrite
+coordinator exposes the projection through its opaque evidence-query API, so a
+target AI does not need to read this file or the Global JSONL directly.
 
 Completed protocol events are moved by unique ownership into one asynchronous
 JSONL writer. `recording.writer_queue_capacity` bounds this queue by event count
@@ -1092,8 +1091,9 @@ not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
 `traffic.jsonl` continues to retain the exchange only when
 `recording.traffic_jsonl` permits it. It also enters
 `global-dependencies.jsonl` with `reason=background_rule` and a
-`bootstrap|runtime` phase. The rule changes ownership only; it does not alter
-forwarding, response capture, body limits, or protocol debugging. Add an
+`bootstrap|runtime` phase, plus its explicit `response_role`. The rule changes
+ownership only; it does not alter forwarding, response capture, body limits,
+or protocol debugging. Add an
 independent rule only after response assertions pass and source inspection
 proves API independence, then create a new recording run.
 
@@ -1108,7 +1108,8 @@ traffic-e2e config recorder apply background-dependencies \
   --authority config.api.demo.test \
   --method GET \
   --path-prefix /1/config/service \
-  --replay-report <same-finalized-replay-report.json> \
+  --case-source <exact-finalized-case-source> \
+  --api '<canonical-api-group>' \
   --source-revision 0123456789abcdef \
   --evidence 'src/config/refresh.rs:42 process-level scheduled refresh'
 ```
@@ -1129,7 +1130,8 @@ traffic-e2e config recorder apply background-dependencies \
   --group kunpeng-config-rpc \
   --interface-name com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc \
   --method-name getConfigByName \
-  --replay-report <same-finalized-replay-report.json> \
+  --case-source <exact-finalized-case-source> \
+  --api '<canonical-api-group>' \
   --source-revision 0123456789abcdef \
   --evidence 'MapiConfigLoader.java:init scheduled refresh unrelated to selected API'
 ```
@@ -1141,7 +1143,34 @@ selector when the same RPC command appears in unmatched, unsupported, or unsafe
 target traffic.
 
 A source scheduler that builds response-driving local cache state can instead
-use the current narrow Breeze Memcached rule:
+use an exact Redis `GET` runtime-state rule:
+
+```bash
+traffic-e2e config recorder apply background-dependencies \
+  --target-root . \
+  --protocol redis \
+  --name startup-cache-warm \
+  --port 20917 \
+  --command GET \
+  --key cache:init:a \
+  --key cache:init:b \
+  --response-role runtime-state \
+  --initial-load-timeout-ms 60000 \
+  --case-source <exact-finalized-case-source> \
+  --api '<canonical-api-group>' \
+  --source-revision 0123456789abcdef \
+  --evidence 'src/cache/warm.rs:init loads response-driving local state'
+```
+
+Planning requires every configured exact key in replay-safe, unused Global
+evidence. The new recording labels those responses as `runtime_state`. Replay
+still consumes each response once and matches the exact target, command, and
+key, but does not inherit the source connection binding or earlier unrelated
+lane commands. Ordinary, bootstrap-only, independent, and case Redis exchanges
+retain connection-order semantics.
+
+Breeze-backed Memcached profile or local-cache warm traffic uses the same
+runtime-state ownership model with a bounded numeric key series:
 
 ```bash
 traffic-e2e config recorder apply background-dependencies \
@@ -1155,7 +1184,8 @@ traffic-e2e config recorder apply background-dependencies \
   --key-separator . \
   --key-suffix pl_video \
   --initial-load-timeout-ms 60000 \
-  --replay-report <same-finalized-replay-report.json> \
+  --case-source <exact-finalized-case-source> \
+  --api '<canonical-api-group>' \
   --source-revision 0123456789abcdef \
   --evidence 'TopUserServiceImpl.java:691 scheduled local-cache warm'
 ```
@@ -1163,18 +1193,20 @@ traffic-e2e config recorder apply background-dependencies \
 The tool requires one compatible Breeze `mc` descriptor, persists its complete
 stable identity without the dynamic port, and resolves the port when the
 source-created descriptor is available. Runtime matching uses port as a coarse
-filter, then requires Memcached `get` and the exact bounded numeric key series. Apply this
-`runtime_state` rule during response repair when the cache warm is a proven
-cause; do not wait for responses to pass.
+filter, then requires Memcached `get` and the exact bounded numeric key series.
+The numeric prefix bounds are unsigned 64-bit values, including UID-derived
+keys above `4294967295`. Apply this `runtime_state` rule during response repair
+when the cache warm is a proven cause; do not wait for responses to pass.
 
-An applied Memcached rule also delays source case admission until Recorder has
-counted `key_end - key_start + 1` completed replay-safe matches. The count
-includes matches observed before HTTP readiness. After the ready probe,
+An applied runtime-state rule also delays source case admission until Recorder
+has observed its initial load. Redis counts each configured exact key once;
+Memcached counts `key_end - key_start + 1` completed replay-safe matches. The
+observations include matches before HTTP readiness. After the ready probe,
 Recorder observes for at most `initial_load_timeout_ms` (60000 by default),
 logs progress every 10 seconds, and warns but continues case admission when
-the count remains incomplete. The rule is the opt-in: without an applied
-Memcached rule there is no additional observation window. This source-recording
-wait does not apply to target-local cache initialization during Replay.
+the load remains incomplete. Without an applied runtime-state rule there is no
+additional observation window. This source-recording wait does not apply to
+target-local cache initialization during Replay.
 
 Recognized MySQL connection maintenance is not a semantic dependency. The
 strict built-in fingerprints are protocol `COM_PING`, c3p0's exact

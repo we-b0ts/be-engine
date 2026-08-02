@@ -103,6 +103,87 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
 }
 
 #[test]
+fn replay_rule_planning_resolves_runner_owned_assertion_details() {
+    let temp = tempdir().unwrap();
+    let policy = temp.path().join("replay.yaml");
+    let assertions = temp.path().join("assertions.json");
+    let aggregate = temp.path().join("aggregate.json");
+    let detail = temp.path().join("assertion-detail.json");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+    let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
+    fs::write(
+        &detail,
+        serde_json::to_vec(&json!({
+            "method": "GET",
+            "path": "/api/resource/token",
+            "body_mode": "json_structural",
+            "differences": [{
+                "pointer": "/content",
+                "kind": "value_mismatch",
+                "expected_type": "string",
+                "actual_type": "string"
+            }],
+            "dynamic_candidates": ["/content"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let detail_fingerprint = crate::replay::policy::fingerprint(&fs::read(&detail).unwrap());
+    fs::write(
+        &assertions,
+        serde_json::to_vec(&json!({
+            "case_source": "/cases",
+            "expected_response": "assertions_only",
+            "assertion_mode": "runner_owned",
+            "policy_fingerprint": fingerprint,
+            "cases": [{
+                "case_id": "case-1",
+                "response": {
+                    "passed": false,
+                    "difference_count": 1,
+                    "detail_report": detail,
+                    "detail_fingerprint": detail_fingerprint
+                }
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &aggregate,
+        serde_json::to_vec(&json!({
+            "case_source": "/cases",
+            "selected_case_ids": ["case-1"],
+            "complete": true,
+            "dirty": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let plan = plan_response_rule(ResponseRuleFeedback {
+        policy_path: policy,
+        kind: ResponseRuleKind::Dynamic,
+        api: "GET /api/resource/token".to_string(),
+        json_pointers: vec!["/content".to_string()],
+        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
+        source_evidence: Some("src/token.rs:issue_token".to_string()),
+        source_example: Some("<redacted source UUID>".to_string()),
+        target_example: Some("<redacted target UUID>".to_string()),
+        assertion_report: assertions,
+        aggregate_report: aggregate,
+    })
+    .unwrap();
+
+    assert!(plan.report().changed);
+    assert_eq!(plan.report().selected_difference_cases, 1);
+}
+
+#[test]
 fn dynamic_field_plan_preserves_unselected_differences_and_dirty_dependencies() {
     let temp = tempdir().unwrap();
     let feedback = write_dynamic_replay_feedback(

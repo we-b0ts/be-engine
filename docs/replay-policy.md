@@ -5,7 +5,7 @@ Each target repository owns one source-controlled
 and comparison verification:
 
 ```bash
-traffic-e2e config replay init --target-root .
+traffic-e2e config init --source-container <container> [--breeze]
 traffic-e2e replay --policy .traffic-e2e/verification.yaml /path/to/case-group
 ```
 
@@ -237,8 +237,7 @@ traffic-e2e config replay apply response-rule \
   --target-example '<redacted UUID from target>' \
   --api 'GET /api/resource/token' \
   --json-pointer /content \
-  --assertion-report .traffic-e2e/local/.../assertions.json \
-  --aggregate-report .traffic-e2e/local/.../aggregate.json
+  --case-source <exact-finalized-case-source>
 ```
 
 Version two also supports arrays whose product contract does not assign meaning
@@ -266,8 +265,7 @@ traffic-e2e config replay apply response-rule \
   --kind unordered \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
-  --assertion-report .traffic-e2e/local/.../assertions.json \
-  --aggregate-report .traffic-e2e/local/.../aggregate.json
+  --case-source <exact-finalized-case-source>
 ```
 
 Both actions accept only the difference kind selected by `--kind`,
@@ -302,7 +300,7 @@ traffic-e2e config comparison plan response-rule \
   --target-example '101' \
   --api 'GET /api/users/show' \
   --json-pointer /followers_count \
-  --comparison-report .traffic-e2e/artifacts/comparison-recordings/.../comparison-report.json
+  --comparison-run .traffic-e2e/artifacts/comparison-recordings/<run-id>
 ```
 
 Review the plan, then repeat with `apply`. Number matches only number. String

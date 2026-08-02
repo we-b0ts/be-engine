@@ -96,9 +96,10 @@ pub(crate) use assertion::{
     read_comparison_response_observation,
 };
 pub use assertion::{
-    ResponseAssertionCaseReport, ResponseAssertionOptions, ResponseDifferenceKind,
-    assert_recorded_response,
+    ResponseAssertionCaseReport, ResponseAssertionOptions, ResponseDifference,
+    ResponseDifferenceKind, assert_recorded_response,
 };
+pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;
 pub use policy::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,

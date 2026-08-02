@@ -199,6 +199,12 @@ fn state_for_published_directory(
     retarget_path(&mut published.replay_report, active_dir, latest_dir)?;
     retarget_path(&mut published.aggregate_report, active_dir, latest_dir)?;
     retarget_path(&mut published.assertions_report, active_dir, latest_dir)?;
+    for case in &mut published.cases {
+        if let Some(assertion) = &mut case.response_assertion {
+            retarget_path(&mut assertion.detail_report, active_dir, latest_dir)?;
+            retarget_path(&mut assertion.actual_response, active_dir, latest_dir)?;
+        }
+    }
     for api in &mut published.apis {
         retarget_path(&mut api.report_dir, active_dir, latest_dir)?;
     }

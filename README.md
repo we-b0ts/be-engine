@@ -42,9 +42,12 @@ cargo build --release
 Use the binary directly for the standard traffic E2E workflow:
 
 ```bash
-traffic-e2e config recorder init ...
-traffic-e2e config replay init ...
-traffic-e2e config project init ...
+traffic-e2e config init --source-container <container> [--breeze]
+traffic-e2e rewrite next --api 'GET /api/widgets/*' \
+  --source-route '/api/widgets/:id'
+traffic-e2e rewrite status
+traffic-e2e rewrite evidence <query-id>
+traffic-e2e record ...
 traffic-e2e record-comparison ...
 traffic-e2e compare ... --policy .traffic-e2e/verification.yaml
 traffic-e2e prepare ...
@@ -54,6 +57,17 @@ traffic-e2e status ...
 traffic-e2e recover ...
 traffic-e2e abort ...
 ```
+
+From a target repository root, the conventional initialization is simply
+`traffic-e2e config init --source-container <container> --breeze`.
+`--breeze` selects the existing container named `breeze`; omit it when the
+source does not use Breeze.
+
+For a backend migration, `traffic-e2e rewrite next` is the normal facade. It
+returns one argv-based action, automatically owns Prepare/E2E/Compare
+transitions, and exposes only bounded evidence queries. Direct `prepare`,
+`run-api`, `compare`, and report-oriented commands remain available to traffic
+operators and system maintainers.
 
 Evidence-driven recorder and verification-policy changes live under
 `traffic-e2e config ... plan|apply`; low-level grouping and report commands live
@@ -79,50 +93,24 @@ cargo run -- --help
 cargo run -- diagnose recorder --config config/recorder.example.toml
 ```
 
-Install the binary and run managed recording. It enables local DNS capture plus
-fake-IP TCP/UDP redirect by default. Use `--no-dns` when you want to skip those
-local rules.
+Install the binary and run managed recording from an initialized target
+repository:
 
 ```bash
 cargo install --path .
-traffic-e2e record --config config/recorder.example.toml
-traffic-e2e record --config config/recorder.example.toml \
+traffic-e2e record --target-root /path/to/target
+traffic-e2e record --target-root /path/to/target \
   --api 'GET /api/widgets/*'
 ```
 
 Automation can reserve the recording directory name with an explicit UTC run
-identifier: `traffic-e2e record --config ... --run-id YYYYMMDDHHMMSS`.
+identifier: `traffic-e2e record --target-root ... --run-id YYYYMMDDHHMMSS`.
 Repeat `--api 'METHOD /path-or-pattern'` to restrict only that run; omission
 uses the TOML rules unchanged. A supplied selector is also the case's
 `api_pattern`, so wildcard traffic stays grouped under the requested API.
-It can also expose two lifecycle barriers without parsing the recorder config:
-
-```bash
-traffic-e2e record --config ... --control-socket /run/traffic-e2e/recording.sock
-traffic-e2e recording wait-listeners \
-  --control-socket /run/traffic-e2e/recording.sock
-# Start the source application after this succeeds.
-traffic-e2e recording wait-ready \
-  --control-socket /run/traffic-e2e/recording.sock
-```
-
-`recording wait-listeners` succeeds after Recorder initialization and every
-enabled listener bind. `recording wait-ready` additionally waits for the
-configured source readiness probe. Both default to a 300-second timeout.
-
-Local interception is always filtered to the fixed `trp-record` Unix user.
-This is a project-created system account, not a Linux built-in. Create it once,
-run the source service as that user, then start the recorder:
-
-```bash
-sudo useradd --system --create-home --shell /bin/bash trp-record
-sudo -u trp-record /path/to/source-service start
-traffic-e2e record --config config/recorder.example.toml
-```
-
-The owner scope cannot be overridden from the CLI, environment, or recorder
-configuration. This prevents a recording session from intercepting DNS and
-fake-IP traffic belonging to the developer's login user.
+Source, optional Breeze, Recorder, interception, readiness, finalization, and
+cleanup are owned by traffic-e2e. Use `diagnose recorder` only for low-level
+Recorder development; its process-level lifecycle commands are internal.
 
 The default example listens on:
 
@@ -145,8 +133,8 @@ traffic-e2e replay path/to/recordings/<run-id>
 For runtime-generated UUIDs, timestamps, signed query fields, and reviewed
 response-comparison exemptions, keep a
 source-controlled `.traffic-e2e/verification.yaml` in the target project and pass it with
-`--policy`. Initialize it with `traffic-e2e config replay init --target-root
-<target>`; initialization, strategy application, replay, and comparison each
+`--policy`. Initialize it with `traffic-e2e config init --source-container
+<container> [--breeze]` from the target root; initialization, strategy application, replay, and comparison each
 validate the policy. See
 [Dependency Replay And Response Verification Policy](docs/replay-policy.md).
 
@@ -167,7 +155,10 @@ developer-owned process; the target process must not access the replay session
 or control socket.
 
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
-Redis and Memcached exchanges are consumed in recorded connection order. The
+Redis and Memcached exchanges are normally consumed in recorded connection
+order. Exact Redis `GET` and Memcached `get` exchanges explicitly recorded by a
+background rule as `runtime_state` remain single-use but are matched without
+source connection binding or lane blockers. The
 v5 replay report keeps complete unmatched, unsupported, unsafe, and unused
 evidence, records exact success totals, and retains a bounded prefix of success
 details. `traffic-e2e diagnose replay-control end/report --fail-on-dirty`
