@@ -6,10 +6,12 @@ use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteContext, RewriteNextOptions,
     RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
-    RewriteRouteOptions, RewriteRulePlanOptions, apply_rewrite_rule, next_rewrite,
-    plan_rewrite_rule, query_rewrite_evidence, recover_rewrite, request_rewrite_recording,
-    route_rewrite, status_rewrite,
+    RewriteRouteOptions, RewriteRulePlanOptions, apply_rewrite_rule, execute_rewrite_recording,
+    next_rewrite, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, route_rewrite, status_rewrite, verify_rewrite_repair,
 };
+
+mod dependency_rule;
 
 #[derive(Debug, Args)]
 pub(super) struct RewriteArgs {
@@ -30,8 +32,12 @@ enum RewriteCommand {
     Evidence(EvidenceArgs),
     /// Plan or apply one evidence-backed response rule.
     Rule(RuleArgs),
+    /// Plan or apply one source-proven background dependency rule.
+    DependencyRule(dependency_rule::DependencyRuleArgs),
     /// Submit a source-backed non-target-code attribution for controlled routing.
     Route(RouteArgs),
+    /// Verify one coordinator-issued system repair acceptance.
+    Repair(RepairArgs),
     /// Request a fresh coordinator-owned recording with explicit bounded parameters.
     Recording(RecordingArgs),
     /// Remove only a stale coordinator lock after its process has exited.
@@ -40,10 +46,10 @@ enum RewriteCommand {
 
 #[derive(Debug, Args)]
 struct NextArgs {
-    /// Canonical active API. Required only when starting a new workflow.
+    /// Optional canonical API selector; omit at startup to process every API observed through recorder configuration.
     #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
     api: Option<RecordingApi>,
-    /// Source registration route; required for a dynamic API pattern.
+    /// Source registration route for the active dynamic API when requested by the coordinator.
     #[arg(long)]
     source_route: Option<String>,
 }
@@ -119,8 +125,23 @@ struct RouteArgs {
     source_ref: String,
     #[arg(long)]
     required_change: String,
-    #[arg(long)]
-    acceptance_command: String,
+}
+
+#[derive(Debug, Args)]
+struct RepairArgs {
+    #[command(subcommand)]
+    command: RepairCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RepairCommand {
+    /// Verify that the accepted system or source revision changed.
+    Verify(RepairVerifyArgs),
+}
+
+#[derive(Debug, Args)]
+struct RepairVerifyArgs {
+    repair_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -131,8 +152,15 @@ struct RecordingArgs {
 
 #[derive(Debug, Subcommand)]
 enum RecordingCommand {
-    /// Replace the active standard evidence chain and return its exact recording action.
+    /// Request or recover one idempotent standard recording action.
     Request(RecordingRequestArgs),
+    /// Execute one unchanged coordinator-owned recording action.
+    Execute(RecordingExecuteArgs),
+}
+
+#[derive(Debug, Args)]
+struct RecordingExecuteArgs {
+    action_id: String,
 }
 
 #[derive(Debug, Args)]
@@ -143,8 +171,11 @@ struct RecordingRequestArgs {
     reason: RecordingReasonArg,
     #[arg(long, default_value = "60")]
     duration_seconds: NonZeroU64,
-    #[arg(long, default_value = "100")]
-    case_limit: NonZeroUsize,
+    #[arg(long = "per-api-case-limit", default_value = "100")]
+    per_api_case_limit: NonZeroUsize,
+    /// Replace a different pending recording request instead of returning a conflict.
+    #[arg(long)]
+    replace_pending: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -218,14 +249,20 @@ pub(super) async fn run(args: RewriteArgs) -> Result<()> {
                 &args.plan_id,
             )?),
         },
+        RewriteCommand::DependencyRule(args) => dependency_rule::run(target_root, args),
         RewriteCommand::Route(args) => print_json(&route_rewrite(RewriteRouteOptions {
             target_root,
             kind: args.kind.as_str().to_string(),
             evidence_id: args.evidence_id,
             source_ref: args.source_ref,
             required_change: args.required_change,
-            acceptance_command: args.acceptance_command,
         })?),
+        RewriteCommand::Repair(args) => match args.command {
+            RepairCommand::Verify(args) => print_json(&verify_rewrite_repair(
+                RewriteContext { target_root },
+                &args.repair_id,
+            )?),
+        },
         RewriteCommand::Recording(args) => match args.command {
             RecordingCommand::Request(args) => print_json(&request_rewrite_recording(
                 RewriteRecordingRequestOptions {
@@ -233,9 +270,13 @@ pub(super) async fn run(args: RewriteArgs) -> Result<()> {
                     kind: args.kind.into(),
                     reason: args.reason.into(),
                     duration_seconds: args.duration_seconds,
-                    case_limit: args.case_limit,
+                    per_api_case_limit: args.per_api_case_limit,
+                    replace_pending: args.replace_pending,
                 },
             )?),
+            RecordingCommand::Execute(args) => {
+                print_json(&execute_rewrite_recording(target_root, &args.action_id).await?)
+            }
         },
         RewriteCommand::Recover => {
             print_json(&recover_rewrite(RewriteContext { target_root }).await?)
@@ -328,7 +369,41 @@ mod tests {
             .is_ok()
         );
         assert!(
+            TestCli::try_parse_from([
+                "test",
+                "recording",
+                "request",
+                "--kind",
+                "standard",
+                "--reason",
+                "user-requested",
+                "--replace-pending",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from(
+                ["test", "recording", "execute", "recording-0123456789abcdef",]
+            )
+            .is_ok()
+        );
+        assert!(
             TestCli::try_parse_from(["test", "evidence", "evq-r1-issue-representatives"]).is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "route",
+                "--kind",
+                "replay-capability-gap",
+                "--evidence-id",
+                "evidence-1",
+                "--source-ref",
+                "src/client.rs:42",
+                "--required-change",
+                "support source-equivalent request matching",
+            ])
+            .is_ok()
         );
         assert!(
             TestCli::try_parse_from([
@@ -345,8 +420,9 @@ mod tests {
                 "--acceptance-command",
                 "traffic-e2e rewrite next",
             ])
-            .is_ok()
+            .is_err()
         );
+        assert!(TestCli::try_parse_from(["test", "repair", "verify", "repair-1"]).is_ok());
         assert!(
             TestCli::try_parse_from([
                 "test",
@@ -358,7 +434,7 @@ mod tests {
                 "user-requested",
                 "--duration-seconds",
                 "90",
-                "--case-limit",
+                "--per-api-case-limit",
                 "250",
             ])
             .is_ok()
@@ -372,10 +448,102 @@ mod tests {
                 "standard",
                 "--reason",
                 "user-requested",
-                "--case-limit",
+                "--per-api-case-limit",
                 "0",
             ])
             .is_err()
         );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "dependency-rule",
+                "plan",
+                "memcached",
+                "--evidence-id",
+                "evidence-1",
+                "--name",
+                "planet-video-cache-warm",
+                "--source-evidence",
+                "TopUserServiceImpl.java:691 scheduled cache warm",
+                "--breeze-resource",
+                "user-video",
+                "--key-start",
+                "0",
+                "--key-end",
+                "4095",
+                "--key-suffix",
+                "pl_video",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "dependency-rule",
+                "plan",
+                "memcached",
+                "--evidence-id",
+                "evidence-1",
+                "--name",
+                "cache-warm",
+                "--source-evidence",
+                "src/cache.rs:init",
+                "--breeze-resource",
+                "user-video",
+                "--key-start",
+                "0",
+                "--key-end",
+                "1",
+                "--key-suffix",
+                "warm",
+                "--authority",
+                "config.internal",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dependency_rule_help_is_protocol_specific_and_has_no_api_context() {
+        let memcached =
+            TestCli::try_parse_from(["test", "dependency-rule", "plan", "memcached", "--help"])
+                .unwrap_err()
+                .to_string();
+        assert!(memcached.contains("--breeze-resource"));
+        assert!(memcached.contains("--key-start"));
+        assert!(!memcached.contains("--authority"));
+        assert!(!memcached.contains("--api"));
+        assert!(!memcached.contains("--case-source"));
+        assert!(!memcached.contains("--source-revision"));
+
+        let http = TestCli::try_parse_from(["test", "dependency-rule", "plan", "http", "--help"])
+            .unwrap_err()
+            .to_string();
+        assert!(http.contains("--authority"));
+        assert!(http.contains("--path-prefix"));
+        assert!(!http.contains("--breeze-resource"));
+        assert!(!http.contains("--key-start"));
+
+        let zcount = TestCli::try_parse_from([
+            "test",
+            "dependency-rule",
+            "plan",
+            "redis",
+            "zcount",
+            "--help",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(zcount.contains("--key-prefix"));
+        assert!(!zcount.contains("--key <"));
+        assert!(!zcount.contains("--initial-load-timeout-ms"));
+
+        let get =
+            TestCli::try_parse_from(["test", "dependency-rule", "plan", "redis", "get", "--help"])
+                .unwrap_err()
+                .to_string();
+        assert!(get.contains("--key <"));
+        assert!(get.contains("--initial-load-timeout-ms"));
+        assert!(!get.contains("--key-prefix"));
     }
 }

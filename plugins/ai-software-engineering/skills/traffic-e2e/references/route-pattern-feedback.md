@@ -80,8 +80,8 @@ case_path_patterns = [
 ```
 
 - Recording limits are target-owned and independent from route feedback.
-  `http_gateway.case_limits.default` applies per resolved case pattern, while
-  exact keys under `http_gateway.case_limits.overrides` may set different
+  `http_gateway.per_api_case_limits.default` applies per resolved case pattern,
+  while exact keys under `http_gateway.per_api_case_limits.overrides` may set different
   limits. Do not add or raise these limits merely to make replay discovery
   record more cases. Pattern feedback must preserve existing limit settings.
 - Require `traffic-e2e` from `PATH`. Never edit the target TOML

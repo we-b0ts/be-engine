@@ -25,6 +25,7 @@ pub struct E2eDirtyCounts {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2eDirtyCluster {
+    pub cluster_id: String,
     pub protocol: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<E2eDependencyEndpoint>,
@@ -152,6 +153,9 @@ fn enrich_cluster(
     pre_readiness_counts: &BTreeMap<String, usize>,
 ) -> Result<E2eDirtyCluster> {
     let endpoint = cluster.endpoint.map(endpoint_from_replay);
+    let scope = "case";
+    let cluster_id =
+        stable_cluster_id(&cluster.protocol, endpoint.as_ref(), scope, &cluster.reason);
     let source_pre_readiness_interactions = endpoint
         .as_ref()
         .and_then(|value| pre_readiness_counts.get(&endpoint_key(value)))
@@ -162,9 +166,10 @@ fn enrich_cluster(
         .map(|value| representative_from_replay(value, case_dirs))
         .transpose()?;
     Ok(E2eDirtyCluster {
+        cluster_id,
         protocol: cluster.protocol,
         endpoint,
-        scope: "case".to_string(),
+        scope: scope.to_string(),
         reason: cluster.reason,
         count: cluster.count,
         case_count: cluster.case_count,
@@ -223,6 +228,25 @@ fn endpoint_key(endpoint: &E2eDependencyEndpoint) -> String {
     format!("{}:{}", endpoint.host, endpoint.port)
 }
 
+fn stable_cluster_id(
+    protocol: &str,
+    endpoint: Option<&E2eDependencyEndpoint>,
+    scope: &str,
+    reason: &str,
+) -> String {
+    let endpoint = endpoint
+        .map(endpoint_key)
+        .unwrap_or_else(|| "unresolved".to_string());
+    let mut hash = 0xcbf29ce484222325_u64;
+    for part in [protocol, endpoint.as_str(), scope, reason] {
+        for byte in part.as_bytes().iter().chain(std::iter::once(&0)) {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("dirty-{hash:016x}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +290,7 @@ mod tests {
 
         let cluster = enrich_cluster(cluster, &case_dirs, &startup).unwrap();
 
+        assert_eq!(cluster.cluster_id, "dirty-ebf71141ecbd6508");
         assert_eq!(cluster.scope, "case");
         assert_eq!(cluster.source_pre_readiness_interactions, 9);
         let representative = cluster.representative.unwrap();

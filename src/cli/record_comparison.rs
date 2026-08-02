@@ -32,9 +32,9 @@ pub(super) struct RecordComparisonArgs {
     /// Record only this API for the current run; repeat for multiple METHOD/path selectors.
     #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
     apis: Vec<RecordingApi>,
-    /// Override the case limit for every API in this run.
-    #[arg(long, value_name = "N")]
-    case_limit: Option<NonZeroUsize>,
+    /// Override the per-API case limit for this run.
+    #[arg(long = "per-api-case-limit", value_name = "N")]
+    per_api_case_limit: Option<NonZeroUsize>,
 }
 
 pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
@@ -57,8 +57,8 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
         "comparison verification policy not found: {}",
         policy_path.display()
     );
-    if let Some(case_limit) = args.case_limit {
-        config.override_case_limits_for_run(case_limit);
+    if let Some(per_api_case_limit) = args.per_api_case_limit {
+        config.override_per_api_case_limit_for_run(per_api_case_limit);
     }
     let decision = configure_baseline_recheck(&mut config, &policy_path, args.baseline_recheck)?;
     info!(
@@ -160,7 +160,7 @@ mod tests {
             "--baseline-recheck",
             "--api",
             "GET /api/users/*",
-            "--case-limit",
+            "--per-api-case-limit",
             "250",
         ])
         .unwrap();
@@ -179,7 +179,10 @@ mod tests {
             "GET /api/users/*"
         );
         assert_eq!(
-            parsed.record_comparison.case_limit.map(NonZeroUsize::get),
+            parsed
+                .record_comparison
+                .per_api_case_limit
+                .map(NonZeroUsize::get),
             Some(250)
         );
         assert!(
@@ -196,8 +199,14 @@ mod tests {
             .is_err()
         );
         assert!(
-            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--case-limit", "0",])
-                .is_err()
+            TestCli::try_parse_from([
+                "test",
+                "--config",
+                "recorder.toml",
+                "--per-api-case-limit",
+                "0",
+            ])
+            .is_err()
         );
 
         let defaults = TestCli::try_parse_from(["test", "--config", "recorder.toml"]).unwrap();

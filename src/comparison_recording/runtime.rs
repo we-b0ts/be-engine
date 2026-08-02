@@ -340,7 +340,10 @@ async fn handle_request(
         || resolve_case_group(&uri, &rule.case_path_patterns),
         |pattern| resolve_case_group(&uri, std::slice::from_ref(pattern)),
     );
-    let limit = runtime.gateway.case_limits.limit_for(&group.pattern);
+    let limit = runtime
+        .gateway
+        .per_api_case_limits
+        .limit_for(&group.pattern);
     let Some(reservation) = runtime
         .store
         .try_reserve(&rule.name, &group.pattern, limit)

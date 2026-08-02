@@ -27,7 +27,7 @@ manually select, retag, or substitute an adapter image.
 The fixed adapter may only establish Platform transport interception. It must
 not alter source business code, caches, feature switches, or response behavior.
 
-Use `--case-limit` only as an invocation-local bound. Do not edit recorder
+Use `--per-api-case-limit` only as an invocation-local per-pattern bound. Do not edit recorder
 scope for a temporary API selection.
 
 When request-header encryption is configured,

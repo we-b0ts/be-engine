@@ -98,7 +98,7 @@ traffic-e2e record-comparison \
   --target-root /path/to/initialized-target \
   --duration-seconds 60 \
   --api 'GET /api/widgets/*' \
-  --case-limit 250
+  --per-api-case-limit 250
 traffic-e2e record-comparison \
   --target-root /path/to/initialized-target \
   --baseline-recheck
@@ -359,15 +359,15 @@ configured in `headers`.
 
 The gateway also limits successfully published cases per resolved case pattern
 within one recorder run. The default is
-`http_gateway.case_limits.default = 100`. Static paths are counted
+`http_gateway.per_api_case_limits.default = 100`. Static paths are counted
 independently by exact URI path; a URI matched by `case_path_patterns` is
 counted under that configured pattern. Pattern-specific limits use exact keys:
 
 ```toml
-[http_gateway.case_limits]
+[http_gateway.per_api_case_limits]
 default = 100
 
-[http_gateway.case_limits.overrides]
+[http_gateway.per_api_case_limits.overrides]
 "/api/resource/token" = 25
 "/api/namespaces/**" = 50
 ```
@@ -378,10 +378,11 @@ later matching requests use the configured fallback strategy without creating
 a case. Failed cases do not consume the limit, and restarting Recorder starts
 a new run with fresh counts.
 
-`record` and `record-comparison` accept a positive `--case-limit N` for one
+`record` and `record-comparison` accept a positive `--per-api-case-limit N` for one
 run. When present, it replaces both the configured default and every
 pattern-specific override in memory, so every resolved API or static path uses
-`N`; it never rewrites the recorder TOML.
+`N`; it is not a run-wide total when multiple APIs are recorded, and it never
+rewrites the recorder TOML.
 
 After an upstream HTTP response completes, Recorder continues accepting new
 case dependencies for the fixed
@@ -766,7 +767,7 @@ selectors are run-local and intersect the configured HTTP rules. They are
 persisted in the run summary and used as the selected cases' `api_pattern`, but
 never rewrite
 `.traffic-e2e/recorder.toml`; no plan/apply workflow is needed for a temporary
-recording scope. Use `--case-limit N` when the same positive run-local case
+recording scope. Use `--per-api-case-limit N` when the same positive run-local case
 limit must apply to every selected API.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
@@ -780,6 +781,8 @@ keeps one atomic state document under the ignored local root, exposes one
 active issue, and never returns raw report paths:
 
 ```bash
+traffic-e2e rewrite next
+# Or explicitly narrow the workflow to one API:
 traffic-e2e rewrite next --api 'GET /api/widgets/*' \
   --source-route '/api/widgets/:id'
 traffic-e2e rewrite status
@@ -788,25 +791,47 @@ traffic-e2e rewrite recording request \
   --kind standard \
   --reason user-requested \
   --duration-seconds 60 \
-  --case-limit 100
+  --per-api-case-limit 100
+traffic-e2e rewrite recording execute <action-id>
+traffic-e2e rewrite repair verify <repair-id>
 ```
 
-`next` returns the exact standard/comparison recording argv when external
-traffic is required. After that command completes, `next` validates the
-preallocated run, prepares the API, runs focused E2E, and returns either one
-bounded implementation issue or the next comparison action. A repository or
-policy change makes prior E2E/comparison evidence stale and causes `next` to
-rerun the required stage. `terminal_allowed` is false until the current API has
-both passing E2E and comparison evidence.
+Every returned command contains a canonical `cwd` plus exact argv. `next`
+returns an opaque standard/comparison `rewrite recording execute <action-id>`
+action. The coordinator chooses a finalized real-traffic request corpus and
+drives it through the recording gateway; callers do not add curl loops,
+replayers, backgrounding, or driver parameters. If no compatible finalized
+corpus exists, the action is `input_required` until that external input is
+available. When startup omits `--api`, recorder configuration limits the
+standard run and the coordinator derives a stable `api_inventory` from its
+published cases. After the execute command completes, `next` validates the
+preallocated run, prepares the current API, runs focused E2E, and returns
+either one bounded implementation issue or the next comparison action. Once
+comparison passes, the following `next` prepares the next inventory item from
+the same standard recording. A repository or policy change makes prior
+E2E/comparison evidence stale and causes `next` to
+rerun the required stage. `terminal_allowed` is false until every inventory
+item has both passing E2E and comparison evidence.
+
+`status` is read-only and returns the current `action` from the persisted
+workflow revision. Before a recording result exists it reconstructs the same
+run ID and argv; a pending rule plan produces `plan_apply_required` with only
+the stored plan ID. When a recording manifest exists or the target repository
+has changed, status returns `resume_required` with `rewrite next` instead of
+repeating the earlier action. Use this snapshot to recover lost command output,
+but do not start a second copy of an action already known to be running.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
 recording. Use `rewrite recording request --kind standard` only for an explicit
 new-traffic request, a changed Recorder contract, or a changed source baseline.
-The request accepts positive duration and case-limit values, invalidates state
+The request accepts positive duration and per-API case-limit values, invalidates state
 derived from the old baseline without deleting its artifacts, and returns a
-new exact recording argv. The coordinator defaults both standard and comparison
-recording actions to 60 seconds and 100 cases.
+new exact recording action. An identical pending request returns the existing
+action and run. A different pending request is rejected unless
+`--replace-pending` is explicit; a completed manifest returns a resume action.
+The coordinator defaults both standard and comparison recording actions to 60
+seconds and 100 cases.
 
 After a focused attempt, `next` and `status` expose
 `latest_focused_e2e.execution_mode` as either `fresh_standard_cases` or
@@ -831,16 +856,23 @@ For a dependency issue, `representatives` and `dirty_clusters` read a bounded
 Replay dependency sidecar instead of the complete Replay report. The sidecar
 contains only case-scoped unmatched, unsupported, unsafe, and unused-case
 events, grouped by protocol and `host:port`, with bounded operation counts and
-one exact representative `case_dir`. Source data interactions recorded before
-readiness are returned separately and correlated by endpoint as diagnostic
-context. They do not affect the case gate. `unused_global` events and target
-activity outside an active case remain aggregate diagnostics and do not make a
-case dirty.
+one exact representative `case_dir`. Each compact cluster has a stable
+`cluster_id` and the correlated startup interaction count. Full source data
+interactions recorded before readiness are returned only by the separate
+`pre_readiness_traffic` query. They do not affect the case gate.
+`unused_global` events and target activity outside an active case remain
+aggregate diagnostics and do not make a case dirty.
 
 Use `rewrite rule plan|apply` for a source-proven response rule and
 `rewrite route` for a proven Recorder/Replay capability gap, external-data
 blocker, or source change. Query IDs and evidence IDs are bound to the workflow
 revision and active issue, so stale evidence is rejected.
+
+An accepted route snapshots a coordinator-defined system or source revision and
+returns `repair verify <repair-id>`. The caller cannot provide an acceptance
+command, and `next` or `recording request` cannot bypass the repair. Successful
+verification decides whether to rerun the same cases or allocate fresh standard
+recording evidence.
 
 The lower-level commands in the remainder of this section are the traffic
 engine interface used by the coordinator and by traffic-e2e maintainers. They
@@ -1132,22 +1164,21 @@ protocol = "http"
 authorities = ["config.api.demo.test"]
 methods = ["GET"]
 path_prefixes = ["/1/config/service"]
-source_revision = "0123456789abcdef"
 source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
-response_role = "independent"
 ```
 
-All three selector dimensions and both source-evidence fields are required. A
+All three selector dimensions and `source_evidence` are required. The source
+revision remains in the plan report instead of runtime configuration. A
 matching exchange is not attributed to an active API case and therefore does
 not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
 `traffic.jsonl` continues to retain the exchange only when
 `recording.traffic_jsonl` permits it. It also enters
 `global-dependencies.jsonl` with `reason=background_rule` and a
-`bootstrap|runtime` phase, plus its explicit `response_role`. The rule changes
+`bootstrap|runtime` phase. The rule changes
 ownership only; it does not alter forwarding, response capture, body limits,
-or protocol debugging. Add an
-independent rule only after response assertions pass and source inspection
-proves API independence, then create a new recording run.
+or protocol debugging. Add a rule only after response assertions pass and
+source inspection proves process ownership and case independence, then create
+a new recording run.
 
 Use a finalized replay report to create the AI-managed rule instead of editing
 the table directly:
@@ -1155,15 +1186,14 @@ the table directly:
 ```bash
 traffic-e2e config recorder apply background-dependencies \
   --target-root . \
-  --protocol http \
   --name config-refresh \
+  --case-source <exact-finalized-case-source> \
+  --source-revision 0123456789abcdef \
+  --evidence 'src/config/refresh.rs:42 process-level scheduled refresh' \
+  http \
   --authority config.api.demo.test \
   --method GET \
-  --path-prefix /1/config/service \
-  --case-source <exact-finalized-case-source> \
-  --api '<canonical-api-group>' \
-  --source-revision 0123456789abcdef \
-  --evidence 'src/config/refresh.rs:42 process-level scheduled refresh'
+  --path-prefix /1/config/service
 ```
 
 The action requires at least one matching unused case HTTP exchange and rejects
@@ -1172,20 +1202,19 @@ replans against the current recorder config and replay report immediately
 before its atomic write. One rule owns one exact authority, method, and path
 prefix; use separate rules for distinct request families.
 
-Source-proven independent Motan process traffic uses one exact RPC identity:
+Source-proven process-owned Motan traffic uses one exact RPC identity:
 
 ```bash
 traffic-e2e config recorder apply background-dependencies \
   --target-root . \
-  --protocol motan \
   --name kunpeng-refresh \
+  --case-source <exact-finalized-case-source> \
+  --source-revision 0123456789abcdef \
+  --evidence 'MapiConfigLoader.java:init scheduled refresh unrelated to selected API' \
+  motan \
   --group kunpeng-config-rpc \
   --interface-name com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc \
-  --method-name getConfigByName \
-  --case-source <exact-finalized-case-source> \
-  --api '<canonical-api-group>' \
-  --source-revision 0123456789abcdef \
-  --evidence 'MapiConfigLoader.java:init scheduled refresh unrelated to selected API'
+  --method-name getConfigByName
 ```
 
 The rule stores no node hostname, port, Vintage alias, or request payload. It
@@ -1194,52 +1223,46 @@ method. Planning requires a matching unused case exchange and rejects the
 selector when the same RPC command appears in unmatched, unsupported, or unsafe
 target traffic.
 
-A source scheduler that builds response-driving local cache state can instead
-use an exact Redis `GET` runtime-state rule:
+A process-owned Redis scheduler using exact GET keys can use:
 
 ```bash
 traffic-e2e config recorder apply background-dependencies \
   --target-root . \
-  --protocol redis \
   --name startup-cache-warm \
+  --case-source <exact-finalized-case-source> \
+  --source-revision 0123456789abcdef \
+  --evidence 'src/cache/warm.rs:init loads response-driving local state' \
+  redis \
+  get \
   --port 20917 \
-  --command GET \
   --key cache:init:a \
   --key cache:init:b \
-  --response-role runtime-state \
-  --initial-load-timeout-ms 60000 \
-  --case-source <exact-finalized-case-source> \
-  --api '<canonical-api-group>' \
-  --source-revision 0123456789abcdef \
-  --evidence 'src/cache/warm.rs:init loads response-driving local state'
+  --initial-load-timeout-ms 60000
 ```
 
-Planning requires every configured exact key in replay-safe, unused Global
-evidence. The new recording labels those responses as `runtime_state`. Replay
-still consumes each response once and matches the exact target, command, and
-key, but does not inherit the source connection binding or earlier unrelated
-lane commands. Ordinary, bootstrap-only, independent, and case Redis exchanges
-retain connection-order semantics.
+Planning requires every configured exact key in replay-safe, unused case
+evidence. Replay consumes each response once and matches the exact target,
+command, and key, without inheriting the source connection binding or earlier
+unrelated lane commands. Case and bootstrap-only exchanges retain
+connection-order semantics.
 
-Breeze-backed Memcached profile or local-cache warm traffic uses the same
-runtime-state ownership model with a bounded numeric key series:
+Breeze-backed Memcached profile or local-cache warm traffic uses a bounded
+numeric key series:
 
 ```bash
 traffic-e2e config recorder apply background-dependencies \
   --target-root . \
-  --protocol memcached \
   --name planet-video-cache-warm \
+  --case-source <exact-finalized-case-source> \
+  --source-revision 0123456789abcdef \
+  --evidence 'TopUserServiceImpl.java:691 scheduled local-cache warm' \
+  memcached \
   --breeze-resource user-video \
-  --command get \
   --key-start 0 \
   --key-end 4095 \
   --key-separator . \
   --key-suffix pl_video \
-  --initial-load-timeout-ms 60000 \
-  --case-source <exact-finalized-case-source> \
-  --api '<canonical-api-group>' \
-  --source-revision 0123456789abcdef \
-  --evidence 'TopUserServiceImpl.java:691 scheduled local-cache warm'
+  --initial-load-timeout-ms 60000
 ```
 
 The tool requires one compatible Breeze `mc` descriptor, persists its complete
@@ -1247,18 +1270,21 @@ stable identity without the dynamic port, and resolves the port when the
 source-created descriptor is available. Runtime matching uses port as a coarse
 filter, then requires Memcached `get` and the exact bounded numeric key series.
 The numeric prefix bounds are unsigned 64-bit values, including UID-derived
-keys above `4294967295`. Apply this `runtime_state` rule during response repair
-when the cache warm is a proven cause; do not wait for responses to pass.
+keys above `4294967295`. The source revision remains in plan evidence rather
+than runtime configuration. If the cache warm affects API behavior, implement
+the source-compatible target cache lifecycle separately from this ownership
+rule.
 
-An applied runtime-state rule also delays source case admission until Recorder
-has observed its initial load. Redis counts each configured exact key once;
+An applied rule with `initial_load_timeout_ms` delays source case admission
+while Recorder observes its initial load. Redis GET counts each configured exact key once;
 Memcached counts `key_end - key_start + 1` completed replay-safe matches. The
 observations include matches before HTTP readiness. After the ready probe,
 Recorder observes for at most `initial_load_timeout_ms` (60000 by default),
 logs progress every 10 seconds, and warns but continues case admission when
-the load remains incomplete. Without an applied runtime-state rule there is no
-additional observation window. This source-recording wait does not apply to
-target-local cache initialization during Replay.
+the load remains incomplete. Without an initial-load timeout there is no
+additional observation window. This source-recording wait does not classify
+response causality and does not apply to target-local cache initialization
+during Replay.
 
 Recognized MySQL connection maintenance is not a semantic dependency. The
 strict built-in fingerprints are protocol `COM_PING`, c3p0's exact

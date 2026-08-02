@@ -91,6 +91,8 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
 
     let plan = plan_background_dependency(fixture.feedback()).unwrap();
     assert!(plan.report().changed);
+    assert!(!plan.report().reused_existing);
+    assert_eq!(plan.report().effective_name, "config-refresh");
     assert!(!plan.report().applied);
     assert_eq!(plan.report().authority, "config.api.demo.test");
     assert_eq!(plan.report().method, "GET");
@@ -101,14 +103,47 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
     assert!(raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
-    assert!(raw.contains("source_revision = \"0123456789abcdef\""));
+    assert!(!raw.contains("response_role"));
+    assert!(!raw.contains("source_revision"));
     assert!(raw.contains(EVIDENCE));
     let config = AppConfig::load(&fixture.config).unwrap();
     assert_eq!(config.recording.background_dependencies.len(), 1);
 
     let repeated = plan_background_dependency(fixture.feedback()).unwrap();
     assert!(!repeated.report().changed);
+    assert!(repeated.report().reused_existing);
+    assert_eq!(repeated.report().effective_name, "config-refresh");
     assert!(repeated.report().diff.is_empty());
+}
+
+#[test]
+fn equivalent_http_selector_reuses_existing_rule_even_when_name_and_proof_change() {
+    let fixture = Fixture::new(report_with_unused());
+    plan_background_dependency(fixture.feedback())
+        .unwrap()
+        .apply()
+        .unwrap();
+
+    let mut feedback = fixture.feedback();
+    feedback.name = "another-config-refresh".to_string();
+    feedback.source_revision = "fedcba9876543210".to_string();
+    feedback.source_evidence = "src/other.rs:9 same process-owned refresh".to_string();
+    let plan = plan_background_dependency(feedback).unwrap();
+
+    assert!(plan.report().reused_existing);
+    assert_eq!(plan.report().effective_name, "config-refresh");
+    assert!(!plan.report().changed);
+    assert!(plan.report().diff.is_empty());
+    let applied = plan.apply().unwrap();
+    assert!(applied.applied);
+    assert!(applied.reused_existing);
+
+    let config = AppConfig::load(&fixture.config).unwrap();
+    assert_eq!(config.recording.background_dependencies.len(), 1);
+    assert_eq!(
+        config.recording.background_dependencies[0].name(),
+        "config-refresh"
+    );
 }
 
 #[test]

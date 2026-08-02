@@ -2,8 +2,8 @@ use super::*;
 use crate::rewrite::model::{RewriteIssueOwner, RewritePhase};
 use crate::{
     E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
-    E2eDependencyRepresentative, E2eDirtyCluster, E2eRepresentativeDifference,
-    ResponseDifferenceKind,
+    E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eRepresentativeDifference,
+    E2eSourcePreReadiness, ResponseDifferenceKind,
 };
 
 #[test]
@@ -51,7 +51,7 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
         attempt: 1,
         comparison_observation: None,
     });
-    let command = commands(&state)
+    let command = commands(target.path(), &state)
         .into_iter()
         .find(|command| command.query_id.contains("representatives"))
         .unwrap();
@@ -123,7 +123,7 @@ fn comparison_representatives_link_the_comparison_case_and_three_way_difference(
             "source_after": "source",
         })),
     });
-    let command = commands(&state)
+    let command = commands(target.path(), &state)
         .into_iter()
         .find(|command| command.query_id.contains("representatives"))
         .unwrap();
@@ -150,6 +150,7 @@ fn comparison_representatives_link_the_comparison_case_and_three_way_difference(
 #[test]
 fn dependency_representative_returns_case_entrypoint_and_bounded_difference() {
     let cluster = E2eDirtyCluster {
+        cluster_id: "dirty-stable".to_string(),
         protocol: "memcached".to_string(),
         endpoint: Some(E2eDependencyEndpoint {
             host: "cache.internal".to_string(),
@@ -183,6 +184,7 @@ fn dependency_representative_returns_case_entrypoint_and_bounded_difference() {
 
     let representative = dependency_representative(&cluster);
 
+    assert_eq!(representative["cluster_id"], "dirty-stable");
     assert_eq!(representative["scope"], "case");
     assert_eq!(representative["case_id"], "case-a");
     assert_eq!(representative["case_dir"], "/recording/case-a");
@@ -196,6 +198,80 @@ fn dependency_representative_returns_case_entrypoint_and_bounded_difference() {
         "reference_only"
     );
     assert!(representative.get("response").is_none());
+}
+
+#[test]
+fn dirty_cluster_facts_omit_the_duplicate_full_startup_summary() {
+    let facts = dirty_cluster_facts(E2eDirtyCounts {
+        complete: true,
+        dirty: false,
+        case_event_counts: Default::default(),
+        clusters: Vec::new(),
+        omitted_clusters: 0,
+        source_pre_readiness: Some(E2eSourcePreReadiness {
+            phase: "source_pre_readiness".to_string(),
+            role: "reference_only".to_string(),
+            interaction_count: 128,
+            endpoints: Vec::new(),
+            unresolved_interactions: 0,
+            omitted_interactions: 0,
+            truncated: false,
+        }),
+    });
+
+    assert!(facts.get("source_pre_readiness").is_none());
+    assert_eq!(facts["clusters"], serde_json::json!([]));
+    assert_eq!(facts["complete"], true);
+}
+
+#[test]
+fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
+    let target = tempfile::tempdir().unwrap();
+    let planners = applicable_rule_planners(
+        target.path(),
+        RewriteIssueKind::Dependency,
+        QUERY_DIRTY_CLUSTERS,
+        &serde_json::json!({
+            "clusters": [
+                {"protocol": "memcached"},
+                {"protocol": "http"},
+                {"protocol": "memcached"},
+                {"protocol": "mysql"}
+            ]
+        }),
+        "evidence-current",
+    );
+
+    assert_eq!(planners.len(), 2);
+    assert_eq!(planners[0].protocol, "http");
+    assert_eq!(planners[1].protocol, "memcached");
+    assert_eq!(planners[1].evidence_id, "evidence-current");
+    assert_eq!(planners[1].command.cwd, target.path());
+    assert_eq!(
+        planners[1].command.argv,
+        [
+            "traffic-e2e",
+            "rewrite",
+            "dependency-rule",
+            "plan",
+            "memcached",
+            "--help",
+        ]
+    );
+}
+
+#[test]
+fn non_dependency_evidence_does_not_offer_background_rule_planners() {
+    let target = tempfile::tempdir().unwrap();
+    let planners = applicable_rule_planners(
+        target.path(),
+        RewriteIssueKind::Replay,
+        QUERY_DIRTY_CLUSTERS,
+        &serde_json::json!({"clusters": [{"protocol": "http"}]}),
+        "evidence-current",
+    );
+
+    assert!(planners.is_empty());
 }
 
 #[test]
@@ -226,7 +302,7 @@ fn pre_readiness_query_returns_only_data_interaction_endpoint_counts() {
         attempt: 1,
         comparison_observation: None,
     });
-    let command = commands(&state)
+    let command = commands(target.path(), &state)
         .into_iter()
         .find(|command| command.query_id.contains("pre-readiness-traffic"))
         .unwrap();

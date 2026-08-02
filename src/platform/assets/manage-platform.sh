@@ -17,6 +17,7 @@ required_environment=(
     TRAFFIC_E2E_TARGET_READY_STATUS
     TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS
     TRAFFIC_E2E_SOURCE_ORIGIN
+    TRAFFIC_E2E_RECORDING_ORIGIN
     TRAFFIC_E2E_SOURCE_READY_PATH
     TRAFFIC_E2E_SOURCE_READY_STATUS
     TRAFFIC_E2E_RECORDER_CONFIG
@@ -45,7 +46,7 @@ run_id=""
 duration_seconds=""
 baseline_recheck=false
 brz_no_fallback=""
-case_limit=""
+per_api_case_limit=""
 api_selectors=()
 while (($# > 0)); do
     case "$1" in
@@ -74,9 +75,9 @@ while (($# > 0)); do
             api_selectors+=("$2")
             shift 2
             ;;
-        --case-limit)
-            [[ -z "$case_limit" && $# -ge 2 ]] || exit 2
-            case_limit=$2
+        --per-api-case-limit)
+            [[ -z "$per_api_case_limit" && $# -ge 2 ]] || exit 2
+            per_api_case_limit=$2
             shift 2
             ;;
         *)
@@ -194,6 +195,7 @@ source_started=false
 target_started=false
 recorder_finalized=false
 comparison_pid=""
+input_pid=""
 
 container_exists() {
     docker container inspect "$1" >/dev/null 2>&1
@@ -216,7 +218,8 @@ run_target() {
         -u TRAFFIC_E2E_TARGET_ORIGIN -u TRAFFIC_E2E_TARGET_PORT \
         -u TRAFFIC_E2E_TARGET_READY_PATH -u TRAFFIC_E2E_TARGET_READY_STATUS \
         -u TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS \
-        -u TRAFFIC_E2E_SOURCE_ORIGIN -u TRAFFIC_E2E_SOURCE_READY_PATH \
+        -u TRAFFIC_E2E_SOURCE_ORIGIN -u TRAFFIC_E2E_RECORDING_ORIGIN \
+        -u TRAFFIC_E2E_REQUEST_SOURCE -u TRAFFIC_E2E_SOURCE_READY_PATH \
         -u TRAFFIC_E2E_SOURCE_READY_STATUS -u TRAFFIC_E2E_RECORDER_CONFIG \
         -u TRAFFIC_E2E_REPLAY_POLICY -u TRAFFIC_E2E_PLATFORM_ASSETS \
         "$TRAFFIC_E2E_PROJECT_CLI" "$@"
@@ -261,6 +264,11 @@ cleanup() {
     if [[ -n "$comparison_pid" ]] && kill -0 "$comparison_pid" >/dev/null 2>&1; then
         kill -INT "$comparison_pid" >/dev/null 2>&1 || true
         wait "$comparison_pid" || true
+    fi
+    if [[ -n "$input_pid" ]] && kill -0 "$input_pid" >/dev/null 2>&1; then
+        kill -TERM "$input_pid" >/dev/null 2>&1 || true
+        wait "$input_pid" || status=1
+        input_pid=""
     fi
     if "$recorder_started" && ! "$recorder_finalized"; then
         finalize_recorder || status=1
@@ -586,6 +594,30 @@ run_no_fallback() {
         "$TRAFFIC_E2E_PLATFORM_ASSETS/brz-no-fallback.sh"
 }
 
+start_recording_input() {
+    [[ -n "${TRAFFIC_E2E_REQUEST_SOURCE-}" ]] || return 0
+    [[ -d "$TRAFFIC_E2E_REQUEST_SOURCE" ]] || {
+        printf 'error: managed recording request source is missing\n' >&2
+        return 1
+    }
+    TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 \
+        "$TRAFFIC_E2E_BIN" internal recording-input \
+        --case-source "$TRAFFIC_E2E_REQUEST_SOURCE" \
+        --origin "$TRAFFIC_E2E_RECORDING_ORIGIN" &
+    input_pid=$!
+}
+
+stop_recording_input() {
+    local status=0
+    [[ -n "$input_pid" ]] || return 0
+    if kill -0 "$input_pid" >/dev/null 2>&1; then
+        kill -TERM "$input_pid" >/dev/null 2>&1 || true
+    fi
+    wait "$input_pid" || status=$?
+    input_pid=""
+    ((status == 0))
+}
+
 run_standard_recording() {
     local artifact_owner control_socket truststore
     artifact_owner="$(id -u):$(id -g)"
@@ -615,7 +647,7 @@ run_standard_recording() {
     fi
     local selector
     for selector in "${api_selectors[@]}"; do recorder_command+=(--api "$selector"); done
-    [[ -z "$case_limit" ]] || recorder_command+=(--case-limit "$case_limit")
+    [[ -z "$per_api_case_limit" ]] || recorder_command+=(--per-api-case-limit "$per_api_case_limit")
     TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 docker run --detach \
         --name "$recorder_name" --platform linux/amd64 --network "container:${anchor_name}" \
         --user 0:0 --cap-add NET_ADMIN --cap-add NET_RAW --workdir /workspace \
@@ -648,7 +680,9 @@ run_standard_recording() {
     fi
     run_no_fallback
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket "$control_socket"
+    start_recording_input
     sleep "$duration_seconds"
+    stop_recording_input
     finalize_recorder
     jq -e '.status == "completed" and .failed_cases == 0 and (.errors | length == 0)' \
         "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null
@@ -676,16 +710,18 @@ run_comparison_recording() {
     "$baseline_recheck" && comparison_command+=(--baseline-recheck)
     local selector
     for selector in "${api_selectors[@]}"; do comparison_command+=(--api "$selector"); done
-    [[ -z "$case_limit" ]] || comparison_command+=(--case-limit "$case_limit")
+    [[ -z "$per_api_case_limit" ]] || comparison_command+=(--per-api-case-limit "$per_api_case_limit")
     (
         cd "$TRAFFIC_E2E_TARGET_ROOT"
         export TRAFFIC_E2E_ENCRYPTION_KEY_B64="$encryption_key_b64"
         exec "$TRAFFIC_E2E_BIN" "${comparison_command[@]}"
     ) &
     comparison_pid=$!
+    start_recording_input
     local status=0
     wait "$comparison_pid" || status=$?
     comparison_pid=""
+    stop_recording_input || status=1
     ((status == 0)) || return "$status"
     run_target stop
     target_started=false

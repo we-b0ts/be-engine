@@ -9,8 +9,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 use super::background_dependencies::{
-    self, BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
-    matches_exact_redis_key, matches_redis_key,
+    self, BackgroundDependencyRuleConfig, matches_exact_redis_key, matches_redis_key,
 };
 use super::background_feedback::{RuleConfigPlan, plan_rule_config};
 use super::edit::write_atomic;
@@ -26,7 +25,6 @@ pub struct RedisBackgroundDependencyFeedback {
     pub key_prefix: String,
     pub key_suffix: String,
     pub initial_load_timeout_ms: Option<u64>,
-    pub response_role: BackgroundDependencyResponseRole,
     pub source_revision: String,
     pub source_evidence: String,
 }
@@ -36,8 +34,9 @@ pub struct RedisBackgroundDependencyReport {
     pub config: PathBuf,
     pub replay_report: PathBuf,
     pub name: String,
+    pub effective_name: String,
+    pub reused_existing: bool,
     pub protocol: &'static str,
-    pub response_role: &'static str,
     pub ports: Vec<u16>,
     pub command: String,
     pub keys: Vec<String>,
@@ -111,8 +110,7 @@ pub fn plan_redis_background_dependency(
         key_prefix: feedback.key_prefix.clone(),
         key_suffix: feedback.key_suffix.clone(),
         initial_load_timeout_ms: feedback.initial_load_timeout_ms,
-        response_role: feedback.response_role,
-        source_revision: feedback.source_revision.clone(),
+        source_revision: String::new(),
         source_evidence: feedback.source_evidence.clone(),
     };
     background_dependencies::validate(std::slice::from_ref(&requested))?;
@@ -127,7 +125,6 @@ pub fn plan_redis_background_dependency(
             keys: &keys,
             key_prefix: feedback.key_prefix.as_bytes(),
             key_suffix: feedback.key_suffix.as_bytes(),
-            response_role: feedback.response_role,
         },
     )?;
     let RuleConfigPlan {
@@ -135,6 +132,8 @@ pub fn plan_redis_background_dependency(
         updated,
         changed,
         diff,
+        effective_name,
+        reused_existing,
     } = plan_rule_config(&feedback.config_path, requested)?;
 
     Ok(RedisBackgroundDependencyPlan {
@@ -148,8 +147,9 @@ pub fn plan_redis_background_dependency(
             config: feedback.config_path,
             replay_report: feedback.replay_report_path,
             name: feedback.name,
+            effective_name,
+            reused_existing,
             protocol: "redis",
-            response_role: feedback.response_role.as_str(),
             ports,
             command,
             keys,
@@ -196,8 +196,6 @@ struct CommandProtocolEvidence {
     unsafe_events: Vec<CommandRequestEvidence>,
     #[serde(default)]
     unused_case: Vec<CommandUnusedEvidence>,
-    #[serde(default)]
-    unused_global: Vec<CommandUnusedEvidence>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -232,7 +230,6 @@ struct RedisEvidenceSelector<'a> {
     keys: &'a [String],
     key_prefix: &'a [u8],
     key_suffix: &'a [u8],
-    response_role: BackgroundDependencyResponseRole,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -253,7 +250,6 @@ fn parse_replay_evidence(
         keys,
         key_prefix,
         key_suffix,
-        response_role,
     } = selector;
     let report: ReplayEvidenceReport = serde_json::from_str(raw)
         .with_context(|| format!("failed to parse replay report {}", report_path.display()))?;
@@ -275,14 +271,12 @@ fn parse_replay_evidence(
                 && event.command.eq_ignore_ascii_case(command)),
         "Redis background selector shares a configured port and command with unsupported or unsafe target traffic"
     );
-    if response_role == BackgroundDependencyResponseRole::Independent {
-        ensure!(
-            !report.redis.unmatched.iter().any(|event| {
-                ports.contains(&event.target.port) && event.command.eq_ignore_ascii_case(command)
-            }),
-            "independent Redis background selector shares a configured port and command with unmatched target traffic"
-        );
-    }
+    ensure!(
+        !report.redis.unmatched.iter().any(|event| {
+            ports.contains(&event.target.port) && event.command.eq_ignore_ascii_case(command)
+        }),
+        "Redis background selector shares a configured port and command with unmatched target traffic"
+    );
     let unused_case = report
         .redis
         .unused_case
@@ -292,28 +286,9 @@ fn parse_replay_evidence(
         })
         .map(|event| (event.index, event))
         .collect::<BTreeMap<_, _>>();
-    let unused_global = report
-        .redis
-        .unused_global
-        .iter()
-        .filter(|event| {
-            ports.contains(&event.target.port) && event.command.eq_ignore_ascii_case(command)
-        })
-        .map(|event| (event.index, event))
-        .collect::<BTreeMap<_, _>>();
-    let selected_unused = match response_role {
-        BackgroundDependencyResponseRole::Independent => &unused_case,
-        BackgroundDependencyResponseRole::RuntimeState => &unused_global,
-    };
     ensure!(
-        !selected_unused.is_empty(),
-        "Redis {} background selector matches no unused {} exchange on the configured ports",
-        response_role.as_str(),
-        if response_role == BackgroundDependencyResponseRole::RuntimeState {
-            "Global"
-        } else {
-            "case"
-        }
+        !unused_case.is_empty(),
+        "Redis background selector matches no unused case exchange on the configured ports"
     );
 
     let mut files = Vec::new();
@@ -326,11 +301,7 @@ fn parse_replay_evidence(
         scan_redis_dependency_file(
             &contents,
             &path,
-            if response_role == BackgroundDependencyResponseRole::RuntimeState {
-                &unused_global
-            } else {
-                &empty_unused
-            },
+            &empty_unused,
             None,
             &mut exchange_index,
             keys,
@@ -346,11 +317,7 @@ fn parse_replay_evidence(
         scan_redis_dependency_file(
             &contents,
             &path,
-            if response_role == BackgroundDependencyResponseRole::Independent {
-                &unused_case
-            } else {
-                &empty_unused
-            },
+            &unused_case,
             Some(&case.case_id),
             &mut exchange_index,
             keys,
@@ -362,16 +329,16 @@ fn parse_replay_evidence(
     }
     ensure!(
         evidence.count > 0,
-        "Redis background selector matches no unused case or Global key in immutable dependency evidence"
+        "Redis background selector matches no unused case key in immutable dependency evidence"
     );
-    if response_role == BackgroundDependencyResponseRole::RuntimeState {
+    if !keys.is_empty() {
         let expected_keys = keys
             .iter()
             .map(|key| key.as_bytes().to_vec())
             .collect::<BTreeSet<_>>();
         ensure!(
             evidence.matched_keys == expected_keys,
-            "runtime-state Redis background selector must match every configured exact key in immutable Global dependency evidence"
+            "Redis GET background selector must match every configured exact key in immutable case dependency evidence"
         );
     }
     Ok(EvidenceMatch {

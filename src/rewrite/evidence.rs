@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use super::model::{
-    RewriteCommandSpec, RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue,
+    RewriteApplicableRulePlanner, RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue,
     RewriteIssueKind, RewriteState,
 };
 use super::{artifacts, fingerprint};
@@ -14,7 +14,7 @@ use crate::comparison_recording::resolve_comparison_case_dir;
 use crate::e2e_run::response_pointer_scope;
 use crate::recorder::load_pre_readiness_traffic_summary;
 use crate::{
-    E2eDirtyCluster, E2eRunContext, E2eValueObservation, E2eValuePresence,
+    E2eDirtyCluster, E2eDirtyCounts, E2eRunContext, E2eValueObservation, E2eValuePresence,
     query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
 };
 
@@ -27,7 +27,7 @@ const QUERY_DIRTY_CLUSTERS: &str = "dirty_clusters";
 const QUERY_POLICY_APPLICABILITY: &str = "policy_applicability";
 const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
 
-pub(super) fn commands(state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
+pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
     let Some(issue) = &state.active_issue else {
         return Vec::new();
     };
@@ -37,15 +37,16 @@ pub(super) fn commands(state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
             let query_id = query_id(state, issue, kind);
             RewriteEvidenceCommand {
                 purpose: purpose.to_string(),
-                command: RewriteCommandSpec {
-                    argv: vec![
+                command: super::action::command(
+                    target_root,
+                    vec![
                         "traffic-e2e".to_string(),
                         "rewrite".to_string(),
                         "evidence".to_string(),
                         query_id.clone(),
                     ],
-                    required_env_names: Vec::new(),
-                },
+                    Vec::new(),
+                ),
                 query_id,
             }
         })
@@ -71,19 +72,67 @@ pub(super) fn query(
             )
         })?;
     let (facts, does_not_prove, next_step) = facts(target_root, state, issue, kind)?;
+    let evidence_id = format!(
+        "evidence-{}",
+        fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
+            .trim_start_matches("fnv1a64:")
+    );
     Ok(RewriteEvidenceReport {
         schema_version: 1,
-        evidence_id: format!(
-            "evidence-{}",
-            fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
-                .trim_start_matches("fnv1a64:")
-        ),
+        evidence_id: evidence_id.clone(),
         issue_id: issue.id.clone(),
         query: kind.to_string(),
+        applicable_rule_planners: applicable_rule_planners(
+            target_root,
+            issue.kind,
+            kind,
+            &facts,
+            &evidence_id,
+        ),
         facts,
         does_not_prove,
         next_step,
     })
+}
+
+fn applicable_rule_planners(
+    target_root: &Path,
+    issue_kind: RewriteIssueKind,
+    query_kind: &str,
+    facts: &Value,
+    evidence_id: &str,
+) -> Vec<RewriteApplicableRulePlanner> {
+    if issue_kind != RewriteIssueKind::Dependency || query_kind != QUERY_DIRTY_CLUSTERS {
+        return Vec::new();
+    }
+    let protocols = facts
+        .get("clusters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|cluster| cluster.get("protocol").and_then(Value::as_str))
+        .filter(|protocol| matches!(*protocol, "http" | "memcached" | "motan" | "redis"))
+        .collect::<std::collections::BTreeSet<_>>();
+    protocols
+        .into_iter()
+        .map(|protocol| RewriteApplicableRulePlanner {
+            kind: "background_dependencies".to_string(),
+            protocol: protocol.to_string(),
+            evidence_id: evidence_id.to_string(),
+            command: super::action::command(
+                target_root,
+                vec![
+                    "traffic-e2e".to_string(),
+                    "rewrite".to_string(),
+                    "dependency-rule".to_string(),
+                    "plan".to_string(),
+                    protocol.to_string(),
+                    "--help".to_string(),
+                ],
+                Vec::new(),
+            ),
+        })
+        .collect()
 }
 
 fn facts(
@@ -202,7 +251,7 @@ fn facts(
         QUERY_DIRTY_CLUSTERS => {
             let counts = query_e2e_dirty_counts(e2e_context(target_root, state)?, group_id(state)?)?;
             Ok((
-                serde_json::to_value(counts)?,
+                dirty_cluster_facts(counts),
                 vec![
                     "dirty event counts do not prove process ownership".to_string(),
                     "they do not prove response causality".to_string(),
@@ -225,6 +274,16 @@ fn facts(
         )),
         _ => anyhow::bail!("unsupported rewrite evidence query {kind:?}"),
     }
+}
+
+fn dirty_cluster_facts(counts: E2eDirtyCounts) -> Value {
+    json!({
+        "clusters": counts.clusters,
+        "complete": counts.complete,
+        "dirty": counts.dirty,
+        "case_event_counts": counts.case_event_counts,
+        "omitted_clusters": counts.omitted_clusters,
+    })
 }
 
 fn representative_facts(
@@ -307,6 +366,7 @@ fn representative_facts(
 fn dependency_representative(cluster: &E2eDirtyCluster) -> Value {
     let representative = cluster.representative.as_ref();
     json!({
+        "cluster_id": cluster.cluster_id,
         "protocol": cluster.protocol,
         "endpoint": cluster.endpoint,
         "scope": cluster.scope,

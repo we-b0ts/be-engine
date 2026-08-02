@@ -26,6 +26,8 @@ pub struct MotanBackgroundDependencyReport {
     pub config: PathBuf,
     pub replay_report: PathBuf,
     pub name: String,
+    pub effective_name: String,
+    pub reused_existing: bool,
     pub protocol: &'static str,
     pub group: String,
     pub interface_name: String,
@@ -80,7 +82,7 @@ pub fn plan_motan_background_dependency(
         group: feedback.group.clone(),
         interface_name: feedback.interface_name.clone(),
         method_name: feedback.method_name.clone(),
-        source_revision: feedback.source_revision.clone(),
+        source_revision: String::new(),
         source_evidence: feedback.source_evidence.clone(),
     };
     background_dependencies::validate(std::slice::from_ref(&requested))?;
@@ -97,6 +99,8 @@ pub fn plan_motan_background_dependency(
         updated,
         changed,
         diff,
+        effective_name,
+        reused_existing,
     } = plan_rule_config(&feedback.config_path, requested)?;
 
     Ok(MotanBackgroundDependencyPlan {
@@ -109,6 +113,8 @@ pub fn plan_motan_background_dependency(
             config: feedback.config_path,
             replay_report: feedback.replay_report_path,
             name: feedback.name,
+            effective_name,
+            reused_existing,
             protocol: "motan",
             group: feedback.group,
             interface_name: feedback.interface_name,

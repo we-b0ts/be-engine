@@ -3,9 +3,9 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
-use super::evidence;
 use super::fingerprint;
-use super::model::{RewriteCommandSpec, RewriteRulePlanRecord, RewriteRuleReport, RewriteState};
+use super::model::{RewriteRulePlanRecord, RewriteRuleReport, RewriteState};
+use super::{action, evidence};
 use crate::{
     ComparisonResponseRuleFeedback, DynamicResponseMechanism, E2eRunContext, ResponseRuleFeedback,
     ResponseRuleKind, ResponseRulePlan, plan_comparison_response_rule, plan_response_rule,
@@ -77,22 +77,14 @@ pub(super) fn plan(
     };
     let traffic_plan = build_plan(target_root, state, &record)?;
     let traffic_report = project_report(traffic_plan.report())?;
+    state.dependency_rule_plan = None;
     state.rule_plan = Some(record.clone());
     state.bump();
     Ok(RewriteRuleReport {
         plan_id: record.id.clone(),
         issue_id: issue.id,
         traffic_e2e_report: traffic_report,
-        next_command: RewriteCommandSpec {
-            argv: vec![
-                "traffic-e2e".to_string(),
-                "rewrite".to_string(),
-                "rule".to_string(),
-                "apply".to_string(),
-                record.id,
-            ],
-            required_env_names: Vec::new(),
-        },
+        next_command: action::rule_apply_command(target_root, &record.id),
     })
 }
 
@@ -125,14 +117,15 @@ pub(super) fn apply(
         plan_id: record.id,
         issue_id: record.issue_id,
         traffic_e2e_report: projected,
-        next_command: RewriteCommandSpec {
-            argv: vec![
+        next_command: action::command(
+            target_root,
+            vec![
                 "traffic-e2e".to_string(),
                 "rewrite".to_string(),
                 "next".to_string(),
             ],
-            required_env_names: Vec::new(),
-        },
+            Vec::new(),
+        ),
     })
 }
 
@@ -203,10 +196,12 @@ fn build_plan(
 }
 
 fn validate_evidence(target_root: &Path, state: &RewriteState, evidence_id: &str) -> Result<()> {
-    let valid = evidence::commands(state).into_iter().any(|command| {
-        evidence::query(target_root, state, &command.query_id)
-            .is_ok_and(|report| report.evidence_id == evidence_id)
-    });
+    let valid = evidence::commands(target_root, state)
+        .into_iter()
+        .any(|command| {
+            evidence::query(target_root, state, &command.query_id)
+                .is_ok_and(|report| report.evidence_id == evidence_id)
+        });
     ensure!(
         valid,
         "evidence id is stale or belongs to another active issue"

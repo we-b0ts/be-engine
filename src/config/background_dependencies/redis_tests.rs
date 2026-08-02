@@ -15,13 +15,12 @@ fn rule() -> BackgroundDependencyRuleConfig {
         key_prefix: "1042015:".to_string(),
         key_suffix: ".wtm2".to_string(),
         initial_load_timeout_ms: None,
-        response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "InterestTagCardServiceImpl.java:init scheduled refresh".to_string(),
     }
 }
 
-fn runtime_state_rule() -> BackgroundDependencyRuleConfig {
+fn get_rule() -> BackgroundDependencyRuleConfig {
     BackgroundDependencyRuleConfig::Redis {
         name: "startup-cache-warm".to_string(),
         ports: vec![20917, 20918, 20919],
@@ -30,7 +29,6 @@ fn runtime_state_rule() -> BackgroundDependencyRuleConfig {
         key_prefix: String::new(),
         key_suffix: String::new(),
         initial_load_timeout_ms: Some(60_000),
-        response_role: BackgroundDependencyResponseRole::RuntimeState,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/cache/warm.rs:init loads response-driving local state".to_string(),
     }
@@ -98,7 +96,7 @@ fn matches_ports_command_and_key_shape_without_domain_identity() {
 }
 
 #[test]
-fn validates_global_independent_redis_rule() {
+fn validates_zcount_redis_rule() {
     let config: AppConfig = toml::from_str(
         r#"
         [recording]
@@ -110,7 +108,6 @@ fn validates_global_independent_redis_rule() {
         command = "ZCOUNT"
         key_prefix = "1042015:"
         key_suffix = ".wtm2"
-        response_role = "independent"
         source_revision = "0123456789abcdef"
         source_evidence = "InterestTagCardServiceImpl.java:init scheduled refresh"
         "#,
@@ -129,22 +126,22 @@ fn validates_global_independent_redis_rule() {
 }
 
 #[test]
-fn matches_only_exact_runtime_state_get_keys() {
-    let rule = runtime_state_rule();
+fn matches_only_exact_get_keys() {
+    let rule = get_rule();
     assert!(rule.matches(&event("redis.internal", 20917, "GET", "cache:init:a",)));
     assert!(!rule.matches(&event("redis.internal", 20917, "GET", "cache:init:c",)));
     assert!(!rule.matches(&event("redis.internal", 20917, "ZCOUNT", "cache:init:a",)));
 }
 
 #[test]
-fn runtime_state_redis_requires_exact_keys_timeout_and_ready_probe() {
+fn redis_get_requires_exact_keys_timeout_and_ready_probe() {
     let mut config = AppConfig::default();
-    config.recording.background_dependencies = vec![runtime_state_rule()];
+    config.recording.background_dependencies = vec![get_rule()];
     let error = config.validate().unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("require an enabled HTTP gateway ready probe")
+            .contains("initial-load observation requires an enabled HTTP gateway ready probe")
     );
 
     config.http_gateway.enabled = true;

@@ -488,10 +488,10 @@ async fn http_gateway_limits_published_cases_independently_by_case_pattern() {
     config.http_gateway.listen = gateway_addr;
     config.http_gateway.matched_upstream = format!("http://{matched_upstream}");
     config.http_gateway.fallback_upstream = format!("http://{fallback_upstream}");
-    config.http_gateway.case_limits.default = 1;
+    config.http_gateway.per_api_case_limits.default = 1;
     config
         .http_gateway
-        .case_limits
+        .per_api_case_limits
         .overrides
         .insert("/record/override/*".to_string(), 2);
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
@@ -606,6 +606,7 @@ async fn http_gateway_writes_case_files_and_decodes_gzip_response() {
 
     let request_json = std::fs::read_to_string(case_dir.join("request.json")).unwrap();
     assert!(request_json.contains(r#""uri": "/api/users/list""#));
+    assert!(request_json.contains(r#""api_pattern": "/api/users/list""#));
 
     let response_json = std::fs::read_to_string(case_dir.join("expected-response.json")).unwrap();
     let response: Value = serde_json::from_str(&response_json).unwrap();

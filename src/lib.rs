@@ -18,6 +18,7 @@ mod mysql;
 mod path_pattern;
 mod platform;
 mod proxy;
+mod recorded_request;
 mod recorder;
 mod recording_api;
 mod recording_control;
@@ -73,7 +74,7 @@ pub use comparison_recording::{
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     AppConfig, ArtifactsConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan,
-    BackgroundDependencyReport, BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
+    BackgroundDependencyReport, BackgroundDependencyRuleConfig,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyReport, BreezeResourceCaptureFeedback,
     BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,
@@ -108,11 +109,13 @@ pub use e2e_run::{
     E2eVerificationGates, abort_e2e_run, initialize_e2e_run, initialize_standard_e2e_project,
     initialize_standard_e2e_project_with_force, prepare_e2e_run, query_e2e_dependency_correlation,
     query_e2e_dirty_counts, query_e2e_source_variation, recover_e2e_run,
-    resolve_e2e_response_rule_evidence, run_e2e_api, run_e2e_round, status_e2e_run,
+    resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence, run_e2e_api,
+    run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use platform::{
-    ManagedRecordingOperation, ManagedRecordingOptions, ManagedRecordingResult,
+    ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
+    ManagedRecordingOptions, ManagedRecordingResult, drive_managed_recording_input,
     run_managed_recording,
 };
 pub use recorder::{
@@ -143,14 +146,18 @@ pub use replay::{
     run_replay, run_replay_control, validate_replay_policy,
 };
 pub use rewrite::{
-    RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewriteContext,
+    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryView, RewriteApiProgress,
+    RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec, RewriteContext,
+    RewriteDependencyRulePlanOptions, RewriteDependencyRuleReport, RewriteDependencyRuleSelector,
     RewriteEvidenceCommand, RewriteEvidenceReport, RewriteFocusedE2eExecution,
     RewriteFocusedE2eExecutionMode, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
-    RewriteNextOptions, RewritePhase, RewriteRecordingKind, RewriteRecordingReason,
-    RewriteRecordingRequestOptions, RewriteRecoveryReport, RewriteRouteOptions, RewriteRouteReport,
-    RewriteRulePlanOptions, RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView,
-    apply_rewrite_rule, next_rewrite, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, route_rewrite, status_rewrite,
+    RewriteNextOptions, RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingKind,
+    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecoveryReport,
+    RewriteRepairAcceptanceKind, RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions,
+    RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule,
+    apply_rewrite_rule, execute_rewrite_recording, next_rewrite, plan_rewrite_dependency_rule,
+    plan_rewrite_rule, query_rewrite_evidence, recover_rewrite, request_rewrite_recording,
+    route_rewrite, status_rewrite, verify_rewrite_repair,
 };
 pub use tls::MitmCa;
 
@@ -570,7 +577,7 @@ impl AppState {
         let background_match = self.inner.background_dependencies.matching_rule(&event);
         let background_rule_name = background_match
             .as_ref()
-            .map(|matched| (matched.rule_name().to_string(), matched.response_role()));
+            .map(|matched| matched.rule_name().to_string());
         let event_type = event.kind();
         if let Err(err) = self
             .recorder()

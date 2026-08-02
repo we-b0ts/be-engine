@@ -33,9 +33,7 @@ pub use allowed_unused_http::{
     plan_allowed_unused_http_hosts,
 };
 pub use artifacts::ArtifactsConfig;
-pub use background_dependencies::{
-    BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
-};
+pub use background_dependencies::BackgroundDependencyRuleConfig;
 pub use background_feedback::{
     BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
     plan_background_dependency,
@@ -162,7 +160,7 @@ pub struct HttpGatewayConfig {
     pub fixed_response: Option<HttpGatewayFixedResponseConfig>,
     pub preserve_host: bool,
     pub ready: HttpGatewayReadyConfig,
-    pub case_limits: HttpGatewayCaseLimitsConfig,
+    pub per_api_case_limits: HttpGatewayCaseLimitsConfig,
     pub exclude_rules: Vec<HttpGatewayRuleConfig>,
     pub rules: Vec<HttpGatewayRuleConfig>,
 }
@@ -247,7 +245,7 @@ impl AppConfig {
         )?;
         comparison_recording.validate(&self.http_gateway)?;
         self.http_gateway
-            .case_limits
+            .per_api_case_limits
             .validate(&self.http_gateway.rules)
     }
 
@@ -259,17 +257,21 @@ impl AppConfig {
         http_gateway::validate_config(&self.http_gateway)?;
         allowed_unused_http::validate_config(&self.http_gateway)?;
         self.http_gateway
-            .case_limits
+            .per_api_case_limits
             .validate(&self.http_gateway.rules)?;
-        if self
-            .recording
-            .background_dependencies
-            .iter()
-            .any(|rule| rule.response_role() == BackgroundDependencyResponseRole::RuntimeState)
-            && (!self.http_gateway.enabled || !self.http_gateway.ready.enabled)
+        if self.recording.background_dependencies.iter().any(|rule| {
+            matches!(
+                rule,
+                BackgroundDependencyRuleConfig::Memcached { .. }
+                    | BackgroundDependencyRuleConfig::Redis {
+                        initial_load_timeout_ms: Some(_),
+                        ..
+                    }
+            )
+        }) && (!self.http_gateway.enabled || !self.http_gateway.ready.enabled)
         {
             bail!(
-                "runtime-state background dependency rules require an enabled HTTP gateway ready probe"
+                "background dependency initial-load observation requires an enabled HTTP gateway ready probe"
             );
         }
         if self.tcp_gateway.backlog == 0 || self.tcp_gateway.backlog > i32::MAX as u32 {
@@ -301,8 +303,10 @@ impl AppConfig {
             .unwrap_or_else(|| self.recording.output_dir.join("comparison-recordings"))
     }
 
-    pub fn override_case_limits_for_run(&mut self, limit: NonZeroUsize) {
-        self.http_gateway.case_limits.override_for_run(limit);
+    pub fn override_per_api_case_limit_for_run(&mut self, limit: NonZeroUsize) {
+        self.http_gateway
+            .per_api_case_limits
+            .override_for_run(limit);
     }
 
     fn validate_artifacts(&self) -> Result<()> {
@@ -377,7 +381,7 @@ impl Default for HttpGatewayConfig {
             fixed_response: None,
             preserve_host: true,
             ready: HttpGatewayReadyConfig::default(),
-            case_limits: HttpGatewayCaseLimitsConfig::default(),
+            per_api_case_limits: HttpGatewayCaseLimitsConfig::default(),
             exclude_rules: Vec::new(),
             rules: Vec::new(),
         }
@@ -501,7 +505,7 @@ mod tests {
         assert!(!config.mysql.record_raw_packets);
         assert_eq!(config.tcp_gateway.backlog, 65_535);
         assert_eq!(
-            config.http_gateway.case_limits.default,
+            config.http_gateway.per_api_case_limits.default,
             case_limits::DEFAULT_MAX_CASES_PER_PATTERN
         );
         assert_eq!(config.recording.max_body_bytes, 1024 * 1024);

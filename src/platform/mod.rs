@@ -13,6 +13,12 @@ use uuid::Uuid;
 use crate::e2e_run::resolve_project;
 use crate::recording_api::RecordingApi;
 
+mod recording_input;
+
+pub use recording_input::{
+    ManagedRecordingInputOptions, ManagedRecordingInputResult, drive_managed_recording_input,
+};
+
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
 const MESH_CONNECT_UTIL: &str = include_str!("assets/MeshConnectUtil.java");
 const APPLY_BREEZE_PATCH: &str = include_str!("assets/apply-breeze-sdk-patch");
@@ -43,7 +49,8 @@ pub struct ManagedRecordingOptions {
     pub baseline_recheck: bool,
     pub breeze_no_fallback: bool,
     pub apis: Vec<RecordingApi>,
-    pub case_limit: Option<NonZeroUsize>,
+    pub per_api_case_limit: Option<NonZeroUsize>,
+    pub request_source: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,6 +112,18 @@ pub async fn run_managed_recording(
     let source_origin = comparison
         .baseline_upstream(&recorder.http_gateway)
         .to_string();
+    let recording_origin = format!("http://127.0.0.1:{}", recorder.http_gateway.listen.port());
+    let request_source = options
+        .request_source
+        .map(fs::canonicalize)
+        .transpose()
+        .context("failed to resolve managed recording request source")?;
+    if let Some(request_source) = &request_source {
+        ensure!(
+            request_source.starts_with(target_root.join(".traffic-e2e/artifacts")),
+            "managed recording request source must be under .traffic-e2e/artifacts"
+        );
+    }
     let executable = std::env::current_exe().context("failed to resolve traffic-e2e binary")?;
     ensure_executable(&executable, "traffic-e2e binary")?;
     let assets = stage_assets(&target_root)?;
@@ -137,6 +156,7 @@ pub async fn run_managed_recording(
             config.target_startup_timeout.as_secs().to_string(),
         )
         .env("TRAFFIC_E2E_SOURCE_ORIGIN", source_origin)
+        .env("TRAFFIC_E2E_RECORDING_ORIGIN", recording_origin)
         .env(
             "TRAFFIC_E2E_SOURCE_READY_PATH",
             &recorder.http_gateway.ready.path,
@@ -154,6 +174,9 @@ pub async fn run_managed_recording(
         .arg(&run_id)
         .arg("--brz-no-fallback")
         .arg(options.breeze_no_fallback.to_string());
+    if let Some(request_source) = request_source {
+        command.env("TRAFFIC_E2E_REQUEST_SOURCE", request_source);
+    }
     if let Some(container) = &config.breeze_container {
         command.env("TRAFFIC_E2E_BREEZE_CONTAINER", container);
     }
@@ -163,8 +186,8 @@ pub async fn run_managed_recording(
     for api in &options.apis {
         command.arg("--api").arg(api.to_string());
     }
-    if let Some(limit) = options.case_limit {
-        command.arg("--case-limit").arg(limit.to_string());
+    if let Some(limit) = options.per_api_case_limit {
+        command.arg("--per-api-case-limit").arg(limit.to_string());
     }
     #[cfg(unix)]
     {
@@ -222,7 +245,7 @@ async fn wait_for_managed_runtime(
     }
 }
 
-async fn shutdown_signal() -> Result<()> {
+pub(super) async fn shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
         let mut terminate =

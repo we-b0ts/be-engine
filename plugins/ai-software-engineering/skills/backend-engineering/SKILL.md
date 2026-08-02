@@ -1,6 +1,6 @@
 ---
 name: backend-engineering
-description: "Design, implement, modify, or review production backend code using coding, code-organization, module-ownership, architecture, runtime-safety, and verification standards. Use for backend APIs, workers, scheduled jobs, consumers, gateways, dependency clients, shared runtime components, and target-code work delegated by an orchestration workflow; this skill owns engineering quality, not task sequencing, external evidence gates, or delivery orchestration."
+description: "Design, implement, modify, or review production Rust backend code using coding, code-organization, module-ownership, architecture, runtime-safety, and verification standards. Use only when Rust is the target implementation language, including for backend APIs, workers, scheduled jobs, consumers, gateways, dependency clients, shared runtime components, and target-code work delegated by an orchestration workflow. Do not use for non-Rust target code; this skill owns engineering quality, not task sequencing, external evidence gates, or delivery orchestration."
 ---
 
 # Backend Service Engineering

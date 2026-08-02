@@ -18,26 +18,47 @@ action requires target-code implementation or review.
 
 ## Control Protocol
 
-From the initialized target repository, begin and resume with:
+From the initialized target repository, begin and resume with the default
+all-configured-traffic workflow:
 
 ```bash
 traffic-e2e rewrite next
 ```
 
-For a new workflow, select one canonical API:
+Use `--api '<METHOD path-or-pattern>'` only when the caller explicitly narrows
+the rewrite to one API. When an active dynamic pattern needs its source
+registration route, the coordinator returns `input_required`; resume with the
+requested `--source-route` for that active API. Do not invent routes for the
+other inventory items.
 
-```bash
-traffic-e2e rewrite next --api '<METHOD path-or-pattern>'
-```
+The coordinator shares one immutable standard recording across the discovered
+API inventory, keeps one active API and one active issue, and executes every
+deterministic Prepare/E2E/Compare step. After one API's comparison passes,
+`next` advances to the next pending inventory item without recording the
+standard baseline again. It returns exactly one action. Execute only that
+action, then call `rewrite next` again.
 
-Add `--source-route '<source-registration-route>'` when the selector is
-dynamic. The coordinator keeps one API and one active issue, executes every
-deterministic Prepare/E2E/Compare step, invalidates stale evidence, and returns
-exactly one action. Execute only that action, then call `rewrite next` again.
+Action commands contain a canonical `cwd` and an argv array. Change to that
+exact directory, then execute the argv without reconstructing, combining,
+shell-evaluating, or changing its arguments. Supply named required environment
+variables without printing their values.
 
-Action commands are argv arrays. Do not reconstruct, combine, shell-evaluate,
-or change their arguments. Supply named required environment variables without
-printing their values.
+`rewrite status` is a read-only recovery snapshot and includes the current
+`action`, reconstructed from the persisted workflow revision. Use it when an
+earlier action response was lost or when resuming an interrupted AI session.
+`plan_apply_required` recovers the exact pending `apply <plan-id>` command.
+`resume_required` means the coordinator detected a completed recording result
+or a target change; execute its exact `rewrite next` argv instead of repeating
+the prior recording or implementation action. If a previously launched action
+is still known to be running, continue waiting rather than launching its
+reconstructed command concurrently.
+
+Read `api_inventory` from every initialized `next` or `status` result. It is
+the authoritative stable list and includes total/completed counts, the current
+index and API, and per-API `pending`, `active`, or `complete` status. Do not
+enumerate APIs from directories, choose a different pending item, or stop when
+only the active API completes. `terminal_allowed=true` means every inventory
+item has current focused E2E and comparison evidence.
 
 Keep the standard case source stable during implementation. A nonpassing
 focused E2E attempt reuses the same immutable cases after the target changes;
@@ -61,20 +82,32 @@ traffic-e2e rewrite recording request \
   --kind standard \
   --reason <user-requested|recorder-contract-changed|source-baseline-changed> \
   --duration-seconds <positive-seconds> \
-  --case-limit <positive-limit>
+  --per-api-case-limit <positive-limit>
 ```
 
-The defaults are 60 seconds and 100 cases. Caller-supplied positive values may
-replace them. This command invalidates evidence derived from the prior standard
-recording, preserves old artifacts, allocates a new run ID, and returns one
-`recording_required` action. Execute that returned argv exactly. A failed E2E
-attempt alone never authorizes this transition.
+The defaults are 60 seconds and 100 cases per configured API pattern; when
+`--api` is omitted, the limit is not a recording-wide total. Caller-supplied
+positive values may replace them. A request identical to the current pending request returns the
+same action and run; a completed manifest returns a resume action. A different
+pending request is rejected unless the caller explicitly supplies
+`--replace-pending`. The command invalidates evidence for every API derived
+from the shared prior standard recording, preserves old artifacts, allocates a
+new run ID, and returns one `recording_required` action. Execute that opaque
+`rewrite recording execute <action-id>` argv exactly. The coordinator chooses
+and drives the finalized real-traffic request corpus; never add `nohup`, curl
+loops, a replayer, or driver parameters. If it returns `input_required` because
+no finalized real-traffic corpus exists, report that missing external input and
+do not synthesize requests. A failed E2E attempt alone never authorizes this
+transition.
 
-`rewrite next`, `evidence`, `rule`, `route`, and `recording request` are the
-public coordinator control surface. The target AI may choose and compose these
-bounded transitions according to their documented preconditions. Reading
-traffic artifacts may support diagnosis, but never replaces a coordinator
-transition or authorizes editing generated evidence.
+`rewrite next`, `evidence`, `rule`, `dependency-rule`, `route`,
+`repair verify`, and `recording request|execute` are the public coordinator
+control surface. `repair verify` and `recording execute` are ID-bound action
+commands returned by the coordinator, not commands whose arguments the AI
+invents. The target AI
+may choose and compose these bounded transitions according to their documented
+preconditions. Reading traffic artifacts may support diagnosis, but never
+replaces a coordinator transition or authorizes editing generated evidence.
 
 Read [workflow.md](references/workflow.md) for action semantics, phase order,
 and recovery behavior.
@@ -108,16 +141,48 @@ concurrent load, refresh, and fallback semantics when they affect behavior.
 
 Dependency cleanliness is case-scoped. Diagnose only the case clusters returned
 by `dirty_clusters`; they group unmatched, unsupported, unsafe, and unused-case
-events by protocol and endpoint. `unused_global` and target activity outside an
-active case do not fail the case gate. Treat `source_pre_readiness` as reference
-context for startup jobs, warmup, and local-cache hypotheses, never as a gate or
-as proof of ownership.
+events by protocol and endpoint. Each cluster has a stable `cluster_id` and only
+the correlated pre-readiness interaction count; query `pre_readiness_traffic`
+for the complete startup summary. `unused_global` and target activity outside
+an active case do not fail the case gate. Treat pre-readiness traffic as
+reference context for startup jobs, warmup, and local-cache hypotheses, never
+as a gate or as proof of ownership.
+
+For a dependency issue, the `dirty_clusters` evidence report's
+`applicable_rule_planners` lists only the background-rule protocol planners
+supported by the current clusters. Run
+the returned protocol-specific help argv, then use
+`rewrite dependency-rule plan <protocol>` with the current evidence ID and only
+the source-proven selector inputs shown there. The coordinator resolves the
+current replay evidence, immutable case source, and source revision; none are
+rule selector inputs. HTTP and Memcached expose different inputs, and
+irrelevant protocol flags are intentionally unavailable; Redis exposes
+command-specific `zcount` and `get` selector inputs. When the plan reports
+`reused_existing=true`, the protocol selector is already covered: do not apply
+a duplicate rule; execute the returned fresh-recording request. If an apply is
+nevertheless resumed by plan ID, it is an idempotent reuse and makes no config
+change. Otherwise execute the plan report's exact apply argv by plan ID.
+After apply, execute its exact fresh-recording request because the Recorder
+contract changed. Do not use the lower-level
+`config recorder plan|apply background-dependencies` interface during a rewrite.
+
+A background rule changes case ownership only: it proves that matching
+asynchronous traffic is process-scoped and case-independent. It carries no
+`independent` or `runtime_state` classification and never replaces destination
+behavior. The target AI must determine from source and response evidence
+whether those dependencies drive process state. If they do, implement the
+source-compatible load, refresh, cache, fallback, and readiness behavior in
+destination code, then verify the affected cases. `initial_load_timeout_ms`
+only bounds source recording observation; it does not classify behavior.
 
 When source code proves a supported response rule, use only the coordinator's
 `rewrite rule plan|apply` interface with a current `evidence_id`. When source
 and bounded evidence prove a Recorder/Replay gap, external-data blocker, or
-source change, use `rewrite route`; a failed route leaves the active target
-repair in place.
+source change, use `rewrite route`; it records the source reference and required
+change and returns a coordinator-issued `repair verify <repair-id>` acceptance.
+The AI cannot supply an acceptance command, and neither `next` nor
+`recording request` can bypass the pending repair. A failed route leaves the
+active target repair in place.
 
 ## Evidence And Internal State
 

@@ -29,9 +29,9 @@ pub(super) struct RecordArgs {
     /// Record only this API; repeat for multiple METHOD/path selectors.
     #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
     apis: Vec<RecordingApi>,
-    /// Override the case limit for every selected API.
-    #[arg(long, value_name = "N")]
-    case_limit: Option<NonZeroUsize>,
+    /// Override the per-API case limit for every selected API.
+    #[arg(long = "per-api-case-limit", value_name = "N")]
+    per_api_case_limit: Option<NonZeroUsize>,
 }
 
 #[derive(Debug, Args)]
@@ -76,7 +76,8 @@ fn options(
         baseline_recheck,
         breeze_no_fallback: args.brz_no_fallback,
         apis: args.apis,
-        case_limit: args.case_limit,
+        per_api_case_limit: args.per_api_case_limit,
+        request_source: None,
     }
 }
 

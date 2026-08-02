@@ -86,7 +86,7 @@ async fn reports_redis_lane_blocker_without_exposing_arguments() {
 }
 
 #[tokio::test]
-async fn runtime_state_redis_gets_are_connection_independent_only_when_recorder_marked() {
+async fn background_redis_gets_are_connection_independent() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -100,7 +100,6 @@ async fn runtime_state_redis_gets_are_connection_independent_only_when_recorder_
     let mut second = redis_dependency(second_connection, 1, "two", b"$1\r\n2\r\n");
     for dependency in [&mut first, &mut second] {
         dependency["global_dependency_reason"] = Value::String("background_rule".to_string());
-        dependency["global_dependency_response_role"] = Value::String("runtime_state".to_string());
     }
     let global = [blocker, first, second]
         .map(|value| serde_json::to_string(&value).unwrap())
@@ -123,48 +122,6 @@ async fn runtime_state_redis_gets_are_connection_independent_only_when_recorder_
     let report = wait_for_matched_count(&report_path, "redis", 2).await;
     assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
     task.abort();
-}
-
-#[tokio::test]
-async fn rejects_runtime_state_metadata_outside_background_global_evidence() {
-    let temp = tempfile::tempdir().unwrap();
-    let case_dir = temp.path().join("case");
-    tokio::fs::create_dir_all(&case_dir).await.unwrap();
-    let mut dependency = redis_dependency(Uuid::new_v4(), 1, "key", b"$1\r\n1\r\n");
-    dependency["global_dependency_reason"] = Value::String("background_rule".to_string());
-    dependency["global_dependency_response_role"] = Value::String("runtime_state".to_string());
-    tokio::fs::write(
-        case_dir.join("dependencies.jsonl"),
-        serde_json::to_string(&dependency).unwrap(),
-    )
-    .await
-    .unwrap();
-
-    let result = ReplayRuntime::load(
-        MysqlReplayConfig {
-            case_dir: case_dir.clone(),
-            selected_case_ids: Vec::new(),
-            dns_listen: "127.0.0.1:0".parse().unwrap(),
-            tcp_listen: "127.0.0.1:0".parse().unwrap(),
-            fake_cidr: "198.18.0.0/15".to_string(),
-            report_path: None,
-            session_path: None,
-            control_socket_path: None,
-            ca_cert_path: Some(case_dir.join(".replay/ca.pem")),
-            ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
-            policy_path: None,
-            http_ignore_query_params: Vec::new(),
-            allowed_unused_http: None,
-        },
-        "127.0.0.1:0".parse().unwrap(),
-        "127.0.0.1:0".parse().unwrap(),
-    )
-    .await;
-    let error = match result {
-        Ok(_) => panic!("case-owned runtime-state metadata unexpectedly loaded"),
-        Err(error) => error,
-    };
-    assert!(error.to_string().contains("Global exchange"));
 }
 
 #[tokio::test]
@@ -289,7 +246,7 @@ async fn replays_memcached_binary_with_live_opaque() {
 }
 
 #[tokio::test]
-async fn runtime_state_memcached_gets_are_connection_independent_only_when_recorder_marked() {
+async fn background_memcached_gets_are_connection_independent() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case");
     tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -303,7 +260,6 @@ async fn runtime_state_memcached_gets_are_connection_independent_only_when_recor
     let mut second = memcached_binary_dependency(second_connection, 1, b"two");
     for dependency in [&mut first, &mut second] {
         dependency["global_dependency_reason"] = Value::String("background_rule".to_string());
-        dependency["global_dependency_response_role"] = Value::String("runtime_state".to_string());
     }
     let global = [blocker, first, second]
         .map(|value| serde_json::to_string(&value).unwrap())

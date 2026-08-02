@@ -364,6 +364,23 @@ pub fn resolve_e2e_response_rule_evidence(
     })
 }
 
+pub fn resolve_single_e2e_response_rule_evidence(
+    context: E2eRunContext,
+) -> Result<E2eResponseRuleEvidence> {
+    let status = status_e2e_run(context.clone())?;
+    let available = status
+        .focused_apis
+        .into_iter()
+        .filter(|candidate| candidate.status != "not_started")
+        .collect::<Vec<_>>();
+    ensure!(
+        available.len() == 1,
+        "background dependency evidence requires exactly one finalized focused API; use the rewrite coordinator when the case source has {} candidates",
+        available.len()
+    );
+    resolve_e2e_response_rule_evidence(context, &available[0].api)
+}
+
 fn run_status_label(status: RunStatus) -> &'static str {
     match status {
         RunStatus::Running => "running",

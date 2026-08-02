@@ -51,9 +51,13 @@ Run only query IDs returned by the active action:
   traffic are excluded, but frequency does not prove background ownership,
   local-cache lifecycle, or response causality;
 - `dirty_clusters`: case-scoped dirty events grouped by protocol and endpoint,
-  with bounded operation counts, an exact representative case, and correlated
-  source pre-readiness counts; it excludes `unused_global` and case-external
-  target activity, and does not prove request or process ownership;
+  with a stable `cluster_id`, bounded operation counts, an exact representative
+  case, and a correlated source pre-readiness count. The complete startup
+  summary remains in `pre_readiness_traffic`. It excludes `unused_global` and
+  case-external target activity, and does not prove request or process
+  ownership. For a dependency issue it also returns
+  `applicable_rule_planners` only for supported protocols present in those
+  clusters;
 - `policy_applicability`: structural rule eligibility; eligibility does not
   authorize a rule;
 - `attempt_delta`: convergence against the previous attempt; improvement does
@@ -159,25 +163,32 @@ evidence. Use the returned issue and dirty-cluster query to distinguish:
 
 If target topology differs, repair target behavior. If semantic evidence exists
 but the engine lacks support, submit `rewrite route` with a current evidence ID,
-source reference, exact system change, and acceptance command. Never implement
-a target workaround for a Replay capability gap.
+source reference, and exact system change. Then apply the repair and use only
+the coordinator-issued `repair verify <repair-id>` acceptance. Never implement
+a target workaround for a Replay capability gap or supply an arbitrary
+acceptance command.
 
 ## Dirty Dependency Issues
 
 Diagnose dirty dependencies only after responses pass and Replay is complete.
-Classify the representative protocol cluster by source causality:
+Classify the representative protocol cluster by source ownership:
 
 - request-owned and required: repair target call topology or Replay support;
-- process-owned and response-driving: use a supported `runtime_state`
-  recording rule;
-- process-owned and response-independent: use a supported `independent`
-  recording rule;
+- process-owned and case-independent: use a supported background recording
+  rule; separately repair target state behavior when source and response
+  evidence prove the dependency is response-driving;
 - unresolved: retain the dirty evidence and name the missing proof.
 
 Timing overlap, high volume, scheduler names, unused exchanges, and passing
 responses do not prove background ownership. A recording-rule change must use
-the coordinator-approved evidence route and requires a new standard recording.
-Never reclassify, trim, or edit the existing recording.
+the current dirty-cluster evidence ID and one protocol-specific planner returned
+in `applicable_rule_planners`. Run its exact help argv, supply only the
+source-proven selector inputs to `rewrite dependency-rule plan <protocol>`, and
+apply the returned plan ID. Replay evidence, case source, and source revision
+come from coordinator state and are not background-rule inputs. Execute the apply
+report's exact fresh-recording request. Never call the lower-level Recorder
+config planner, reclassify existing evidence, trim traffic, or edit an existing
+recording.
 
 ## Comparison Issues
 
@@ -199,13 +210,15 @@ coordinator must rerun focused E2E before requesting a fresh comparison.
 Route the proven cause to exactly one action:
 
 - target implementation or cache defect: change target code with
-  `backend-engineering`, run focused target tests, then the acceptance command;
+  `backend-engineering`, run focused target tests, then the implementation
+  action's acceptance command;
 - startup/configuration defect: repair source-compatible loading or the fixed
-  start/stop boundary, then run the acceptance command;
+  start/stop boundary, then run the implementation action's acceptance command;
 - supported nondeterminism/order/counter: run exact `rewrite rule plan`, review
   the evidence, then `apply` and rerun;
 - Recorder/Replay capability gap, source change, or external-data issue: submit
-  exact `rewrite route` evidence; do not patch the target;
+  exact `rewrite route` evidence, apply the routed change, then execute the
+  returned `repair verify <repair-id>` action; do not patch the target;
 - unresolved: gather the named missing source/runtime proof before changing
   code or policy.
 

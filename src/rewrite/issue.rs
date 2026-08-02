@@ -53,8 +53,7 @@ pub(super) fn from_e2e(
             None,
             vec![
                 "request_owned_target_call_mismatch".to_string(),
-                "runtime_state_background_dependency".to_string(),
-                "independent_background_dependency".to_string(),
+                "process_scoped_background_dependency".to_string(),
                 "replay_capability_gap".to_string(),
             ],
         ),

@@ -216,7 +216,7 @@ impl Recorder {
         &self,
         event: RecorderEvent,
         targets: crate::active_case::DependencyTargets,
-        background_rule: Option<(String, crate::config::BackgroundDependencyResponseRole)>,
+        background_rule: Option<String>,
     ) -> Result<()> {
         self.writer.try_record(writer::RecordEnvelope {
             event,

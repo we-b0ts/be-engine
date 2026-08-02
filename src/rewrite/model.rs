@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 1;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 4;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -17,10 +17,46 @@ const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap
 #[serde(rename_all = "snake_case")]
 pub enum RewritePhase {
     RecordingRequired,
+    ApiPending,
     ImplementationRequired,
     ComparisonRecordingRequired,
     SystemRepairRequired,
     SliceComplete,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteApiStatus {
+    #[default]
+    Pending,
+    Active,
+    Complete,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewriteApiProgress {
+    pub api: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_route: Option<String>,
+    #[serde(default)]
+    pub status: RewriteApiStatus,
+    #[serde(default)]
+    pub attempts: usize,
+    #[serde(default)]
+    pub e2e_current: bool,
+    #[serde(default)]
+    pub comparison_current: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteApiInventoryView {
+    pub total: usize,
+    pub completed: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_api: Option<String>,
+    pub items: Vec<RewriteApiProgress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,17 +109,22 @@ impl fmt::Display for RewriteRecordingReason {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct RewriteRecordingSettings {
     pub duration_seconds: NonZeroU64,
-    pub case_limit: NonZeroUsize,
+    #[serde(default = "default_recording_case_limit")]
+    pub per_api_case_limit: NonZeroUsize,
+}
+
+const fn default_recording_case_limit() -> NonZeroUsize {
+    DEFAULT_RECORDING_CASE_LIMIT
 }
 
 impl Default for RewriteRecordingSettings {
     fn default() -> Self {
         Self {
             duration_seconds: DEFAULT_RECORDING_DURATION_SECONDS,
-            case_limit: DEFAULT_RECORDING_CASE_LIMIT,
+            per_api_case_limit: DEFAULT_RECORDING_CASE_LIMIT,
         }
     }
 }
@@ -130,7 +171,22 @@ pub struct RewriteRouteRecord {
     pub evidence_id: String,
     pub source_ref: String,
     pub required_change: String,
-    pub acceptance_command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acceptance_kind: Option<RewriteRepairAcceptanceKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_revision: Option<String>,
+    #[serde(default, rename = "acceptance_command", skip_serializing)]
+    pub(crate) legacy_acceptance_command: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteRepairAcceptanceKind {
+    TrafficE2eRevisionChanged,
+    SourceRevisionChanged,
+    SourceRuntimeInputsChanged,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -151,6 +207,54 @@ pub struct RewriteRulePlanRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "protocol", rename_all = "snake_case")]
+pub(super) enum RewriteDependencyRuleSpec {
+    Http {
+        authority: String,
+        method: String,
+        path_prefix: String,
+    },
+    Memcached {
+        breeze_resource: String,
+        command: String,
+        key_start: u64,
+        key_end: u64,
+        key_separator: String,
+        key_suffix: String,
+        initial_load_timeout_ms: u64,
+    },
+    Motan {
+        group: String,
+        interface_name: String,
+        method_name: String,
+    },
+    RedisZcount {
+        ports: Vec<u16>,
+        key_prefix: String,
+        key_suffix: String,
+    },
+    RedisGet {
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        initial_load_timeout_ms: u64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteDependencyRulePlanRecord {
+    pub id: String,
+    pub issue_id: String,
+    pub evidence_id: String,
+    pub name: String,
+    pub source_evidence: String,
+    pub spec: RewriteDependencyRuleSpec,
+    #[serde(default)]
+    pub reused_existing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteState {
     pub version: u32,
     pub revision: u64,
@@ -158,6 +262,12 @@ pub(super) struct RewriteState {
     pub phase: RewritePhase,
     pub api: String,
     pub source_route: String,
+    #[serde(default)]
+    pub recording_apis: Vec<String>,
+    #[serde(default)]
+    pub api_inventory: Vec<RewriteApiProgress>,
+    #[serde(default)]
+    pub current_api_index: Option<usize>,
     pub recording_run_id: String,
     #[serde(default)]
     pub recording_rejection: Option<String>,
@@ -165,6 +275,8 @@ pub(super) struct RewriteState {
     pub recording_settings: RewriteRecordingSettings,
     #[serde(default)]
     pub recording_request_reason: Option<RewriteRecordingReason>,
+    #[serde(default)]
+    pub recording_input_case_source: Option<PathBuf>,
     pub comparison_run_id: Option<String>,
     #[serde(default)]
     pub comparison_rejection: Option<String>,
@@ -178,6 +290,8 @@ pub(super) struct RewriteState {
     pub attempt_delta: Option<RewriteAttemptDelta>,
     pub active_issue: Option<RewriteIssue>,
     pub rule_plan: Option<RewriteRulePlanRecord>,
+    #[serde(default)]
+    pub dependency_rule_plan: Option<RewriteDependencyRulePlanRecord>,
     pub route: Option<RewriteRouteRecord>,
     pub e2e_current: bool,
     pub comparison_current: bool,
@@ -212,6 +326,7 @@ pub struct RewriteFocusedE2eExecution {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteCommandSpec {
+    pub cwd: PathBuf,
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env_names: Vec<String>,
@@ -239,6 +354,14 @@ pub enum RewriteAction {
         evidence_commands: Vec<RewriteEvidenceCommand>,
         acceptance: RewriteCommandSpec,
     },
+    PlanApplyRequired {
+        summary: String,
+        command: RewriteCommandSpec,
+    },
+    ResumeRequired {
+        summary: String,
+        command: RewriteCommandSpec,
+    },
     ComparisonRecordingRequired {
         summary: String,
         command: RewriteCommandSpec,
@@ -248,6 +371,8 @@ pub enum RewriteAction {
         issue: RewriteIssue,
         #[serde(skip_serializing_if = "Option::is_none")]
         route: Option<RewriteRouteRecord>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        acceptance: Option<RewriteCommandSpec>,
     },
     Complete {
         summary: String,
@@ -264,10 +389,20 @@ pub struct RewriteEvidenceCommand {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RewriteApplicableRulePlanner {
+    pub kind: String,
+    pub protocol: String,
+    pub evidence_id: String,
+    pub command: RewriteCommandSpec,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RewriteActionEnvelope {
     pub schema_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow: Option<RewriteWorkflowView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
     pub action: RewriteAction,
@@ -276,9 +411,12 @@ pub struct RewriteActionEnvelope {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteStatusReport {
+    pub schema_version: u32,
     pub initialized: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow: Option<RewriteWorkflowView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_issue: Option<RewriteIssue>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -286,6 +424,7 @@ pub struct RewriteStatusReport {
     pub e2e_current: bool,
     pub comparison_current: bool,
     pub terminal_allowed: bool,
+    pub action: RewriteAction,
     pub next: RewriteCommandSpec,
 }
 
@@ -297,12 +436,24 @@ pub struct RewriteRecoveryReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RewriteRecordingExecutionReport {
+    pub action_id: String,
+    pub run_id: String,
+    pub operation: String,
+    pub already_completed: bool,
+    pub manifest: PathBuf,
+    pub next: RewriteCommandSpec,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RewriteEvidenceReport {
     pub schema_version: u32,
     pub evidence_id: String,
     pub issue_id: String,
     pub query: String,
     pub facts: Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applicable_rule_planners: Vec<RewriteApplicableRulePlanner>,
     pub does_not_prove: Vec<String>,
     pub next_step: String,
 }
@@ -316,11 +467,19 @@ pub struct RewriteRuleReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RewriteDependencyRuleReport {
+    pub plan_id: String,
+    pub issue_id: String,
+    pub traffic_e2e_report: Value,
+    pub next_command: RewriteCommandSpec,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RewriteRouteReport {
     pub accepted: bool,
     pub issue_id: String,
     pub route: RewriteRouteRecord,
-    pub next_command: RewriteCommandSpec,
+    pub acceptance: RewriteCommandSpec,
 }
 
 #[cfg(test)]
@@ -333,13 +492,21 @@ mod tests {
         let object = value.as_object_mut().unwrap();
         object.remove("recording_settings");
         object.remove("recording_request_reason");
+        object.remove("recording_input_case_source");
         object.remove("case_inventory_id");
+        object.remove("recording_apis");
+        object.remove("api_inventory");
+        object.remove("current_api_index");
 
         let state: RewriteState = serde_json::from_value(value).unwrap();
 
         assert_eq!(state.recording_settings.duration_seconds.get(), 60);
-        assert_eq!(state.recording_settings.case_limit.get(), 100);
+        assert_eq!(state.recording_settings.per_api_case_limit.get(), 100);
         assert!(state.recording_request_reason.is_none());
+        assert!(state.recording_input_case_source.is_none());
         assert!(state.case_inventory_id.is_none());
+        assert!(state.recording_apis.is_empty());
+        assert!(state.api_inventory.is_empty());
+        assert!(state.current_api_index.is_none());
     }
 }

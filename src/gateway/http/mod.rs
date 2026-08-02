@@ -180,7 +180,7 @@ async fn handle_gateway_request(
             || resolve_case_group(&original_uri, &rule.case_path_patterns),
             |pattern| resolve_case_group(&original_uri, std::slice::from_ref(pattern)),
         );
-        let max_cases = config.case_limits.limit_for(&group.pattern);
+        let max_cases = config.per_api_case_limits.limit_for(&group.pattern);
         (
             CaseContext {
                 id,
@@ -215,6 +215,7 @@ async fn handle_gateway_request(
     };
     let mut should_record = false;
     let mut case = None;
+    let mut admitted_case_pattern = None;
     let mut upstream_base = config.fallback_upstream.clone();
     let mut case_guard = None;
 
@@ -232,6 +233,7 @@ async fn handle_gateway_request(
         should_record = true;
         upstream_base = config.matched_upstream.clone();
         case = Some(candidate_case);
+        admitted_case_pattern = Some(case_pattern);
         case_guard = Some(guard);
     }
 
@@ -252,6 +254,7 @@ async fn handle_gateway_request(
             client_addr: client_addr.clone(),
             method: method.to_string(),
             uri: original_uri.to_string(),
+            api_pattern: admitted_case_pattern.clone(),
             authority: authority.clone(),
             matched_rule: matched_rule_name.clone(),
             upstream: upstream_base.clone(),
@@ -526,6 +529,7 @@ async fn record_gateway_error(ctx: GatewayErrorContext) -> Response<GatewayBody>
                 client_addr: ctx.client_addr.clone(),
                 method: ctx.method.to_string(),
                 uri: ctx.original_uri.to_string(),
+                api_pattern: None,
                 authority: ctx.authority.clone(),
                 matched_rule: ctx.matched_rule.clone(),
                 upstream: ctx.target.clone().unwrap_or_default(),

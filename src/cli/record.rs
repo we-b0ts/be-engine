@@ -30,9 +30,9 @@ pub(super) struct RecordArgs {
     /// Record only this API for the current run; repeat for multiple METHOD/path selectors.
     #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
     apis: Vec<RecordingApi>,
-    /// Override the case limit for every API in this run.
-    #[arg(long, value_name = "N")]
-    case_limit: Option<NonZeroUsize>,
+    /// Override the per-API case limit for this run.
+    #[arg(long = "per-api-case-limit", value_name = "N")]
+    per_api_case_limit: Option<NonZeroUsize>,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -55,8 +55,8 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
         );
     }
     let mut config = AppConfig::load(&args.config)?;
-    if let Some(case_limit) = args.case_limit {
-        config.override_case_limits_for_run(case_limit);
+    if let Some(per_api_case_limit) = args.per_api_case_limit {
+        config.override_per_api_case_limit_for_run(per_api_case_limit);
     }
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
@@ -422,15 +422,29 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_positive_runtime_case_limits() {
-        let cli =
-            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--case-limit", "250"])
-                .unwrap();
+    fn accepts_only_positive_per_api_case_limits() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--config",
+            "recorder.toml",
+            "--per-api-case-limit",
+            "250",
+        ])
+        .unwrap();
 
-        assert_eq!(cli.record.case_limit.map(NonZeroUsize::get), Some(250));
+        assert_eq!(
+            cli.record.per_api_case_limit.map(NonZeroUsize::get),
+            Some(250)
+        );
         assert!(
-            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--case-limit", "0",])
-                .is_err()
+            TestCli::try_parse_from([
+                "test",
+                "--config",
+                "recorder.toml",
+                "--per-api-case-limit",
+                "0",
+            ])
+            .is_err()
         );
     }
 

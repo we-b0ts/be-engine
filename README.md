@@ -48,7 +48,7 @@ traffic-e2e rewrite next --api 'GET /api/widgets/*' \
 traffic-e2e rewrite status
 traffic-e2e rewrite evidence <query-id>
 traffic-e2e rewrite recording request --kind standard \
-  --reason user-requested --duration-seconds 60 --case-limit 100
+  --reason user-requested --duration-seconds 60 --per-api-case-limit 100
 traffic-e2e record ...
 traffic-e2e record-comparison ...
 traffic-e2e compare ... --policy .traffic-e2e/verification.yaml
@@ -178,8 +178,8 @@ or control socket.
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are normally consumed in recorded connection
 order. Exact Redis `GET` and Memcached `get` exchanges explicitly recorded by a
-background rule as `runtime_state` remain single-use but are matched without
-source connection binding or lane blockers. The
+process-scoped background rule remain single-use but are matched without source
+connection binding or lane blockers. The
 v5 replay report keeps complete unmatched, unsupported, unsafe, and unused
 evidence, records exact success totals, and retains a bounded prefix of success
 details. `traffic-e2e diagnose replay-control end/report --fail-on-dirty`
