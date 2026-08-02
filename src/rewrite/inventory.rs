@@ -160,10 +160,12 @@ pub(super) fn reset_for_recording(state: &mut RewriteState) {
     state.current_api_index = None;
     if state.recording_apis.len() == 1 {
         state.api = state.recording_apis[0].clone();
-        if let Ok(api) = state.api.parse::<RecordingApi>()
-            && !api.is_dynamic()
-        {
-            state.source_route = api.path_pattern().to_string();
+        if let Ok(api) = state.api.parse::<RecordingApi>() {
+            state.source_route = if api.is_dynamic() {
+                String::new()
+            } else {
+                api.path_pattern().to_string()
+            };
         }
     } else {
         state.api.clear();

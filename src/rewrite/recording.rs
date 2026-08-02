@@ -1,5 +1,10 @@
+use std::fs::{self, OpenOptions};
 use std::num::{NonZeroU64, NonZeroUsize};
+use std::os::unix::fs::OpenOptionsExt as _;
+use std::os::unix::process::CommandExt as _;
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 
@@ -8,8 +13,11 @@ use super::artifacts;
 use super::inventory;
 use super::model::{
     RewriteActionEnvelope, RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingKind,
-    RewriteRecordingReason, RewriteRecordingSettings, RewriteState,
+    RewriteRecordingReason, RewriteRecordingSettings, RewriteRecordingStartReport,
+    RewriteRecordingStartState, RewriteState,
 };
+use super::recording_action;
+use super::recording_execution::{self, RecordingExecutionMarker, RecordingExecutionState};
 use super::store::RewriteStore;
 use crate::{ManagedRecordingOperation, ManagedRecordingOptions, RecordingApi};
 
@@ -20,7 +28,15 @@ pub struct RewriteRecordingRequestOptions {
     pub reason: RewriteRecordingReason,
     pub duration_seconds: NonZeroU64,
     pub per_api_case_limit: NonZeroUsize,
+    pub api: Option<RecordingApi>,
     pub replace_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExistingRecordingDisposition {
+    ReturnStatus,
+    ReturnAction,
+    Replace,
 }
 
 pub fn request_rewrite_recording(
@@ -47,12 +63,25 @@ pub fn request_rewrite_recording(
         duration_seconds: options.duration_seconds,
         per_api_case_limit: options.per_api_case_limit,
     };
+    let requested_apis = requested_recording_apis(options.api.as_ref());
     if state.phase == RewritePhase::RecordingRequired {
-        if artifacts::recording_manifest(&target_root, &state.recording_run_id).is_file() {
-            return action::for_status(&target_root, &state);
-        }
-        if reuse_pending_recording(&state, options.reason, settings, options.replace_pending)? {
-            return Ok(action::for_state(&target_root, &state));
+        let publication =
+            artifacts::standard_recording_publication(&target_root, &state.recording_run_id)?;
+        match existing_recording_disposition(
+            publication,
+            &state,
+            options.reason,
+            settings,
+            &requested_apis,
+            options.replace_pending,
+        )? {
+            ExistingRecordingDisposition::ReturnStatus => {
+                return action::for_status(&target_root, &state);
+            }
+            ExistingRecordingDisposition::ReturnAction => {
+                return Ok(action::for_state(&target_root, &state));
+            }
+            ExistingRecordingDisposition::Replace => {}
         }
     }
     let run_id = artifacts::allocate_run_id_excluding(
@@ -61,6 +90,11 @@ pub fn request_rewrite_recording(
         &[&state.recording_run_id],
     )?;
     reset_for_fresh_recording(&mut state, run_id, settings, options.reason);
+    if state.recording_apis != requested_apis {
+        state.recording_apis = requested_apis;
+        state.recording_input_case_source = None;
+        inventory::reset_for_recording(&mut state);
+    }
     if state.recording_input_case_source.is_none() {
         state.recording_input_case_source = artifacts::compatible_recording_input(
             &target_root,
@@ -72,13 +106,46 @@ pub fn request_rewrite_recording(
     Ok(action::for_state(&target_root, &state))
 }
 
+fn requested_recording_apis(api: Option<&RecordingApi>) -> Vec<String> {
+    api.map(|api| vec![api.to_string()]).unwrap_or_default()
+}
+
+fn existing_recording_disposition(
+    publication: artifacts::RecordingPublication,
+    state: &RewriteState,
+    reason: RewriteRecordingReason,
+    settings: RewriteRecordingSettings,
+    requested_apis: &[String],
+    replace_pending: bool,
+) -> Result<ExistingRecordingDisposition> {
+    if publication == artifacts::RecordingPublication::Running {
+        return Ok(ExistingRecordingDisposition::ReturnStatus);
+    }
+    let reusable =
+        reuse_pending_recording(state, reason, settings, requested_apis, replace_pending)?;
+    Ok(match (publication, reusable) {
+        (artifacts::RecordingPublication::Finalized, true) => {
+            ExistingRecordingDisposition::ReturnStatus
+        }
+        (artifacts::RecordingPublication::Missing, true) => {
+            ExistingRecordingDisposition::ReturnAction
+        }
+        (_, false) => ExistingRecordingDisposition::Replace,
+        (artifacts::RecordingPublication::Running, _) => unreachable!("handled above"),
+    })
+}
+
 fn reuse_pending_recording(
     state: &RewriteState,
     reason: RewriteRecordingReason,
     settings: RewriteRecordingSettings,
+    requested_apis: &[String],
     replace_pending: bool,
 ) -> Result<bool> {
-    if state.recording_request_reason == Some(reason) && state.recording_settings == settings {
+    if state.recording_request_reason == Some(reason)
+        && state.recording_settings == settings
+        && inventory::recording_scope(state) == requested_apis
+    {
         return Ok(true);
     }
     ensure!(
@@ -88,57 +155,206 @@ fn reuse_pending_recording(
     Ok(false)
 }
 
-pub async fn execute_rewrite_recording(
+pub fn start_rewrite_recording(
+    target_root: PathBuf,
+    requested_action_id: &str,
+) -> Result<RewriteRecordingStartReport> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&target_root)?;
+    let store = RewriteStore::new(&target_root)?;
+    let lock = store.lock()?;
+    let state = store
+        .load()?
+        .context("rewrite workflow has not been initialized")?;
+    let (comparison, operation, run_id, _) = recording_action_context(&target_root, &state)?;
+    let expected_action_id = recording_action::recording_action_id(&state, comparison);
+    ensure!(
+        requested_action_id == expected_action_id,
+        "recording action is stale or belongs to another workflow revision"
+    );
+    match recording_execution::state(&target_root)? {
+        RecordingExecutionState::Live(marker) => {
+            ensure!(
+                marker.action_id == requested_action_id,
+                "another recording action is already running"
+            );
+            return Ok(start_report(
+                &target_root,
+                requested_action_id,
+                operation,
+                run_id,
+                RewriteRecordingStartState::AlreadyRunning,
+            ));
+        }
+        RecordingExecutionState::Stale(_) => {
+            anyhow::bail!(
+                "the previous recording executor stopped before publishing completion; execute `traffic-e2e rewrite recover`"
+            );
+        }
+        RecordingExecutionState::Absent => {}
+    }
+    let publication = recording_publication(&target_root, &state, comparison)?;
+    match publication {
+        artifacts::RecordingPublication::Finalized => {
+            return Ok(start_report(
+                &target_root,
+                requested_action_id,
+                operation,
+                run_id,
+                RewriteRecordingStartState::AlreadyCompleted,
+            ));
+        }
+        artifacts::RecordingPublication::Running => {
+            anyhow::bail!(
+                "the recording manifest is incomplete and has no live executor; execute `traffic-e2e rewrite recover`"
+            );
+        }
+        artifacts::RecordingPublication::Missing => {}
+    }
+    let log_path = recording_execution::log_path(&target_root, &run_id);
+    let log_root = log_path.parent().context("recording log has no parent")?;
+    fs::create_dir_all(log_root)
+        .with_context(|| format!("failed to create recording log root {}", log_root.display()))?;
+    let stdout = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&log_path)
+        .with_context(|| format!("failed to open recording log {}", log_path.display()))?;
+    let stderr = stdout.try_clone()?;
+    let executable = std::env::current_exe().context("failed to resolve traffic-e2e binary")?;
+    let mut command = std::process::Command::new(executable);
+    command
+        .arg("internal")
+        .arg("rewrite-recording-worker")
+        .arg("--target-root")
+        .arg(&target_root)
+        .arg(requested_action_id)
+        .current_dir(&target_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr));
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    let mut child = command
+        .spawn()
+        .context("failed to start detached recording executor")?;
+    let marker = RecordingExecutionMarker {
+        action_id: requested_action_id.to_string(),
+        run_id: run_id.clone(),
+        operation: operation.script_name().to_string(),
+        pid: child.id(),
+    };
+    if let Err(error) = recording_execution::publish(&target_root, &marker) {
+        let _ = child.kill();
+        return Err(error);
+    }
+    drop(lock);
+    Ok(start_report(
+        &target_root,
+        requested_action_id,
+        operation,
+        run_id,
+        RewriteRecordingStartState::Started,
+    ))
+}
+
+pub async fn execute_rewrite_recording_worker(
     target_root: PathBuf,
     requested_action_id: &str,
 ) -> Result<RewriteRecordingExecutionReport> {
     let (target_root, _) = crate::e2e_run::resolve_project(&target_root)?;
     let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let lock = loop {
+        if let Some(lock) = store.try_lock()? {
+            break lock;
+        }
+        ensure!(
+            tokio::time::Instant::now() < deadline,
+            "detached recording executor could not acquire the coordinator lock"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    let result =
+        execute_rewrite_recording_locked(target_root.clone(), requested_action_id, store, lock)
+            .await;
+    match result {
+        Ok(report) => {
+            recording_execution::clear(&target_root, requested_action_id)?;
+            Ok(report)
+        }
+        Err(runtime_error) => {
+            let store = RewriteStore::new(&target_root)?;
+            let state = store
+                .load()?
+                .context("rewrite workflow has not been initialized")?;
+            let (comparison, operation, run_id, manifest) =
+                recording_action_context(&target_root, &state)?;
+            if recording_publication(&target_root, &state, comparison)?
+                != artifacts::RecordingPublication::Finalized
+            {
+                return Err(runtime_error);
+            }
+            if comparison {
+                artifacts::validate_comparison_recording(&target_root, &state)?;
+            } else {
+                artifacts::validate_standard_recording(&target_root, &state)?;
+            }
+            recording_execution::clear(&target_root, requested_action_id)?;
+            Ok(execution_report(
+                &target_root,
+                requested_action_id,
+                operation,
+                run_id,
+                manifest,
+                false,
+            ))
+        }
+    }
+}
+
+async fn execute_rewrite_recording_locked(
+    target_root: PathBuf,
+    requested_action_id: &str,
+    store: RewriteStore,
+    _lock: super::store::RewriteLock,
+) -> Result<RewriteRecordingExecutionReport> {
     let state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
-    let comparison = match state.phase {
-        RewritePhase::RecordingRequired => false,
-        RewritePhase::ComparisonRecordingRequired => true,
-        _ => anyhow::bail!("rewrite workflow has no recording action to execute"),
-    };
-    let expected_action_id = action::recording_action_id(&state, comparison);
+    let (comparison, operation, run_id, manifest) = recording_action_context(&target_root, &state)?;
+    let expected_action_id = recording_action::recording_action_id(&state, comparison);
     ensure!(
         requested_action_id == expected_action_id,
         "recording action is stale or belongs to another workflow revision"
     );
-    let (operation, run_id, manifest) = if comparison {
-        let run_id = state
-            .comparison_run_id
-            .clone()
-            .context("comparison recording action has no run id")?;
-        (
-            ManagedRecordingOperation::RecordComparison,
-            run_id.clone(),
-            artifacts::comparison_manifest(&target_root, &run_id),
-        )
-    } else {
-        (
-            ManagedRecordingOperation::Record,
-            state.recording_run_id.clone(),
-            artifacts::recording_manifest(&target_root, &state.recording_run_id),
-        )
-    };
-    if manifest.is_file() {
-        if comparison {
-            artifacts::validate_comparison_recording(&target_root, &state)?;
-        } else {
-            artifacts::validate_standard_recording(&target_root, &state)?;
+    match recording_publication(&target_root, &state, comparison)? {
+        artifacts::RecordingPublication::Finalized => {
+            if comparison {
+                artifacts::validate_comparison_recording(&target_root, &state)?;
+            } else {
+                artifacts::validate_standard_recording(&target_root, &state)?;
+            }
+            return Ok(execution_report(
+                &target_root,
+                requested_action_id,
+                operation,
+                run_id,
+                manifest,
+                true,
+            ));
         }
-        return Ok(execution_report(
-            &target_root,
-            requested_action_id,
-            operation,
-            run_id,
-            manifest,
-            true,
-        ));
+        artifacts::RecordingPublication::Running => anyhow::bail!(
+            "the recording manifest is incomplete; execute `traffic-e2e rewrite recover`"
+        ),
+        artifacts::RecordingPublication::Missing => {}
     }
     let request_source = if comparison {
         state.case_source.clone()
@@ -174,6 +390,65 @@ pub async fn execute_rewrite_recording(
         result.manifest,
         false,
     ))
+}
+
+fn recording_action_context(
+    target_root: &std::path::Path,
+    state: &RewriteState,
+) -> Result<(bool, ManagedRecordingOperation, String, PathBuf)> {
+    match state.phase {
+        RewritePhase::RecordingRequired => Ok((
+            false,
+            ManagedRecordingOperation::Record,
+            state.recording_run_id.clone(),
+            artifacts::recording_manifest(target_root, &state.recording_run_id),
+        )),
+        RewritePhase::ComparisonRecordingRequired => {
+            let run_id = state
+                .comparison_run_id
+                .clone()
+                .context("comparison recording action has no run id")?;
+            Ok((
+                true,
+                ManagedRecordingOperation::RecordComparison,
+                run_id.clone(),
+                artifacts::comparison_manifest(target_root, &run_id),
+            ))
+        }
+        _ => anyhow::bail!("rewrite workflow has no recording action to execute"),
+    }
+}
+
+fn recording_publication(
+    target_root: &std::path::Path,
+    state: &RewriteState,
+    comparison: bool,
+) -> Result<artifacts::RecordingPublication> {
+    if comparison {
+        let run_id = state
+            .comparison_run_id
+            .as_deref()
+            .context("comparison recording action has no run id")?;
+        artifacts::comparison_recording_publication(target_root, run_id)
+    } else {
+        artifacts::standard_recording_publication(target_root, &state.recording_run_id)
+    }
+}
+
+fn start_report(
+    target_root: &std::path::Path,
+    action_id: &str,
+    operation: ManagedRecordingOperation,
+    run_id: String,
+    execution_state: RewriteRecordingStartState,
+) -> RewriteRecordingStartReport {
+    RewriteRecordingStartReport {
+        action_id: action_id.to_string(),
+        run_id,
+        operation: operation.script_name().to_string(),
+        execution_state,
+        status: action::status_command(target_root),
+    }
 }
 
 fn execution_report(
@@ -279,7 +554,7 @@ mod tests {
                 "rewrite",
                 "recording",
                 "execute",
-                action::recording_action_id(&state, false).as_str(),
+                recording_action::recording_action_id(&state, false).as_str(),
             ]
         );
         assert_eq!(command.cwd, target.path());
@@ -304,6 +579,7 @@ mod tests {
                 &state,
                 RewriteRecordingReason::UserRequested,
                 settings,
+                &state.recording_apis,
                 false,
             )
             .unwrap()
@@ -318,6 +594,7 @@ mod tests {
                 &state,
                 RewriteRecordingReason::UserRequested,
                 different,
+                &state.recording_apis,
                 false,
             )
             .is_err()
@@ -327,9 +604,39 @@ mod tests {
                 &state,
                 RewriteRecordingReason::UserRequested,
                 different,
+                &state.recording_apis,
                 true,
             )
             .unwrap()
+        );
+    }
+
+    #[test]
+    fn omitted_api_requests_all_configured_traffic() {
+        assert!(requested_recording_apis(None).is_empty());
+        let api = "GET /api/widgets/*".parse::<RecordingApi>().unwrap();
+        assert_eq!(requested_recording_apis(Some(&api)), ["GET /api/widgets/*"]);
+    }
+
+    #[test]
+    fn finalized_single_api_can_be_replaced_by_an_all_configured_request() {
+        let mut state = crate::rewrite::test_state();
+        state.recording_request_reason = Some(RewriteRecordingReason::UserRequested);
+
+        assert_eq!(
+            existing_recording_disposition(
+                artifacts::RecordingPublication::Finalized,
+                &state,
+                RewriteRecordingReason::UserRequested,
+                RewriteRecordingSettings {
+                    duration_seconds: NonZeroU64::new(60).unwrap(),
+                    per_api_case_limit: NonZeroUsize::new(100).unwrap(),
+                },
+                &[],
+                true,
+            )
+            .unwrap(),
+            ExistingRecordingDisposition::Replace
         );
     }
 }

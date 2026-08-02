@@ -9,7 +9,7 @@ use super::model::{
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewritePhase, RewriteState,
     RewriteWorkflowView,
 };
-use super::{artifacts, evidence, fingerprint, inventory};
+use super::{evidence, fingerprint, inventory, recording_action};
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
     envelope(state, state_action(target_root, state))
@@ -19,14 +19,12 @@ pub(super) fn for_status(
     target_root: &Path,
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
+    let recording_status = recording_action::status_action(target_root, state)?;
     let action = match state.phase {
-        RewritePhase::RecordingRequired
-            if artifacts::recording_manifest(target_root, &state.recording_run_id).is_file() =>
+        RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
+            if recording_status.is_some() =>
         {
-            resume_required(target_root, format!(
-                "standard recording result for run {} is available; resume coordinator validation",
-                state.recording_run_id
-            ))
+            recording_status.expect("recording status was checked")
         }
         RewritePhase::ImplementationRequired
             if state.target_fingerprint.as_deref()
@@ -37,19 +35,6 @@ pub(super) fn for_status(
                 "target repository changed after the latest focused attempt; resume coordinator verification"
                     .to_string(),
             )
-        }
-        RewritePhase::ComparisonRecordingRequired
-            if state.comparison_run_id.as_deref().is_some_and(|run_id| {
-                artifacts::comparison_manifest(target_root, run_id).is_file()
-            }) =>
-        {
-            resume_required(target_root, format!(
-                "comparison recording result for run {} is available; resume coordinator validation",
-                state
-                    .comparison_run_id
-                    .as_deref()
-                    .expect("comparison manifest requires a run id")
-            ))
         }
         _ => state_action(target_root, state),
     };
@@ -126,7 +111,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
     match state.phase {
         RewritePhase::RecordingRequired => RewriteAction::RecordingRequired {
             summary: recording_summary(state),
-            command: recording_command(target_root, state, false),
+            command: recording_action::command(target_root, state, false),
             resume: next_command(target_root),
         },
         RewritePhase::ApiPending => resume_required(
@@ -151,7 +136,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                     )
                 },
             ),
-            command: recording_command(target_root, state, true),
+            command: recording_action::command(target_root, state, true),
             resume: next_command(target_root),
         },
         RewritePhase::SystemRepairRequired => RewriteAction::SystemRepairRequired {
@@ -298,60 +283,10 @@ pub(super) fn workflow_view(state: &RewriteState) -> RewriteWorkflowView {
 fn workflow_scope(state: &RewriteState) -> String {
     let scope = inventory::recording_scope(state);
     if scope.is_empty() {
-        "all_recorded_apis".to_string()
+        "all_configured_apis".to_string()
     } else {
         scope.join(", ")
     }
-}
-
-fn recording_command(
-    target_root: &Path,
-    state: &RewriteState,
-    comparison: bool,
-) -> RewriteCommandSpec {
-    command(
-        target_root,
-        vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
-            "recording".to_string(),
-            "execute".to_string(),
-            recording_action_id(state, comparison),
-        ],
-        vec!["TRAFFIC_E2E_ENCRYPTION_KEY_B64".to_string()],
-    )
-}
-
-pub(super) fn recording_action_id(state: &RewriteState, comparison: bool) -> String {
-    let run_id = if comparison {
-        state
-            .comparison_run_id
-            .as_deref()
-            .expect("comparison action requires run id")
-    } else {
-        &state.recording_run_id
-    };
-    let input_source = if comparison {
-        state.case_source.as_ref()
-    } else {
-        state.recording_input_case_source.as_ref()
-    };
-    let input_source = input_source
-        .map(|path| path.to_string_lossy())
-        .unwrap_or_default();
-    format!(
-        "recording-{}",
-        fingerprint::id(&[
-            &state.workflow_id,
-            if comparison { "comparison" } else { "standard" },
-            run_id,
-            &inventory::recording_scope(state).join("\n"),
-            &state.recording_settings.duration_seconds.to_string(),
-            &state.recording_settings.per_api_case_limit.to_string(),
-            input_source.as_ref(),
-        ])
-        .trim_start_matches("fnv1a64:")
-    )
 }
 
 pub(super) fn command(
@@ -373,6 +308,18 @@ pub(super) fn next_command(target_root: &Path) -> RewriteCommandSpec {
             "traffic-e2e".to_string(),
             "rewrite".to_string(),
             "next".to_string(),
+        ],
+        Vec::new(),
+    )
+}
+
+pub(super) fn status_command(target_root: &Path) -> RewriteCommandSpec {
+    command(
+        target_root,
+        vec![
+            "traffic-e2e".to_string(),
+            "rewrite".to_string(),
+            "status".to_string(),
         ],
         Vec::new(),
     )
@@ -441,6 +388,8 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    use super::super::recording_action::recording_action_id;
+    use super::super::{artifacts, recording_execution};
     use super::*;
     use crate::{
         E2eDependencyGate, E2eDiagnosisCounts, E2eReplayGate, E2eResponseGate, E2eVerificationGates,
@@ -475,7 +424,11 @@ mod tests {
 
         let manifest = artifacts::recording_manifest(target.path(), &state.recording_run_id);
         fs::create_dir_all(manifest.parent().unwrap()).unwrap();
-        fs::write(manifest, b"{}").unwrap();
+        fs::write(
+            manifest,
+            br#"{"status":"completed","recording_apis":["GET /api"],"published_cases":1,"failed_cases":0,"errors":[]}"#,
+        )
+        .unwrap();
         let resumable = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
         assert_eq!(
             resumable.pointer("/action/kind"),
@@ -501,13 +454,74 @@ mod tests {
 
         let comparison_manifest = artifacts::comparison_manifest(target.path(), "20260802000001");
         fs::create_dir_all(comparison_manifest.parent().unwrap()).unwrap();
-        fs::write(comparison_manifest, b"{}").unwrap();
+        fs::write(
+            comparison_manifest,
+            br#"{"status":"completed","ready":true,"recording_apis":["GET /api"],"counts":{"published":1,"failed":0},"errors":[]}"#,
+        )
+        .unwrap();
         let comparison_resumable =
             serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
         assert_eq!(
             comparison_resumable.pointer("/action/kind"),
             Some(&serde_json::json!("resume_required"))
         );
+    }
+
+    #[test]
+    fn status_requires_recovery_for_an_unowned_running_manifest() {
+        let target = tempfile::tempdir().unwrap();
+        let state = crate::rewrite::test_state();
+        let manifest = artifacts::recording_manifest(target.path(), &state.recording_run_id);
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        fs::write(
+            manifest,
+            br#"{"status":"running","recording_apis":["GET /api"],"published_cases":1,"failed_cases":0,"errors":[]}"#,
+        )
+        .unwrap();
+
+        let status = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
+        assert_eq!(
+            status.pointer("/action/kind"),
+            Some(&serde_json::json!("recovery_required"))
+        );
+        assert_eq!(
+            status.pointer("/action/command/argv"),
+            Some(&serde_json::json!(["traffic-e2e", "rewrite", "recover"]))
+        );
+    }
+
+    #[test]
+    fn status_reports_a_live_recording_without_returning_execute_again() {
+        let target = tempfile::tempdir().unwrap();
+        let state = crate::rewrite::test_state();
+        let manifest = artifacts::recording_manifest(target.path(), &state.recording_run_id);
+        fs::create_dir_all(manifest.parent().unwrap()).unwrap();
+        fs::write(
+            manifest,
+            br#"{"status":"running","recording_apis":["GET /api"],"published_cases":1,"failed_cases":0,"errors":[]}"#,
+        )
+        .unwrap();
+        recording_execution::publish(
+            target.path(),
+            &recording_execution::RecordingExecutionMarker {
+                action_id: recording_action_id(&state, false),
+                run_id: state.recording_run_id.clone(),
+                operation: "record".to_string(),
+                pid: std::process::id(),
+            },
+        )
+        .unwrap();
+
+        let status = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
+        assert_eq!(
+            status.pointer("/action/kind"),
+            Some(&serde_json::json!("recording_in_progress"))
+        );
+        assert_eq!(
+            status.pointer("/action/status/argv"),
+            Some(&serde_json::json!(["traffic-e2e", "rewrite", "status"]))
+        );
+        assert!(status.pointer("/action/command").is_none());
     }
 
     #[test]

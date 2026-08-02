@@ -85,17 +85,26 @@ traffic-e2e rewrite recording request \
   --per-api-case-limit <positive-limit>
 ```
 
-The defaults are 60 seconds and 100 cases per configured API pattern; when
-`--api` is omitted, the limit is not a recording-wide total. Caller-supplied
+Omit `--api` to record every API admitted by recorder configuration, including
+when replacing a previously narrowed workflow. Supply `--api '<METHOD path>'`
+only when the caller explicitly requests a single-API fresh recording. The
+defaults are 60 seconds and 100 cases per configured API pattern; the limit is
+not a recording-wide total. Caller-supplied
 positive values may replace them. A request identical to the current pending request returns the
-same action and run; a completed manifest returns a resume action. A different
+same action and run; a matching completed manifest returns a resume action. A different
 pending request is rejected unless the caller explicitly supplies
 `--replace-pending`. The command invalidates evidence for every API derived
 from the shared prior standard recording, preserves old artifacts, allocates a
 new run ID, and returns one `recording_required` action. Execute that opaque
-`rewrite recording execute <action-id>` argv exactly. The coordinator chooses
-and drives the finalized real-traffic request corpus; never add `nohup`, curl
-loops, a replayer, or driver parameters. If it returns `input_required` because
+`rewrite recording execute <action-id>` argv exactly. It starts a detached
+coordinator-owned worker and returns immediately; do not background it, pipe it
+through `head`/`tail`, or wait on a shell task. Poll the exact `rewrite status`
+command from the result. `recording_in_progress` means the one worker still
+owns the run, `resume_required` means finalization completed, and
+`recovery_required` means the owner exited and its exact recovery command must
+run before retrying. The coordinator chooses and drives the finalized
+real-traffic request corpus; never add `nohup`, curl loops, a replayer, or
+driver parameters. If it returns `input_required` because
 no finalized real-traffic corpus exists, report that missing external input and
 do not synthesize requests. A failed E2E attempt alone never authorizes this
 transition.

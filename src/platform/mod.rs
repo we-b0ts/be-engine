@@ -14,10 +14,12 @@ use crate::e2e_run::resolve_project;
 use crate::recording_api::RecordingApi;
 
 mod recording_input;
+mod recovery;
 
 pub use recording_input::{
     ManagedRecordingInputOptions, ManagedRecordingInputResult, drive_managed_recording_input,
 };
+pub use recovery::{ManagedRecordingRecoveryResult, recover_managed_recording};
 
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
 const MESH_CONNECT_UTIL: &str = include_str!("assets/MeshConnectUtil.java");
@@ -32,7 +34,7 @@ pub enum ManagedRecordingOperation {
 }
 
 impl ManagedRecordingOperation {
-    fn script_name(self) -> &'static str {
+    pub(crate) fn script_name(self) -> &'static str {
         match self {
             Self::Record => "record",
             Self::RecordComparison => "record-comparison",

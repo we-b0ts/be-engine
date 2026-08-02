@@ -76,7 +76,11 @@ passing attempts advance to fresh comparison recording. An explicit
 `rewrite recording request --kind standard` transition replaces the standard
 evidence chain when new traffic is requested or its Recorder/source contract
 has changed. The coordinator, not the caller, allocates the run ID and returns
-the exact recording argv.
+the exact recording argv. Omitting `--api` on that request resets any prior
+single-API scope and records every API admitted by recorder configuration;
+provide `--api` only for an explicitly narrowed fresh recording. Executing the
+returned action starts a detached coordinator worker and returns immediately;
+poll `rewrite status` until it reports `resume_required`.
 
 Representative evidence returns the exact immutable standard or comparison
 case directory and a structured response difference. Use that case as the

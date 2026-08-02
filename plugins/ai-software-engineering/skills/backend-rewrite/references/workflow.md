@@ -28,10 +28,13 @@ The target AI repeatedly runs `traffic-e2e rewrite next`. It pauses only for:
 ### `recording_required`
 
 Execute the exact opaque `rewrite recording execute <action-id>` argv from its
-canonical `cwd` with the named environment variables, then run `next`. The
+canonical `cwd` with the named environment variables. The command starts a
+detached coordinator worker and returns immediately. Poll its returned
+`rewrite status` command; wait through `recording_in_progress`, and run `next`
+only after `resume_required`. The
 coordinator preallocates the run ID, owns the real-traffic request driver, and
 validates that exact finalized manifest. Never discover a run by recency or add
-manual curl, replay, backgrounding, or driver flags. Duration and case limit
+manual curl, replay, shell pipelines, backgrounding, or driver flags. Duration and case limit
 belong to the preceding recording request and are bound into the action ID.
 When the workflow was started without `--api`, an empty run-local selector is
 intentional: recorder configuration limits traffic and the finalized cases
@@ -73,7 +76,9 @@ Use `rewrite recording request --kind standard` only for an explicit caller
 request, a changed Recorder contract, or a changed source baseline. Supply the
 corresponding reason plus positive `--duration-seconds` and
 `--per-api-case-limit`
-values. An identical pending request is idempotent; a different pending request
+values. Omit `--api` to replace any previous narrowed scope with every API
+admitted by recorder configuration; provide it only for an explicitly
+single-API recording. An identical pending request is idempotent; a different pending request
 requires explicit `--replace-pending`. The coordinator preserves prior
 artifacts, clears state derived from that baseline, allocates a new run, and
 returns the exact `recording_required` action. Execute that action and resume
@@ -156,17 +161,19 @@ delivery remain under the caller's rewrite objective.
 Coordinator state is one atomically replaced file under the ignored local
 root. Prefer `rewrite status` to reading this noisy internal representation and
 never edit it. Status reconstructs the current action without advancing state:
-it returns the original recording action while no result exists, an exact
-`plan_apply_required` command for a pending plan, or `resume_required` when a
-recording manifest or target change is ready for `rewrite next`. This makes a
-lost action response recoverable without rebuilding argv. Do not execute a
-reconstructed action concurrently with a previously launched copy that is
-still running. In `system_repair_required`, status also reconstructs the exact
+it returns the original recording action before execution, an exact
+`plan_apply_required` command for a pending plan, `recording_in_progress` while
+the detached worker is live, or `resume_required` only after a finalized
+recording manifest or target change is ready for `rewrite next`. A running
+manifest whose owner exited returns `recovery_required`; recovery removes only
+the matching managed run resources and allocates a replacement run. This makes
+a lost action response recoverable without rebuilding argv or starting a
+second worker. In `system_repair_required`, status also reconstructs the exact
 coordinator-issued `repair verify <repair-id>` acceptance. When an action
 reports `recovery_required`, execute its exact
 `rewrite recover` argv. Recovery rejects a live coordinator, removes a stale
-lock, stops an orphaned focused target/Replay attempt, and publishes that
-attempt as interrupted before returning the next coordinator command.
+lock, stops an orphaned focused target/Replay attempt or managed recording,
+publishes interrupted state, and returns the next coordinator command.
 
 Traffic-e2e's internal runner publication may retain its own implementation
 layout. Those local paths are not a stable rewrite-interface contract. The

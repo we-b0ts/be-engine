@@ -9,6 +9,13 @@ use super::inventory;
 use super::model::RewriteState;
 use crate::{ManagedRecordingOperation, RecordingApi, resolve_recording_api_member};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RecordingPublication {
+    Missing,
+    Running,
+    Finalized,
+}
+
 pub(super) fn allocate_run_id(
     target_root: &Path,
     operation: ManagedRecordingOperation,
@@ -60,6 +67,16 @@ pub(super) fn validate_standard_recording(target_root: &Path, state: &RewriteSta
         "standard recording is dirty"
     );
     Ok(())
+}
+
+pub(super) fn standard_recording_publication(
+    target_root: &Path,
+    run_id: &str,
+) -> Result<RecordingPublication> {
+    manifest_publication::<StandardRecordingManifest>(
+        &recording_manifest(target_root, run_id),
+        |manifest| manifest.status.as_str(),
+    )
 }
 
 pub(super) fn standard_recording_apis(
@@ -116,6 +133,16 @@ pub(super) fn validate_comparison_recording(
     Ok(())
 }
 
+pub(super) fn comparison_recording_publication(
+    target_root: &Path,
+    run_id: &str,
+) -> Result<RecordingPublication> {
+    manifest_publication::<ComparisonRecordingManifest>(
+        &comparison_manifest(target_root, run_id),
+        |manifest| manifest.status.as_str(),
+    )
+}
+
 pub(super) fn compatible_recording_input(
     target_root: &Path,
     requested_apis: &[String],
@@ -141,14 +168,19 @@ pub(super) fn compatible_recording_input(
         let Ok(report) = read_json::<StandardRecordingManifest>(&manifest) else {
             continue;
         };
+        let scope_matches = if requested_apis.is_empty() {
+            report.recording_apis.is_empty()
+        } else {
+            requested_apis.iter().all(|api| {
+                api.parse::<RecordingApi>()
+                    .is_ok_and(|api| resolve_recording_api_member(&entry.path(), &api).is_ok())
+            })
+        };
         if report.status == "completed"
             && report.published_cases > 0
             && report.failed_cases == 0
             && report.errors.is_empty()
-            && requested_apis.iter().all(|api| {
-                api.parse::<RecordingApi>()
-                    .is_ok_and(|api| resolve_recording_api_member(&entry.path(), &api).is_ok())
-            })
+            && scope_matches
         {
             return Ok(Some(entry.path()));
         }
@@ -288,6 +320,24 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
         .with_context(|| format!("invalid generated evidence {}", path.display()))
 }
 
+fn manifest_publication<T>(
+    path: &Path,
+    status: impl FnOnce(&T) -> &str,
+) -> Result<RecordingPublication>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if !path.is_file() {
+        return Ok(RecordingPublication::Missing);
+    }
+    let manifest: T = read_json(path)?;
+    Ok(match status(&manifest) {
+        "running" => RecordingPublication::Running,
+        "completed" | "failed" => RecordingPublication::Finalized,
+        other => anyhow::bail!("generated recording manifest has unsupported status {other:?}"),
+    })
+}
+
 #[derive(Debug, Deserialize)]
 struct StandardRecordingManifest {
     status: String,
@@ -351,7 +401,7 @@ mod tests {
         std::fs::create_dir_all(&newer_dirty).unwrap();
         std::fs::write(
             valid.join("recording-run.json"),
-            r#"{"status":"completed","recording_apis":["GET /api"],"published_cases":3,"failed_cases":0,"errors":[]}"#,
+            r#"{"status":"completed","recording_apis":[],"published_cases":3,"failed_cases":0,"errors":[]}"#,
         )
         .unwrap();
         std::fs::write(

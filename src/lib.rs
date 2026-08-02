@@ -115,8 +115,8 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use platform::{
     ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
-    ManagedRecordingOptions, ManagedRecordingResult, drive_managed_recording_input,
-    run_managed_recording,
+    ManagedRecordingOptions, ManagedRecordingRecoveryResult, ManagedRecordingResult,
+    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
@@ -152,12 +152,13 @@ pub use rewrite::{
     RewriteEvidenceCommand, RewriteEvidenceReport, RewriteFocusedE2eExecution,
     RewriteFocusedE2eExecutionMode, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
     RewriteNextOptions, RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingKind,
-    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecoveryReport,
-    RewriteRepairAcceptanceKind, RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions,
-    RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule,
-    apply_rewrite_rule, execute_rewrite_recording, next_rewrite, plan_rewrite_dependency_rule,
+    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecordingStartReport,
+    RewriteRecordingStartState, RewriteRecoveryReport, RewriteRepairAcceptanceKind,
+    RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport,
+    RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_rule,
+    execute_rewrite_recording_worker, next_rewrite, plan_rewrite_dependency_rule,
     plan_rewrite_rule, query_rewrite_evidence, recover_rewrite, request_rewrite_recording,
-    route_rewrite, status_rewrite, verify_rewrite_repair,
+    route_rewrite, start_rewrite_recording, status_rewrite, verify_rewrite_repair,
 };
 pub use tls::MitmCa;
 

@@ -349,6 +349,11 @@ pub enum RewriteAction {
         command: RewriteCommandSpec,
         resume: RewriteCommandSpec,
     },
+    RecordingInProgress {
+        summary: String,
+        run_id: String,
+        status: RewriteCommandSpec,
+    },
     ImplementationRequired {
         issue: RewriteIssue,
         evidence_commands: Vec<RewriteEvidenceCommand>,
@@ -432,7 +437,17 @@ pub struct RewriteStatusReport {
 pub struct RewriteRecoveryReport {
     pub recovered_stale_lock: bool,
     pub recovered_focused_attempt: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recovered_recording_run: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replacement_recording_run: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub removed_managed_containers: usize,
     pub next: RewriteCommandSpec,
+}
+
+fn is_zero(value: &usize) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -443,6 +458,23 @@ pub struct RewriteRecordingExecutionReport {
     pub already_completed: bool,
     pub manifest: PathBuf,
     pub next: RewriteCommandSpec,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteRecordingStartState {
+    Started,
+    AlreadyRunning,
+    AlreadyCompleted,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteRecordingStartReport {
+    pub action_id: String,
+    pub run_id: String,
+    pub operation: String,
+    pub execution_state: RewriteRecordingStartState,
+    pub status: RewriteCommandSpec,
 }
 
 #[derive(Debug, Clone, Serialize)]

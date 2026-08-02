@@ -800,11 +800,14 @@ Every returned command contains a canonical `cwd` plus exact argv. `next`
 returns an opaque standard/comparison `rewrite recording execute <action-id>`
 action. The coordinator chooses a finalized real-traffic request corpus and
 drives it through the recording gateway; callers do not add curl loops,
-replayers, backgrounding, or driver parameters. If no compatible finalized
+replayers, shell pipelines, backgrounding, or driver parameters. `execute`
+starts a detached coordinator-owned worker and returns immediately. Poll
+`rewrite status`; `recording_in_progress` never returns a second execute action,
+and `resume_required` means finalization and cleanup completed. If no compatible finalized
 corpus exists, the action is `input_required` until that external input is
 available. When startup omits `--api`, recorder configuration limits the
 standard run and the coordinator derives a stable `api_inventory` from its
-published cases. After the execute command completes, `next` validates the
+published cases. After status returns `resume_required`, `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next comparison action. Once
 comparison passes, the following `next` prepares the next inventory item from
@@ -814,12 +817,13 @@ rerun the required stage. `terminal_allowed` is false until every inventory
 item has both passing E2E and comparison evidence.
 
 `status` is read-only and returns the current `action` from the persisted
-workflow revision. Before a recording result exists it reconstructs the same
-run ID and argv; a pending rule plan produces `plan_apply_required` with only
-the stored plan ID. When a recording manifest exists or the target repository
-has changed, status returns `resume_required` with `rewrite next` instead of
-repeating the earlier action. Use this snapshot to recover lost command output,
-but do not start a second copy of an action already known to be running.
+workflow revision. Before execution starts it reconstructs the same run ID and
+argv; a live detached worker returns `recording_in_progress`, and only a
+finalized manifest returns `resume_required`. A running manifest without a live
+owner returns `recovery_required`; `rewrite recover` removes only that run's
+managed resources and allocates a replacement run. A pending rule plan produces
+`plan_apply_required` with only the stored plan ID. A target repository change
+also returns `resume_required` with `rewrite next`.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
@@ -827,9 +831,11 @@ recording. Use `rewrite recording request --kind standard` only for an explicit
 new-traffic request, a changed Recorder contract, or a changed source baseline.
 The request accepts positive duration and per-API case-limit values, invalidates state
 derived from the old baseline without deleting its artifacts, and returns a
-new exact recording action. An identical pending request returns the existing
+new exact recording action. Omitting `--api` means all APIs admitted by recorder
+configuration, even when the prior workflow was narrowed; explicit `--api`
+keeps the fresh recording single-API. An identical pending request returns the existing
 action and run. A different pending request is rejected unless
-`--replace-pending` is explicit; a completed manifest returns a resume action.
+`--replace-pending` is explicit; a matching completed manifest returns a resume action.
 The coordinator defaults both standard and comparison recording actions to 60
 seconds and 100 cases.
 

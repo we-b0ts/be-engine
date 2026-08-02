@@ -6,9 +6,9 @@ use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteContext, RewriteNextOptions,
     RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
-    RewriteRouteOptions, RewriteRulePlanOptions, apply_rewrite_rule, execute_rewrite_recording,
-    next_rewrite, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, route_rewrite, status_rewrite, verify_rewrite_repair,
+    RewriteRouteOptions, RewriteRulePlanOptions, apply_rewrite_rule, next_rewrite,
+    plan_rewrite_rule, query_rewrite_evidence, recover_rewrite, request_rewrite_recording,
+    route_rewrite, start_rewrite_recording, status_rewrite, verify_rewrite_repair,
 };
 
 mod dependency_rule;
@@ -154,7 +154,7 @@ struct RecordingArgs {
 enum RecordingCommand {
     /// Request or recover one idempotent standard recording action.
     Request(RecordingRequestArgs),
-    /// Execute one unchanged coordinator-owned recording action.
+    /// Start one detached coordinator-owned recording action and return immediately.
     Execute(RecordingExecuteArgs),
 }
 
@@ -173,6 +173,9 @@ struct RecordingRequestArgs {
     duration_seconds: NonZeroU64,
     #[arg(long = "per-api-case-limit", default_value = "100")]
     per_api_case_limit: NonZeroUsize,
+    /// Optional API selector; omit to record every API admitted by recorder configuration.
+    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
+    api: Option<RecordingApi>,
     /// Replace a different pending recording request instead of returning a conflict.
     #[arg(long)]
     replace_pending: bool,
@@ -271,11 +274,12 @@ pub(super) async fn run(args: RewriteArgs) -> Result<()> {
                     reason: args.reason.into(),
                     duration_seconds: args.duration_seconds,
                     per_api_case_limit: args.per_api_case_limit,
+                    api: args.api,
                     replace_pending: args.replace_pending,
                 },
             )?),
             RecordingCommand::Execute(args) => {
-                print_json(&execute_rewrite_recording(target_root, &args.action_id).await?)
+                print_json(&start_rewrite_recording(target_root, &args.action_id)?)
             }
         },
         RewriteCommand::Recover => {
@@ -365,6 +369,20 @@ mod tests {
                 "GET /api/users/*",
                 "--source-route",
                 "/api/users/:id",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "recording",
+                "request",
+                "--kind",
+                "standard",
+                "--reason",
+                "user-requested",
+                "--api",
+                "GET /api/widgets/*",
             ])
             .is_ok()
         );

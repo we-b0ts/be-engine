@@ -7,6 +7,9 @@ mod inventory;
 mod issue;
 mod model;
 mod recording;
+mod recording_action;
+mod recording_execution;
+mod recovery;
 mod repair;
 mod rule;
 mod store;
@@ -23,11 +26,13 @@ pub use model::{
     RewriteDependencyRuleReport, RewriteEvidenceCommand, RewriteEvidenceReport,
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteIssue, RewriteIssueKind,
     RewriteIssueOwner, RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingKind,
-    RewriteRecordingReason, RewriteRecoveryReport, RewriteRepairAcceptanceKind, RewriteRouteReport,
-    RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView,
+    RewriteRecordingReason, RewriteRecordingStartReport, RewriteRecordingStartState,
+    RewriteRecoveryReport, RewriteRepairAcceptanceKind, RewriteRouteReport, RewriteRuleReport,
+    RewriteStatusReport, RewriteWorkflowView,
 };
 pub use recording::{
-    RewriteRecordingRequestOptions, execute_rewrite_recording, request_rewrite_recording,
+    RewriteRecordingRequestOptions, execute_rewrite_recording_worker, request_rewrite_recording,
+    start_rewrite_recording,
 };
 pub use repair::RewriteRouteOptions;
 pub use rule::RewriteRulePlanOptions;
@@ -60,6 +65,14 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let Some(_lock) = store.try_lock()? else {
+        if let Some(state) = store.load()?
+            && matches!(
+                state.phase,
+                RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
+            )
+        {
+            return action::for_status(&target_root, &state);
+        }
         return Ok(action::recovery_required(&target_root));
     };
     let mut state = match store.load()? {
@@ -158,8 +171,15 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
 
     match state.phase {
         RewritePhase::RecordingRequired => {
-            if !artifacts::recording_manifest(&target_root, &state.recording_run_id).is_file() {
-                return Ok(action::for_state(&target_root, &state));
+            match artifacts::standard_recording_publication(&target_root, &state.recording_run_id)?
+            {
+                artifacts::RecordingPublication::Missing => {
+                    return Ok(action::for_state(&target_root, &state));
+                }
+                artifacts::RecordingPublication::Running => {
+                    return action::for_status(&target_root, &state);
+                }
+                artifacts::RecordingPublication::Finalized => {}
             }
             let apis = match artifacts::validate_standard_recording(&target_root, &state)
                 .and_then(|()| artifacts::standard_recording_apis(&target_root, &state))
@@ -216,8 +236,14 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 .comparison_run_id
                 .as_deref()
                 .context("comparison phase has no allocated run id")?;
-            if !artifacts::comparison_manifest(&target_root, run_id).is_file() {
-                return Ok(action::for_state(&target_root, &state));
+            match artifacts::comparison_recording_publication(&target_root, run_id)? {
+                artifacts::RecordingPublication::Missing => {
+                    return Ok(action::for_state(&target_root, &state));
+                }
+                artifacts::RecordingPublication::Running => {
+                    return action::for_status(&target_root, &state);
+                }
+                artifacts::RecordingPublication::Finalized => {}
             }
             if let Err(error) = artifacts::validate_comparison_recording(&target_root, &state) {
                 state.comparison_rejection = Some(artifacts::comparison_rejection(&error));
@@ -378,32 +404,7 @@ pub fn verify_rewrite_repair(
 }
 
 pub async fn recover_rewrite(context: RewriteContext) -> Result<RewriteRecoveryReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
-    let store = RewriteStore::new(&target_root)?;
-    let recovered_stale_lock = store.recover_lock()?;
-    let _lock = store.lock()?;
-    let recovered_focused_attempt = match store.load()? {
-        Some(state) => match (state.case_source, state.group_id) {
-            (Some(case_source), Some(group_id)) => {
-                crate::e2e_run::recover_focused_e2e_api(
-                    E2eRunContext {
-                        target_root: target_root.clone(),
-                        case_source,
-                        run_key: None,
-                    },
-                    &group_id,
-                )
-                .await?
-            }
-            _ => false,
-        },
-        None => false,
-    };
-    Ok(RewriteRecoveryReport {
-        recovered_stale_lock,
-        recovered_focused_attempt,
-        next: action::next_command(&target_root),
-    })
+    recovery::recover(context).await
 }
 
 fn prepare_recording(target_root: &Path, state: &mut RewriteState) -> Result<()> {
@@ -665,7 +666,7 @@ mod tests {
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
         assert_eq!(
             value.pointer("/action/command/argv/4"),
-            Some(&serde_json::json!(action::recording_action_id(
+            Some(&serde_json::json!(recording_action::recording_action_id(
                 &state, false
             )))
         );
