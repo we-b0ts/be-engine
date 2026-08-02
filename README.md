@@ -47,6 +47,8 @@ traffic-e2e rewrite next --api 'GET /api/widgets/*' \
   --source-route '/api/widgets/:id'
 traffic-e2e rewrite status
 traffic-e2e rewrite evidence <query-id>
+traffic-e2e rewrite recording request --kind standard \
+  --reason user-requested --duration-seconds 60 --case-limit 100
 traffic-e2e record ...
 traffic-e2e record-comparison ...
 traffic-e2e compare ... --policy .traffic-e2e/verification.yaml
@@ -68,6 +70,25 @@ returns one argv-based action, automatically owns Prepare/E2E/Compare
 transitions, and exposes only bounded evidence queries. Direct `prepare`,
 `run-api`, `compare`, and report-oriented commands remain available to traffic
 operators and system maintainers.
+
+Nonpassing focused E2E attempts reuse the active immutable standard cases;
+passing attempts advance to fresh comparison recording. An explicit
+`rewrite recording request --kind standard` transition replaces the standard
+evidence chain when new traffic is requested or its Recorder/source contract
+has changed. The coordinator, not the caller, allocates the run ID and returns
+the exact recording argv.
+
+Representative evidence returns the exact immutable standard or comparison
+case directory and a structured response difference. Use that case as the
+efficient starting point for diagnosis; all generated files under
+`.traffic-e2e/artifacts/` remain available for read-only inspection when
+additional cases are useful.
+
+Dependency evidence is case-scoped. Replay publishes a bounded sidecar with
+dirty events clustered by protocol and endpoint, an exact representative case,
+and a compact expected/actual dependency difference. Source traffic observed
+before readiness is returned separately as reference context. Unused global
+traffic and target activity outside a case do not make a case dirty.
 
 Evidence-driven recorder and verification-policy changes live under
 `traffic-e2e config ... plan|apply`; low-level grouping and report commands live

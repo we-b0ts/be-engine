@@ -11,11 +11,22 @@ pub(super) fn allocate_run_id(
     target_root: &Path,
     operation: ManagedRecordingOperation,
 ) -> Result<String> {
+    allocate_run_id_excluding(target_root, operation, &[])
+}
+
+pub(super) fn allocate_run_id_excluding(
+    target_root: &Path,
+    operation: ManagedRecordingOperation,
+    excluded: &[&str],
+) -> Result<String> {
     let now = Utc::now().naive_utc();
     for offset in 0..120 {
         let run_id = (now + Duration::seconds(offset))
             .format("%Y%m%d%H%M%S")
             .to_string();
+        if excluded.contains(&run_id.as_str()) {
+            continue;
+        }
         let run = match operation {
             ManagedRecordingOperation::Record => recording_run(target_root, &run_id),
             ManagedRecordingOperation::RecordComparison => comparison_run(target_root, &run_id),
@@ -162,4 +173,24 @@ struct ComparisonRecordingManifest {
 struct ComparisonRecordingCounts {
     published: usize,
     failed: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocator_can_exclude_an_unpublished_reserved_run() {
+        let target = tempfile::tempdir().unwrap();
+        let reserved = allocate_run_id(target.path(), ManagedRecordingOperation::Record).unwrap();
+
+        let replacement = allocate_run_id_excluding(
+            target.path(),
+            ManagedRecordingOperation::Record,
+            &[&reserved],
+        )
+        .unwrap();
+
+        assert_ne!(replacement, reserved);
+    }
 }

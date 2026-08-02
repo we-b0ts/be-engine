@@ -98,11 +98,13 @@ pub use config::{
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
-    E2eApiRunResult, E2eDependencyCorrelation, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts,
-    E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus, E2eReplayGate,
-    E2eRepresentativeDifference, E2eResponseGate, E2eResponseRuleEvidence, E2eRunContext,
-    E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult,
-    E2eRunStatus, E2eSourceValueCount, E2eSourceVariation, E2eValueObservation, E2eValuePresence,
+    E2eApiRunResult, E2eDependencyCorrelation, E2eDependencyDifference, E2eDependencyEndpoint,
+    E2eDependencyGate, E2eDependencyObservation, E2eDependencyRepresentative, E2eDiagnosis,
+    E2eDiagnosisCounts, E2eDirtyCluster, E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus,
+    E2eReplayGate, E2eRepresentativeDifference, E2eResponseGate, E2eResponseRuleEvidence,
+    E2eRunContext, E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult,
+    E2eRunResult, E2eRunStatus, E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint,
+    E2eSourceValueCount, E2eSourceVariation, E2eValueObservation, E2eValuePresence,
     E2eVerificationGates, abort_e2e_run, initialize_e2e_run, initialize_standard_e2e_project,
     initialize_standard_e2e_project_with_force, prepare_e2e_run, query_e2e_dependency_correlation,
     query_e2e_dirty_counts, query_e2e_source_variation, recover_e2e_run,
@@ -143,10 +145,12 @@ pub use replay::{
 pub use rewrite::{
     RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewriteContext,
     RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue, RewriteIssueKind,
-    RewriteIssueOwner, RewriteNextOptions, RewritePhase, RewriteRecoveryReport,
+    RewriteIssueOwner, RewriteNextOptions, RewritePhase, RewriteRecordingKind,
+    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecoveryReport,
     RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport,
     RewriteStatusReport, RewriteWorkflowView, apply_rewrite_rule, next_rewrite, plan_rewrite_rule,
-    query_rewrite_evidence, recover_rewrite, route_rewrite, status_rewrite,
+    query_rewrite_evidence, recover_rewrite, request_rewrite_recording, route_rewrite,
+    status_rewrite,
 };
 pub use tls::MitmCa;
 

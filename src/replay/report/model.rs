@@ -60,11 +60,22 @@ impl ReplayReport {
     }
 
     pub(in crate::replay) fn is_dirty(&self) -> bool {
-        !self.unmatched_queries.is_empty()
-            || !self.unsupported_commands.is_empty()
+        self.unmatched_queries
+            .iter()
+            .any(|query| query.case_id.is_some())
+            || self
+                .unsupported_commands
+                .iter()
+                .any(|query| query.case_id.is_some())
             || !self.unused_case_exchanges.is_empty()
-            || !self.unmatched_http_requests.is_empty()
-            || !self.unsupported_http_exchanges.is_empty()
+            || self
+                .unmatched_http_requests
+                .iter()
+                .any(|request| request.case_id.is_some())
+            || self
+                .unsupported_http_exchanges
+                .iter()
+                .any(|request| request.case_id.is_some())
             || !self.unused_case_http_exchanges.is_empty()
             || self.protocols.redis.is_dirty()
             || self.protocols.memcached.is_dirty()

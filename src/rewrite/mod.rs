@@ -4,6 +4,7 @@ mod evidence;
 mod fingerprint;
 mod issue;
 mod model;
+mod recording;
 mod rule;
 mod store;
 
@@ -15,13 +16,15 @@ use serde_json::Value;
 pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewriteEvidenceCommand,
     RewriteEvidenceReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
-    RewriteRecoveryReport, RewriteRouteReport, RewriteRuleReport, RewriteStatusReport,
-    RewriteWorkflowView,
+    RewriteRecordingKind, RewriteRecordingReason, RewriteRecoveryReport, RewriteRouteReport,
+    RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView,
 };
+pub use recording::{RewriteRecordingRequestOptions, request_rewrite_recording};
 pub use rule::RewriteRulePlanOptions;
 
 use model::{
-    RewriteAttemptDelta, RewriteAttemptSummary, RewriteRouteRecord, RewriteState, STATE_VERSION,
+    RewriteAttemptDelta, RewriteAttemptSummary, RewriteRecordingSettings, RewriteRouteRecord,
+    RewriteState, STATE_VERSION,
 };
 use store::RewriteStore;
 
@@ -98,6 +101,8 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 source_route,
                 recording_run_id,
                 recording_rejection: None,
+                recording_settings: RewriteRecordingSettings::default(),
+                recording_request_reason: None,
                 comparison_run_id: None,
                 comparison_rejection: None,
                 case_source: None,
@@ -518,6 +523,8 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         source_route: "/api".to_string(),
         recording_run_id: "20260802000000".to_string(),
         recording_rejection: None,
+        recording_settings: RewriteRecordingSettings::default(),
+        recording_request_reason: None,
         comparison_run_id: None,
         comparison_rejection: None,
         case_source: None,
@@ -551,6 +558,14 @@ mod tests {
         assert_eq!(
             value.pointer("/action/command/required_env_names/0"),
             Some(&Value::String("TRAFFIC_E2E_ENCRYPTION_KEY_B64".to_string()))
+        );
+        assert_eq!(
+            value.pointer("/action/command/argv/10"),
+            Some(&Value::String("--case-limit".to_string()))
+        );
+        assert_eq!(
+            value.pointer("/action/command/argv/11"),
+            Some(&Value::String("100".to_string()))
         );
         assert!(!value.to_string().contains("encryption-key-value"));
     }

@@ -10,20 +10,7 @@ pub(super) fn for_state(state: &RewriteState) -> RewriteActionEnvelope {
     let workflow = Some(workflow_view(state));
     let action = match state.phase {
         RewritePhase::RecordingRequired => RewriteAction::RecordingRequired {
-            summary: state.recording_rejection.as_ref().map_or_else(
-                || {
-                    format!(
-                        "generate one finalized standard recording for {}",
-                        state.api
-                    )
-                },
-                |reason| {
-                    format!(
-                        "previous standard recording was rejected ({reason}); generate a replacement for {}",
-                        state.api
-                    )
-                },
-            ),
+            summary: recording_summary(state),
             command: recording_command(state, false),
             resume: next_command(),
         },
@@ -69,6 +56,25 @@ pub(super) fn for_state(state: &RewriteState) -> RewriteActionEnvelope {
         workflow,
         terminal_allowed: state.phase == RewritePhase::SliceComplete,
         action,
+    }
+}
+
+fn recording_summary(state: &RewriteState) -> String {
+    if let Some(reason) = &state.recording_rejection {
+        return format!(
+            "previous standard recording was rejected ({reason}); generate a replacement for {}",
+            state.api
+        );
+    }
+    match state.recording_request_reason {
+        Some(reason) => format!(
+            "fresh standard recording requested ({reason}) for {}",
+            state.api
+        ),
+        None => format!(
+            "generate one finalized standard recording for {}",
+            state.api
+        ),
     }
 }
 
@@ -141,9 +147,11 @@ fn recording_command(state: &RewriteState, comparison: bool) -> RewriteCommandSp
             state.recording_run_id.clone()
         },
         "--duration-seconds".to_string(),
-        "60".to_string(),
+        state.recording_settings.duration_seconds.to_string(),
         "--api".to_string(),
         state.api.clone(),
+        "--case-limit".to_string(),
+        state.recording_settings.case_limit.to_string(),
     ];
     if comparison {
         argv.push("--baseline-recheck".to_string());

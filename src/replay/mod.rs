@@ -42,7 +42,7 @@ mod motan;
 mod mysql;
 mod policy;
 mod redis;
-mod report;
+pub(crate) mod report;
 
 use control::*;
 use dependencies::*;

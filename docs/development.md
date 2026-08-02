@@ -784,6 +784,11 @@ traffic-e2e rewrite next --api 'GET /api/widgets/*' \
   --source-route '/api/widgets/:id'
 traffic-e2e rewrite status
 traffic-e2e rewrite evidence <query-id>
+traffic-e2e rewrite recording request \
+  --kind standard \
+  --reason user-requested \
+  --duration-seconds 60 \
+  --case-limit 100
 ```
 
 `next` returns the exact standard/comparison recording argv when external
@@ -794,11 +799,40 @@ policy change makes prior E2E/comparison evidence stale and causes `next` to
 rerun the required stage. `terminal_allowed` is false until the current API has
 both passing E2E and comparison evidence.
 
-Only use returned `rewrite evidence` query IDs for traffic facts. Use
-`rewrite rule plan|apply` for a source-proven response rule and `rewrite route`
-for a proven Recorder/Replay capability gap, external-data blocker, or source
-change. Query IDs and evidence IDs are bound to the workflow revision and
-active issue, so stale evidence is rejected.
+A failed focused E2E attempt reuses the same finalized standard cases after the
+target changes. A passing attempt advances to a newly allocated comparison
+recording. Use `rewrite recording request --kind standard` only for an explicit
+new-traffic request, a changed Recorder contract, or a changed source baseline.
+The request accepts positive duration and case-limit values, invalidates state
+derived from the old baseline without deleting its artifacts, and returns a
+new exact recording argv. The coordinator defaults both standard and comparison
+recording actions to 60 seconds and 100 cases.
+
+Only use returned `rewrite evidence` query IDs for coordinator gate and
+aggregate facts. The `representatives` result includes the representative case
+ID, its exact immutable standard or comparison `case_dir`, and a structured
+response difference. A focused E2E difference contains expected and actual
+observations; a comparison difference contains source-before, candidate, and
+source-after observations. It does not duplicate the complete Replay response
+or expose a Replay-local result directory. The AI may inspect all persisted
+files under `.traffic-e2e/artifacts/`, starting with the representative case for
+efficiency. Artifacts remain read-only, and coordinator results remain
+authoritative for the active run and legal transitions.
+
+For a dependency issue, `representatives` and `dirty_clusters` read a bounded
+Replay dependency sidecar instead of the complete Replay report. The sidecar
+contains only case-scoped unmatched, unsupported, unsafe, and unused-case
+events, grouped by protocol and `host:port`, with bounded operation counts and
+one exact representative `case_dir`. Source data interactions recorded before
+readiness are returned separately and correlated by endpoint as diagnostic
+context. They do not affect the case gate. `unused_global` events and target
+activity outside an active case remain aggregate diagnostics and do not make a
+case dirty.
+
+Use `rewrite rule plan|apply` for a source-proven response rule and
+`rewrite route` for a proven Recorder/Replay capability gap, external-data
+blocker, or source change. Query IDs and evidence IDs are bound to the workflow
+revision and active issue, so stale evidence is rejected.
 
 The lower-level commands in the remainder of this section are the traffic
 engine interface used by the coordinator and by traffic-e2e maintainers. They
@@ -851,6 +885,13 @@ scripts/<project>-cli start --e2e --start-breeze off \
 scripts/<project>-cli stop
 ```
 
+For Breeze-aware standard recording, the managed runtime keeps one
+target-scoped source-adapter cache tag. Each run fingerprints the inspected
+source image ID and complete adapter build context: a matching image is reused,
+while a missing or stale image is rebuilt. Cleanup removes the run-private
+context and containers but retains the matching adapter image. Comparison
+recording continues to use the genuine source image directly.
+
 Each `start --e2e` invocation must run the project's normal compile command
 once before launch, even when an artifact already exists. If that compile
 command supports `--release`, pass `--release` to the compile command and
@@ -892,9 +933,12 @@ Pointer/kind differences, and one representative expected/actual observation.
 Value presence explicitly distinguishes JSON null, missing, unavailable, and
 not-applicable evidence.
 
-Normal AI operation consumes only the terminal result. It does not open
-generated state, assertion details, aggregate reports, raw cases, `.active`,
-or `latest`.
+Normal AI operation starts with the bounded terminal result. Representative
+evidence links directly to an immutable recorded case for request, expected
+response, and dependency inspection, and the AI may inspect any other artifact
+as needed. Prefer coordinator output over scanning generated local state,
+assertion details, aggregate reports, `.active`, or `latest`; those are
+unstable and usually less efficient, not access-controlled secrets.
 
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current

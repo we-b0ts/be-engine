@@ -1,11 +1,14 @@
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteContext, RewriteNextOptions,
+    RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
     RewriteRouteOptions, RewriteRulePlanOptions, apply_rewrite_rule, next_rewrite,
-    plan_rewrite_rule, query_rewrite_evidence, recover_rewrite, route_rewrite, status_rewrite,
+    plan_rewrite_rule, query_rewrite_evidence, recover_rewrite, request_rewrite_recording,
+    route_rewrite, status_rewrite,
 };
 
 #[derive(Debug, Args)]
@@ -29,6 +32,8 @@ enum RewriteCommand {
     Rule(RuleArgs),
     /// Submit a source-backed non-target-code attribution for controlled routing.
     Route(RouteArgs),
+    /// Request a fresh coordinator-owned recording with explicit bounded parameters.
+    Recording(RecordingArgs),
     /// Remove only a stale coordinator lock after its process has exited.
     Recover,
 }
@@ -118,6 +123,42 @@ struct RouteArgs {
     acceptance_command: String,
 }
 
+#[derive(Debug, Args)]
+struct RecordingArgs {
+    #[command(subcommand)]
+    command: RecordingCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RecordingCommand {
+    /// Replace the active standard evidence chain and return its exact recording action.
+    Request(RecordingRequestArgs),
+}
+
+#[derive(Debug, Args)]
+struct RecordingRequestArgs {
+    #[arg(long, value_enum)]
+    kind: RecordingKindArg,
+    #[arg(long, value_enum)]
+    reason: RecordingReasonArg,
+    #[arg(long, default_value = "60")]
+    duration_seconds: NonZeroU64,
+    #[arg(long, default_value = "100")]
+    case_limit: NonZeroUsize,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RecordingKindArg {
+    Standard,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RecordingReasonArg {
+    UserRequested,
+    RecorderContractChanged,
+    SourceBaselineChanged,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RouteKindArg {
     RecorderCapabilityGap,
@@ -185,6 +226,17 @@ pub(super) async fn run(args: RewriteArgs) -> Result<()> {
             required_change: args.required_change,
             acceptance_command: args.acceptance_command,
         })?),
+        RewriteCommand::Recording(args) => match args.command {
+            RecordingCommand::Request(args) => print_json(&request_rewrite_recording(
+                RewriteRecordingRequestOptions {
+                    target_root,
+                    kind: args.kind.into(),
+                    reason: args.reason.into(),
+                    duration_seconds: args.duration_seconds,
+                    case_limit: args.case_limit,
+                },
+            )?),
+        },
         RewriteCommand::Recover => {
             print_json(&recover_rewrite(RewriteContext { target_root }).await?)
         }
@@ -222,6 +274,24 @@ impl RouteKindArg {
             Self::ReplayCapabilityGap => "replay_capability_gap",
             Self::ExternalDataBlocker => "external_data_blocker",
             Self::SourceChange => "source_change",
+        }
+    }
+}
+
+impl From<RecordingKindArg> for RewriteRecordingKind {
+    fn from(value: RecordingKindArg) -> Self {
+        match value {
+            RecordingKindArg::Standard => Self::Standard,
+        }
+    }
+}
+
+impl From<RecordingReasonArg> for RewriteRecordingReason {
+    fn from(value: RecordingReasonArg) -> Self {
+        match value {
+            RecordingReasonArg::UserRequested => Self::UserRequested,
+            RecordingReasonArg::RecorderContractChanged => Self::RecorderContractChanged,
+            RecordingReasonArg::SourceBaselineChanged => Self::SourceBaselineChanged,
         }
     }
 }
@@ -276,6 +346,36 @@ mod tests {
                 "traffic-e2e rewrite next",
             ])
             .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "recording",
+                "request",
+                "--kind",
+                "standard",
+                "--reason",
+                "user-requested",
+                "--duration-seconds",
+                "90",
+                "--case-limit",
+                "250",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "recording",
+                "request",
+                "--kind",
+                "standard",
+                "--reason",
+                "user-requested",
+                "--case-limit",
+                "0",
+            ])
+            .is_err()
         );
     }
 }

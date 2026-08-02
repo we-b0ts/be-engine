@@ -6,6 +6,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 use serde_json::Value;
 
+use super::dependency_evidence::report_has_case_dirty_events;
+
 mod counts;
 mod policy;
 
@@ -482,7 +484,7 @@ fn summarize_report(
         && finalized;
     let counts = counts::read(report, report_path)?;
     let replay_policy = policy::summary(report, report_path)?;
-    let dirty = counts.is_dirty()
+    let dirty = report_has_case_dirty_events(report)
         || replay_policy
             .as_ref()
             .is_some_and(|policy| !policy.unused_applicable_rule_ids.is_empty());
@@ -606,15 +608,6 @@ impl ReplayEventCounts {
         self.kafka.add(&other.kafka);
         self.motan.add(&other.motan);
     }
-
-    fn is_dirty(&self) -> bool {
-        self.mysql.is_dirty()
-            || self.http.is_dirty()
-            || self.redis.is_dirty()
-            || self.memcached.is_dirty()
-            || self.kafka.is_dirty()
-            || self.motan.is_dirty()
-    }
 }
 
 impl MysqlEventCounts {
@@ -628,12 +621,6 @@ impl MysqlEventCounts {
         self.unused_global_exchanges += other.unused_global_exchanges;
         self.metadata_warnings += other.metadata_warnings;
     }
-
-    fn is_dirty(&self) -> bool {
-        self.unmatched_queries > 0
-            || self.unsupported_commands > 0
-            || self.unused_case_exchanges > 0
-    }
 }
 
 impl HttpEventCounts {
@@ -644,12 +631,6 @@ impl HttpEventCounts {
         self.unused_case_exchanges += other.unused_case_exchanges;
         self.allowed_unused_case_exchanges += other.allowed_unused_case_exchanges;
         self.unused_global_exchanges += other.unused_global_exchanges;
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.unmatched_requests > 0
-            || self.unsupported_exchanges > 0
-            || self.unused_case_exchanges > 0
     }
 }
 
@@ -663,10 +644,6 @@ impl CommandProtocolCounts {
         self.unused_case += other.unused_case;
         self.unused_global += other.unused_global;
         self.warnings += other.warnings;
-    }
-
-    fn is_dirty(&self) -> bool {
-        self.unmatched > 0 || self.unsupported > 0 || self.unsafe_events > 0 || self.unused_case > 0
     }
 }
 

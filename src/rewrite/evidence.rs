@@ -4,15 +4,18 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::fingerprint;
 use super::model::{
     RewriteCommandSpec, RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue,
     RewriteIssueKind, RewriteState,
 };
+use super::{artifacts, fingerprint};
+use crate::case_group::resolve_published_case_dir;
+use crate::comparison_recording::resolve_comparison_case_dir;
+use crate::e2e_run::response_pointer_scope;
 use crate::recorder::load_pre_readiness_traffic_summary;
 use crate::{
-    E2eRunContext, E2eValueObservation, E2eValuePresence, query_e2e_dependency_correlation,
-    query_e2e_dirty_counts, query_e2e_source_variation,
+    E2eDirtyCluster, E2eRunContext, E2eValueObservation, E2eValuePresence,
+    query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
 };
 
 const QUERY_REPRESENTATIVES: &str = "representatives";
@@ -90,16 +93,20 @@ fn facts(
     kind: &str,
 ) -> Result<(Value, Vec<String>, String)> {
     match kind {
-        QUERY_REPRESENTATIVES => Ok((
-            json!({
-                "pointer_scope": "decoded_response_body_json",
-                "representative": issue.representative,
-                "comparison_observation": issue.comparison_observation,
-            }),
-            vec!["the representative does not prove the business cause".to_string()],
-            "Inspect the source assignment path and the corresponding target construction."
-                .to_string(),
-        )),
+        QUERY_REPRESENTATIVES => {
+            let (pointer_scope, representative) =
+                representative_facts(target_root, state, issue)?;
+            let (does_not_prove, next_step) = representative_guidance(issue.kind);
+            Ok((
+                json!({
+                    "pointer_scope": pointer_scope,
+                    "representative": representative,
+                    "comparison_observation": issue.comparison_observation,
+                }),
+                does_not_prove,
+                next_step,
+            ))
+        }
         QUERY_SOURCE_VARIATION => {
             let representative = issue
                 .representative
@@ -200,7 +207,7 @@ fn facts(
                     "dirty event counts do not prove process ownership".to_string(),
                     "they do not prove response causality".to_string(),
                 ],
-                "Inspect only the protocol family with non-zero counts and prove ownership and causality in source code."
+                "Start with the largest endpoint cluster and its representative case directory; compare the source pre-readiness count, then prove request or process ownership and response causality in source code."
                     .to_string(),
             ))
         }
@@ -217,6 +224,124 @@ fn facts(
                 .to_string(),
         )),
         _ => anyhow::bail!("unsupported rewrite evidence query {kind:?}"),
+    }
+}
+
+fn representative_facts(
+    target_root: &Path,
+    state: &RewriteState,
+    issue: &RewriteIssue,
+) -> Result<(&'static str, Value)> {
+    if let Some(representative) = issue.representative.as_ref() {
+        let case_dir =
+            resolve_published_case_dir(&case_source(target_root, state)?, &representative.case_id)?;
+        return Ok((
+            response_pointer_scope(&representative.pointer),
+            json!({
+                "case_id": representative.case_id,
+                "case_dir": case_dir,
+                "response_difference": {
+                    "pointer": representative.pointer,
+                    "kind": representative.difference_kind,
+                    "expected": representative.expected,
+                    "actual": representative.actual,
+                },
+            }),
+        ));
+    }
+    if matches!(
+        issue.kind,
+        RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+    ) {
+        let evidence = query_e2e_dirty_counts(e2e_context(target_root, state)?, group_id(state)?)?;
+        let Some(cluster) = evidence.clusters.first() else {
+            return Ok(("not_applicable", Value::Null));
+        };
+        return Ok(("not_applicable", dependency_representative(cluster)));
+    }
+    let Some(observation) = issue.comparison_observation.as_ref() else {
+        return Ok(("not_applicable", Value::Null));
+    };
+    let case_id = observation
+        .get("case_id")
+        .and_then(Value::as_str)
+        .context("comparison representative has no case id")?;
+    let pointer = observation
+        .get("pointer")
+        .and_then(Value::as_str)
+        .context("comparison representative has no response pointer")?;
+    let difference_kind = observation
+        .get("difference_kind")
+        .context("comparison representative has no difference kind")?;
+    let source_before = observation
+        .get("source_before")
+        .context("comparison representative has no source-before value")?;
+    let candidate = observation
+        .get("candidate")
+        .context("comparison representative has no candidate value")?;
+    let source_after = observation
+        .get("source_after")
+        .context("comparison representative has no source-after value")?;
+    let run_id = state
+        .comparison_run_id
+        .as_deref()
+        .context("comparison representative has no recording run")?;
+    let case_dir =
+        resolve_comparison_case_dir(&artifacts::comparison_run(target_root, run_id), case_id)?;
+    Ok((
+        response_pointer_scope(pointer),
+        json!({
+            "case_id": case_id,
+            "case_dir": case_dir,
+            "response_difference": {
+                "pointer": pointer,
+                "kind": difference_kind,
+                "source_before": source_before,
+                "candidate": candidate,
+                "source_after": source_after,
+            },
+        }),
+    ))
+}
+
+fn dependency_representative(cluster: &E2eDirtyCluster) -> Value {
+    let representative = cluster.representative.as_ref();
+    json!({
+        "protocol": cluster.protocol,
+        "endpoint": cluster.endpoint,
+        "scope": cluster.scope,
+        "reason": cluster.reason,
+        "count": cluster.count,
+        "case_count": cluster.case_count,
+        "operations": cluster.operations,
+        "source_pre_readiness_interactions": cluster.source_pre_readiness_interactions,
+        "source_pre_readiness_role": "reference_only",
+        "case_id": representative.map(|value| &value.case_id),
+        "case_dir": representative.map(|value| &value.case_dir),
+        "dependency_difference": representative.map(|value| &value.difference),
+    })
+}
+
+fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
+    match kind {
+        RewriteIssueKind::Dependency | RewriteIssueKind::Replay => (
+            vec![
+                "endpoint and pre-readiness correlation does not prove process ownership"
+                    .to_string(),
+                "an unused recorded exchange does not prove that the target should reproduce it"
+                    .to_string(),
+            ],
+            "Inspect the representative case directory and the clustered dependency difference, then use source code to prove request ownership, startup/background ownership, and response causality."
+                .to_string(),
+        ),
+        _ => (
+            vec![
+                "the recorded case and response difference do not prove the business cause"
+                    .to_string(),
+            ],
+            "Inspect the coordinator-selected immutable case directory, then trace the response difference through source and target code."
+                .to_string(),
+        ),
     }
 }
 
@@ -255,7 +380,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
     ) {
         queries.push((
             QUERY_DIRTY_CLUSTERS,
-            "Summarize dirty dependency event counts by protocol",
+            "Cluster case-scoped dirty dependencies by protocol, endpoint, and reason",
         ));
     }
     if state.attempt_delta.is_some() {
@@ -367,50 +492,5 @@ fn policy_applicability(issue: &RewriteIssue) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::rewrite::model::{RewriteIssueOwner, RewritePhase};
-
-    #[test]
-    fn pre_readiness_query_returns_only_data_interaction_endpoint_counts() {
-        let target = tempfile::tempdir().unwrap();
-        let case_source = target.path().join("recording");
-        std::fs::create_dir(&case_source).unwrap();
-        std::fs::write(
-            case_source.join("global-dependencies.jsonl"),
-            r#"{"event_type":"redis_connection","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379,"command":"PING"}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379,"command":"GET"}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379,"command":"GET"}"#,
-        )
-        .unwrap();
-        let mut state = crate::rewrite::test_state();
-        state.phase = RewritePhase::ImplementationRequired;
-        state.case_source = Some(case_source);
-        state.active_issue = Some(RewriteIssue {
-            id: "issue-test".to_string(),
-            kind: RewriteIssueKind::Response,
-            owner: RewriteIssueOwner::TargetCode,
-            summary: "response mismatch".to_string(),
-            pointer_pattern: None,
-            representative: None,
-            possible_causes: Vec::new(),
-            observed_target_fingerprint: "target".to_string(),
-            attempt: 1,
-            comparison_observation: None,
-        });
-        let command = commands(&state)
-            .into_iter()
-            .find(|command| command.query_id.contains("pre-readiness-traffic"))
-            .unwrap();
-
-        let report = query(target.path(), &state, &command.query_id).unwrap();
-
-        assert_eq!(report.query, QUERY_PRE_READINESS_TRAFFIC);
-        assert_eq!(report.facts["available"], true);
-        assert_eq!(report.facts["interaction_count"], 2);
-        assert_eq!(report.facts["endpoint_counts"]["cache.internal:6379"], 2);
-        assert_eq!(report.facts["excluded_non_data_events"], 2);
-        assert!(!report.facts.to_string().contains("PING"));
-    }
-}
+#[path = "evidence/tests.rs"]
+mod tests;

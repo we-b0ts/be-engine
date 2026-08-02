@@ -1,6 +1,7 @@
 mod branch;
 mod case_progress;
 mod config;
+mod dirty_evidence;
 mod evidence;
 mod execute;
 mod final_evidence;
@@ -25,13 +26,19 @@ use crate::case_group::{
 
 pub(crate) use config::resolve_project;
 pub(crate) use config::{render_project_config, validate_project_pr_base};
+pub use dirty_evidence::{
+    E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
+    E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eSourcePreReadiness,
+    E2eSourcePreReadinessEndpoint,
+};
 pub use evidence::{
-    E2eDependencyCorrelation, E2eDirtyCounts, E2eSourceValueCount, E2eSourceVariation,
+    E2eDependencyCorrelation, E2eSourceValueCount, E2eSourceVariation,
     query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
 };
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 use model::RunStatus;
+pub(crate) use result::response_pointer_scope;
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,
     E2eReplayGate, E2eRepresentativeDifference, E2eResponseGate, E2eRunResult, E2eValueObservation,

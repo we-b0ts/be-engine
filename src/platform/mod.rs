@@ -311,6 +311,27 @@ mod tests {
         ));
         assert!(MANAGER.contains("--env RUN_COMMAND=traffic-e2e-source-root-launcher"));
         assert!(MANAGER.contains("source_run_command=\"./${source_run_command}\""));
+        assert!(
+            MANAGER.contains("adapter_image=\"traffic-e2e/${repo_name}-recording-source:cache\"")
+        );
+        assert!(MANAGER.contains("reusing cached recording source adapter"));
+        assert!(MANAGER.contains(
+            "com.weibo.traffic-e2e.recording-adapter.fingerprint=${adapter_fingerprint}"
+        ));
+        assert!(MANAGER.contains("--iidfile \"$adapter_iid_file\""));
+        assert!(
+            MANAGER
+                .contains("\"${runtime_args[@]}\" \"$adapter_image_id\" \"${runtime_command[@]}\"")
+        );
+        assert!(!MANAGER.contains("docker image rm \"$adapter_image\""));
+        assert!(
+            MANAGER
+                .find("cached_adapter_record=$(docker image inspect")
+                .unwrap()
+                < MANAGER
+                    .find("docker build --platform linux/amd64 --network none")
+                    .unwrap()
+        );
         assert!(MANAGER.contains(
             "registry.api.demo.test/weibo_rd_if/breeze:v0.1.21-e2e@sha256:5aba065755724d43c7da3f6b79ac82890a0a0a08c6ae3f43af12558b5e52462f"
         ));

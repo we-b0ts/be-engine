@@ -281,6 +281,14 @@ pub(super) fn response_observation(path: &Path, pointer: &str) -> E2eValueObserv
     }
 }
 
+pub(crate) fn response_pointer_scope(pointer: &str) -> &'static str {
+    match pointer {
+        "$status" => "response_status",
+        "$body" => "response_body_bytes",
+        _ => "decoded_response_body_json",
+    }
+}
+
 fn observation(presence: E2eValuePresence, value: Option<Value>) -> E2eValueObservation {
     E2eValueObservation { presence, value }
 }
@@ -383,6 +391,16 @@ mod tests {
     use crate::case_group::{CanonicalCase, CanonicalCaseGroup, CaseGroupInventory};
     use crate::e2e_run::model::ResponseAssertionSummary;
     use crate::replay::ResponseDifference;
+
+    #[test]
+    fn response_pointer_scopes_distinguish_status_body_and_json_values() {
+        assert_eq!(response_pointer_scope("$status"), "response_status");
+        assert_eq!(response_pointer_scope("$body"), "response_body_bytes");
+        assert_eq!(
+            response_pointer_scope("/users/0/id"),
+            "decoded_response_body_json"
+        );
+    }
 
     #[test]
     fn response_gate_distinguishes_nonpassing_and_incomplete_evidence() {

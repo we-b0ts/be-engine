@@ -13,6 +13,7 @@ pub use representative::{
     ComparisonRepresentativeDifference, ComparisonRepresentativePolicyMismatch,
 };
 pub use runtime::{ComparisonRecordingRunOptions, run, run_with_duration, run_with_options};
+pub(crate) use verification::resolve_comparison_case_dir;
 pub use verification::{
     ComparisonVerificationApi, ComparisonVerificationApiCounts, ComparisonVerificationCase,
     ComparisonVerificationClassification, ComparisonVerificationCounts,

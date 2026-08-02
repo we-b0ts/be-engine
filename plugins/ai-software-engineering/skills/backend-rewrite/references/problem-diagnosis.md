@@ -9,11 +9,17 @@ chooses the only repair attempted before the next focused E2E run.
 The coordinator supplies one active issue, bounded possible causes, one
 representative when available, exact evidence-query argv, and one acceptance
 command. Treat possible causes as hypotheses. Traffic facts come only from the
-returned queries; business causality comes from source and target code.
+returned queries and immutable artifacts; business causality comes from source
+and target code.
 
-Never open generated local state, reports, expected or actual responses,
-dependency artifacts, or recordings. Never use ad-hoc scripts to recreate a
-traffic query. Never patch multiple speculative categories in one iteration.
+Standard and comparison artifacts are readable, read-only diagnostic evidence.
+Start from the representative `case_dir` returned by the coordinator and
+inspect its complete contents. Inspect other cases under
+`.traffic-e2e/artifacts/` when they help distinguish hypotheses. Prefer bounded
+coordinator queries over scanning generated local state or large reports; do
+not edit internal state, infer the active run by recency, or use ad-hoc scripts
+to recreate a coordinator query. Never patch multiple speculative categories
+in one iteration.
 
 Evaluate gates in this order:
 
@@ -31,8 +37,9 @@ real differences until source evidence proves otherwise.
 
 Run only query IDs returned by the active action:
 
-- `representatives`: bounded expected/actual presence and value; it does not
-  prove the cause;
+- `representatives`: the representative case ID, exact immutable standard or
+  comparison `case_dir`, and bounded structured response or dependency
+  difference; it does not prove the cause;
 - `source_variation`: source values across recorded cases; variation alone
   does not prove nondeterminism or cache ownership;
 - `collection_equivalence`: array multiset equality; equality does not prove
@@ -43,20 +50,30 @@ Run only query IDs returned by the active action:
   before readiness; connection lifecycle, known ping/heartbeat, and setup
   traffic are excluded, but frequency does not prove background ownership,
   local-cache lifecycle, or response causality;
-- `dirty_clusters`: dirty counts by protocol; counts do not prove request or
-  process ownership;
+- `dirty_clusters`: case-scoped dirty events grouped by protocol and endpoint,
+  with bounded operation counts, an exact representative case, and correlated
+  source pre-readiness counts; it excludes `unused_global` and case-external
+  target activity, and does not prove request or process ownership;
 - `policy_applicability`: structural rule eligibility; eligibility does not
   authorize a rule;
 - `attempt_delta`: convergence against the previous attempt; improvement does
   not identify the cause.
 
 Use the smallest query set that can distinguish the current hypotheses. Then
-trace the corresponding source and target path. Do not run every query merely
-because it is available.
+inspect the representative case and trace the corresponding source and target
+path. Read other artifact cases only when the representative is insufficient.
+Do not run every query merely because it is available.
+
+Only a dependency event attributed to an active case participates in that
+case's cleanliness gate. Treat source pre-readiness traffic as reference for
+startup jobs, warmup, and local-cache hypotheses. Do not repair, suppress, or
+re-record traffic merely because the same endpoint appears during startup.
 
 ## Response Issues
 
-Trace the representative from response construction backwards:
+Use the recorded request, expected response, dependencies, and structured
+response difference from the representative case to trace response
+construction backwards:
 
 ```text
 response field/status -> target construction -> local state/cache -> client

@@ -1,3 +1,5 @@
+use std::fmt;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -7,6 +9,9 @@ use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGate
 
 pub(super) const STATE_VERSION: u32 = 1;
 pub(super) const ACTION_SCHEMA_VERSION: u32 = 1;
+
+const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
+const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -35,6 +40,45 @@ pub enum RewriteIssueOwner {
     TargetRuntime,
     TrafficE2eSystem,
     SourceInvestigation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteRecordingKind {
+    Standard,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteRecordingReason {
+    UserRequested,
+    RecorderContractChanged,
+    SourceBaselineChanged,
+}
+
+impl fmt::Display for RewriteRecordingReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::UserRequested => "user_requested",
+            Self::RecorderContractChanged => "recorder_contract_changed",
+            Self::SourceBaselineChanged => "source_baseline_changed",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(super) struct RewriteRecordingSettings {
+    pub duration_seconds: NonZeroU64,
+    pub case_limit: NonZeroUsize,
+}
+
+impl Default for RewriteRecordingSettings {
+    fn default() -> Self {
+        Self {
+            duration_seconds: DEFAULT_RECORDING_DURATION_SECONDS,
+            case_limit: DEFAULT_RECORDING_CASE_LIMIT,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,6 +154,10 @@ pub(super) struct RewriteState {
     pub recording_run_id: String,
     #[serde(default)]
     pub recording_rejection: Option<String>,
+    #[serde(default)]
+    pub recording_settings: RewriteRecordingSettings,
+    #[serde(default)]
+    pub recording_request_reason: Option<RewriteRecordingReason>,
     pub comparison_run_id: Option<String>,
     #[serde(default)]
     pub comparison_rejection: Option<String>,
@@ -247,4 +295,23 @@ pub struct RewriteRouteReport {
     pub issue_id: String,
     pub route: RewriteRouteRecord,
     pub next_command: RewriteCommandSpec,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn older_state_uses_bounded_recording_defaults() {
+        let mut value = serde_json::to_value(crate::rewrite::test_state()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("recording_settings");
+        object.remove("recording_request_reason");
+
+        let state: RewriteState = serde_json::from_value(value).unwrap();
+
+        assert_eq!(state.recording_settings.duration_seconds.get(), 60);
+        assert_eq!(state.recording_settings.case_limit.get(), 100);
+        assert!(state.recording_request_reason.is_none());
+    }
 }

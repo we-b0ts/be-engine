@@ -137,6 +137,24 @@ pub fn resolve_recording_api_member(
     Ok(members.into_iter().next().expect("one member was required"))
 }
 
+pub(crate) fn resolve_published_case_dir(case_source: &Path, case_id: &str) -> Result<PathBuf> {
+    let case_source = fs::canonicalize(case_source)
+        .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
+    let cases = discover_published_cases(&case_source)?;
+    ensure!(!cases.is_empty(), "case source contains no published cases");
+    reject_duplicate_case_ids(&cases)?;
+    cases
+        .into_iter()
+        .find(|case| case.id == case_id)
+        .map(|case| case.dir)
+        .with_context(|| {
+            format!(
+                "recorded case {case_id:?} is not part of case source {}",
+                case_source.display()
+            )
+        })
+}
+
 pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureResult> {
     validate_options(&options)?;
     let case_source = fs::canonicalize(&options.case_source).with_context(|| {
