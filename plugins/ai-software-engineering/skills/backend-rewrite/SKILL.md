@@ -44,6 +44,14 @@ focused E2E attempt reuses the same immutable cases after the target changes;
 it does not trigger another recording. A passing focused E2E attempt advances
 to a fresh comparison recording automatically.
 
+After any focused attempt, read `latest_focused_e2e` from the `rewrite next`
+or `rewrite status` result. Its `execution_mode` explicitly distinguishes
+`fresh_standard_cases` from `reused_standard_cases`; use its recording run,
+exact case source, case inventory, previous/current attempt numbers, and pass
+status instead of inferring reuse from local paths. This field describes the
+latest completed focused attempt and does not imply that every `next` call ran
+another attempt.
+
 When the caller explicitly requests new traffic, the Recorder contract has
 changed, or the source baseline has changed, request a fresh standard recording
 through the coordinator:

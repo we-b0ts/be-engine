@@ -2,8 +2,9 @@ use crate::RecordingApi;
 
 use super::evidence;
 use super::model::{
-    ACTION_SCHEMA_VERSION, RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewritePhase,
-    RewriteState, RewriteWorkflowView,
+    ACTION_SCHEMA_VERSION, RewriteAction, RewriteActionEnvelope, RewriteCommandSpec,
+    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewritePhase, RewriteState,
+    RewriteWorkflowView,
 };
 
 pub(super) fn for_state(state: &RewriteState) -> RewriteActionEnvelope {
@@ -54,6 +55,7 @@ pub(super) fn for_state(state: &RewriteState) -> RewriteActionEnvelope {
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
         workflow,
+        latest_focused_e2e: latest_focused_e2e(state),
         terminal_allowed: state.phase == RewritePhase::SliceComplete,
         action,
     }
@@ -82,6 +84,7 @@ pub(super) fn input_required() -> RewriteActionEnvelope {
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
         workflow: None,
+        latest_focused_e2e: None,
         action: RewriteAction::InputRequired {
             summary: "select one canonical API to start the rewrite workflow".to_string(),
             required: vec!["--api 'METHOD /path-or-pattern'".to_string()],
@@ -94,6 +97,7 @@ pub(super) fn source_route_required(api: &RecordingApi) -> RewriteActionEnvelope
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
         workflow: None,
+        latest_focused_e2e: None,
         action: RewriteAction::InputRequired {
             summary: format!(
                 "dynamic API {api} requires a route confirmed from source registration"
@@ -108,6 +112,7 @@ pub(super) fn recovery_required() -> RewriteActionEnvelope {
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
         workflow: None,
+        latest_focused_e2e: None,
         action: RewriteAction::RecoveryRequired {
             summary: "rewrite workflow is locked; execute the recovery command before retrying"
                 .to_string(),
@@ -116,6 +121,30 @@ pub(super) fn recovery_required() -> RewriteActionEnvelope {
         },
         terminal_allowed: false,
     }
+}
+
+pub(super) fn latest_focused_e2e(state: &RewriteState) -> Option<RewriteFocusedE2eExecution> {
+    let current = state.attempts.last()?;
+    let case_source = state.case_source.clone()?;
+    let previous_attempt = state
+        .attempts
+        .iter()
+        .rev()
+        .nth(1)
+        .map(|attempt| attempt.attempt);
+    Some(RewriteFocusedE2eExecution {
+        execution_mode: if previous_attempt.is_some() {
+            RewriteFocusedE2eExecutionMode::ReusedStandardCases
+        } else {
+            RewriteFocusedE2eExecutionMode::FreshStandardCases
+        },
+        recording_run_id: state.recording_run_id.clone(),
+        case_source,
+        case_inventory_id: state.case_inventory_id.clone(),
+        previous_attempt,
+        current_attempt: current.attempt,
+        passed: current.passed,
+    })
 }
 
 pub(super) fn workflow_view(state: &RewriteState) -> RewriteWorkflowView {
@@ -181,5 +210,93 @@ pub(super) fn recover_command() -> RewriteCommandSpec {
             "recover".to_string(),
         ],
         required_env_names: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::{
+        E2eDependencyGate, E2eDiagnosisCounts, E2eReplayGate, E2eResponseGate, E2eVerificationGates,
+    };
+
+    use super::super::model::RewriteAttemptSummary;
+
+    #[test]
+    fn identifies_fresh_and_reused_standard_cases() {
+        let mut state = crate::rewrite::test_state();
+        state.phase = RewritePhase::SliceComplete;
+        state.case_source = Some(PathBuf::from(
+            ".traffic-e2e/artifacts/recordings/20260802000000",
+        ));
+        state.case_inventory_id = Some("fnv1a64:case-inventory".to_string());
+        state.attempts.push(test_attempt(4, false));
+
+        let fresh = serde_json::to_value(for_state(&state)).unwrap();
+        assert_eq!(
+            fresh.pointer("/latest_focused_e2e/execution_mode"),
+            Some(&serde_json::json!("fresh_standard_cases"))
+        );
+        assert_eq!(
+            fresh.pointer("/latest_focused_e2e/recording_run_id"),
+            Some(&serde_json::json!("20260802000000"))
+        );
+        assert_eq!(
+            fresh.pointer("/latest_focused_e2e/case_inventory_id"),
+            Some(&serde_json::json!("fnv1a64:case-inventory"))
+        );
+        assert!(
+            fresh
+                .pointer("/latest_focused_e2e/previous_attempt")
+                .is_none()
+        );
+        assert_eq!(
+            fresh.pointer("/latest_focused_e2e/current_attempt"),
+            Some(&serde_json::json!(4))
+        );
+
+        state.attempts.push(test_attempt(5, true));
+        let reused = serde_json::to_value(for_state(&state)).unwrap();
+        assert_eq!(
+            reused.pointer("/latest_focused_e2e/execution_mode"),
+            Some(&serde_json::json!("reused_standard_cases"))
+        );
+        assert_eq!(
+            reused.pointer("/latest_focused_e2e/previous_attempt"),
+            Some(&serde_json::json!(4))
+        );
+        assert_eq!(
+            reused.pointer("/latest_focused_e2e/current_attempt"),
+            Some(&serde_json::json!(5))
+        );
+        assert_eq!(
+            reused.pointer("/latest_focused_e2e/passed"),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    fn test_attempt(attempt: u64, passed: bool) -> RewriteAttemptSummary {
+        RewriteAttemptSummary {
+            attempt,
+            passed,
+            gates: E2eVerificationGates {
+                responses: if passed {
+                    E2eResponseGate::Passed
+                } else {
+                    E2eResponseGate::Nonpassing
+                },
+                replay: E2eReplayGate::Complete,
+                dependencies: E2eDependencyGate::Clean,
+            },
+            counts: E2eDiagnosisCounts {
+                selected: 1,
+                executed: 1,
+                response_passed: usize::from(passed),
+                response_nonpassing: usize::from(!passed),
+                response_incomplete: 0,
+            },
+        }
     }
 }

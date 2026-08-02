@@ -15,9 +15,10 @@ use serde_json::Value;
 
 pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewriteEvidenceCommand,
-    RewriteEvidenceReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
-    RewriteRecordingKind, RewriteRecordingReason, RewriteRecoveryReport, RewriteRouteReport,
-    RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView,
+    RewriteEvidenceReport, RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode,
+    RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase, RewriteRecordingKind,
+    RewriteRecordingReason, RewriteRecoveryReport, RewriteRouteReport, RewriteRuleReport,
+    RewriteStatusReport, RewriteWorkflowView,
 };
 pub use recording::{RewriteRecordingRequestOptions, request_rewrite_recording};
 pub use rule::RewriteRulePlanOptions;
@@ -106,6 +107,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 comparison_run_id: None,
                 comparison_rejection: None,
                 case_source: None,
+                case_inventory_id: None,
                 source_revision: None,
                 group_id: None,
                 target_fingerprint: None,
@@ -191,6 +193,7 @@ pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
             initialized: true,
             workflow: Some(action::workflow_view(&state)),
             active_issue: state.active_issue.clone(),
+            latest_focused_e2e: action::latest_focused_e2e(&state),
             e2e_current: state.e2e_current,
             comparison_current: state.comparison_current,
             terminal_allowed: state.phase == RewritePhase::SliceComplete,
@@ -200,6 +203,7 @@ pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
             initialized: false,
             workflow: None,
             active_issue: None,
+            latest_focused_e2e: None,
             e2e_current: false,
             comparison_current: false,
             terminal_allowed: false,
@@ -346,6 +350,7 @@ fn prepare_recording(target_root: &Path, state: &mut RewriteState) -> Result<()>
         "the selected recording contains cases outside the active API scope"
     );
     state.case_source = Some(case_source);
+    state.case_inventory_id = Some(prepared.group.case_inventory_id);
     state.source_revision = Some(source_revision);
     state.group_id = Some(prepared.group.group_id);
     state.bump();
@@ -528,6 +533,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         comparison_run_id: None,
         comparison_rejection: None,
         case_source: None,
+        case_inventory_id: None,
         source_revision: None,
         group_id: None,
         target_fingerprint: None,
@@ -555,6 +561,7 @@ mod tests {
     fn action_commands_are_argv_and_do_not_contain_secret_values() {
         let state = test_state();
         let value = serde_json::to_value(action::for_state(&state)).unwrap();
+        assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/command/required_env_names/0"),
             Some(&Value::String("TRAFFIC_E2E_ENCRYPTION_KEY_B64".to_string()))

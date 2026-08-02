@@ -66,6 +66,7 @@ fn reset_for_fresh_recording(
     state.comparison_run_id = None;
     state.comparison_rejection = None;
     state.case_source = None;
+    state.case_inventory_id = None;
     state.source_revision = None;
     state.group_id = None;
     state.target_fingerprint = None;
@@ -89,6 +90,7 @@ mod tests {
         let mut state = crate::rewrite::test_state();
         state.phase = RewritePhase::SliceComplete;
         state.case_source = Some(PathBuf::from("old-cases"));
+        state.case_inventory_id = Some("old-inventory".to_string());
         state.group_id = Some("GET /api".to_string());
         state.comparison_run_id = Some("20260802000001".to_string());
         state.e2e_current = true;
@@ -106,6 +108,7 @@ mod tests {
 
         assert_eq!(state.phase, RewritePhase::RecordingRequired);
         assert!(state.case_source.is_none());
+        assert!(state.case_inventory_id.is_none());
         assert!(state.group_id.is_none());
         assert!(state.comparison_run_id.is_none());
         assert!(!state.e2e_current);

@@ -56,6 +56,13 @@ pub enum RewriteRecordingReason {
     SourceBaselineChanged,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteFocusedE2eExecutionMode {
+    FreshStandardCases,
+    ReusedStandardCases,
+}
+
 impl fmt::Display for RewriteRecordingReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -162,6 +169,8 @@ pub(super) struct RewriteState {
     #[serde(default)]
     pub comparison_rejection: Option<String>,
     pub case_source: Option<PathBuf>,
+    #[serde(default)]
+    pub case_inventory_id: Option<String>,
     pub source_revision: Option<String>,
     pub group_id: Option<String>,
     pub target_fingerprint: Option<String>,
@@ -186,6 +195,19 @@ pub struct RewriteWorkflowView {
     pub revision: u64,
     pub phase: RewritePhase,
     pub scope: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteFocusedE2eExecution {
+    pub execution_mode: RewriteFocusedE2eExecutionMode,
+    pub recording_run_id: String,
+    pub case_source: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub case_inventory_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_attempt: Option<u64>,
+    pub current_attempt: u64,
+    pub passed: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -246,6 +268,8 @@ pub struct RewriteActionEnvelope {
     pub schema_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow: Option<RewriteWorkflowView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
     pub action: RewriteAction,
     pub terminal_allowed: bool,
 }
@@ -257,6 +281,8 @@ pub struct RewriteStatusReport {
     pub workflow: Option<RewriteWorkflowView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub active_issue: Option<RewriteIssue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
     pub e2e_current: bool,
     pub comparison_current: bool,
     pub terminal_allowed: bool,
@@ -307,11 +333,13 @@ mod tests {
         let object = value.as_object_mut().unwrap();
         object.remove("recording_settings");
         object.remove("recording_request_reason");
+        object.remove("case_inventory_id");
 
         let state: RewriteState = serde_json::from_value(value).unwrap();
 
         assert_eq!(state.recording_settings.duration_seconds.get(), 60);
         assert_eq!(state.recording_settings.case_limit.get(), 100);
         assert!(state.recording_request_reason.is_none());
+        assert!(state.case_inventory_id.is_none());
     }
 }

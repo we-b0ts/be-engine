@@ -144,13 +144,13 @@ pub use replay::{
 };
 pub use rewrite::{
     RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewriteContext,
-    RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue, RewriteIssueKind,
-    RewriteIssueOwner, RewriteNextOptions, RewritePhase, RewriteRecordingKind,
-    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecoveryReport,
-    RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport,
-    RewriteStatusReport, RewriteWorkflowView, apply_rewrite_rule, next_rewrite, plan_rewrite_rule,
-    query_rewrite_evidence, recover_rewrite, request_rewrite_recording, route_rewrite,
-    status_rewrite,
+    RewriteEvidenceCommand, RewriteEvidenceReport, RewriteFocusedE2eExecution,
+    RewriteFocusedE2eExecutionMode, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
+    RewriteNextOptions, RewritePhase, RewriteRecordingKind, RewriteRecordingReason,
+    RewriteRecordingRequestOptions, RewriteRecoveryReport, RewriteRouteOptions, RewriteRouteReport,
+    RewriteRulePlanOptions, RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView,
+    apply_rewrite_rule, next_rewrite, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, route_rewrite, status_rewrite,
 };
 pub use tls::MitmCa;
 

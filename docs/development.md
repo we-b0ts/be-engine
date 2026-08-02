@@ -808,6 +808,14 @@ derived from the old baseline without deleting its artifacts, and returns a
 new exact recording argv. The coordinator defaults both standard and comparison
 recording actions to 60 seconds and 100 cases.
 
+After a focused attempt, `next` and `status` expose
+`latest_focused_e2e.execution_mode` as either `fresh_standard_cases` or
+`reused_standard_cases`. The same bounded object identifies the standard
+recording run, exact case-source directory, case-inventory ID when available,
+previous/current attempt numbers, and whether the latest attempt passed. It
+describes the latest completed attempt, so a repeated `next` with no target
+change returns the same evidence without claiming another replay occurred.
+
 Only use returned `rewrite evidence` query IDs for coordinator gate and
 aggregate facts. The `representatives` result includes the representative case
 ID, its exact immutable standard or comparison `case_dir`, and a structured

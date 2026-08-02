@@ -37,6 +37,15 @@ focused E2E attempt fails, change the target for one proven cause and run
 coordinator allocates fresh comparison evidence without replacing the standard
 cases.
 
+After the first focused attempt, every `next` and `status` result includes
+`latest_focused_e2e`. `execution_mode=fresh_standard_cases` identifies the
+first attempt against the current standard baseline, while
+`execution_mode=reused_standard_cases` proves that the latest attempt reused
+that baseline. The result also carries the recording run ID, exact case source,
+case inventory ID when available, previous/current attempt numbers, and pass
+status. It is a description of the latest completed focused attempt; if `next`
+returns without a target change, it does not claim that a new attempt ran.
+
 Use `rewrite recording request --kind standard` only for an explicit caller
 request, a changed Recorder contract, or a changed source baseline. Supply the
 corresponding reason plus positive `--duration-seconds` and `--case-limit`
