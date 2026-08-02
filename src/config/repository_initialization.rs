@@ -14,7 +14,7 @@ const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
 const RECORDER_CONFIG_PATH: &str = ".traffic-e2e/recorder.toml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
 const BOOT_DIR: &str = ".traffic-e2e/boot";
-const LOCAL_DIR: &str = ".traffic-e2e/local";
+const INTERNAL_DIR: &str = crate::internal_runtime::REPOSITORY_RELATIVE_ROOT;
 
 #[derive(Debug, Clone)]
 pub struct RepositoryConfigInitOptions {
@@ -70,7 +70,7 @@ fn initialize_repository_config_with(
         )
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
-    require_ignored(&target_root, LOCAL_DIR)?;
+    require_ignored(&target_root, INTERNAL_DIR)?;
     require_ignored(&target_root, BOOT_DIR)?;
     crate::e2e_run::validate_project_pr_base(&target_root, "dev-migration")?;
 
@@ -217,7 +217,7 @@ mod tests {
     #[test]
     fn conventional_paths_are_bounded_and_boot_is_not_created() {
         assert_eq!(BOOT_DIR, ".traffic-e2e/boot");
-        assert_eq!(LOCAL_DIR, ".traffic-e2e/local");
+        assert_eq!(INTERNAL_DIR, ".traffic-e2e/.ai-forbidden");
         assert_eq!(
             [
                 PROJECT_CONFIG_PATH,
@@ -233,11 +233,11 @@ mod tests {
     }
 
     #[test]
-    fn unified_init_generates_three_valid_files_without_boot_or_local_directories() {
+    fn unified_init_generates_three_valid_files_without_boot_or_internal_directories() {
         let target = tempdir().unwrap();
         fs::write(
             target.path().join(".gitignore"),
-            "/.traffic-e2e/local/\n/.traffic-e2e/boot/\n",
+            "/.traffic-e2e/.ai-forbidden/\n/.traffic-e2e/boot/\n",
         )
         .unwrap();
         assert!(
@@ -309,9 +309,10 @@ mod tests {
         assert!(target.path().join(RECORDER_CONFIG_PATH).is_file());
         assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());
         assert!(!target.path().join(BOOT_DIR).exists());
-        assert!(!target.path().join(LOCAL_DIR).exists());
+        assert!(!target.path().join(INTERNAL_DIR).exists());
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 7"));
+        assert!(project.contains("version: 8"));
+        assert!(project.contains("ai_forbidden_root: .ai-forbidden"));
         assert!(project.contains("boot_dir: .traffic-e2e/boot"));
         assert!(project.contains("container: breeze"));
         crate::config::AppConfig::load(target.path().join(RECORDER_CONFIG_PATH)).unwrap();

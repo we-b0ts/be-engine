@@ -69,10 +69,11 @@ traffic-e2e target exec -- path/to/prebuilt-target
 - Keep sensitive data handling explicit. Add newly sensitive headers to
   `recording.redact_headers` defaults or document the choice.
 - In this traffic-e2e engine repository, agents are explicitly allowed to read
-  `.traffic-e2e/local/**` when developing, diagnosing, reviewing, or testing
-  engine behavior. This repository-maintainer exception does not apply to an
-  ordinary rewrite in a target repository. It does not authorize editing
-  recordings or exposing sensitive artifact contents.
+  `.traffic-e2e/.ai-forbidden/**` when developing, diagnosing, reviewing, or
+  testing engine behavior. This repository-maintainer exception does not apply
+  to an ordinary rewrite in a target repository. The directory remains an
+  internal implementation detail and this exception does not authorize
+  editing runtime state or exposing sensitive contents.
 - Before changing product code, follow the backend-engineering
   [code-organization rules](plugins/ai-software-engineering/skills/backend-engineering/references/code-organization.md)
   and this repository's [module ownership](docs/code-organization.md). Treat

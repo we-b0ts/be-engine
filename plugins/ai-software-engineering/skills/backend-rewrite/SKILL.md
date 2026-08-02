@@ -69,7 +69,7 @@ After any focused attempt, read `latest_focused_e2e` from the `rewrite next`
 or `rewrite status` result. Its `execution_mode` explicitly distinguishes
 `fresh_standard_cases` from `reused_standard_cases`; use its recording run,
 exact case source, case inventory, previous/current attempt numbers, and pass
-status instead of inferring reuse from local paths. This field describes the
+status instead of inferring reuse from internal paths. This field describes the
 latest completed focused attempt and does not imply that every `next` call ran
 another attempt.
 
@@ -102,12 +102,17 @@ through `head`/`tail`, or wait on a shell task. Poll the exact `rewrite status`
 command from the result. `recording_in_progress` means the one worker still
 owns the run, `resume_required` means finalization completed, and
 `recovery_required` means the owner exited and its exact recovery command must
-run before retrying. The coordinator chooses and drives the finalized
-real-traffic request corpus; never add `nohup`, curl loops, a replayer, or
-driver parameters. If it returns `input_required` because
-no finalized real-traffic corpus exists, report that missing external input and
-do not synthesize requests. A failed E2E attempt alone never authorizes this
-transition.
+run before retrying. `input_mode=reused_atomic_recording` means the coordinator
+found one finalized historical recording whose API selector exactly equals the
+requested selector. An omitted selector matches only an omitted historical
+selector; a single API matches only that exact single API. Never split, merge,
+or narrow a recording because boot and case evidence are one lifecycle.
+`input_mode=external_live_traffic` means no exact atomic input was reusable and
+the action opens a fresh recording window; its bounded
+`recording_input_diagnosis` contains recent candidate scopes and rejection
+reasons. Never add `nohup`, curl loops, a replayer, or driver parameters. Do
+not inspect internal state, search the traffic-e2e implementation, or synthesize
+requests. A failed E2E attempt alone never authorizes this transition.
 
 `rewrite next`, `evidence`, `rule`, `dependency-rule`, `route`,
 `repair verify`, and `recording request|execute` are the public coordinator
@@ -201,20 +206,21 @@ inspect other standard or comparison cases when useful. Keep every artifact
 read-only and let coordinator output determine the active run, issue, gates,
 and legal transition; never select workflow state by recency.
 
-Prefer coordinator queries and status over scanning `.traffic-e2e/local/**`,
-`.active`, `latest`, generated state, or large reports. Those paths are noisy,
-unstable implementation details, so this is an efficiency rule rather than an
-access prohibition. Narrow inspection is allowed when the public result is
-insufficient to understand a system problem, but never edit internal state or
-treat its schema as a target contract.
+Never read, search, list, summarize, or otherwise inspect
+`.traffic-e2e/.ai-forbidden/**`. It is coordinator-owned internal state and is
+not a diagnostic surface for a target rewrite. If a public action, status, or
+evidence result is insufficient, report that coordinator API gap to the caller;
+do not compensate by inspecting the internal directory or the traffic-e2e
+implementation. This prohibition does not apply to maintainers working inside
+the traffic-e2e engine repository under its own `AGENTS.md`.
 
 `replay-progress.yaml` and `comparison-progress.yaml` are coordinator-generated,
 versioned migration evidence. They retain durable values such as consecutive
 success counts. Never hand-edit, reset, restore, or check out their changes to
 clean the worktree. When the coordinator changes either file, include that
 generated change in the same delivery commit as the verified target change.
-This exception does not apply to ignored runtime state under `local/` or to
-recordings and other generated artifacts.
+This exception does not apply to ignored runtime state under
+`.ai-forbidden/` or to recordings and other generated artifacts.
 
 Do not use bulk `jq`, Python, or ad-hoc shell processing as a substitute for
 coordinator gate and aggregate results. Focused inspection of case files is

@@ -32,8 +32,8 @@ canonical `cwd` with the named environment variables. The command starts a
 detached coordinator worker and returns immediately. Poll its returned
 `rewrite status` command; wait through `recording_in_progress`, and run `next`
 only after `resume_required`. The
-coordinator preallocates the run ID, owns the real-traffic request driver, and
-validates that exact finalized manifest. Never discover a run by recency or add
+coordinator preallocates the run ID, owns the recording input mode and
+lifecycle, and validates that exact finalized manifest. Never discover a run by recency or add
 manual curl, replay, shell pipelines, backgrounding, or driver flags. Duration and case limit
 belong to the preceding recording request and are bound into the action ID.
 When the workflow was started without `--api`, an empty run-local selector is
@@ -82,9 +82,14 @@ single-API recording. An identical pending request is idempotent; a different pe
 requires explicit `--replace-pending`. The coordinator preserves prior
 artifacts, clears state derived from that baseline, allocates a new run, and
 returns the exact `recording_required` action. Execute that action and resume
-with `next`. If no finalized real-traffic request corpus is available, retain
-the `input_required` state and request that external input rather than inventing
-traffic.
+with `next`. Historical request input is reusable only when its complete
+recording selector exactly equals the requested selector. Omitted API selectors
+match only each other, and a single API matches only that exact single API.
+Never split or merge recordings because boot and case evidence belong to one
+recording lifecycle. When no exact atomic input exists,
+`input_mode=external_live_traffic` opens a fresh recording window and includes
+bounded recent candidate scopes and rejection counts. Treat that diagnosis as
+complete and do not inspect internal state or invent traffic.
 
 After a system repair, only the returned coordinator-issued
 `rewrite repair verify <repair-id>` action can advance the workflow. Successful
@@ -158,9 +163,9 @@ delivery remain under the caller's rewrite objective.
 
 ## State And Recovery
 
-Coordinator state is one atomically replaced file under the ignored local
-root. Prefer `rewrite status` to reading this noisy internal representation and
-never edit it. Status reconstructs the current action without advancing state:
+Coordinator state is stored under `.traffic-e2e/.ai-forbidden/`. A target
+rewrite AI must never read, search, or list that directory. Use
+`rewrite status`, which reconstructs the current action without advancing state:
 it returns the original recording action before execution, an exact
 `plan_apply_required` command for a pending plan, `recording_in_progress` while
 the detached worker is live, or `resume_required` only after a finalized
@@ -176,7 +181,7 @@ lock, stops an orphaned focused target/Replay attempt or managed recording,
 publishes interrupted state, and returns the next coordinator command.
 
 Traffic-e2e's internal runner publication may retain its own implementation
-layout. Those local paths are not a stable rewrite-interface contract. The
+layout. Those internal paths are not a stable rewrite-interface contract. The
 interface may expose immutable artifact paths such as a representative
 `case_dir` when direct inspection is useful.
 
@@ -184,5 +189,5 @@ The target repository's `replay-progress.yaml` and
 `comparison-progress.yaml` are a separate, versioned coordinator output. Do
 not edit or roll them back manually. Preserve coordinator-generated changes,
 including consecutive-success evidence, and commit them with the target change
-they verify. Continue excluding ignored local runtime state and traffic
+they verify. Continue excluding ignored internal runtime state and traffic
 artifacts from delivery.

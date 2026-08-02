@@ -523,7 +523,7 @@ mod tests {
             case_source: PathBuf::from("/cases"),
             progress_path: temp.path().join("progress.yaml"),
             legacy_progress_path: temp.path().join("legacy-progress.yaml"),
-            local_root: temp.path().join("local"),
+            internal_root: temp.path().join("internal"),
             current_path: temp.path().join("current"),
             run_root: temp.path().join("run"),
             index_path: temp.path().join("index.yaml"),

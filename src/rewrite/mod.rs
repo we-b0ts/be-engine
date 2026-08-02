@@ -9,6 +9,7 @@ mod model;
 mod recording;
 mod recording_action;
 mod recording_execution;
+mod recording_input;
 mod recovery;
 mod repair;
 mod rule;
@@ -24,8 +25,11 @@ pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryView, RewriteApiProgress,
     RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec,
     RewriteDependencyRuleReport, RewriteEvidenceCommand, RewriteEvidenceReport,
-    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteIssue, RewriteIssueKind,
-    RewriteIssueOwner, RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingKind,
+    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
+    RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
+    RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
+    RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
     RewriteRecordingReason, RewriteRecordingStartReport, RewriteRecordingStartState,
     RewriteRecoveryReport, RewriteRepairAcceptanceKind, RewriteRouteReport, RewriteRuleReport,
     RewriteStatusReport, RewriteWorkflowView,
@@ -111,12 +115,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             }
             let recording_run_id =
                 artifacts::allocate_run_id(&target_root, ManagedRecordingOperation::Record)?;
-            let recording_input_case_source = artifacts::compatible_recording_input(
-                &target_root,
-                &recording_apis,
-                Some(&recording_run_id),
-            )?;
-            let state = RewriteState {
+            let mut state = RewriteState {
                 version: STATE_VERSION,
                 revision: 1,
                 workflow_id: format!("rewrite-{}", uuid::Uuid::new_v4().simple()),
@@ -130,7 +129,8 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 recording_rejection: None,
                 recording_settings: RewriteRecordingSettings::default(),
                 recording_request_reason: None,
-                recording_input_case_source,
+                recording_input_case_source: None,
+                recording_input_diagnosis: None,
                 comparison_run_id: None,
                 comparison_rejection: None,
                 case_source: None,
@@ -147,6 +147,8 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 e2e_current: false,
                 comparison_current: false,
             };
+            let excluded_run_id = state.recording_run_id.clone();
+            recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))?;
             store.save(&state)?;
             state
         }
@@ -156,17 +158,13 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
         store.save(&state)?;
     }
 
-    if state.phase == RewritePhase::RecordingRequired
-        && state.recording_input_case_source.is_none()
-        && let Some(case_source) = artifacts::compatible_recording_input(
-            &target_root,
-            &state.recording_apis,
-            Some(&state.recording_run_id),
-        )?
+    if state.phase == RewritePhase::RecordingRequired && state.recording_input_case_source.is_none()
     {
-        state.recording_input_case_source = Some(case_source);
-        state.bump();
-        store.save(&state)?;
+        let excluded_run_id = state.recording_run_id.clone();
+        if recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))? {
+            state.bump();
+            store.save(&state)?;
+        }
     }
 
     match state.phase {
@@ -591,6 +589,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         recording_settings: RewriteRecordingSettings::default(),
         recording_request_reason: None,
         recording_input_case_source: Some(PathBuf::from("recording-input")),
+        recording_input_diagnosis: None,
         comparison_run_id: None,
         comparison_rejection: None,
         case_source: None,
@@ -624,7 +623,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(4)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(5)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/command/cwd"),
@@ -702,7 +701,7 @@ mod tests {
             value.pointer("/action/command/cwd"),
             Some(&serde_json::json!(target))
         );
-        assert!(!value.to_string().contains(".traffic-e2e/local"));
+        assert!(!value.to_string().contains(".traffic-e2e/.ai-forbidden"));
         assert_eq!(
             value.pointer("/action/resume/argv"),
             Some(&serde_json::json!(["traffic-e2e", "rewrite", "next"]))

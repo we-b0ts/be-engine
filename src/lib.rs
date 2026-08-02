@@ -11,6 +11,7 @@ mod dns_mock;
 mod e2e_run;
 mod gateway;
 mod http;
+mod internal_runtime;
 mod kafka;
 mod memcached;
 mod motan;
@@ -150,15 +151,18 @@ pub use rewrite::{
     RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec, RewriteContext,
     RewriteDependencyRulePlanOptions, RewriteDependencyRuleReport, RewriteDependencyRuleSelector,
     RewriteEvidenceCommand, RewriteEvidenceReport, RewriteFocusedE2eExecution,
-    RewriteFocusedE2eExecutionMode, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
-    RewriteNextOptions, RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingKind,
-    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecordingStartReport,
-    RewriteRecordingStartState, RewriteRecoveryReport, RewriteRepairAcceptanceKind,
-    RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport,
-    RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_rule,
-    execute_rewrite_recording_worker, next_rewrite, plan_rewrite_dependency_rule,
-    plan_rewrite_rule, query_rewrite_evidence, recover_rewrite, request_rewrite_recording,
-    route_rewrite, start_rewrite_recording, status_rewrite, verify_rewrite_repair,
+    RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason, RewriteIssue, RewriteIssueKind,
+    RewriteIssueOwner, RewriteNextOptions, RewritePhase, RewriteRecordingExecutionReport,
+    RewriteRecordingInputCandidate, RewriteRecordingInputCandidateDisposition,
+    RewriteRecordingInputDiagnosis, RewriteRecordingInputMode, RewriteRecordingInputRejections,
+    RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
+    RewriteRecordingStartReport, RewriteRecordingStartState, RewriteRecoveryReport,
+    RewriteRepairAcceptanceKind, RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions,
+    RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule,
+    apply_rewrite_rule, execute_rewrite_recording_worker, next_rewrite,
+    plan_rewrite_dependency_rule, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
+    verify_rewrite_repair,
 };
 pub use tls::MitmCa;
 

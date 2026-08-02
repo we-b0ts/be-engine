@@ -20,7 +20,7 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
         "HEAD",
         "--",
         ".",
-        ":(exclude).traffic-e2e/local/**",
+        crate::internal_runtime::GIT_PATHSPEC,
         ":(exclude).traffic-e2e/artifacts/**",
         ":(exclude).traffic-e2e/data/**",
     ];
@@ -33,7 +33,7 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
         "-z",
         "--",
         ".",
-        ":(exclude).traffic-e2e/local/**",
+        crate::internal_runtime::GIT_PATHSPEC,
         ":(exclude).traffic-e2e/artifacts/**",
         ":(exclude).traffic-e2e/data/**",
     ];

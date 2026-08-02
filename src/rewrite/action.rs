@@ -6,8 +6,8 @@ use crate::RecordingApi;
 
 use super::model::{
     ACTION_SCHEMA_VERSION, RewriteAction, RewriteActionEnvelope, RewriteCommandSpec,
-    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewritePhase, RewriteState,
-    RewriteWorkflowView,
+    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
+    RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
 };
 use super::{evidence, fingerprint, inventory, recording_action};
 
@@ -66,18 +66,9 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                 .to_string(),
         );
     }
-    if state.phase == RewritePhase::RecordingRequired && state.recording_input_case_source.is_none()
-    {
-        return RewriteAction::InputRequired {
-            summary: format!(
-                "coordinator requires one finalized real-traffic request corpus for {} before it can drive recording",
-                workflow_scope(state)
-            ),
-            required: vec!["finalized real-traffic recording request corpus".to_string()],
-        };
-    }
     if state.phase == RewritePhase::ApiPending && inventory::current_requires_source_route(state) {
         return RewriteAction::InputRequired {
+            reason: RewriteInputRequiredReason::SourceRouteRequired,
             summary: format!(
                 "dynamic API {} requires a route confirmed from source registration",
                 state.api
@@ -111,6 +102,16 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
     match state.phase {
         RewritePhase::RecordingRequired => RewriteAction::RecordingRequired {
             summary: recording_summary(state),
+            input_mode: if state.recording_input_case_source.is_some() {
+                RewriteRecordingInputMode::ReusedAtomicRecording
+            } else {
+                RewriteRecordingInputMode::ExternalLiveTraffic
+            },
+            recording_input_diagnosis: if state.recording_input_case_source.is_none() {
+                state.recording_input_diagnosis.clone()
+            } else {
+                None
+            },
             command: recording_action::command(target_root, state, false),
             resume: next_command(target_root),
         },
@@ -180,21 +181,29 @@ pub(super) fn resume_envelope(
 }
 
 fn recording_summary(state: &RewriteState) -> String {
-    if let Some(reason) = &state.recording_rejection {
-        return format!(
+    let summary = if let Some(reason) = &state.recording_rejection {
+        format!(
             "previous standard recording was rejected ({reason}); generate a replacement for {}",
             workflow_scope(state)
-        );
-    }
-    match state.recording_request_reason {
-        Some(reason) => format!(
-            "fresh standard recording requested ({reason}) for {}",
-            workflow_scope(state)
-        ),
-        None => format!(
-            "generate one finalized standard recording for {}",
-            workflow_scope(state)
-        ),
+        )
+    } else {
+        match state.recording_request_reason {
+            Some(reason) => format!(
+                "fresh standard recording requested ({reason}) for {}",
+                workflow_scope(state)
+            ),
+            None => format!(
+                "generate one finalized standard recording for {}",
+                workflow_scope(state)
+            ),
+        }
+    };
+    if state.recording_input_case_source.is_none() {
+        format!(
+            "{summary}; no exact-scope atomic historical input is reusable, capture fresh external live traffic"
+        )
+    } else {
+        summary
     }
 }
 
@@ -205,6 +214,7 @@ pub(super) fn input_required(_target_root: &Path) -> RewriteActionEnvelope {
         api_inventory: None,
         latest_focused_e2e: None,
         action: RewriteAction::InputRequired {
+            reason: RewriteInputRequiredReason::WorkflowNotInitialized,
             summary: "start the rewrite workflow for every API observed through recorder configuration, or optionally select one API".to_string(),
             required: vec!["run `traffic-e2e rewrite next`; optional: --api 'METHOD /path-or-pattern'".to_string()],
         },
@@ -222,6 +232,7 @@ pub(super) fn source_route_required(
         api_inventory: None,
         latest_focused_e2e: None,
         action: RewriteAction::InputRequired {
+            reason: RewriteInputRequiredReason::SourceRouteRequired,
             summary: format!(
                 "dynamic API {api} requires a route confirmed from source registration"
             ),

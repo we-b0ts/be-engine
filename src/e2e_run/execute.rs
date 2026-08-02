@@ -67,7 +67,7 @@ pub async fn abort_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
+    config::require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
     ensure!(
         layout.active_dir.is_dir(),
         "there is no active E2E run to abort"
@@ -245,7 +245,7 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
+    config::require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
     std::fs::create_dir_all(&layout.run_root)?;
     store::recover_publication(&layout)?;
     if layout.active_dir.is_dir() {
@@ -281,7 +281,7 @@ pub(crate) async fn recover_focused_e2e_api(context: E2eRunContext, api_key: &st
         &context.case_source,
         context.run_key.as_deref(),
     )?;
-    config::require_local_ignored(&base_layout.target_root, &base_layout.local_root)?;
+    config::require_internal_root_ignored(&base_layout.target_root, &base_layout.internal_root)?;
     let global_layout = base_layout.clone();
     let mut layout = base_layout;
     let focused_root = layout.run_root.join("focused").join(api_directory(api_key));
@@ -348,7 +348,7 @@ fn resolve_for_execution(context: &E2eRunContext) -> Result<(ResolvedProjectConf
         context.run_key.as_deref(),
     )?;
     branch::require_work_branch(&layout.target_root, &config.pr_base)?;
-    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
+    config::require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
     require_executable(&config.project_cli, "project CLI")?;
     ensure!(
         config.replay_policy.is_file(),

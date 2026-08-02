@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 4;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 5;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -277,6 +277,8 @@ pub(super) struct RewriteState {
     pub recording_request_reason: Option<RewriteRecordingReason>,
     #[serde(default)]
     pub recording_input_case_source: Option<PathBuf>,
+    #[serde(default)]
+    pub recording_input_diagnosis: Option<RewriteRecordingInputDiagnosis>,
     pub comparison_run_id: Option<String>,
     #[serde(default)]
     pub comparison_rejection: Option<String>,
@@ -332,10 +334,65 @@ pub struct RewriteCommandSpec {
     pub required_env_names: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteInputRequiredReason {
+    WorkflowNotInitialized,
+    SourceRouteRequired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteRecordingInputMode {
+    ReusedAtomicRecording,
+    ExternalLiveTraffic,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewriteRecordingInputRejections {
+    pub unreadable: usize,
+    pub not_completed: usize,
+    pub empty: usize,
+    pub dirty: usize,
+    pub scope_mismatch: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewriteRecordingInputDiagnosis {
+    pub requested_scope: String,
+    pub inspected_runs: usize,
+    pub omitted_older_runs: usize,
+    pub finalized_clean_runs: usize,
+    pub observed_apis: Vec<String>,
+    pub rejections: RewriteRecordingInputRejections,
+    pub candidates: Vec<RewriteRecordingInputCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RewriteRecordingInputCandidate {
+    pub run_id: String,
+    pub recording_apis: Vec<String>,
+    pub omitted_recording_apis: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub published_cases: Option<usize>,
+    pub disposition: RewriteRecordingInputCandidateDisposition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteRecordingInputCandidateDisposition {
+    Unreadable,
+    NotCompleted,
+    Empty,
+    Dirty,
+    ScopeMismatch,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RewriteAction {
     InputRequired {
+        reason: RewriteInputRequiredReason,
         summary: String,
         required: Vec<String>,
     },
@@ -346,6 +403,9 @@ pub enum RewriteAction {
     },
     RecordingRequired {
         summary: String,
+        input_mode: RewriteRecordingInputMode,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        recording_input_diagnosis: Option<RewriteRecordingInputDiagnosis>,
         command: RewriteCommandSpec,
         resume: RewriteCommandSpec,
     },
@@ -525,6 +585,7 @@ mod tests {
         object.remove("recording_settings");
         object.remove("recording_request_reason");
         object.remove("recording_input_case_source");
+        object.remove("recording_input_diagnosis");
         object.remove("case_inventory_id");
         object.remove("recording_apis");
         object.remove("api_inventory");
@@ -536,6 +597,7 @@ mod tests {
         assert_eq!(state.recording_settings.per_api_case_limit.get(), 100);
         assert!(state.recording_request_reason.is_none());
         assert!(state.recording_input_case_source.is_none());
+        assert!(state.recording_input_diagnosis.is_none());
         assert!(state.case_inventory_id.is_none());
         assert!(state.recording_apis.is_empty());
         assert!(state.api_inventory.is_empty());

@@ -20,7 +20,7 @@ Before a run, the runner requires:
 
 - executable `scripts/<project>-cli`;
 - valid recorder and replay config;
-- ignored `.traffic-e2e/local/`;
+- ignored `.traffic-e2e/.ai-forbidden/`;
 - ignored `.traffic-e2e/boot/`; the directory itself may remain absent until
   target startup proves an authoritative input is required;
 - a feature branch distinct from the configured PR base.
@@ -71,7 +71,7 @@ response artifact.
 
 The terminal JSON is the engine result interface. Consume `status`, `passed`,
 `gates`, bounded `diagnosis`, and `progress`; do not open report paths or
-generated local state during normal operation. Explicit value presence
+generated internal state during normal operation. Explicit value presence
 distinguishes JSON null, missing fields, and unavailable evidence. Report these
 facts without choosing a migration repair.
 

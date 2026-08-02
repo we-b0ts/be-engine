@@ -70,7 +70,7 @@ pub struct E2eRunInitOptions {
 #[derive(Debug, Serialize)]
 pub struct E2eRunInitResult {
     pub config: PathBuf,
-    pub local_root: PathBuf,
+    pub ai_forbidden_root: PathBuf,
     pub pr_base: String,
     pub recorder_feedback: bool,
     pub replaced: bool,
@@ -207,7 +207,7 @@ pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareRes
         options.context.run_key.as_deref(),
     )?;
     branch::require_work_branch(&layout.target_root, &config.pr_base)?;
-    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
+    config::require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
     ensure!(
         !layout.active_dir.exists(),
         "cannot change case grouping while an E2E run is active"

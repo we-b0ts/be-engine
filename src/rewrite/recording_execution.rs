@@ -122,7 +122,7 @@ fn marker_path(target_root: &Path) -> PathBuf {
 }
 
 fn runtime_root(target_root: &Path) -> PathBuf {
-    target_root.join(".traffic-e2e/local/rewrite")
+    crate::internal_runtime::root(target_root).join("rewrite")
 }
 
 fn process_exists(pid: u32) -> bool {

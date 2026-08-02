@@ -84,7 +84,7 @@ pub async fn recover_managed_recording(
             "failed to remove managed recording containers"
         );
     }
-    let local = target_root.join(".traffic-e2e/local/platform");
+    let local = crate::internal_runtime::root(&target_root).join("platform");
     for token in tokens {
         remove_runtime_dir(&local.join("control").join(&token), &local.join("control"))?;
         remove_runtime_dir(

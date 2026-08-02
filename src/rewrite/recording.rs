@@ -93,14 +93,12 @@ pub fn request_rewrite_recording(
     if state.recording_apis != requested_apis {
         state.recording_apis = requested_apis;
         state.recording_input_case_source = None;
+        state.recording_input_diagnosis = None;
         inventory::reset_for_recording(&mut state);
     }
     if state.recording_input_case_source.is_none() {
-        state.recording_input_case_source = artifacts::compatible_recording_input(
-            &target_root,
-            &inventory::recording_scope(&state),
-            Some(&state.recording_run_id),
-        )?;
+        let excluded_run_id = state.recording_run_id.clone();
+        super::recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))?;
     }
     store.save(&state)?;
     Ok(action::for_state(&target_root, &state))
@@ -357,11 +355,15 @@ async fn execute_rewrite_recording_locked(
         artifacts::RecordingPublication::Missing => {}
     }
     let request_source = if comparison {
-        state.case_source.clone()
+        Some(
+            state
+                .case_source
+                .clone()
+                .context("comparison recording has no finalized standard case source")?,
+        )
     } else {
         state.recording_input_case_source.clone()
-    }
-    .context("coordinator has no finalized real-traffic request corpus for the recording action")?;
+    };
     let apis = if comparison {
         vec![state.api.parse::<RecordingApi>()?]
     } else {
@@ -379,7 +381,7 @@ async fn execute_rewrite_recording_locked(
         breeze_no_fallback: true,
         apis,
         per_api_case_limit: Some(state.recording_settings.per_api_case_limit),
-        request_source: Some(request_source),
+        request_source,
     })
     .await?;
     Ok(execution_report(
@@ -482,6 +484,7 @@ pub(super) fn reset_for_fresh_recording(
         .case_source
         .clone()
         .or_else(|| state.recording_input_case_source.clone());
+    state.recording_input_diagnosis = None;
     state.phase = RewritePhase::RecordingRequired;
     inventory::reset_for_recording(state);
     state.recording_run_id = run_id;

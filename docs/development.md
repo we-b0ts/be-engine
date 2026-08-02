@@ -777,8 +777,9 @@ failures, not product behavior evidence.
 ## Migration E2E Runner
 
 Use the rewrite coordinator as the normal AI-facing migration command. It
-keeps one atomic state document under the ignored local root, exposes one
-active issue, and never returns raw report paths:
+keeps internal state under `.traffic-e2e/.ai-forbidden/`, exposes one active
+issue, and never returns raw internal report paths. Target rewrite agents must
+not read, search, or list that directory:
 
 ```bash
 traffic-e2e rewrite next
@@ -798,14 +799,16 @@ traffic-e2e rewrite repair verify <repair-id>
 
 Every returned command contains a canonical `cwd` plus exact argv. `next`
 returns an opaque standard/comparison `rewrite recording execute <action-id>`
-action. The coordinator chooses a finalized real-traffic request corpus and
-drives it through the recording gateway; callers do not add curl loops,
-replayers, shell pipelines, backgrounding, or driver parameters. `execute`
+action. The coordinator either reuses one exact-scope atomic real-traffic input
+or opens a fresh external-live-traffic recording window; callers do not add
+curl loops, replayers, shell pipelines, backgrounding, or driver parameters. `execute`
 starts a detached coordinator-owned worker and returns immediately. Poll
 `rewrite status`; `recording_in_progress` never returns a second execute action,
-and `resume_required` means finalization and cleanup completed. If no compatible finalized
-corpus exists, the action is `input_required` until that external input is
-available. When startup omits `--api`, recorder configuration limits the
+and `resume_required` means finalization and cleanup completed. Historical
+input is reused only when its API selector exactly equals the requested
+selector; recordings are never split or merged. When no exact atomic input
+exists, `input_mode=external_live_traffic` opens a fresh recording window and
+includes bounded candidate/rejection diagnostics. When startup omits `--api`, recorder configuration limits the
 standard run and the coordinator derives a stable `api_inventory` from its
 published cases. After status returns `resume_required`, `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
@@ -982,9 +985,11 @@ not-applicable evidence.
 Normal AI operation starts with the bounded terminal result. Representative
 evidence links directly to an immutable recorded case for request, expected
 response, and dependency inspection, and the AI may inspect any other artifact
-as needed. Prefer coordinator output over scanning generated local state,
-assertion details, aggregate reports, `.active`, or `latest`; those are
-unstable and usually less efficient, not access-controlled secrets.
+as needed. A target rewrite agent must not read, search, or list
+`.traffic-e2e/.ai-forbidden/**`; use coordinator output instead. Engine
+maintainers may inspect it only under this repository's `AGENTS.md`. Generated
+assertion details, aggregate reports, `.active`, and `latest` are internal
+surfaces rather than ordinary migration evidence.
 
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current

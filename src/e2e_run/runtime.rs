@@ -503,7 +503,7 @@ mod tests {
             case_source: directory.path().join("cases"),
             progress_path: directory.path().join("progress.yaml"),
             legacy_progress_path: directory.path().join("legacy-progress.yaml"),
-            local_root: directory.path().join("local"),
+            internal_root: directory.path().join("internal"),
             current_path: directory.path().join("current.yaml"),
             run_root: directory.path().join("run"),
             index_path: directory.path().join("index.yaml"),

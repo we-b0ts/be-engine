@@ -35,7 +35,7 @@ Target product code, CLI, configuration, tests, and support must not read:
 - `expected-response.json` or candidate response artifacts;
 - `dependencies.jsonl` or Global dependency files;
 - Replay session/control files;
-- generated `.traffic-e2e/local/` state or reports;
+- generated `.traffic-e2e/.ai-forbidden/` state or reports;
 - request-header encryption keys.
 
 `.traffic-e2e/boot` may be absent at initialization. When startup proves a

@@ -143,51 +143,6 @@ pub(super) fn comparison_recording_publication(
     )
 }
 
-pub(super) fn compatible_recording_input(
-    target_root: &Path,
-    requested_apis: &[String],
-    excluded_run_id: Option<&str>,
-) -> Result<Option<PathBuf>> {
-    let root = target_root.join(".traffic-e2e/artifacts/recordings");
-    let mut runs = match std::fs::read_dir(&root) {
-        Ok(entries) => entries.collect::<std::io::Result<Vec<_>>>()?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to inspect recordings {}", root.display()));
-        }
-    };
-    runs.sort_by_key(std::fs::DirEntry::file_name);
-    for entry in runs.into_iter().rev() {
-        let run_id = entry.file_name();
-        let run_id = run_id.to_string_lossy();
-        if excluded_run_id == Some(run_id.as_ref()) || !entry.path().is_dir() {
-            continue;
-        }
-        let manifest = entry.path().join("recording-run.json");
-        let Ok(report) = read_json::<StandardRecordingManifest>(&manifest) else {
-            continue;
-        };
-        let scope_matches = if requested_apis.is_empty() {
-            report.recording_apis.is_empty()
-        } else {
-            requested_apis.iter().all(|api| {
-                api.parse::<RecordingApi>()
-                    .is_ok_and(|api| resolve_recording_api_member(&entry.path(), &api).is_ok())
-            })
-        };
-        if report.status == "completed"
-            && report.published_cases > 0
-            && report.failed_cases == 0
-            && report.errors.is_empty()
-            && scope_matches
-        {
-            return Ok(Some(entry.path()));
-        }
-    }
-    Ok(None)
-}
-
 pub(super) fn recording_rejection(error: &anyhow::Error) -> String {
     public_rejection(
         error,
@@ -389,35 +344,6 @@ mod tests {
         .unwrap();
 
         assert_ne!(replacement, reserved);
-    }
-
-    #[test]
-    fn recording_input_reuses_only_the_newest_compatible_finalized_run() {
-        let target = tempfile::tempdir().unwrap();
-        let recordings = target.path().join(".traffic-e2e/artifacts/recordings");
-        let valid = recordings.join("20260802000001");
-        let newer_dirty = recordings.join("20260802000002");
-        std::fs::create_dir_all(&valid).unwrap();
-        std::fs::create_dir_all(&newer_dirty).unwrap();
-        std::fs::write(
-            valid.join("recording-run.json"),
-            r#"{"status":"completed","recording_apis":[],"published_cases":3,"failed_cases":0,"errors":[]}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            newer_dirty.join("recording-run.json"),
-            r#"{"status":"completed","recording_apis":["GET /api"],"published_cases":3,"failed_cases":1,"errors":["failed"]}"#,
-        )
-        .unwrap();
-
-        assert_eq!(
-            compatible_recording_input(target.path(), &[], None).unwrap(),
-            Some(valid.clone())
-        );
-        assert_eq!(
-            compatible_recording_input(target.path(), &[], Some("20260802000001")).unwrap(),
-            None
-        );
     }
 
     #[test]

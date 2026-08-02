@@ -274,8 +274,8 @@ fn signal_process_group(child: &tokio::process::Child, signal: libc::c_int) {
 }
 
 fn stage_assets(target_root: &Path) -> Result<PathBuf> {
-    let root = target_root
-        .join(".traffic-e2e/local/platform/assets")
+    let root = crate::internal_runtime::root(target_root)
+        .join("platform/assets")
         .join(Uuid::new_v4().to_string());
     fs::create_dir_all(&root)
         .with_context(|| format!("failed to create Platform asset root {}", root.display()))?;
