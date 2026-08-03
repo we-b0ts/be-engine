@@ -8,10 +8,11 @@ ownership.
 
 ## Package Shape
 
-Keep this repository as one Rust crate unless the user asks for a workspace,
-the project gains multiple deployable artifacts, or multiple real packages
-need a shared library. Ask before creating a workspace when the boundary is
-unclear.
+Keep this repository as one Rust crate while the companion `traffic-e2e` and
+`backend-rewrite` binaries share the same engine and coordinator library.
+Introduce a workspace only when independently versioned packages or a real
+package dependency boundary appears. Ask before creating one when the boundary
+is unclear.
 
 ## Current Boundaries
 
@@ -28,7 +29,8 @@ unclear.
   `replay/<protocol>` owns matching and response behavior for recorded
   evidence. Both may depend on the top-level protocol module, never the
   reverse.
-- `main.rs` owns CLI and binary bootstrap only.
+- `main.rs` owns the `traffic-e2e` engine CLI bootstrap only.
+- `bin/backend-rewrite/` owns the AI-facing coordinator CLI bootstrap only.
 - `lib.rs` owns application wiring, shared state, and stable exports.
 - Proxy and gateway modules own connection and request orchestration.
 - Protocol and semantic modules own parsing, encoding, and interpretation.

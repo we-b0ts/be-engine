@@ -18,7 +18,8 @@ generate or invoke repository comparison wrappers.
 
 When Breeze is absent, the same command selects the configured runtime without
 starting Breeze. Comparison sends admitted read-only requests symmetrically to
-source and candidate. Use repeatable `--api`, optional positive `--case-limit`,
+source and candidate. Use repeatable `--api`, optional positive
+`--per-api-case-limit`,
 and `--baseline-recheck` only when the verification policy or diagnosis needs
 source-after evidence.
 

@@ -24,7 +24,7 @@ use crate::memcached::{
 mod builtins;
 use super::command_matching::{
     CaseConnectionBinding, CommandExchangeScope, PreferredMatch,
-    is_connection_independent_runtime_state, lane_blocked_diagnostic, preferred_match,
+    is_connection_independent_background, lane_blocked_diagnostic, preferred_match,
     unmatched_diagnostic,
 };
 use super::report::command::{
@@ -69,8 +69,6 @@ pub(super) struct RecordedExchange {
     replay_safe: bool,
     #[serde(default)]
     global_dependency_reason: Option<String>,
-    #[serde(default)]
-    global_dependency_response_role: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -218,14 +216,10 @@ impl MemcachedReplayState {
             record.outcome
         };
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, outcome);
-        let connection_independent = is_connection_independent_runtime_state(
+        let connection_independent = is_connection_independent_background(
             source,
             record.global_dependency_reason.as_deref(),
-            record.global_dependency_response_role.as_deref(),
-            "Memcached",
-            &record.command,
-            "get",
-        )?;
+        );
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),

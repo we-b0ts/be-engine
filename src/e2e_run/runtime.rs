@@ -48,7 +48,7 @@ pub(super) fn spawn_replay(
     let replay_override = std::env::var_os("TRAFFIC_E2E_TRAFFIC_REPLAY").map(PathBuf::from);
     let replay_command = match replay_override.as_ref() {
         Some(command) => command.clone(),
-        None => std::env::current_exe().context("failed to resolve traffic-e2e binary")?,
+        None => crate::engine_binary::executable()?,
     };
     let stdout = File::create(layout.active_dir.join("reports/replay.stdout.log"))?;
     let stderr = File::create(layout.active_dir.join("reports/replay.stderr.log"))?;
@@ -503,7 +503,7 @@ mod tests {
             case_source: directory.path().join("cases"),
             progress_path: directory.path().join("progress.yaml"),
             legacy_progress_path: directory.path().join("legacy-progress.yaml"),
-            local_root: directory.path().join("local"),
+            internal_root: directory.path().join("internal"),
             current_path: directory.path().join("current.yaml"),
             run_root: directory.path().join("run"),
             index_path: directory.path().join("index.yaml"),

@@ -235,7 +235,7 @@ async fn case_limit_returns_fixed_response_without_more_mirroring() {
     let gateway = free_addr();
     let run_id = "20260722160001";
     let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
-    config.http_gateway.case_limits.default = 1;
+    config.http_gateway.per_api_case_limits.default = 1;
     let task = tokio::spawn(traffic_e2e::run_comparison_recording(
         config,
         Some(run_id.to_string()),

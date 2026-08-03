@@ -12,6 +12,7 @@ use tokio::sync::{Mutex, Notify};
 use uuid::Uuid;
 
 use super::super::ReplayState;
+use super::dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
 
 const SNAPSHOT_DEBOUNCE: Duration = Duration::from_secs(1);
 
@@ -101,7 +102,9 @@ pub(in crate::replay) async fn write_final_report_value(
         state.report_write_lock.clone()
     };
     let _write_guard = report_write_lock.lock().await;
-    write_report_value(&report_path, report).await
+    write_report_value(&report_path, report).await?;
+    let evidence = build_dependency_evidence(report);
+    write_report_value(&dependency_evidence_path(&report_path), &evidence).await
 }
 
 async fn write_report_value(report_path: &Path, report: &impl Serialize) -> Result<()> {

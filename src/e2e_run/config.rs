@@ -12,8 +12,8 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-const CONFIG_VERSION: u32 = 7;
-const DEFAULT_LOCAL_ROOT: &str = "local";
+const CONFIG_VERSION: u32 = 8;
+const DEFAULT_AI_FORBIDDEN_ROOT: &str = crate::internal_runtime::TRAFFIC_E2E_RELATIVE_ROOT;
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
 pub(crate) fn validate_project_pr_base(target_root: &Path, pr_base: &str) -> Result<()> {
@@ -84,9 +84,9 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         options.recording_rule
     );
 
-    let local_root_setting = PathBuf::from(DEFAULT_LOCAL_ROOT);
-    let local_root = traffic_e2e_dir.join(&local_root_setting);
-    require_local_ignored(&target_root, &local_root)?;
+    let ai_forbidden_root_setting = PathBuf::from(DEFAULT_AI_FORBIDDEN_ROOT);
+    let ai_forbidden_root = traffic_e2e_dir.join(&ai_forbidden_root_setting);
+    require_internal_root_ignored(&target_root, &ai_forbidden_root)?;
 
     let payload = render_project_config(&options)?;
     let project_config: ProjectConfig = serde_yaml::from_slice(&payload)
@@ -100,7 +100,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
 
     Ok(E2eRunInitResult {
         config: config_path,
-        local_root,
+        ai_forbidden_root,
         pr_base: persisted.delivery.pr_base,
         recorder_feedback: true,
         replaced,
@@ -150,7 +150,7 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
             pr_base: options.pr_base.clone(),
         },
         state: StateProjectConfig {
-            local_root: PathBuf::from(DEFAULT_LOCAL_ROOT),
+            ai_forbidden_root: PathBuf::from(DEFAULT_AI_FORBIDDEN_ROOT),
         },
     };
     validate_project_config(&project_config)?;
@@ -182,24 +182,24 @@ pub(super) fn resolve_layout(
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
     let config_path = traffic_e2e_dir.join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
-    let local_root = resolve_under(&traffic_e2e_dir, &config.state.local_root);
+    let internal_root = resolve_under(&traffic_e2e_dir, &config.state.ai_forbidden_root);
     ensure!(
-        local_root.starts_with(&traffic_e2e_dir) && local_root != traffic_e2e_dir,
-        "local_root must be a child of .traffic-e2e"
+        internal_root.starts_with(&traffic_e2e_dir) && internal_root != traffic_e2e_dir,
+        "state.ai_forbidden_root must be a child of .traffic-e2e"
     );
     let run_key = match explicit_run_key {
         Some(value) => validate_run_key(value)?,
         None => derive_run_key(&case_source)?,
     };
-    let run_root = local_root.join(&run_key);
+    let run_root = internal_root.join(&run_key);
     let layout = RunLayout {
         target_root,
         run_key,
         case_source,
         progress_path: traffic_e2e_dir.join("replay-progress.yaml"),
         legacy_progress_path: traffic_e2e_dir.join("e2e-progress.yaml"),
-        local_root: local_root.clone(),
-        current_path: local_root.join("current.yaml"),
+        internal_root: internal_root.clone(),
+        current_path: internal_root.join("current.yaml"),
         index_path: run_root.join("state.yaml"),
         group_index_path: run_root.join("case-groups.json"),
         active_dir: run_root.join(".active"),
@@ -247,12 +247,15 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     ))
 }
 
-pub(super) fn require_local_ignored(target_root: &Path, local_root: &Path) -> Result<()> {
-    fs::create_dir_all(local_root)?;
-    let probe = local_root.join(".ignore-check");
+pub(super) fn require_internal_root_ignored(
+    target_root: &Path,
+    internal_root: &Path,
+) -> Result<()> {
+    fs::create_dir_all(internal_root)?;
+    let probe = internal_root.join(".ignore-check");
     let relative = probe
         .strip_prefix(target_root)
-        .context("traffic E2E local root is outside target repository")?;
+        .context("traffic E2E internal root is outside target repository")?;
     let output = Command::new("git")
         .arg("-C")
         .arg(target_root)
@@ -264,7 +267,7 @@ pub(super) fn require_local_ignored(target_root: &Path, local_root: &Path) -> Re
     ensure!(
         output.success(),
         "{} must be ignored by the target repository before running traffic E2E",
-        local_root.display()
+        internal_root.display()
     );
     Ok(())
 }
@@ -361,8 +364,8 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "delivery.pr_base must not be empty"
     );
     ensure!(
-        !config.state.local_root.as_os_str().is_empty(),
-        "state.local_root must not be empty"
+        config.state.ai_forbidden_root == Path::new(DEFAULT_AI_FORBIDDEN_ROOT),
+        "state.ai_forbidden_root must be {DEFAULT_AI_FORBIDDEN_ROOT:?}"
     );
     ensure!(
         !config.recording.config.as_os_str().is_empty(),
@@ -434,7 +437,7 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        fs::write(root.join(".gitignore"), ".traffic-e2e/local/\n").unwrap();
+        fs::write(root.join(".gitignore"), ".traffic-e2e/.ai-forbidden/\n").unwrap();
         fs::create_dir_all(root.join("scripts")).unwrap();
         let project_cli = root.join("scripts/project-cli");
         fs::write(&project_cli, "#!/usr/bin/env bash\nexit 0\n").unwrap();
@@ -541,7 +544,10 @@ mod tests {
         );
         assert_eq!(config.delivery.pr_base, "integration");
         assert_eq!(result.pr_base, "integration");
-        assert_eq!(config.state.local_root, PathBuf::from(DEFAULT_LOCAL_ROOT));
+        assert_eq!(
+            config.state.ai_forbidden_root,
+            PathBuf::from(DEFAULT_AI_FORBIDDEN_ROOT)
+        );
     }
 
     #[test]
@@ -726,7 +732,7 @@ mod tests {
             "version: 2\n\
              project_cli: scripts/project-cli\n\
              replay_policy: config/replay.yaml\n\
-             local_root: local\n",
+             ai_forbidden_root: .ai-forbidden\n",
         )
         .unwrap();
         let cases = target.path().join("cases/run");
@@ -743,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn initialize_requires_local_state_to_be_ignored() {
+    fn initialize_requires_internal_state_to_be_ignored() {
         let target = target();
         fs::write(target.path().join(".gitignore"), "").unwrap();
 

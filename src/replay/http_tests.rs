@@ -368,6 +368,39 @@ async fn unmatched_http_request_is_dirty_and_does_not_consume_exchange() {
 }
 
 #[tokio::test]
+async fn unmatched_http_outside_a_case_is_reference_context_not_dirty() {
+    let temp = tempdir().unwrap();
+    let case_dir = temp.path().join("case-unscoped");
+    write_http_case(
+        &case_dir,
+        "fake_ip_http",
+        "api.example.test",
+        "/expected",
+        "",
+        "ok",
+    )
+    .await;
+    let (addr, runtime, task) = spawn_http_replay(&case_dir, Vec::new()).await;
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(TokioIo::new(stream), "api.example.test", "/expected", "").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    runtime.state.lock().await.active_case_id = None;
+
+    let stream = TcpStream::connect(addr).await.unwrap();
+    let response = send_request(TokioIo::new(stream), "api.example.test", "/warmup", "").await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+
+    let state = runtime.state.lock().await;
+    let report = state.snapshot_report();
+    assert_eq!(report.unmatched_http_requests.len(), 1);
+    assert!(report.unmatched_http_requests[0].case_id.is_none());
+    assert!(report.unused_case_http_exchanges.is_empty());
+    assert!(!super::super::report_is_dirty(&report));
+    task.abort();
+}
+
+#[tokio::test]
 async fn allowed_unused_http_host_is_diagnostic_but_unmatched_requests_stay_dirty() {
     let temp = tempdir().unwrap();
     let case_dir = temp.path().join("case-allowed-unused");

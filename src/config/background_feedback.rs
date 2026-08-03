@@ -7,9 +7,7 @@ use anyhow::{Context, Result, ensure};
 use hyper::http::{Method, Uri, uri::Authority};
 use serde::{Deserialize, Serialize};
 
-use super::background_dependencies::{
-    self, BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
-};
+use super::background_dependencies::{self, BackgroundDependencyRuleConfig};
 use super::edit::write_atomic;
 use super::rule_document::{find_managed_block, managed_block_diff, newline, parse_and_validate};
 
@@ -34,6 +32,8 @@ pub struct BackgroundDependencyReport {
     pub config: PathBuf,
     pub replay_report: PathBuf,
     pub name: String,
+    pub effective_name: String,
+    pub reused_existing: bool,
     pub protocol: &'static str,
     pub authority: String,
     pub method: String,
@@ -62,6 +62,8 @@ pub(super) struct RuleConfigPlan {
     pub(super) updated: String,
     pub(super) changed: bool,
     pub(super) diff: String,
+    pub(super) effective_name: String,
+    pub(super) reused_existing: bool,
 }
 
 impl BackgroundDependencyPlan {
@@ -102,8 +104,7 @@ pub fn plan_background_dependency(
         authorities: vec![authority.clone()],
         methods: vec![method.clone()],
         path_prefixes: vec![path_prefix.clone()],
-        response_role: BackgroundDependencyResponseRole::Independent,
-        source_revision: feedback.source_revision.clone(),
+        source_revision: String::new(),
         source_evidence: feedback.source_evidence.clone(),
     };
     background_dependencies::validate(std::slice::from_ref(&requested))?;
@@ -129,6 +130,8 @@ pub fn plan_background_dependency(
             config: feedback.config_path,
             replay_report: feedback.replay_report_path,
             name: feedback.name,
+            effective_name: config_plan.effective_name,
+            reused_existing: config_plan.reused_existing,
             protocol: "http",
             authority,
             method,
@@ -152,15 +155,27 @@ pub(super) fn plan_rule_config(
     let original = read_file(config_path, "recorder config")?;
     let config = parse_and_validate(&original, config_path)?;
     let mut rules = config.recording.background_dependencies.clone();
-    if let Some(existing) = rules
-        .iter_mut()
-        .find(|rule| rule.name() == requested.name())
-    {
-        ensure_same_selector(existing, &requested)?;
-        *existing = requested;
-    } else {
-        rules.push(requested);
+    let requested_name = requested.name().to_string();
+    let reused = rules
+        .iter()
+        .find(|rule| equivalent_selector(rule, &requested))
+        .map(|rule| rule.name().to_string());
+    if reused.is_none() {
+        if let Some(existing) = rules
+            .iter_mut()
+            .find(|rule| rule.name() == requested.name())
+        {
+            ensure_same_selector(existing, &requested)?;
+            *existing = requested;
+        } else {
+            rules.push(requested);
+        }
     }
+    let effective_name = if let Some(name) = reused.as_ref() {
+        name.clone()
+    } else {
+        requested_name
+    };
     background_dependencies::validate(&rules)?;
     rules.sort_by(|left, right| left.name().cmp(right.name()));
 
@@ -191,6 +206,16 @@ pub(super) fn plan_rule_config(
         }
     };
     let old_block = &original[block.clone()];
+    if reused.is_some() {
+        return Ok(RuleConfigPlan {
+            original: original.clone(),
+            updated: original,
+            changed: false,
+            diff: String::new(),
+            effective_name,
+            reused_existing: true,
+        });
+    }
     let new_block = render_block(
         &rules,
         newline(&original),
@@ -212,6 +237,8 @@ pub(super) fn plan_rule_config(
         updated,
         changed,
         diff,
+        effective_name,
+        reused_existing: false,
     })
 }
 
@@ -326,7 +353,35 @@ fn ensure_same_selector(
     existing: &BackgroundDependencyRuleConfig,
     requested: &BackgroundDependencyRuleConfig,
 ) -> Result<()> {
-    let same = match (existing, requested) {
+    let same = compatible_named_selector(existing, requested);
+    ensure!(
+        same,
+        "background dependency rule name {:?} already exists with a different selector; choose a new name instead of broadening it",
+        existing.name()
+    );
+    Ok(())
+}
+
+fn equivalent_selector(
+    existing: &BackgroundDependencyRuleConfig,
+    requested: &BackgroundDependencyRuleConfig,
+) -> bool {
+    compatible_selector(existing, requested, true)
+}
+
+fn compatible_named_selector(
+    existing: &BackgroundDependencyRuleConfig,
+    requested: &BackgroundDependencyRuleConfig,
+) -> bool {
+    compatible_selector(existing, requested, false)
+}
+
+fn compatible_selector(
+    existing: &BackgroundDependencyRuleConfig,
+    requested: &BackgroundDependencyRuleConfig,
+    require_exact_sets: bool,
+) -> bool {
+    match (existing, requested) {
         (
             BackgroundDependencyRuleConfig::Http {
                 authorities: existing_authorities,
@@ -341,8 +396,18 @@ fn ensure_same_selector(
                 ..
             },
         ) => {
-            existing_authorities == requested_authorities
-                && existing_methods == requested_methods
+            (!require_exact_sets || existing_authorities.len() == requested_authorities.len())
+                && existing_authorities.iter().all(|authority| {
+                    requested_authorities.iter().any(|requested| {
+                        canonical_authority(authority).ok() == canonical_authority(requested).ok()
+                    })
+                })
+                && (!require_exact_sets || existing_methods.len() == requested_methods.len())
+                && existing_methods.iter().all(|method| {
+                    requested_methods
+                        .iter()
+                        .any(|requested| method.eq_ignore_ascii_case(requested))
+                })
                 && existing_paths == requested_paths
         }
         (
@@ -379,7 +444,6 @@ fn ensure_same_selector(
                 keys: existing_keys,
                 key_prefix: existing_prefix,
                 key_suffix: existing_suffix,
-                response_role: existing_role,
                 ..
             },
             BackgroundDependencyRuleConfig::Redis {
@@ -388,18 +452,17 @@ fn ensure_same_selector(
                 keys: requested_keys,
                 key_prefix: requested_prefix,
                 key_suffix: requested_suffix,
-                response_role: requested_role,
                 ..
             },
         ) => {
-            existing_ports
-                .iter()
-                .all(|port| requested_ports.contains(port))
+            (!require_exact_sets || existing_ports.len() == requested_ports.len())
+                && existing_ports
+                    .iter()
+                    .all(|port| requested_ports.contains(port))
                 && existing_command == requested_command
                 && existing_keys == requested_keys
                 && existing_prefix == requested_prefix
                 && existing_suffix == requested_suffix
-                && existing_role == requested_role
         }
         (
             BackgroundDependencyRuleConfig::Motan {
@@ -420,13 +483,7 @@ fn ensure_same_selector(
                 && existing_method == requested_method
         }
         _ => false,
-    };
-    ensure!(
-        same,
-        "background dependency rule name {:?} already exists with a different selector; choose a new name instead of broadening it",
-        existing.name()
-    );
-    Ok(())
+    }
 }
 
 fn render_block(
@@ -465,7 +522,6 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             authorities,
             methods,
             path_prefixes,
-            source_revision,
             source_evidence,
             ..
         } => {
@@ -474,8 +530,6 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             push_array(output, "authorities", authorities, newline);
             push_array(output, "methods", methods, newline);
             push_array(output, "path_prefixes", path_prefixes, newline);
-            push_line(output, "response_role = \"independent\"", newline);
-            push_assignment(output, "source_revision", source_revision, newline);
             push_assignment(output, "source_evidence", source_evidence, newline);
         }
         BackgroundDependencyRuleConfig::Memcached {
@@ -487,7 +541,6 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             key_separator,
             key_suffix,
             initial_load_timeout_ms,
-            source_revision,
             source_evidence,
             ..
         } => {
@@ -504,8 +557,6 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
                 &format!("initial_load_timeout_ms = {initial_load_timeout_ms}"),
                 newline,
             );
-            push_line(output, "response_role = \"runtime_state\"", newline);
-            push_assignment(output, "source_revision", source_revision, newline);
             push_assignment(output, "source_evidence", source_evidence, newline);
         }
         BackgroundDependencyRuleConfig::Redis {
@@ -516,8 +567,6 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             key_prefix,
             key_suffix,
             initial_load_timeout_ms,
-            response_role,
-            source_revision,
             source_evidence,
             ..
         } => {
@@ -538,8 +587,6 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
                     newline,
                 );
             }
-            push_assignment(output, "response_role", response_role.as_str(), newline);
-            push_assignment(output, "source_revision", source_revision, newline);
             push_assignment(output, "source_evidence", source_evidence, newline);
         }
         BackgroundDependencyRuleConfig::Motan {
@@ -547,15 +594,14 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             group,
             interface_name,
             method_name,
-            source_revision,
             source_evidence,
+            ..
         } => {
             push_assignment(output, "name", name, newline);
             push_line(output, "protocol = \"motan\"", newline);
             push_assignment(output, "group", group, newline);
             push_assignment(output, "interface_name", interface_name, newline);
             push_assignment(output, "method_name", method_name, newline);
-            push_assignment(output, "source_revision", source_revision, newline);
             push_assignment(output, "source_evidence", source_evidence, newline);
         }
     }

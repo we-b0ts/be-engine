@@ -9,8 +9,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 use super::background_dependencies::{
-    self, BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
-    matches_memcached_key_series,
+    self, BackgroundDependencyRuleConfig, matches_memcached_key_series,
 };
 use super::background_feedback::{RuleConfigPlan, plan_rule_config};
 use super::edit::write_atomic;
@@ -37,8 +36,9 @@ pub struct BreezeMemcachedBackgroundDependencyReport {
     pub config: PathBuf,
     pub replay_report: PathBuf,
     pub name: String,
+    pub effective_name: String,
+    pub reused_existing: bool,
     pub protocol: &'static str,
-    pub response_role: &'static str,
     pub breeze_resource: String,
     pub breeze_identity: String,
     pub resolved_port: u16,
@@ -131,8 +131,7 @@ fn plan_in(
         key_separator: feedback.key_separator.clone(),
         key_suffix: feedback.key_suffix.clone(),
         initial_load_timeout_ms: feedback.initial_load_timeout_ms,
-        response_role: BackgroundDependencyResponseRole::RuntimeState,
-        source_revision: feedback.source_revision.clone(),
+        source_revision: String::new(),
         source_evidence: feedback.source_evidence.clone(),
     };
     background_dependencies::validate(std::slice::from_ref(&requested))?;
@@ -152,6 +151,8 @@ fn plan_in(
         updated,
         changed,
         diff,
+        effective_name,
+        reused_existing,
     } = plan_rule_config(&feedback.config_path, requested)?;
 
     Ok(BreezeMemcachedBackgroundDependencyPlan {
@@ -166,8 +167,9 @@ fn plan_in(
             config: feedback.config_path,
             replay_report: feedback.replay_report_path,
             name: feedback.name,
+            effective_name,
+            reused_existing,
             protocol: "memcached",
-            response_role: "runtime_state",
             breeze_resource: feedback.breeze_resource,
             breeze_identity: descriptor.identity,
             resolved_port: descriptor.port,
@@ -209,13 +211,13 @@ struct ReplayCaseEvidence {
 #[derive(Debug, Default, Deserialize)]
 struct CommandProtocolEvidence {
     #[serde(default)]
+    unmatched: Vec<CommandRequestEvidence>,
+    #[serde(default)]
     unsupported: Vec<CommandRequestEvidence>,
     #[serde(default)]
     unsafe_events: Vec<CommandRequestEvidence>,
     #[serde(default)]
     unused_case: Vec<CommandUnusedEvidence>,
-    #[serde(default)]
-    unused_global: Vec<CommandUnusedEvidence>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -272,11 +274,12 @@ fn parse_replay_evidence(
     ensure!(
         !report
             .memcached
-            .unsupported
+            .unmatched
             .iter()
+            .chain(&report.memcached.unsupported)
             .chain(&report.memcached.unsafe_events)
             .any(|event| event.target.port == port && event.command.eq_ignore_ascii_case("get")),
-        "Memcached background selector shares its Breeze port and command with unsupported or unsafe target traffic"
+        "Memcached background selector shares its Breeze port and command with unmatched, unsupported, or unsafe target traffic"
     );
     let unused_case = report
         .memcached
@@ -285,29 +288,23 @@ fn parse_replay_evidence(
         .filter(|event| event.target.port == port && event.command.eq_ignore_ascii_case("get"))
         .map(|event| (event.index, event))
         .collect::<BTreeMap<_, _>>();
-    let unused_global = report
-        .memcached
-        .unused_global
-        .iter()
-        .filter(|event| event.target.port == port && event.command.eq_ignore_ascii_case("get"))
-        .map(|event| (event.index, event))
-        .collect::<BTreeMap<_, _>>();
     ensure!(
-        !unused_case.is_empty() || !unused_global.is_empty(),
-        "Memcached background selector matches no unused case or Global exchange on the resolved Breeze port"
+        !unused_case.is_empty(),
+        "Memcached background selector matches no unused case exchange on the resolved Breeze port"
     );
 
     let mut files = Vec::new();
     let mut exchange_index = 0;
     let mut count = 0_usize;
     let mut case_ids = BTreeSet::new();
+    let empty_unused = BTreeMap::new();
     if let Some(recorded) = report.global_dependencies_path {
         let path = resolve_evidence_path(report_path, &recorded);
         let contents = read_file(&path, "Global dependency evidence")?;
         scan_memcached_dependency_file(
             &contents,
             &path,
-            &unused_global,
+            &empty_unused,
             None,
             &mut exchange_index,
             key_start,
@@ -339,7 +336,7 @@ fn parse_replay_evidence(
     }
     ensure!(
         count > 0,
-        "Memcached background selector matches no unused case or Global key in immutable dependency evidence"
+        "Memcached background selector matches no unused case key in immutable dependency evidence"
     );
     Ok(EvidenceMatch {
         count,

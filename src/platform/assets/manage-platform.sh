@@ -17,6 +17,7 @@ required_environment=(
     TRAFFIC_E2E_TARGET_READY_STATUS
     TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS
     TRAFFIC_E2E_SOURCE_ORIGIN
+    TRAFFIC_E2E_RECORDING_ORIGIN
     TRAFFIC_E2E_SOURCE_READY_PATH
     TRAFFIC_E2E_SOURCE_READY_STATUS
     TRAFFIC_E2E_RECORDER_CONFIG
@@ -45,7 +46,7 @@ run_id=""
 duration_seconds=""
 baseline_recheck=false
 brz_no_fallback=""
-case_limit=""
+per_api_case_limit=""
 api_selectors=()
 while (($# > 0)); do
     case "$1" in
@@ -74,9 +75,9 @@ while (($# > 0)); do
             api_selectors+=("$2")
             shift 2
             ;;
-        --case-limit)
-            [[ -z "$case_limit" && $# -ge 2 ]] || exit 2
-            case_limit=$2
+        --per-api-case-limit)
+            [[ -z "$per_api_case_limit" && $# -ge 2 ]] || exit 2
+            per_api_case_limit=$2
             shift 2
             ;;
         *)
@@ -106,7 +107,7 @@ if [[ "$operation" == record && "$baseline_recheck" == true ]]; then
     exit 2
 fi
 
-for command_name in docker jq curl nc timeout base64 readlink id date find sort sed grep awk wc tr rm; do
+for command_name in docker jq curl nc timeout base64 readlink id date find sort sed grep awk wc tr rm sha256sum; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf 'error: required command not found: %s\n' "$command_name" >&2
         exit 1
@@ -162,18 +163,25 @@ recorder_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:
 breeze_image='registry.api.demo.test/weibo_rd_if/breeze:v0.1.21-e2e@sha256:5aba065755724d43c7da3f6b79ac82890a0a0a08c6ae3f43af12558b5e52462f'
 
 repo_name=$(basename "$TRAFFIC_E2E_TARGET_ROOT" | tr -cs 'A-Za-z0-9_.-' '-')
+repo_name=${repo_name#-}
+repo_name=${repo_name%-}
+[[ -n "$repo_name" ]] || {
+    printf 'error: target repository name cannot form a Docker image name\n' >&2
+    exit 1
+}
 token="${run_id}-$$"
 prefix="traffic-e2e-${repo_name}-${operation}-${token}"
 anchor_name="${prefix}-anchor"
 recorder_name="${prefix}-recorder"
 breeze_name="${prefix}-breeze"
 source_name="${prefix}-source"
-adapter_image="traffic-e2e/${repo_name}-recording-source:${token}"
+adapter_image="traffic-e2e/${repo_name}-recording-source:cache"
+adapter_image_id=""
 
 runtime_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e"
 data_dir="$runtime_root/data"
 artifacts_dir="$runtime_root/artifacts"
-local_dir="$runtime_root/local/platform"
+local_dir="$runtime_root/.ai-forbidden/platform"
 diagnostics_dir="$local_dir/diagnostics/${operation}-${token}"
 control_dir="$local_dir/control/${token}"
 adapter_context="$local_dir/adapters/${token}"
@@ -187,6 +195,7 @@ source_started=false
 target_started=false
 recorder_finalized=false
 comparison_pid=""
+input_pid=""
 
 container_exists() {
     docker container inspect "$1" >/dev/null 2>&1
@@ -209,7 +218,8 @@ run_target() {
         -u TRAFFIC_E2E_TARGET_ORIGIN -u TRAFFIC_E2E_TARGET_PORT \
         -u TRAFFIC_E2E_TARGET_READY_PATH -u TRAFFIC_E2E_TARGET_READY_STATUS \
         -u TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS \
-        -u TRAFFIC_E2E_SOURCE_ORIGIN -u TRAFFIC_E2E_SOURCE_READY_PATH \
+        -u TRAFFIC_E2E_SOURCE_ORIGIN -u TRAFFIC_E2E_RECORDING_ORIGIN \
+        -u TRAFFIC_E2E_REQUEST_SOURCE -u TRAFFIC_E2E_SOURCE_READY_PATH \
         -u TRAFFIC_E2E_SOURCE_READY_STATUS -u TRAFFIC_E2E_RECORDER_CONFIG \
         -u TRAFFIC_E2E_REPLAY_POLICY -u TRAFFIC_E2E_PLATFORM_ASSETS \
         "$TRAFFIC_E2E_PROJECT_CLI" "$@"
@@ -255,6 +265,11 @@ cleanup() {
         kill -INT "$comparison_pid" >/dev/null 2>&1 || true
         wait "$comparison_pid" || true
     fi
+    if [[ -n "$input_pid" ]] && kill -0 "$input_pid" >/dev/null 2>&1; then
+        kill -TERM "$input_pid" >/dev/null 2>&1 || true
+        wait "$input_pid" || status=1
+        input_pid=""
+    fi
     if "$recorder_started" && ! "$recorder_finalized"; then
         finalize_recorder || status=1
     fi
@@ -266,7 +281,6 @@ cleanup() {
     "$breeze_started" && stop_container "$breeze_name"
     "$recorder_started" && stop_container "$recorder_name"
     "$anchor_started" && stop_container "$anchor_name"
-    docker image rm "$adapter_image" >/dev/null 2>&1 || true
     remove_private_runtime_dir "$control_dir" "$local_dir/control" || status=1
     remove_private_runtime_dir "$adapter_context" "$local_dir/adapters" || status=1
     exit "$status"
@@ -437,9 +451,22 @@ start_genuine_source() {
         "$TRAFFIC_E2E_SOURCE_READY_STATUS" source "$source_name"
 }
 
-build_recording_adapter() {
-    local source_image source_launcher_path source_run_command source_workdir
+prepare_recording_adapter() {
+    local source_image source_image_id resolved_source_image_id
+    local source_launcher_path source_run_command source_workdir
+    local adapter_fingerprint cached_adapter_record cached_adapter_image_id
+    local cached_adapter_fingerprint adapter_iid_file path file_hash
     source_image=$(jq -r '.[0].Config.Image' <<<"$source_inspect")
+    source_image_id=$(jq -r '.[0].Image' <<<"$source_inspect")
+    [[ "$source_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+        printf 'error: source container has an invalid image ID\n' >&2
+        return 1
+    }
+    resolved_source_image_id=$(docker image inspect --format '{{.Id}}' "$source_image")
+    [[ "$resolved_source_image_id" == "$source_image_id" ]] || {
+        printf 'error: source image reference no longer resolves to the inspected container image\n' >&2
+        return 1
+    }
     source_run_command=$(jq -r '.[0].Config.Env[]? | select(startswith("RUN_COMMAND=")) | sub("^RUN_COMMAND="; "")' <<<"$source_inspect" | tail -n 1)
     source_workdir=$(jq -r '.[0].Config.WorkingDir // "/"' <<<"$source_inspect")
     [[ -n "$source_run_command" ]] || {
@@ -490,7 +517,39 @@ RUN chmod 0755 /usr/local/bin/traffic-e2e-source-java-launcher ${source_launcher
     && setcap cap_net_bind_service=+ep "\${java_bin}" \\
     && getcap "\${java_bin}" | grep -F 'cap_net_bind_service+ep'
 DOCKERFILE
-    docker build --platform linux/amd64 --network none --tag "$adapter_image" "$adapter_context"
+    adapter_fingerprint=$(
+        {
+            printf '%s\0' "$source_image_id"
+            while IFS= read -r -d '' path; do
+                file_hash=$(sha256sum "$path")
+                printf '%s\0%s\0' "${path##*/}" "${file_hash%% *}"
+            done < <(find "$adapter_context" -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
+        } | sha256sum
+    )
+    adapter_fingerprint=${adapter_fingerprint%% *}
+    cached_adapter_record=$(docker image inspect \
+        --format '{{.Id}} {{ index .Config.Labels "com.weibo.traffic-e2e.recording-adapter.fingerprint" }}' \
+        "$adapter_image" 2>/dev/null || true)
+    cached_adapter_image_id=${cached_adapter_record%% *}
+    cached_adapter_fingerprint=${cached_adapter_record#* }
+    if [[ "$cached_adapter_fingerprint" == "$adapter_fingerprint" ]]; then
+        adapter_image_id=$cached_adapter_image_id
+        printf 'reusing cached recording source adapter %s (%s)\n' \
+            "$adapter_image" "$adapter_image_id" >&2
+        return 0
+    fi
+    adapter_iid_file="$control_dir/adapter-image-id"
+    rm -f "$adapter_iid_file"
+    docker build --platform linux/amd64 --network none \
+        --iidfile "$adapter_iid_file" \
+        --label "com.weibo.traffic-e2e.recording-adapter.fingerprint=${adapter_fingerprint}" \
+        --label "com.weibo.traffic-e2e.recording-adapter.source-image-id=${source_image_id}" \
+        --tag "$adapter_image" "$adapter_context"
+    adapter_image_id=$(<"$adapter_iid_file")
+    [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+        printf 'error: adapter build did not publish an image ID\n' >&2
+        return 1
+    }
 }
 
 start_recording_source() {
@@ -510,7 +569,7 @@ start_recording_source() {
         --volume "$truststore:/traffic-e2e/source-truststore.jks:ro"
     )
     docker run --detach --name "$source_name" --network "container:${anchor_name}" \
-        "${runtime_args[@]}" "$adapter_image" "${runtime_command[@]}" >/dev/null
+        "${runtime_args[@]}" "$adapter_image_id" "${runtime_command[@]}" >/dev/null
     source_started=true
     wait_port 880 source "$source_name"
     docker exec "$source_name" /bin/sh -ec '
@@ -535,6 +594,30 @@ run_no_fallback() {
         "$TRAFFIC_E2E_PLATFORM_ASSETS/brz-no-fallback.sh"
 }
 
+start_recording_input() {
+    [[ -n "${TRAFFIC_E2E_REQUEST_SOURCE-}" ]] || return 0
+    [[ -d "$TRAFFIC_E2E_REQUEST_SOURCE" ]] || {
+        printf 'error: managed recording request source is missing\n' >&2
+        return 1
+    }
+    TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 \
+        "$TRAFFIC_E2E_BIN" internal recording-input \
+        --case-source "$TRAFFIC_E2E_REQUEST_SOURCE" \
+        --origin "$TRAFFIC_E2E_RECORDING_ORIGIN" &
+    input_pid=$!
+}
+
+stop_recording_input() {
+    local status=0
+    [[ -n "$input_pid" ]] || return 0
+    if kill -0 "$input_pid" >/dev/null 2>&1; then
+        kill -TERM "$input_pid" >/dev/null 2>&1 || true
+    fi
+    wait "$input_pid" || status=$?
+    input_pid=""
+    ((status == 0))
+}
+
 run_standard_recording() {
     local artifact_owner control_socket truststore
     artifact_owner="$(id -u):$(id -g)"
@@ -545,7 +628,7 @@ run_standard_recording() {
         return 1
     }
     if "$breeze_enabled"; then
-        build_recording_adapter
+        prepare_recording_adapter
         normalize_breeze_directories
         docker pull "$breeze_image" >/dev/null
     fi
@@ -564,7 +647,7 @@ run_standard_recording() {
     fi
     local selector
     for selector in "${api_selectors[@]}"; do recorder_command+=(--api "$selector"); done
-    [[ -z "$case_limit" ]] || recorder_command+=(--case-limit "$case_limit")
+    [[ -z "$per_api_case_limit" ]] || recorder_command+=(--per-api-case-limit "$per_api_case_limit")
     TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 docker run --detach \
         --name "$recorder_name" --platform linux/amd64 --network "container:${anchor_name}" \
         --user 0:0 --cap-add NET_ADMIN --cap-add NET_RAW --workdir /workspace \
@@ -582,7 +665,7 @@ run_standard_recording() {
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-listeners --control-socket "$control_socket"
     if "$breeze_enabled"; then
         docker run --rm --platform linux/amd64 --network none --entrypoint /bin/sh \
-            --volume "$data_dir:/workspace/data" "$adapter_image" -ec '
+            --volume "$data_dir:/workspace/data" "$adapter_image_id" -ec '
                 test -s /workspace/data/traffic-recorder-ca.pem
                 rm -f /workspace/data/source-truststore.jks
                 keytool -importcert -noprompt -alias traffic-recorder-ca \
@@ -597,7 +680,9 @@ run_standard_recording() {
     fi
     run_no_fallback
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket "$control_socket"
+    start_recording_input
     sleep "$duration_seconds"
+    stop_recording_input
     finalize_recorder
     jq -e '.status == "completed" and .failed_cases == 0 and (.errors | length == 0)' \
         "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null
@@ -625,16 +710,18 @@ run_comparison_recording() {
     "$baseline_recheck" && comparison_command+=(--baseline-recheck)
     local selector
     for selector in "${api_selectors[@]}"; do comparison_command+=(--api "$selector"); done
-    [[ -z "$case_limit" ]] || comparison_command+=(--case-limit "$case_limit")
+    [[ -z "$per_api_case_limit" ]] || comparison_command+=(--per-api-case-limit "$per_api_case_limit")
     (
         cd "$TRAFFIC_E2E_TARGET_ROOT"
         export TRAFFIC_E2E_ENCRYPTION_KEY_B64="$encryption_key_b64"
         exec "$TRAFFIC_E2E_BIN" "${comparison_command[@]}"
     ) &
     comparison_pid=$!
+    start_recording_input
     local status=0
     wait "$comparison_pid" || status=$?
     comparison_pid=""
+    stop_recording_input || status=1
     ((status == 0)) || return "$status"
     run_target stop
     target_started=false

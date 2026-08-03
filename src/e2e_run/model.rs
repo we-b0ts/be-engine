@@ -103,12 +103,12 @@ pub(super) struct DeliveryProjectConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct StateProjectConfig {
-    #[serde(default = "default_local_root")]
-    pub local_root: PathBuf,
+    #[serde(default = "default_ai_forbidden_root")]
+    pub ai_forbidden_root: PathBuf,
 }
 
-fn default_local_root() -> PathBuf {
-    PathBuf::from("local")
+fn default_ai_forbidden_root() -> PathBuf {
+    PathBuf::from(crate::internal_runtime::TRAFFIC_E2E_RELATIVE_ROOT)
 }
 
 #[derive(Debug, Clone)]
@@ -139,7 +139,7 @@ pub(super) struct RunLayout {
     pub case_source: PathBuf,
     pub progress_path: PathBuf,
     pub legacy_progress_path: PathBuf,
-    pub local_root: PathBuf,
+    pub internal_root: PathBuf,
     pub current_path: PathBuf,
     pub run_root: PathBuf,
     pub index_path: PathBuf,

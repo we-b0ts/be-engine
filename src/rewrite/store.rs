@@ -18,7 +18,7 @@ impl RewriteStore {
     pub(super) fn new(target_root: &Path) -> Result<Self> {
         let target_root = fs::canonicalize(target_root)
             .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
-        let root = target_root.join(".traffic-e2e/local/rewrite");
+        let root = crate::internal_runtime::root(&target_root).join("rewrite");
         Ok(Self {
             state_path: root.join("state.json"),
             root,
@@ -105,7 +105,7 @@ impl RewriteStore {
 
     pub(super) fn lock(&self) -> Result<RewriteLock> {
         self.try_lock()?.context(
-            "rewrite workflow is already being advanced; execute `traffic-e2e rewrite recover`",
+            "rewrite workflow is already being advanced; execute `backend-rewrite recover`",
         )
     }
 
@@ -130,7 +130,7 @@ impl RewriteStore {
                     .unwrap_or_default();
                 ensure!(
                     age >= INCOMPLETE_LOCK_GRACE,
-                    "rewrite lock is still being initialized; execute `traffic-e2e rewrite recover` again"
+                    "rewrite lock is still being initialized; execute `backend-rewrite recover` again"
                 );
             }
         }
@@ -173,7 +173,7 @@ mod tests {
     #[test]
     fn state_is_atomically_replaced_and_lock_is_exclusive() {
         let target = tempfile::tempdir().unwrap();
-        fs::create_dir_all(target.path().join(".traffic-e2e/local")).unwrap();
+        fs::create_dir_all(crate::internal_runtime::root(target.path())).unwrap();
         let store = RewriteStore::new(target.path()).unwrap();
         let mut state = test_state();
         store.save(&state).unwrap();

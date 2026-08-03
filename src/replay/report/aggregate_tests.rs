@@ -70,7 +70,7 @@ fn marks_pending_and_unused_evidence_in_summary() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");
     let mut report = report_value(6, &source.join("api"), &[("case-a", "pending")], 0);
-    report["unused_case_http_exchanges"] = json!([{}]);
+    report["unused_case_http_exchanges"] = json!([{"case_id":"case-a"}]);
     write_report(&source, "api", report);
 
     let aggregate = aggregate_replay_reports(&source).unwrap();
@@ -108,6 +108,38 @@ fn retains_unused_global_as_diagnostic_without_marking_dirty() {
     assert_eq!(aggregate.counts.events.memcached.unused_global, 1);
     assert_eq!(aggregate.counts.events.kafka.unused_global, 1);
     assert_eq!(aggregate.counts.events.motan.unused_global, 1);
+}
+
+#[test]
+fn unscoped_target_activity_is_counted_but_does_not_mark_cases_dirty() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v6(
+        &source.join("api"),
+        &[("case-a", "ended")],
+        "00000000-0000-4000-8000-000000000086",
+        true,
+    );
+    report["unmatched_http_requests"] = json!([{
+        "case_id": null,
+        "target": {"host":"startup.internal","port":80},
+        "method":"GET",
+        "uri":"/warmup"
+    }]);
+    report["memcached"] = protocol_value(0, 0, 0, 0, 0, 0, 0);
+    report["memcached"]["unmatched"] = json!([{
+        "case_id": null,
+        "target": {"host":"cache.internal","port":11211},
+        "command":"get"
+    }]);
+    write_report(&source, "api", report);
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(aggregate.is_complete());
+    assert!(!aggregate.is_dirty());
+    assert_eq!(aggregate.counts.events.http.unmatched_requests, 1);
+    assert_eq!(aggregate.counts.events.memcached.unmatched, 1);
 }
 
 #[test]
@@ -486,7 +518,17 @@ fn protocol_value(
     ] {
         value.insert(
             name.to_owned(),
-            Value::Array((0..count).map(|index| json!({"index": index})).collect()),
+            Value::Array(
+                (0..count)
+                    .map(|index| {
+                        if name == "unused_global" {
+                            json!({"index": index})
+                        } else {
+                            json!({"index": index, "case_id": "case-a"})
+                        }
+                    })
+                    .collect(),
+            ),
         );
     }
     Value::Object(value)

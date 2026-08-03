@@ -4,7 +4,8 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::result::{E2eValueObservation, response_observation};
+use super::dirty_evidence::{self, E2eDirtyCounts};
+use super::result::{E2eValueObservation, response_observation, response_pointer_scope};
 use super::{E2eRunContext, config, model, store, support};
 
 const MAX_DISTINCT_SOURCE_VALUES: usize = 8;
@@ -31,13 +32,6 @@ pub struct E2eDependencyCorrelation {
     pub interpretation: &'static str,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct E2eDirtyCounts {
-    pub complete: bool,
-    pub dirty: bool,
-    pub event_counts: Value,
-}
-
 pub fn query_e2e_source_variation(
     context: E2eRunContext,
     api: &str,
@@ -62,7 +56,7 @@ pub fn query_e2e_source_variation(
         .map(|(observation, cases)| E2eSourceValueCount { observation, cases })
         .collect();
     Ok(E2eSourceVariation {
-        pointer_scope: "decoded_response_body_json",
+        pointer_scope: response_pointer_scope(pointer),
         pointer: pointer.to_string(),
         observed_cases,
         distinct_values,
@@ -115,19 +109,7 @@ pub fn query_e2e_dirty_counts(context: E2eRunContext, api: &str) -> Result<E2eDi
         .get("dirty")
         .and_then(Value::as_bool)
         .context("aggregate evidence has no dirty flag")?;
-    let event_counts = report
-        .pointer("/counts/events")
-        .cloned()
-        .context("aggregate evidence has no event counts")?;
-    ensure!(
-        event_counts.is_object(),
-        "aggregate event counts must be an object"
-    );
-    Ok(E2eDirtyCounts {
-        complete,
-        dirty,
-        event_counts,
-    })
+    dirty_evidence::build(&state, complete, dirty)
 }
 
 fn finalized_focused_state(context: E2eRunContext, api: &str) -> Result<model::ActiveRunState> {

@@ -8,23 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::recorder::RecorderEvent;
 
-#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum BackgroundDependencyResponseRole {
-    #[default]
-    Independent,
-    RuntimeState,
-}
-
-impl BackgroundDependencyResponseRole {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Independent => "independent",
-            Self::RuntimeState => "runtime_state",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
@@ -34,7 +17,6 @@ pub enum BackgroundDependencyRuleConfig {
         methods: Vec<String>,
         path_prefixes: Vec<String>,
         #[serde(default)]
-        response_role: BackgroundDependencyResponseRole,
         source_revision: String,
         source_evidence: String,
     },
@@ -47,7 +29,7 @@ pub enum BackgroundDependencyRuleConfig {
         key_separator: String,
         key_suffix: String,
         initial_load_timeout_ms: u64,
-        response_role: BackgroundDependencyResponseRole,
+        #[serde(default)]
         source_revision: String,
         source_evidence: String,
     },
@@ -63,7 +45,7 @@ pub enum BackgroundDependencyRuleConfig {
         key_suffix: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial_load_timeout_ms: Option<u64>,
-        response_role: BackgroundDependencyResponseRole,
+        #[serde(default)]
         source_revision: String,
         source_evidence: String,
     },
@@ -72,6 +54,7 @@ pub enum BackgroundDependencyRuleConfig {
         group: String,
         interface_name: String,
         method_name: String,
+        #[serde(default)]
         source_revision: String,
         source_evidence: String,
     },
@@ -177,15 +160,6 @@ impl BackgroundDependencyRuleConfig {
             _ => false,
         }
     }
-
-    pub(crate) fn response_role(&self) -> BackgroundDependencyResponseRole {
-        match self {
-            Self::Http { response_role, .. }
-            | Self::Memcached { response_role, .. }
-            | Self::Redis { response_role, .. } => *response_role,
-            Self::Motan { .. } => BackgroundDependencyResponseRole::Independent,
-        }
-    }
 }
 
 pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
@@ -203,7 +177,6 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 authorities,
                 methods,
                 path_prefixes,
-                response_role,
                 source_revision,
                 source_evidence,
                 ..
@@ -211,10 +184,10 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 validate_authorities(name, authorities)?;
                 validate_methods(name, methods)?;
                 validate_path_prefixes(name, path_prefixes)?;
-                if *response_role != BackgroundDependencyResponseRole::Independent {
-                    bail!("HTTP background dependency rule {name:?} must be response-independent");
+                if !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
                 }
-                validate_source_metadata(source_revision, source_evidence)?;
+                validate_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Memcached {
                 breeze_identity,
@@ -224,7 +197,6 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 key_separator,
                 key_suffix,
                 initial_load_timeout_ms,
-                response_role,
                 source_revision,
                 source_evidence,
                 ..
@@ -241,12 +213,10 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                         "Memcached background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
                     );
                 }
-                if *response_role != BackgroundDependencyResponseRole::RuntimeState {
-                    bail!(
-                        "Memcached background dependency rule {name:?} must use response_role = \"runtime_state\""
-                    );
+                if !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
                 }
-                validate_source_metadata(source_revision, source_evidence)?;
+                validate_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Redis {
                 ports,
@@ -255,22 +225,16 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 key_prefix,
                 key_suffix,
                 initial_load_timeout_ms,
-                response_role,
                 source_revision,
                 source_evidence,
                 ..
             } => {
                 validate_redis_ports(name, ports)?;
-                match response_role {
-                    BackgroundDependencyResponseRole::Independent => {
-                        if command != "ZCOUNT" {
-                            bail!(
-                                "independent Redis background dependency rule {name:?} currently supports only command \"ZCOUNT\""
-                            );
-                        }
+                match command.as_str() {
+                    "ZCOUNT" => {
                         if !keys.is_empty() || initial_load_timeout_ms.is_some() {
                             bail!(
-                                "independent Redis background dependency rule {name:?} must use key_prefix/key_suffix without keys or initial_load_timeout_ms"
+                                "Redis ZCOUNT background dependency rule {name:?} must use key_prefix/key_suffix without keys or initial_load_timeout_ms"
                             );
                         }
                         validate_single_line(
@@ -284,26 +248,27 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                             512,
                         )?;
                     }
-                    BackgroundDependencyResponseRole::RuntimeState => {
-                        if command != "GET" {
-                            bail!(
-                                "runtime-state Redis background dependency rule {name:?} currently supports only command \"GET\""
-                            );
-                        }
+                    "GET" => {
                         if !key_prefix.is_empty() || !key_suffix.is_empty() {
                             bail!(
-                                "runtime-state Redis background dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
+                                "Redis GET background dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
                             );
                         }
                         validate_exact_redis_keys(name, keys)?;
                         if initial_load_timeout_ms.is_none_or(|timeout| timeout == 0) {
                             bail!(
-                                "runtime-state Redis background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
+                                "Redis GET background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
                             );
                         }
                     }
+                    _ => bail!(
+                        "Redis background dependency rule {name:?} currently supports only commands \"ZCOUNT\" and \"GET\""
+                    ),
                 }
-                validate_source_metadata(source_revision, source_evidence)?;
+                if !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
+                }
+                validate_source_evidence(source_evidence)?;
             }
             BackgroundDependencyRuleConfig::Motan {
                 group,
@@ -323,7 +288,10 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                         "Motan heartbeat is protocol-owned and cannot be configured as a background dependency rule"
                     );
                 }
-                validate_source_metadata(source_revision, source_evidence)?;
+                if !source_revision.is_empty() {
+                    validate_source_revision(source_revision)?;
+                }
+                validate_source_evidence(source_evidence)?;
             }
         }
     }
@@ -331,7 +299,7 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
     Ok(())
 }
 
-fn validate_source_metadata(source_revision: &str, source_evidence: &str) -> Result<()> {
+fn validate_source_revision(source_revision: &str) -> Result<()> {
     validate_single_line("background dependency source revision", source_revision, 64)?;
     if source_revision.len() < 7
         || !source_revision
@@ -342,6 +310,10 @@ fn validate_source_metadata(source_revision: &str, source_evidence: &str) -> Res
             "background dependency source revision must be a 7-64 character lowercase hexadecimal revision"
         );
     }
+    Ok(())
+}
+
+fn validate_source_evidence(source_evidence: &str) -> Result<()> {
     validate_single_line(
         "background dependency source evidence",
         source_evidence,
@@ -497,16 +469,14 @@ fn validate_exact_redis_keys(rule_name: &str, keys: &[String]) -> Result<()> {
     const MAX_KEYS: usize = 4_096;
     if keys.is_empty() || keys.len() > MAX_KEYS {
         bail!(
-            "runtime-state Redis background dependency rule {rule_name:?} must include between 1 and {MAX_KEYS} exact keys"
+            "Redis GET background dependency rule {rule_name:?} must include between 1 and {MAX_KEYS} exact keys"
         );
     }
     let mut unique = HashSet::new();
     for key in keys {
-        validate_single_line("runtime-state Redis background dependency key", key, 512)?;
+        validate_single_line("Redis GET background dependency key", key, 512)?;
         if !unique.insert(key) {
-            bail!(
-                "runtime-state Redis background dependency rule {rule_name:?} has duplicate key {key:?}"
-            );
+            bail!("Redis GET background dependency rule {rule_name:?} has duplicate key {key:?}");
         }
     }
     Ok(())

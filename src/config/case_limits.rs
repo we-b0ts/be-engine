@@ -39,7 +39,7 @@ impl HttpGatewayCaseLimitsConfig {
                     rules
                         .iter()
                         .any(|rule| rule.case_path_patterns.contains(pattern)),
-                    "http_gateway.case_limits override {pattern:?} must exactly match a configured case_path_patterns entry"
+                    "http_gateway.per_api_case_limits override {pattern:?} must exactly match a configured case_path_patterns entry"
                 );
             }
         }
@@ -59,15 +59,15 @@ impl Default for HttpGatewayCaseLimitsConfig {
 fn validate_case_pattern(pattern: &str) -> Result<()> {
     ensure!(
         pattern.starts_with('/'),
-        "http_gateway.case_limits override must start with '/': {pattern}"
+        "http_gateway.per_api_case_limits override must start with '/': {pattern}"
     );
     ensure!(
         !pattern.contains(['?', '#', '\r', '\n']),
-        "http_gateway.case_limits override must contain only a URI path: {pattern}"
+        "http_gateway.per_api_case_limits override must contain only a URI path: {pattern}"
     );
     ensure!(
         pattern == "/" || (!pattern.ends_with('/') && !pattern.contains("//")),
-        "http_gateway.case_limits override must use canonical separators with no trailing slash: {pattern}"
+        "http_gateway.per_api_case_limits override must use canonical separators with no trailing slash: {pattern}"
     );
     let segments = pattern
         .split('/')
@@ -77,14 +77,14 @@ fn validate_case_pattern(pattern: &str) -> Result<()> {
         segments
             .iter()
             .all(|segment| !segment.contains('*') || *segment == "*" || *segment == "**"),
-        "http_gateway.case_limits wildcards must occupy a whole path segment: {pattern}"
+        "http_gateway.per_api_case_limits wildcards must occupy a whole path segment: {pattern}"
     );
     ensure!(
         segments
             .iter()
             .enumerate()
             .all(|(index, segment)| *segment != "**" || index == segments.len() - 1),
-        "http_gateway.case_limits '**' catch-all must be the final path segment: {pattern}"
+        "http_gateway.per_api_case_limits '**' catch-all must be the final path segment: {pattern}"
     );
     Ok(())
 }

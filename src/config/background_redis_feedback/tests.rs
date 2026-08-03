@@ -60,7 +60,6 @@ impl Fixture {
             key_prefix: "1042015:".to_string(),
             key_suffix: ".wtm2".to_string(),
             initial_load_timeout_ms: None,
-            response_role: BackgroundDependencyResponseRole::Independent,
             source_revision: REVISION.to_string(),
             source_evidence: EVIDENCE.to_string(),
         }
@@ -155,7 +154,7 @@ fn rejects_nonmatching_keys_and_conflicting_target_traffic() {
         plan_redis_background_dependency(fixture.feedback())
             .unwrap_err()
             .to_string()
-            .contains("matches no unused case or Global key")
+            .contains("matches no unused case key")
     );
 
     let fixture = Fixture::new("1042015:202607:financeStock.wtm2");
@@ -194,7 +193,7 @@ fn apply_rejects_changed_dependency_evidence() {
 }
 
 #[test]
-fn runtime_state_requires_every_exact_key_in_unused_global_evidence() {
+fn redis_get_requires_every_exact_key_in_unused_case_evidence() {
     let fixture = Fixture::new("unrelated-case-key");
     fs::write(
         &fixture.config,
@@ -203,7 +202,6 @@ fn runtime_state_requires_every_exact_key_in_unused_global_evidence() {
          [recording]\ntraffic_jsonl = \"full\"\n",
     )
     .unwrap();
-    let global = fixture._temp.path().join("global-dependencies.jsonl");
     let keys = ["cache:init:a", "cache:init:b"];
     let exchanges = keys
         .iter()
@@ -222,27 +220,24 @@ fn runtime_state_requires_every_exact_key_in_unused_global_evidence() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    fs::write(&global, format!("{exchanges}\n")).unwrap();
+    fs::write(&fixture.dependencies, format!("{exchanges}\n")).unwrap();
 
     let mut replay = report(&fixture.dependencies);
-    replay["global_dependencies_path"] = json!(global);
-    replay["redis"]["unused_case"] = json!([]);
-    replay["redis"]["unused_global"] = json!([
+    replay["redis"]["unused_case"] = json!([
         {
             "index": 0,
+            "case_id": "case-a",
             "target": { "host": "cache.service", "port": 20917 },
             "command": "GET",
         },
         {
             "index": 1,
+            "case_id": "case-a",
             "target": { "host": "cache.service", "port": 20917 },
             "command": "GET",
         }
     ]);
-    replay["redis"]["unmatched"] = json!([{
-        "target": { "host": "cache.service", "port": 20917 },
-        "command": "GET",
-    }]);
+    replay["redis"]["unmatched"] = json!([]);
     fs::write(
         &fixture.replay_report,
         serde_json::to_vec_pretty(&replay).unwrap(),
@@ -255,11 +250,10 @@ fn runtime_state_requires_every_exact_key_in_unused_global_evidence() {
     feedback.key_prefix.clear();
     feedback.key_suffix.clear();
     feedback.initial_load_timeout_ms = Some(30_000);
-    feedback.response_role = BackgroundDependencyResponseRole::RuntimeState;
 
     let plan = plan_redis_background_dependency(feedback.clone()).unwrap();
     assert_eq!(plan.report().matched_unused_exchanges, 2);
-    assert!(plan.report().matched_case_ids.is_empty());
+    assert_eq!(plan.report().matched_case_ids, ["case-a"]);
     assert_eq!(plan.report().keys, keys);
 
     let mut incomplete = feedback;
@@ -276,5 +270,5 @@ fn runtime_state_requires_every_exact_key_in_unused_global_evidence() {
     assert!(raw.contains("command = \"GET\""));
     assert!(raw.contains("keys = [\"cache:init:a\", \"cache:init:b\"]"));
     assert!(raw.contains("initial_load_timeout_ms = 30000"));
-    assert!(raw.contains("response_role = \"runtime_state\""));
+    assert!(!raw.contains("response_role"));
 }

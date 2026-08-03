@@ -1,14 +1,15 @@
 ---
 name: backend-engineering
-description: "Design, implement, modify, or review production backend code using coding, code-organization, module-ownership, architecture, runtime-safety, and verification standards. Use for backend APIs, workers, scheduled jobs, consumers, gateways, dependency clients, shared runtime components, and target-code work delegated by an orchestration workflow; this skill owns engineering quality, not task sequencing, external evidence gates, or delivery orchestration."
+description: "Design, implement, modify, or review large production Rust backend systems using coding, code-organization, module-ownership, architecture, runtime-safety, and verification standards. Use only when Rust is the target implementation language and the backend has or is expected to have substantial architecture such as multiple capabilities, deployable roles, dependency clients, API or data contracts, background runtimes, or complex configuration. Apply to focused target-code work within those systems as well as cross-cutting architecture work; do not use for non-Rust target code. This skill owns engineering quality, not task sequencing, external evidence gates, or delivery orchestration."
 ---
 
-# Backend Service Engineering
+# Large Rust Backend Engineering
 
-Build backend software that remains correct and operable under concurrency,
-dependency failures, large payloads, and sustained load. Treat performance,
-throughput, and stability as measurable system properties, not adjectives that
-can be claimed from code inspection alone.
+Build large Rust backend systems that remain correct and operable under
+concurrency, dependency failures, large payloads, sustained load, and evolving
+capability boundaries. Treat performance, throughput, and stability as
+measurable system properties, not adjectives that can be claimed from code
+inspection alone.
 
 ## Normative Language
 
@@ -24,10 +25,11 @@ of the current change.
 
 ## Working Method
 
-1. Inspect the repository instructions, architecture, normal startup, config,
-   tests, observability, and the exact path being changed. Identify whether the
-   path is latency-sensitive, throughput-sensitive, memory-sensitive,
-   stateful, or failure-critical.
+1. Inspect the repository instructions, Cargo workspace, crate and module
+   ownership, normal startup, configuration, async runtime, tests,
+   observability, and the exact path being changed. Identify whether the path
+   is latency-sensitive, throughput-sensitive, memory-sensitive, stateful, or
+   failure-critical.
 2. State the observable contract, expected workload when known, external
    dependencies, side effects, and failure semantics. Mark unknown capacity
    inputs as assumptions; do not fabricate exact traffic or latency targets.
@@ -35,16 +37,17 @@ of the current change.
    deadlines, maximum in-flight work, queue bounds, connection ownership,
    payload limits, and shutdown behavior.
 4. Choose the smallest design that preserves clear ownership and dependency
-   direction. Reuse established repository frameworks and clients unless
-   evidence justifies a change.
+   direction. Reuse the repository's established runtime, frameworks, crates,
+   and clients unless evidence justifies a change.
 5. Implement success, overload, timeout, cancellation, and dependency-failure
    paths together. Do not postpone failure behavior until after the happy path.
 6. Verify correctness and operational properties in proportion to risk. Use
    targeted tests for local behavior and measured evidence for material
    performance or capacity claims.
-7. Review the final implementation again for unbounded work, retry
-   multiplication, avoidable allocation, hidden blocking, resource leaks,
-   missing observability, and accidental behavior changes.
+7. Review the final implementation again for unbounded work, detached tasks,
+   retry multiplication, avoidable cloning or allocation, blocking on async
+   executor threads, resource leaks, missing observability, and accidental
+   behavior changes.
 
 Read-only inspection of an available authorized runtime is allowed when
 repository files do not establish effective configuration or startup behavior.
@@ -81,6 +84,28 @@ genuine runtime dependency with an environment variable inferred from traffic.
 - Production behavior MUST NOT depend on tests, recordings, fixtures, debug
   branches, or developer-only defaults.
 
+## Rust Runtime Baseline
+
+- Keep async code on the repository's established runtime. With Tokio, move
+  blocking filesystem, process, compression, cryptographic, or CPU-heavy work
+  behind bounded admission to `spawn_blocking` or a dedicated pool.
+- Give every spawned task an owner through its parent future, a task set,
+  cancellation mechanism, or supervisor. Detached tasks still require bounded
+  admission, error reporting, and shutdown behavior.
+- Do not hold synchronous or asynchronous lock guards across `.await` unless
+  the protected resource requires it and the resulting contention and
+  cancellation behavior are understood.
+- Do not add `clone()`, `Arc`, boxing, or owned conversion merely to satisfy the
+  compiler. Review retained memory, aliasing, synchronization, and hot-path
+  allocation before widening ownership.
+- Preserve error sources and operational categories with typed errors or
+  contextual chains. Keep timeouts, overload, protocol failures, and remote
+  application failures distinguishable until retry, observability, and
+  external error mapping decisions are complete.
+- Keep `unsafe` isolated behind a narrow safe interface, document its safety
+  invariants, and test the boundary. Do not introduce it for speculative
+  performance gains.
+
 ## Risk-Scaled Decisions
 
 Do not add caches, pools, batching, lock-free structures, circuit breakers, or
@@ -96,16 +121,13 @@ defects before they become scale defects.
 ## Reference Routing
 
 - Read [code-organization.md](references/code-organization.md) before modifying
-  or reviewing product code. For Rust changes, run its bundled organization
-  checker after the final product-code edit and before commit, then again at
-  the prescribed MR boundary.
-- Read [architecture.md](references/architecture.md) when choosing modules,
-  ownership, configuration, APIs, or runtime boundaries.
-- Read [large-rust-backend-architecture.md](references/large-rust-backend-architecture.md)
-  before structuring or extending a Platform Rust backend, or a repository
-  that explicitly adopts that architecture standard, when it has multiple
-  deployable roles, product capabilities, service dependencies, remote
-  clients, API adapters, or complex configuration.
+  or reviewing product code. Run its bundled organization checker after the
+  final product-code edit and before commit, then again at the prescribed MR
+  boundary.
+- Read [architecture.md](references/architecture.md) before modifying or
+  reviewing product code to map workspace shape, deployable roles, capability
+  ownership, dependency direction, contracts, configuration, and runtime
+  composition.
 - Read [concurrency-and-backpressure.md](references/concurrency-and-backpressure.md)
   when adding async work, threads, queues, batching, fan-out, or background work.
 - Read [dependency-clients.md](references/dependency-clients.md) whenever the
@@ -123,13 +145,13 @@ defects before they become scale defects.
   for readiness, overload, degradation, shutdown, logging, metrics, or tracing.
 - Read [verification.md](references/verification.md) before making correctness,
   performance, throughput, capacity, or stability claims.
-- Read [rust.md](references/rust.md) only when Rust is the implementation language.
 
 ## Completion Review
 
 Before claiming completion, confirm that:
 
-1. repository-required format, lint, static analysis, and tests pass;
+1. repository-required `cargo fmt`, build or check, test, Clippy, and other
+   static-analysis gates pass for the affected workspace scope;
 2. normal startup and shutdown remain valid for runnable components;
 3. resource bounds, deadlines, retries, cancellation, and dependency ownership
    are explicit on every changed runtime path;

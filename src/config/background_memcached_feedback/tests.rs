@@ -108,16 +108,6 @@ fn report(dependencies: &Path) -> Value {
     })
 }
 
-fn capture(data: &str) -> Value {
-    json!({
-        "encoding": "utf8",
-        "original_len": data.len(),
-        "stored_len": data.len(),
-        "truncated": false,
-        "data": data,
-    })
-}
-
 #[test]
 fn plans_exact_breeze_identity_without_persisting_dynamic_port() {
     let fixture = Fixture::new("2634.pl_video");
@@ -133,7 +123,8 @@ fn plans_exact_breeze_identity_without_persisting_dynamic_port() {
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
     assert!(raw.contains("protocol = \"memcached\""));
-    assert!(raw.contains("response_role = \"runtime_state\""));
+    assert!(!raw.contains("response_role"));
+    assert!(!raw.contains("source_revision"));
     assert!(raw.contains("key_start = 0"));
     assert!(raw.contains("key_end = 4095"));
     assert!(raw.contains("initial_load_timeout_ms = 30000"));
@@ -180,7 +171,7 @@ fn rejects_non_matching_keys_and_unsafe_target_traffic() {
         plan_in(fixture.feedback(), &fixture.socks)
             .unwrap_err()
             .to_string()
-            .contains("matches no unused case or Global key")
+            .contains("matches no unused case key")
     );
 
     let fixture = Fixture::new("2634.pl_video");
@@ -201,46 +192,14 @@ fn rejects_non_matching_keys_and_unsafe_target_traffic() {
         plan_in(fixture.feedback(), &fixture.socks)
             .unwrap_err()
             .to_string()
-            .contains("unsupported or unsafe")
+            .contains("unsupported")
     );
 }
 
 #[test]
-fn runtime_state_accepts_u64_profile_key_from_unused_global_evidence() {
+fn accepts_u64_profile_key_from_unused_case_evidence() {
     let key = "5000000000.profile";
     let fixture = Fixture::new(key);
-    let global = fixture._temp.path().join("global-dependencies.jsonl");
-    fs::write(
-        &global,
-        format!(
-            "{}\n",
-            json!({
-                "event_type": "memcached_exchange",
-                "target_port": 9448,
-                "command": "get",
-                "key": capture(key),
-                "replay_safe": true,
-            })
-        ),
-    )
-    .unwrap();
-    let mut replay = report(&fixture.dependencies);
-    replay["global_dependencies_path"] = json!(global);
-    replay["memcached"]["unused_case"] = json!([]);
-    replay["memcached"]["unused_global"] = json!([{
-        "index": 0,
-        "target": { "host": "breeze.recording", "port": 9448 },
-        "command": "get",
-    }]);
-    replay["memcached"]["unmatched"] = json!([{
-        "target": { "host": "breeze.recording", "port": 9448 },
-        "command": "get",
-    }]);
-    fs::write(
-        &fixture.replay_report,
-        serde_json::to_vec_pretty(&replay).unwrap(),
-    )
-    .unwrap();
 
     let mut feedback = fixture.feedback();
     feedback.key_start = 5_000_000_000;
@@ -249,7 +208,7 @@ fn runtime_state_accepts_u64_profile_key_from_unused_global_evidence() {
     let plan = plan_in(feedback, &fixture.socks).unwrap();
 
     assert_eq!(plan.report().matched_unused_exchanges, 1);
-    assert!(plan.report().matched_case_ids.is_empty());
+    assert_eq!(plan.report().matched_case_ids, ["case-a"]);
     assert_eq!(plan.report().key_start, 5_000_000_000);
     plan.apply().unwrap();
     let raw = fs::read_to_string(&fixture.config).unwrap();

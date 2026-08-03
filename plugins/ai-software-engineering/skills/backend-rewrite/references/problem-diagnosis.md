@@ -6,14 +6,21 @@ chooses the only repair attempted before the next focused E2E run.
 
 ## Contract
 
-The coordinator supplies one active issue, bounded possible causes, one
-representative when available, exact evidence-query argv, and one acceptance
-command. Treat possible causes as hypotheses. Traffic facts come only from the
-returned queries; business causality comes from source and target code.
+The coordinator supplies one active issue in `action.details`, including
+bounded possible causes and one representative when available. Exact
+evidence-query argv are under `action.commands.evidence`, and the sole
+acceptance command is `action.commands.acceptance`. Treat possible causes as
+hypotheses. Traffic facts come only from the returned queries and immutable
+artifacts; business causality comes from source and target code.
 
-Never open generated local state, reports, expected or actual responses,
-dependency artifacts, or recordings. Never use ad-hoc scripts to recreate a
-traffic query. Never patch multiple speculative categories in one iteration.
+Standard and comparison artifacts are readable, read-only diagnostic evidence.
+Start from the representative `case_dir` returned by the coordinator and
+inspect its complete contents. Inspect other cases under
+`.traffic-e2e/artifacts/` when they help distinguish hypotheses. Never read,
+search, or list `.traffic-e2e/.ai-forbidden/**`; use bounded coordinator queries
+instead. Do not edit internal state, infer the active run by recency, or use
+ad-hoc scripts to recreate a coordinator query. Never patch multiple
+speculative categories in one iteration.
 
 Evaluate gates in this order:
 
@@ -29,10 +36,11 @@ real differences until source evidence proves otherwise.
 
 ## Evidence Queries
 
-Run only query IDs returned by the active action:
+Run only query IDs returned by `action.commands.evidence`:
 
-- `representatives`: bounded expected/actual presence and value; it does not
-  prove the cause;
+- `representatives`: the representative case ID, exact immutable standard or
+  comparison `case_dir`, and bounded structured response or dependency
+  difference; it does not prove the cause;
 - `source_variation`: source values across recorded cases; variation alone
   does not prove nondeterminism or cache ownership;
 - `collection_equivalence`: array multiset equality; equality does not prove
@@ -43,20 +51,34 @@ Run only query IDs returned by the active action:
   before readiness; connection lifecycle, known ping/heartbeat, and setup
   traffic are excluded, but frequency does not prove background ownership,
   local-cache lifecycle, or response causality;
-- `dirty_clusters`: dirty counts by protocol; counts do not prove request or
-  process ownership;
+- `dirty_clusters`: case-scoped dirty events grouped by protocol and endpoint,
+  with a stable `cluster_id`, bounded operation counts, an exact representative
+  case, and a correlated source pre-readiness count. The complete startup
+  summary remains in `pre_readiness_traffic`. It excludes `unused_global` and
+  case-external target activity, and does not prove request or process
+  ownership. For a dependency issue it also returns
+  `applicable_rule_planners` only for supported protocols present in those
+  clusters;
 - `policy_applicability`: structural rule eligibility; eligibility does not
   authorize a rule;
 - `attempt_delta`: convergence against the previous attempt; improvement does
   not identify the cause.
 
 Use the smallest query set that can distinguish the current hypotheses. Then
-trace the corresponding source and target path. Do not run every query merely
-because it is available.
+inspect the representative case and trace the corresponding source and target
+path. Read other artifact cases only when the representative is insufficient.
+Do not run every query merely because it is available.
+
+Only a dependency event attributed to an active case participates in that
+case's cleanliness gate. Treat source pre-readiness traffic as reference for
+startup jobs, warmup, and local-cache hypotheses. Do not repair, suppress, or
+re-record traffic merely because the same endpoint appears during startup.
 
 ## Response Issues
 
-Trace the representative from response construction backwards:
+Use the recorded request, expected response, dependencies, and structured
+response difference from the representative case to trace response
+construction backwards:
 
 ```text
 response field/status -> target construction -> local state/cache -> client
@@ -141,26 +163,33 @@ evidence. Use the returned issue and dirty-cluster query to distinguish:
 - the recording lacks required semantic evidence.
 
 If target topology differs, repair target behavior. If semantic evidence exists
-but the engine lacks support, submit `rewrite route` with a current evidence ID,
-source reference, exact system change, and acceptance command. Never implement
-a target workaround for a Replay capability gap.
+but the engine lacks support, submit `backend-rewrite route` with a current evidence ID,
+source reference, and exact system change. Then apply the repair and use only
+the coordinator-issued `repair verify <repair-id>` acceptance. Never implement
+a target workaround for a Replay capability gap or supply an arbitrary
+acceptance command.
 
 ## Dirty Dependency Issues
 
 Diagnose dirty dependencies only after responses pass and Replay is complete.
-Classify the representative protocol cluster by source causality:
+Classify the representative protocol cluster by source ownership:
 
 - request-owned and required: repair target call topology or Replay support;
-- process-owned and response-driving: use a supported `runtime_state`
-  recording rule;
-- process-owned and response-independent: use a supported `independent`
-  recording rule;
+- process-owned and case-independent: use a supported background recording
+  rule; separately repair target state behavior when source and response
+  evidence prove the dependency is response-driving;
 - unresolved: retain the dirty evidence and name the missing proof.
 
 Timing overlap, high volume, scheduler names, unused exchanges, and passing
 responses do not prove background ownership. A recording-rule change must use
-the coordinator-approved evidence route and requires a new standard recording.
-Never reclassify, trim, or edit the existing recording.
+the current dirty-cluster evidence ID and one protocol-specific planner returned
+in `applicable_rule_planners`. Run its exact help argv, supply only the
+source-proven selector inputs to `backend-rewrite dependency-rule plan <protocol>`, and
+apply the returned plan ID. Replay evidence, case source, and source revision
+come from coordinator state and are not background-rule inputs. Execute the apply
+report's exact fresh-recording request. Never call the lower-level Recorder
+config planner, reclassify existing evidence, trim traffic, or edit an existing
+recording.
 
 ## Comparison Issues
 
@@ -182,13 +211,15 @@ coordinator must rerun focused E2E before requesting a fresh comparison.
 Route the proven cause to exactly one action:
 
 - target implementation or cache defect: change target code with
-  `backend-engineering`, run focused target tests, then the acceptance command;
+  `backend-engineering`, run focused target tests, then execute
+  `action.commands.acceptance`;
 - startup/configuration defect: repair source-compatible loading or the fixed
-  start/stop boundary, then run the acceptance command;
-- supported nondeterminism/order/counter: run exact `rewrite rule plan`, review
+  start/stop boundary, then execute `action.commands.acceptance`;
+- supported nondeterminism/order/counter: run exact `backend-rewrite rule plan`, review
   the evidence, then `apply` and rerun;
 - Recorder/Replay capability gap, source change, or external-data issue: submit
-  exact `rewrite route` evidence; do not patch the target;
+  exact `backend-rewrite route` evidence, apply the routed change, then execute the
+  returned `repair verify <repair-id>` action; do not patch the target;
 - unresolved: gather the named missing source/runtime proof before changing
   code or policy.
 

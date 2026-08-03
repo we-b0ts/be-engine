@@ -303,10 +303,10 @@ path = __READINESS_PATH__
 success_status = __READINESS_STATUS__
 interval_ms = 1000
 
-[http_gateway.case_limits]
+[http_gateway.per_api_case_limits]
 default = 100
 
-[http_gateway.case_limits.overrides]
+[http_gateway.per_api_case_limits.overrides]
 
 [[http_gateway.rules]]
 name = "record-api"
@@ -350,18 +350,16 @@ redact_headers = [
 
 # Source-proven process work can be moved from case ownership into the shared
 # Global replay pool. Use `config recorder plan|apply background-dependencies`;
-# do not hand-edit generated rules. HTTP rules are response-independent.
+# do not hand-edit generated rules.
 # [[recording.background_dependencies]]
 # name = "config-refresh"
 # protocol = "http"
 # authorities = ["config.api.demo.test"]
 # methods = ["GET"]
 # path_prefixes = ["/1/config/service"]
-# response_role = "independent"
-# source_revision = "0123456789abcdef"
 # source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
 
-# Independent Motan process traffic uses an exact logical RPC identity. Do not
+# Process-owned Motan traffic uses an exact logical RPC identity. Do not
 # persist node IPs, ports, Vintage aliases, or payload values.
 # [[recording.background_dependencies]]
 # name = "kunpeng-refresh"
@@ -369,10 +367,9 @@ redact_headers = [
 # group = "kunpeng-config-rpc"
 # interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc"
 # method_name = "getConfigByName"
-# source_revision = "0123456789abcdef"
 # source_evidence = "MapiConfigLoader.java:init scheduled refresh unrelated to selected API"
 
-# Source-proven independent Redis process traffic uses the stable service port
+# Source-proven Redis ZCOUNT process traffic uses the stable service port
 # set plus one exact command and bounded key shape. Domains are diagnostic only
 # and are intentionally not persisted.
 # [[recording.background_dependencies]]
@@ -382,13 +379,10 @@ redact_headers = [
 # command = "ZCOUNT"
 # key_prefix = "1042015:"
 # key_suffix = ".wtm2"
-# response_role = "independent"
-# source_revision = "0123456789abcdef"
 # source_evidence = "InterestTagCardServiceImpl.java:init process-owned WAIC cache refresh"
 
-# Response-driving Redis startup reads use an exact GET key set. New recordings
-# mark these Global responses as runtime state so Replay can serve them without
-# inheriting unrelated commands from the source connection lane.
+# Process-owned Redis startup reads use an exact GET key set. Background-rule
+# Global exchanges replay independently from the source connection lane.
 # [[recording.background_dependencies]]
 # name = "startup-cache-warm"
 # protocol = "redis"
@@ -396,8 +390,6 @@ redact_headers = [
 # command = "GET"
 # keys = ["cache:init:a", "cache:init:b"]
 # initial_load_timeout_ms = 60000
-# response_role = "runtime_state"
-# source_revision = "0123456789abcdef"
 # source_evidence = "src/cache/warm.rs:init loads response-driving local state"
 
 # Breeze-backed Memcached local-cache warm rules use a stable descriptor
@@ -413,12 +405,10 @@ redact_headers = [
 # key_end = 4095
 # key_separator = "."
 # key_suffix = "pl_video"
-# Once HTTP readiness succeeds, observe runtime-state rules for up to the
+# Once HTTP readiness succeeds, observe the initial load for up to the
 # configured window and log progress every 10 seconds. If the expected load
 # remains incomplete, warn and continue case admission.
 # initial_load_timeout_ms = 60000
-# response_role = "runtime_state"
-# source_revision = "0123456789abcdef"
 # source_evidence = "TopUserServiceImpl.java:691 scheduled local-cache warm"
 
 # BEGIN AI-MANAGED BACKGROUND DEPENDENCIES

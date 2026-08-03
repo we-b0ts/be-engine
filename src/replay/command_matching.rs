@@ -1,4 +1,3 @@
-use anyhow::{Result, bail};
 use uuid::Uuid;
 
 use super::ReplaySource;
@@ -17,36 +16,11 @@ pub(super) trait CommandExchangeScope {
     }
 }
 
-pub(super) fn is_connection_independent_runtime_state(
+pub(super) fn is_connection_independent_background(
     source: ReplaySource,
     reason: Option<&str>,
-    response_role: Option<&str>,
-    protocol: &str,
-    command: &str,
-    supported_command: &str,
-) -> Result<bool> {
-    let Some(response_role) = response_role else {
-        return Ok(false);
-    };
-    if !matches!(response_role, "independent" | "runtime_state") {
-        bail!(
-            "recorded {protocol} dependency has unsupported Global response role {response_role:?}"
-        );
-    }
-    if source != ReplaySource::Global || reason != Some("background_rule") {
-        bail!(
-            "recorded {protocol} dependency response role is valid only on a background-rule Global exchange"
-        );
-    }
-    if response_role == "independent" {
-        return Ok(false);
-    }
-    if !command.eq_ignore_ascii_case(supported_command) {
-        bail!(
-            "recorded {protocol} runtime-state dependency supports only command {supported_command:?}"
-        );
-    }
-    Ok(true)
+) -> bool {
+    source == ReplaySource::Global && reason == Some("background_rule")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -340,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn connection_independent_runtime_state_ignores_earlier_lane_entries() {
+    fn connection_independent_background_ignores_earlier_lane_entries() {
         let connection_id = Uuid::new_v4();
         let exchanges = [
             Exchange {

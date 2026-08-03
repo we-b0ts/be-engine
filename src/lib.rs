@@ -9,8 +9,10 @@ mod config;
 mod dependency;
 mod dns_mock;
 mod e2e_run;
+mod engine_binary;
 mod gateway;
 mod http;
+mod internal_runtime;
 mod kafka;
 mod memcached;
 mod motan;
@@ -18,6 +20,7 @@ mod mysql;
 mod path_pattern;
 mod platform;
 mod proxy;
+mod recorded_request;
 mod recorder;
 mod recording_api;
 mod recording_control;
@@ -73,7 +76,7 @@ pub use comparison_recording::{
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     AppConfig, ArtifactsConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan,
-    BackgroundDependencyReport, BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig,
+    BackgroundDependencyReport, BackgroundDependencyRuleConfig,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyReport, BreezeResourceCaptureFeedback,
     BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,
@@ -98,20 +101,24 @@ pub use config::{
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
-    E2eApiRunResult, E2eDependencyCorrelation, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts,
-    E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus, E2eReplayGate,
-    E2eRepresentativeDifference, E2eResponseGate, E2eResponseRuleEvidence, E2eRunContext,
-    E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult,
-    E2eRunStatus, E2eSourceValueCount, E2eSourceVariation, E2eValueObservation, E2eValuePresence,
+    E2eApiRunResult, E2eDependencyCorrelation, E2eDependencyDifference, E2eDependencyEndpoint,
+    E2eDependencyGate, E2eDependencyObservation, E2eDependencyRepresentative, E2eDiagnosis,
+    E2eDiagnosisCounts, E2eDirtyCluster, E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus,
+    E2eReplayGate, E2eRepresentativeDifference, E2eResponseGate, E2eResponseRuleEvidence,
+    E2eRunContext, E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult,
+    E2eRunResult, E2eRunStatus, E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint,
+    E2eSourceValueCount, E2eSourceVariation, E2eValueObservation, E2eValuePresence,
     E2eVerificationGates, abort_e2e_run, initialize_e2e_run, initialize_standard_e2e_project,
     initialize_standard_e2e_project_with_force, prepare_e2e_run, query_e2e_dependency_correlation,
     query_e2e_dirty_counts, query_e2e_source_variation, recover_e2e_run,
-    resolve_e2e_response_rule_evidence, run_e2e_api, run_e2e_round, status_e2e_run,
+    resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence, run_e2e_api,
+    run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use platform::{
-    ManagedRecordingOperation, ManagedRecordingOptions, ManagedRecordingResult,
-    run_managed_recording,
+    ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
+    ManagedRecordingOptions, ManagedRecordingRecoveryResult, ManagedRecordingResult,
+    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
@@ -141,12 +148,23 @@ pub use replay::{
     run_replay, run_replay_control, validate_replay_policy,
 };
 pub use rewrite::{
-    RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewriteContext,
-    RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue, RewriteIssueKind,
-    RewriteIssueOwner, RewriteNextOptions, RewritePhase, RewriteRecoveryReport,
+    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
+    RewriteApiProgress, RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec,
+    RewriteContext, RewriteDependencyRulePlanOptions, RewriteDependencyRuleReport,
+    RewriteDependencyRuleSelector, RewriteEvidenceCommand, RewriteEvidenceReport,
+    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
+    RewriteInventoryReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteNextOptions,
+    RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
+    RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
+    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecordingStartReport,
+    RewriteRecordingStartState, RewriteRecoveryReport, RewriteRepairAcceptanceKind,
     RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport,
-    RewriteStatusReport, RewriteWorkflowView, apply_rewrite_rule, next_rewrite, plan_rewrite_rule,
-    query_rewrite_evidence, recover_rewrite, route_rewrite, status_rewrite,
+    RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_rule,
+    execute_rewrite_recording_worker, inventory_rewrite, next_rewrite,
+    plan_rewrite_dependency_rule, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
+    verify_rewrite_repair,
 };
 pub use tls::MitmCa;
 
@@ -566,7 +584,7 @@ impl AppState {
         let background_match = self.inner.background_dependencies.matching_rule(&event);
         let background_rule_name = background_match
             .as_ref()
-            .map(|matched| (matched.rule_name().to_string(), matched.response_role()));
+            .map(|matched| matched.rule_name().to_string());
         let event_type = event.kind();
         if let Err(err) = self
             .recorder()

@@ -120,7 +120,6 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
         authorities: vec!["config.api.demo.test".to_string()],
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/1/config/service".to_string()],
-        response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
     }];
@@ -164,7 +163,7 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
     assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
     assert!(global.contains("\"global_dependency_phase\":\"runtime\""));
     assert!(global.contains("\"global_dependency_matched_by\":\"config-refresh\""));
-    assert!(global.contains("\"global_dependency_response_role\":\"independent\""));
+    assert!(!global.contains("global_dependency_response_role"));
 }
 
 #[tokio::test]
@@ -230,7 +229,6 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
         key_prefix: "1042015:".to_string(),
         key_suffix: ".wtm2".to_string(),
         initial_load_timeout_ms: None,
-        response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "InterestTagCardServiceImpl.java:init process-owned refresh".to_string(),
     }];
@@ -269,14 +267,14 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
     assert!(global.contains("\"target_host\":\"new-operations-domain.example\""));
     assert!(global.contains("\"target_port\":20918"));
     assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
-    assert!(global.contains("\"global_dependency_response_role\":\"independent\""));
+    assert!(!global.contains("global_dependency_response_role"));
     assert!(
         global.contains("\"global_dependency_matched_by\":\"interest-tag-mining-cache-refresh\"")
     );
 }
 
 #[tokio::test]
-async fn runtime_state_redis_records_explicit_global_role_metadata() {
+async fn redis_get_background_rule_records_without_response_role_metadata() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
@@ -288,7 +286,6 @@ async fn runtime_state_redis_records_explicit_global_role_metadata() {
         key_prefix: String::new(),
         key_suffix: String::new(),
         initial_load_timeout_ms: Some(1_000),
-        response_role: BackgroundDependencyResponseRole::RuntimeState,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/cache/warm.rs:init loads response-driving local state".to_string(),
     }];
@@ -309,5 +306,5 @@ async fn runtime_state_redis_records_explicit_global_role_metadata() {
     assert_eq!(global.lines().count(), 1);
     assert!(global.contains("\"global_dependency_reason\":\"background_rule\""));
     assert!(global.contains("\"global_dependency_matched_by\":\"startup-cache-warm\""));
-    assert!(global.contains("\"global_dependency_response_role\":\"runtime_state\""));
+    assert!(!global.contains("global_dependency_response_role"));
 }

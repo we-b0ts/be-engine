@@ -45,9 +45,17 @@ pub(in crate::replay) struct KafkaProtocolReport {
 
 impl KafkaProtocolReport {
     pub(in crate::replay) fn is_dirty(&self) -> bool {
-        !self.unmatched.is_empty()
-            || !self.unsupported.is_empty()
-            || !self.unsafe_events.is_empty()
+        self.unmatched
+            .iter()
+            .any(|request| request.case_id.is_some())
+            || self
+                .unsupported
+                .iter()
+                .any(|request| request.case_id.is_some())
+            || self
+                .unsafe_events
+                .iter()
+                .any(|request| request.case_id.is_some())
             || !self.unused_case.is_empty()
     }
 

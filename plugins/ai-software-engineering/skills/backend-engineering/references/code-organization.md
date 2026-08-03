@@ -98,16 +98,16 @@ requires repair, while an evidenced cohesive file between 800 and 1000 lines
 may remain. Do not maintain static hotspot lists; inspect the current working
 tree.
 
-For Rust, invoke the bundled
-[check-code-organization](../scripts/check-code-organization) with the target
-repository as the working directory. It checks conventional product roots:
+Invoke the bundled [check-code-organization](../scripts/check-code-organization)
+with the target repository as the working directory. It checks conventional
+Rust product roots:
 `src/`, `crates/**/src/`, and `apps/**/src/`.
 
 ## Execution Timing
 
 - Before modification, inspect the target file’s current size and ownership.
   Do not run a full-repository scan for every focused task.
-- After the final Rust product-code edit and before commit, run the checker
+- After the final product-code edit and before commit, run the checker
   with no arguments. It checks working-tree changes, staged changes, and
   untracked product files. Rerun it if product code changes afterward.
 - Before an MR, set `CODE_ORG_BASE` to its target branch and rerun the checker
@@ -115,8 +115,8 @@ repository as the working directory. It checks conventional product roots:
   covered.
 - Use `--all` only for an initial baseline, architecture review, or explicit
   repository-wide cleanup.
-- Skip this Rust-specific checker for documentation, configuration, skill-only,
-  or non-Rust changes unless repository instructions require it.
+- Skip the checker for documentation, configuration, or skill-only changes
+  unless repository instructions require it.
 
 The checker is a deterministic size backstop, not a replacement for ownership
 and cohesion review.

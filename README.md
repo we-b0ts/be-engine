@@ -1,7 +1,9 @@
 # traffic-e2e
 
-Rust single-binary CLI for recording, replaying, and verifying traffic-based
-E2E contracts.
+Rust binaries for traffic-based E2E contracts and backend rewrite
+orchestration. `traffic-e2e` owns recording, replay, comparison, and
+diagnostics; `backend-rewrite` owns the AI-facing migration workflow and uses
+the same `traffic_e2e` crate.
 
 ## Features
 
@@ -34,19 +36,27 @@ sparse registry.
 ## Build
 
 ```bash
-cargo build --release
+cargo build --release --bins
 ```
+
+This produces sibling `traffic-e2e` and `backend-rewrite` executables. Keep
+them together when installing or packaging them: detached rewrite recording
+actions delegate engine work to the sibling `traffic-e2e` binary.
 
 ## Command Model
 
-Use the binary directly for the standard traffic E2E workflow:
+Use `traffic-e2e` for direct traffic operations and `backend-rewrite` for
+migration orchestration:
 
 ```bash
 traffic-e2e config init --source-container <container> [--breeze]
-traffic-e2e rewrite next --api 'GET /api/widgets/*' \
+backend-rewrite next --api 'GET /api/widgets/*' \
   --source-route '/api/widgets/:id'
-traffic-e2e rewrite status
-traffic-e2e rewrite evidence <query-id>
+backend-rewrite status
+backend-rewrite inventory
+backend-rewrite evidence <query-id>
+backend-rewrite recording request --kind standard \
+  --reason user-requested --duration-seconds 60 --per-api-case-limit 100
 traffic-e2e record ...
 traffic-e2e record-comparison ...
 traffic-e2e compare ... --policy .traffic-e2e/verification.yaml
@@ -63,11 +73,40 @@ From a target repository root, the conventional initialization is simply
 `--breeze` selects the existing container named `breeze`; omit it when the
 source does not use Breeze.
 
-For a backend migration, `traffic-e2e rewrite next` is the normal facade. It
+For a backend migration, `backend-rewrite next` is the normal facade. It
 returns one argv-based action, automatically owns Prepare/E2E/Compare
 transitions, and exposes only bounded evidence queries. Direct `prepare`,
 `run-api`, `compare`, and report-oriented commands remain available to traffic
 operators and system maintainers.
+
+Nonpassing focused E2E attempts reuse the active immutable standard cases;
+passing attempts advance to fresh comparison recording. An explicit
+`backend-rewrite recording request --kind standard` transition replaces the standard
+evidence chain when new traffic is requested or its Recorder/source contract
+has changed. The coordinator, not the caller, allocates the run ID and returns
+the exact recording argv. Omitting `--api` on that request resets any prior
+single-API scope and records every API admitted by recorder configuration;
+provide `--api` only for an explicitly narrowed fresh recording. Executing the
+returned action starts a detached coordinator worker and returns immediately;
+poll `backend-rewrite status` until it reports `resume_required`.
+
+`backend-rewrite` emits one compact JSON object per command by default; use
+global `--pretty` for interactive inspection. Normal `next` and `status`
+responses contain only the bounded API-inventory summary. Query the full
+ordered per-API list explicitly with the read-only `backend-rewrite inventory`
+command.
+
+Representative evidence returns the exact immutable standard or comparison
+case directory and a structured response difference. Use that case as the
+efficient starting point for diagnosis; all generated files under
+`.traffic-e2e/artifacts/` remain available for read-only inspection when
+additional cases are useful.
+
+Dependency evidence is case-scoped. Replay publishes a bounded sidecar with
+dirty events clustered by protocol and endpoint, an exact representative case,
+and a compact expected/actual dependency difference. Source traffic observed
+before readiness is returned separately as reference context. Unused global
+traffic and target activity outside a case do not make a case dirty.
 
 Evidence-driven recorder and verification-policy changes live under
 `traffic-e2e config ... plan|apply`; low-level grouping and report commands live
@@ -93,7 +132,7 @@ cargo run -- --help
 cargo run -- diagnose recorder --config config/recorder.example.toml
 ```
 
-Install the binary and run managed recording from an initialized target
+Install both binaries and run managed recording from an initialized target
 repository:
 
 ```bash
@@ -157,8 +196,8 @@ or control socket.
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are normally consumed in recorded connection
 order. Exact Redis `GET` and Memcached `get` exchanges explicitly recorded by a
-background rule as `runtime_state` remain single-use but are matched without
-source connection binding or lane blockers. The
+process-scoped background rule remain single-use but are matched without source
+connection binding or lane blockers. The
 v5 replay report keeps complete unmatched, unsupported, unsafe, and unused
 evidence, records exact success totals, and retains a bounded prefix of success
 details. `traffic-e2e diagnose replay-control end/report --fail-on-dirty`

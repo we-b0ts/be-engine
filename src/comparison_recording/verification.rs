@@ -402,6 +402,32 @@ pub fn verify_comparison_recording(
     Ok(report)
 }
 
+pub(crate) fn resolve_comparison_case_dir(case_source: &Path, case_id: &str) -> Result<PathBuf> {
+    let case_source = case_source.canonicalize().with_context(|| {
+        format!(
+            "failed to resolve comparison recording source {}",
+            case_source.display()
+        )
+    })?;
+    let cases = discover_cases(&case_source)?;
+    let mut matches = cases.into_iter().filter(|case| {
+        case.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == case_id)
+    });
+    let case = matches.next().with_context(|| {
+        format!(
+            "comparison case {case_id:?} is not part of case source {}",
+            case_source.display()
+        )
+    })?;
+    ensure!(
+        matches.next().is_none(),
+        "duplicate comparison recording case id {case_id:?}"
+    );
+    Ok(case)
+}
+
 fn update_api_counts(
     counts: &mut ComparisonVerificationApiCounts,
     classification: ComparisonVerificationClassification,

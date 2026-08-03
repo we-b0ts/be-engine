@@ -1,6 +1,7 @@
 mod branch;
 mod case_progress;
 mod config;
+mod dirty_evidence;
 mod evidence;
 mod execute;
 mod final_evidence;
@@ -25,13 +26,19 @@ use crate::case_group::{
 
 pub(crate) use config::resolve_project;
 pub(crate) use config::{render_project_config, validate_project_pr_base};
+pub use dirty_evidence::{
+    E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
+    E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eSourcePreReadiness,
+    E2eSourcePreReadinessEndpoint,
+};
 pub use evidence::{
-    E2eDependencyCorrelation, E2eDirtyCounts, E2eSourceValueCount, E2eSourceVariation,
+    E2eDependencyCorrelation, E2eSourceValueCount, E2eSourceVariation,
     query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
 };
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 use model::RunStatus;
+pub(crate) use result::response_pointer_scope;
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,
     E2eReplayGate, E2eRepresentativeDifference, E2eResponseGate, E2eRunResult, E2eValueObservation,
@@ -63,7 +70,7 @@ pub struct E2eRunInitOptions {
 #[derive(Debug, Serialize)]
 pub struct E2eRunInitResult {
     pub config: PathBuf,
-    pub local_root: PathBuf,
+    pub ai_forbidden_root: PathBuf,
     pub pr_base: String,
     pub recorder_feedback: bool,
     pub replaced: bool,
@@ -200,7 +207,7 @@ pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareRes
         options.context.run_key.as_deref(),
     )?;
     branch::require_work_branch(&layout.target_root, &config.pr_base)?;
-    config::require_local_ignored(&layout.target_root, &layout.local_root)?;
+    config::require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
     ensure!(
         !layout.active_dir.exists(),
         "cannot change case grouping while an E2E run is active"
@@ -355,6 +362,23 @@ pub fn resolve_e2e_response_rule_evidence(
         assertions: state.assertions_report,
         aggregate: state.aggregate_report,
     })
+}
+
+pub fn resolve_single_e2e_response_rule_evidence(
+    context: E2eRunContext,
+) -> Result<E2eResponseRuleEvidence> {
+    let status = status_e2e_run(context.clone())?;
+    let available = status
+        .focused_apis
+        .into_iter()
+        .filter(|candidate| candidate.status != "not_started")
+        .collect::<Vec<_>>();
+    ensure!(
+        available.len() == 1,
+        "background dependency evidence requires exactly one finalized focused API; use the rewrite coordinator when the case source has {} candidates",
+        available.len()
+    );
+    resolve_e2e_response_rule_evidence(context, &available[0].api)
 }
 
 fn run_status_label(status: RunStatus) -> &'static str {

@@ -13,20 +13,20 @@ use tracing::{info, warn};
 
 use super::{BodyCapture, RecorderEvent};
 use crate::breeze;
+use crate::config::BackgroundDependencyRuleConfig;
 use crate::config::background_dependencies::{
     matches_exact_redis_key, matches_memcached_key_series,
 };
-use crate::config::{BackgroundDependencyResponseRole, BackgroundDependencyRuleConfig};
 use crate::dependency::DependencyExchangeOutcome;
 
 const INITIAL_LOAD_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub(crate) struct BackgroundDependencyMatcher {
-    independent_rules: Vec<BackgroundDependencyRuleConfig>,
+    rules: Vec<BackgroundDependencyRuleConfig>,
     socks_dir: PathBuf,
     memcached: Mutex<MemcachedRules>,
-    redis_runtime_state: Vec<RedisRuntimeStateRule>,
+    redis_initial_load_rules: Vec<RedisInitialLoadRule>,
     initial_loads: InitialLoads,
 }
 
@@ -49,7 +49,7 @@ struct MemcachedRule {
 }
 
 #[derive(Debug, Clone)]
-struct RedisRuntimeStateRule {
+struct RedisInitialLoadRule {
     name: String,
     ports: Vec<u16>,
     keys: Vec<String>,
@@ -59,7 +59,6 @@ struct RedisRuntimeStateRule {
 #[derive(Debug)]
 pub(crate) struct BackgroundDependencyMatch {
     rule_name: String,
-    response_role: BackgroundDependencyResponseRole,
     initial_load: Option<Arc<InitialLoad>>,
     completion_key: Option<Vec<u8>>,
     completed_response: bool,
@@ -96,27 +95,25 @@ impl BackgroundDependencyMatcher {
     }
 
     fn from_rules_in(rules: &[BackgroundDependencyRuleConfig], socks_dir: &Path) -> Result<Self> {
-        let mut independent_rules = Vec::new();
+        let mut rules_without_specialized_matching = Vec::new();
         let mut memcached = MemcachedRules::default();
-        let mut redis_runtime_state = Vec::new();
+        let mut redis_initial_load_rules = Vec::new();
         let mut initial_loads = InitialLoads::default();
         for rule in rules {
             match rule {
                 BackgroundDependencyRuleConfig::Http { .. }
                 | BackgroundDependencyRuleConfig::Motan { .. } => {
-                    independent_rules.push(rule.clone());
+                    rules_without_specialized_matching.push(rule.clone());
                 }
                 BackgroundDependencyRuleConfig::Redis {
                     name,
                     ports,
                     keys,
                     initial_load_timeout_ms,
-                    response_role: BackgroundDependencyResponseRole::RuntimeState,
                     ..
-                } => {
-                    let timeout_ms = initial_load_timeout_ms.context(
-                        "validated runtime-state Redis rule has no initial-load timeout",
-                    )?;
+                } if initial_load_timeout_ms.is_some() => {
+                    let timeout_ms = initial_load_timeout_ms
+                        .context("validated Redis initial-load rule has no timeout")?;
                     let initial_load = Arc::new(InitialLoad {
                         name: name.clone(),
                         expected: keys.len() as u64,
@@ -125,7 +122,7 @@ impl BackgroundDependencyMatcher {
                         seen_keys: Some(Mutex::new(HashSet::new())),
                     });
                     initial_loads.rules.push(initial_load.clone());
-                    redis_runtime_state.push(RedisRuntimeStateRule {
+                    redis_initial_load_rules.push(RedisInitialLoadRule {
                         name: name.clone(),
                         ports: ports.clone(),
                         keys: keys.clone(),
@@ -133,7 +130,7 @@ impl BackgroundDependencyMatcher {
                     });
                 }
                 BackgroundDependencyRuleConfig::Redis { .. } => {
-                    independent_rules.push(rule.clone());
+                    rules_without_specialized_matching.push(rule.clone());
                 }
                 BackgroundDependencyRuleConfig::Memcached {
                     name,
@@ -174,10 +171,10 @@ impl BackgroundDependencyMatcher {
         }
 
         let matcher = Self {
-            independent_rules,
+            rules: rules_without_specialized_matching,
             socks_dir: socks_dir.to_path_buf(),
             memcached: Mutex::new(memcached),
-            redis_runtime_state,
+            redis_initial_load_rules,
             initial_loads,
         };
         matcher.refresh_pending_resources()?;
@@ -227,25 +224,23 @@ impl BackgroundDependencyMatcher {
             && exchange.replay_safe
         {
             let key = exchange.args.first().and_then(decode_capture)?;
-            if let Some(rule) = self.redis_runtime_state.iter().find(|rule| {
+            if let Some(rule) = self.redis_initial_load_rules.iter().find(|rule| {
                 rule.ports.contains(&exchange.target_port)
                     && matches_exact_redis_key(&key, &rule.keys)
             }) {
                 return Some(BackgroundDependencyMatch {
                     rule_name: rule.name.clone(),
-                    response_role: BackgroundDependencyResponseRole::RuntimeState,
                     initial_load: Some(rule.initial_load.clone()),
                     completion_key: Some(key),
                     completed_response: exchange.outcome == DependencyExchangeOutcome::Response,
                 });
             }
         }
-        self.independent_rules
+        self.rules
             .iter()
             .find(|rule| rule.matches(event))
             .map(|rule| BackgroundDependencyMatch {
                 rule_name: rule.name().to_string(),
-                response_role: rule.response_role(),
                 initial_load: None,
                 completion_key: None,
                 completed_response: false,
@@ -265,7 +260,7 @@ impl BackgroundDependencyMatcher {
             };
             if !seen_keys
                 .lock()
-                .expect("runtime-state initial-load keys poisoned")
+                .expect("background initial-load keys poisoned")
                 .insert(key.clone())
             {
                 return;
@@ -286,7 +281,7 @@ impl BackgroundDependencyMatcher {
                     rule = %initial_load.name,
                     completed = initial_load.expected,
                     expected = initial_load.expected,
-                    "runtime-state initial load completed"
+                    "background initial load completed"
                 );
             }
         }
@@ -322,7 +317,7 @@ impl BackgroundDependencyMatcher {
             %progress,
             %pending_resources,
             progress_interval_ms = INITIAL_LOAD_PROGRESS_LOG_INTERVAL.as_millis(),
-            "runtime-state initial load observation started"
+            "background initial load observation started"
         );
         loop {
             let pending = self.pending_initial_loads();
@@ -343,7 +338,7 @@ impl BackgroundDependencyMatcher {
                 warn!(
                     %progress,
                     %pending_resources,
-                    "runtime-state initial load observation window elapsed; continuing recording"
+                    "background initial load observation window elapsed; continuing recording"
                 );
                 return;
             }
@@ -370,7 +365,7 @@ impl BackgroundDependencyMatcher {
                         %progress,
                         %pending_resources,
                         remaining_ms,
-                        "runtime-state initial load observation is still waiting"
+                        "background initial load observation is still waiting"
                     );
                     next_progress_log = now + INITIAL_LOAD_PROGRESS_LOG_INTERVAL;
                 }
@@ -474,10 +469,6 @@ impl BackgroundDependencyMatch {
     pub(crate) fn rule_name(&self) -> &str {
         &self.rule_name
     }
-
-    pub(crate) fn response_role(&self) -> BackgroundDependencyResponseRole {
-        self.response_role
-    }
 }
 
 impl MemcachedRule {
@@ -505,7 +496,6 @@ fn match_memcached_rule(
         .find(|rule| rule.matches(key))
         .map(|rule| BackgroundDependencyMatch {
             rule_name: rule.name.clone(),
-            response_role: BackgroundDependencyResponseRole::RuntimeState,
             initial_load: Some(rule.initial_load.clone()),
             completion_key: None,
             completed_response: exchange.outcome == DependencyExchangeOutcome::Response
@@ -548,7 +538,6 @@ mod tests {
 
     use super::*;
     use crate::DependencyExchangeOutcome;
-    use crate::config::BackgroundDependencyResponseRole;
     use crate::recorder::{MemcachedExchangeEvent, RedisExchangeEvent};
 
     fn memcached_rule_with(
@@ -565,7 +554,6 @@ mod tests {
             key_separator: ".".to_string(),
             key_suffix: "pl_video".to_string(),
             initial_load_timeout_ms,
-            response_role: BackgroundDependencyResponseRole::RuntimeState,
             source_revision: "0123456789abcdef".to_string(),
             source_evidence: "TopUserServiceImpl.java:691 scheduled local cache warm".to_string(),
         }
@@ -607,7 +595,7 @@ mod tests {
         })
     }
 
-    fn redis_runtime_state_rule() -> BackgroundDependencyRuleConfig {
+    fn redis_get_rule() -> BackgroundDependencyRuleConfig {
         BackgroundDependencyRuleConfig::Redis {
             name: "startup-cache-warm".to_string(),
             ports: vec![20917, 20918],
@@ -616,7 +604,6 @@ mod tests {
             key_prefix: String::new(),
             key_suffix: String::new(),
             initial_load_timeout_ms: Some(50),
-            response_role: BackgroundDependencyResponseRole::RuntimeState,
             source_revision: "0123456789abcdef".to_string(),
             source_evidence: "src/cache/warm.rs:init loads response-driving local state"
                 .to_string(),
@@ -769,18 +756,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn redis_runtime_state_requires_each_exact_key_once() {
-        let matcher =
-            BackgroundDependencyMatcher::from_rules(&[redis_runtime_state_rule()]).unwrap();
+    async fn redis_get_initial_load_requires_each_exact_key_once() {
+        let matcher = BackgroundDependencyMatcher::from_rules(&[redis_get_rule()]).unwrap();
 
         for _ in 0..2 {
             let matched = matcher
                 .matching_rule(&redis_event(20917, b"cache:init:a"))
                 .unwrap();
-            assert_eq!(
-                matched.response_role(),
-                BackgroundDependencyResponseRole::RuntimeState
-            );
             matcher.record_completed_match(&matched);
         }
         assert_eq!(matcher.pending_initial_loads().len(), 1);

@@ -43,7 +43,6 @@ fn memcached_rule(timeout_ms: u64) -> BackgroundDependencyRuleConfig {
         key_separator: ".".to_string(),
         key_suffix: "pl_video".to_string(),
         initial_load_timeout_ms: timeout_ms,
-        response_role: BackgroundDependencyResponseRole::RuntimeState,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "TopUserServiceImpl.java:691 scheduled local cache warm".to_string(),
     }
@@ -91,7 +90,6 @@ fn http_rule_matches_authority_method_and_path_without_weakening_query_identity(
         authorities: vec!["CONFIG.API.demo.test".to_string()],
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/1/config/service".to_string()],
-        response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
     };
@@ -249,7 +247,6 @@ fn rejects_host_only_or_ambiguous_http_background_rules() {
         authorities: vec!["config.api.demo.test".to_string()],
         methods: Vec::new(),
         path_prefixes: vec!["/".to_string()],
-        response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
     }];
@@ -260,7 +257,6 @@ fn rejects_host_only_or_ambiguous_http_background_rules() {
         authorities: vec!["config.api.demo.test".to_string()],
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/lookup?group=x".to_string()],
-        response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
     }];
@@ -274,7 +270,6 @@ fn rejects_host_only_or_ambiguous_http_background_rules() {
         ],
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/lookup".to_string()],
-        response_role: BackgroundDependencyResponseRole::Independent,
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
     }];
@@ -282,14 +277,14 @@ fn rejects_host_only_or_ambiguous_http_background_rules() {
 }
 
 #[test]
-fn memcached_runtime_state_requires_ready_probe_and_positive_timeout() {
+fn memcached_initial_load_requires_ready_probe_and_positive_timeout() {
     let mut config = AppConfig::default();
     config.recording.background_dependencies = vec![memcached_rule(30_000)];
     let error = config.validate().unwrap_err();
     assert!(
         error
             .to_string()
-            .contains("require an enabled HTTP gateway ready probe")
+            .contains("initial-load observation requires an enabled HTTP gateway ready probe")
     );
 
     config.http_gateway.enabled = true;
@@ -302,7 +297,7 @@ fn memcached_runtime_state_requires_ready_probe_and_positive_timeout() {
 }
 
 #[test]
-fn memcached_runtime_state_accepts_u64_profile_keys() {
+fn memcached_initial_load_accepts_u64_profile_keys() {
     assert!(matches_memcached_key_series(
         b"5000000000.profile",
         5_000_000_000,

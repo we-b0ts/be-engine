@@ -56,10 +56,13 @@ The adapter is traffic-e2e product code. The target AI must neither generate
 nor customize it. Any required business-behavior patch is invalid source
 mutation, not an adapter extension.
 
-Build the adapter once per `traffic-e2e record` run after preflight and before
-starting managed containers. Never build it during `config init`, comparison,
-or replay. Use a run-unique temporary tag and remove the image and build
-context during cleanup.
+Prepare the adapter after preflight and before starting managed containers.
+The managed runtime fingerprints the inspected source image identity and every
+adapter build input. It reuses the retained target-scoped cache image only when
+that fingerprint matches; otherwise it rebuilds and replaces the stable cache
+tag. Never prepare it during `config init`, comparison, or replay. Remove the
+run-private build context during cleanup, but retain the matching cache image
+for later standard recordings.
 
 For comparison, traffic-e2e reproduces the genuine source runtime, starts one
 shared genuine Breeze, starts the target with `--start-breeze off`, waits for

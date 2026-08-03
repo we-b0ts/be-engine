@@ -1,4 +1,4 @@
 interface:
-  display_name: "Backend Service Engineering"
-  short_description: "Production backend quality and architecture"
-  default_prompt: "Use $backend-engineering to implement or review this backend service with clear module ownership, bounded resources, explicit failure behavior, and evidence-based verification."
+  display_name: "Large Rust Backend Engineering"
+  short_description: "Large Rust backend engineering and architecture"
+  default_prompt: "Use $backend-engineering to implement or review this large Rust backend with clear capability ownership, bounded resources, explicit failure behavior, and evidence-based verification."

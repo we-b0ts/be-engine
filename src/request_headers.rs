@@ -86,6 +86,14 @@ pub(crate) fn decrypt_request_file(path: &Path) -> Result<Option<Vec<u8>>> {
         .with_context(|| format!("failed to decrypt recorded request {}", path.display()))
 }
 
+pub(crate) fn load_request_file(path: &Path) -> Result<Vec<u8>> {
+    let raw = std::fs::read(path)
+        .with_context(|| format!("failed to read recorded request {}", path.display()))?;
+    Ok(decrypt_request_payload(&raw)
+        .with_context(|| format!("failed to decrypt recorded request {}", path.display()))?
+        .unwrap_or(raw))
+}
+
 pub(crate) fn validate_request_file(path: &Path) -> Result<()> {
     let _ = decrypt_request_file(path)?;
     Ok(())

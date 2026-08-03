@@ -36,12 +36,12 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()
                         path = %config.ready.path,
                         status,
                         post_ready_settle_ms = post_ready_settle.as_millis(),
-                        waits_for_runtime_state = state.has_background_initial_loads(),
+                        waits_for_background_initial_load = state.has_background_initial_loads(),
                         "HTTP gateway ready probe succeeded; waiting for case admission prerequisites"
                     );
                 }
                 state.wait_for_background_initial_loads().await.context(
-                    "runtime-state background dependencies were not ready with the source",
+                    "background dependency initial-load observation failed with the source",
                 )?;
                 let settle_deadline = ready_at + post_ready_settle;
                 if tokio::time::Instant::now() < settle_deadline {
