@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, ensure};
 
 use super::model::{
-    RewriteApiInventoryView, RewriteApiProgress, RewriteApiStatus, RewritePhase, RewriteState,
+    RewriteApiInventoryDetails, RewriteApiInventoryView, RewriteApiProgress, RewriteApiStatus,
+    RewritePhase, RewriteState,
 };
 use crate::RecordingApi;
 
@@ -174,6 +175,27 @@ pub(super) fn reset_for_recording(state: &mut RewriteState) {
 }
 
 pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
+    RewriteApiInventoryView {
+        total: state.api_inventory.len(),
+        completed: state
+            .api_inventory
+            .iter()
+            .filter(|item| item.status == RewriteApiStatus::Complete)
+            .count(),
+        pending: state
+            .api_inventory
+            .iter()
+            .filter(|item| item.status == RewriteApiStatus::Pending)
+            .count(),
+        current_index: state.current_api_index,
+        current_api: state
+            .current_api_index
+            .and_then(|index| state.api_inventory.get(index))
+            .map(|item| item.api.clone()),
+    }
+}
+
+pub(super) fn details(state: &RewriteState) -> RewriteApiInventoryDetails {
     let mut items = state.api_inventory.clone();
     if let Some(index) = state.current_api_index
         && let Some(current) = items.get_mut(index)
@@ -183,17 +205,8 @@ pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
         current.e2e_current = state.e2e_current;
         current.comparison_current = state.comparison_current;
     }
-    RewriteApiInventoryView {
-        total: items.len(),
-        completed: items
-            .iter()
-            .filter(|item| item.status == RewriteApiStatus::Complete)
-            .count(),
-        current_index: state.current_api_index,
-        current_api: state
-            .current_api_index
-            .and_then(|index| items.get(index))
-            .map(|item| item.api.clone()),
+    RewriteApiInventoryDetails {
+        summary: view(state),
         items,
     }
 }
@@ -252,9 +265,14 @@ mod tests {
         let inventory = view(&state);
         assert_eq!(inventory.total, 2);
         assert_eq!(inventory.completed, 1);
+        assert_eq!(inventory.pending, 0);
         assert_eq!(inventory.current_index, Some(1));
         assert_eq!(inventory.current_api.as_deref(), Some("POST /b"));
-        assert_eq!(inventory.items[0].status, RewriteApiStatus::Complete);
-        assert_eq!(inventory.items[1].status, RewriteApiStatus::Active);
+        let serialized = serde_json::to_value(&inventory).unwrap();
+        assert!(serialized.get("items").is_none());
+
+        let details = details(&state);
+        assert_eq!(details.items[0].status, RewriteApiStatus::Complete);
+        assert_eq!(details.items[1].status, RewriteApiStatus::Active);
     }
 }

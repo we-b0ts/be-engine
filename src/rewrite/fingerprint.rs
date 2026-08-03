@@ -80,7 +80,7 @@ pub(super) fn source_container_revision(container: &str) -> Result<String> {
 }
 
 pub(super) fn traffic_e2e_revision() -> Result<String> {
-    let executable = std::env::current_exe().context("failed to resolve traffic-e2e binary")?;
+    let executable = crate::engine_binary::executable()?;
     let mut file = fs::File::open(&executable)
         .with_context(|| format!("failed to read traffic-e2e binary {}", executable.display()))?;
     let mut hash = Fnv1a::default();

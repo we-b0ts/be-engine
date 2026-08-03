@@ -117,15 +117,7 @@ pub(super) fn apply(
         plan_id: record.id,
         issue_id: record.issue_id,
         traffic_e2e_report: projected,
-        next_command: action::command(
-            target_root,
-            vec![
-                "traffic-e2e".to_string(),
-                "rewrite".to_string(),
-                "next".to_string(),
-            ],
-            Vec::new(),
-        ),
+        next_command: action::command(target_root, vec!["next".to_string()], Vec::new()),
     })
 }
 

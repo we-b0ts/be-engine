@@ -1,0 +1,453 @@
+use std::io::Write;
+use std::num::{NonZeroU64, NonZeroUsize};
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use anyhow::{Result, bail};
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use tracing_subscriber::EnvFilter;
+use traffic_e2e::{
+    DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteContext, RewriteNextOptions,
+    RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
+    RewriteRouteOptions, RewriteRulePlanOptions, apply_rewrite_rule, inventory_rewrite,
+    next_rewrite, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
+    verify_rewrite_repair,
+};
+
+mod dependency_rule;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "backend-rewrite",
+    author,
+    version,
+    about = "Coordinate backend rewrites through bounded traffic evidence",
+    subcommand_required = true,
+    arg_required_else_help = true
+)]
+struct Cli {
+    /// Default coordinator log filter when RUST_LOG is not set.
+    #[arg(
+        long,
+        global = true,
+        env = "TRAFFIC_E2E_LOG_LEVEL",
+        default_value = "info",
+        value_name = "FILTER"
+    )]
+    log_level: String,
+    /// Pretty-print JSON for human inspection; compact JSON is the default.
+    #[arg(long, global = true)]
+    pretty: bool,
+    /// Initialized target repository root.
+    #[arg(long, default_value = ".")]
+    target_root: PathBuf,
+    #[command(subcommand)]
+    command: RewriteCommand,
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let cli = Cli::parse();
+    let log_filter = match log_filter(&cli.log_level) {
+        Ok(filter) => filter,
+        Err(error) => {
+            report_error(&error);
+            return ExitCode::FAILURE;
+        }
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(log_filter)
+        .with_writer(std::io::stderr)
+        .init();
+    match run(cli).await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            report_error(&error);
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn log_filter(default_filter: &str) -> Result<EnvFilter> {
+    if std::env::var_os("RUST_LOG").is_some() {
+        Ok(EnvFilter::try_from_default_env()?)
+    } else {
+        Ok(EnvFilter::try_new(default_filter)?)
+    }
+}
+
+fn report_error(error: &anyhow::Error) {
+    eprintln!("Error: {error:?}");
+}
+
+#[derive(Debug, Subcommand)]
+enum RewriteCommand {
+    /// Advance deterministic stages and return the only allowed next action.
+    Next(NextArgs),
+    /// Show bounded coordinator state without advancing it.
+    Status,
+    /// Show the full stable API inventory without advancing it.
+    Inventory,
+    /// Execute one current, bounded evidence query.
+    Evidence(EvidenceArgs),
+    /// Plan or apply one evidence-backed response rule.
+    Rule(RuleArgs),
+    /// Plan or apply one source-proven background dependency rule.
+    DependencyRule(dependency_rule::DependencyRuleArgs),
+    /// Submit a source-backed non-target-code attribution for controlled routing.
+    Route(RouteArgs),
+    /// Verify one coordinator-issued system repair acceptance.
+    Repair(RepairArgs),
+    /// Request a fresh coordinator-owned recording with explicit bounded parameters.
+    Recording(RecordingArgs),
+    /// Remove only a stale coordinator lock after its process has exited.
+    Recover,
+}
+
+#[derive(Debug, Args)]
+struct NextArgs {
+    /// Optional canonical API selector; omit at startup to process every API observed through recorder configuration.
+    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
+    api: Option<RecordingApi>,
+    /// Source registration route for the active dynamic API when requested by the coordinator.
+    #[arg(long)]
+    source_route: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct EvidenceArgs {
+    /// Opaque current query id returned by rewrite next.
+    query_id: String,
+}
+
+#[derive(Debug, Args)]
+struct RuleArgs {
+    #[command(subcommand)]
+    command: RuleCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RuleCommand {
+    /// Validate current evidence and preview one response-rule change.
+    Plan(RulePlanArgs),
+    /// Revalidate and atomically apply an unchanged pending plan.
+    Apply(RuleApplyArgs),
+}
+
+#[derive(Debug, Args)]
+struct RulePlanArgs {
+    #[arg(long)]
+    evidence_id: String,
+    #[arg(long, value_enum)]
+    kind: RuleKindArg,
+    #[arg(long)]
+    json_pointer: Option<String>,
+    #[arg(long = "dynamic-mechanism", value_enum)]
+    dynamic_mechanisms: Vec<DynamicMechanismArg>,
+    #[arg(long)]
+    source_evidence: Option<String>,
+    #[arg(long)]
+    source_example: Option<String>,
+    #[arg(long)]
+    target_example: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct RuleApplyArgs {
+    plan_id: String,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RuleKindArg {
+    Dynamic,
+    Unordered,
+    Counter,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DynamicMechanismArg {
+    Timestamp,
+    Duration,
+    Uuid,
+    Random,
+    Nonce,
+    RandomSalt,
+    DynamicDerived,
+}
+
+#[derive(Debug, Args)]
+struct RouteArgs {
+    #[arg(long, value_enum)]
+    kind: RouteKindArg,
+    #[arg(long)]
+    evidence_id: String,
+    #[arg(long)]
+    source_ref: String,
+    #[arg(long)]
+    required_change: String,
+}
+
+#[derive(Debug, Args)]
+struct RepairArgs {
+    #[command(subcommand)]
+    command: RepairCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RepairCommand {
+    /// Verify that the accepted system or source revision changed.
+    Verify(RepairVerifyArgs),
+}
+
+#[derive(Debug, Args)]
+struct RepairVerifyArgs {
+    repair_id: String,
+}
+
+#[derive(Debug, Args)]
+struct RecordingArgs {
+    #[command(subcommand)]
+    command: RecordingCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RecordingCommand {
+    /// Request or recover one idempotent standard recording action.
+    Request(RecordingRequestArgs),
+    /// Start one detached coordinator-owned recording action and return immediately.
+    Execute(RecordingExecuteArgs),
+}
+
+#[derive(Debug, Args)]
+struct RecordingExecuteArgs {
+    action_id: String,
+}
+
+#[derive(Debug, Args)]
+struct RecordingRequestArgs {
+    #[arg(long, value_enum)]
+    kind: RecordingKindArg,
+    #[arg(long, value_enum)]
+    reason: RecordingReasonArg,
+    #[arg(long, default_value = "60")]
+    duration_seconds: NonZeroU64,
+    #[arg(long = "per-api-case-limit", default_value = "100")]
+    per_api_case_limit: NonZeroUsize,
+    /// Optional API selector; omit to record every API admitted by recorder configuration.
+    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
+    api: Option<RecordingApi>,
+    /// Replace a different pending recording request instead of returning a conflict.
+    #[arg(long)]
+    replace_pending: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RecordingKindArg {
+    Standard,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RecordingReasonArg {
+    UserRequested,
+    RecorderContractChanged,
+    SourceBaselineChanged,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RouteKindArg {
+    RecorderCapabilityGap,
+    ReplayCapabilityGap,
+    ExternalDataBlocker,
+    SourceChange,
+}
+
+async fn run(cli: Cli) -> Result<()> {
+    let target_root = cli.target_root;
+    let pretty = cli.pretty;
+    match cli.command {
+        RewriteCommand::Next(args) => {
+            let recovery_root = target_root.clone();
+            let mut operation = Box::pin(next_rewrite(RewriteNextOptions {
+                target_root,
+                api: args.api,
+                source_route: args.source_route,
+            }));
+            tokio::select! {
+                biased;
+                result = &mut operation => print_json(&result?, pretty),
+                signal = shutdown_signal() => {
+                    signal?;
+                    drop(operation);
+                    let recovery = recover_rewrite(RewriteContext {
+                        target_root: recovery_root,
+                    }).await?;
+                    print_json(&recovery, pretty)?;
+                    bail!("rewrite next was interrupted; runtime cleanup completed")
+                }
+            }
+        }
+        RewriteCommand::Status => {
+            print_json(&status_rewrite(RewriteContext { target_root })?, pretty)
+        }
+        RewriteCommand::Inventory => {
+            print_json(&inventory_rewrite(RewriteContext { target_root })?, pretty)
+        }
+        RewriteCommand::Evidence(args) => print_json(
+            &query_rewrite_evidence(RewriteContext { target_root }, &args.query_id)?,
+            pretty,
+        ),
+        RewriteCommand::Rule(args) => match args.command {
+            RuleCommand::Plan(args) => print_json(
+                &plan_rewrite_rule(
+                    RewriteContext { target_root },
+                    RewriteRulePlanOptions {
+                        evidence_id: args.evidence_id,
+                        kind: args.kind.into(),
+                        json_pointer: args.json_pointer,
+                        dynamic_mechanisms: args
+                            .dynamic_mechanisms
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                        source_evidence: args.source_evidence,
+                        source_example: args.source_example,
+                        target_example: args.target_example,
+                    },
+                )?,
+                pretty,
+            ),
+            RuleCommand::Apply(args) => print_json(
+                &apply_rewrite_rule(RewriteContext { target_root }, &args.plan_id)?,
+                pretty,
+            ),
+        },
+        RewriteCommand::DependencyRule(args) => dependency_rule::run(target_root, args, pretty),
+        RewriteCommand::Route(args) => print_json(
+            &route_rewrite(RewriteRouteOptions {
+                target_root,
+                kind: args.kind.as_str().to_string(),
+                evidence_id: args.evidence_id,
+                source_ref: args.source_ref,
+                required_change: args.required_change,
+            })?,
+            pretty,
+        ),
+        RewriteCommand::Repair(args) => match args.command {
+            RepairCommand::Verify(args) => print_json(
+                &verify_rewrite_repair(RewriteContext { target_root }, &args.repair_id)?,
+                pretty,
+            ),
+        },
+        RewriteCommand::Recording(args) => match args.command {
+            RecordingCommand::Request(args) => print_json(
+                &request_rewrite_recording(RewriteRecordingRequestOptions {
+                    target_root,
+                    kind: args.kind.into(),
+                    reason: args.reason.into(),
+                    duration_seconds: args.duration_seconds,
+                    per_api_case_limit: args.per_api_case_limit,
+                    api: args.api,
+                    replace_pending: args.replace_pending,
+                })?,
+                pretty,
+            ),
+            RecordingCommand::Execute(args) => print_json(
+                &start_rewrite_recording(target_root, &args.action_id)?,
+                pretty,
+            ),
+        },
+        RewriteCommand::Recover => print_json(
+            &recover_rewrite(RewriteContext { target_root }).await?,
+            pretty,
+        ),
+    }
+}
+
+impl From<RuleKindArg> for ResponseRuleKind {
+    fn from(value: RuleKindArg) -> Self {
+        match value {
+            RuleKindArg::Dynamic => Self::Dynamic,
+            RuleKindArg::Unordered => Self::Unordered,
+            RuleKindArg::Counter => Self::Counter,
+        }
+    }
+}
+
+impl From<DynamicMechanismArg> for DynamicResponseMechanism {
+    fn from(value: DynamicMechanismArg) -> Self {
+        match value {
+            DynamicMechanismArg::Timestamp => Self::Timestamp,
+            DynamicMechanismArg::Duration => Self::Duration,
+            DynamicMechanismArg::Uuid => Self::Uuid,
+            DynamicMechanismArg::Random => Self::Random,
+            DynamicMechanismArg::Nonce => Self::Nonce,
+            DynamicMechanismArg::RandomSalt => Self::RandomSalt,
+            DynamicMechanismArg::DynamicDerived => Self::DynamicDerived,
+        }
+    }
+}
+
+impl RouteKindArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RecorderCapabilityGap => "recorder_capability_gap",
+            Self::ReplayCapabilityGap => "replay_capability_gap",
+            Self::ExternalDataBlocker => "external_data_blocker",
+            Self::SourceChange => "source_change",
+        }
+    }
+}
+
+impl From<RecordingKindArg> for RewriteRecordingKind {
+    fn from(value: RecordingKindArg) -> Self {
+        match value {
+            RecordingKindArg::Standard => Self::Standard,
+        }
+    }
+}
+
+impl From<RecordingReasonArg> for RewriteRecordingReason {
+    fn from(value: RecordingReasonArg) -> Self {
+        match value {
+            RecordingReasonArg::UserRequested => Self::UserRequested,
+            RecordingReasonArg::RecorderContractChanged => Self::RecorderContractChanged,
+            RecordingReasonArg::SourceBaselineChanged => Self::SourceBaselineChanged,
+        }
+    }
+}
+
+fn write_json(mut writer: impl Write, value: &impl serde::Serialize, pretty: bool) -> Result<()> {
+    if pretty {
+        serde_json::to_writer_pretty(&mut writer, value)?;
+    } else {
+        serde_json::to_writer(&mut writer, value)?;
+    }
+    writeln!(writer)?;
+    Ok(())
+}
+
+fn print_json(value: &impl serde::Serialize, pretty: bool) -> Result<()> {
+    write_json(std::io::stdout(), value, pretty)
+}
+
+async fn shutdown_signal() -> Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result?,
+            _ = terminate.recv() => {}
+            _ = hangup.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

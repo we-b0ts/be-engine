@@ -102,6 +102,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
     match state.phase {
         RewritePhase::RecordingRequired => RewriteAction::RecordingRequired {
             summary: recording_summary(state),
+            run_id: state.recording_run_id.clone(),
             input_mode: if state.recording_input_case_source.is_some() {
                 RewriteRecordingInputMode::ReusedAtomicRecording
             } else {
@@ -113,7 +114,6 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                 None
             },
             command: recording_action::command(target_root, state, false),
-            resume: next_command(target_root),
         },
         RewritePhase::ApiPending => resume_required(
             target_root,
@@ -137,8 +137,11 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                     )
                 },
             ),
+            run_id: state
+                .comparison_run_id
+                .clone()
+                .expect("comparison recording phase requires a run id"),
             command: recording_action::command(target_root, state, true),
-            resume: next_command(target_root),
         },
         RewritePhase::SystemRepairRequired => RewriteAction::SystemRepairRequired {
             issue: state
@@ -216,7 +219,7 @@ pub(super) fn input_required(_target_root: &Path) -> RewriteActionEnvelope {
         action: RewriteAction::InputRequired {
             reason: RewriteInputRequiredReason::WorkflowNotInitialized,
             summary: "start the rewrite workflow for every API observed through recorder configuration, or optionally select one API".to_string(),
-            required: vec!["run `traffic-e2e rewrite next`; optional: --api 'METHOD /path-or-pattern'".to_string()],
+            required: vec!["run `backend-rewrite next`; optional: --api 'METHOD /path-or-pattern'".to_string()],
         },
         terminal_allowed: false,
     }
@@ -252,7 +255,6 @@ pub(super) fn recovery_required(target_root: &Path) -> RewriteActionEnvelope {
             summary: "rewrite workflow is locked; execute the recovery command before retrying"
                 .to_string(),
             command: recover_command(target_root),
-            resume: next_command(target_root),
         },
         terminal_allowed: false,
     }
@@ -302,9 +304,12 @@ fn workflow_scope(state: &RewriteState) -> String {
 
 pub(super) fn command(
     target_root: &Path,
-    argv: Vec<String>,
+    arguments: Vec<String>,
     required_env_names: Vec<String>,
 ) -> RewriteCommandSpec {
+    let mut argv = Vec::with_capacity(arguments.len() + 1);
+    argv.push("backend-rewrite".to_string());
+    argv.extend(arguments);
     RewriteCommandSpec {
         cwd: target_root.to_path_buf(),
         argv,
@@ -313,39 +318,17 @@ pub(super) fn command(
 }
 
 pub(super) fn next_command(target_root: &Path) -> RewriteCommandSpec {
-    command(
-        target_root,
-        vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
-            "next".to_string(),
-        ],
-        Vec::new(),
-    )
+    command(target_root, vec!["next".to_string()], Vec::new())
 }
 
 pub(super) fn status_command(target_root: &Path) -> RewriteCommandSpec {
-    command(
-        target_root,
-        vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
-            "status".to_string(),
-        ],
-        Vec::new(),
-    )
+    command(target_root, vec!["status".to_string()], Vec::new())
 }
 
 pub(super) fn rule_apply_command(target_root: &Path, plan_id: &str) -> RewriteCommandSpec {
     command(
         target_root,
-        vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
-            "rule".to_string(),
-            "apply".to_string(),
-            plan_id.to_string(),
-        ],
+        vec!["rule".to_string(), "apply".to_string(), plan_id.to_string()],
         Vec::new(),
     )
 }
@@ -357,8 +340,6 @@ pub(super) fn dependency_rule_apply_command(
     command(
         target_root,
         vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
             "dependency-rule".to_string(),
             "apply".to_string(),
             plan_id.to_string(),
@@ -371,8 +352,6 @@ pub(super) fn repair_verify_command(target_root: &Path, repair_id: &str) -> Rewr
     command(
         target_root,
         vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
             "repair".to_string(),
             "verify".to_string(),
             repair_id.to_string(),
@@ -382,15 +361,7 @@ pub(super) fn repair_verify_command(target_root: &Path, repair_id: &str) -> Rewr
 }
 
 pub(super) fn recover_command(target_root: &Path) -> RewriteCommandSpec {
-    command(
-        target_root,
-        vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
-            "recover".to_string(),
-        ],
-        Vec::new(),
-    )
+    command(target_root, vec!["recover".to_string()], Vec::new())
 }
 
 #[cfg(test)]
@@ -423,12 +394,16 @@ mod tests {
             Some(&serde_json::json!("recording_required"))
         );
         assert_eq!(
-            pending.pointer("/action/command/cwd"),
+            pending.pointer("/action/details/run_id"),
+            Some(&serde_json::json!(state.recording_run_id.as_str()))
+        );
+        assert_eq!(
+            pending.pointer("/action/commands/execute/cwd"),
             Some(&serde_json::json!(target.path()))
         );
         assert!(
             pending
-                .pointer("/action/command/argv/4")
+                .pointer("/action/commands/execute/argv/3")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|value| value.starts_with("recording-"))
         );
@@ -446,8 +421,8 @@ mod tests {
             Some(&serde_json::json!("resume_required"))
         );
         assert_eq!(
-            resumable.pointer("/action/command/argv"),
-            Some(&serde_json::json!(["traffic-e2e", "rewrite", "next"]))
+            resumable.pointer("/action/commands/resume/argv"),
+            Some(&serde_json::json!(["backend-rewrite", "next"]))
         );
 
         state.phase = RewritePhase::ComparisonRecordingRequired;
@@ -459,7 +434,11 @@ mod tests {
             Some(&serde_json::json!("comparison_recording_required"))
         );
         assert_eq!(
-            comparison_pending.pointer("/action/command/argv/4"),
+            comparison_pending.pointer("/action/details/run_id"),
+            Some(&serde_json::json!("20260802000001"))
+        );
+        assert_eq!(
+            comparison_pending.pointer("/action/commands/execute/argv/3"),
             Some(&serde_json::json!(recording_action_id(&state, true)))
         );
 
@@ -496,8 +475,8 @@ mod tests {
             Some(&serde_json::json!("recovery_required"))
         );
         assert_eq!(
-            status.pointer("/action/command/argv"),
-            Some(&serde_json::json!(["traffic-e2e", "rewrite", "recover"]))
+            status.pointer("/action/commands/recover/argv"),
+            Some(&serde_json::json!(["backend-rewrite", "recover"]))
         );
     }
 
@@ -529,10 +508,10 @@ mod tests {
             Some(&serde_json::json!("recording_in_progress"))
         );
         assert_eq!(
-            status.pointer("/action/status/argv"),
-            Some(&serde_json::json!(["traffic-e2e", "rewrite", "status"]))
+            status.pointer("/action/commands/status/argv"),
+            Some(&serde_json::json!(["backend-rewrite", "status"]))
         );
-        assert!(status.pointer("/action/command").is_none());
+        assert!(status.pointer("/action/commands/execute").is_none());
     }
 
     #[test]
@@ -578,17 +557,16 @@ mod tests {
         let status = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
 
         assert_eq!(
-            status.pointer("/action/acceptance/argv"),
+            status.pointer("/action/commands/acceptance/argv"),
             Some(&serde_json::json!([
-                "traffic-e2e",
-                "rewrite",
+                "backend-rewrite",
                 "repair",
                 "verify",
                 "repair-current"
             ]))
         );
         assert_eq!(
-            status.pointer("/action/acceptance/cwd"),
+            status.pointer("/action/commands/acceptance/cwd"),
             Some(&serde_json::json!(target.path()))
         );
     }
@@ -616,10 +594,9 @@ mod tests {
             Some(&serde_json::json!("plan_apply_required"))
         );
         assert_eq!(
-            response.pointer("/action/command/argv"),
+            response.pointer("/action/commands/apply/argv"),
             Some(&serde_json::json!([
-                "traffic-e2e",
-                "rewrite",
+                "backend-rewrite",
                 "rule",
                 "apply",
                 "plan-response"
@@ -643,10 +620,9 @@ mod tests {
         });
         let dependency = serde_json::to_value(for_state(target, &state)).unwrap();
         assert_eq!(
-            dependency.pointer("/action/command/argv"),
+            dependency.pointer("/action/commands/apply/argv"),
             Some(&serde_json::json!([
-                "traffic-e2e",
-                "rewrite",
+                "backend-rewrite",
                 "dependency-rule",
                 "apply",
                 "plan-dependency"
@@ -662,7 +638,7 @@ mod tests {
             Some(&serde_json::json!("resume_required"))
         );
         assert_eq!(
-            reused.pointer("/action/command/argv/3"),
+            reused.pointer("/action/commands/resume/argv/2"),
             Some(&serde_json::json!("request"))
         );
         assert!(
@@ -704,8 +680,8 @@ mod tests {
             Some(&serde_json::json!("resume_required"))
         );
         assert_eq!(
-            status.pointer("/action/command/argv"),
-            Some(&serde_json::json!(["traffic-e2e", "rewrite", "next"]))
+            status.pointer("/action/commands/resume/argv"),
+            Some(&serde_json::json!(["backend-rewrite", "next"]))
         );
     }
 

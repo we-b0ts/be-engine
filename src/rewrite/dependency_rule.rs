@@ -405,8 +405,6 @@ pub(super) fn fresh_recording_request(
     action::command(
         target_root,
         vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
             "recording".to_string(),
             "request".to_string(),
             "--kind".to_string(),

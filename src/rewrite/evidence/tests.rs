@@ -250,8 +250,7 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
     assert_eq!(
         planners[1].command.argv,
         [
-            "traffic-e2e",
-            "rewrite",
+            "backend-rewrite",
             "dependency-rule",
             "plan",
             "memcached",

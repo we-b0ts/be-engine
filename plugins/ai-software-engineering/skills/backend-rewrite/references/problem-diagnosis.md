@@ -6,11 +6,12 @@ chooses the only repair attempted before the next focused E2E run.
 
 ## Contract
 
-The coordinator supplies one active issue, bounded possible causes, one
-representative when available, exact evidence-query argv, and one acceptance
-command. Treat possible causes as hypotheses. Traffic facts come only from the
-returned queries and immutable artifacts; business causality comes from source
-and target code.
+The coordinator supplies one active issue in `action.details`, including
+bounded possible causes and one representative when available. Exact
+evidence-query argv are under `action.commands.evidence`, and the sole
+acceptance command is `action.commands.acceptance`. Treat possible causes as
+hypotheses. Traffic facts come only from the returned queries and immutable
+artifacts; business causality comes from source and target code.
 
 Standard and comparison artifacts are readable, read-only diagnostic evidence.
 Start from the representative `case_dir` returned by the coordinator and
@@ -35,7 +36,7 @@ real differences until source evidence proves otherwise.
 
 ## Evidence Queries
 
-Run only query IDs returned by the active action:
+Run only query IDs returned by `action.commands.evidence`:
 
 - `representatives`: the representative case ID, exact immutable standard or
   comparison `case_dir`, and bounded structured response or dependency
@@ -162,7 +163,7 @@ evidence. Use the returned issue and dirty-cluster query to distinguish:
 - the recording lacks required semantic evidence.
 
 If target topology differs, repair target behavior. If semantic evidence exists
-but the engine lacks support, submit `rewrite route` with a current evidence ID,
+but the engine lacks support, submit `backend-rewrite route` with a current evidence ID,
 source reference, and exact system change. Then apply the repair and use only
 the coordinator-issued `repair verify <repair-id>` acceptance. Never implement
 a target workaround for a Replay capability gap or supply an arbitrary
@@ -183,7 +184,7 @@ Timing overlap, high volume, scheduler names, unused exchanges, and passing
 responses do not prove background ownership. A recording-rule change must use
 the current dirty-cluster evidence ID and one protocol-specific planner returned
 in `applicable_rule_planners`. Run its exact help argv, supply only the
-source-proven selector inputs to `rewrite dependency-rule plan <protocol>`, and
+source-proven selector inputs to `backend-rewrite dependency-rule plan <protocol>`, and
 apply the returned plan ID. Replay evidence, case source, and source revision
 come from coordinator state and are not background-rule inputs. Execute the apply
 report's exact fresh-recording request. Never call the lower-level Recorder
@@ -210,14 +211,14 @@ coordinator must rerun focused E2E before requesting a fresh comparison.
 Route the proven cause to exactly one action:
 
 - target implementation or cache defect: change target code with
-  `backend-engineering`, run focused target tests, then the implementation
-  action's acceptance command;
+  `backend-engineering`, run focused target tests, then execute
+  `action.commands.acceptance`;
 - startup/configuration defect: repair source-compatible loading or the fixed
-  start/stop boundary, then run the implementation action's acceptance command;
-- supported nondeterminism/order/counter: run exact `rewrite rule plan`, review
+  start/stop boundary, then execute `action.commands.acceptance`;
+- supported nondeterminism/order/counter: run exact `backend-rewrite rule plan`, review
   the evidence, then `apply` and rerun;
 - Recorder/Replay capability gap, source change, or external-data issue: submit
-  exact `rewrite route` evidence, apply the routed change, then execute the
+  exact `backend-rewrite route` evidence, apply the routed change, then execute the
   returned `repair verify <repair-id>` action; do not patch the target;
 - unresolved: gather the named missing source/runtime proof before changing
   code or policy.

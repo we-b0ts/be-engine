@@ -8,7 +8,7 @@ use serde_json::Value;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 5;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 7;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -52,10 +52,17 @@ pub struct RewriteApiProgress {
 pub struct RewriteApiInventoryView {
     pub total: usize,
     pub completed: usize,
+    pub pending: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_api: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteApiInventoryDetails {
+    #[serde(flatten)]
+    pub summary: RewriteApiInventoryView,
     pub items: Vec<RewriteApiProgress>,
 }
 
@@ -388,8 +395,7 @@ pub enum RewriteRecordingInputCandidateDisposition {
     ScopeMismatch,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[derive(Debug, Clone)]
 pub enum RewriteAction {
     InputRequired {
         reason: RewriteInputRequiredReason,
@@ -399,15 +405,13 @@ pub enum RewriteAction {
     RecoveryRequired {
         summary: String,
         command: RewriteCommandSpec,
-        resume: RewriteCommandSpec,
     },
     RecordingRequired {
         summary: String,
+        run_id: String,
         input_mode: RewriteRecordingInputMode,
-        #[serde(skip_serializing_if = "Option::is_none")]
         recording_input_diagnosis: Option<RewriteRecordingInputDiagnosis>,
         command: RewriteCommandSpec,
-        resume: RewriteCommandSpec,
     },
     RecordingInProgress {
         summary: String,
@@ -429,14 +433,12 @@ pub enum RewriteAction {
     },
     ComparisonRecordingRequired {
         summary: String,
+        run_id: String,
         command: RewriteCommandSpec,
-        resume: RewriteCommandSpec,
     },
     SystemRepairRequired {
         issue: RewriteIssue,
-        #[serde(skip_serializing_if = "Option::is_none")]
         route: Option<RewriteRouteRecord>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         acceptance: Option<RewriteCommandSpec>,
     },
     Complete {
@@ -483,14 +485,21 @@ pub struct RewriteStatusReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub active_issue: Option<RewriteIssue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
     pub e2e_current: bool,
     pub comparison_current: bool,
     pub terminal_allowed: bool,
     pub action: RewriteAction,
-    pub next: RewriteCommandSpec,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteInventoryReport {
+    pub schema_version: u32,
+    pub initialized: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<RewriteWorkflowView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_inventory: Option<RewriteApiInventoryDetails>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -576,6 +585,8 @@ pub struct RewriteRouteReport {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -602,5 +613,77 @@ mod tests {
         assert!(state.recording_apis.is_empty());
         assert!(state.api_inventory.is_empty());
         assert!(state.current_api_index.is_none());
+    }
+
+    #[test]
+    fn implementation_action_has_one_stable_public_shape() {
+        let command = RewriteCommandSpec {
+            cwd: PathBuf::from("/target"),
+            argv: vec!["backend-rewrite".to_string(), "status".to_string()],
+            required_env_names: Vec::new(),
+        };
+        let action = RewriteAction::ImplementationRequired {
+            issue: RewriteIssue {
+                id: "issue-response".to_string(),
+                kind: RewriteIssueKind::Response,
+                owner: RewriteIssueOwner::TargetCode,
+                summary: "response status differs".to_string(),
+                pointer_pattern: Some("/status".to_string()),
+                representative: None,
+                possible_causes: vec!["target behavior differs".to_string()],
+                observed_target_fingerprint: "fnv1a64:target".to_string(),
+                attempt: 2,
+                comparison_observation: None,
+            },
+            evidence_commands: vec![RewriteEvidenceCommand {
+                purpose: "inspect representative".to_string(),
+                query_id: "representatives".to_string(),
+                command: command.clone(),
+            }],
+            acceptance: command,
+        };
+
+        let value = serde_json::to_value(&action).unwrap();
+        let keys = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            BTreeSet::from(["commands", "details", "kind", "summary"])
+        );
+        assert_eq!(
+            value.pointer("/details/issue_id"),
+            Some(&serde_json::json!("issue-response"))
+        );
+        assert_eq!(
+            value.pointer("/details/possible_causes/0"),
+            Some(&serde_json::json!("target behavior differs"))
+        );
+        assert_eq!(
+            value.pointer("/commands/evidence/0/query_id"),
+            Some(&serde_json::json!("representatives"))
+        );
+        assert!(value.get("issue").is_none());
+        assert!(value.get("evidence_commands").is_none());
+        assert!(value.get("acceptance").is_none());
+
+        let status = serde_json::to_value(RewriteStatusReport {
+            schema_version: ACTION_SCHEMA_VERSION,
+            initialized: true,
+            workflow: None,
+            api_inventory: None,
+            latest_focused_e2e: None,
+            e2e_current: false,
+            comparison_current: false,
+            terminal_allowed: false,
+            action,
+        })
+        .unwrap();
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(7)));
+        assert!(status.get("active_issue").is_none());
+        assert!(status.get("next").is_none());
     }
 }

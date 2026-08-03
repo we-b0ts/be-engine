@@ -143,7 +143,7 @@ fn initialize_repository_config_with(
                                   compile command supports --release, compile with --release \
                                   and launch that artifact; never pass --release to start",
         target_stop_contract: format!("scripts/{repository_name}-cli stop"),
-        rewrite_command: "traffic-e2e rewrite next --api '<METHOD path-or-pattern>'",
+        rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
         record_command: "traffic-e2e record --target-root .",
         comparison_command: "traffic-e2e record-comparison --target-root .",
     })
@@ -305,6 +305,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.generated.len(), 3);
+        assert_eq!(
+            result.rewrite_command,
+            "backend-rewrite next --api '<METHOD path-or-pattern>'"
+        );
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
         assert!(target.path().join(RECORDER_CONFIG_PATH).is_file());
         assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());

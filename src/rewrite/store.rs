@@ -105,7 +105,7 @@ impl RewriteStore {
 
     pub(super) fn lock(&self) -> Result<RewriteLock> {
         self.try_lock()?.context(
-            "rewrite workflow is already being advanced; execute `traffic-e2e rewrite recover`",
+            "rewrite workflow is already being advanced; execute `backend-rewrite recover`",
         )
     }
 
@@ -130,7 +130,7 @@ impl RewriteStore {
                     .unwrap_or_default();
                 ensure!(
                     age >= INCOMPLETE_LOCK_GRACE,
-                    "rewrite lock is still being initialized; execute `traffic-e2e rewrite recover` again"
+                    "rewrite lock is still being initialized; execute `backend-rewrite recover` again"
                 );
             }
         }

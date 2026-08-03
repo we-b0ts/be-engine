@@ -12,11 +12,14 @@ cargo fmt --check
 cargo test
 cargo clippy --all-targets -- -D warnings
 plugins/ai-software-engineering/skills/backend-engineering/scripts/check-code-organization
-cargo build
+cargo build --bins
 ```
 
 The repository includes `.cargo/config.toml` for the configured crates.io
 mirror. Do not replace that registry configuration unless explicitly asked.
+The build produces sibling `traffic-e2e` and `backend-rewrite` executables.
+Keep them together in installed packages because detached coordinator actions
+delegate engine work to `traffic-e2e`.
 
 ## Shared Recording Images
 
@@ -83,9 +86,16 @@ Use `traffic-e2e config ... init` for one-time target configuration and
 workflow. Use `traffic-e2e config recorder|replay|comparison plan|apply` for
 evidence-driven managed rule changes. Use `traffic-e2e diagnose ...` only for
 recorder development or focused low-level diagnosis. Managed record, replay,
-target isolation, and host interception are implemented in the Rust binary.
+target isolation, and host interception are implemented in the `traffic-e2e`
+binary.
 Repository scripts are development checks or explicit host trust-store tools
 only.
+
+Use the `backend-rewrite` binary and its `next`, `status`, `inventory`,
+`evidence`, `rule`, `dependency-rule`, `route`, `repair`, `recording`, and
+`recover` commands for AI-facing migration orchestration. `traffic-e2e` has no
+`rewrite` subcommand; `backend-rewrite` invokes the shared crate directly and
+delegates only engine-owned detached work to its sibling executable.
 
 ## Running Locally
 
@@ -782,35 +792,56 @@ issue, and never returns raw internal report paths. Target rewrite agents must
 not read, search, or list that directory:
 
 ```bash
-traffic-e2e rewrite next
+backend-rewrite next
 # Or explicitly narrow the workflow to one API:
-traffic-e2e rewrite next --api 'GET /api/widgets/*' \
+backend-rewrite next --api 'GET /api/widgets/*' \
   --source-route '/api/widgets/:id'
-traffic-e2e rewrite status
-traffic-e2e rewrite evidence <query-id>
-traffic-e2e rewrite recording request \
+backend-rewrite status
+backend-rewrite inventory
+backend-rewrite evidence <query-id>
+backend-rewrite recording request \
   --kind standard \
   --reason user-requested \
   --duration-seconds 60 \
   --per-api-case-limit 100
-traffic-e2e rewrite recording execute <action-id>
-traffic-e2e rewrite repair verify <repair-id>
+backend-rewrite recording execute <action-id>
+backend-rewrite repair verify <repair-id>
 ```
 
-Every returned command contains a canonical `cwd` plus exact argv. `next`
-returns an opaque standard/comparison `rewrite recording execute <action-id>`
-action. The coordinator either reuses one exact-scope atomic real-traffic input
-or opens a fresh external-live-traffic recording window; callers do not add
-curl loops, replayers, shell pipelines, backgrounding, or driver parameters. `execute`
-starts a detached coordinator-owned worker and returns immediately. Poll
-`rewrite status`; `recording_in_progress` never returns a second execute action,
+Rewrite action schema v7 always returns `action.kind`, `action.summary`,
+`action.details`, and `action.commands`. Variant facts exist only under
+`details`; executable argv exist only under role-named `commands` such as
+`execute`, `status`, `resume`, `recover`, `evidence`, `apply`, and `acceptance`.
+Status does not duplicate an `active_issue` or publish an unconditional
+top-level `next`. Every returned command contains a canonical `cwd` plus exact
+argv.
+
+The binary writes one compact JSON object per command by default. Pass global
+`--pretty` only for interactive human inspection. This keeps automation output
+atomic and avoids reconstructing one response with `head` and `tail`.
+
+`next` returns an opaque standard/comparison
+`action.commands.execute` recording action. `action.details.run_id` identifies
+the preallocated run. The coordinator either reuses one exact-scope atomic
+real-traffic input or opens a fresh external-live-traffic recording window;
+callers do not add curl loops, replayers, shell pipelines, backgrounding, or
+driver parameters. `execute` starts a detached coordinator-owned worker and
+returns immediately. Poll
+`backend-rewrite status`; `recording_in_progress` never returns a second execute action,
 and `resume_required` means finalization and cleanup completed. Historical
 input is reused only when its API selector exactly equals the requested
 selector; recordings are never split or merged. When no exact atomic input
-exists, `input_mode=external_live_traffic` opens a fresh recording window and
-includes bounded candidate/rejection diagnostics. When startup omits `--api`, recorder configuration limits the
-standard run and the coordinator derives a stable `api_inventory` from its
-published cases. After status returns `resume_required`, `next` validates the
+exists, `action.details.input_mode=external_live_traffic` opens a fresh
+recording window and includes bounded candidate/rejection diagnostics under
+`action.details.recording_input_diagnosis`. When startup omits `--api`, recorder
+configuration limits the standard run and the coordinator derives a stable
+API inventory from its published cases. `next` and `status` expose only its
+bounded summary (`total`, `completed`, `pending`, `current_index`, and
+`current_api`) so their size does not grow with API count. The read-only
+`backend-rewrite inventory` command returns the full ordered per-API list for
+explicit scope audits and final delivery checks. It does not advance the
+workflow or authorize choosing a pending API. After status returns
+`resume_required`, `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next comparison action. Once
 comparison passes, the following `next` prepares the next inventory item from
@@ -823,14 +854,14 @@ item has both passing E2E and comparison evidence.
 workflow revision. Before execution starts it reconstructs the same run ID and
 argv; a live detached worker returns `recording_in_progress`, and only a
 finalized manifest returns `resume_required`. A running manifest without a live
-owner returns `recovery_required`; `rewrite recover` removes only that run's
+owner returns `recovery_required`; `backend-rewrite recover` removes only that run's
 managed resources and allocates a replacement run. A pending rule plan produces
 `plan_apply_required` with only the stored plan ID. A target repository change
-also returns `resume_required` with `rewrite next`.
+also returns `resume_required` with `backend-rewrite next`.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
-recording. Use `rewrite recording request --kind standard` only for an explicit
+recording. Use `backend-rewrite recording request --kind standard` only for an explicit
 new-traffic request, a changed Recorder contract, or a changed source baseline.
 The request accepts positive duration and per-API case-limit values, invalidates state
 derived from the old baseline without deleting its artifacts, and returns a
@@ -850,7 +881,7 @@ previous/current attempt numbers, and whether the latest attempt passed. It
 describes the latest completed attempt, so a repeated `next` with no target
 change returns the same evidence without claiming another replay occurred.
 
-Only use returned `rewrite evidence` query IDs for coordinator gate and
+Only use returned `backend-rewrite evidence` query IDs for coordinator gate and
 aggregate facts. The `representatives` result includes the representative case
 ID, its exact immutable standard or comparison `case_dir`, and a structured
 response difference. A focused E2E difference contains expected and actual
@@ -872,8 +903,8 @@ interactions recorded before readiness are returned only by the separate
 `unused_global` events and target activity outside an active case remain
 aggregate diagnostics and do not make a case dirty.
 
-Use `rewrite rule plan|apply` for a source-proven response rule and
-`rewrite route` for a proven Recorder/Replay capability gap, external-data
+Use `backend-rewrite rule plan|apply` for a source-proven response rule and
+`backend-rewrite route` for a proven Recorder/Replay capability gap, external-data
 blocker, or source change. Query IDs and evidence IDs are bound to the workflow
 revision and active issue, so stale evidence is rejected.
 

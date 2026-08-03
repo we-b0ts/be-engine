@@ -138,16 +138,16 @@ struct DependencyRuleApplyArgs {
     plan_id: String,
 }
 
-pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs) -> Result<()> {
+pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs, pretty: bool) -> Result<()> {
     match args.command {
-        DependencyRuleCommand::Plan(args) => super::print_json(&plan_rewrite_dependency_rule(
-            RewriteContext { target_root },
-            args.protocol.into(),
-        )?),
-        DependencyRuleCommand::Apply(args) => super::print_json(&apply_rewrite_dependency_rule(
-            RewriteContext { target_root },
-            &args.plan_id,
-        )?),
+        DependencyRuleCommand::Plan(args) => super::print_json(
+            &plan_rewrite_dependency_rule(RewriteContext { target_root }, args.protocol.into())?,
+            pretty,
+        ),
+        DependencyRuleCommand::Apply(args) => super::print_json(
+            &apply_rewrite_dependency_rule(RewriteContext { target_root }, &args.plan_id)?,
+            pretty,
+        ),
     }
 }
 

@@ -39,12 +39,7 @@ pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteE
                 purpose: purpose.to_string(),
                 command: super::action::command(
                     target_root,
-                    vec![
-                        "traffic-e2e".to_string(),
-                        "rewrite".to_string(),
-                        "evidence".to_string(),
-                        query_id.clone(),
-                    ],
+                    vec!["evidence".to_string(), query_id.clone()],
                     Vec::new(),
                 ),
                 query_id,
@@ -122,8 +117,6 @@ fn applicable_rule_planners(
             command: super::action::command(
                 target_root,
                 vec![
-                    "traffic-e2e".to_string(),
-                    "rewrite".to_string(),
                     "dependency-rule".to_string(),
                     "plan".to_string(),
                     protocol.to_string(),

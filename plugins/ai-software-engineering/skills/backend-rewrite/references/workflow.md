@@ -14,7 +14,7 @@ explicit new traffic / changed recording contract / changed source baseline
            -> fresh standard recording -> prepare -> focused E2E
 ```
 
-The target AI repeatedly runs `traffic-e2e rewrite next`. It pauses only for:
+The target AI repeatedly runs `backend-rewrite next`. It pauses only for:
 
 - the exact standard or comparison recording command returned by the action;
 - one source/target investigation and implementation issue;
@@ -25,14 +25,32 @@ The target AI repeatedly runs `traffic-e2e rewrite next`. It pauses only for:
 
 ## Action Handling
 
+Action schema v7 has one stable shape for every kind:
+
+```json
+{
+  "kind": "implementation_required",
+  "summary": "...",
+  "details": {},
+  "commands": {}
+}
+```
+
+`details` is the only location for kind-specific facts. `commands` is the only
+location for executable argv, keyed by its role. An empty object means the
+action has no command of that class; do not infer a fallback. `status` does not
+duplicate the issue as `active_issue` or publish an unconditional top-level
+`next` command.
+
 ### `recording_required`
 
-Execute the exact opaque `rewrite recording execute <action-id>` argv from its
-canonical `cwd` with the named environment variables. The command starts a
-detached coordinator worker and returns immediately. Poll its returned
-`rewrite status` command; wait through `recording_in_progress`, and run `next`
-only after `resume_required`. The
-coordinator preallocates the run ID, owns the recording input mode and
+Execute the exact opaque `action.commands.execute` argv from its canonical
+`cwd` with the named environment variables. The command starts a detached
+coordinator worker and returns immediately. Poll the status command returned by
+that execution; `recording_in_progress` exposes it as
+`action.commands.status`. Run `action.commands.resume` only after
+`resume_required`. The allocated recording identity is
+`action.details.run_id`; the coordinator owns its recording input mode and
 lifecycle, and validates that exact finalized manifest. Never discover a run by recency or add
 manual curl, replay, shell pipelines, backgrounding, or driver flags. Duration and case limit
 belong to the preceding recording request and are bound into the action ID.
@@ -42,14 +60,18 @@ produce the stable API inventory. Do not add selectors to the returned action.
 
 ### API inventory and `api_pending`
 
-Every initialized action/status envelope includes `api_inventory`. Its order
-is coordinator-owned and stable for the shared standard recording. Work only
-on `current_api`. After that API passes focused E2E and comparison, the
-coordinator marks it complete and returns `resume_required` for the next
-pending API. Execute the returned `next`; it prepares and runs that API from
-the same standard recording. If the current pattern is dynamic and lacks a
-proven source registration route, the action is `input_required`; provide only
-the requested `--source-route` when resuming.
+Every initialized action/status envelope includes a bounded `api_inventory`
+summary: `total`, `completed`, `pending`, `current_index`, and `current_api`.
+The coordinator owns the stable order for the shared standard recording; work
+only on `current_api`. Use `backend-rewrite inventory` only when an explicit
+scope audit or final delivery check needs the complete ordered list and its
+per-API `pending`, `active`, or `complete` status. That read-only report does
+not authorize selecting another item. After the current API passes focused E2E
+and comparison, the coordinator marks it complete and returns
+`resume_required` for the next pending API. Execute the returned `next`; it
+prepares and runs that API from the same standard recording. If the current
+pattern is dynamic and lacks a proven source registration route, the action is
+`input_required`; provide only the requested `--source-route` when resuming.
 
 Per-API failure retries reuse the same cases for that API. A fresh standard
 recording is still allowed only under the explicit conditions below and resets
@@ -72,7 +94,7 @@ case inventory ID when available, previous/current attempt numbers, and pass
 status. It is a description of the latest completed focused attempt; if `next`
 returns without a target change, it does not claim that a new attempt ran.
 
-Use `rewrite recording request --kind standard` only for an explicit caller
+Use `backend-rewrite recording request --kind standard` only for an explicit caller
 request, a changed Recorder contract, or a changed source baseline. Supply the
 corresponding reason plus positive `--duration-seconds` and
 `--per-api-case-limit`
@@ -87,32 +109,34 @@ recording selector exactly equals the requested selector. Omitted API selectors
 match only each other, and a single API matches only that exact single API.
 Never split or merge recordings because boot and case evidence belong to one
 recording lifecycle. When no exact atomic input exists,
-`input_mode=external_live_traffic` opens a fresh recording window and includes
-bounded recent candidate scopes and rejection counts. Treat that diagnosis as
-complete and do not inspect internal state or invent traffic.
+`action.details.input_mode=external_live_traffic` opens a fresh recording
+window and includes bounded recent candidate scopes and rejection counts in
+`action.details.recording_input_diagnosis`. Treat that diagnosis as complete
+and do not inspect internal state or invent traffic.
 
 After a system repair, only the returned coordinator-issued
-`rewrite repair verify <repair-id>` action can advance the workflow. Successful
+`backend-rewrite repair verify <repair-id>` action can advance the workflow. Successful
 verification chooses whether fresh standard traffic or replaying the same cases
 is required; the AI does not choose that transition itself.
 
 ### `implementation_required`
 
-The action contains one bounded issue, one representative when available,
-possible causes, evidence query IDs, and the acceptance command. Traffic facts
-come from those queries and immutable artifacts. `representatives` returns the
+`action.details` contains one bounded issue, one representative when available,
+and possible causes. `action.commands.evidence` contains the permitted evidence
+queries, while `action.commands.acceptance` is the only acceptance transition.
+Traffic facts come from those queries and immutable artifacts. `representatives` returns the
 exact standard or comparison case directory and structured response difference;
 inspect that case first and other artifact cases as needed. Source inspection
 supplies the final business attribution. Apply
 [problem-diagnosis.md](problem-diagnosis.md), repair one proven cause, run local
-target tests, then execute the acceptance command.
+target tests, then execute `action.commands.acceptance`.
 
 For a dependency issue, the `dirty_clusters` evidence report may also contain
 `applicable_rule_planners`. Each entry is limited to a supported protocol
 actually present in the current clusters and returns a protocol-specific help
 argv. A background rule is process-scoped, not API-scoped: the coordinator
 binds its plan to the active API evidence, case source, and source revision
-internally. After `rewrite dependency-rule apply <plan-id>`, execute the exact
+internally. After `backend-rewrite dependency-rule apply <plan-id>`, execute the exact
 fresh-standard-recording request returned by the report.
 If planning returns `reused_existing=true`, an equivalent protocol selector is
 already configured under `effective_name`. Skip apply and execute the returned
@@ -146,39 +170,44 @@ outside a case do not fail the case gate.
 
 ### `system_repair_required`
 
-This action exists only after `rewrite route` accepts current evidence and a
+This action exists only after `backend-rewrite route` accepts current evidence and a
 source reference and required system change. The route snapshots a
 coordinator-defined system/source revision and returns an opaque repair ID; the
 AI never supplies an acceptance command. Apply the required repair, then execute
-the exact `repair verify <repair-id>` action. `next` and `recording request`
-cannot bypass it. Successful verification reruns the same cases for Replay or
-external-input repairs, or allocates fresh standard recording for Recorder or
-source-baseline changes.
+the exact `action.commands.acceptance` argv for
+`repair verify <repair-id>`. `next` and `recording request` cannot bypass it.
+Successful verification reruns the same cases for Replay or external-input
+repairs, or allocates fresh standard recording for Recorder or source-baseline
+changes.
 
 ### `complete`
 
-Every API in `api_inventory` has current passing focused E2E and comparison
-evidence. `terminal_allowed` is true only here. Repository-wide regression and
-delivery remain under the caller's rewrite objective.
+All APIs represented by the inventory summary have current passing focused E2E
+and comparison evidence. `terminal_allowed` is true only here. Use
+`backend-rewrite inventory` if final delivery needs the full per-API list.
+Repository-wide regression and delivery remain under the caller's rewrite
+objective.
 
 ## State And Recovery
 
 Coordinator state is stored under `.traffic-e2e/.ai-forbidden/`. A target
 rewrite AI must never read, search, or list that directory. Use
-`rewrite status`, which reconstructs the current action without advancing state:
-it returns the original recording action before execution, an exact
-`plan_apply_required` command for a pending plan, `recording_in_progress` while
-the detached worker is live, or `resume_required` only after a finalized
-recording manifest or target change is ready for `rewrite next`. A running
+`backend-rewrite status`, which reconstructs the current action without advancing state:
+it returns the original `action.commands.execute` before recording execution,
+an exact `action.commands.apply` for a pending plan,
+`action.commands.status` while the detached worker is live, or
+`action.commands.resume` only after a finalized recording manifest or target
+change is ready for `backend-rewrite next`. A running
 manifest whose owner exited returns `recovery_required`; recovery removes only
 the matching managed run resources and allocates a replacement run. This makes
 a lost action response recoverable without rebuilding argv or starting a
 second worker. In `system_repair_required`, status also reconstructs the exact
-coordinator-issued `repair verify <repair-id>` acceptance. When an action
-reports `recovery_required`, execute its exact
-`rewrite recover` argv. Recovery rejects a live coordinator, removes a stale
-lock, stops an orphaned focused target/Replay attempt or managed recording,
-publishes interrupted state, and returns the next coordinator command.
+coordinator-issued `action.commands.acceptance` for
+`repair verify <repair-id>`. When an action reports `recovery_required`, execute
+its exact `action.commands.recover` argv. Recovery rejects a live coordinator,
+removes a stale lock, stops an orphaned focused target/Replay attempt or managed
+recording, publishes interrupted state, and returns the next coordinator
+command.
 
 Traffic-e2e's internal runner publication may retain its own implementation
 layout. Those internal paths are not a stable rewrite-interface contract. The

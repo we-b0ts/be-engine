@@ -18,6 +18,8 @@ struct RecordedRequest {
     timestamp: Option<DateTime<Utc>>,
     method: String,
     uri: String,
+    #[serde(default)]
+    api_pattern: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +29,7 @@ struct RawCase {
     method: String,
     path: String,
     recorded_at: Option<DateTime<Utc>>,
+    has_recording_api_pattern: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +69,11 @@ pub(super) fn discover_published_cases(case_source: &Path) -> Result<Vec<Publish
         .map(|case| {
             let member_dir = if direct_collection {
                 case_source.to_path_buf()
+            } else if case.has_recording_api_pattern {
+                case.dir
+                    .parent()
+                    .context("recorded API case has no member directory")?
+                    .to_path_buf()
             } else {
                 let relative = case.dir.strip_prefix(case_source)?;
                 let first = relative
@@ -107,6 +115,9 @@ fn walk_case_directories(root: &Path, directory: &Path, cases: &mut Vec<RawCase>
         let recorded: RecordedRequest = serde_json::from_slice(&payload)
             .with_context(|| format!("failed to parse {}", request.display()))?;
         validate_single_line("recorded request method", &recorded.method)?;
+        if let Some(pattern) = &recorded.api_pattern {
+            validate_single_line("recorded API pattern", pattern)?;
+        }
         let path = request_path(&recorded.uri)?;
         let id = directory
             .file_name()
@@ -119,6 +130,7 @@ fn walk_case_directories(root: &Path, directory: &Path, cases: &mut Vec<RawCase>
             method: recorded.method.trim().to_ascii_uppercase(),
             path,
             recorded_at: recorded.timestamp,
+            has_recording_api_pattern: recorded.api_pattern.is_some(),
         });
         return Ok(());
     }

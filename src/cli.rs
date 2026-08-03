@@ -13,7 +13,6 @@ mod record;
 mod record_comparison;
 mod recording;
 mod replay;
-mod rewrite;
 mod signal;
 mod target;
 mod workflow;
@@ -69,8 +68,6 @@ enum Command {
     Recover(workflow::ContextArgs),
     /// Abort an active traffic E2E run and preserve its diagnostics.
     Abort(workflow::ContextArgs),
-    /// Coordinate one API rewrite through bounded actions and evidence.
-    Rewrite(rewrite::RewriteArgs),
     /// Access low-level recorder, replay, grouping, and policy commands.
     Diagnose(diagnose::DiagnoseArgs),
     /// Runtime-only process entrypoints used by managed containers.
@@ -105,7 +102,6 @@ pub(crate) async fn run() -> Result<()> {
         Command::Status(args) => workflow::run(workflow::WorkflowCommand::Status(args)).await,
         Command::Recover(args) => workflow::run(workflow::WorkflowCommand::Recover(args)).await,
         Command::Abort(args) => workflow::run(workflow::WorkflowCommand::Abort(args)).await,
-        Command::Rewrite(args) => rewrite::run(args).await,
         Command::Diagnose(args) => diagnose::run(args).await,
         Command::Internal(args) => internal::run(args).await,
     }
@@ -151,10 +147,14 @@ mod tests {
                 "status",
                 "recover",
                 "abort",
-                "rewrite",
                 "diagnose"
             ]
         );
+    }
+
+    #[test]
+    fn rejects_rewrite_commands_owned_by_the_backend_rewrite_binary() {
+        assert!(Cli::try_parse_from(["traffic-e2e", "rewrite", "next"]).is_err());
     }
 
     #[test]

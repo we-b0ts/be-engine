@@ -11,7 +11,7 @@ pub(super) async fn recover(context: RewriteContext) -> Result<RewriteRecoveryRe
     let recording_execution_state = recording_execution::state(&target_root)?;
     if let recording_execution::RecordingExecutionState::Live(marker) = &recording_execution_state {
         anyhow::bail!(
-            "recording executor process {} is still active; inspect `traffic-e2e rewrite status`",
+            "recording executor process {} is still active; inspect `backend-rewrite status`",
             marker.pid
         );
     }

@@ -9,6 +9,7 @@ mod config;
 mod dependency;
 mod dns_mock;
 mod e2e_run;
+mod engine_binary;
 mod gateway;
 mod http;
 mod internal_runtime;
@@ -147,19 +148,20 @@ pub use replay::{
     run_replay, run_replay_control, validate_replay_policy,
 };
 pub use rewrite::{
-    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryView, RewriteApiProgress,
-    RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec, RewriteContext,
-    RewriteDependencyRulePlanOptions, RewriteDependencyRuleReport, RewriteDependencyRuleSelector,
-    RewriteEvidenceCommand, RewriteEvidenceReport, RewriteFocusedE2eExecution,
-    RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason, RewriteIssue, RewriteIssueKind,
-    RewriteIssueOwner, RewriteNextOptions, RewritePhase, RewriteRecordingExecutionReport,
-    RewriteRecordingInputCandidate, RewriteRecordingInputCandidateDisposition,
-    RewriteRecordingInputDiagnosis, RewriteRecordingInputMode, RewriteRecordingInputRejections,
-    RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
-    RewriteRecordingStartReport, RewriteRecordingStartState, RewriteRecoveryReport,
-    RewriteRepairAcceptanceKind, RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions,
-    RewriteRuleReport, RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule,
-    apply_rewrite_rule, execute_rewrite_recording_worker, next_rewrite,
+    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
+    RewriteApiProgress, RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec,
+    RewriteContext, RewriteDependencyRulePlanOptions, RewriteDependencyRuleReport,
+    RewriteDependencyRuleSelector, RewriteEvidenceCommand, RewriteEvidenceReport,
+    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
+    RewriteInventoryReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteNextOptions,
+    RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
+    RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
+    RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecordingStartReport,
+    RewriteRecordingStartState, RewriteRecoveryReport, RewriteRepairAcceptanceKind,
+    RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport,
+    RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_rule,
+    execute_rewrite_recording_worker, inventory_rewrite, next_rewrite,
     plan_rewrite_dependency_rule, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
     request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
     verify_rewrite_repair,

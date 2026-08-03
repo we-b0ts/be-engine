@@ -62,10 +62,6 @@ pub(super) fn validate_standard_recording(target_root: &Path, state: &RewriteSta
         report.published_cases > 0,
         "standard recording published no cases"
     );
-    ensure!(
-        report.failed_cases == 0 && report.errors.is_empty(),
-        "standard recording is dirty"
-    );
     Ok(())
 }
 
@@ -151,7 +147,6 @@ pub(super) fn recording_rejection(error: &anyhow::Error) -> String {
             "standard recording scope does not match requested rewrite scope",
             "standard recording contains no API inventory",
             "standard recording published no cases",
-            "standard recording is dirty",
         ],
         "standard recording evidence is unreadable or invalid",
     )
@@ -298,8 +293,6 @@ struct StandardRecordingManifest {
     status: String,
     recording_apis: Vec<String>,
     published_cases: usize,
-    failed_cases: usize,
-    errors: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -344,6 +337,63 @@ mod tests {
         .unwrap();
 
         assert_ne!(replacement, reserved);
+    }
+
+    #[test]
+    fn standard_recording_publication_accepts_structured_errors() {
+        let target = tempfile::tempdir().unwrap();
+        let run_id = "20260803021953";
+        let run = recording_run(target.path(), run_id);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(
+            run.join("recording-run.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "status": "running",
+                "recording_apis": [],
+                "published_cases": 651,
+                "failed_cases": 1,
+                "errors": [{
+                    "rule_name": "record-api",
+                    "case_id": "f036616f-aa65-4938-b805-64fc26ef5165",
+                    "reason": "dependency_replay_unsafe"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            standard_recording_publication(target.path(), run_id).unwrap(),
+            RecordingPublication::Running
+        );
+    }
+
+    #[test]
+    fn standard_recording_validation_accepts_quarantined_case_errors() {
+        let target = tempfile::tempdir().unwrap();
+        let run_id = "20260803021953";
+        let run = recording_run(target.path(), run_id);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(
+            run.join("recording-run.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "status": "completed",
+                "recording_apis": ["GET /api"],
+                "published_cases": 667,
+                "failed_cases": 1,
+                "errors": [{
+                    "rule_name": "record-api",
+                    "case_id": "f036616f-aa65-4938-b805-64fc26ef5165",
+                    "reason": "dependency_replay_unsafe"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut state = crate::rewrite::test_state();
+        state.recording_run_id = run_id.to_string();
+
+        validate_standard_recording(target.path(), &state).unwrap();
     }
 
     #[test]

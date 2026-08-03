@@ -75,7 +75,6 @@ fn recovery_required(target_root: &Path, reason: &str) -> RewriteAction {
     RewriteAction::RecoveryRequired {
         summary: format!("{reason}; recover the managed recording before continuing"),
         command: action::recover_command(target_root),
-        resume: action::next_command(target_root),
     }
 }
 
@@ -119,8 +118,6 @@ pub(super) fn command(
     action::command(
         target_root,
         vec![
-            "traffic-e2e".to_string(),
-            "rewrite".to_string(),
             "recording".to_string(),
             "execute".to_string(),
             recording_action_id(state, comparison),

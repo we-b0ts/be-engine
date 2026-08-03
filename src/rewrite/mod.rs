@@ -1,4 +1,5 @@
 mod action;
+mod action_contract;
 mod artifacts;
 mod dependency_rule;
 mod evidence;
@@ -22,11 +23,11 @@ use serde_json::Value;
 
 pub use dependency_rule::{RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector};
 pub use model::{
-    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryView, RewriteApiProgress,
-    RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec,
+    RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
+    RewriteApiProgress, RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec,
     RewriteDependencyRuleReport, RewriteEvidenceCommand, RewriteEvidenceReport,
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
-    RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
+    RewriteInventoryReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
     RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
     RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
@@ -42,8 +43,8 @@ pub use repair::RewriteRouteOptions;
 pub use rule::RewriteRulePlanOptions;
 
 use model::{
-    RewriteAttemptDelta, RewriteAttemptSummary, RewriteRecordingSettings, RewriteState,
-    STATE_VERSION,
+    ACTION_SCHEMA_VERSION, RewriteAttemptDelta, RewriteAttemptSummary, RewriteRecordingSettings,
+    RewriteState, STATE_VERSION,
 };
 use store::RewriteStore;
 
@@ -267,7 +268,6 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
 pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let state = RewriteStore::new(&target_root)?.load()?;
-    let next = action::next_command(&target_root);
     Ok(match state {
         Some(mut state) => {
             inventory::initialize_legacy(&mut state);
@@ -277,13 +277,11 @@ pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
                 initialized: true,
                 workflow: envelope.workflow,
                 api_inventory: envelope.api_inventory,
-                active_issue: state.active_issue.clone(),
                 latest_focused_e2e: envelope.latest_focused_e2e,
                 e2e_current: state.e2e_current,
                 comparison_current: state.comparison_current,
                 terminal_allowed: envelope.terminal_allowed,
                 action: envelope.action,
-                next,
             }
         }
         None => {
@@ -293,15 +291,35 @@ pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
                 initialized: false,
                 workflow: None,
                 api_inventory: None,
-                active_issue: None,
                 latest_focused_e2e: None,
                 e2e_current: false,
                 comparison_current: false,
                 terminal_allowed: false,
                 action: envelope.action,
-                next,
             }
         }
+    })
+}
+
+pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryReport> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let state = RewriteStore::new(&target_root)?.load()?;
+    Ok(match state {
+        Some(mut state) => {
+            inventory::initialize_legacy(&mut state);
+            RewriteInventoryReport {
+                schema_version: ACTION_SCHEMA_VERSION,
+                initialized: true,
+                workflow: Some(action::workflow_view(&state)),
+                api_inventory: Some(inventory::details(&state)),
+            }
+        }
+        None => RewriteInventoryReport {
+            schema_version: ACTION_SCHEMA_VERSION,
+            initialized: false,
+            workflow: None,
+            api_inventory: None,
+        },
     })
 }
 
@@ -623,32 +641,32 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(5)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(7)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
-            value.pointer("/action/command/cwd"),
+            value.pointer("/action/commands/execute/cwd"),
             Some(&serde_json::json!(target))
         );
         assert_eq!(
-            value.pointer("/action/command/required_env_names/0"),
+            value.pointer("/action/commands/execute/required_env_names/0"),
             Some(&Value::String("TRAFFIC_E2E_ENCRYPTION_KEY_B64".to_string()))
         );
         assert_eq!(
-            value.pointer("/action/command/argv/0"),
-            Some(&Value::String("traffic-e2e".to_string()))
+            value.pointer("/action/commands/execute/argv/0"),
+            Some(&Value::String("backend-rewrite".to_string()))
         );
         assert_eq!(
-            value.pointer("/action/command/argv/3"),
+            value.pointer("/action/commands/execute/argv/2"),
             Some(&serde_json::json!("execute"))
         );
         assert_eq!(
             value
-                .pointer("/action/command/argv")
+                .pointer("/action/commands/execute/argv")
                 .unwrap()
                 .as_array()
                 .unwrap()
                 .len(),
-            5
+            4
         );
         assert!(!value.to_string().contains("encryption-key-value"));
     }
@@ -664,7 +682,7 @@ mod tests {
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
         assert_eq!(
-            value.pointer("/action/command/argv/4"),
+            value.pointer("/action/commands/execute/argv/3"),
             Some(&serde_json::json!(recording_action::recording_action_id(
                 &state, false
             )))
@@ -694,17 +712,14 @@ mod tests {
         let target = Path::new("/target");
         let value = serde_json::to_value(action::recovery_required(target)).unwrap();
         assert_eq!(
-            value.pointer("/action/command/argv"),
-            Some(&serde_json::json!(["traffic-e2e", "rewrite", "recover"]))
+            value.pointer("/action/commands/recover/argv"),
+            Some(&serde_json::json!(["backend-rewrite", "recover"]))
         );
         assert_eq!(
-            value.pointer("/action/command/cwd"),
+            value.pointer("/action/commands/recover/cwd"),
             Some(&serde_json::json!(target))
         );
         assert!(!value.to_string().contains(".traffic-e2e/.ai-forbidden"));
-        assert_eq!(
-            value.pointer("/action/resume/argv"),
-            Some(&serde_json::json!(["traffic-e2e", "rewrite", "next"]))
-        );
+        assert!(value.pointer("/action/commands/resume").is_none());
     }
 }

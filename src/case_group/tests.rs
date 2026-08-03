@@ -39,6 +39,31 @@ fn write_case_files(directory: &Path, method: &str, uri: &str) {
     fs::write(directory.join("expected-response.json"), b"{}\n").unwrap();
 }
 
+fn write_recording_case(
+    source: &Path,
+    member: &str,
+    case_id: &str,
+    method: &str,
+    uri: &str,
+    api_pattern: &str,
+) -> PathBuf {
+    let directory = source.join("record-api").join(member).join(case_id);
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("request.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "method": method,
+            "uri": uri,
+            "matched_rule": "record-api",
+            "api_pattern": api_pattern,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(directory.join("expected-response.json"), b"{}\n").unwrap();
+    directory
+}
+
 fn write_case_at(
     root: &Path,
     group: &str,
@@ -208,6 +233,50 @@ fn static_route_uses_the_existing_directory_as_the_group() {
         result.pattern_outcome.status,
         PatternOutcomeStatus::NotRequiredStatic
     );
+}
+
+#[test]
+fn recording_rule_wrapper_preserves_each_api_member() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("recording-run");
+    let show_member = source.join("record-api/2-users-show.json");
+    let batch_member = source.join("record-api/2-users-show_batch.json");
+    write_recording_case(
+        &source,
+        "2-users-show.json",
+        "case-show",
+        "GET",
+        "/2/users/show.json?uid=1",
+        "/2/users/show.json",
+    );
+    write_recording_case(
+        &source,
+        "2-users-show_batch.json",
+        "case-batch",
+        "GET",
+        "/2/users/show_batch.json?uids=1,2",
+        "/2/users/show_batch.json",
+    );
+
+    let show_api = "GET /2/users/show.json".parse().unwrap();
+    assert_eq!(
+        resolve_recording_api_member(&source, &show_api).unwrap(),
+        show_member
+    );
+
+    let result = ensure_case_group(options(
+        &source,
+        &batch_member,
+        &temporary.path().join("case-groups.json"),
+        "/2/users/show_batch.json",
+        None,
+    ))
+    .unwrap();
+
+    assert_eq!(result.status, CaseGroupStatus::AlreadyCanonical);
+    assert_eq!(result.group_dir, Some(batch_member.clone()));
+    assert_eq!(result.member_dirs, vec![batch_member]);
+    assert_eq!(result.case_ids, vec!["case-batch"]);
 }
 
 #[test]

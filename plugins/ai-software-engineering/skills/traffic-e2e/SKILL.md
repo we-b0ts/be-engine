@@ -10,6 +10,11 @@ skill for an ordinary backend rewrite. The `backend-rewrite` skill is
 self-contained and consumes the coordinator interface without this operational
 context.
 
+Use the `traffic-e2e` binary for the operations in this skill. It intentionally
+has no `rewrite` subcommand. Backend migration orchestration belongs only to
+the companion `backend-rewrite` binary, which uses the same `traffic_e2e` crate;
+do not emulate that coordinator by composing low-level engine commands.
+
 ## Boundary
 
 - Recordings are immutable sensitive evidence. Never edit, synthesize, trim, or

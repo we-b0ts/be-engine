@@ -148,7 +148,7 @@ fn reuse_pending_recording(
     }
     ensure!(
         replace_pending,
-        "a different standard recording is already pending; inspect `traffic-e2e rewrite status` or retry with --replace-pending"
+        "a different standard recording is already pending; inspect `backend-rewrite status` or retry with --replace-pending"
     );
     Ok(false)
 }
@@ -185,7 +185,7 @@ pub fn start_rewrite_recording(
         }
         RecordingExecutionState::Stale(_) => {
             anyhow::bail!(
-                "the previous recording executor stopped before publishing completion; execute `traffic-e2e rewrite recover`"
+                "the previous recording executor stopped before publishing completion; execute `backend-rewrite recover`"
             );
         }
         RecordingExecutionState::Absent => {}
@@ -203,7 +203,7 @@ pub fn start_rewrite_recording(
         }
         artifacts::RecordingPublication::Running => {
             anyhow::bail!(
-                "the recording manifest is incomplete and has no live executor; execute `traffic-e2e rewrite recover`"
+                "the recording manifest is incomplete and has no live executor; execute `backend-rewrite recover`"
             );
         }
         artifacts::RecordingPublication::Missing => {}
@@ -219,7 +219,7 @@ pub fn start_rewrite_recording(
         .open(&log_path)
         .with_context(|| format!("failed to open recording log {}", log_path.display()))?;
     let stderr = stdout.try_clone()?;
-    let executable = std::env::current_exe().context("failed to resolve traffic-e2e binary")?;
+    let executable = crate::engine_binary::executable()?;
     let mut command = std::process::Command::new(executable);
     command
         .arg("internal")
@@ -349,9 +349,9 @@ async fn execute_rewrite_recording_locked(
                 true,
             ));
         }
-        artifacts::RecordingPublication::Running => anyhow::bail!(
-            "the recording manifest is incomplete; execute `traffic-e2e rewrite recover`"
-        ),
+        artifacts::RecordingPublication::Running => {
+            anyhow::bail!("the recording manifest is incomplete; execute `backend-rewrite recover`")
+        }
         artifacts::RecordingPublication::Missing => {}
     }
     let request_source = if comparison {
@@ -553,8 +553,7 @@ mod tests {
         assert_eq!(
             command.argv,
             [
-                "traffic-e2e",
-                "rewrite",
+                "backend-rewrite",
                 "recording",
                 "execute",
                 recording_action::recording_action_id(&state, false).as_str(),

@@ -23,8 +23,6 @@ struct RecordingManifest {
     status: String,
     recording_apis: Vec<String>,
     published_cases: usize,
-    failed_cases: usize,
-    errors: Vec<String>,
 }
 
 pub(super) fn bind(
@@ -118,16 +116,6 @@ fn inspect(
                 run_id,
                 &report,
                 RewriteRecordingInputCandidateDisposition::Empty,
-            );
-            continue;
-        }
-        if report.failed_cases > 0 || !report.errors.is_empty() {
-            diagnosis.rejections.dirty = diagnosis.rejections.dirty.saturating_add(1);
-            push_manifest_candidate(
-                &mut diagnosis,
-                run_id,
-                &report,
-                RewriteRecordingInputCandidateDisposition::Dirty,
             );
             continue;
         }
@@ -370,9 +358,9 @@ mod tests {
             target.path(),
             "20260802000002",
             &[],
-            &["/2/users/show.json?uid=1"],
+            &[],
             "completed",
-            true,
+            false,
         );
         let mut state = unscoped_state();
 
@@ -381,7 +369,8 @@ mod tests {
         let diagnosis = state.recording_input_diagnosis.as_ref().unwrap();
         assert_eq!(diagnosis.inspected_runs, 2);
         assert_eq!(diagnosis.rejections.not_completed, 1);
-        assert_eq!(diagnosis.rejections.dirty, 1);
+        assert_eq!(diagnosis.rejections.empty, 1);
+        assert_eq!(diagnosis.rejections.dirty, 0);
         assert_eq!(diagnosis.candidates.len(), 2);
         let envelope = super::super::action::for_state(target.path(), &state);
         let super::super::model::RewriteAction::RecordingRequired {
@@ -398,6 +387,40 @@ mod tests {
         );
         assert_eq!(public_diagnosis.candidates, diagnosis.candidates);
         assert!(!bind(target.path(), &mut state, None).unwrap());
+    }
+
+    #[test]
+    fn completed_recording_with_quarantined_errors_is_reusable() {
+        let target = tempfile::tempdir().unwrap();
+        let run = write_run(
+            target.path(),
+            "20260802000001",
+            &[],
+            &["/2/users/show.json?uid=1"],
+            "completed",
+            false,
+        );
+        fs::write(
+            run.join("recording-run.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "status": "completed",
+                "recording_apis": [],
+                "published_cases": 1,
+                "failed_cases": 1,
+                "errors": [{
+                    "rule_name": "record-api",
+                    "reason": "dependency_replay_unsafe"
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let mut state = unscoped_state();
+
+        bind(target.path(), &mut state, None).unwrap();
+
+        assert_eq!(state.recording_input_case_source, Some(run));
+        assert!(state.recording_input_diagnosis.is_none());
     }
 
     fn unscoped_state() -> RewriteState {
@@ -431,6 +454,7 @@ mod tests {
         let run = target_root
             .join(".traffic-e2e/artifacts/recordings")
             .join(run_id);
+        fs::create_dir_all(&run).unwrap();
         for (index, uri) in uris.iter().enumerate() {
             let case = run.join("record-api").join(format!("case-{index:04}"));
             fs::create_dir_all(&case).unwrap();

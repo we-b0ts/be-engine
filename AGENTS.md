@@ -2,16 +2,18 @@
 
 ## Overview
 
-This is a Rust single-binary traffic E2E CLI. It records HTTP, HTTPS, HTTP
-gateway, fake-DNS TCP/UDP gateways, MySQL, Redis, Memcached, and constrained
-Kafka traffic to JSONL files, then groups, replays, and verifies recorded
-contracts.
+This is a Rust traffic E2E engine and backend rewrite coordinator. It records
+HTTP, HTTPS, HTTP gateway, fake-DNS TCP/UDP gateways, MySQL, Redis, Memcached,
+and constrained Kafka traffic to JSONL files, then groups, replays, and
+verifies recorded contracts.
 
-The primary crate is in `src/` and builds the `traffic-e2e` binary. Standard
-workflow commands are `config init`, `rewrite ...`, `record`, `record-comparison`, `prepare`,
-`run-api`, `run`, `status`, `recover`, and `abort`; managed recording, replay, and target isolation are
-also provided by the same binary, while low-level tooling is under `diagnose`.
-Recorder
+The primary crate is in `src/` and builds two binaries. `traffic-e2e` exposes
+the low-level recording, replay, comparison, configuration, and diagnostic
+engine; `backend-rewrite` exposes AI-facing rewrite orchestration directly on
+the same crate. Standard engine workflow commands are `config init`, `record`,
+`record-comparison`, `prepare`, `run-api`, `run`, `status`, `recover`, and
+`abort`; managed recording, replay, and target isolation are also provided by
+the `traffic-e2e` binary, while low-level tooling is under `diagnose`. Recorder
 configuration starts from `config/recorder.example.toml`. Repository scripts
 are development or manual host-trust tools only.
 
