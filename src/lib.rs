@@ -23,7 +23,9 @@ mod proxy;
 mod recorded_request;
 mod recorder;
 mod recording_api;
+mod recording_completion;
 mod recording_control;
+mod recording_runtime;
 mod redis;
 mod replay;
 mod repository;
@@ -34,7 +36,6 @@ mod tls;
 mod udp_gateway;
 mod verification_progress;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,7 +45,6 @@ use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 use rustls::{ClientConfig, RootCertStore};
-use tokio::task::JoinSet;
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -57,7 +57,7 @@ use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::background::BackgroundDependencyMatcher;
 use crate::recorder::http::case::CaseInvalidation;
-use crate::recording_control::{RecordingControlServer, RecordingLifecycle, RecordingListener};
+use crate::recording_control::{RecordingLifecycle, RecordingListener};
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
@@ -149,22 +149,27 @@ pub use replay::{
 };
 pub use rewrite::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
-    RewriteApiProgress, RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec,
-    RewriteContext, RewriteDependencyRulePlanOptions, RewriteDependencyRuleReport,
-    RewriteDependencyRuleSelector, RewriteEvidenceCommand, RewriteEvidenceReport,
-    RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
-    RewriteInventoryReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteNextOptions,
-    RewritePhase, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteApiProgress, RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCapturePreview,
+    RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
+    RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
+    RewriteCaseDependencyTargetSummary, RewriteCommandSpec, RewriteContext,
+    RewriteDependencyRulePlanOptions, RewriteDependencyRuleReport, RewriteDependencyRuleSelector,
+    RewriteEvidenceCommand, RewriteEvidenceReport, RewriteFocusedE2eExecution,
+    RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason, RewriteInventoryReport,
+    RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteMemcachedExchangeDetail,
+    RewriteMemcachedOperationDetail, RewriteNextOptions, RewritePhase,
+    RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
     RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
     RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecordingStartReport,
-    RewriteRecordingStartState, RewriteRecoveryReport, RewriteRepairAcceptanceKind,
-    RewriteRouteOptions, RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport,
-    RewriteStatusReport, RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_rule,
+    RewriteRecordingStartState, RewriteRecoveryReport, RewriteRedisExchangeDetail,
+    RewriteRedisOperationDetail, RewriteRepairAcceptanceKind, RewriteRouteOptions,
+    RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport, RewriteStatusReport,
+    RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_rule,
     execute_rewrite_recording_worker, inventory_rewrite, next_rewrite,
-    plan_rewrite_dependency_rule, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
-    verify_rewrite_repair,
+    plan_rewrite_dependency_rule, plan_rewrite_rule, query_rewrite_case_dependencies,
+    query_rewrite_evidence, recover_rewrite, request_rewrite_recording, route_rewrite,
+    start_rewrite_recording, status_rewrite, verify_rewrite_repair,
 };
 pub use tls::MitmCa;
 
@@ -228,11 +233,23 @@ impl AppState {
         let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
             .context("failed to initialize DNS bypass matcher")?;
         let recording_output_dir = config.recording_output_dir();
+        let recording_api_limits = recording_apis
+            .iter()
+            .map(|api| {
+                (
+                    api.to_string(),
+                    config
+                        .http_gateway
+                        .per_api_case_limits
+                        .limit_for(api.path_pattern()),
+                )
+            })
+            .collect();
         let recorder = Recorder::new_with_recording_config_at_and_run_id(
             &config.recording,
             recording_output_dir,
             run_id,
-            recording_apis.iter().map(ToString::to_string).collect(),
+            recording_api_limits,
             artifact_owner,
         )
         .await
@@ -615,180 +632,6 @@ impl AppState {
                 .record_completed_match(matched);
         }
     }
-
-    pub async fn run(self) -> Result<()> {
-        self.run_with_control_socket(None).await
-    }
-
-    pub async fn run_with_control_socket(self, control_socket: Option<PathBuf>) -> Result<()> {
-        let control_server = match control_socket {
-            Some(path) => Some(
-                RecordingControlServer::start(self.inner.recording_lifecycle.clone(), path).await?,
-            ),
-            None => None,
-        };
-        let mut tasks = JoinSet::new();
-
-        if self.config().http.enabled {
-            let http_state = self.clone();
-            tasks.spawn(async move { proxy::http::run(http_state).await });
-        }
-
-        if self.config().dns_mock.enabled {
-            let dns_state = self.clone();
-            tasks.spawn(async move { dns_mock::run(dns_state).await });
-        }
-
-        if self.config().tcp_gateway.enabled {
-            let tcp_gateway_state = self.clone();
-            tasks.spawn(async move { tcp_gateway::run(tcp_gateway_state).await });
-        }
-
-        if self.config().udp_gateway.enabled {
-            let udp_gateway_state = self.clone();
-            tasks.spawn(async move { udp_gateway::run(udp_gateway_state).await });
-        }
-
-        if self.config().http_gateway.enabled {
-            let gateway_state = self.clone();
-            tasks.spawn(async move { gateway::http::run(gateway_state).await });
-        }
-
-        if self.config().mysql.enabled {
-            let mysql_state = self.clone();
-            tasks.spawn(async move { recorder::mysql::run(mysql_state).await });
-        }
-
-        info!(
-            access_policy = self.config().recording.access_policy.as_str(),
-            access_rules = self.config().recording.access_rules.len(),
-            http_enabled = self.config().http.enabled,
-            http_listen = %self.config().http.listen,
-            dns_mock_enabled = self.config().dns_mock.enabled,
-            tcp_gateway_enabled = self.config().tcp_gateway.enabled,
-            udp_gateway_enabled = self.config().udp_gateway.enabled,
-            http_gateway_enabled = self.config().http_gateway.enabled,
-            mysql_enabled = self.config().mysql.enabled,
-            "traffic recorder proxy started"
-        );
-
-        let mut registry_flush_interval = tokio::time::interval_at(
-            tokio::time::Instant::now() + dns_mock::REGISTRY_FLUSH_INTERVAL,
-            dns_mock::REGISTRY_FLUSH_INTERVAL,
-        );
-        registry_flush_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        let shutdown = shutdown_signal();
-        tokio::pin!(shutdown);
-        let run_result = loop {
-            tokio::select! {
-                result = &mut shutdown => {
-                    if let Err(error) = result {
-                        break Err(error);
-                    }
-                    self.inner.recording_lifecycle.mark_stopping();
-                    let newly_quiescing = self.begin_case_quiescing();
-                    let timeout_ms = self.config().recording.shutdown_case_drain_timeout_ms;
-                    info!(
-                        newly_quiescing,
-                        timeout_ms,
-                        "shutdown signal received; draining active recording case"
-                    );
-                    if self.wait_for_active_case_shutdown_drain().await {
-                        info!("active recording case shutdown drain completed");
-                    } else {
-                        warn!(
-                            timeout_ms,
-                            "active recording case shutdown drain timed out"
-                        );
-                    }
-                    break Ok(());
-                }
-                joined = tasks.join_next(), if !tasks.is_empty() => {
-                    let Some(joined) = joined else {
-                        continue;
-                    };
-                    break match joined {
-                        Ok(result) => result,
-                        Err(error) => Err(error).context("proxy task panicked"),
-                    };
-                }
-                _ = registry_flush_interval.tick() => {
-                    match self.dns_registry().flush_if_dirty().await {
-                        Ok(true) => info!("flushed fake DNS registry"),
-                        Ok(false) => {}
-                        Err(error) => {
-                            warn!(
-                                error = %error,
-                                "failed to flush fake DNS registry; pending updates will be retried"
-                            );
-                        }
-                    }
-                }
-            }
-        };
-        if let Err(error) = &run_result {
-            self.inner.recording_lifecycle.mark_failed(error);
-        }
-        let runtime_succeeded = run_result.is_ok();
-
-        tasks.abort_all();
-        while let Some(joined) = tasks.join_next().await {
-            if let Err(error) = joined
-                && !error.is_cancelled()
-            {
-                warn!(error = %error, "proxy task failed while shutting down");
-            }
-        }
-        self.kubectl_proxy_manager().shutdown().await;
-        let finish_run_result = self
-            .recorder()
-            .finish_run_after_runtime(runtime_succeeded)
-            .await
-            .context("failed to finalize recording run");
-        let registry_flush_result = self
-            .dns_registry()
-            .flush_if_dirty()
-            .await
-            .context("failed to flush fake DNS registry during shutdown");
-
-        let result = async {
-            let has_failed_cases = finish_run_result?;
-            if has_failed_cases {
-                warn!(
-                    "recording run finalized with failed cases; published cases remain available"
-                );
-            }
-            run_result?;
-            registry_flush_result?;
-            Ok(())
-        }
-        .await;
-        if let Err(error) = &result {
-            self.inner.recording_lifecycle.mark_failed(error);
-        }
-        let control_result = match control_server {
-            Some(server) => server.shutdown().await,
-            None => Ok(()),
-        };
-        result.and(control_result)
-    }
-}
-
-async fn shutdown_signal() -> Result<()> {
-    #[cfg(unix)]
-    {
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        let mut hangup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())?;
-        tokio::select! {
-            result = tokio::signal::ctrl_c() => result?,
-            _ = terminate.recv() => {}
-            _ = hangup.recv() => {}
-        }
-    }
-    #[cfg(not(unix))]
-    tokio::signal::ctrl_c().await?;
-    Ok(())
 }
 
 fn build_upstream_tls_config(ca: &MitmCa) -> Result<Arc<ClientConfig>> {

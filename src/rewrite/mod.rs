@@ -1,12 +1,14 @@
 mod action;
 mod action_contract;
 mod artifacts;
+mod case_dependencies;
 mod dependency_rule;
 mod evidence;
 mod fingerprint;
 mod inventory;
 mod issue;
 mod model;
+mod preparation;
 mod recording;
 mod recording_action;
 mod recording_execution;
@@ -15,12 +17,19 @@ mod recovery;
 mod repair;
 mod rule;
 mod store;
+mod transition;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
+pub use case_dependencies::{
+    RewriteCapturePreview, RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
+    RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
+    RewriteCaseDependencyTargetSummary, RewriteMemcachedExchangeDetail,
+    RewriteMemcachedOperationDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
+};
 pub use dependency_rule::{RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector};
 pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
@@ -42,16 +51,15 @@ pub use recording::{
 pub use repair::RewriteRouteOptions;
 pub use rule::RewriteRulePlanOptions;
 
-use model::{
-    ACTION_SCHEMA_VERSION, RewriteAttemptDelta, RewriteAttemptSummary, RewriteRecordingSettings,
-    RewriteState, STATE_VERSION,
-};
+use model::{ACTION_SCHEMA_VERSION, RewriteRecordingSettings, RewriteState, STATE_VERSION};
 use store::RewriteStore;
 
+use crate::e2e_run::{
+    FocusedBackgroundReclassification, reclassify_focused_background_dependencies,
+};
 use crate::{
-    ComparisonVerificationOptions, E2eRunContext, E2eRunPrepareOptions, ManagedRecordingOperation,
-    RecordingApi, prepare_e2e_run, resolve_recording_api_member, run_e2e_api,
-    update_comparison_progress, verify_comparison_recording,
+    ComparisonVerificationOptions, E2eRunContext, ManagedRecordingOperation, RecordingApi,
+    run_e2e_api, update_comparison_progress, verify_comparison_recording,
 };
 
 #[derive(Debug, Clone)]
@@ -64,6 +72,12 @@ pub struct RewriteNextOptions {
 #[derive(Debug, Clone)]
 pub struct RewriteContext {
     pub target_root: PathBuf,
+}
+
+pub fn query_rewrite_case_dependencies(
+    options: RewriteCaseDependenciesOptions,
+) -> Result<RewriteCaseDependenciesReport> {
+    case_dependencies::query(options)
 }
 
 pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
@@ -159,7 +173,17 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
         store.save(&state)?;
     }
 
-    if state.phase == RewritePhase::RecordingRequired && state.recording_input_case_source.is_none()
+    if preparation::restore_legacy_background_rule_recording_request(&target_root, &mut state)? {
+        store.save(&state)?;
+    }
+
+    if preparation::restore_stale_dependency_finalize_result(&target_root, &mut state)? {
+        store.save(&state)?;
+    }
+
+    if state.phase == RewritePhase::RecordingRequired
+        && recording::standard_recording_input_source(&state).is_none()
+        && !recording::requires_external_live_traffic(&state)
     {
         let excluded_run_id = state.recording_run_id.clone();
         if recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))? {
@@ -203,7 +227,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 store.save(&state)?;
                 return Ok(action::for_state(&target_root, &state));
             }
-            prepare_recording(&target_root, &mut state)?;
+            preparation::prepare_recording(&target_root, &mut state)?;
             store.save(&state)?;
             run_and_transition(&target_root, &mut state).await?;
             store.save(&state)?;
@@ -224,7 +248,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             if inventory::current_requires_source_route(&state) {
                 return Ok(action::for_state(&target_root, &state));
             }
-            prepare_recording(&target_root, &mut state)?;
+            preparation::prepare_recording(&target_root, &mut state)?;
             store.save(&state)?;
             run_and_transition(&target_root, &mut state).await?;
             store.save(&state)?;
@@ -387,7 +411,32 @@ pub fn apply_rewrite_dependency_rule(
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
-    let report = dependency_rule::apply(&target_root, &mut state, plan_id)?;
+    let mut report = dependency_rule::apply(&target_root, &mut state, plan_id)?;
+    let case_source = state
+        .case_source
+        .clone()
+        .context("rewrite workflow has no case source to reclassify")?;
+    let api = state
+        .group_id
+        .clone()
+        .context("rewrite workflow has no focused API to reclassify")?;
+    let reclassification: FocusedBackgroundReclassification =
+        reclassify_focused_background_dependencies(
+            E2eRunContext {
+                target_root: target_root.clone(),
+                case_source,
+                run_key: None,
+            },
+            &api,
+        )?;
+    transition::from_e2e_result(
+        &target_root,
+        &mut state,
+        &reclassification.result,
+        transition::AttemptTransition::ReclassifyCurrent,
+    )?;
+    report.evidence_reclassification = Some(serde_json::to_value(&reclassification)?);
+    report.next_command = action::next_command(&target_root);
     store.save(&state)?;
     Ok(report)
 }
@@ -423,32 +472,6 @@ pub async fn recover_rewrite(context: RewriteContext) -> Result<RewriteRecoveryR
     recovery::recover(context).await
 }
 
-fn prepare_recording(target_root: &Path, state: &mut RewriteState) -> Result<()> {
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    let case_source = artifacts::recording_run(target_root, &state.recording_run_id);
-    let api = state.api.parse::<RecordingApi>()?;
-    let member = resolve_recording_api_member(&case_source, &api)?;
-    let source_revision = fingerprint::source_container_revision(&project.source_container)?;
-    let prepared = prepare_e2e_run(E2eRunPrepareOptions {
-        context: E2eRunContext {
-            target_root: target_root.to_path_buf(),
-            case_source: case_source.clone(),
-            run_key: None,
-        },
-        case_dir: member,
-        method: api.method().to_string(),
-        source_route: state.source_route.clone(),
-        pattern: api.is_dynamic().then(|| api.path_pattern().to_string()),
-        source_revision: source_revision.clone(),
-    })?;
-    state.case_source = Some(case_source);
-    state.case_inventory_id = Some(prepared.group.case_inventory_id);
-    state.source_revision = Some(source_revision);
-    state.group_id = Some(prepared.group.group_id);
-    state.bump();
-    Ok(())
-}
-
 async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Result<()> {
     let case_source = state
         .case_source
@@ -467,37 +490,12 @@ async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Res
         &api,
     )
     .await?;
-    let target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
-    let summary = RewriteAttemptSummary {
-        attempt: result.attempt,
-        passed: result.passed,
-        gates: result.gates.clone(),
-        counts: result.diagnosis.counts.clone(),
-    };
-    state.attempt_delta = state
-        .attempts
-        .last()
-        .map(|previous| attempt_delta(previous, &summary));
-    state.attempts.push(summary);
-    state.target_fingerprint = Some(target_fingerprint.clone());
-    state.e2e_current = result.passed;
-    state.comparison_current = false;
-    state.route = None;
-    state.rule_plan = None;
-    state.dependency_rule_plan = None;
-    if result.passed {
-        state.active_issue = None;
-        state.phase = RewritePhase::ComparisonRecordingRequired;
-        state.comparison_run_id = Some(artifacts::allocate_run_id(
-            target_root,
-            ManagedRecordingOperation::RecordComparison,
-        )?);
-    } else {
-        state.active_issue = Some(issue::from_e2e(&state.api, &result, target_fingerprint));
-        state.phase = RewritePhase::ImplementationRequired;
-    }
-    state.bump();
-    Ok(())
+    transition::from_e2e_result(
+        target_root,
+        state,
+        &result,
+        transition::AttemptTransition::Append,
+    )
 }
 
 fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Result<()> {
@@ -564,24 +562,6 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
     Ok(())
 }
 
-fn attempt_delta(
-    previous: &RewriteAttemptSummary,
-    current: &RewriteAttemptSummary,
-) -> RewriteAttemptDelta {
-    let passed_delta =
-        current.counts.response_passed as i64 - previous.counts.response_passed as i64;
-    let nonpassing_delta =
-        current.counts.response_nonpassing as i64 - previous.counts.response_nonpassing as i64;
-    RewriteAttemptDelta {
-        previous_attempt: previous.attempt,
-        current_attempt: current.attempt,
-        response_passed_delta: passed_delta,
-        response_nonpassing_delta: nonpassing_delta,
-        improved: passed_delta > 0 || nonpassing_delta < 0,
-        regressed: passed_delta < 0 || nonpassing_delta > 0,
-    }
-}
-
 fn validate_single_line(label: &str, value: &str) -> Result<()> {
     ensure!(
         value == value.trim() && !value.is_empty() && !value.contains(['\r', '\n']),
@@ -628,6 +608,9 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::process::Command;
+
     use super::*;
 
     #[test]
@@ -708,6 +691,78 @@ mod tests {
     }
 
     #[test]
+    fn clean_reclassification_advances_without_replacing_standard_recording() {
+        let target = tempfile::tempdir().unwrap();
+        fs::write(
+            target.path().join("Cargo.toml"),
+            "[package]\nname='target'\n",
+        )
+        .unwrap();
+        git_ok(target.path(), &["init"]);
+        git_ok(target.path(), &["config", "user.email", "test@example.com"]);
+        git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
+        git_ok(target.path(), &["add", "."]);
+        git_ok(target.path(), &["commit", "-m", "baseline"]);
+
+        let counts = crate::E2eDiagnosisCounts {
+            selected: 10,
+            executed: 10,
+            response_passed: 10,
+            response_nonpassing: 0,
+            response_incomplete: 0,
+        };
+        let mut state = test_state();
+        state.phase = RewritePhase::ImplementationRequired;
+        state.recording_run_id = "20260803023812".to_string();
+        state.case_source = Some(PathBuf::from("recording-cases"));
+        state.group_id = Some("GET /api".to_string());
+        state.attempts.push(model::RewriteAttemptSummary {
+            attempt: 3,
+            passed: false,
+            gates: crate::E2eVerificationGates {
+                responses: crate::E2eResponseGate::Passed,
+                replay: crate::E2eReplayGate::Complete,
+                dependencies: crate::E2eDependencyGate::Dirty,
+            },
+            counts: counts.clone(),
+        });
+        let result = crate::E2eApiRunResult {
+            run_key: "20260803023812".to_string(),
+            api: "GET /api".to_string(),
+            attempt: 3,
+            status: "successful".to_string(),
+            passed: true,
+            gates: crate::E2eVerificationGates {
+                responses: crate::E2eResponseGate::Passed,
+                replay: crate::E2eReplayGate::Complete,
+                dependencies: crate::E2eDependencyGate::Clean,
+            },
+            diagnosis: crate::E2eDiagnosis {
+                counts,
+                failure_clusters: Vec::new(),
+                representative: None,
+                lifecycle_errors: Vec::new(),
+            },
+            progress: PathBuf::from("replay-progress.yaml"),
+        };
+
+        transition::from_e2e_result(
+            target.path(),
+            &mut state,
+            &result,
+            transition::AttemptTransition::ReclassifyCurrent,
+        )
+        .unwrap();
+
+        assert_eq!(state.phase, RewritePhase::ComparisonRecordingRequired);
+        assert_eq!(state.recording_run_id, "20260803023812");
+        assert_eq!(state.recording_request_reason, None);
+        assert_eq!(state.attempts.len(), 1);
+        assert!(state.attempts[0].passed);
+        assert!(state.comparison_run_id.is_some());
+    }
+
+    #[test]
     fn locked_workflow_returns_only_a_public_recovery_command() {
         let target = Path::new("/target");
         let value = serde_json::to_value(action::recovery_required(target)).unwrap();
@@ -721,5 +776,15 @@ mod tests {
         );
         assert!(!value.to_string().contains(".traffic-e2e/.ai-forbidden"));
         assert!(value.pointer("/action/commands/resume").is_none());
+    }
+
+    fn git_ok(repository: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {args:?}");
     }
 }

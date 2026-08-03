@@ -362,6 +362,13 @@ mod tests {
         ));
         assert!(MANAGER.contains("internal recorder-run --config"));
         assert!(MANAGER.contains("internal comparison-run --config"));
+        assert!(MANAGER.contains("wait_for_recorder_or_duration"));
+        assert!(
+            MANAGER.contains(
+                "timeout --foreground \"$duration_seconds\" docker wait \"$recorder_name\""
+            )
+        );
+        assert!(!MANAGER.contains("sleep \"$duration_seconds\""));
     }
 
     #[test]

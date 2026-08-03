@@ -122,39 +122,7 @@ impl ProgressReport {
     }
 
     pub(crate) fn apply(&mut self, observation: ProgressObservation) -> Result<bool> {
-        ensure!(
-            self.version == PROGRESS_VERSION,
-            "unsupported {:?} progress version {}",
-            self.stage,
-            self.version
-        );
-        ensure!(
-            !observation.key.is_empty(),
-            "progress run key must not be empty"
-        );
-        ensure!(
-            !observation.evidence_fingerprint.is_empty(),
-            "progress evidence fingerprint must not be empty"
-        );
-        ensure!(
-            !observation.apis.is_empty(),
-            "progress run must contain at least one API"
-        );
-        for (api, result) in &observation.apis {
-            ensure!(!api.is_empty(), "progress API key must not be empty");
-            ensure!(
-                result.cases.executed > 0,
-                "progress API {api:?} must execute at least one case"
-            );
-            ensure!(
-                result.cases.passed <= result.cases.executed,
-                "progress API {api:?} passed more cases than it executed"
-            );
-            ensure!(
-                !result.passed || result.cases.passed == result.cases.executed,
-                "passing progress API {api:?} must pass every executed case"
-            );
-        }
+        self.validate_observation(&observation)?;
 
         if let Some(evidence_fingerprint) = self.counted_runs.get(&observation.key) {
             ensure!(
@@ -252,6 +220,162 @@ impl ProgressReport {
             scope,
         });
         Ok(true)
+    }
+
+    pub(crate) fn revise_latest(&mut self, observation: ProgressObservation) -> Result<bool> {
+        self.validate_observation(&observation)?;
+        ensure!(
+            observation.apis.len() == 1,
+            "only a focused single-API progress run can be revised"
+        );
+        let latest = self
+            .latest_run
+            .clone()
+            .context("progress has no latest run to revise")?;
+        ensure!(
+            latest.key == observation.key,
+            "only the latest progress run can be revised"
+        );
+        let (api_key, api_observation) = observation
+            .apis
+            .iter()
+            .next()
+            .expect("single-API observation is non-empty");
+        ensure!(
+            latest.scope == [api_key.clone()],
+            "latest progress scope changed before revision"
+        );
+        if latest.evidence_fingerprint == observation.evidence_fingerprint {
+            return Ok(false);
+        }
+
+        revise_success_counts(&mut self.totals.cases, latest.cases, api_observation.cases);
+        self.totals.runs.passed = self
+            .totals
+            .runs
+            .passed
+            .saturating_sub(u64::from(latest.passed))
+            .saturating_add(u64::from(api_observation.passed));
+        revise_streak(
+            &mut self.success_streak,
+            latest.passed,
+            api_observation.passed,
+            latest.cases.executed,
+            api_observation.cases.executed,
+        );
+
+        let api = self
+            .apis
+            .get_mut(api_key)
+            .with_context(|| format!("latest progress API {api_key:?} is missing"))?;
+        revise_success_counts(&mut api.totals.cases, latest.cases, api_observation.cases);
+        api.totals.runs.passed = api
+            .totals
+            .runs
+            .passed
+            .saturating_sub(u64::from(latest.passed))
+            .saturating_add(u64::from(api_observation.passed));
+        revise_streak(
+            &mut api.success_streak,
+            latest.passed,
+            api_observation.passed,
+            latest.cases.executed,
+            api_observation.cases.executed,
+        );
+
+        self.updated_at = observation.finished_at;
+        self.counted_runs.insert(
+            observation.key.clone(),
+            observation.evidence_fingerprint.clone(),
+        );
+        self.latest_run = Some(LatestRun {
+            key: observation.key,
+            evidence_fingerprint: observation.evidence_fingerprint,
+            number: latest.number,
+            passed: api_observation.passed,
+            cases: api_observation.cases,
+            apis: LatestCounts {
+                executed: 1,
+                passed: u64::from(api_observation.passed),
+            },
+            scope: vec![api_key.clone()],
+        });
+        Ok(true)
+    }
+
+    fn validate_observation(&self, observation: &ProgressObservation) -> Result<()> {
+        ensure!(
+            self.version == PROGRESS_VERSION,
+            "unsupported {:?} progress version {}",
+            self.stage,
+            self.version
+        );
+        ensure!(
+            !observation.key.is_empty(),
+            "progress run key must not be empty"
+        );
+        ensure!(
+            !observation.evidence_fingerprint.is_empty(),
+            "progress evidence fingerprint must not be empty"
+        );
+        ensure!(
+            !observation.apis.is_empty(),
+            "progress run must contain at least one API"
+        );
+        for (api, result) in &observation.apis {
+            ensure!(!api.is_empty(), "progress API key must not be empty");
+            ensure!(
+                result.cases.executed > 0,
+                "progress API {api:?} must execute at least one case"
+            );
+            ensure!(
+                result.cases.passed <= result.cases.executed,
+                "progress API {api:?} passed more cases than it executed"
+            );
+            ensure!(
+                !result.passed || result.cases.passed == result.cases.executed,
+                "passing progress API {api:?} must pass every executed case"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn revise_success_counts(
+    totals: &mut SuccessCounts,
+    previous: LatestCounts,
+    current: LatestCounts,
+) {
+    totals.executed = totals
+        .executed
+        .saturating_sub(previous.executed)
+        .saturating_add(current.executed);
+    totals.passed = totals
+        .passed
+        .saturating_sub(previous.passed)
+        .saturating_add(current.passed);
+}
+
+fn revise_streak(
+    streak: &mut SuccessStreak,
+    previous_passed: bool,
+    current_passed: bool,
+    previous_cases: u64,
+    current_cases: u64,
+) {
+    match (previous_passed, current_passed) {
+        (true, true) => {
+            streak.cases = streak
+                .cases
+                .saturating_sub(previous_cases)
+                .saturating_add(current_cases);
+        }
+        (false, true) => {
+            streak.runs = 1;
+            streak.cases = current_cases;
+        }
+        (true, false) => *streak = SuccessStreak::default(),
+        (false, false) => {}
     }
 }
 
@@ -455,6 +579,55 @@ mod tests {
         conflicting.evidence_fingerprint = "other".to_string();
         assert!(report.apply(conflicting).is_err());
         assert_eq!(report.totals.runs.executed, 2);
+    }
+
+    #[test]
+    fn revises_latest_focused_observation_without_counting_a_new_run() {
+        let mut report = ProgressReport::new(VerificationStage::Replay);
+        report
+            .apply(observation("1", &[("GET /users", 100, 100)]))
+            .unwrap();
+        report
+            .apply(observation("2", &[("GET /users", 100, 98)]))
+            .unwrap();
+        let mut revised = observation("2", &[("GET /users", 100, 100)]);
+        revised.evidence_fingerprint = "reclassified-fingerprint-2".to_string();
+
+        assert!(report.revise_latest(revised).unwrap());
+
+        assert_eq!(report.totals.runs.executed, 2);
+        assert_eq!(report.totals.runs.passed, 2);
+        assert_eq!(report.totals.cases.executed, 200);
+        assert_eq!(report.totals.cases.passed, 200);
+        assert_eq!(report.success_streak.runs, 1);
+        assert_eq!(report.success_streak.cases, 100);
+        assert_eq!(report.apis["GET /users"].totals.runs.executed, 2);
+        assert_eq!(report.apis["GET /users"].totals.runs.passed, 2);
+        assert_eq!(
+            report.latest_run.as_ref().unwrap().evidence_fingerprint,
+            "reclassified-fingerprint-2"
+        );
+    }
+
+    #[test]
+    fn refuses_to_revise_a_non_latest_progress_run() {
+        let mut report = ProgressReport::new(VerificationStage::Replay);
+        report
+            .apply(observation("1", &[("GET /users", 1, 0)]))
+            .unwrap();
+        report
+            .apply(observation("2", &[("GET /users", 1, 0)]))
+            .unwrap();
+        let mut stale = observation("1", &[("GET /users", 1, 1)]);
+        stale.evidence_fingerprint = "reclassified-fingerprint-1".to_string();
+
+        assert!(
+            report
+                .revise_latest(stale)
+                .unwrap_err()
+                .to_string()
+                .contains("only the latest")
+        );
     }
 
     #[test]

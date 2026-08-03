@@ -1,12 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
 use super::fingerprint;
 use super::model::{
-    RewriteCommandSpec, RewriteDependencyRulePlanRecord, RewriteDependencyRuleReport,
-    RewriteDependencyRuleSpec, RewriteIssueKind, RewriteState,
+    RewriteDependencyRulePlanRecord, RewriteDependencyRuleReport, RewriteDependencyRuleSpec,
+    RewriteIssueKind, RewriteState,
 };
 use super::{action, evidence};
 use crate::{
@@ -57,6 +57,16 @@ pub enum RewriteDependencyRuleSelector {
         keys: Vec<String>,
         initial_load_timeout_ms: u64,
     },
+    RedisScard {
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        initial_load_timeout_ms: u64,
+    },
+    RedisHgetall {
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        initial_load_timeout_ms: u64,
+    },
 }
 
 enum DependencyRulePlan {
@@ -64,6 +74,17 @@ enum DependencyRulePlan {
     Memcached(BreezeMemcachedBackgroundDependencyPlan),
     Motan(MotanBackgroundDependencyPlan),
     Redis(RedisBackgroundDependencyPlan),
+}
+
+struct ExactKeyRedisPlanInput<'a> {
+    config_path: PathBuf,
+    replay_report_path: PathBuf,
+    record: &'a RewriteDependencyRulePlanRecord,
+    ports: &'a [u16],
+    keys: &'a [String],
+    initial_load_timeout_ms: u64,
+    source_revision: String,
+    command: &'static str,
 }
 
 impl DependencyRulePlan {
@@ -110,7 +131,7 @@ pub(super) fn plan(
     options: RewriteDependencyRulePlanOptions,
 ) -> Result<RewriteDependencyRuleReport> {
     let issue = dependency_issue(state)?;
-    validate_evidence(target_root, state, &options.evidence_id)?;
+    validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
     let spec = spec_from_selector(options.selector);
     let spec_json = serde_json::to_string(&spec)?;
     let mut record = RewriteDependencyRulePlanRecord {
@@ -146,11 +167,8 @@ pub(super) fn plan(
         plan_id: record.id.clone(),
         issue_id: issue.id,
         traffic_e2e_report: report,
-        next_command: if record.reused_existing {
-            fresh_recording_request(target_root, state)
-        } else {
-            action::dependency_rule_apply_command(target_root, &record.id)
-        },
+        evidence_reclassification: None,
+        next_command: action::dependency_rule_apply_command(target_root, &record.id),
     })
 }
 
@@ -159,20 +177,7 @@ pub(super) fn apply(
     state: &mut RewriteState,
     plan_id: &str,
 ) -> Result<RewriteDependencyRuleReport> {
-    let record = state
-        .dependency_rule_plan
-        .clone()
-        .context("rewrite workflow has no pending dependency rule plan")?;
-    ensure!(
-        record.id == plan_id,
-        "dependency rule plan is stale or belongs to another issue"
-    );
-    let issue = dependency_issue(state)?;
-    ensure!(
-        issue.id == record.issue_id,
-        "active rewrite issue changed after dependency rule planning"
-    );
-    validate_evidence(target_root, state, &record.evidence_id)?;
+    let record = pending_plan_for_apply(state, plan_id)?;
     let report = build_plan(target_root, state, &record)?.apply()?;
     state.dependency_rule_plan = None;
     state.e2e_current = false;
@@ -182,7 +187,8 @@ pub(super) fn apply(
         plan_id: record.id,
         issue_id: record.issue_id,
         traffic_e2e_report: report,
-        next_command: fresh_recording_request(target_root, state),
+        evidence_reclassification: None,
+        next_command: action::next_command(target_root),
     })
 }
 
@@ -198,7 +204,40 @@ fn dependency_issue(state: &RewriteState) -> Result<super::model::RewriteIssue> 
     Ok(issue)
 }
 
-fn validate_evidence(target_root: &Path, state: &RewriteState, evidence_id: &str) -> Result<()> {
+fn pending_plan_for_apply(
+    state: &RewriteState,
+    plan_id: &str,
+) -> Result<RewriteDependencyRulePlanRecord> {
+    let record = state
+        .dependency_rule_plan
+        .clone()
+        .context("rewrite workflow has no pending dependency rule plan")?;
+    ensure!(
+        record.id == plan_id,
+        "dependency rule plan is stale or belongs to another issue"
+    );
+    let issue = dependency_issue(state)?;
+    ensure!(
+        issue.id == record.issue_id,
+        "active rewrite issue changed after dependency rule planning"
+    );
+    Ok(record)
+}
+
+fn validate_plan_evidence(
+    target_root: &Path,
+    state: &RewriteState,
+    issue_id: &str,
+    evidence_id: &str,
+) -> Result<()> {
+    if state
+        .dependency_rule_plan
+        .as_ref()
+        .is_some_and(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
+    {
+        return Ok(());
+    }
+
     let valid = evidence::commands(target_root, state)
         .into_iter()
         .any(|command| {
@@ -264,6 +303,24 @@ fn spec_from_selector(selector: RewriteDependencyRuleSelector) -> RewriteDepende
             keys,
             initial_load_timeout_ms,
         } => RewriteDependencyRuleSpec::RedisGet {
+            ports,
+            keys,
+            initial_load_timeout_ms,
+        },
+        RewriteDependencyRuleSelector::RedisScard {
+            ports,
+            keys,
+            initial_load_timeout_ms,
+        } => RewriteDependencyRuleSpec::RedisScard {
+            ports,
+            keys,
+            initial_load_timeout_ms,
+        },
+        RewriteDependencyRuleSelector::RedisHgetall {
+            ports,
+            keys,
+            initial_load_timeout_ms,
+        } => RewriteDependencyRuleSpec::RedisHgetall {
             ports,
             keys,
             initial_load_timeout_ms,
@@ -380,42 +437,76 @@ fn build_plan(
             ports,
             keys,
             initial_load_timeout_ms,
-        } => Ok(DependencyRulePlan::Redis(plan_redis_background_dependency(
-            RedisBackgroundDependencyFeedback {
-                config_path,
-                replay_report_path,
-                name: record.name.clone(),
-                ports: ports.clone(),
-                command: "GET".to_string(),
-                keys: keys.clone(),
-                key_prefix: String::new(),
-                key_suffix: String::new(),
-                initial_load_timeout_ms: Some(*initial_load_timeout_ms),
-                source_revision,
-                source_evidence: record.source_evidence.clone(),
-            },
-        )?)),
+        } => plan_exact_key_redis_background_dependency(ExactKeyRedisPlanInput {
+            config_path,
+            replay_report_path,
+            record,
+            ports,
+            keys,
+            initial_load_timeout_ms: *initial_load_timeout_ms,
+            source_revision,
+            command: "GET",
+        }),
+        RewriteDependencyRuleSpec::RedisScard {
+            ports,
+            keys,
+            initial_load_timeout_ms,
+        } => plan_exact_key_redis_background_dependency(ExactKeyRedisPlanInput {
+            config_path,
+            replay_report_path,
+            record,
+            ports,
+            keys,
+            initial_load_timeout_ms: *initial_load_timeout_ms,
+            source_revision,
+            command: "SCARD",
+        }),
+        RewriteDependencyRuleSpec::RedisHgetall {
+            ports,
+            keys,
+            initial_load_timeout_ms,
+        } => plan_exact_key_redis_background_dependency(ExactKeyRedisPlanInput {
+            config_path,
+            replay_report_path,
+            record,
+            ports,
+            keys,
+            initial_load_timeout_ms: *initial_load_timeout_ms,
+            source_revision,
+            command: "HGETALL",
+        }),
     }
 }
 
-pub(super) fn fresh_recording_request(
-    target_root: &Path,
-    state: &RewriteState,
-) -> RewriteCommandSpec {
-    action::command(
-        target_root,
-        vec![
-            "recording".to_string(),
-            "request".to_string(),
-            "--kind".to_string(),
-            "standard".to_string(),
-            "--reason".to_string(),
-            "recorder-contract-changed".to_string(),
-            "--duration-seconds".to_string(),
-            state.recording_settings.duration_seconds.to_string(),
-            "--per-api-case-limit".to_string(),
-            state.recording_settings.per_api_case_limit.to_string(),
-        ],
-        Vec::new(),
-    )
+fn plan_exact_key_redis_background_dependency(
+    input: ExactKeyRedisPlanInput<'_>,
+) -> Result<DependencyRulePlan> {
+    let ExactKeyRedisPlanInput {
+        config_path,
+        replay_report_path,
+        record,
+        ports,
+        keys,
+        initial_load_timeout_ms,
+        source_revision,
+        command,
+    } = input;
+    Ok(DependencyRulePlan::Redis(plan_redis_background_dependency(
+        RedisBackgroundDependencyFeedback {
+            config_path,
+            replay_report_path,
+            name: record.name.clone(),
+            ports: ports.to_vec(),
+            command: command.to_string(),
+            keys: keys.to_vec(),
+            key_prefix: String::new(),
+            key_suffix: String::new(),
+            initial_load_timeout_ms: Some(initial_load_timeout_ms),
+            source_revision,
+            source_evidence: record.source_evidence.clone(),
+        },
+    )?))
 }
+
+#[cfg(test)]
+mod tests;

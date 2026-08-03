@@ -88,7 +88,11 @@ enum RedisBackgroundModeArgs {
     /// Process-owned Redis ZCOUNT traffic selected by key affixes.
     Zcount(RedisZcountBackgroundArgs),
     /// Process-owned Redis GET traffic selected by exact keys.
-    Get(RedisGetBackgroundArgs),
+    Get(RedisExactKeyBackgroundArgs),
+    /// Process-owned Redis SCARD traffic selected by exact keys.
+    Scard(RedisExactKeyBackgroundArgs),
+    /// Process-owned Redis HGETALL traffic selected by exact keys.
+    Hgetall(RedisExactKeyBackgroundArgs),
 }
 
 #[derive(Debug, Args)]
@@ -102,7 +106,7 @@ struct RedisZcountBackgroundArgs {
 }
 
 #[derive(Debug, Args)]
-struct RedisGetBackgroundArgs {
+struct RedisExactKeyBackgroundArgs {
     #[arg(long = "port", required = true)]
     ports: Vec<u16>,
     #[arg(long = "key", required = true)]
@@ -203,6 +207,22 @@ pub(super) fn run(
                     RedisBackgroundModeArgs::Get(selector) => (
                         selector.ports,
                         "GET".to_string(),
+                        selector.keys,
+                        String::new(),
+                        String::new(),
+                        Some(selector.initial_load_timeout_ms),
+                    ),
+                    RedisBackgroundModeArgs::Scard(selector) => (
+                        selector.ports,
+                        "SCARD".to_string(),
+                        selector.keys,
+                        String::new(),
+                        String::new(),
+                        Some(selector.initial_load_timeout_ms),
+                    ),
+                    RedisBackgroundModeArgs::Hgetall(selector) => (
+                        selector.ports,
+                        "HGETALL".to_string(),
                         selector.keys,
                         String::new(),
                         String::new(),
@@ -403,5 +423,15 @@ mod tests {
         assert!(get.contains("--key <"));
         assert!(get.contains("--initial-load-timeout-ms"));
         assert!(!get.contains("--key-prefix"));
+
+        for command in ["scard", "hgetall"] {
+            let help = BackgroundTestCli::try_parse_from(["test", "redis", command, "--help"])
+                .unwrap_err()
+                .to_string();
+            assert!(help.contains("--key <"));
+            assert!(help.contains("--initial-load-timeout-ms"));
+            assert!(!help.contains("--key-prefix"));
+            assert!(!help.contains("--command"));
+        }
     }
 }

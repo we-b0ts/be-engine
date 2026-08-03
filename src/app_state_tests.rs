@@ -2,6 +2,56 @@ use chrono::Utc;
 
 use super::*;
 
+#[tokio::test]
+async fn explicit_api_case_limit_stops_and_finalizes_the_recorder_runtime() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.http.enabled = false;
+    config.dns_mock.enabled = false;
+    config.tcp_gateway.enabled = false;
+    config.udp_gateway.enabled = false;
+    config.http_gateway.enabled = false;
+    config.mysql.enabled = false;
+    config.recording.output_dir = temp.path().join("recordings");
+    config.http_gateway.per_api_case_limits.default = 1;
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    config.dns_mock.registry_path = temp.path().join("fake-dns.json");
+    let api = "GET /api/users/*".parse::<RecordingApi>().unwrap();
+    let state = AppState::new_with_recording_apis(config, None, vec![api])
+        .await
+        .unwrap();
+    let runtime = tokio::spawn(state.clone().run());
+
+    state
+        .recorder()
+        .publish_case_for_api(
+            &CaseContext {
+                id: Uuid::new_v4(),
+                rule_name: "record-api".to_string(),
+                uri_group: Some("api-users-wildcard".to_string()),
+            },
+            Some("GET /api/users/*"),
+        )
+        .await
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), runtime)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    let report: serde_json::Value = serde_json::from_slice(
+        &tokio::fs::read(state.recorder().run_dir.join("recording-run.json"))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["status"], "completed");
+    assert_eq!(report["published_cases"], 1);
+    assert_eq!(report["completion_reason"], "per_api_case_limit_reached");
+}
+
 fn http_dependency(authority: &str, uri: &str) -> RecorderEvent {
     let response = vec![b'x'; 314_066];
     RecorderEvent::HttpExchange(HttpExchangeEvent {

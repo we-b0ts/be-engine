@@ -134,6 +134,40 @@ fn matches_only_exact_get_keys() {
 }
 
 #[test]
+fn matches_scard_and_hgetall_only_on_their_exact_keys() {
+    for command in ["SCARD", "HGETALL"] {
+        let mut rule = get_rule();
+        let BackgroundDependencyRuleConfig::Redis {
+            command: configured_command,
+            ..
+        } = &mut rule
+        else {
+            panic!("expected Redis background rule");
+        };
+        *configured_command = command.to_string();
+
+        validate(std::slice::from_ref(&rule)).unwrap();
+        assert!(rule.matches(&event("redis.internal", 20917, command, "cache:init:a",)));
+        assert!(!rule.matches(&event("redis.internal", 20917, command, "cache:init:c",)));
+        assert!(!rule.matches(&event("redis.internal", 20917, "GET", "cache:init:a",)));
+    }
+}
+
+#[test]
+fn rejects_unlisted_exact_key_redis_commands() {
+    let mut rule = get_rule();
+    let BackgroundDependencyRuleConfig::Redis { command, .. } = &mut rule else {
+        panic!("expected Redis background rule");
+    };
+    *command = "SMEMBERS".to_string();
+
+    let error = validate(&[rule]).unwrap_err().to_string();
+    assert!(error.contains("ZCOUNT"));
+    assert!(error.contains("SCARD"));
+    assert!(error.contains("HGETALL"));
+}
+
+#[test]
 fn redis_get_requires_exact_keys_timeout_and_ready_probe() {
     let mut config = AppConfig::default();
     config.recording.background_dependencies = vec![get_rule()];

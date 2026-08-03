@@ -31,7 +31,9 @@ is unclear.
   reverse.
 - `main.rs` owns the `traffic-e2e` engine CLI bootstrap only.
 - `bin/backend-rewrite/` owns the AI-facing coordinator CLI bootstrap only.
-- `lib.rs` owns application wiring, shared state, and stable exports.
+- `lib.rs` owns application wiring, shared state, and stable exports;
+  `recording_runtime` owns the Recorder application's listener supervision,
+  stop triggers, graceful drain, and finalization lifecycle.
 - Proxy and gateway modules own connection and request orchestration.
 - Protocol and semantic modules own parsing, encoding, and interpretation.
 - Recorder event, run, writer, and summary modules own capture, persistence,

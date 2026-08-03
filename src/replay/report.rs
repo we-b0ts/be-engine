@@ -3,6 +3,7 @@ use super::*;
 pub(crate) mod aggregate;
 #[cfg(test)]
 mod aggregate_tests;
+mod background_overlay;
 pub(super) mod command;
 mod dependency_evidence;
 mod model;
@@ -11,6 +12,9 @@ mod writer;
 #[cfg(test)]
 mod writer_tests;
 
+pub(crate) use background_overlay::{
+    BackgroundReclassification, reclassify_background_dependencies,
+};
 pub(crate) use dependency_evidence::{
     ReplayDependencyCluster, ReplayDependencyDifference, ReplayDependencyEndpoint,
     ReplayDependencyObservation, ReplayDependencyRepresentative, read_dependency_evidence,

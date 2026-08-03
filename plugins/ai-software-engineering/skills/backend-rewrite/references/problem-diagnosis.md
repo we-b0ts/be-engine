@@ -58,7 +58,8 @@ Run only query IDs returned by `action.commands.evidence`:
   case-external target activity, and does not prove request or process
   ownership. For a dependency issue it also returns
   `applicable_rule_planners` only for supported protocols present in those
-  clusters;
+  clusters. It also returns the selected case's exact
+  `representative_dependencies_command` when available;
 - `policy_applicability`: structural rule eligibility; eligibility does not
   authorize a rule;
 - `attempt_delta`: convergence against the previous attempt; improvement does
@@ -68,6 +69,19 @@ Use the smallest query set that can distinguish the current hypotheses. Then
 inspect the representative case and trace the corresponding source and target
 path. Read other artifact cases only when the representative is insufficient.
 Do not run every query merely because it is available.
+
+For dependency topology, execute the representative result's
+`dependencies_command`, or the dirty-cluster result's
+`representative_dependencies_command`. The compact summary groups by target and
+returns one exact `detail_command` per target. Execute only the relevant target
+detail before reading raw `dependencies.jsonl`; do not recreate this projection
+with Python or shell parsing. The detail contains bounded representative Redis
+exchanges that preserve each key/argument/response association and Memcached
+key/outcome associations. A dependency response preview is at most 256 bytes
+and carries its encoding, original length, and truncation state. Memcached flags
+are intentionally neither interpreted nor returned. Complete small Redis scalar
+responses also carry a decoded `response_value`; larger or structured responses
+retain only their bounded frame preview.
 
 Only a dependency event attributed to an active case participates in that
 case's cleanliness gate. Treat source pre-readiness traffic as reference for
@@ -186,10 +200,12 @@ the current dirty-cluster evidence ID and one protocol-specific planner returned
 in `applicable_rule_planners`. Run its exact help argv, supply only the
 source-proven selector inputs to `backend-rewrite dependency-rule plan <protocol>`, and
 apply the returned plan ID. Replay evidence, case source, and source revision
-come from coordinator state and are not background-rule inputs. Execute the apply
-report's exact fresh-recording request. Never call the lower-level Recorder
-config planner, reclassify existing evidence, trim traffic, or edit an existing
-recording.
+come from coordinator state and are not background-rule inputs. Execute the
+apply report's exact `next`. The coordinator, not the target AI, reclassifies
+the same focused replay report under the current rules and returns either
+residual dirty evidence or the next comparison action. Never call the
+lower-level Recorder config planner, manually rewrite replay reports, trim
+traffic, or edit immutable request/response/dependency capture files.
 
 ## Comparison Issues
 

@@ -202,6 +202,10 @@ its lifetime; start it again or provide a new `--run-id` to reset case quotas.
 With `--duration-seconds`, the timer begins only after both configured
 readiness probes succeed, then shutdown finalizes
 `comparison-recording-run.json`. Archive and remove old runs externally.
+When one or more APIs are selected explicitly, reaching every selected API's
+case limit finalizes the run early and records
+`completion_reason = per_api_case_limit_reached`; the duration remains the
+upper bound. An unscoped run always observes the full duration.
 
 `traffic-e2e config init --source-container <container> --breeze` installs the
 Breeze-aware recorder defaults together with project and verification
@@ -393,6 +397,11 @@ run. When present, it replaces both the configured default and every
 pattern-specific override in memory, so every resolved API or static path uses
 `N`; it is not a run-wide total when multiple APIs are recorded, and it never
 rewrites the recorder TOML.
+For explicitly selected APIs, both recording modes stop admission and finalize
+normally after all selected APIs reach `N`. Standard managed recording also
+ends its outer Platform lifecycle at that point instead of waiting out the
+remaining duration. Without explicit selectors, the limit continues to
+suppress over-quota cases but never shortens the recording window.
 
 After an upstream HTTP response completes, Recorder continues accepting new
 case dependencies for the fixed
@@ -778,7 +787,8 @@ persisted in the run summary and used as the selected cases' `api_pattern`, but
 never rewrite
 `.traffic-e2e/recorder.toml`; no plan/apply workflow is needed for a temporary
 recording scope. Use `--per-api-case-limit N` when the same positive run-local case
-limit must apply to every selected API.
+limit must apply to every selected API. Explicitly selected runs finalize when
+all selectors reach `N`; runs without selectors continue for the full duration.
 
 Do not send target E2E requests before replay is ready. Replay startup, port
 binding, DNS redirect, or stale-process failures are replay lifecycle/setup
@@ -856,8 +866,12 @@ argv; a live detached worker returns `recording_in_progress`, and only a
 finalized manifest returns `resume_required`. A running manifest without a live
 owner returns `recovery_required`; `backend-rewrite recover` removes only that run's
 managed resources and allocates a replacement run. A pending rule plan produces
-`plan_apply_required` with only the stored plan ID. A target repository change
-also returns `resume_required` with `backend-rewrite next`.
+`plan_apply_required` with only the stored plan ID. The persisted plan keeps
+the evidence validation performed at plan time, so its own workflow revision
+does not make apply stale. A corrected plan using the same evidence ID replaces
+the pending preview before apply; recorder configuration is still changed only
+by apply. A target repository change also returns `resume_required` with
+`backend-rewrite next`.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
@@ -902,6 +916,24 @@ interactions recorded before readiness are returned only by the separate
 `pre_readiness_traffic` query. They do not affect the case gate.
 `unused_global` events and target activity outside an active case remain
 aggregate diagnostics and do not make a case dirty.
+
+Dependency evidence can be projected without parsing the JSONL directly:
+
+```bash
+backend-rewrite case dependencies <representative-case-dir>
+```
+
+The summary is grouped by stable target ID and includes an exact
+`detail_command` for every target. Executing that command returns only the
+selected target's bounded operation details and representative exchanges. Redis
+exchanges keep keys, arguments, and responses associated; response previews are
+capped at 256 bytes and retain encoding, original length, and truncation
+metadata. Complete small Redis scalar frames also expose a decoded
+`response_value`. Keys are labeled only for understood command shapes. Memcached
+representative keys and outcomes are returned together, but flags are
+intentionally neither interpreted nor exposed. Dependency `representatives` and `dirty_clusters` evidence also
+return the appropriate summary command so an AI does not need to reconstruct
+argv or write an ad hoc artifact parser.
 
 Use `backend-rewrite rule plan|apply` for a source-proven response rule and
 `backend-rewrite route` for a proven Recorder/Replay capability gap, external-data
@@ -1219,8 +1251,19 @@ not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
 `bootstrap|runtime` phase. The rule changes
 ownership only; it does not alter forwarding, response capture, body limits,
 or protocol debugging. Add a rule only after response assertions pass and
-source inspection proves process ownership and case independence, then create
-a new recording run.
+source inspection proves process ownership and case independence. Low-level
+Recorder use applies the rule during future capture. In the managed
+`backend-rewrite` workflow, dependency-rule apply also derives a current
+case/global ownership view from the existing immutable capture, rewrites only
+the generated replay report and dependency-evidence sidecar, and revises the
+same focused attempt. A clean result advances without a new standard recording;
+only missing semantic capture, a genuine Recorder contract change, or a source
+baseline change requires fresh traffic.
+The coordinator also detects an already-finalized attempt whose effective
+dependency view is clean but whose persisted errors still contain the obsolete
+strict dirty-finalize result. `backend-rewrite next` removes only that
+dependency-derived error, preserves genuine lifecycle errors, revises the same
+attempt, and resumes at comparison without rerunning E2E.
 
 Use a finalized replay report to create the AI-managed rule instead of editing
 the table directly:
@@ -1265,7 +1308,8 @@ method. Planning requires a matching unused case exchange and rejects the
 selector when the same RPC command appears in unmatched, unsupported, or unsafe
 target traffic.
 
-A process-owned Redis scheduler using exact GET keys can use:
+A process-owned Redis scheduler using exact keys can use a command-specific
+`get`, `scard`, or `hgetall` selector:
 
 ```bash
 traffic-e2e config recorder apply background-dependencies \
@@ -1287,6 +1331,11 @@ evidence. Replay consumes each response once and matches the exact target,
 command, and key, without inheriting the source connection binding or earlier
 unrelated lane commands. Case and bootstrap-only exchanges retain
 connection-order semantics.
+
+For example, replace `get` above with `scard` or `hgetall` while retaining the
+same `--port`, repeated `--key`, and `--initial-load-timeout-ms` inputs. These
+selectors do not accept key prefixes, patterns, fields, or a generic command
+argument.
 
 Breeze-backed Memcached profile or local-cache warm traffic uses a bounded
 numeric key series:
@@ -1318,7 +1367,8 @@ the source-compatible target cache lifecycle separately from this ownership
 rule.
 
 An applied rule with `initial_load_timeout_ms` delays source case admission
-while Recorder observes its initial load. Redis GET counts each configured exact key once;
+while Recorder observes its initial load. Redis exact-key `GET`, `SCARD`, and
+`HGETALL` rules count each configured exact key once;
 Memcached counts `key_end - key_start + 1` completed replay-safe matches. The
 observations include matches before HTTP readiness. After the ready probe,
 Recorder observes for at most `initial_load_timeout_ms` (60000 by default),

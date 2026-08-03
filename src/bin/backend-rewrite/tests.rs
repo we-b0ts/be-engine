@@ -16,6 +16,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "next",
             "status",
             "inventory",
+            "case",
             "evidence",
             "rule",
             "dependency-rule",
@@ -94,6 +95,25 @@ fn parses_the_bounded_rewrite_surface() {
             .is_ok()
     );
     assert!(Cli::try_parse_from(["test", "evidence", "evq-r1-issue-representatives"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "case",
+            "dependencies",
+            "/repo/.traffic-e2e/artifacts/run/api/case-a",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "case",
+            "dependencies",
+            "/repo/.traffic-e2e/artifacts/run/api/case-a",
+            "dependency-target-0123456789abcdef",
+        ])
+        .is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",
@@ -247,4 +267,21 @@ fn dependency_rule_help_is_protocol_specific_and_has_no_api_context() {
     assert!(get.contains("--key <"));
     assert!(get.contains("--initial-load-timeout-ms"));
     assert!(!get.contains("--key-prefix"));
+
+    for command in ["scard", "hgetall"] {
+        let help = Cli::try_parse_from([
+            "test",
+            "dependency-rule",
+            "plan",
+            "redis",
+            command,
+            "--help",
+        ])
+        .unwrap_err()
+        .to_string();
+        assert!(help.contains("--key <"));
+        assert!(help.contains("--initial-load-timeout-ms"));
+        assert!(!help.contains("--key-prefix"));
+        assert!(!help.contains("--command"));
+    }
 }

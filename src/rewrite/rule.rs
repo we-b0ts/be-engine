@@ -32,7 +32,7 @@ pub(super) fn plan(
         .active_issue
         .clone()
         .context("rewrite workflow has no active issue")?;
-    validate_evidence(target_root, state, &options.evidence_id)?;
+    validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
     let pointer = options
         .json_pointer
         .or_else(|| {
@@ -93,20 +93,7 @@ pub(super) fn apply(
     state: &mut RewriteState,
     plan_id: &str,
 ) -> Result<RewriteRuleReport> {
-    let record = state
-        .rule_plan
-        .clone()
-        .context("rewrite workflow has no pending rule plan")?;
-    ensure!(
-        record.id == plan_id,
-        "rule plan is stale or belongs to another issue"
-    );
-    ensure!(
-        state.active_issue.as_ref().map(|issue| issue.id.as_str())
-            == Some(record.issue_id.as_str()),
-        "active rewrite issue changed after rule planning"
-    );
-    validate_evidence(target_root, state, &record.evidence_id)?;
+    let record = pending_plan_for_apply(state, plan_id)?;
     let report = build_plan(target_root, state, &record)?.apply()?;
     let projected = project_report(&report)?;
     state.rule_plan = None;
@@ -187,7 +174,37 @@ fn build_plan(
     })
 }
 
-fn validate_evidence(target_root: &Path, state: &RewriteState, evidence_id: &str) -> Result<()> {
+fn pending_plan_for_apply(state: &RewriteState, plan_id: &str) -> Result<RewriteRulePlanRecord> {
+    let record = state
+        .rule_plan
+        .clone()
+        .context("rewrite workflow has no pending rule plan")?;
+    ensure!(
+        record.id == plan_id,
+        "rule plan is stale or belongs to another issue"
+    );
+    ensure!(
+        state.active_issue.as_ref().map(|issue| issue.id.as_str())
+            == Some(record.issue_id.as_str()),
+        "active rewrite issue changed after rule planning"
+    );
+    Ok(record)
+}
+
+fn validate_plan_evidence(
+    target_root: &Path,
+    state: &RewriteState,
+    issue_id: &str,
+    evidence_id: &str,
+) -> Result<()> {
+    if state
+        .rule_plan
+        .as_ref()
+        .is_some_and(|plan| plan.issue_id == issue_id && plan.evidence_id == evidence_id)
+    {
+        return Ok(());
+    }
+
     let valid = evidence::commands(target_root, state)
         .into_iter()
         .any(|command| {
@@ -245,6 +262,9 @@ fn mechanism_name(mechanism: DynamicResponseMechanism) -> &'static str {
         DynamicResponseMechanism::DynamicDerived => "dynamic_derived",
     }
 }
+
+#[cfg(test)]
+mod tests;
 
 fn parse_mechanism(value: &str) -> Result<DynamicResponseMechanism> {
     match value {

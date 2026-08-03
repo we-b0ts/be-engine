@@ -96,9 +96,6 @@ pub(super) fn update_focused_index(
     let Some(api) = state.apis.first() else {
         return;
     };
-    if index.latest_focused_sequences.get(&api.api_key) == Some(&state.sequence) {
-        return;
-    }
     reconcile_baseline(index, state);
     index.inventory_complete = inventory_complete;
     count_current_run(index);
@@ -151,6 +148,15 @@ pub(super) fn write_replay_progress(
     }
     if progress_path != legacy_progress_path && legacy_progress_path.exists() {
         remove_legacy_progress(legacy_progress_path)?;
+    }
+    Ok(())
+}
+
+pub(super) fn revise_replay_progress(progress_path: &Path, state: &ActiveRunState) -> Result<()> {
+    let mut report = load(progress_path, VerificationStage::Replay)?
+        .context("replay progress is missing for focused evidence revision")?;
+    if report.revise_latest(observation(state, ReplayRunKind::Focused)?)? {
+        write(progress_path, &report)?;
     }
     Ok(())
 }

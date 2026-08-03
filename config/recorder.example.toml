@@ -280,8 +280,9 @@ redact_headers = [
 # key_suffix = ".wtm2"
 # source_evidence = "InterestTagCardServiceImpl.java:init process-owned WAIC cache refresh"
 
-# Process-owned Redis startup reads use an exact GET key set. Background-rule
-# Global exchanges replay independently from the source connection lane.
+# Process-owned Redis startup reads use an exact key set with GET, SCARD, or
+# HGETALL. Background-rule Global exchanges replay independently from the
+# source connection lane.
 # [[recording.background_dependencies]]
 # name = "startup-cache-warm"
 # protocol = "redis"

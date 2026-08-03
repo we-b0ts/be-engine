@@ -11,6 +11,7 @@ use super::dependencies::ensure_case_dependency_file;
 use super::http::case::CaseInvalidationContext;
 use super::summary::{write_case_dependency_summary, write_global_dependency_summary};
 use super::{CaseContext, Recorder, sanitize_path_component};
+use crate::recording_completion::RecordingCompletionReason;
 
 #[derive(Debug, Serialize)]
 struct RecorderRunReport {
@@ -22,6 +23,8 @@ struct RecorderRunReport {
     traffic_jsonl: &'static str,
     published_cases: usize,
     failed_cases: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completion_reason: Option<RecordingCompletionReason>,
     errors: Vec<RecordingErrorSummary>,
 }
 
@@ -32,6 +35,7 @@ pub(crate) struct RecorderRunState {
     pub(crate) published_cases: usize,
     pub(crate) published_cases_by_group: BTreeMap<(String, Option<String>), usize>,
     pub(crate) failed_cases: usize,
+    pub(crate) completion_reason: Option<RecordingCompletionReason>,
     pub(crate) errors: Vec<RecordingErrorSummary>,
     pub(crate) finishing: bool,
     pub(crate) finished: bool,
@@ -62,6 +66,14 @@ struct RecordingErrorDetail {
 
 impl Recorder {
     pub async fn publish_case(&self, case: &CaseContext) -> Result<()> {
+        self.publish_case_for_api(case, None).await
+    }
+
+    pub(crate) async fn publish_case_for_api(
+        &self,
+        case: &CaseContext,
+        recording_api: Option<&str>,
+    ) -> Result<()> {
         self.flush_traffic().await?;
         let _guard = self.dependency_write_lock.lock().await;
         self.ensure_run_accepts_case_writes().await?;
@@ -115,7 +127,13 @@ impl Recorder {
                 .entry((case.rule_name.clone(), case.uri_group.clone()))
                 .or_default() += 1;
         }
-        self.write_run_report("running").await
+        self.write_run_report("running").await?;
+        if let Some(recording_api) = recording_api {
+            self.explicit_api_case_limits
+                .record_published(recording_api)
+                .await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn published_case_count(&self, case: &CaseContext) -> usize {
@@ -126,6 +144,18 @@ impl Recorder {
             .get(&(case.rule_name.clone(), case.uri_group.clone()))
             .copied()
             .unwrap_or_default()
+    }
+
+    pub(crate) async fn published_recording_api_count(&self, recording_api: &str) -> Option<usize> {
+        self.explicit_api_case_limits.published(recording_api).await
+    }
+
+    pub(crate) async fn wait_for_explicit_api_case_limit(&self) {
+        self.explicit_api_case_limits.wait_until_complete().await;
+    }
+
+    pub(crate) async fn set_completion_reason(&self, reason: RecordingCompletionReason) {
+        self.run_state.lock().await.completion_reason = Some(reason);
     }
 
     pub async fn fail_case(
@@ -416,6 +446,7 @@ impl Recorder {
             traffic_jsonl: self.traffic_jsonl.as_str(),
             published_cases: state.published_cases,
             failed_cases: state.failed_cases,
+            completion_reason: state.completion_reason,
             errors: state.errors.clone(),
         };
         drop(state);
@@ -505,6 +536,67 @@ mod tests {
         assert_eq!(report["status"], "running");
         assert_eq!(report["published_cases"], 3);
         assert_eq!(report["failed_cases"], 1);
+    }
+
+    #[tokio::test]
+    async fn explicit_api_case_limits_complete_only_after_published_cases() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = crate::config::RecordingConfig::default();
+        let recorder = Recorder::new_with_recording_config_at_and_run_id(
+            &config,
+            temp.path(),
+            None,
+            vec![("GET /api/users/*".to_string(), 2)],
+            None,
+        )
+        .await
+        .unwrap();
+        let failed = case("api-users-wildcard");
+        recorder
+            .fail_case(&failed, "test_failure", "expected test failure")
+            .await
+            .unwrap();
+        assert_eq!(
+            recorder
+                .published_recording_api_count("GET /api/users/*")
+                .await,
+            Some(0)
+        );
+
+        recorder
+            .publish_case_for_api(&case("api-users-wildcard"), Some("GET /api/users/*"))
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(20),
+                recorder.wait_for_explicit_api_case_limit(),
+            )
+            .await
+            .is_err()
+        );
+
+        recorder
+            .publish_case_for_api(&case("api-users-wildcard"), Some("GET /api/users/*"))
+            .await
+            .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            recorder.wait_for_explicit_api_case_limit(),
+        )
+        .await
+        .unwrap();
+        recorder
+            .set_completion_reason(RecordingCompletionReason::PerApiCaseLimitReached)
+            .await;
+        assert!(recorder.finish_run().await.unwrap());
+
+        let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
+            .await
+            .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&report_raw).unwrap();
+        assert_eq!(report["published_cases"], 2);
+        assert_eq!(report["completion_reason"], "per_api_case_limit_reached");
     }
 
     #[tokio::test]

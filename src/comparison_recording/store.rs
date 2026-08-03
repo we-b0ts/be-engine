@@ -6,10 +6,12 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
+use tracing::info;
 
 use super::model::{CaseKind, ComparisonRecordingCase};
 use super::summary::ComparisonRecordingSummary;
 use crate::recorder::sanitize_path_component;
+use crate::recording_completion::ExplicitApiCaseLimits;
 
 #[derive(Default)]
 struct Quota {
@@ -20,19 +22,20 @@ struct Quota {
 #[derive(Clone)]
 pub(super) struct ComparisonRecordingStore {
     run_dir: Arc<PathBuf>,
-    quotas: Arc<Mutex<HashMap<(String, String), Quota>>>,
+    quotas: Arc<Mutex<HashMap<String, Quota>>>,
+    explicit_api_case_limits: ExplicitApiCaseLimits,
     summary: ComparisonRecordingSummary,
 }
 
 pub(super) struct Reservation {
-    key: (String, String),
+    key: String,
 }
 
 impl ComparisonRecordingStore {
     pub(super) async fn create(
         output_dir: &Path,
         run_id: &str,
-        recording_apis: Vec<String>,
+        recording_api_limits: Vec<(String, usize)>,
     ) -> Result<Self> {
         tokio::fs::create_dir_all(output_dir)
             .await
@@ -44,11 +47,16 @@ impl ComparisonRecordingStore {
                 run_dir.display()
             )
         })?;
+        let recording_apis = recording_api_limits
+            .iter()
+            .map(|(api, _)| api.clone())
+            .collect();
         let summary = ComparisonRecordingSummary::new(run_id.to_string(), &run_dir, recording_apis);
         summary.flush().await?;
         Ok(Self {
             run_dir: Arc::new(run_dir),
             quotas: Arc::new(Mutex::new(HashMap::new())),
+            explicit_api_case_limits: ExplicitApiCaseLimits::new(recording_api_limits),
             summary,
         })
     }
@@ -97,11 +105,12 @@ impl ComparisonRecordingStore {
 
     pub(super) async fn try_reserve(
         &self,
+        recording_api: &str,
         rule: &str,
         pattern: &str,
         limit: usize,
     ) -> Option<Reservation> {
-        let key = (rule.to_string(), pattern.to_string());
+        let key = recording_api.to_string();
         let mut quotas = self.quotas.lock().await;
         let quota = quotas.entry(key.clone()).or_default();
         if quota.published.saturating_add(quota.reserved) >= limit {
@@ -131,6 +140,14 @@ impl ComparisonRecordingStore {
                 self.summary
                     .api_update(&case.rule, &case.pattern, |counts| counts.published += 1)
                     .await;
+                let recording_api = format!("{} {}", case.request.method, case.request.api_pattern);
+                if self
+                    .explicit_api_case_limits
+                    .record_published(&recording_api)
+                    .await
+                {
+                    info!("every explicitly selected comparison API reached its case limit");
+                }
                 Ok(())
             }
             Err(error) => {
@@ -230,6 +247,10 @@ impl ComparisonRecordingStore {
         if let Some(quota) = self.quotas.lock().await.get_mut(&reservation.key) {
             quota.reserved = quota.reserved.saturating_sub(1);
         }
+    }
+
+    pub(super) async fn wait_for_explicit_api_case_limit(&self) {
+        self.explicit_api_case_limits.wait_until_complete().await;
     }
 }
 

@@ -8,6 +8,7 @@ mod final_evidence;
 mod http_driver;
 mod model;
 mod progress;
+mod reclassify;
 mod request_view;
 mod result;
 mod runtime;
@@ -38,6 +39,10 @@ pub use evidence::{
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 use model::RunStatus;
+pub(crate) use reclassify::{
+    FocusedBackgroundReclassification, focused_background_reclassification_recovery_required,
+    latest_focused_api, reclassify_focused_background_dependencies,
+};
 pub(crate) use result::response_pointer_scope;
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,

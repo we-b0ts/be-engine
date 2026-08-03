@@ -181,6 +181,9 @@ async fn handle_gateway_request(
             |pattern| resolve_case_group(&original_uri, std::slice::from_ref(pattern)),
         );
         let max_cases = config.per_api_case_limits.limit_for(&group.pattern);
+        let recording_api = recording_api_pattern
+            .as_ref()
+            .map(|pattern| format!("{method} {pattern}"));
         (
             CaseContext {
                 id,
@@ -188,6 +191,7 @@ async fn handle_gateway_request(
                 uri_group: Some(group.directory),
             },
             group.pattern,
+            recording_api,
             max_cases,
         )
     });
@@ -219,11 +223,12 @@ async fn handle_gateway_request(
     let mut upstream_base = config.fallback_upstream.clone();
     let mut case_guard = None;
 
-    if let Some((candidate_case, case_pattern, max_cases)) = candidate_case
+    if let Some((candidate_case, case_pattern, recording_api, max_cases)) = candidate_case
         && let Some(guard) = try_admit_case(
             &state,
             &candidate_case,
             &case_pattern,
+            recording_api.as_deref(),
             max_cases,
             &config.matched_upstream,
             &original_uri,
