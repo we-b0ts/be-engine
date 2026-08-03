@@ -36,6 +36,14 @@ Serialize once near the transport boundary when practical. Reuse immutable
 byte buffers or slices instead of copying between layers. Buffer writes to
 reduce system calls, but bound buffer capacity and define flush behavior.
 
+Prefer borrowed data and immutable `bytes::Bytes`-style buffers when lifetimes
+and framework contracts keep ownership clear. Do not introduce `clone()`,
+`Arc`, boxing, or owned strings merely to satisfy the borrow checker without
+reviewing retained memory, aliasing, synchronization, and allocation cost.
+Avoid repeated `serde_json::Value` cloning; prefer typed models or direct and
+streaming serialization when they preserve the wire contract and evidence
+justifies the complexity.
+
 ## Collections, Caches, And Logs
 
 Preallocate only from trustworthy bounded sizes. Cap maps, deduplication sets,

@@ -22,6 +22,25 @@ management, dependency semantics, or system capacity. Avoid tests that
 reimplement the production algorithm or construct actual results from expected
 fixtures.
 
+## Rust Quality Gate
+
+Run repository-required commands. Without stricter equivalents, use:
+
+```bash
+cargo fmt --check
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
+
+In a Cargo workspace with a root package, root-level commands may select only
+that package. Use the repository's prescribed workspace commands or pass
+`--workspace` when the claim covers every member. Run the bundled
+code-organization checker after the final product-code edit and again at the
+repository's merge-request boundary.
+
+For runnable services, also exercise normal startup, readiness, graceful
+shutdown, and any material performance or failure path changed by the work.
+
 ## Performance Evidence
 
 Define the claim before measuring: latency percentile, throughput, CPU,
@@ -38,7 +57,7 @@ Observe at least:
 - request or job rate and latency distribution;
 - error, timeout, retry, fallback, and rejection rates;
 - queue depth and wait, active tasks, and pool acquisition wait;
-- CPU, allocation or GC pressure, and resident memory;
+- CPU, allocation rate, allocator contention, and resident memory;
 - downstream request rate and saturation;
 - recovery and shutdown behavior.
 

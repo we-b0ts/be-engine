@@ -10,6 +10,24 @@ identity, discovery, listener, or connection lifecycle, apply
 business SQL, keys, messages, service contracts, provider mapping, fallback
 decisions, and orchestration in the capability-owned adapter.
 
+## Ownership Boundaries
+
+Represent every internal or third-party remote system through a named client
+or adapter boundary. Name it after the remote capability or provider, not only
+`http`, `rpc`, or `client`. Group multiple remote interfaces only when they
+share one provider, configuration, lifecycle, and compatibility contract.
+
+Keep discovery, protocol types, connection lifecycle, request policy, and
+remote error classification inside the client boundary. Expose a typed
+capability interface to application code; do not pass raw HTTP, RPC, generated,
+or driver clients into application services.
+
+Use a library crate when several deployables reuse the client. Keep it as a
+capability adapter module when it is local to one capability, while preserving
+the same dependency direction. Keep business-specific SQL, keys, messages,
+contracts, fallback policy, and orchestration with the capability that owns
+them.
+
 ## Shared Contract
 
 - Construct long-lived clients and pools at startup or through an explicitly
@@ -19,7 +37,9 @@ decisions, and orchestration in the capability-owned adapter.
 - Bound pool size, waiter count, in-flight requests, per-target concurrency,
   response size, and retry work.
 - Classify timeout, overload, protocol, authentication, validation, and remote
-  application errors without erasing their root causes.
+  application errors without erasing their root causes. Preserve sources with
+  typed errors or contextual chains until retry, observability, and external
+  error mapping decisions are complete.
 - Retry only operations proven safe or protected by idempotency. Bound attempts
   and elapsed time, add jitter where synchronization is possible, and expose
   retry counts.
