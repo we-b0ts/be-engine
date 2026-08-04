@@ -4,6 +4,13 @@ Use this reference for every `implementation_required` action. Problem
 diagnosis is a required rewrite phase, not optional troubleshooting. Its result
 chooses the only repair attempted before the next focused E2E run.
 
+## Contents
+
+- Contract and evidence queries
+- Response, cache, runtime, and Replay issues
+- Dirty dependency and comparison issues
+- Repair routing and blocker criteria
+
 ## Contract
 
 The coordinator supplies one active issue in `action.details`, including
@@ -11,7 +18,8 @@ bounded possible causes and one representative when available. Exact
 evidence-query argv are under `action.commands.evidence`, and the sole
 acceptance command is `action.commands.acceptance`. Treat possible causes as
 hypotheses. Traffic facts come only from the returned queries and immutable
-artifacts; business causality comes from source and target code.
+artifacts; business causality comes from source and target code. Return the
+acceptance command unchanged to the orchestrator; never execute it as a worker.
 
 Standard and comparison artifacts are readable, read-only diagnostic evidence.
 Start from the representative `case_dir` returned by the coordinator and
@@ -168,7 +176,7 @@ expected-response access to the target repository.
 
 ## Replay Issues
 
-`replay=incomplete` means the engine did not publish complete lifecycle
+`replay=incomplete` means the coordinator did not publish complete lifecycle
 evidence. Use the returned issue and dirty-cluster query to distinguish:
 
 - target never emitted the expected genuine dependency call;
@@ -177,11 +185,11 @@ evidence. Use the returned issue and dirty-cluster query to distinguish:
 - the recording lacks required semantic evidence.
 
 If target topology differs, repair target behavior. If semantic evidence exists
-but the engine lacks support, submit `backend-rewrite route` with a current evidence ID,
-source reference, and exact system change. Then apply the repair and use only
-the coordinator-issued `repair verify <repair-id>` acceptance. Never implement
-a target workaround for a Replay capability gap or supply an arbitrary
-acceptance command.
+but the coordinator lacks support, return the current evidence ID, source
+reference, and exact required system change to the orchestrator. It owns
+`backend-rewrite route` and the coordinator-issued
+`repair verify <repair-id>` acceptance. Never implement a target workaround for
+a Replay capability gap or supply an arbitrary acceptance command.
 
 ## Dirty Dependency Issues
 
@@ -195,17 +203,15 @@ Classify the representative protocol cluster by source ownership:
 - unresolved: retain the dirty evidence and name the missing proof.
 
 Timing overlap, high volume, scheduler names, unused exchanges, and passing
-responses do not prove background ownership. A recording-rule change must use
+responses do not prove background ownership. A recording-rule proposal must use
 the current dirty-cluster evidence ID and one protocol-specific planner returned
-in `applicable_rule_planners`. Run its exact help argv, supply only the
-source-proven selector inputs to `backend-rewrite dependency-rule plan <protocol>`, and
-apply the returned plan ID. Replay evidence, case source, and source revision
-come from coordinator state and are not background-rule inputs. Execute the
-apply report's exact `next`. The coordinator, not the target AI, reclassifies
-the same focused replay report under the current rules and returns either
-residual dirty evidence or the next comparison action. Never manually rewrite
-replay reports, trim traffic, or edit immutable request/response/dependency
-capture files.
+in `applicable_rule_planners`. Run its exact read-only help argv and return only
+the source-proven selector inputs to the orchestrator. Replay evidence, case
+source, and source revision come from coordinator state and are not rule
+inputs. The orchestrator owns `backend-rewrite dependency-rule plan|apply` and
+the apply report's exact `next`; the coordinator then reclassifies the same
+focused replay report. Never manually rewrite replay reports, trim traffic, or
+edit immutable request/response/dependency capture files.
 
 ## Comparison Issues
 
@@ -227,15 +233,17 @@ coordinator must rerun focused E2E before requesting a fresh comparison.
 Route the proven cause to exactly one action:
 
 - target implementation or cache defect: change target code with
-  `backend-engineering`, run focused target tests, then execute
-  `action.commands.acceptance`;
+  `backend-engineering`, run focused target tests, and return the tested handoff
+  plus unchanged `action.commands.acceptance` to the orchestrator;
 - startup/configuration defect: repair source-compatible loading or the fixed
-  start/stop boundary, then execute `action.commands.acceptance`;
-- supported nondeterminism/order/counter: run exact `backend-rewrite rule plan`, review
-  the evidence, then `apply` and rerun;
-- Recorder/Replay capability gap, source change, or external-data issue: submit
-  exact `backend-rewrite route` evidence, apply the routed change, then execute the
-  returned `repair verify <repair-id>` action; do not patch the target;
+  start/stop boundary, test it, and return the handoff plus unchanged acceptance
+  to the orchestrator;
+- supported nondeterminism/order/counter: return source proof and proposed rule
+  inputs; the orchestrator owns `backend-rewrite rule plan|apply` and rerun;
+- Recorder/Replay capability gap, source change, or external-data issue: return
+  exact route evidence and required system change; the orchestrator owns
+  `backend-rewrite route` and the returned `repair verify <repair-id>` action;
+  do not patch the target;
 - unresolved: gather the named missing source/runtime proof before changing
   code or policy.
 

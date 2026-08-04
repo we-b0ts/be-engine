@@ -153,4 +153,5 @@ Before accepting target startup or configuration-dependent behavior:
    and startup result without recording sensitive values.
 
 If the target cannot start from the source configuration contract, keep the
-rewrite `action_required`; configuration compatibility is not complete.
+assigned API incomplete and return the unresolved configuration risk;
+configuration compatibility is not complete.

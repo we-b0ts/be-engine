@@ -1,4 +1,0 @@
-interface:
-  display_name: "Backend Rewrite & Migration"
-  short_description: "Orchestrate evidence-driven backend rewrites"
-  default_prompt: "Use $backend-rewrite to diagnose, implement, verify, and deliver this backend rewrite through the self-contained rewrite coordinator."

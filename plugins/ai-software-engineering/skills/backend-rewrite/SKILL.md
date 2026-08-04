@@ -1,385 +1,174 @@
 ---
 name: backend-rewrite
-description: "Plan, implement, verify, and deliver backend service rewrites and migrations from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns migration sequencing, mandatory implementation-worker isolation, repair routing, completion state, and pull-request delivery."
+description: "Orchestrate, verify, and deliver backend service rewrites from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns coordinator sequencing, mandatory per-API implementation subagents, repair routing, completion state, and delivery."
 ---
 
 # Backend Rewrite
 
-Use the `backend-rewrite` binary for migration sequence and bounded traffic
-evidence. The coordinator owns workflow state, traffic operations, and gate
-results. Recorded artifacts are readable diagnostic evidence, while the
-assigned worker owns source-code attribution and target-code implementation.
-Load `backend-engineering` only in the assigned worker that performs target-code
-implementation or review, not the main orchestrator before dispatch.
+Use the `backend-rewrite` binary as the authoritative workflow coordinator.
+Treat recorded artifacts as read-only diagnostic evidence and coordinator
+actions as the only authority for workflow state, legal transitions, and gate
+results.
 
-## Control Protocol
+## Select The Current Role
 
-From the initialized target repository, start or continue the default
-all-configured-traffic workflow:
+Choose one role before taking action:
+
+- **Main orchestrator:** use this role unless a parent explicitly assigned one
+  API, issue/action, and worker worktree. Own coordinator commands, worktrees,
+  dispatch, integration, serialized Replay/comparison, repository checks, and
+  final delivery. Do not diagnose or implement an API before dispatch.
+- **Assigned API worker:** use this role only when the handoff names one exact
+  API, complete `implementation_required` action, and absolute worktree. Own
+  that API's evidence, source/target diagnosis, implementation, and local tests.
+  Never advance coordinator state, execute acceptance, or operate another API.
+
+The main orchestrator reads
+[workflow.md](references/workflow.md) before advancing the workflow and reads
+[implementation-worker-coordination.md](references/implementation-worker-coordination.md)
+before its first implementation dispatch. An assigned worker reads
+[problem-diagnosis.md](references/problem-diagnosis.md) and loads
+[`backend-engineering`](../backend-engineering/SKILL.md) before changing target
+code. Do not load worker engineering guidance in the main orchestrator merely
+to prepare a handoff.
+
+## Coordinator Contract
+
+Start or resume an initialized, all-configured-API workflow from the canonical
+target repository:
 
 ```bash
 backend-rewrite next
 ```
 
-Before the first standard recording, use `--api '<METHOD path-or-pattern>'`
-only when the caller explicitly narrows the recording to one API. After the
-recording installs its API inventory, `next --api '<METHOD pattern>'` selects
-that exact inventory item for one AI worker. When a selected dynamic pattern
-needs its source registration route, the coordinator returns `input_required`;
-continue with the requested `--source-route` for that API. Do not invent routes
-for other inventory items.
+Before the first standard recording, add `--api '<METHOD path-or-pattern>'`
+only when the caller explicitly requests a single-API recording. After the
+coordinator publishes its stable inventory, select work with the exact
+inventory method/pattern.
 
-The coordinator shares one immutable standard recording across the discovered
-API inventory. It may retain multiple API-scoped `implementation_required`
-work items so different AI workers can diagnose and edit code concurrently.
-Each worker must keep using its exact `--api`; an acceptance command returned
-for one API never authorizes advancing another. Recording, focused Replay, and
-comparison share one serialized `traffic_runtime` lease. The same standard
-baseline remains available to every inventory item.
+Response schema v8 contains an `action` object with exactly `kind`, `summary`,
+`details`, and `commands`. This action schema version is independent of target
+repository configuration versions. Read facts only from `action.details` and
+execute only command roles actually present under `action.commands`; never
+guess legacy fields or missing transitions.
 
-Coordinator action schema v8 always has exactly four fields:
-`kind`, `summary`, `details`, and `commands`. Read variant-specific facts only
-from `action.details`; read executable commands only from
-`action.commands.<role>`. Command roles are explicit (`execute`, `status`,
-`advance`, `recover`, `evidence`, `apply`, or `acceptance`), and absent roles are
-not legal transitions. Concurrent issues remain API-scoped and are never
-published as parallel top-level `active_issue` or `next` fields. There are no
-legacy action-level `command`, `issue`, `evidence_commands`, or `acceptance`
-aliases. Never guess an old field path or rerun `next` merely because a command
-role is absent.
+Every returned command has a canonical `cwd` and argv whose absolute
+`--target-root` is already bound. Execute it opaquely without reconstructing,
+combining, shell-evaluating, or changing arguments. Supply named required
+environment variables without printing their values. Compact JSON is the
+default; use global `--pretty` only for interactive human inspection.
 
-Every returned command contains a canonical `cwd` and an argv array with the
-absolute `--target-root` already included. Execute the argv without
-reconstructing, combining, shell-evaluating, or changing its arguments. The
-canonical `cwd` remains the safe default, while the explicit target root lets a
-worker execute read-only coordinator commands from its own worktree without
-opening a private workflow. Supply named required environment variables without
-printing their values.
+Use `backend-rewrite status [--api '<METHOD pattern>']` when an action response
+was lost or a session resumes. Never infer state from artifact recency. Never
+read, search, list, or summarize `.traffic-e2e/local/ai-forbidden/**`; report an
+insufficient public action/status/evidence surface as a coordinator API gap.
 
-`backend-rewrite status [--api '<METHOD pattern>']` is a read-only recovery
-snapshot. With `--api`, it reconstructs that API's action even when another API
-is selected. Use it when an earlier action response was lost or when resuming
-an interrupted AI session.
-`plan_apply_required` recovers the exact pending
-`action.commands.apply` command with its `apply <plan-id>` argv.
-The stored plan is an evidence-validated snapshot: the workflow revision
-created by planning does not make its apply stale. If the plan report proves
-that the selector is incomplete, rerun the same planner with the same evidence
-ID and corrected selector inputs before apply; this replaces only the pending
-preview and does not mutate recorder configuration.
-`advance_required` means the prerequisite named in `action.summary` is already
-available and the coordinator is ready for its next state transition. Execute
-the exact `action.commands.advance` argv once; do not repeat the prior
-recording, Replay, comparison, or implementation action. If
-`action.kind=wait_required`, read the blocking API and live operation from
-`action.details`, wait at least `retry_after_seconds`, and execute only
-`action.commands.status`. Never use `recover` for a live owner and never launch
-another recording, Replay, or comparison concurrently. If a previously
-launched action is still known to be running, continue waiting rather than
-launching its reconstructed command concurrently.
+## Main Orchestrator Loop
 
-Read the bounded `api_inventory` summary from every initialized `next` or
-`status` result. It includes `total`, `completed`, `pending`,
-`implementation_required`, `current_index`, and `current_api`. The main
-orchestrator must read
+1. Execute `backend-rewrite next`, a returned opaque command, or scoped
+   read-only `status` as required by the current action.
+2. Read the complete action and `api_inventory`. Keep `workflow.scope` separate
+   from the currently selected API.
+3. Follow [workflow.md](references/workflow.md) for action-specific execution,
+   waiting, recovery, fresh recording, rule, and repair semantics.
+4. On every `implementation_required`, stop before evidence or code analysis,
+   create the API worktree, and dispatch a real subagent as described below.
+5. After dispatch, if inventory still has a `status=pending` item and no
+   `wait_required`, run read-only `backend-rewrite inventory`, select its exact
+   method/pattern, and execute `backend-rewrite next --api '<exact API>'`.
+6. When a worker returns a tested handoff, integrate it into the canonical
+   worktree, freeze the target revision, and execute that API's unchanged
+   coordinator-issued acceptance.
+7. Repeat until the coordinator permits terminal completion or a proven blocker
+   prevents further progress.
+
+Recording, focused Replay, and comparison share one serialized traffic lane.
+Serialize each live operation, not the complete lifecycle of one API. Expensive
+worker diagnosis, coding, and tests may run concurrently while the main
+orchestrator advances other pending APIs. Do not wait for one worker while
+another pending API can advance.
+
+Keep the standard cases immutable through ordinary repair attempts. A failed
+focused attempt changes the target and reuses those cases; it does not itself
+authorize fresh traffic. Later integrated edits may invalidate an API's target
+fingerprint and requeue its prior evidence.
+
+## Mandatory API Implementation Workers
+
+Every `implementation_required`, including a single-API workflow, is a hard
+dispatch barrier. Before the main orchestrator executes evidence, opens a case,
+reads source or target implementation code, or forms an API hypothesis, it
+must:
+
+1. preserve the exact API, workflow/issue identity, complete action, canonical
+   `cwd`, and all opaque command specs;
+2. create the isolated worktree from the current integrated target revision;
+3. invoke the runtime's real subagent mechanism with that handoff; and
+4. retain the `API -> subagent -> worktree` binding.
+
+`TaskCreate`, TODO state, narration, or delayed intent is not dispatch. If a
+real subagent is unavailable, report that capability blocker instead of
+implementing in the main orchestrator.
+
+The worker executes only its assigned evidence, case-dependency, and returned
+read-only help commands, proves one cause, implements one compatible repair,
+runs focused local tests, and returns its handoff. It returns source proof and
+proposed inputs when a rule, route, or other coordinator mutation is needed;
+only the orchestrator executes that mutation. Follow
 [implementation-worker-coordination.md](references/implementation-worker-coordination.md)
-once: when it first observes `api_inventory.total > 1`, or before the first
-`implementation_required` dispatch in a single-API workflow. Subagents do not
-read that coordinator guide merely because their API-scoped status includes the
-same inventory.
+for exact worktree placement, scheduling, integration, reactivation, and
+cleanup.
 
-Every `action.kind=implementation_required`, including a single-API workflow,
-is a mandatory worker-dispatch barrier. Before the main orchestrator runs an
-evidence command, opens a case artifact, reads source or target code, or forms
-an API-level hypothesis, it creates the API worktree and starts a real subagent
-with the complete action and command specs. The worker, not the orchestrator,
-executes evidence. `TaskCreate`, a TODO, or a statement that dispatch will
-happen later is not a subagent. If dispatch is unavailable, report that
-capability blocker instead of silently implementing in the main orchestrator.
+## Completion Contract
 
-After dispatch, do not wait for that worker while the bounded summary reports
-`api_inventory.pending > 0` and the coordinator has not returned
-`wait_required`. Read `backend-rewrite inventory`, select an exact item whose
-`status=pending`, and run
-`backend-rewrite next --api '<exact METHOD pattern>'`, operate the serialized
-traffic lane, and dispatch another worker if it reaches
-`implementation_required`. Serialization applies to each recording, Replay, or
-comparison operation, not to the whole lifecycle of one API. Wait for workers
-only after no pending API can advance or when the coordinator explicitly
-returns `wait_required`.
+Keep these states distinct:
 
-An individual worker may act only on its assigned API and must not declare the
-whole rewrite complete. `terminal_allowed=true` means every inventory item has
-current focused E2E and comparison evidence for the same target revision.
-`workflow.scope` describes the standard-recording selector
-(`all_configured_apis` when it was omitted); it is not the active action target.
+- **Worker handoff ready:** the worker returned API and issue identity, proven
+  cause/evidence, changed files and shared-module impact, patch or commit,
+  tests, required coordinator inputs, and unresolved risks. Its current turn
+  may become idle, but its API binding and worktree remain.
+- **API complete:** the orchestrator integrated the handoff and the
+  coordinator-issued acceptance returned that API as `complete` for the current
+  target revision. If acceptance returns `implementation_required`, update the
+  same worker from the integrated revision and reactivate it with the new
+  action/result; replace it only under the exceptions in the worker guide.
+- **Workflow complete:** `terminal_allowed=true` proves every API has current
+  focused E2E and comparison evidence for the same target revision. Then run
+  the caller-required repository checks and finish delivery.
 
-`backend-rewrite` emits one compact JSON object per command by default so the
-result can be captured atomically without `head`/`tail`. Use global `--pretty`
-only for interactive human inspection.
+Thus worker handoff ready is not API completion, and API completion is not
+workflow completion. Remove an API worktree and release its binding only after
+that API is complete and the worktree is no longer needed.
 
-Keep the standard case source stable during implementation. A nonpassing
-focused E2E attempt reuses the same immutable cases after the target changes;
-it does not trigger another recording. A passing focused E2E attempt advances
-to a fresh comparison recording automatically.
+An evidence-proven unavailable external response-driving value may stop work as
+blocked under [problem-diagnosis.md](references/problem-diagnosis.md). A blocker
+is not successful completion and must never be reported as
+`terminal_allowed=true`.
 
-For every implementation issue, the orchestrator owns worktree allocation,
-state-mutating coordinator commands, integration, and serialized verification;
-the assigned worker exclusively owns API-level diagnosis, implementation, and
-focused tests. The orchestrator may inspect implementation code only for
-integration review, shared-module conflicts, or a system-scoped issue. Follow
-[implementation-worker-coordination.md](references/implementation-worker-coordination.md)
-instead of allowing workers to create worktrees or run private coordinators.
-Completed API evidence is requeued when later integrated edits change the
-target fingerprint.
+## Evidence And Repository Contract
 
-After any focused attempt, read `latest_focused_e2e` from the `backend-rewrite next`
-or `backend-rewrite status` result. Its `execution_mode` explicitly distinguishes
-`fresh_standard_cases` from `reused_standard_cases`; use its recording run,
-exact case source, case inventory, previous/current attempt numbers, and pass
-status instead of inferring reuse from internal paths. This field describes the
-latest completed focused attempt and does not imply that every `next` call ran
-another attempt.
+`.traffic-e2e/local/artifacts/` is readable, read-only evidence. Preserve
+coordinator-generated `replay-progress.yaml` and `comparison-progress.yaml` and
+commit their verified changes with the target change. Do not hand-edit them,
+replace coordinator aggregation with bulk scripts, make target code consume
+recorded results, or modify source business behavior to manufacture evidence.
 
-When the caller explicitly requests new traffic, the Recorder contract has
-changed, or the source baseline has changed, request a fresh standard recording
-through the coordinator:
-
-```bash
-backend-rewrite recording request \
-  --kind standard \
-  --reason <user-requested|recorder-contract-changed|source-baseline-changed> \
-  --duration-seconds <positive-seconds> \
-  --per-api-case-limit <positive-limit>
-```
-
-Omit `--api` to record every API admitted by recorder configuration, including
-when replacing a previously narrowed workflow. Supply `--api '<METHOD path>'`
-only when the caller explicitly requests a single-API fresh recording. The
-defaults are 60 seconds and 100 cases per configured API pattern; the limit is
-not a recording-wide total. Caller-supplied
-positive values may replace them. A request identical to the current pending request returns the
-same action and run; a matching completed manifest returns an advance action. A different
-pending request is rejected unless the caller explicitly supplies
-`--replace-pending`. The command invalidates evidence for every API derived
-from the shared prior standard recording, preserves old artifacts, allocates a
-new run ID, and returns one `recording_required` action. Read the allocated run
-from `action.details.run_id` and execute the opaque `action.commands.execute`
-argv exactly. It starts a detached coordinator-owned worker and returns
-immediately; do not background it, pipe it through `head`/`tail`, or wait on a
-shell task. Poll the exact status command returned by execution. While running,
-owner status may return `recording_in_progress` with
-`action.commands.status`; after finalization it returns `advance_required` with
-`action.commands.advance`. `recovery_required` means the owner exited and its
-exact `action.commands.recover` must run before retrying.
-`action.details.input_mode=reused_atomic_recording` means
-the coordinator found one finalized historical recording whose API selector
-exactly equals the requested selector. An omitted selector matches only an
-omitted historical selector; a single API matches only that exact single API.
-Never split, merge, or narrow a recording because boot and case evidence are
-one lifecycle. `action.details.input_mode=external_live_traffic` means no exact
-atomic input was reusable and the action opens a fresh recording window; its
-bounded `action.details.recording_input_diagnosis` contains recent candidate
-scopes and rejection reasons. Never add `nohup`, curl loops, a replayer, or
-driver parameters. Do not inspect internal state or synthesize requests. A
-failed E2E attempt alone never authorizes this transition.
-
-For a recording bound to one or more explicit API selectors, the worker may
-finalize as soon as every selected API reaches its per-API case limit; the
-configured duration is an upper bound. An all-configured recording with no API
-selector always observes the complete duration so low-frequency APIs still
-have an opportunity to appear. This early completion is coordinator-owned and
-does not change the status/advance polling protocol.
-
-The public coordinator surface is the `backend-rewrite` binary with `next`,
-`status`, `inventory`, `case`, `evidence`, `rule`, `dependency-rule`, `route`,
-`repair`, `recording`, and `recover` subcommands. `repair verify` and `recording execute` are ID-bound action
-commands returned by the coordinator, not commands whose arguments the AI
-invents. The target AI may choose and compose these bounded transitions according to their documented
-preconditions. Reading traffic artifacts may support diagnosis, but never
-replaces a coordinator transition or authorizes editing generated evidence.
-
-Read [workflow.md](references/workflow.md) for action semantics, phase order,
-and recovery behavior.
-
-## Problem Diagnosis And Repair
-
-Problem diagnosis is mandatory for every `implementation_required` action. It
-selects the one evidence-backed repair attempted before the next replay; it is
-not an optional fallback after speculative implementation.
-
-The assigned worker performs every diagnostic and implementation step below.
-The main orchestrator must dispatch before step 1 and must not prefetch evidence
-to enrich the handoff.
-
-When the worker receives `implementation_required`:
-
-1. Read the issue ID, kind, owner, representative, and hypotheses from
-   `action.details`. Run only the
-   `action.commands.evidence[*].command` argv for traffic facts.
-2. For `representatives`, inspect the returned immutable `case_dir` and its
-   request, expected response, candidate response when present, dependencies,
-   and other persisted case evidence. When the result contains a
-   `dependencies_command`, execute its exact argv for a compact target summary;
-   select only the relevant target and execute its returned `detail_command`
-   for bounded representative exchanges that keep keys, arguments, and
-   responses associated. Do not write an
-   ad hoc parser for `dependencies.jsonl` while this query answers the question.
-   Inspect additional cases under
-   `.traffic-e2e/local/artifacts/` when they can distinguish the active hypotheses.
-3. Read [problem-diagnosis.md](references/problem-diagnosis.md) and follow its
-   issue-specific evidence and source-proof route.
-4. Inspect the matching immutable source code and target implementation and
-   prove one cause.
-5. Use [`backend-engineering`](../backend-engineering/SKILL.md) for the target
-   repair and repository checks.
-6. Return the tested change and unchanged `action.commands.acceptance` to the
-   orchestrator. The orchestrator integrates the change and executes acceptance
-   from the coordinator worktree; the worker never executes it.
-
-When the proven repair needs a coordinator mutation such as rule plan/apply or
-route, the worker returns the source proof and proposed inputs. The orchestrator
-executes that transition and reactivates the worker if implementation diagnosis
-remains necessary.
-
-Treat coordinator `possible_causes` as hypotheses, never conclusions. Preserve
-source cache keys, expiry, bounds, eviction, negative caching, warmup,
-concurrent load, refresh, and fallback semantics when they affect behavior.
-
-Dependency cleanliness is case-scoped. Diagnose only the case clusters returned
-by `dirty_clusters`; they group unmatched, unsupported, unsafe, and unused-case
-events by protocol and endpoint. Each cluster has a stable `cluster_id` and only
-the correlated pre-readiness interaction count; query `pre_readiness_traffic`
-for the complete startup summary. `unused_global` and target activity outside
-an active case do not fail the case gate. Treat pre-readiness traffic as
-reference context for startup jobs, warmup, and local-cache hypotheses, never
-as a gate or as proof of ownership. The dirty-cluster result includes a
-`representative_dependencies_command` for its selected case when available;
-execute it before expanding raw dependency artifacts.
-
-`backend-rewrite case dependencies <case-dir>` is read-only and returns a
-bounded target summary. It deliberately omits keys and response bodies; every
-target carries an opaque `target_id` and an exact `detail_command`. The detail
-query expands only that target and caps representative values. Redis detail
-labels keys only for command shapes the coordinator understands. Memcached
-detail returns representative keys and response outcome summaries but never
-interprets or exposes flags, whose meaning is application-specific. Dependency
-response previews are capped at 256 bytes and retain encoding, original length,
-and truncation metadata. Complete small Redis scalar frames also expose a
-`response_value`, so the AI does not need to parse RESP framing; inspect the
-read-only artifact only when the preview is insufficient. Use raw
-read-only case artifacts only when the selected detail remains insufficient.
-
-For a dependency issue, the `dirty_clusters` evidence report's
-`applicable_rule_planners` lists only the background-rule protocol planners
-supported by the current clusters. Run
-the returned protocol-specific help argv, then use
-`backend-rewrite dependency-rule plan <protocol>` with the current evidence ID and only
-the source-proven selector inputs shown there. The coordinator resolves the
-current replay evidence, immutable case source, and source revision; none are
-rule selector inputs. HTTP and Memcached expose different inputs, and
-irrelevant protocol flags are intentionally unavailable; Redis exposes
-command-specific `zcount`, `get`, `scard`, and `hgetall` selector inputs.
-`get`, `scard`, and `hgetall` require exact keys; do not infer prefixes or
-wildcards from recorded examples. When the plan reports
-`reused_existing=true`, the protocol selector is already covered: execute the
-returned apply-by-plan-ID action to confirm that reuse and refresh the current
-derived evidence; it makes no duplicate config change. Inspect the bounded
-plan coverage before apply. When it exposes an
-incomplete selector, rerun the planner with the same evidence ID and complete
-source-proven inputs; the new preview replaces the pending one without a
-special replacement flag. Otherwise execute the plan report's exact apply argv
-by plan ID.
-After apply, inspect `evidence_reclassification` and execute its exact `next`.
-The coordinator preserves immutable request, response, and dependency capture
-files, reapplies the current background rules to the latest focused replay
-report, rebuilds bounded dependency evidence, and revises that same attempt.
-If responses already pass and the effective dependency view becomes clean, it
-advances directly to comparison recording. Residual dirty evidence remains an
-`implementation_required` action. A background rule is not a Recorder capture
-contract change, so this path must not request fresh standard traffic or return
-`recorder-contract-changed`. If a session was interrupted after apply, discard
-cached actions and execute the current `backend-rewrite next`. The coordinator
-repairs an obsolete dependency-finalize failure against the current clean
-derived view and resumes
-the same attempt; do not retry E2E, inspect internal state, or request new
-traffic to recover it.
-
-A background rule changes case ownership only: it proves that matching
-asynchronous traffic is process-scoped and case-independent. It carries no
-`independent` or `runtime_state` classification and never replaces destination
-behavior. The target AI must determine from source and response evidence
-whether those dependencies drive process state. If they do, implement the
-source-compatible load, refresh, cache, fallback, and readiness behavior in
-destination code, then verify the affected cases. `initial_load_timeout_ms`
-only bounds source recording observation; it does not classify behavior.
-
-When source code proves a supported response rule, use only the coordinator's
-`backend-rewrite rule plan|apply` interface with a current `evidence_id`. When source
-and bounded evidence prove a Recorder/Replay gap, external-data blocker, or
-source change, use `backend-rewrite route`; it records the source reference and required
-change and returns a coordinator-issued `repair verify <repair-id>` acceptance.
-The AI cannot supply an acceptance command, and neither `next` nor
-`recording request` can bypass the pending repair. A failed route leaves the
-active target repair in place.
-
-## Evidence And Internal State
-
-`.traffic-e2e/local/artifacts/` is readable diagnostic evidence, not a forbidden
-directory. Start with the exact `case_dir` returned by `representatives`, then
-inspect other standard or comparison cases when useful. Keep every artifact
-read-only and let coordinator output determine the active run, issue, gates,
-and legal transition; never select workflow state by recency.
-
-Never read, search, list, summarize, or otherwise inspect
-`.traffic-e2e/local/ai-forbidden/**`. It is coordinator-owned internal state and is
-not a diagnostic surface for a target rewrite. If a public action, status, or
-evidence result is insufficient, report that coordinator API gap to the caller;
-do not compensate by inspecting the internal directory or coordinator
-implementation.
-
-`replay-progress.yaml` and `comparison-progress.yaml` are coordinator-generated,
-versioned migration evidence. They retain durable values such as consecutive
-success counts. Never hand-edit, reset, restore, or check out their changes to
-clean the worktree. When the coordinator changes either file, include that
-generated change in the same delivery commit as the verified target change.
-This exception does not apply to ignored runtime state under
-`local/ai-forbidden/` or to recordings and other generated artifacts.
-
-Do not use bulk `jq`, Python, or ad-hoc shell processing as a substitute for
-coordinator gate and aggregate results. Focused inspection of case files is
-allowed. Do not make target code, configuration, tests, or fixtures consume
-recorded responses or dependency outputs. Never modify source business
-behavior to manufacture evidence.
-
-## Repository Contract
-
-Start this workflow from an initialized target repository. The target provides
-only its ordinary implementation, source-compatible configuration, and:
+The initialized target repository provides ordinary product implementation,
+source-compatible configuration, and the generic lifecycle boundary:
 
 ```text
-scripts/<project>-cli start --e2e --start-breeze off \
+scripts/<project>-cli start --e2e \
   --boot-dir .traffic-e2e/local/boot --port <port>
 scripts/<project>-cli stop
 ```
 
-Every E2E start compiles once; use the compile command's `--release` mode when
-available and launch that artifact. `stop` is idempotent. The target CLI must
-not read traffic cases, Replay sessions, expected responses, or reports.
+Compile once per E2E start and launch release output when the normal compile
+supports it. Keep `stop` idempotent. The target CLI must not read cases, Replay
+sessions, expected responses, or reports.
 
 Read [configuration-compatibility.md](references/configuration-compatibility.md)
-for target configuration work. For Platform+Breeze recording lifecycle, read
-[platform-breeze-runtime.md](references/platform-breeze-runtime.md). The
-coordinator owns source, Breeze, Recorder, Replay, and comparison runtime
-control.
-
-## Completion
-
-Continue while `terminal_allowed` is false. `implementation_required` and
-`system_repair_required` are working states, not final answers. Retries,
-diminishing returns, code changes, or a draft PR never authorize stopping.
-
-`action.kind=complete` with `terminal_allowed=false` means only the assigned
-API is complete and other workers or inventory items remain. Only
-`terminal_allowed=true` completes the whole rewrite. Delivery still requires
-the user-requested repository checks and delivery outcome.
+before implementing target configuration loading or accepting
+configuration-dependent startup. Read
+[platform-breeze-runtime.md](references/platform-breeze-runtime.md) only for a
+Platform Java/Tomcat source whose dependency clients are Breeze-owned; that
+reference adds the Breeze-specific startup contract.

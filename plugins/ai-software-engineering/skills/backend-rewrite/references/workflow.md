@@ -1,5 +1,14 @@
 # Rewrite Coordinator Workflow
 
+## Contents
+
+- Coordinator phase order
+- Action handling
+- API inventory and serialized traffic
+- Fresh standard recording
+- Implementation and repair actions
+- State and recovery
+
 The coordinator owns the executable phase order:
 
 ```text
@@ -15,19 +24,18 @@ explicit new traffic / changed recording contract / changed source baseline
            -> fresh standard recording -> prepare -> focused E2E
 ```
 
-The target AI repeatedly runs `backend-rewrite next`. It pauses only for:
+The main orchestrator repeatedly executes `backend-rewrite next` or the opaque
+command returned by the current action. It waits only for:
 
-- the exact standard or comparison recording command returned by the action;
-- one source/target investigation and implementation issue;
-- one evidence-backed rule decision;
-- one controlled non-target-code route;
-- one explicit fresh-standard-recording request when its preconditions hold;
+- a returned standard, focused Replay, or comparison operation;
+- required caller input or a coordinator-owned mutation;
 - a serialized traffic runtime owned by another API;
-- completion.
+- worker handoffs after no pending API can advance; or
+- terminal completion.
 
 ## Action Handling
 
-Action schema v8 has one stable shape for every kind:
+The `action` object in response schema v8 has one stable shape for every kind:
 
 ```json
 {
@@ -42,12 +50,13 @@ Action schema v8 has one stable shape for every kind:
 location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
-`next` command.
+`next` command. Response schema v8 is independent of target repository
+configuration versions.
 
 ### `wait_required`
 
 Recording, Replay, and comparison share one `traffic_runtime` lease. When
-another worker owns it, `details.reason=resource_busy` identifies the resource,
+another operation owns it, `details.reason=resource_busy` identifies the resource,
 requested API, blocking API, live operation when one exists, and
 `retry_after_seconds`. Execute only `commands.status` after that delay. A
 missing live operation means another API has a non-preemptible coordinator
@@ -60,7 +69,7 @@ owner is live.
 Execute the exact opaque `action.commands.execute` argv with the named
 environment variables. Returned argv already contains the canonical absolute
 `--target-root`; `cwd` remains its safe execution default. The command starts a detached
-coordinator worker and returns immediately. Poll the status command returned by
+recording executor and returns immediately. Poll the status command returned by
 that execution; `recording_in_progress` exposes it as
 `action.commands.status`. Run `action.commands.advance` only after
 `advance_required`. The allocated recording identity is
@@ -83,7 +92,7 @@ is ready to advance its state. Execute the exact `commands.advance` argv once.
 This action never means rerun the previous recording, Replay, comparison, or
 implementation command.
 
-### API inventory and `api_pending`
+### API inventory and pending items
 
 Every initialized action/status envelope includes a bounded `api_inventory`
 summary: `total`, `completed`, `pending`, `implementation_required`,
@@ -270,13 +279,13 @@ rewrite AI must never read, search, or list that directory. Use
 current or requested API action without advancing state:
 it returns the original `action.commands.execute` before recording execution,
 an exact `action.commands.apply` for a pending plan,
-`action.commands.status` while the detached worker is live, or
+`action.commands.status` while the detached recording executor is live, or
 `action.commands.advance` only after a finalized recording manifest or target
 change is ready for `backend-rewrite next`. A running
 manifest whose owner exited returns `recovery_required`; recovery removes only
 the matching managed run resources and allocates a replacement run. This makes
 a lost action response recoverable without rebuilding argv or starting a
-second worker. In `system_repair_required`, status also reconstructs the exact
+second executor. In `system_repair_required`, status also reconstructs the exact
 coordinator-issued `action.commands.acceptance` for
 `repair verify <repair-id>`. When an action reports `recovery_required`, execute
 its exact `action.commands.recover` argv. Recovery rejects a live coordinator,

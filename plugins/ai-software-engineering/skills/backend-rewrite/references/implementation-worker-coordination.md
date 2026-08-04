@@ -5,6 +5,14 @@ reports `total > 1`, or before the first `implementation_required` action in a
 single-API workflow. Worker dispatch is universal; inventory size changes only
 what the orchestrator does after dispatch.
 
+## Contents
+
+- Execution model
+- Mandatory dispatch gate
+- Worktrees and commands
+- Post-dispatch scheduler
+- Assignment and worker lifecycle
+
 ## Execution Model
 
 The main Agent is a thin orchestrator. It owns the canonical coordinator
@@ -19,6 +27,9 @@ Each subagent owns one API's diagnosis-to-tested-change cycle:
 - implement the smallest compatible repair;
 - run API-local unit and component tests; and
 - return a reviewable handoff.
+
+A handoff ends only the worker's current turn. It does not complete the API or
+release the `API -> subagent -> worktree` binding.
 
 Keep recording, focused Replay, and comparison serial. They share one
 `traffic_runtime` lease and run only under the orchestrator. Serialization
@@ -58,9 +69,11 @@ create, switch, reset, remove, or repurpose worktrees and must not initialize a
 private coordinator. Worker edits stay isolated until orchestrator integration.
 
 Every returned coordinator argv includes the absolute canonical
-`--target-root`. A worker may therefore execute its assigned read-only status,
-inventory, evidence, and case-dependency argv from its own worktree. It must
-execute the argv exactly and must not remove or replace `--target-root`.
+`--target-root`. A worker may therefore execute its assigned evidence,
+case-dependency, returned read-only help, and explicitly handed API-scoped
+status argv from its own worktree. It must execute the argv exactly and must not
+remove or replace `--target-root`. Inventory and unscoped status remain
+orchestrator concerns.
 
 Only the orchestrator runs state-mutating transitions: `next` and acceptance,
 recording, rule plan/apply, route or repair verification, recover, Replay, and
@@ -106,8 +119,7 @@ complete action, opaque evidence commands, expected module ownership when
 known, and required handoff. Do not ask the worker to rediscover workflow state
 or enumerate other APIs.
 
-The worker's current subagent task is complete after local tests when it
-returns:
+The worker handoff is ready after local tests when it returns:
 
 - API and issue ID;
 - proven root cause and supporting evidence;
@@ -115,9 +127,9 @@ returns:
 - patch or commit identity and test outcomes; and
 - required coordinator transition inputs and unresolved risks.
 
-The worker becomes idle after handoff and does not wait for Replay. Retain the
-`API -> subagent -> worktree` binding until that API reaches coordinator
-`complete` or ownership is explicitly transferred.
+The worker's current turn becomes idle after handoff and does not wait for
+Replay. Retain the `API -> subagent -> worktree` binding until that API reaches
+coordinator `complete` or ownership is explicitly transferred.
 
 If serialized acceptance returns `implementation_required`, update that
 worker's worktree from the integrated target revision and reactivate the same

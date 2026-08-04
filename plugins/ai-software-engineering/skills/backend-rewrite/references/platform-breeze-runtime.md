@@ -8,7 +8,7 @@ dependency clients are owned by Breeze.
 The initialized target repository provides:
 
 - one genuine source application container in `.traffic-e2e/project.yaml`;
-- `scripts/<project>-cli start --e2e --start-breeze off --boot-dir
+- `scripts/<project>-cli start --e2e --boot-dir
   .traffic-e2e/local/boot --port <port>`;
 - an idempotent `scripts/<project>-cli stop`; and
 - source-compatible startup inputs under `.traffic-e2e/local/boot/`.
@@ -18,8 +18,8 @@ launch. If that compile supports release mode, compile and launch the release
 artifact; do not add a `--release` argument to the `start` interface itself.
 
 The conventional existing Breeze container is `breeze` unless project config
-names another one. Start the target with `--start-breeze off` so source and
-target use the coordinator-managed Breeze lifecycle.
+names another one. For a Breeze-dependent target, `start --e2e` does not start
+Breeze; source and target use the coordinator-managed Breeze lifecycle.
 
 The target repository contains only product startup and shutdown behavior. It
 does not own recording, comparison, container, truststore, source-adaptation,
@@ -32,9 +32,8 @@ managed Breeze and recording lifecycle, waits for readiness, records the
 selected scope, finalizes evidence, and cleans up. Execute only the exact
 commands returned by `backend-rewrite` actions.
 
-During comparison, source and target use the same Breeze lifecycle. The target
-continues to start with `--start-breeze off`; no second Breeze instance belongs
-to the target startup path.
+During comparison, source and target use the same Breeze lifecycle. No second
+Breeze instance belongs to the target startup path.
 
 ## Acceptance
 
