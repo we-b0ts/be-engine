@@ -288,10 +288,10 @@ command.
 blocking the requested transition and always supplies the status command the
 AI should poll. Only `recovery_required` authorizes `recover`.
 
-Traffic-e2e's internal runner publication may retain its own implementation
-layout. Those internal paths are not a stable rewrite-interface contract. The
-interface may expose immutable artifact paths such as a representative
-`case_dir` when direct inspection is useful.
+Internal runner publication may retain its own implementation layout. Those
+internal paths are not a stable rewrite-interface contract. The interface may
+expose immutable artifact paths such as a representative `case_dir` when direct
+inspection is useful.
 
 The target repository's `replay-progress.yaml` and
 `comparison-progress.yaml` are a separate, versioned coordinator output. Do

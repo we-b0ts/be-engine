@@ -5,17 +5,11 @@ description: "Plan, implement, verify, and deliver backend service rewrites and 
 
 # Backend Rewrite
 
-Use the `backend-rewrite` binary for migration sequence and bounded
-traffic evidence. The target AI owns source-code attribution and target-code
-implementation; it does not operate the traffic engine. Recorded artifacts are
-readable diagnostic evidence, while coordinator actions remain authoritative
-for workflow state and gate results.
-
-This skill is self-contained for ordinary rewrites. Do not load the
-`traffic-e2e` skill. `backend-rewrite` uses the `traffic_e2e` crate and is the
-complete executable coordinator interface; the target AI must not reconstruct
-its operations from lower-level `traffic-e2e` commands. Load
-`backend-engineering` only in the assigned worker that performs target-code
+Use the `backend-rewrite` binary for migration sequence and bounded traffic
+evidence. The coordinator owns workflow state, traffic operations, and gate
+results. Recorded artifacts are readable diagnostic evidence, while the
+assigned worker owns source-code attribution and target-code implementation.
+Load `backend-engineering` only in the assigned worker that performs target-code
 implementation or review, not the main orchestrator before dispatch.
 
 ## Control Protocol
@@ -187,9 +181,8 @@ one lifecycle. `action.details.input_mode=external_live_traffic` means no exact
 atomic input was reusable and the action opens a fresh recording window; its
 bounded `action.details.recording_input_diagnosis` contains recent candidate
 scopes and rejection reasons. Never add `nohup`, curl loops, a replayer, or
-driver parameters. Do not inspect internal state, search the traffic-e2e
-implementation, or synthesize requests. A failed E2E attempt alone never
-authorizes this transition.
+driver parameters. Do not inspect internal state or synthesize requests. A
+failed E2E attempt alone never authorizes this transition.
 
 For a recording bound to one or more explicit API selectors, the worker may
 finalize as soon as every selected API reaches its per-API case limit; the
@@ -305,11 +298,10 @@ If responses already pass and the effective dependency view becomes clean, it
 advances directly to comparison recording. Residual dirty evidence remains an
 `implementation_required` action. A background rule is not a Recorder capture
 contract change, so this path must not request fresh standard traffic or return
-`recorder-contract-changed`. Do not use the lower-level
-`config recorder plan|apply background-dependencies` interface during a rewrite.
-If a session was interrupted after apply, discard cached actions and execute
-the current `backend-rewrite next`. The coordinator repairs an obsolete
-dependency-finalize failure against the current clean derived view and resumes
+`recorder-contract-changed`. If a session was interrupted after apply, discard
+cached actions and execute the current `backend-rewrite next`. The coordinator
+repairs an obsolete dependency-finalize failure against the current clean
+derived view and resumes
 the same attempt; do not retry E2E, inspect internal state, or request new
 traffic to recover it.
 
@@ -343,9 +335,8 @@ Never read, search, list, summarize, or otherwise inspect
 `.traffic-e2e/local/ai-forbidden/**`. It is coordinator-owned internal state and is
 not a diagnostic surface for a target rewrite. If a public action, status, or
 evidence result is insufficient, report that coordinator API gap to the caller;
-do not compensate by inspecting the internal directory or the traffic-e2e
-implementation. This prohibition does not apply to maintainers working inside
-the traffic-e2e engine repository under its own `AGENTS.md`.
+do not compensate by inspecting the internal directory or coordinator
+implementation.
 
 `replay-progress.yaml` and `comparison-progress.yaml` are coordinator-generated,
 versioned migration evidence. They retain durable values such as consecutive
@@ -363,14 +354,8 @@ behavior to manufacture evidence.
 
 ## Repository Contract
 
-Initialize once with:
-
-```bash
-traffic-e2e config init --source-container <container> [--breeze]
-```
-
-The target provides only its ordinary implementation, source-compatible
-configuration, and:
+Start this workflow from an initialized target repository. The target provides
+only its ordinary implementation, source-compatible configuration, and:
 
 ```text
 scripts/<project>-cli start --e2e --start-breeze off \
@@ -385,8 +370,8 @@ not read traffic cases, Replay sessions, expected responses, or reports.
 Read [configuration-compatibility.md](references/configuration-compatibility.md)
 for target configuration work. For Platform+Breeze recording lifecycle, read
 [platform-breeze-runtime.md](references/platform-breeze-runtime.md). The
-traffic engine owns source/Breeze/Recorder/Replay containers and capture-only
-source adaptation; the target repository owns none of that control flow.
+coordinator owns source, Breeze, Recorder, Replay, and comparison runtime
+control.
 
 ## Completion
 

@@ -65,7 +65,7 @@ execute the argv exactly and must not remove or replace `--target-root`.
 Only the orchestrator runs state-mutating transitions: `next` and acceptance,
 recording, rule plan/apply, route or repair verification, recover, Replay, and
 comparison. A worker returns source-proven proposed inputs for those transitions
-and never invokes lower-level `traffic-e2e` operations.
+and never starts an unreturned coordinator operation.
 
 ## Post-Dispatch Scheduler
 

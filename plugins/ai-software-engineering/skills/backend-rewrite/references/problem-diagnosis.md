@@ -203,9 +203,9 @@ apply the returned plan ID. Replay evidence, case source, and source revision
 come from coordinator state and are not background-rule inputs. Execute the
 apply report's exact `next`. The coordinator, not the target AI, reclassifies
 the same focused replay report under the current rules and returns either
-residual dirty evidence or the next comparison action. Never call the
-lower-level Recorder config planner, manually rewrite replay reports, trim
-traffic, or edit immutable request/response/dependency capture files.
+residual dirty evidence or the next comparison action. Never manually rewrite
+replay reports, trim traffic, or edit immutable request/response/dependency
+capture files.
 
 ## Comparison Issues
 
