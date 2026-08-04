@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 8;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 9;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -287,6 +287,14 @@ pub(super) struct RewriteDependencyRulePlanRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteWorkerBinding {
+    pub agent_handle_fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    pub confirmed_dispatch_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteSliceState {
     pub phase: RewritePhase,
     pub api: String,
@@ -349,6 +357,8 @@ pub(super) struct RewriteState {
     pub current_api_index: Option<usize>,
     #[serde(default)]
     pub parked_slices: BTreeMap<String, RewriteSliceState>,
+    #[serde(default)]
+    pub worker_bindings: BTreeMap<String, RewriteWorkerBinding>,
     pub recording_run_id: String,
     #[serde(default)]
     pub recording_rejection: Option<String>,
@@ -411,6 +421,33 @@ pub struct RewriteCommandSpec {
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub required_env_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteWorkerDispatchState {
+    DispatchRequired,
+    ResumeRequired,
+    Confirmed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteWorkerBlockingReason {
+    WorkerDispatchUnconfirmed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteWorkerDispatchView {
+    pub binding_id: String,
+    pub dispatch_id: String,
+    pub state: RewriteWorkerDispatchState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocking_reason: Option<RewriteWorkerBlockingReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_api: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -517,7 +554,10 @@ pub enum RewriteAction {
         status: RewriteCommandSpec,
     },
     ImplementationRequired {
+        summary: String,
         issue: RewriteIssue,
+        worker: RewriteWorkerDispatchView,
+        confirm_worker: Option<RewriteCommandSpec>,
         evidence_commands: Vec<RewriteEvidenceCommand>,
         acceptance: RewriteCommandSpec,
     },
@@ -706,6 +746,7 @@ mod tests {
         object.remove("api_inventory");
         object.remove("current_api_index");
         object.remove("parked_slices");
+        object.remove("worker_bindings");
 
         let state: RewriteState = serde_json::from_value(value).unwrap();
 
@@ -719,6 +760,7 @@ mod tests {
         assert!(state.api_inventory.is_empty());
         assert!(state.current_api_index.is_none());
         assert!(state.parked_slices.is_empty());
+        assert!(state.worker_bindings.is_empty());
     }
 
     #[test]
@@ -729,6 +771,7 @@ mod tests {
             required_env_names: Vec::new(),
         };
         let action = RewriteAction::ImplementationRequired {
+            summary: "response status differs".to_string(),
             issue: RewriteIssue {
                 id: "issue-response".to_string(),
                 kind: RewriteIssueKind::Response,
@@ -741,6 +784,15 @@ mod tests {
                 attempt: 2,
                 comparison_observation: None,
             },
+            worker: RewriteWorkerDispatchView {
+                binding_id: "worker-binding".to_string(),
+                dispatch_id: "worker-dispatch".to_string(),
+                state: RewriteWorkerDispatchState::DispatchRequired,
+                blocking_reason: Some(RewriteWorkerBlockingReason::WorkerDispatchUnconfirmed),
+                requested_api: None,
+                agent_name: None,
+            },
+            confirm_worker: Some(command.clone()),
             evidence_commands: vec![RewriteEvidenceCommand {
                 purpose: "inspect representative".to_string(),
                 query_id: "representatives".to_string(),
@@ -772,6 +824,14 @@ mod tests {
             value.pointer("/commands/evidence/0/query_id"),
             Some(&serde_json::json!("representatives"))
         );
+        assert_eq!(
+            value.pointer("/details/worker/state"),
+            Some(&serde_json::json!("dispatch_required"))
+        );
+        assert_eq!(
+            value.pointer("/commands/confirm_worker/argv/1"),
+            Some(&serde_json::json!("status"))
+        );
         assert!(value.get("issue").is_none());
         assert!(value.get("evidence_commands").is_none());
         assert!(value.get("acceptance").is_none());
@@ -788,7 +848,7 @@ mod tests {
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(8)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(9)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }

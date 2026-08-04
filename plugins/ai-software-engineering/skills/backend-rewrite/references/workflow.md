@@ -35,7 +35,7 @@ command returned by the current action. It waits only for:
 
 ## Action Handling
 
-The `action` object in response schema v8 has one stable shape for every kind:
+The `action` object in response schema v9 has one stable shape for every kind:
 
 ```json
 {
@@ -50,8 +50,9 @@ The `action` object in response schema v8 has one stable shape for every kind:
 location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
-`next` command. Response schema v8 is independent of target repository
-configuration versions.
+`next` command. Response schema v9 is independent of target repository
+configuration versions. Schema v9 adds the mandatory implementation-worker
+dispatch confirmation gate.
 
 ### `wait_required`
 
@@ -188,9 +189,15 @@ is required; the AI does not choose that transition itself.
 ### `implementation_required`
 
 `action.details` contains one bounded issue, one representative when available,
-and possible causes. Without running evidence, the orchestrator creates the
-worktree and dedicated subagent binding for the API's first issue, or resumes
-its stored subagent handle for every later issue.
+possible causes, and a `worker` gate. `dispatch_required` creates the worktree
+and dedicated subagent; `resume_required` reactivates its stored handle. After
+the runtime returns the handle, execute `action.commands.confirm_worker` with
+the required handle environment variable and optional subagent-name variable.
+Do not execute any later `next` until the worker state is `confirmed`; this
+includes same-API acceptance and cross-API selection. A refused cross-API
+selection also returns `blocking_reason=worker_dispatch_unconfirmed`, the
+requested API, and the same confirmation command instead of an unstructured
+error.
 `action.commands.evidence` contains the worker's permitted evidence queries,
 while `action.commands.acceptance` is the orchestrator's only acceptance
 transition. Traffic facts come from those queries and immutable artifacts.

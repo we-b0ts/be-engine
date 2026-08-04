@@ -22,6 +22,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "dependency-rule",
             "route",
             "repair",
+            "worker",
             "recording",
             "recover",
         ]
@@ -158,6 +159,19 @@ fn parses_the_bounded_rewrite_surface() {
         .is_err()
     );
     assert!(Cli::try_parse_from(["test", "repair", "verify", "repair-1"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "worker",
+            "confirm",
+            "fnv1a64:dispatch",
+            "--agent-handle",
+            "runtime-agent-42",
+            "--agent-name",
+            "friends-ids-worker",
+        ])
+        .is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

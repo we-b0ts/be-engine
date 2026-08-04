@@ -20,6 +20,7 @@ mod status;
 mod store;
 mod traffic_operation;
 mod transition;
+mod worker;
 
 use std::path::{Path, PathBuf};
 
@@ -45,6 +46,7 @@ pub use model::{
     RewriteRecordingReason, RewriteRecordingStartReport, RewriteRecordingStartState,
     RewriteRecoveryReport, RewriteRepairAcceptanceKind, RewriteRouteReport, RewriteRuleReport,
     RewriteStatusReport, RewriteTrafficOperationKind, RewriteTrafficOperationView,
+    RewriteWorkerBlockingReason, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
     RewriteWorkflowView,
 };
 pub use recording::{
@@ -54,6 +56,7 @@ pub use recording::{
 pub use repair::RewriteRouteOptions;
 pub use rule::RewriteRulePlanOptions;
 pub use status::{status_rewrite, status_rewrite_for_api};
+pub use worker::{RewriteWorkerConfirmOptions, confirm as confirm_rewrite_worker};
 
 use model::{
     ACTION_SCHEMA_VERSION, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
@@ -192,6 +195,22 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 let scoped = inventory::scoped(&state, options.api.as_ref())?;
                 return action::for_status(&target_root, &scoped);
             }
+            if state.phase == RewritePhase::ImplementationRequired
+                && !worker::current_is_confirmed(&state)
+            {
+                if migrated || invalidated || active_comparison_stale {
+                    store.save(&state)?;
+                }
+                return Ok(worker::gate_envelope(
+                    &target_root,
+                    &state,
+                    options
+                        .api
+                        .as_ref()
+                        .map(ToString::to_string)
+                        .filter(|requested| requested != &state.api),
+                ));
+            }
             let activated = inventory::activate_requested(&mut state, options.api.as_ref())?;
             let bound = inventory::bind_options(
                 &mut state,
@@ -234,6 +253,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 api_inventory: Vec::new(),
                 current_api_index: None,
                 parked_slices: std::collections::BTreeMap::new(),
+                worker_bindings: std::collections::BTreeMap::new(),
                 recording_run_id,
                 recording_rejection: None,
                 recording_settings: RewriteRecordingSettings::default(),
@@ -746,6 +766,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         api_inventory: Vec::new(),
         current_api_index: None,
         parked_slices: std::collections::BTreeMap::new(),
+        worker_bindings: std::collections::BTreeMap::new(),
         recording_run_id: "20260802000000".to_string(),
         recording_rejection: None,
         recording_settings: RewriteRecordingSettings::default(),
@@ -793,7 +814,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(8)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(9)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),

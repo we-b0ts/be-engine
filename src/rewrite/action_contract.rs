@@ -6,7 +6,7 @@ use crate::E2eRepresentativeDifference;
 use super::model::{
     RewriteAction, RewriteCommandSpec, RewriteEvidenceCommand, RewriteInputRequiredReason,
     RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteRecordingInputDiagnosis,
-    RewriteRecordingInputMode, RewriteRouteRecord,
+    RewriteRecordingInputMode, RewriteRouteRecord, RewriteWorkerDispatchView,
 };
 
 impl Serialize for RewriteAction {
@@ -84,14 +84,21 @@ impl Serialize for RewriteAction {
             }
             .serialize(serializer),
             Self::ImplementationRequired {
+                summary,
                 issue,
+                worker,
+                confirm_worker,
                 evidence_commands,
                 acceptance,
             } => RewriteActionView {
                 kind: "implementation_required",
-                summary: &issue.summary,
-                details: RewriteIssueDetails::from(issue),
+                summary,
+                details: RewriteImplementationDetails {
+                    issue: RewriteIssueDetails::from(issue),
+                    worker,
+                },
                 commands: RewriteImplementationCommands {
+                    confirm_worker: confirm_worker.as_ref(),
                     evidence: evidence_commands,
                     acceptance,
                 },
@@ -219,6 +226,13 @@ struct RewriteIssueDetails<'a> {
     comparison_observation: Option<&'a Value>,
 }
 
+#[derive(Serialize)]
+struct RewriteImplementationDetails<'a> {
+    #[serde(flatten)]
+    issue: RewriteIssueDetails<'a>,
+    worker: &'a RewriteWorkerDispatchView,
+}
+
 impl<'a> From<&'a RewriteIssue> for RewriteIssueDetails<'a> {
     fn from(issue: &'a RewriteIssue) -> Self {
         Self {
@@ -266,6 +280,8 @@ struct RewriteStatusCommands<'a> {
 
 #[derive(Serialize)]
 struct RewriteImplementationCommands<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confirm_worker: Option<&'a RewriteCommandSpec>,
     evidence: &'a [RewriteEvidenceCommand],
     acceptance: &'a RewriteCommandSpec,
 }

@@ -10,10 +10,10 @@ use traffic_e2e::{
     DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteCaseDependenciesOptions,
     RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
     RewriteRecordingRequestOptions, RewriteRouteOptions, RewriteRulePlanOptions,
-    apply_rewrite_rule, inventory_rewrite, next_rewrite, plan_rewrite_rule,
-    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
-    status_rewrite_for_api, verify_rewrite_repair,
+    RewriteWorkerConfirmOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
+    next_rewrite, plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence,
+    recover_rewrite, request_rewrite_recording, route_rewrite, start_rewrite_recording,
+    status_rewrite, status_rewrite_for_api, verify_rewrite_repair,
 };
 
 mod dependency_rule;
@@ -103,6 +103,8 @@ enum RewriteCommand {
     Route(RouteArgs),
     /// Verify one coordinator-issued system repair acceptance.
     Repair(RepairArgs),
+    /// Confirm the runtime identity of one dispatched or resumed API subagent.
+    Worker(WorkerArgs),
     /// Request a fresh coordinator-owned recording with explicit bounded parameters.
     Recording(RecordingArgs),
     /// Remove only a stale coordinator lock after its process has exited.
@@ -234,6 +236,30 @@ enum RepairCommand {
 #[derive(Debug, Args)]
 struct RepairVerifyArgs {
     repair_id: String,
+}
+
+#[derive(Debug, Args)]
+struct WorkerArgs {
+    #[command(subcommand)]
+    command: WorkerCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkerCommand {
+    /// Bind an actual subagent handle to the current implementation dispatch.
+    Confirm(WorkerConfirmArgs),
+}
+
+#[derive(Debug, Args)]
+struct WorkerConfirmArgs {
+    /// Opaque dispatch id returned by the current implementation_required action.
+    dispatch_id: String,
+    /// Runtime-returned subagent handle. Supply through the named environment variable.
+    #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
+    agent_handle: String,
+    /// Optional human-readable subagent name for diagnostics.
+    #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_NAME", hide_env_values = true)]
+    agent_name: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -383,6 +409,17 @@ async fn run(cli: Cli) -> Result<()> {
         RewriteCommand::Repair(args) => match args.command {
             RepairCommand::Verify(args) => print_json(
                 &verify_rewrite_repair(RewriteContext { target_root }, &args.repair_id)?,
+                pretty,
+            ),
+        },
+        RewriteCommand::Worker(args) => match args.command {
+            WorkerCommand::Confirm(args) => print_json(
+                &confirm_rewrite_worker(RewriteWorkerConfirmOptions {
+                    target_root,
+                    dispatch_id: args.dispatch_id,
+                    agent_handle: args.agent_handle,
+                    agent_name: args.agent_name,
+                })?,
                 pretty,
             ),
         },

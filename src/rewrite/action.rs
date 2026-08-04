@@ -9,7 +9,7 @@ use super::model::{
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
     RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
 };
-use super::{evidence, fingerprint, inventory, recording, recording_action};
+use super::{fingerprint, inventory, recording, recording_action, worker};
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
     envelope(state, state_action(target_root, state))
@@ -125,7 +125,7 @@ pub(super) fn uninitialized_coordinator_wait_envelope(
     }
 }
 
-fn envelope(state: &RewriteState, action: RewriteAction) -> RewriteActionEnvelope {
+pub(super) fn envelope(state: &RewriteState, action: RewriteAction) -> RewriteActionEnvelope {
     let workflow = Some(workflow_view(state));
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
@@ -211,14 +211,9 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             Some(&state.api),
             format!("continue with the next recorded API {}", state.api),
         ),
-        RewritePhase::ImplementationRequired => RewriteAction::ImplementationRequired {
-            issue: state
-                .active_issue
-                .clone()
-                .expect("implementation phase requires an issue"),
-            evidence_commands: evidence::commands(target_root, state),
-            acceptance: next_command_for_api(target_root, &state.api),
-        },
+        RewritePhase::ImplementationRequired => {
+            worker::implementation_action(target_root, state, None)
+        }
         RewritePhase::ComparisonRecordingRequired => RewriteAction::ComparisonRecordingRequired {
             summary: state.comparison_rejection.as_ref().map_or_else(
                 || format!("generate fresh comparison evidence for {}", state.api),

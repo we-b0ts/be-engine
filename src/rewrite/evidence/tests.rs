@@ -44,6 +44,7 @@ fn parked_api_evidence_survives_unrelated_api_revisions() {
         .unwrap();
     let evidence = query(target_root, &state, &evidence_command.query_id).unwrap();
     let original_revision = state.revision;
+    crate::rewrite::worker::confirm_current_for_test(&mut state);
 
     inventory::activate_requested(
         &mut state,

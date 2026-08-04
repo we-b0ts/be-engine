@@ -57,9 +57,12 @@ inspects source or target code, or develops an API-level hypothesis, it must:
 2. create the API worker worktree from the current integrated target revision;
 3. invoke the runtime's actual subagent-dispatch tool with that context and the
    required handoff;
-4. capture the returned worker handle; and
-5. retain the `API -> subagent handle -> worktree` binding before resuming
-   orchestrator scheduling.
+4. capture the returned worker handle and optional display name;
+5. execute the returned `commands.confirm_worker`, supplying
+   `BACKEND_REWRITE_SUBAGENT_HANDLE` and optionally
+   `BACKEND_REWRITE_SUBAGENT_NAME`; and
+6. execute no later `next`, including same-API acceptance or cross-API
+   scheduling, until the returned worker state is `confirmed`.
 
 `TaskCreate`, a TODO, task-status changes, or an announcement of future
 dispatch does not satisfy this gate. If no real subagent capability is
@@ -71,6 +74,8 @@ subagent. Refresh the same worktree from the integrated revision and use the
 runtime's resume/reactivate operation with the stored handle. A fresh Agent or
 subagent invocation is a replacement even when given the prior prompt or
 worktree; it loses the dedicated worker's accumulated context.
+Confirm every reactivation with the same handle through the new action's
+`commands.confirm_worker` before any later `next`.
 
 ## Worktrees And Commands
 

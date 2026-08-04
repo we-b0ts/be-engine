@@ -87,6 +87,14 @@ pub(super) fn install(state: &mut RewriteState, apis: Vec<String>) -> Result<()>
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let installed_apis = state
+        .api_inventory
+        .iter()
+        .map(|item| item.api.clone())
+        .collect::<Vec<_>>();
+    state
+        .worker_bindings
+        .retain(|api, _| installed_apis.contains(api));
     state.parked_slices.clear();
     state.current_api_index = Some(0);
     load_pending(state, 0)?;
@@ -135,6 +143,7 @@ pub(super) fn activate_requested(
     }
 
     if state.phase == RewritePhase::ImplementationRequired {
+        super::worker::ensure_current_confirmed(state)?;
         park_current_implementation(state)?;
     } else {
         let current_index = state
@@ -633,14 +642,14 @@ mod tests {
         .unwrap();
         state.phase = RewritePhase::ImplementationRequired;
         state.target_fingerprint = Some("target-a".to_string());
+        state.active_issue = Some(test_issue("issue-a", "target-a"));
 
-        assert!(
-            activate_requested(
-                &mut state,
-                Some(&"POST /b".parse::<RecordingApi>().unwrap())
-            )
-            .unwrap()
-        );
+        let api_b = "POST /b".parse::<RecordingApi>().unwrap();
+        let error = activate_requested(&mut state, Some(&api_b)).unwrap_err();
+        assert!(error.to_string().contains("subagent dispatch is confirmed"));
+        super::super::worker::confirm_current_for_test(&mut state);
+
+        assert!(activate_requested(&mut state, Some(&api_b)).unwrap());
         assert_eq!(state.api, "POST /b");
         assert_eq!(state.phase, RewritePhase::ApiPending);
         assert_eq!(
@@ -658,6 +667,8 @@ mod tests {
 
         state.phase = RewritePhase::ImplementationRequired;
         state.target_fingerprint = Some("target-b".to_string());
+        state.active_issue = Some(test_issue("issue-b", "target-b"));
+        super::super::worker::confirm_current_for_test(&mut state);
         assert!(activate_requested(&mut state, Some(&api_a)).unwrap());
         assert_eq!(state.api, "GET /a");
         assert_eq!(state.target_fingerprint.as_deref(), Some("target-a"));
@@ -665,6 +676,21 @@ mod tests {
             state.parked_slices["POST /b"].target_fingerprint.as_deref(),
             Some("target-b")
         );
+    }
+
+    fn test_issue(id: &str, target_fingerprint: &str) -> crate::rewrite::model::RewriteIssue {
+        crate::rewrite::model::RewriteIssue {
+            id: id.to_string(),
+            kind: crate::rewrite::model::RewriteIssueKind::Response,
+            owner: crate::rewrite::model::RewriteIssueOwner::TargetCode,
+            summary: "implementation differs".to_string(),
+            pointer_pattern: None,
+            representative: None,
+            possible_causes: Vec::new(),
+            observed_target_fingerprint: target_fingerprint.to_string(),
+            attempt: 1,
+            comparison_observation: None,
+        }
     }
 
     #[test]
@@ -707,13 +733,27 @@ mod tests {
         state.target_fingerprint = Some("target-r0".to_string());
         state.e2e_current = true;
         state.comparison_current = true;
+        state.phase = RewritePhase::ImplementationRequired;
+        state.active_issue = Some(test_issue("issue-a", "target-r0"));
+        super::super::worker::confirm_current_for_test(&mut state);
         assert!(complete_current_and_advance(&mut state).unwrap());
         assert_eq!(state.api_inventory[0].status, RewriteApiStatus::Complete);
+        assert!(state.worker_bindings.contains_key("GET /a"));
 
         assert!(invalidate_completed_for_target_change(&mut state, "target-r1").unwrap());
         assert_eq!(state.api_inventory[0].status, RewriteApiStatus::Pending);
         assert!(!state.api_inventory[0].e2e_current);
         assert!(!state.api_inventory[0].comparison_current);
         assert!(state.api_inventory[0].verified_target_fingerprint.is_none());
+        assert!(state.worker_bindings.contains_key("GET /a"));
+
+        let api_a = "GET /a".parse::<RecordingApi>().unwrap();
+        assert!(activate_requested(&mut state, Some(&api_a)).unwrap());
+        state.phase = RewritePhase::ImplementationRequired;
+        state.active_issue = Some(test_issue("issue-a-later", "target-r1"));
+        assert_eq!(
+            super::super::worker::dispatch_view(&state, None).state,
+            crate::rewrite::model::RewriteWorkerDispatchState::ResumeRequired
+        );
     }
 }

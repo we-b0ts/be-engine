@@ -47,7 +47,7 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v8 contains an `action` object with exactly `kind`, `summary`,
+Response schema v9 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read facts only from `action.details` and
 execute only command roles actually present under `action.commands`; never
@@ -112,13 +112,20 @@ it must:
    `cwd`, and all opaque command specs;
 2. create the isolated worktree from the current integrated target revision;
 3. invoke the runtime's real subagent mechanism with that handoff;
-4. capture the returned subagent handle; and
-5. retain the `API -> subagent handle -> worktree` binding.
+4. capture the returned subagent handle and optional human-readable name;
+5. execute the exact returned `action.commands.confirm_worker`, supplying the
+   handle through `BACKEND_REWRITE_SUBAGENT_HANDLE` and, when available, the
+   name through `BACKEND_REWRITE_SUBAGENT_NAME`; and
+6. require `action.details.worker.state=confirmed` before any later `next`,
+   including same-API acceptance or selection of another API. Retain the
+   `API -> subagent handle -> worktree` binding until workflow completion.
 
 On every later `implementation_required`, update the bound worktree from the
 integrated revision and resume or reactivate the stored handle with the new
 complete action and raw acceptance result. A new subagent invocation without
 that handle is replacement, not resume, even if its prompt says "resuming".
+After reactivation, execute the new `confirm_worker` command with the same
+handle. `resume_required` is not satisfied by a new subagent.
 Never replace the dedicated subagent silently. If the stored handle cannot be
 resumed, preserve its worktree and report a capability blocker; transfer
 requires explicit caller approval.
