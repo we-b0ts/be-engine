@@ -245,13 +245,15 @@ fn public_rejection(error: &anyhow::Error, allowed: &[&str], fallback: &str) -> 
 
 pub(super) fn recording_run(target_root: &Path, run_id: &str) -> PathBuf {
     target_root
-        .join(".traffic-e2e/artifacts/recordings")
+        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+        .join("recordings")
         .join(run_id)
 }
 
 pub(super) fn comparison_run(target_root: &Path, run_id: &str) -> PathBuf {
     target_root
-        .join(".traffic-e2e/artifacts/comparison-recordings")
+        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+        .join("comparison-recordings")
         .join(run_id)
 }
 

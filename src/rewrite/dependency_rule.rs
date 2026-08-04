@@ -188,7 +188,7 @@ pub(super) fn apply(
         issue_id: record.issue_id,
         traffic_e2e_report: report,
         evidence_reclassification: None,
-        next_command: action::next_command(target_root),
+        next_command: action::next_command_for_api(target_root, &state.api),
     })
 }
 

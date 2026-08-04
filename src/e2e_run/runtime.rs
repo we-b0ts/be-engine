@@ -414,7 +414,7 @@ mod tests {
     fn resolved_project(project_cli: PathBuf) -> ResolvedProjectConfig {
         ResolvedProjectConfig {
             project_cli,
-            target_boot_dir: PathBuf::from(".traffic-e2e/boot"),
+            target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
             target_http_origin: "http://127.0.0.1:8081".to_string(),
             target_port: 8081,
             target_readiness_path: "/healthz".to_string(),
@@ -549,7 +549,7 @@ mod tests {
                 "--start-breeze",
                 "off",
                 "--boot-dir",
-                ".traffic-e2e/boot",
+                ".traffic-e2e/local/boot",
                 "--port",
                 "8081"
             ])

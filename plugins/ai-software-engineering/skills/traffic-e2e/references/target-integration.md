@@ -4,7 +4,7 @@ The target repository exposes one thin conventional executable:
 
 ```text
 scripts/<project>-cli start --e2e --start-breeze off \
-  --boot-dir .traffic-e2e/boot --port <port>
+  --boot-dir .traffic-e2e/local/boot --port <port>
 scripts/<project>-cli stop
 ```
 
@@ -35,10 +35,10 @@ Target product code, CLI, configuration, tests, and support must not read:
 - `expected-response.json` or candidate response artifacts;
 - `dependencies.jsonl` or Global dependency files;
 - Replay session/control files;
-- generated `.traffic-e2e/.ai-forbidden/` state or reports;
+- generated `.traffic-e2e/local/ai-forbidden/` state or reports;
 - request-header encryption keys.
 
-`.traffic-e2e/boot` may be absent at initialization. When startup proves a
+`.traffic-e2e/local/boot` may be absent at initialization. When startup proves a
 required configuration root, place only authoritative source-compatible
 inputs there. Never materialize configuration from source-process memory,
 remote responses, recordings, logs, or diagnostics. A complete

@@ -18,7 +18,11 @@ use super::model::{
 };
 use super::recording_action;
 use super::recording_execution::{self, RecordingExecutionMarker, RecordingExecutionState};
-use super::store::RewriteStore;
+use super::store::{RewriteLockState, RewriteStore};
+use super::traffic_operation::{
+    self, TrafficOperationClaim, TrafficOperationKind, TrafficOperationMarker,
+    TrafficOperationState,
+};
 use crate::{ManagedRecordingOperation, ManagedRecordingOptions, RecordingApi};
 
 #[derive(Debug, Clone)]
@@ -44,7 +48,26 @@ pub fn request_rewrite_recording(
 ) -> Result<RewriteActionEnvelope> {
     let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
     let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
+    let requested_api = options.api.as_ref().map(ToString::to_string);
+    let Some(_lock) = store.try_lock()? else {
+        let state = store
+            .load()?
+            .context("rewrite workflow has not been initialized")?;
+        return Ok(match traffic_operation::state(&target_root)? {
+            TrafficOperationState::Live(active) => {
+                action::wait_envelope(&target_root, &state, requested_api, &active)
+            }
+            TrafficOperationState::Stale(_) => action::recovery_required(&target_root),
+            TrafficOperationState::Absent => match store.lock_state()? {
+                RewriteLockState::Live => {
+                    action::coordinator_wait_envelope(&target_root, &state, requested_api)
+                }
+                RewriteLockState::Stale | RewriteLockState::Absent => {
+                    action::recovery_required(&target_root)
+                }
+            },
+        });
+    };
     let mut state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
@@ -160,7 +183,7 @@ pub fn start_rewrite_recording(
 ) -> Result<RewriteRecordingStartReport> {
     let (target_root, _) = crate::e2e_run::resolve_project(&target_root)?;
     let store = RewriteStore::new(&target_root)?;
-    let lock = store.lock()?;
+    let lock = store.try_lock()?;
     let state = store
         .load()?
         .context("rewrite workflow has not been initialized")?;
@@ -170,6 +193,48 @@ pub fn start_rewrite_recording(
         requested_action_id == expected_action_id,
         "recording action is stale or belongs to another workflow revision"
     );
+    let Some(lock) = lock else {
+        if store.lock_state()? == RewriteLockState::Stale {
+            anyhow::bail!(
+                "the rewrite coordinator has a stale owner; execute `backend-rewrite recover`"
+            );
+        }
+        let active = match traffic_operation::state(&target_root)? {
+            TrafficOperationState::Live(active) => Some(active),
+            TrafficOperationState::Stale(_) => {
+                anyhow::bail!(
+                    "the traffic runtime has a stale owner; execute `backend-rewrite recover`"
+                );
+            }
+            TrafficOperationState::Absent => None,
+        };
+        return Ok(waiting_start_report(
+            &target_root,
+            requested_action_id,
+            operation,
+            run_id,
+            &state.api,
+            active,
+        ));
+    };
+    match traffic_operation::state(&target_root)? {
+        TrafficOperationState::Live(active) if active.operation_id != requested_action_id => {
+            return Ok(waiting_start_report(
+                &target_root,
+                requested_action_id,
+                operation,
+                run_id,
+                &state.api,
+                Some(active),
+            ));
+        }
+        TrafficOperationState::Stale(_) => {
+            anyhow::bail!(
+                "the traffic runtime has a stale owner; execute `backend-rewrite recover`"
+            );
+        }
+        TrafficOperationState::Live(_) | TrafficOperationState::Absent => {}
+    }
     match recording_execution::state(&target_root)? {
         RecordingExecutionState::Live(marker) => {
             ensure!(
@@ -254,6 +319,39 @@ pub fn start_rewrite_recording(
         let _ = child.kill();
         return Err(error);
     }
+    let traffic_marker = TrafficOperationMarker {
+        operation_id: requested_action_id.to_string(),
+        kind: if comparison {
+            TrafficOperationKind::Comparison
+        } else {
+            TrafficOperationKind::Recording
+        },
+        api: comparison.then(|| state.api.clone()),
+        started_at: chrono::Utc::now().to_rfc3339(),
+        pid: child.id(),
+    };
+    match traffic_operation::claim(&target_root, traffic_marker)? {
+        TrafficOperationClaim::Acquired(guard) => guard.disarm(),
+        TrafficOperationClaim::Busy(active) => {
+            let _ = child.kill();
+            recording_execution::clear(&target_root, requested_action_id)?;
+            return Ok(waiting_start_report(
+                &target_root,
+                requested_action_id,
+                operation,
+                run_id,
+                &state.api,
+                Some(active),
+            ));
+        }
+        TrafficOperationClaim::Stale(_) => {
+            let _ = child.kill();
+            recording_execution::clear(&target_root, requested_action_id)?;
+            anyhow::bail!(
+                "the traffic runtime has a stale owner; execute `backend-rewrite recover`"
+            );
+        }
+    }
     drop(lock);
     Ok(start_report(
         &target_root,
@@ -286,6 +384,7 @@ pub async fn execute_rewrite_recording_worker(
             .await;
     match result {
         Ok(report) => {
+            traffic_operation::clear_owned(&target_root, requested_action_id)?;
             recording_execution::clear(&target_root, requested_action_id)?;
             Ok(report)
         }
@@ -307,6 +406,7 @@ pub async fn execute_rewrite_recording_worker(
                 artifacts::validate_standard_recording(&target_root, &state)?;
             }
             recording_execution::clear(&target_root, requested_action_id)?;
+            traffic_operation::clear_owned(&target_root, requested_action_id)?;
             Ok(execution_report(
                 &target_root,
                 requested_action_id,
@@ -450,7 +550,26 @@ fn start_report(
         run_id,
         operation: operation.script_name().to_string(),
         execution_state,
+        waiting_on: None,
         status: action::status_command(target_root),
+    }
+}
+
+fn waiting_start_report(
+    target_root: &std::path::Path,
+    action_id: &str,
+    operation: ManagedRecordingOperation,
+    run_id: String,
+    api: &str,
+    active: Option<TrafficOperationMarker>,
+) -> RewriteRecordingStartReport {
+    RewriteRecordingStartReport {
+        action_id: action_id.to_string(),
+        run_id,
+        operation: operation.script_name().to_string(),
+        execution_state: RewriteRecordingStartState::WaitingForTrafficRuntime,
+        waiting_on: active.as_ref().map(traffic_operation::view),
+        status: action::status_command_for_api(target_root, (!api.is_empty()).then_some(api)),
     }
 }
 
@@ -530,6 +649,29 @@ pub(super) fn standard_recording_input_source(state: &RewriteState) -> Option<&P
 mod tests {
     use super::*;
     use crate::RewriteAction;
+
+    #[test]
+    fn recording_execute_conflict_returns_pollable_wait_report() {
+        let target = Path::new("/target");
+        let report = waiting_start_report(
+            target,
+            "recording-a",
+            ManagedRecordingOperation::RecordComparison,
+            "run-a".to_string(),
+            "GET /api",
+            None,
+        );
+
+        assert_eq!(
+            report.execution_state,
+            RewriteRecordingStartState::WaitingForTrafficRuntime
+        );
+        assert!(report.waiting_on.is_none());
+        assert_eq!(
+            report.status.argv,
+            ["backend-rewrite", "status", "--api", "GET /api"]
+        );
+    }
 
     #[test]
     fn fresh_request_invalidates_evidence_and_returns_opaque_managed_action() {

@@ -104,7 +104,7 @@ pub(super) fn apply(
         plan_id: record.id,
         issue_id: record.issue_id,
         traffic_e2e_report: projected,
-        next_command: action::command(target_root, vec!["next".to_string()], Vec::new()),
+        next_command: action::next_command_for_api(target_root, &state.api),
     })
 }
 
@@ -122,7 +122,8 @@ fn build_plan(
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
     let comparison_run = state.comparison_run_id.as_ref().map(|run_id| {
         target_root
-            .join(".traffic-e2e/artifacts/comparison-recordings")
+            .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+            .join("comparison-recordings")
             .join(run_id)
     });
     if kind == ResponseRuleKind::Counter

@@ -11,17 +11,17 @@ Initialize all repository configuration once from the target root:
 traffic-e2e config init --source-container <existing-source-container> [--breeze]
 ```
 
-The generated version-7 configuration has separate `source`, optional `breeze`, `target`,
+The generated version-9 configuration has separate `source`, optional `breeze`, `target`,
 `replay`, `recording`, `delivery`, and `state` sections. Relevant target fields
-are the conventional CLI, `.traffic-e2e/boot`, HTTP host, port, readiness,
+are the conventional CLI, `.traffic-e2e/local/boot`, HTTP host, port, readiness,
 timeouts, and response-size bound. Do not hand-write it.
 
 Before a run, the runner requires:
 
 - executable `scripts/<project>-cli`;
 - valid recorder and replay config;
-- ignored `.traffic-e2e/.ai-forbidden/`;
-- ignored `.traffic-e2e/boot/`; the directory itself may remain absent until
+- ignored `.traffic-e2e/local/`, ensured by repository initialization;
+- `.traffic-e2e/local/boot/` may remain absent until
   target startup proves an authoritative input is required;
 - a feature branch distinct from the configured PR base.
 
@@ -52,7 +52,7 @@ One attempt:
 1. starts Replay and loads the selected cases;
 2. invokes the target once as
    `scripts/<project>-cli start --e2e --start-breeze off --boot-dir
-   .traffic-e2e/boot --port <configured-port>`;
+   .traffic-e2e/local/boot --port <configured-port>`;
 3. waits for configured HTTP readiness;
 4. decrypts request headers into a private temporary view when required;
 5. sends every recorded request through the normal target HTTP endpoint;

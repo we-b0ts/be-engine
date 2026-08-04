@@ -63,7 +63,7 @@ traffic-e2e target exec -- path/to/prebuilt-target
 - Keep async code on `tokio`.
 - Do not replace `.cargo/config.toml` registry settings unless explicitly asked.
 - Do not commit generated CA files, traffic recordings, test captures, local
-  swap files, `target/`, `data/`, or `recordings/`.
+  swap files, `target/`, `data/`, `recordings/`, or `.traffic-e2e/local/`.
 - Use `dependencies.jsonl` for replay-oriented semantic dependency data.
   Use `dependencies-debug.jsonl` only for protocol-level debugging.
 - MySQL TLS MITM is intentionally out of scope for v1. If `CLIENT_SSL` is
@@ -71,7 +71,7 @@ traffic-e2e target exec -- path/to/prebuilt-target
 - Keep sensitive data handling explicit. Add newly sensitive headers to
   `recording.redact_headers` defaults or document the choice.
 - In this traffic-e2e engine repository, agents are explicitly allowed to read
-  `.traffic-e2e/.ai-forbidden/**` when developing, diagnosing, reviewing, or
+  `.traffic-e2e/local/ai-forbidden/**` when developing, diagnosing, reviewing, or
   testing engine behavior. This repository-maintainer exception does not apply
   to an ordinary rewrite in a target repository. The directory remains an
   internal implementation detail and this exception does not authorize

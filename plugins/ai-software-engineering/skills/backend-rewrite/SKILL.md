@@ -27,37 +27,42 @@ all-configured-traffic workflow:
 backend-rewrite next
 ```
 
-Use `--api '<METHOD path-or-pattern>'` only when the caller explicitly narrows
-the rewrite to one API. When an active dynamic pattern needs its source
-registration route, the coordinator returns `input_required`; resume with the
-requested `--source-route` for that active API. Do not invent routes for the
-other inventory items.
+Before the first standard recording, use `--api '<METHOD path-or-pattern>'`
+only when the caller explicitly narrows the recording to one API. After the
+recording installs its API inventory, `next --api '<METHOD pattern>'` selects
+that exact inventory item for one AI worker. When a selected dynamic pattern
+needs its source registration route, the coordinator returns `input_required`;
+resume with the requested `--source-route` for that API. Do not invent routes
+for other inventory items.
 
 The coordinator shares one immutable standard recording across the discovered
-API inventory, keeps one active API and one active issue, and executes every
-deterministic Prepare/E2E/Compare step. After one API's comparison passes,
-`next` advances to the next pending inventory item without recording the
-standard baseline again. It returns exactly one action. Execute only that
-action, then call `backend-rewrite next` again.
+API inventory. It may retain multiple API-scoped `implementation_required`
+work items so different AI workers can diagnose and edit code concurrently.
+Each worker must keep using its exact `--api`; an acceptance command returned
+for one API never authorizes advancing another. Recording, focused Replay, and
+comparison share one serialized `traffic_runtime` lease. The same standard
+baseline remains available to every inventory item.
 
-Coordinator action schema v7 always has exactly four fields:
+Coordinator action schema v8 always has exactly four fields:
 `kind`, `summary`, `details`, and `commands`. Read variant-specific facts only
 from `action.details`; read executable commands only from
 `action.commands.<role>`. Command roles are explicit (`execute`, `status`,
 `resume`, `recover`, `evidence`, `apply`, or `acceptance`), and absent roles are
-not legal transitions. There are no parallel top-level `active_issue` or `next`
-commands and no legacy action-level `command`, `issue`, `evidence_commands`, or
-`acceptance` aliases. Never guess an old field path or rerun `next` merely
-because a command role is absent.
+not legal transitions. Concurrent issues remain API-scoped and are never
+published as parallel top-level `active_issue` or `next` fields. There are no
+legacy action-level `command`, `issue`, `evidence_commands`, or `acceptance`
+aliases. Never guess an old field path or rerun `next` merely because a command
+role is absent.
 
 Every command contains a canonical `cwd` and an argv array. Change to that exact
 directory, then execute the argv without reconstructing, combining,
 shell-evaluating, or changing its arguments. Supply named required environment
 variables without printing their values.
 
-`backend-rewrite status` is a read-only recovery snapshot and includes the current
-`action`, reconstructed from the persisted workflow revision. Use it when an
-earlier action response was lost or when resuming an interrupted AI session.
+`backend-rewrite status [--api '<METHOD pattern>']` is a read-only recovery
+snapshot. With `--api`, it reconstructs that API's action even when another API
+is selected. Use it when an earlier action response was lost or when resuming
+an interrupted AI session.
 `plan_apply_required` recovers the exact pending
 `action.commands.apply` command with its `apply <plan-id>` argv.
 The stored plan is an evidence-validated snapshot: the workflow revision
@@ -67,18 +72,25 @@ ID and corrected selector inputs before apply; this replaces only the pending
 preview and does not mutate recorder configuration.
 `resume_required` means the coordinator detected a completed recording result
 or a target change; execute its exact `action.commands.resume` argv instead of
-repeating the prior recording or implementation action. If a previously
+repeating the prior recording or implementation action. If
+`action.kind=wait_required`, read the blocking API and live operation from
+`action.details`, wait at least `retry_after_seconds`, and execute only
+`action.commands.status`. Never use `recover` for a live owner and never launch
+another recording, Replay, or comparison concurrently. If a previously
 launched action is still known to be running, continue waiting rather than
 launching its reconstructed command concurrently.
 
 Read the bounded `api_inventory` summary from every initialized `next` or
-`status` result. It includes `total`, `completed`, `pending`, `current_index`,
-and the authoritative `current_api`; work only on that API. Do not enumerate
-APIs from directories, choose another pending item, or stop when only the
-active API completes. Use the read-only `backend-rewrite inventory` command
-only for an explicit scope audit or final delivery check. Its full stable list
-does not authorize selecting a pending API. `terminal_allowed=true` means
-every inventory item has current focused E2E and comparison evidence.
+`status` result. It includes `total`, `completed`, `pending`,
+`implementation_required`, `current_index`, and `current_api`. When the main
+orchestrator first observes `api_inventory.total > 1` in the current task, it
+must read [parallel-api-coordination.md](references/parallel-api-coordination.md)
+once before assigning subagents. Use the stable `total` as the trigger; do not
+retrigger on the changing unfinished count. Subagents do not read that guide
+merely because their API-scoped status includes the same inventory. An
+individual worker may act only on its assigned API and must not stop when that
+API alone completes. `terminal_allowed=true` means every inventory item has
+current focused E2E and comparison evidence for the same target revision.
 `workflow.scope` describes the standard-recording selector
 (`all_configured_apis` when it was omitted); it is not the active action target.
 
@@ -90,6 +102,15 @@ Keep the standard case source stable during implementation. A nonpassing
 focused E2E attempt reuses the same immutable cases after the target changes;
 it does not trigger another recording. A passing focused E2E attempt advances
 to a fresh comparison recording automatically.
+
+For a multi-API workflow, the orchestrator owns worktree allocation,
+state-mutating coordinator commands, integration, and serialized verification;
+workers own API-level diagnosis, implementation, and focused tests in assigned
+worktrees. Follow
+[parallel-api-coordination.md](references/parallel-api-coordination.md) instead
+of allowing workers to create worktrees or run private coordinators. Completed
+API evidence is requeued when later integrated edits change the target
+fingerprint.
 
 After any focused attempt, read `latest_focused_e2e` from the `backend-rewrite next`
 or `backend-rewrite status` result. Its `execution_mode` explicitly distinguishes
@@ -126,7 +147,7 @@ from `action.details.run_id` and execute the opaque `action.commands.execute`
 argv exactly. It starts a detached coordinator-owned worker and returns
 immediately; do not background it, pipe it through `head`/`tail`, or wait on a
 shell task. Poll the exact status command returned by execution. While running,
-`backend-rewrite status` returns `recording_in_progress` with
+owner status may return `recording_in_progress` with
 `action.commands.status`; after finalization it returns `resume_required` with
 `action.commands.resume`. `recovery_required` means the owner exited and its
 exact `action.commands.recover` must run before retrying.
@@ -181,16 +202,19 @@ When the action is `implementation_required`:
    responses associated. Do not write an
    ad hoc parser for `dependencies.jsonl` while this query answers the question.
    Inspect additional cases under
-   `.traffic-e2e/artifacts/` when they can distinguish the active hypotheses.
+   `.traffic-e2e/local/artifacts/` when they can distinguish the active hypotheses.
 3. Read [problem-diagnosis.md](references/problem-diagnosis.md) and follow its
    issue-specific evidence and source-proof route.
 4. Inspect the matching immutable source code and target implementation and
    prove one cause.
 5. Use [`backend-engineering`](../backend-engineering/SKILL.md) for the target
    repair and repository checks.
-6. Execute `action.commands.acceptance`; for target implementation this is the
-   coordinator-issued `backend-rewrite next` that detects the repository change and
-   reruns the same immutable cases.
+6. In a single-agent workflow, execute `action.commands.acceptance`; for target
+   implementation this is the coordinator-issued `backend-rewrite next` that
+   detects the repository change and reruns the same immutable cases. In the
+   parallel workflow, the worker returns its tested change and the unchanged
+   acceptance command to the orchestrator, which integrates the change and
+   executes acceptance from the coordinator worktree.
 
 Treat coordinator `possible_causes` as hypotheses, never conclusions. Preserve
 source cache keys, expiry, bounds, eviction, negative caching, warmup,
@@ -276,14 +300,14 @@ active target repair in place.
 
 ## Evidence And Internal State
 
-`.traffic-e2e/artifacts/` is readable diagnostic evidence, not a forbidden
+`.traffic-e2e/local/artifacts/` is readable diagnostic evidence, not a forbidden
 directory. Start with the exact `case_dir` returned by `representatives`, then
 inspect other standard or comparison cases when useful. Keep every artifact
 read-only and let coordinator output determine the active run, issue, gates,
 and legal transition; never select workflow state by recency.
 
 Never read, search, list, summarize, or otherwise inspect
-`.traffic-e2e/.ai-forbidden/**`. It is coordinator-owned internal state and is
+`.traffic-e2e/local/ai-forbidden/**`. It is coordinator-owned internal state and is
 not a diagnostic surface for a target rewrite. If a public action, status, or
 evidence result is insufficient, report that coordinator API gap to the caller;
 do not compensate by inspecting the internal directory or the traffic-e2e
@@ -296,7 +320,7 @@ success counts. Never hand-edit, reset, restore, or check out their changes to
 clean the worktree. When the coordinator changes either file, include that
 generated change in the same delivery commit as the verified target change.
 This exception does not apply to ignored runtime state under
-`.ai-forbidden/` or to recordings and other generated artifacts.
+`local/ai-forbidden/` or to recordings and other generated artifacts.
 
 Do not use bulk `jq`, Python, or ad-hoc shell processing as a substitute for
 coordinator gate and aggregate results. Focused inspection of case files is
@@ -317,7 +341,7 @@ configuration, and:
 
 ```text
 scripts/<project>-cli start --e2e --start-breeze off \
-  --boot-dir .traffic-e2e/boot --port <port>
+  --boot-dir .traffic-e2e/local/boot --port <port>
 scripts/<project>-cli stop
 ```
 
@@ -337,6 +361,7 @@ Continue while `terminal_allowed` is false. `implementation_required` and
 `system_repair_required` are working states, not final answers. Retries,
 diminishing returns, code changes, or a draft PR never authorize stopping.
 
-Only `action.kind=complete` with `terminal_allowed=true` completes the active
-API slice. Whole-rewrite delivery still requires the user-requested repository
-checks and delivery outcome.
+`action.kind=complete` with `terminal_allowed=false` means only the assigned
+API is complete and other workers or inventory items remain. Only
+`terminal_allowed=true` completes the whole rewrite. Delivery still requires
+the user-requested repository checks and delivery outcome.

@@ -87,7 +87,7 @@ fn comparison_representatives_link_the_comparison_case_and_three_way_difference(
     let run_id = "20260802120000";
     let case_dir = target
         .path()
-        .join(".traffic-e2e/artifacts/comparison-recordings")
+        .join(".traffic-e2e/local/artifacts/comparison-recordings")
         .join(run_id)
         .join("record-api")
         .join("case-comparison");

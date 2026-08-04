@@ -95,12 +95,13 @@ fn parses_the_bounded_rewrite_surface() {
             .is_ok()
     );
     assert!(Cli::try_parse_from(["test", "evidence", "evq-r1-issue-representatives"]).is_ok());
+    assert!(Cli::try_parse_from(["test", "status", "--api", "GET /api/widgets/*"]).is_ok());
     assert!(
         Cli::try_parse_from([
             "test",
             "case",
             "dependencies",
-            "/repo/.traffic-e2e/artifacts/run/api/case-a",
+            "/repo/.traffic-e2e/local/artifacts/run/api/case-a",
         ])
         .is_ok()
     );
@@ -109,7 +110,7 @@ fn parses_the_bounded_rewrite_surface() {
             "test",
             "case",
             "dependencies",
-            "/repo/.traffic-e2e/artifacts/run/api/case-a",
+            "/repo/.traffic-e2e/local/artifacts/run/api/case-a",
             "dependency-target-0123456789abcdef",
         ])
         .is_ok()

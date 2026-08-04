@@ -2,7 +2,7 @@ use anyhow::Result;
 
 use super::model::{RewritePhase, RewriteRecoveryReport};
 use super::store::RewriteStore;
-use super::{RewriteContext, action, artifacts, recording_execution};
+use super::{RewriteContext, action, artifacts, recording_execution, traffic_operation};
 use crate::{E2eRunContext, ManagedRecordingOperation};
 
 pub(super) async fn recover(context: RewriteContext) -> Result<RewriteRecoveryReport> {
@@ -15,6 +15,16 @@ pub(super) async fn recover(context: RewriteContext) -> Result<RewriteRecoveryRe
             marker.pid
         );
     }
+    if let traffic_operation::TrafficOperationState::Live(marker) =
+        traffic_operation::state(&target_root)?
+    {
+        anyhow::bail!(
+            "traffic {:?} process {} is still active; inspect `backend-rewrite status`",
+            marker.kind,
+            marker.pid
+        );
+    }
+    let recovered_stale_traffic_operation = traffic_operation::clear_stale(&target_root)?;
     let recording_executor_stale = matches!(
         recording_execution_state,
         recording_execution::RecordingExecutionState::Stale(_)
@@ -83,7 +93,7 @@ pub(super) async fn recover(context: RewriteContext) -> Result<RewriteRecoveryRe
         }
     }
     let recovered_focused_attempt = match state {
-        Some(state) => match (state.case_source, state.group_id) {
+        Some(state) => match (state.case_source.clone(), state.group_id.clone()) {
             (Some(case_source), Some(group_id)) => {
                 crate::e2e_run::recover_focused_e2e_api(
                     E2eRunContext {
@@ -101,6 +111,7 @@ pub(super) async fn recover(context: RewriteContext) -> Result<RewriteRecoveryRe
     };
     Ok(RewriteRecoveryReport {
         recovered_stale_lock,
+        recovered_stale_traffic_operation,
         recovered_focused_attempt,
         recovered_recording_run,
         replacement_recording_run,

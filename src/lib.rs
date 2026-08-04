@@ -165,11 +165,12 @@ pub use rewrite::{
     RewriteRecordingStartState, RewriteRecoveryReport, RewriteRedisExchangeDetail,
     RewriteRedisOperationDetail, RewriteRepairAcceptanceKind, RewriteRouteOptions,
     RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport, RewriteStatusReport,
-    RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_rule,
-    execute_rewrite_recording_worker, inventory_rewrite, next_rewrite,
-    plan_rewrite_dependency_rule, plan_rewrite_rule, query_rewrite_case_dependencies,
-    query_rewrite_evidence, recover_rewrite, request_rewrite_recording, route_rewrite,
-    start_rewrite_recording, status_rewrite, verify_rewrite_repair,
+    RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWorkflowView,
+    apply_rewrite_dependency_rule, apply_rewrite_rule, execute_rewrite_recording_worker,
+    inventory_rewrite, next_rewrite, plan_rewrite_dependency_rule, plan_rewrite_rule,
+    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
+    status_rewrite_for_api, verify_rewrite_repair,
 };
 pub use tls::MitmCa;
 

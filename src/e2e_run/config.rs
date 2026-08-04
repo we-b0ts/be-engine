@@ -12,7 +12,7 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-const CONFIG_VERSION: u32 = 8;
+const CONFIG_VERSION: u32 = 9;
 const DEFAULT_AI_FORBIDDEN_ROOT: &str = crate::internal_runtime::TRAFFIC_E2E_RELATIVE_ROOT;
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -30,7 +30,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     ensure!(target_root.is_dir(), "target root must be a directory");
     branch::validate_pr_base(&target_root, &options.pr_base)?;
 
-    let traffic_e2e_dir = target_root.join(".traffic-e2e");
+    let traffic_e2e_dir = target_root.join(crate::repository::TRAFFIC_E2E_ROOT);
     let config_path = traffic_e2e_dir.join(PROJECT_CONFIG_FILE);
     let existing = match fs::symlink_metadata(&config_path) {
         Ok(metadata) => Some(metadata),
@@ -177,7 +177,7 @@ pub(super) fn resolve_layout(
         "recorder config does not exist: {}",
         resolved.recorder_config.display()
     );
-    let traffic_e2e_dir = target_root.join(".traffic-e2e");
+    let traffic_e2e_dir = target_root.join(crate::repository::TRAFFIC_E2E_ROOT);
     let case_source = fs::canonicalize(case_source)
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
     let config_path = traffic_e2e_dir.join(PROJECT_CONFIG_FILE);
@@ -212,7 +212,9 @@ pub(super) fn resolve_layout(
 pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedProjectConfig)> {
     let target_root = fs::canonicalize(target_root)
         .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
-    let config_path = target_root.join(".traffic-e2e").join(PROJECT_CONFIG_FILE);
+    let config_path = target_root
+        .join(crate::repository::TRAFFIC_E2E_ROOT)
+        .join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
     let policy_path = resolve_under(&target_root, &config.replay.policy);
     let policy = validate_replay_policy(&policy_path).context("invalid replay policy")?;
@@ -323,8 +325,9 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "target.boot_dir must not be empty"
     );
     ensure!(
-        config.target.boot_dir == Path::new(".traffic-e2e/boot"),
-        "target.boot_dir must be .traffic-e2e/boot"
+        config.target.boot_dir == Path::new(crate::repository::LOCAL_BOOT_ROOT),
+        "target.boot_dir must be {}",
+        crate::repository::LOCAL_BOOT_ROOT
     );
     ensure!(
         !config.target.http_host.trim().is_empty()
@@ -437,7 +440,7 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        fs::write(root.join(".gitignore"), ".traffic-e2e/.ai-forbidden/\n").unwrap();
+        fs::write(root.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
         fs::create_dir_all(root.join("scripts")).unwrap();
         let project_cli = root.join("scripts/project-cli");
         fs::write(&project_cli, "#!/usr/bin/env bash\nexit 0\n").unwrap();
@@ -502,7 +505,7 @@ mod tests {
             source_container: "source-app".to_string(),
             breeze_container: Some("breeze".to_string()),
             project_cli: PathBuf::from("scripts/project-cli"),
-            target_boot_dir: PathBuf::from(".traffic-e2e/boot"),
+            target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
             target_http_host: "127.0.0.1".to_string(),
             target_port: 8081,
             target_readiness_path: "/healthz".to_string(),

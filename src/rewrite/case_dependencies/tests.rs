@@ -4,7 +4,7 @@ use super::*;
 fn summary_stays_bounded_and_detail_returns_decoded_keys() {
     let temp = tempfile::tempdir().unwrap();
     let target_root = temp.path();
-    let case_dir = target_root.join(".traffic-e2e/artifacts/run/api/case-a");
+    let case_dir = target_root.join(".traffic-e2e/local/artifacts/run/api/case-a");
     std::fs::create_dir_all(&case_dir).unwrap();
     let redis_key = STANDARD.encode("42.cntbf");
     let redis_response = STANDARD.encode("$1\r\n7\r\n");
@@ -118,7 +118,7 @@ fn summary_stays_bounded_and_detail_returns_decoded_keys() {
 #[test]
 fn rejects_case_directories_outside_artifacts() {
     let temp = tempfile::tempdir().unwrap();
-    std::fs::create_dir_all(temp.path().join(".traffic-e2e/artifacts")).unwrap();
+    std::fs::create_dir_all(temp.path().join(".traffic-e2e/local/artifacts")).unwrap();
     let outside = temp.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("dependencies.jsonl"), "").unwrap();
@@ -130,7 +130,7 @@ fn rejects_case_directories_outside_artifacts() {
     })
     .unwrap_err();
 
-    assert!(error.to_string().contains(".traffic-e2e/artifacts"));
+    assert!(error.to_string().contains(".traffic-e2e/local/artifacts"));
 }
 
 #[test]

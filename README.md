@@ -71,7 +71,9 @@ traffic-e2e abort ...
 From a target repository root, the conventional initialization is simply
 `traffic-e2e config init --source-container <container> --breeze`.
 `--breeze` selects the existing container named `breeze`; omit it when the
-source does not use Breeze.
+source does not use Breeze. Initialization adds `/.traffic-e2e/local/` to the
+target `.gitignore`; all non-versioned runtime data, including recordings,
+boot inputs, internal state, and rewrite worktrees, lives below that root.
 
 For a backend migration, `backend-rewrite next` is the normal facade. It
 returns one argv-based action, automatically owns Prepare/E2E/Compare
@@ -109,7 +111,7 @@ command.
 Representative evidence returns the exact immutable standard or comparison
 case directory and a structured response difference. Use that case as the
 efficient starting point for diagnosis; all generated files under
-`.traffic-e2e/artifacts/` remain available for read-only inspection when
+`.traffic-e2e/local/artifacts/` remain available for read-only inspection when
 additional cases are useful.
 
 Dependency evidence is case-scoped. Replay publishes a bounded sidecar with
@@ -177,8 +179,8 @@ The default example listens on:
 - DNS mock: `127.0.0.153:15353`
 - TCP fake-IP gateway: `127.0.0.1:15001`
 - HTTP gateway for tcpcopy traffic: `0.0.0.0:18084`
-- JSONL output: `./.traffic-e2e/artifacts/recordings/<run-id>/traffic.jsonl`
-- Generated CA: `./data/traffic-recorder-ca.pem`
+- JSONL output: `./.traffic-e2e/local/artifacts/recordings/<run-id>/traffic.jsonl`
+- Generated CA: `./.traffic-e2e/local/data/traffic-recorder-ca.pem`
 
 For dependency replay, install the binary and pass the case directory directly:
 
@@ -459,7 +461,7 @@ listen = "127.0.0.153:15353"
 upstream_dns = "10.10.10.10:53"
 fake_cidr = "198.18.0.0/15"
 ttl_seconds = 60
-registry_path = "./.traffic-e2e/artifacts/fake_dns_registry.json"
+registry_path = "./.traffic-e2e/local/artifacts/fake_dns_registry.json"
 # Exact names, suffixes starting with ".", and glob wildcards using "*" or "?"
 # are returned from upstream DNS unchanged.
 bypass_domains = [
@@ -586,7 +588,7 @@ When `mitm_https = true`, TLS-looking streams are intercepted with the generated
 recorder CA, decoded as HTTPS over HTTP/1.1, forwarded to the real upstream IP
 with the original domain as SNI, and recorded as request/response.
 
-Trust `./data/traffic-recorder-ca.pem` on the client before enabling HTTPS
+Trust `./.traffic-e2e/local/data/traffic-recorder-ca.pem` on the client before enabling HTTPS
 MITM. Clients with certificate pinning, or clients that require HTTP/2 only, may
 reject the recorder certificate or protocol negotiation.
 

@@ -442,8 +442,10 @@ impl Default for MysqlRouteConfig {
 impl Default for TlsConfig {
     fn default() -> Self {
         Self {
-            ca_cert_path: PathBuf::from("./data/traffic-recorder-ca.pem"),
-            ca_key_path: PathBuf::from("./data/traffic-recorder-ca-key.pem"),
+            ca_cert_path: PathBuf::from(crate::repository::LOCAL_DATA_ROOT)
+                .join("traffic-recorder-ca.pem"),
+            ca_key_path: PathBuf::from(crate::repository::LOCAL_DATA_ROOT)
+                .join("traffic-recorder-ca-key.pem"),
         }
     }
 }
@@ -478,11 +480,11 @@ mod tests {
         assert_eq!(config.http_gateway.rules.len(), 1);
         assert_eq!(
             config.recording_output_dir(),
-            PathBuf::from("./.traffic-e2e/artifacts/recordings")
+            PathBuf::from("./.traffic-e2e/local/artifacts/recordings")
         );
         assert_eq!(
             config.comparison_recording_output_dir(),
-            PathBuf::from("./.traffic-e2e/artifacts/comparison-recordings")
+            PathBuf::from("./.traffic-e2e/local/artifacts/comparison-recordings")
         );
 
         config.recording.encrypt_request_headers = vec!["not a header".to_string()];

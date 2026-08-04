@@ -16,8 +16,8 @@ artifacts; business causality comes from source and target code.
 Standard and comparison artifacts are readable, read-only diagnostic evidence.
 Start from the representative `case_dir` returned by the coordinator and
 inspect its complete contents. Inspect other cases under
-`.traffic-e2e/artifacts/` when they help distinguish hypotheses. Never read,
-search, or list `.traffic-e2e/.ai-forbidden/**`; use bounded coordinator queries
+`.traffic-e2e/local/artifacts/` when they help distinguish hypotheses. Never read,
+search, or list `.traffic-e2e/local/ai-forbidden/**`; use bounded coordinator queries
 instead. Do not edit internal state, infer the active run by recency, or use
 ad-hoc scripts to recreate a coordinator query. Never patch multiple
 speculative categories in one iteration.

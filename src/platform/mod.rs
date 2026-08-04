@@ -80,7 +80,7 @@ pub async fn run_managed_recording(
         .run_id
         .unwrap_or_else(|| Utc::now().format("%Y%m%d%H%M%S").to_string());
     let manifest = target_root
-        .join(".traffic-e2e/artifacts")
+        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
         .join(match options.operation {
             ManagedRecordingOperation::Record => "recordings",
             ManagedRecordingOperation::RecordComparison => "comparison-recordings",
@@ -122,8 +122,9 @@ pub async fn run_managed_recording(
         .context("failed to resolve managed recording request source")?;
     if let Some(request_source) = &request_source {
         ensure!(
-            request_source.starts_with(target_root.join(".traffic-e2e/artifacts")),
-            "managed recording request source must be under .traffic-e2e/artifacts"
+            request_source.starts_with(target_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT)),
+            "managed recording request source must be under {}",
+            crate::repository::LOCAL_ARTIFACTS_ROOT
         );
     }
     let executable = std::env::current_exe().context("failed to resolve traffic-e2e binary")?;

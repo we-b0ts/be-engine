@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::fmt;
 use std::num::{NonZeroU64, NonZeroUsize};
+use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +10,7 @@ use serde_json::Value;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 7;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 8;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -30,6 +32,7 @@ pub enum RewriteApiStatus {
     #[default]
     Pending,
     Active,
+    ImplementationRequired,
     Complete,
 }
 
@@ -46,6 +49,8 @@ pub struct RewriteApiProgress {
     pub e2e_current: bool,
     #[serde(default)]
     pub comparison_current: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified_target_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -53,6 +58,7 @@ pub struct RewriteApiInventoryView {
     pub total: usize,
     pub completed: usize,
     pub pending: usize,
+    pub implementation_required: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -281,30 +287,10 @@ pub(super) struct RewriteDependencyRulePlanRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct RewriteState {
-    pub version: u32,
-    pub revision: u64,
-    pub workflow_id: String,
+pub(super) struct RewriteSliceState {
     pub phase: RewritePhase,
     pub api: String,
     pub source_route: String,
-    #[serde(default)]
-    pub recording_apis: Vec<String>,
-    #[serde(default)]
-    pub api_inventory: Vec<RewriteApiProgress>,
-    #[serde(default)]
-    pub current_api_index: Option<usize>,
-    pub recording_run_id: String,
-    #[serde(default)]
-    pub recording_rejection: Option<String>,
-    #[serde(default)]
-    pub recording_settings: RewriteRecordingSettings,
-    #[serde(default)]
-    pub recording_request_reason: Option<RewriteRecordingReason>,
-    #[serde(default)]
-    pub recording_input_case_source: Option<PathBuf>,
-    #[serde(default)]
-    pub recording_input_diagnosis: Option<RewriteRecordingInputDiagnosis>,
     pub comparison_run_id: Option<String>,
     #[serde(default)]
     pub comparison_rejection: Option<String>,
@@ -323,6 +309,73 @@ pub(super) struct RewriteState {
     pub route: Option<RewriteRouteRecord>,
     pub e2e_current: bool,
     pub comparison_current: bool,
+}
+
+impl RewriteSliceState {
+    pub(super) fn pending(api: String, source_route: String) -> Self {
+        Self {
+            phase: RewritePhase::ApiPending,
+            api,
+            source_route,
+            comparison_run_id: None,
+            comparison_rejection: None,
+            case_source: None,
+            case_inventory_id: None,
+            source_revision: None,
+            group_id: None,
+            target_fingerprint: None,
+            attempts: Vec::new(),
+            attempt_delta: None,
+            active_issue: None,
+            rule_plan: None,
+            dependency_rule_plan: None,
+            route: None,
+            e2e_current: false,
+            comparison_current: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteState {
+    pub version: u32,
+    pub revision: u64,
+    pub workflow_id: String,
+    #[serde(default)]
+    pub recording_apis: Vec<String>,
+    #[serde(default)]
+    pub api_inventory: Vec<RewriteApiProgress>,
+    #[serde(default)]
+    pub current_api_index: Option<usize>,
+    #[serde(default)]
+    pub parked_slices: BTreeMap<String, RewriteSliceState>,
+    pub recording_run_id: String,
+    #[serde(default)]
+    pub recording_rejection: Option<String>,
+    #[serde(default)]
+    pub recording_settings: RewriteRecordingSettings,
+    #[serde(default)]
+    pub recording_request_reason: Option<RewriteRecordingReason>,
+    #[serde(default)]
+    pub recording_input_case_source: Option<PathBuf>,
+    #[serde(default)]
+    pub recording_input_diagnosis: Option<RewriteRecordingInputDiagnosis>,
+    #[serde(flatten)]
+    pub active_slice: RewriteSliceState,
+}
+
+impl Deref for RewriteState {
+    type Target = RewriteSliceState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.active_slice
+    }
+}
+
+impl DerefMut for RewriteState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.active_slice
+    }
 }
 
 impl RewriteState {
@@ -414,6 +467,23 @@ pub enum RewriteRecordingInputCandidateDisposition {
     ScopeMismatch,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteTrafficOperationKind {
+    Recording,
+    Replay,
+    Comparison,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RewriteTrafficOperationView {
+    pub operation_id: String,
+    pub kind: RewriteTrafficOperationKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api: Option<String>,
+    pub started_at: String,
+}
+
 #[derive(Debug, Clone)]
 pub enum RewriteAction {
     InputRequired {
@@ -424,6 +494,15 @@ pub enum RewriteAction {
     RecoveryRequired {
         summary: String,
         command: RewriteCommandSpec,
+    },
+    WaitRequired {
+        summary: String,
+        resource: String,
+        requested_api: Option<String>,
+        blocking_api: Option<String>,
+        active_operation: Option<RewriteTrafficOperationView>,
+        retry_after_seconds: u64,
+        status: RewriteCommandSpec,
     },
     RecordingRequired {
         summary: String,
@@ -524,6 +603,7 @@ pub struct RewriteInventoryReport {
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteRecoveryReport {
     pub recovered_stale_lock: bool,
+    pub recovered_stale_traffic_operation: bool,
     pub recovered_focused_attempt: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recovered_recording_run: Option<String>,
@@ -548,12 +628,13 @@ pub struct RewriteRecordingExecutionReport {
     pub next: RewriteCommandSpec,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RewriteRecordingStartState {
     Started,
     AlreadyRunning,
     AlreadyCompleted,
+    WaitingForTrafficRuntime,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -562,6 +643,8 @@ pub struct RewriteRecordingStartReport {
     pub run_id: String,
     pub operation: String,
     pub execution_state: RewriteRecordingStartState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_on: Option<RewriteTrafficOperationView>,
     pub status: RewriteCommandSpec,
 }
 
@@ -622,6 +705,7 @@ mod tests {
         object.remove("recording_apis");
         object.remove("api_inventory");
         object.remove("current_api_index");
+        object.remove("parked_slices");
 
         let state: RewriteState = serde_json::from_value(value).unwrap();
 
@@ -634,6 +718,7 @@ mod tests {
         assert!(state.recording_apis.is_empty());
         assert!(state.api_inventory.is_empty());
         assert!(state.current_api_index.is_none());
+        assert!(state.parked_slices.is_empty());
     }
 
     #[test]
@@ -703,7 +788,7 @@ mod tests {
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(7)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(8)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }

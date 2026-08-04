@@ -57,10 +57,10 @@ default, or fallback.
 Expose each source configuration directory through a target startup option
 named `--<root-name>-dir`, and default it to the directory's exact source-
 container path. When local execution uses a copied boot input, pass that option
-explicitly with `.traffic-e2e/boot/<root-name>/`; keep configuration loading in
+explicitly with `.traffic-e2e/local/boot/<root-name>/`; keep configuration loading in
 product code. For example, source `/data1/authconfs` becomes
 `--authconfs-dir`, defaults to `/data1/authconfs`, and local E2E startup passes
-`--authconfs-dir .traffic-e2e/boot/authconfs`.
+`--authconfs-dir .traffic-e2e/local/boot/authconfs`.
 
 ## Discover The Source Loader
 
@@ -87,14 +87,14 @@ diagnostic lifecycle as non-evidence.
 
 ## Materialize Local Boot Inputs
 
-Use the repository's Git-ignored `.traffic-e2e/boot/` only to transport
+Use the repository's Git-ignored `.traffic-e2e/local/boot/` only to transport
 source-proven startup inputs. The directory name, existence, and Git-ignore
 status do not establish provenance or authorize creating content. Only an
 authoritative startup configuration or SDK-owned snapshot directory that
 already exists in the source container may be copied. Copy the smallest
 complete root; never copy one selected file, a selected file set, or extracted
 keys. When that complete root exists only inside the source container, copy it
-verbatim to `.traffic-e2e/boot/<root-name>/` as the standard transport path and
+verbatim to `.traffic-e2e/local/boot/<root-name>/` as the standard transport path and
 continue the workflow. Preserve its supplied format and directory
 relationships; do not treat the transport mechanism as an operator-selected
 design choice.

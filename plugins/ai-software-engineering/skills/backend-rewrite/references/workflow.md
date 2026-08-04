@@ -4,10 +4,11 @@ The coordinator owns the executable phase order:
 
 ```text
 record configured traffic -> stable API inventory
-           -> prepare current API -> focused E2E
-           -> one active issue -> focused E2E
-           -> comparison recording -> compare
-           -> next pending API (same standard recording) -> ...
+           -> serialize prepare/focused E2E for API A
+           -> API A implementation issue (AI work may run in parallel)
+           -> serialize focused E2E for API B
+           -> API B implementation issue (AI work may run in parallel)
+           -> serialize each Replay/comparison transition
            -> all API slices complete
 
 explicit new traffic / changed recording contract / changed source baseline
@@ -21,11 +22,12 @@ The target AI repeatedly runs `backend-rewrite next`. It pauses only for:
 - one evidence-backed rule decision;
 - one controlled non-target-code route;
 - one explicit fresh-standard-recording request when its preconditions hold;
+- a serialized traffic runtime owned by another API;
 - completion.
 
 ## Action Handling
 
-Action schema v7 has one stable shape for every kind:
+Action schema v8 has one stable shape for every kind:
 
 ```json
 {
@@ -41,6 +43,17 @@ location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
 `next` command.
+
+### `wait_required`
+
+Recording, Replay, and comparison share one `traffic_runtime` lease. When
+another worker owns it, `details.reason=resource_busy` identifies the resource,
+requested API, blocking API, live operation when one exists, and
+`retry_after_seconds`. Execute only `commands.status` after that delay. A
+missing live operation means another API has a non-preemptible coordinator
+transition to finish; inspect the blocking API's returned status action. Do not
+run `recover`, repeat `next`, or start a second traffic operation while the
+owner is live.
 
 ### `recording_required`
 
@@ -65,20 +78,26 @@ produce the stable API inventory. Do not add selectors to the returned action.
 ### API inventory and `api_pending`
 
 Every initialized action/status envelope includes a bounded `api_inventory`
-summary: `total`, `completed`, `pending`, `current_index`, and `current_api`.
-The coordinator owns the stable order for the shared standard recording; work
-only on `current_api`. Use `backend-rewrite inventory` only when an explicit
-scope audit or final delivery check needs the complete ordered list and its
-per-API `pending`, `active`, or `complete` status. That read-only report does
-not authorize selecting another item. After the current API passes focused E2E
-and comparison, the coordinator marks it complete and returns
-`resume_required` for the next pending API. Execute the returned `next`; it
-prepares and runs that API from the same standard recording. If the current
-pattern is dynamic and lacks a proven source registration route, the action is
+summary: `total`, `completed`, `pending`, `implementation_required`,
+`current_index`, and `current_api`. The coordinator owns the stable inventory
+for the shared standard recording. When `total > 1`, the main orchestrator
+reads [parallel-api-coordination.md](parallel-api-coordination.md) once per task
+before assigning workers. That stable trigger remains valid even when only one
+API is unfinished later; it does not require rereading the guide or parallel
+traffic execution. The coordinator parks other implementation issues while it
+serializes the selected API's Replay or comparison. If the selected pattern is
+dynamic and lacks a proven source registration route, the action is
 `input_required`; provide only the requested `--source-route` when resuming.
 `workflow.scope` is the selector of that shared standard recording, not the
-active API. It is `all_configured_apis` when the selector was omitted and must
-remain stable as `current_api` advances.
+selected API. It is `all_configured_apis` when the selector was omitted and
+must remain stable as workers change the selected API.
+
+AI diagnosis, code edits, and local tests may proceed concurrently after APIs
+reach `implementation_required`. An API's evidence and acceptance commands are
+opaque and remain bound to that API. If the target fingerprint changes during
+a focused Replay, that result is discarded and the API returns to Replay. If
+later edits change the fingerprint after an API completed, its prior evidence
+is requeued before whole-workflow completion.
 
 Per-API failure retries reuse the same cases for that API. A fresh standard
 recording is still allowed only under the explicit conditions below and resets
@@ -153,8 +172,11 @@ returns an exact `detail_command` for each target, so only the selected target's
 bounded exchanges need expansion. Each exchange preserves key/argument/response
 association; response previews are capped and length annotated. Source inspection
 supplies the final business attribution. Apply
-[problem-diagnosis.md](problem-diagnosis.md), repair one proven cause, run local
-target tests, then execute `action.commands.acceptance`.
+[problem-diagnosis.md](problem-diagnosis.md), repair one proven cause, and run
+local target tests. In a single-agent workflow, execute
+`action.commands.acceptance`. In the parallel workflow, the worker returns the
+tested change and unchanged acceptance command to the orchestrator, which
+integrates it and executes acceptance from the coordinator worktree.
 
 For a dependency issue, the `dirty_clusters` evidence report may also contain
 `applicable_rule_planners`. Each entry is limited to a supported protocol
@@ -218,17 +240,19 @@ changes.
 
 ### `complete`
 
-All APIs represented by the inventory summary have current passing focused E2E
-and comparison evidence. `terminal_allowed` is true only here. Use
-`backend-rewrite inventory` if final delivery needs the full per-API list.
-Repository-wide regression and delivery remain under the caller's rewrite
-objective.
+For API-scoped status, this action may mean only that assigned API has current
+passing focused E2E and comparison evidence; `terminal_allowed` remains false
+while another inventory item is incomplete. `terminal_allowed=true` means all
+APIs are complete for the same target revision. Use `backend-rewrite inventory`
+if final delivery needs the full per-API list. Repository-wide regression and
+delivery remain under the caller's rewrite objective.
 
 ## State And Recovery
 
-Coordinator state is stored under `.traffic-e2e/.ai-forbidden/`. A target
+Coordinator state is stored under `.traffic-e2e/local/ai-forbidden/`. A target
 rewrite AI must never read, search, or list that directory. Use
-`backend-rewrite status`, which reconstructs the current action without advancing state:
+`backend-rewrite status [--api '<METHOD pattern>']`, which reconstructs the
+current or requested API action without advancing state:
 it returns the original `action.commands.execute` before recording execution,
 an exact `action.commands.apply` for a pending plan,
 `action.commands.status` while the detached worker is live, or
@@ -244,6 +268,10 @@ its exact `action.commands.recover` argv. Recovery rejects a live coordinator,
 removes a stale lock, stops an orphaned focused target/Replay attempt or managed
 recording, publishes interrupted state, and returns the next coordinator
 command.
+
+`wait_required` is not recovery. It proves a live or non-preemptible owner is
+blocking the requested transition and always supplies the status command the
+AI should poll. Only `recovery_required` authorizes `recover`.
 
 Traffic-e2e's internal runner publication may retain its own implementation
 layout. Those internal paths are not a stable rewrite-interface contract. The

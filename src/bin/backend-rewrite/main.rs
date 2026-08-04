@@ -13,7 +13,7 @@ use traffic_e2e::{
     apply_rewrite_rule, inventory_rewrite, next_rewrite, plan_rewrite_rule,
     query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
     request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
-    verify_rewrite_repair,
+    status_rewrite_for_api, verify_rewrite_repair,
 };
 
 mod dependency_rule;
@@ -88,7 +88,7 @@ enum RewriteCommand {
     /// Advance deterministic stages and return the only allowed next action.
     Next(NextArgs),
     /// Show bounded coordinator state without advancing it.
-    Status,
+    Status(StatusArgs),
     /// Show the full stable API inventory without advancing it.
     Inventory,
     /// Inspect bounded dependency evidence from one published case.
@@ -117,6 +117,13 @@ struct NextArgs {
     /// Source registration route for the active dynamic API when requested by the coordinator.
     #[arg(long)]
     source_route: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct StatusArgs {
+    /// API work item whose action should be reconstructed while other AI work proceeds.
+    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
+    api: Option<RecordingApi>,
 }
 
 #[derive(Debug, Args)]
@@ -311,8 +318,14 @@ async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        RewriteCommand::Status => {
-            print_json(&status_rewrite(RewriteContext { target_root })?, pretty)
+        RewriteCommand::Status(args) => {
+            let context = RewriteContext { target_root };
+            let report = if let Some(api) = args.api.as_ref() {
+                status_rewrite_for_api(context, Some(api))?
+            } else {
+                status_rewrite(context)?
+            };
+            print_json(&report, pretty)
         }
         RewriteCommand::Inventory => {
             print_json(&inventory_rewrite(RewriteContext { target_root })?, pretty)

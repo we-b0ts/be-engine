@@ -60,7 +60,7 @@ pub(super) fn status_action(
                 summary: format!(
                     "{label} recording result for run {run_id} is finalized; resume coordinator validation"
                 ),
-                command: action::next_command(target_root),
+                command: action::next_command_for_api(target_root, &state.api),
             },
             artifacts::RecordingPublication::Running => recovery_required(
                 target_root,

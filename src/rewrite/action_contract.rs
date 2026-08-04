@@ -33,6 +33,28 @@ impl Serialize for RewriteAction {
                 commands: RewriteRecoveryCommands { recover: command },
             }
             .serialize(serializer),
+            Self::WaitRequired {
+                summary,
+                resource,
+                requested_api,
+                blocking_api,
+                active_operation,
+                retry_after_seconds,
+                status,
+            } => RewriteActionView {
+                kind: "wait_required",
+                summary,
+                details: RewriteWaitRequiredDetails {
+                    reason: "resource_busy",
+                    resource,
+                    requested_api: requested_api.as_deref(),
+                    blocking_api: blocking_api.as_deref(),
+                    active_operation: active_operation.as_ref(),
+                    retry_after_seconds: *retry_after_seconds,
+                },
+                commands: RewriteStatusCommands { status },
+            }
+            .serialize(serializer),
             Self::RecordingRequired {
                 summary,
                 run_id,
@@ -165,6 +187,19 @@ struct RewriteRecordingRequiredDetails<'a> {
 #[derive(Serialize)]
 struct RewriteRecordingRunDetails<'a> {
     run_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct RewriteWaitRequiredDetails<'a> {
+    reason: &'static str,
+    resource: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_api: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocking_api: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_operation: Option<&'a super::model::RewriteTrafficOperationView>,
+    retry_after_seconds: u64,
 }
 
 #[derive(Serialize)]

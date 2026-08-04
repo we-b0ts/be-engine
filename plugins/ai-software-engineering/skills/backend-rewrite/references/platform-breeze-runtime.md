@@ -10,9 +10,9 @@ The target repository provides only:
 - one existing genuine source application container in
   `.traffic-e2e/project.yaml`;
 - `scripts/<project>-cli start --e2e --start-breeze off --boot-dir
-  .traffic-e2e/boot --port <port>`;
+  .traffic-e2e/local/boot --port <port>`;
 - `scripts/<project>-cli stop`;
-- source-compatible startup inputs discovered under `.traffic-e2e/boot/`.
+- source-compatible startup inputs discovered under `.traffic-e2e/local/boot/`.
 
 Each `start --e2e` invocation forces one normal project compile before launch.
 If that compile command supports `--release`, it must compile with

@@ -32,6 +32,7 @@ pub(super) fn for_status(
         {
             resume_required(
                 target_root,
+                Some(&state.api),
                 "target repository changed after the latest focused attempt; resume coordinator verification"
                     .to_string(),
             )
@@ -41,6 +42,89 @@ pub(super) fn for_status(
     Ok(envelope(state, action))
 }
 
+pub(super) fn wait_envelope(
+    target_root: &Path,
+    state: &RewriteState,
+    requested_api: Option<String>,
+    active: &super::traffic_operation::TrafficOperationMarker,
+) -> RewriteActionEnvelope {
+    envelope(
+        state,
+        super::traffic_operation::wait_action(target_root, requested_api, active),
+    )
+}
+
+pub(super) fn api_selection_wait_envelope(
+    target_root: &Path,
+    state: &RewriteState,
+    requested_api: String,
+) -> RewriteActionEnvelope {
+    envelope(
+        state,
+        RewriteAction::WaitRequired {
+            summary: format!(
+                "wait for API {}; its {:?} transition must finish before selecting {}",
+                state.api, state.phase, requested_api
+            ),
+            resource: "rewrite_api_transition".to_string(),
+            requested_api: Some(requested_api),
+            blocking_api: (!state.api.is_empty()).then(|| state.api.clone()),
+            active_operation: None,
+            retry_after_seconds: 5,
+            status: status_command_for_api(
+                target_root,
+                (!state.api.is_empty()).then_some(state.api.as_str()),
+            ),
+        },
+    )
+}
+
+pub(super) fn coordinator_wait_envelope(
+    target_root: &Path,
+    state: &RewriteState,
+    requested_api: Option<String>,
+) -> RewriteActionEnvelope {
+    let status_api = requested_api
+        .as_deref()
+        .or((!state.api.is_empty()).then_some(state.api.as_str()));
+    let status = status_command_for_api(target_root, status_api);
+    envelope(
+        state,
+        RewriteAction::WaitRequired {
+            summary: "wait for the live rewrite coordinator transition".to_string(),
+            resource: "rewrite_coordinator".to_string(),
+            requested_api,
+            blocking_api: (!state.api.is_empty()).then(|| state.api.clone()),
+            active_operation: None,
+            retry_after_seconds: 5,
+            status,
+        },
+    )
+}
+
+pub(super) fn uninitialized_coordinator_wait_envelope(
+    target_root: &Path,
+    requested_api: Option<String>,
+) -> RewriteActionEnvelope {
+    let status = status_command_for_api(target_root, requested_api.as_deref());
+    RewriteActionEnvelope {
+        schema_version: ACTION_SCHEMA_VERSION,
+        workflow: None,
+        api_inventory: None,
+        latest_focused_e2e: None,
+        terminal_allowed: false,
+        action: RewriteAction::WaitRequired {
+            summary: "wait for the live rewrite coordinator initialization".to_string(),
+            resource: "rewrite_coordinator".to_string(),
+            requested_api,
+            blocking_api: None,
+            active_operation: None,
+            retry_after_seconds: 5,
+            status,
+        },
+    }
+}
+
 fn envelope(state: &RewriteState, action: RewriteAction) -> RewriteActionEnvelope {
     let workflow = Some(workflow_view(state));
     RewriteActionEnvelope {
@@ -48,7 +132,11 @@ fn envelope(state: &RewriteState, action: RewriteAction) -> RewriteActionEnvelop
         workflow,
         api_inventory: Some(inventory::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
-        terminal_allowed: state.phase == RewritePhase::SliceComplete,
+        terminal_allowed: state.phase == RewritePhase::SliceComplete
+            && state
+                .api_inventory
+                .iter()
+                .all(|item| item.status == super::model::RewriteApiStatus::Complete),
         action,
     }
 }
@@ -62,6 +150,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
     {
         return resume_required(
             target_root,
+            Some(&state.api),
             "initialize coordinator-issued acceptance for the pending legacy system repair"
                 .to_string(),
         );
@@ -119,6 +208,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
         },
         RewritePhase::ApiPending => resume_required(
             target_root,
+            Some(&state.api),
             format!("continue with the next recorded API {}", state.api),
         ),
         RewritePhase::ImplementationRequired => RewriteAction::ImplementationRequired {
@@ -127,7 +217,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                 .clone()
                 .expect("implementation phase requires an issue"),
             evidence_commands: evidence::commands(target_root, state),
-            acceptance: next_command(target_root),
+            acceptance: next_command_for_api(target_root, &state.api),
         },
         RewritePhase::ComparisonRecordingRequired => RewriteAction::ComparisonRecordingRequired {
             summary: state.comparison_rejection.as_ref().map_or_else(
@@ -159,18 +249,29 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             }),
         },
         RewritePhase::SliceComplete => RewriteAction::Complete {
-            summary: format!(
-                "all {} recorded API slice(s) have current E2E and comparison evidence",
-                state.api_inventory.len()
-            ),
+            summary: if state
+                .api_inventory
+                .iter()
+                .all(|item| item.status == super::model::RewriteApiStatus::Complete)
+            {
+                format!(
+                    "all {} recorded API slice(s) have current E2E and comparison evidence",
+                    state.api_inventory.len()
+                )
+            } else {
+                format!(
+                    "{} has current E2E and comparison evidence; other recorded APIs still require work",
+                    state.api
+                )
+            },
             e2e_current: state.e2e_current,
             comparison_current: state.comparison_current,
         },
     }
 }
 
-fn resume_required(target_root: &Path, summary: String) -> RewriteAction {
-    resume_required_with_command(summary, next_command(target_root))
+fn resume_required(target_root: &Path, api: Option<&str>, summary: String) -> RewriteAction {
+    resume_required_with_command(summary, next_command_with_optional_api(target_root, api))
 }
 
 fn resume_required_with_command(summary: String, command: RewriteCommandSpec) -> RewriteAction {
@@ -182,7 +283,10 @@ pub(super) fn resume_envelope(
     state: &RewriteState,
     summary: String,
 ) -> RewriteActionEnvelope {
-    envelope(state, resume_required(target_root, summary))
+    envelope(
+        state,
+        resume_required(target_root, Some(&state.api), summary),
+    )
 }
 
 fn recording_summary(state: &RewriteState) -> String {
@@ -331,8 +435,28 @@ pub(super) fn next_command(target_root: &Path) -> RewriteCommandSpec {
     command(target_root, vec!["next".to_string()], Vec::new())
 }
 
+pub(super) fn next_command_for_api(target_root: &Path, api: &str) -> RewriteCommandSpec {
+    next_command_with_optional_api(target_root, Some(api))
+}
+
+fn next_command_with_optional_api(target_root: &Path, api: Option<&str>) -> RewriteCommandSpec {
+    let mut arguments = vec!["next".to_string()];
+    if let Some(api) = api.filter(|api| !api.is_empty()) {
+        arguments.extend(["--api".to_string(), api.to_string()]);
+    }
+    command(target_root, arguments, Vec::new())
+}
+
 pub(super) fn status_command(target_root: &Path) -> RewriteCommandSpec {
     command(target_root, vec!["status".to_string()], Vec::new())
+}
+
+pub(super) fn status_command_for_api(target_root: &Path, api: Option<&str>) -> RewriteCommandSpec {
+    let mut arguments = vec!["status".to_string()];
+    if let Some(api) = api {
+        arguments.extend(["--api".to_string(), api.to_string()]);
+    }
+    command(target_root, arguments, Vec::new())
 }
 
 pub(super) fn rule_apply_command(target_root: &Path, plan_id: &str) -> RewriteCommandSpec {
@@ -394,6 +518,36 @@ mod tests {
     };
 
     #[test]
+    fn cross_api_non_preemptible_transition_returns_scoped_wait_status() {
+        let mut state = crate::rewrite::test_state();
+        state.phase = RewritePhase::ComparisonRecordingRequired;
+        let target = Path::new("/target");
+
+        let response = serde_json::to_value(api_selection_wait_envelope(
+            target,
+            &state,
+            "POST /other".to_string(),
+        ))
+        .unwrap();
+
+        assert_eq!(response["action"]["kind"], "wait_required");
+        assert_eq!(
+            response["action"]["details"]["resource"],
+            "rewrite_api_transition"
+        );
+        assert_eq!(response["action"]["details"]["blocking_api"], "GET /api");
+        assert!(
+            response
+                .pointer("/action/details/active_operation")
+                .is_none()
+        );
+        assert_eq!(
+            response["action"]["commands"]["status"]["argv"],
+            serde_json::json!(["backend-rewrite", "status", "--api", "GET /api"])
+        );
+    }
+
+    #[test]
     fn status_recovers_the_exact_recording_action_until_a_result_exists() {
         let target = tempfile::tempdir().unwrap();
         let mut state = crate::rewrite::test_state();
@@ -432,7 +586,12 @@ mod tests {
         );
         assert_eq!(
             resumable.pointer("/action/commands/resume/argv"),
-            Some(&serde_json::json!(["backend-rewrite", "next"]))
+            Some(&serde_json::json!([
+                "backend-rewrite",
+                "next",
+                "--api",
+                "GET /api"
+            ]))
         );
 
         state.phase = RewritePhase::ComparisonRecordingRequired;
@@ -707,7 +866,12 @@ mod tests {
         );
         assert_eq!(
             status.pointer("/action/commands/resume/argv"),
-            Some(&serde_json::json!(["backend-rewrite", "next"]))
+            Some(&serde_json::json!([
+                "backend-rewrite",
+                "next",
+                "--api",
+                "GET /api"
+            ]))
         );
     }
 
@@ -716,7 +880,7 @@ mod tests {
         let mut state = crate::rewrite::test_state();
         state.phase = RewritePhase::SliceComplete;
         state.case_source = Some(PathBuf::from(
-            ".traffic-e2e/artifacts/recordings/20260802000000",
+            ".traffic-e2e/local/artifacts/recordings/20260802000000",
         ));
         state.case_inventory_id = Some("fnv1a64:case-inventory".to_string());
         state.attempts.push(test_attempt(1, false));
