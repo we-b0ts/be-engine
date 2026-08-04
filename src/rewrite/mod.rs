@@ -808,7 +808,15 @@ mod tests {
             Some(&Value::String("backend-rewrite".to_string()))
         );
         assert_eq!(
+            value.pointer("/action/commands/execute/argv/1"),
+            Some(&serde_json::json!("--target-root"))
+        );
+        assert_eq!(
             value.pointer("/action/commands/execute/argv/2"),
+            Some(&serde_json::json!("/target"))
+        );
+        assert_eq!(
+            value.pointer("/action/commands/execute/argv/4"),
             Some(&serde_json::json!("execute"))
         );
         assert_eq!(
@@ -818,7 +826,7 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .len(),
-            4
+            6
         );
         assert!(!value.to_string().contains("encryption-key-value"));
     }
@@ -834,7 +842,7 @@ mod tests {
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
         assert_eq!(
-            value.pointer("/action/commands/execute/argv/3"),
+            value.pointer("/action/commands/execute/argv/5"),
             Some(&serde_json::json!(recording_action::recording_action_id(
                 &state, false
             )))
@@ -937,7 +945,12 @@ mod tests {
         let value = serde_json::to_value(action::recovery_required(target)).unwrap();
         assert_eq!(
             value.pointer("/action/commands/recover/argv"),
-            Some(&serde_json::json!(["backend-rewrite", "recover"]))
+            Some(&serde_json::json!([
+                "backend-rewrite",
+                "--target-root",
+                "/target",
+                "recover"
+            ]))
         );
         assert_eq!(
             value.pointer("/action/commands/recover/cwd"),

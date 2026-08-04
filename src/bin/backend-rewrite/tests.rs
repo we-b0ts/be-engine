@@ -95,6 +95,16 @@ fn parses_the_bounded_rewrite_surface() {
             .is_ok()
     );
     assert!(Cli::try_parse_from(["test", "evidence", "evq-r1-issue-representatives"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "--target-root",
+            "/canonical/target",
+            "evidence",
+            "evq-r1-issue-representatives",
+        ])
+        .is_ok()
+    );
     assert!(Cli::try_parse_from(["test", "status", "--api", "GET /api/widgets/*"]).is_ok());
     assert!(
         Cli::try_parse_from([

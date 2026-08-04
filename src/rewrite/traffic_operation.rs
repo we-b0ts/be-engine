@@ -288,7 +288,14 @@ mod tests {
         assert_eq!(value["details"]["active_operation"]["api"], "GET /a");
         assert_eq!(
             value["commands"]["status"]["argv"],
-            serde_json::json!(["backend-rewrite", "status", "--api", "GET /b"])
+            serde_json::json!([
+                "backend-rewrite",
+                "--target-root",
+                target.path(),
+                "status",
+                "--api",
+                "GET /b"
+            ])
         );
 
         let mut workflow_owner = active;
@@ -302,7 +309,7 @@ mod tests {
         let value = serde_json::to_value(action).unwrap();
         assert_eq!(
             value["commands"]["status"]["argv"],
-            serde_json::json!(["backend-rewrite", "status"])
+            serde_json::json!(["backend-rewrite", "--target-root", target.path(), "status"])
         );
     }
 }

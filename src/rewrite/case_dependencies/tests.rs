@@ -43,13 +43,21 @@ fn summary_stays_bounded_and_detail_returns_decoded_keys() {
         );
         assert_eq!(
             target["detail_command"]["argv"][1],
-            Value::String("case".to_string())
+            Value::String("--target-root".to_string())
         );
         assert_eq!(
             target["detail_command"]["argv"][2],
+            Value::String(target_root.display().to_string())
+        );
+        assert_eq!(
+            target["detail_command"]["argv"][3],
+            Value::String("case".to_string())
+        );
+        assert_eq!(
+            target["detail_command"]["argv"][4],
             Value::String("dependencies".to_string())
         );
-        assert_eq!(target["detail_command"]["argv"][4], target["target_id"]);
+        assert_eq!(target["detail_command"]["argv"][6], target["target_id"]);
     }
 
     let redis_target = summary_value["targets"]

@@ -57,8 +57,9 @@ owner is live.
 
 ### `recording_required`
 
-Execute the exact opaque `action.commands.execute` argv from its canonical
-`cwd` with the named environment variables. The command starts a detached
+Execute the exact opaque `action.commands.execute` argv with the named
+environment variables. Returned argv already contains the canonical absolute
+`--target-root`; `cwd` remains its safe execution default. The command starts a detached
 coordinator worker and returns immediately. Poll the status command returned by
 that execution; `recording_in_progress` exposes it as
 `action.commands.status`. Run `action.commands.advance` only after
@@ -87,21 +88,27 @@ implementation command.
 Every initialized action/status envelope includes a bounded `api_inventory`
 summary: `total`, `completed`, `pending`, `implementation_required`,
 `current_index`, and `current_api`. The coordinator owns the stable inventory
-for the shared standard recording. When `total > 1`, the main orchestrator
-reads [parallel-api-coordination.md](parallel-api-coordination.md) once per task
-before assigning workers. That stable trigger remains valid even when only one
-API is unfinished later; it does not require rereading the guide or parallel
-traffic execution. The coordinator parks other implementation issues while it
-serializes the selected API's Replay or comparison. If the selected pattern is
-dynamic and lacks a proven source registration route, the action is
+for the shared standard recording. The main orchestrator reads
+[implementation-worker-coordination.md](implementation-worker-coordination.md)
+once when `total > 1`, or before the first implementation dispatch when
+`total = 1`. Every `implementation_required` action uses a worker; inventory
+size only controls whether the orchestrator advances another pending API or
+waits after dispatch. The coordinator parks other implementation issues while
+it serializes the selected API's Replay or comparison. If the selected pattern
+is dynamic and lacks a proven source registration route, the action is
 `input_required`; provide only the requested `--source-route` when resuming.
 `workflow.scope` is the selector of that shared standard recording, not the
 selected API. It is `all_configured_apis` when the selector was omitted and
 must remain stable as workers change the selected API.
 
-AI diagnosis, code edits, and local tests may proceed concurrently after APIs
-reach `implementation_required`. An API's evidence and acceptance commands are
-opaque and remain bound to that API. If the target fingerprint changes during
+The assigned worker owns AI diagnosis, code edits, and local tests after every
+API reaches `implementation_required`. The orchestrator dispatches before
+executing evidence. With multiple APIs, a positive `api_inventory.pending`
+count makes it read `backend-rewrite inventory`, select an exact pending item,
+and run `backend-rewrite next --api '<exact METHOD pattern>'`; it does not wait
+for the worker unless no pending API can advance or the coordinator returns
+`wait_required`. An API's evidence and acceptance commands are opaque and
+remain bound to that API. If the target fingerprint changes during
 a focused Replay, that result is discarded and the API returns to Replay. If
 later edits change the fingerprint after an API completed, its prior evidence
 is requeued before whole-workflow completion.
@@ -169,21 +176,22 @@ is required; the AI does not choose that transition itself.
 ### `implementation_required`
 
 `action.details` contains one bounded issue, one representative when available,
-and possible causes. `action.commands.evidence` contains the permitted evidence
-queries, while `action.commands.acceptance` is the only acceptance transition.
-Traffic facts come from those queries and immutable artifacts. `representatives` returns the
+and possible causes. The orchestrator first creates the worktree and dispatches
+a real subagent without running evidence. `action.commands.evidence` contains
+the worker's permitted evidence queries, while `action.commands.acceptance` is
+the orchestrator's only acceptance transition. Traffic facts come from those
+queries and immutable artifacts. `representatives` returns the
 exact standard or comparison case directory and structured response difference;
 inspect that case first and other artifact cases as needed. For dependency
 evidence, execute its returned `dependencies_command`; the target summary then
 returns an exact `detail_command` for each target, so only the selected target's
 bounded exchanges need expansion. Each exchange preserves key/argument/response
 association; response previews are capped and length annotated. Source inspection
-supplies the final business attribution. Apply
-[problem-diagnosis.md](problem-diagnosis.md), repair one proven cause, and run
-local target tests. In a single-agent workflow, execute
-`action.commands.acceptance`. In the parallel workflow, the worker returns the
-tested change and unchanged acceptance command to the orchestrator, which
-integrates it and executes acceptance from the coordinator worktree.
+supplies the final business attribution. The worker applies
+[problem-diagnosis.md](problem-diagnosis.md), repairs one proven cause, runs
+local target tests, and returns the tested change plus unchanged acceptance
+command. The orchestrator integrates it and executes acceptance from the
+coordinator worktree.
 
 For a dependency issue, the `dirty_clusters` evidence report may also contain
 `applicable_rule_planners`. Each entry is limited to a supported protocol

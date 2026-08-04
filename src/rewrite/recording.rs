@@ -669,7 +669,14 @@ mod tests {
         assert!(report.waiting_on.is_none());
         assert_eq!(
             report.status.argv,
-            ["backend-rewrite", "status", "--api", "GET /api"]
+            [
+                "backend-rewrite",
+                "--target-root",
+                "/target",
+                "status",
+                "--api",
+                "GET /api"
+            ]
         );
     }
 
@@ -713,6 +720,8 @@ mod tests {
             command.argv,
             [
                 "backend-rewrite",
+                "--target-root",
+                target.path().to_str().unwrap(),
                 "recording",
                 "execute",
                 recording_action::recording_action_id(&state, false).as_str(),

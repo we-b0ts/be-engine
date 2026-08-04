@@ -825,7 +825,9 @@ Rewrite action schema v8 always returns `action.kind`, `action.summary`,
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
 Status does not duplicate an `active_issue` or publish an unconditional
 top-level `next`. Every returned command contains a canonical `cwd` plus exact
-argv.
+argv. The argv includes the canonical absolute `--target-root`, so executing a
+read-only evidence command from an isolated worker worktree still addresses the
+single coordinator state.
 
 The binary writes one compact JSON object per command by default. Pass global
 `--pretty` only for interactive human inspection. This keeps automation output
@@ -852,9 +854,13 @@ API inventory from its published cases. `next` and `status` expose only its
 bounded summary (`total`, `completed`, `pending`, `implementation_required`,
 `current_index`, and `current_api`) so their size does not grow with API count.
 The read-only `backend-rewrite inventory` command returns the full ordered
-per-API list. A parallel AI orchestrator may assign distinct pending or
-implementation-required items, and each worker selects only its assignment
-with `next --api`. After status returns
+per-API list. Every `implementation_required` action is assigned to an isolated
+subagent, including a single-API workflow. The main orchestrator dispatches
+before executing evidence, and each worker owns evidence, diagnosis, target
+code, and local tests for only its API. With multiple APIs, the orchestrator
+uses `backend-rewrite inventory` to choose an exact pending item and continues
+with `next --api` after dispatch rather than waiting for the current worker.
+After status returns
 `advance_required`, the returned `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next comparison action. Once
@@ -867,10 +873,11 @@ item has both passing E2E and comparison evidence for the same target revision.
 Recording, focused Replay, and comparison share one serialized traffic-runtime
 lease. When another API owns it, action schema v8 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
-delay, and the exact `commands.status` argv. AI diagnosis, source inspection,
-target-code edits, and local tests may continue in parallel, but no worker may
-start a second traffic operation. If code changes during Replay, that result is
-discarded; later code changes also requeue already-completed API evidence.
+delay, and the exact `commands.status` argv. This lease serializes each traffic
+operation, not a complete API lifecycle: while worker A implements, the
+orchestrator may run Replay for API B and dispatch worker B. No worker may start
+a traffic operation. If code changes during Replay, that result is discarded;
+later code changes also requeue already-completed API evidence.
 
 `status [--api]` is read-only and returns the selected API's `action` from the
 persisted workflow revision. Before execution starts it reconstructs the same

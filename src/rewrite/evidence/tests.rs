@@ -202,6 +202,8 @@ fn dependency_representative_returns_case_entrypoint_and_bounded_difference() {
         representative["dependencies_command"]["argv"],
         serde_json::json!([
             "backend-rewrite",
+            "--target-root",
+            target.path(),
             "case",
             "dependencies",
             "/recording/case-a"
@@ -268,6 +270,8 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
         planners[1].command.argv,
         [
             "backend-rewrite",
+            "--target-root",
+            target.path().to_str().unwrap(),
             "dependency-rule",
             "plan",
             "memcached",
@@ -278,6 +282,8 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
         planners[2].command.argv,
         [
             "backend-rewrite",
+            "--target-root",
+            target.path().to_str().unwrap(),
             "dependency-rule",
             "plan",
             "redis",

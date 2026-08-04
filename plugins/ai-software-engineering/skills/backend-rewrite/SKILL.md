@@ -1,6 +1,6 @@
 ---
 name: backend-rewrite
-description: "Plan, implement, verify, and deliver backend service rewrites and migrations from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns migration sequencing, mandatory worker isolation for multi-API implementation, repair routing, completion state, and pull-request delivery."
+description: "Plan, implement, verify, and deliver backend service rewrites and migrations from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns migration sequencing, mandatory implementation-worker isolation, repair routing, completion state, and pull-request delivery."
 ---
 
 # Backend Rewrite
@@ -15,9 +15,8 @@ This skill is self-contained for ordinary rewrites. Do not load the
 `traffic-e2e` skill. `backend-rewrite` uses the `traffic_e2e` crate and is the
 complete executable coordinator interface; the target AI must not reconstruct
 its operations from lower-level `traffic-e2e` commands. Load
-`backend-engineering` only in the agent that performs target-code
-implementation or review. In a multi-API workflow, that is the assigned worker,
-not the main orchestrator before dispatch.
+`backend-engineering` only in the assigned worker that performs target-code
+implementation or review, not the main orchestrator before dispatch.
 
 ## Control Protocol
 
@@ -55,10 +54,13 @@ legacy action-level `command`, `issue`, `evidence_commands`, or `acceptance`
 aliases. Never guess an old field path or rerun `next` merely because a command
 role is absent.
 
-Every command contains a canonical `cwd` and an argv array. Change to that exact
-directory, then execute the argv without reconstructing, combining,
-shell-evaluating, or changing its arguments. Supply named required environment
-variables without printing their values.
+Every returned command contains a canonical `cwd` and an argv array with the
+absolute `--target-root` already included. Execute the argv without
+reconstructing, combining, shell-evaluating, or changing its arguments. The
+canonical `cwd` remains the safe default, while the explicit target root lets a
+worker execute read-only coordinator commands from its own worktree without
+opening a private workflow. Supply named required environment variables without
+printing their values.
 
 `backend-rewrite status [--api '<METHOD pattern>']` is a read-only recovery
 snapshot. With `--api`, it reconstructs that API's action even when another API
@@ -84,31 +86,39 @@ launching its reconstructed command concurrently.
 
 Read the bounded `api_inventory` summary from every initialized `next` or
 `status` result. It includes `total`, `completed`, `pending`,
-`implementation_required`, `current_index`, and `current_api`. When the main
-orchestrator first observes `api_inventory.total > 1` in the current task, it
-must read [parallel-api-coordination.md](references/parallel-api-coordination.md)
-once. Use the stable `total` as the trigger; do not retrigger on the changing
-unfinished count.
+`implementation_required`, `current_index`, and `current_api`. The main
+orchestrator must read
+[implementation-worker-coordination.md](references/implementation-worker-coordination.md)
+once: when it first observes `api_inventory.total > 1`, or before the first
+`implementation_required` dispatch in a single-API workflow. Subagents do not
+read that coordinator guide merely because their API-scoped status includes the
+same inventory.
 
-For that multi-API workflow, the first action for each API with
-`action.kind=implementation_required` is mandatory worker dispatch. Before the
-main orchestrator runs an evidence command, reads case/source/target code, or
-performs API-level diagnosis, it must create the API worktree and start a real
-subagent with the complete action and canonical command context. A task-list
-entry such as `TaskCreate`, a TODO, or a statement that dispatch will happen
-later is not a subagent. Do not wait for a second implementation issue. If the
-runtime cannot dispatch a subagent, report that capability blocker instead of
-silently continuing the API implementation in the main orchestrator. After
-dispatch, keep the main orchestrator available to select another pending API
-and operate the serialized traffic lane.
+Every `action.kind=implementation_required`, including a single-API workflow,
+is a mandatory worker-dispatch barrier. Before the main orchestrator runs an
+evidence command, opens a case artifact, reads source or target code, or forms
+an API-level hypothesis, it creates the API worktree and starts a real subagent
+with the complete action and command specs. The worker, not the orchestrator,
+executes evidence. `TaskCreate`, a TODO, or a statement that dispatch will
+happen later is not a subagent. If dispatch is unavailable, report that
+capability blocker instead of silently implementing in the main orchestrator.
 
-Subagents do not read the parallel guide merely because their API-scoped status
-includes the same inventory. An individual worker may act only on its assigned
-API and must not stop when that API alone completes. `terminal_allowed=true`
-means every inventory item has current focused E2E and comparison evidence for
-the same target revision. `workflow.scope` describes the standard-recording
-selector (`all_configured_apis` when it was omitted); it is not the active
-action target.
+After dispatch, do not wait for that worker while the bounded summary reports
+`api_inventory.pending > 0` and the coordinator has not returned
+`wait_required`. Read `backend-rewrite inventory`, select an exact item whose
+`status=pending`, and run
+`backend-rewrite next --api '<exact METHOD pattern>'`, operate the serialized
+traffic lane, and dispatch another worker if it reaches
+`implementation_required`. Serialization applies to each recording, Replay, or
+comparison operation, not to the whole lifecycle of one API. Wait for workers
+only after no pending API can advance or when the coordinator explicitly
+returns `wait_required`.
+
+An individual worker may act only on its assigned API and must not declare the
+whole rewrite complete. `terminal_allowed=true` means every inventory item has
+current focused E2E and comparison evidence for the same target revision.
+`workflow.scope` describes the standard-recording selector
+(`all_configured_apis` when it was omitted); it is not the active action target.
 
 `backend-rewrite` emits one compact JSON object per command by default so the
 result can be captured atomically without `head`/`tail`. Use global `--pretty`
@@ -119,12 +129,12 @@ focused E2E attempt reuses the same immutable cases after the target changes;
 it does not trigger another recording. A passing focused E2E attempt advances
 to a fresh comparison recording automatically.
 
-For a multi-API workflow, the orchestrator owns worktree allocation,
+For every implementation issue, the orchestrator owns worktree allocation,
 state-mutating coordinator commands, integration, and serialized verification;
-workers exclusively own API-level diagnosis, implementation, and focused tests
-in assigned worktrees. The orchestrator may inspect implementation code only
-for integration review, shared-module conflicts, or a system-scoped issue.
-Follow [parallel-api-coordination.md](references/parallel-api-coordination.md)
+the assigned worker exclusively owns API-level diagnosis, implementation, and
+focused tests. The orchestrator may inspect implementation code only for
+integration review, shared-module conflicts, or a system-scoped issue. Follow
+[implementation-worker-coordination.md](references/implementation-worker-coordination.md)
 instead of allowing workers to create worktrees or run private coordinators.
 Completed API evidence is requeued when later integrated edits change the
 target fingerprint.
@@ -205,7 +215,11 @@ Problem diagnosis is mandatory for every `implementation_required` action. It
 selects the one evidence-backed repair attempted before the next replay; it is
 not an optional fallback after speculative implementation.
 
-When the action is `implementation_required`:
+The assigned worker performs every diagnostic and implementation step below.
+The main orchestrator must dispatch before step 1 and must not prefetch evidence
+to enrich the handoff.
+
+When the worker receives `implementation_required`:
 
 1. Read the issue ID, kind, owner, representative, and hypotheses from
    `action.details`. Run only the
@@ -226,12 +240,14 @@ When the action is `implementation_required`:
    prove one cause.
 5. Use [`backend-engineering`](../backend-engineering/SKILL.md) for the target
    repair and repository checks.
-6. In a single-agent workflow, execute `action.commands.acceptance`; for target
-   implementation this is the coordinator-issued `backend-rewrite next` that
-   detects the repository change and reruns the same immutable cases. In the
-   parallel workflow, the worker returns its tested change and the unchanged
-   acceptance command to the orchestrator, which integrates the change and
-   executes acceptance from the coordinator worktree.
+6. Return the tested change and unchanged `action.commands.acceptance` to the
+   orchestrator. The orchestrator integrates the change and executes acceptance
+   from the coordinator worktree; the worker never executes it.
+
+When the proven repair needs a coordinator mutation such as rule plan/apply or
+route, the worker returns the source proof and proposed inputs. The orchestrator
+executes that transition and reactivates the worker if implementation diagnosis
+remains necessary.
 
 Treat coordinator `possible_causes` as hypotheses, never conclusions. Preserve
 source cache keys, expiry, bounds, eviction, negative caching, warmup,

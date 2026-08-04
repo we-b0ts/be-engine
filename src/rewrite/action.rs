@@ -421,8 +421,12 @@ pub(super) fn command(
     arguments: Vec<String>,
     required_env_names: Vec<String>,
 ) -> RewriteCommandSpec {
-    let mut argv = Vec::with_capacity(arguments.len() + 1);
-    argv.push("backend-rewrite".to_string());
+    let mut argv = Vec::with_capacity(arguments.len() + 3);
+    argv.extend([
+        "backend-rewrite".to_string(),
+        "--target-root".to_string(),
+        target_root.to_string_lossy().into_owned(),
+    ]);
     argv.extend(arguments);
     RewriteCommandSpec {
         cwd: target_root.to_path_buf(),
@@ -543,7 +547,14 @@ mod tests {
         );
         assert_eq!(
             response["action"]["commands"]["status"]["argv"],
-            serde_json::json!(["backend-rewrite", "status", "--api", "GET /api"])
+            serde_json::json!([
+                "backend-rewrite",
+                "--target-root",
+                "/target",
+                "status",
+                "--api",
+                "GET /api"
+            ])
         );
     }
 
@@ -567,7 +578,7 @@ mod tests {
         );
         assert!(
             pending
-                .pointer("/action/commands/execute/argv/3")
+                .pointer("/action/commands/execute/argv/5")
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|value| value.starts_with("recording-"))
         );
@@ -588,6 +599,8 @@ mod tests {
             advanceable.pointer("/action/commands/advance/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
+                "--target-root",
+                target.path(),
                 "next",
                 "--api",
                 "GET /api"
@@ -607,7 +620,7 @@ mod tests {
             Some(&serde_json::json!("20260802000001"))
         );
         assert_eq!(
-            comparison_pending.pointer("/action/commands/execute/argv/3"),
+            comparison_pending.pointer("/action/commands/execute/argv/5"),
             Some(&serde_json::json!(recording_action_id(&state, true)))
         );
 
@@ -645,7 +658,12 @@ mod tests {
         );
         assert_eq!(
             status.pointer("/action/commands/recover/argv"),
-            Some(&serde_json::json!(["backend-rewrite", "recover"]))
+            Some(&serde_json::json!([
+                "backend-rewrite",
+                "--target-root",
+                target.path(),
+                "recover"
+            ]))
         );
     }
 
@@ -678,7 +696,12 @@ mod tests {
         );
         assert_eq!(
             status.pointer("/action/commands/status/argv"),
-            Some(&serde_json::json!(["backend-rewrite", "status"]))
+            Some(&serde_json::json!([
+                "backend-rewrite",
+                "--target-root",
+                target.path(),
+                "status"
+            ]))
         );
         assert!(status.pointer("/action/commands/execute").is_none());
     }
@@ -740,6 +763,8 @@ mod tests {
             status.pointer("/action/commands/acceptance/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
+                "--target-root",
+                target.path(),
                 "repair",
                 "verify",
                 "repair-current"
@@ -777,6 +802,8 @@ mod tests {
             response.pointer("/action/commands/apply/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
+                "--target-root",
+                "/target",
                 "rule",
                 "apply",
                 "plan-response"
@@ -803,6 +830,8 @@ mod tests {
             dependency.pointer("/action/commands/apply/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
+                "--target-root",
+                "/target",
                 "dependency-rule",
                 "apply",
                 "plan-dependency"
@@ -821,6 +850,8 @@ mod tests {
             reused.pointer("/action/commands/apply/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
+                "--target-root",
+                "/target",
                 "dependency-rule",
                 "apply",
                 "plan-dependency"
@@ -868,6 +899,8 @@ mod tests {
             status.pointer("/action/commands/advance/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
+                "--target-root",
+                target.path(),
                 "next",
                 "--api",
                 "GET /api"
