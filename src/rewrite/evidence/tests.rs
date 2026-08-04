@@ -1,10 +1,81 @@
 use super::*;
-use crate::rewrite::model::{RewriteIssueOwner, RewritePhase};
+use crate::rewrite::inventory;
+use crate::rewrite::model::{RewriteAttemptDelta, RewriteIssueOwner, RewritePhase};
 use crate::{
     E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
     E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eRepresentativeDifference,
     E2eSourcePreReadiness, ResponseDifferenceKind,
 };
+
+#[test]
+fn parked_api_evidence_survives_unrelated_api_revisions() {
+    let target_root = Path::new("/target");
+    let mut state = crate::rewrite::test_state();
+    inventory::install(
+        &mut state,
+        vec!["GET /a".to_string(), "POST /b".to_string()],
+    )
+    .unwrap();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.target_fingerprint = Some("target-a".to_string());
+    state.attempt_delta = Some(RewriteAttemptDelta {
+        previous_attempt: 0,
+        current_attempt: 1,
+        response_passed_delta: 1,
+        response_nonpassing_delta: -1,
+        improved: true,
+        regressed: false,
+    });
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-api-a".to_string(),
+        kind: RewriteIssueKind::Response,
+        owner: RewriteIssueOwner::TargetCode,
+        summary: "response mismatch".to_string(),
+        pointer_pattern: None,
+        representative: None,
+        possible_causes: Vec::new(),
+        observed_target_fingerprint: "target-a".to_string(),
+        attempt: 1,
+        comparison_observation: None,
+    });
+    let evidence_command = commands(target_root, &state)
+        .into_iter()
+        .find(|command| command.query_id.contains("attempt-delta"))
+        .unwrap();
+    let evidence = query(target_root, &state, &evidence_command.query_id).unwrap();
+    let original_revision = state.revision;
+
+    inventory::activate_requested(
+        &mut state,
+        Some(&"POST /b".parse::<crate::RecordingApi>().unwrap()),
+    )
+    .unwrap();
+
+    assert!(state.revision > original_revision);
+    assert_eq!(
+        inventory::api_for_evidence_query(target_root, &state, &evidence_command.query_id)
+            .as_deref(),
+        Some("GET /a")
+    );
+    assert_eq!(
+        inventory::api_for_evidence_id(target_root, &state, &evidence.evidence_id).as_deref(),
+        Some("GET /a")
+    );
+
+    state
+        .parked_slices
+        .get_mut("GET /a")
+        .unwrap()
+        .active_issue
+        .as_mut()
+        .unwrap()
+        .attempt += 1;
+    assert!(
+        inventory::api_for_evidence_query(target_root, &state, &evidence_command.query_id)
+            .is_none()
+    );
+    assert!(inventory::api_for_evidence_id(target_root, &state, &evidence.evidence_id).is_none());
+}
 
 #[test]
 fn representatives_return_the_exact_recorded_case_directory_and_response_difference() {

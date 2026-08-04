@@ -460,10 +460,31 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
 }
 
 fn query_id(state: &RewriteState, issue: &RewriteIssue, kind: &str) -> String {
+    // Global workflow revisions change while other API workers are active. Bind
+    // the command only to evidence inputs owned by this API slice.
+    let attempt = issue.attempt.to_string();
+    let case_source = state
+        .case_source
+        .as_ref()
+        .map(|path| path.to_string_lossy())
+        .unwrap_or_default();
+    let scope = fingerprint::id(&[
+        "rewrite-evidence-query-v2",
+        &state.workflow_id,
+        &state.api,
+        &issue.id,
+        &attempt,
+        &issue.observed_target_fingerprint,
+        state.case_inventory_id.as_deref().unwrap_or_default(),
+        state.source_revision.as_deref().unwrap_or_default(),
+        state.group_id.as_deref().unwrap_or_default(),
+        state.comparison_run_id.as_deref().unwrap_or_default(),
+        case_source.as_ref(),
+        kind,
+    ]);
     format!(
-        "evq-r{}-{}-{}",
-        state.revision,
-        issue.id.trim_start_matches("issue-"),
+        "evq-{}-{}",
+        scope.trim_start_matches("fnv1a64:"),
         kind.replace('_', "-")
     )
 }

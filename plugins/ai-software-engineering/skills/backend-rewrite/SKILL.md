@@ -1,6 +1,6 @@
 ---
 name: backend-rewrite
-description: "Orchestrate, verify, and deliver backend service rewrites from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns coordinator sequencing, mandatory per-API implementation subagents, repair routing, completion state, and delivery."
+description: "Orchestrate, verify, and deliver backend service rewrites from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns coordinator sequencing, one persistent dedicated implementation subagent and worktree per API, repair routing, completion state, and delivery."
 ---
 
 # Backend Rewrite
@@ -16,8 +16,9 @@ Choose one role before taking action:
 
 - **Main orchestrator:** use this role unless a parent explicitly assigned one
   API, issue/action, and worker worktree. Own coordinator commands, worktrees,
-  dispatch, integration, serialized Replay/comparison, repository checks, and
-  final delivery. Do not diagnose or implement an API before dispatch.
+  dedicated API-subagent bindings, integration, serialized Replay/comparison,
+  repository checks, and final delivery. Do not diagnose or implement an API
+  before dispatch.
 - **Assigned API worker:** use this role only when the handoff names one exact
   API, complete `implementation_required` action, and absolute worktree. Own
   that API's evidence, source/target diagnosis, implementation, and local tests.
@@ -71,8 +72,9 @@ insufficient public action/status/evidence surface as a coordinator API gap.
    from the currently selected API.
 3. Follow [workflow.md](references/workflow.md) for action-specific execution,
    waiting, recovery, fresh recording, rule, and repair semantics.
-4. On every `implementation_required`, stop before evidence or code analysis,
-   create the API worktree, and dispatch a real subagent as described below.
+4. On every `implementation_required`, stop before evidence or code analysis.
+   Create and bind the API worktree and dedicated subagent on its first issue;
+   reactivate that same binding on every later issue.
 5. After dispatch, if inventory still has a `status=pending` item and no
    `wait_required`, run read-only `backend-rewrite inventory`, select its exact
    method/pattern, and execute `backend-rewrite next --api '<exact API>'`.
@@ -93,18 +95,33 @@ focused attempt changes the target and reuses those cases; it does not itself
 authorize fresh traffic. Later integrated edits may invalidate an API's target
 fingerprint and requeue its prior evidence.
 
-## Mandatory API Implementation Workers
+## Mandatory Dedicated API Implementation Workers
 
-Every `implementation_required`, including a single-API workflow, is a hard
-dispatch barrier. Before the main orchestrator executes evidence, opens a case,
-reads source or target implementation code, or forms an API hypothesis, it
-must:
+Each exact inventory API has one dedicated subagent handle and one worktree
+from its first `implementation_required` until coordinator `complete`. The API
+method/pattern is the binding identity. A new issue ID, attempt, workflow
+revision, action kind, or comparison failure updates the assignment but never
+creates another subagent for that API.
+
+The first `implementation_required`, including in a single-API workflow, is a
+hard dispatch barrier. Before the main orchestrator executes evidence, opens a
+case, reads source or target implementation code, or forms an API hypothesis,
+it must:
 
 1. preserve the exact API, workflow/issue identity, complete action, canonical
    `cwd`, and all opaque command specs;
 2. create the isolated worktree from the current integrated target revision;
-3. invoke the runtime's real subagent mechanism with that handoff; and
-4. retain the `API -> subagent -> worktree` binding.
+3. invoke the runtime's real subagent mechanism with that handoff;
+4. capture the returned subagent handle; and
+5. retain the `API -> subagent handle -> worktree` binding.
+
+On every later `implementation_required`, update the bound worktree from the
+integrated revision and resume or reactivate the stored handle with the new
+complete action and raw acceptance result. A new subagent invocation without
+that handle is replacement, not resume, even if its prompt says "resuming".
+Never replace the dedicated subagent silently. If the stored handle cannot be
+resumed, preserve its worktree and report a capability blocker; transfer
+requires explicit caller approval.
 
 `TaskCreate`, TODO state, narration, or delayed intent is not dispatch. If a
 real subagent is unavailable, report that capability blocker instead of
@@ -130,8 +147,8 @@ Keep these states distinct:
 - **API complete:** the orchestrator integrated the handoff and the
   coordinator-issued acceptance returned that API as `complete` for the current
   target revision. If acceptance returns `implementation_required`, update the
-  same worker from the integrated revision and reactivate it with the new
-  action/result; replace it only under the exceptions in the worker guide.
+  same worker from the integrated revision and reactivate its stored handle
+  with the new action/result; do not create a replacement worker.
 - **Workflow complete:** `terminal_allowed=true` proves every API has current
   focused E2E and comparison evidence for the same target revision. Then run
   the caller-required repository checks and finish delivery.

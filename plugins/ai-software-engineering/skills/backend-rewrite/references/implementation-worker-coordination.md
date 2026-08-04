@@ -20,6 +20,16 @@ worktree, worker/worktree assignment, state-mutating coordinator commands,
 integration, serialized traffic verification, shared refactoring, repository
 checks, and the final `terminal_allowed` decision.
 
+Maintain this invariant for the complete workflow:
+
+```text
+one exact API <-> one dedicated subagent handle <-> one dedicated worktree
+```
+
+The API method/pattern, not its current issue ID, is the assignment identity.
+Attempts, issue IDs, workflow revisions, Replay results, and comparison results
+may change without changing that binding.
+
 Each subagent owns one API's diagnosis-to-tested-change cycle:
 
 - execute the assigned read-only evidence commands;
@@ -37,22 +47,30 @@ applies to one live traffic operation, not to an API's complete lifecycle.
 
 ## Mandatory Dispatch Gate
 
-Treat every first `implementation_required` action, including the only API in
-a workflow, as an immediate dispatch barrier. The orchestrator may read the
-action envelope, but before it executes evidence, opens a case artifact,
+Treat the first `implementation_required` action for an API, including the only
+API in a workflow, as an immediate dispatch barrier. The orchestrator may read
+the action envelope, but before it executes evidence, opens a case artifact,
 inspects source or target code, or develops an API-level hypothesis, it must:
 
 1. preserve the complete action, exact API, issue ID, canonical `cwd`, and
    command specs without executing the evidence commands;
 2. create the API worker worktree from the current integrated target revision;
 3. invoke the runtime's actual subagent-dispatch tool with that context and the
-   required handoff; and
-4. retain the returned worker handle and resume orchestrator scheduling.
+   required handoff;
+4. capture the returned worker handle; and
+5. retain the `API -> subagent handle -> worktree` binding before resuming
+   orchestrator scheduling.
 
 `TaskCreate`, a TODO, task-status changes, or an announcement of future
 dispatch does not satisfy this gate. If no real subagent capability is
 available, report the blocker; do not silently fall back to main-Agent
 diagnosis or implementation.
+
+For a later `implementation_required` on a bound API, do not dispatch another
+subagent. Refresh the same worktree from the integrated revision and use the
+runtime's resume/reactivate operation with the stored handle. A fresh Agent or
+subagent invocation is a replacement even when given the prior prompt or
+worktree; it loses the dedicated worker's accumulated context.
 
 ## Worktrees And Commands
 
@@ -132,10 +150,12 @@ Replay. Retain the `API -> subagent -> worktree` binding until that API reaches
 coordinator `complete` or ownership is explicitly transferred.
 
 If serialized acceptance returns `implementation_required`, update that
-worker's worktree from the integrated target revision and reactivate the same
-subagent with the new action and attempt result. Replace it only when it is
-unavailable, ownership becomes shared/system-scoped, or an independent
-diagnosis is required. Never let two workers edit the same API concurrently.
+worker's worktree from the integrated target revision and resume the stored
+subagent handle with the complete new action and raw attempt result. A changed
+issue ID or a need for an independent diagnosis does not release the binding.
+If the stored handle cannot be resumed, preserve the worktree and report a
+capability blocker. Only explicit caller approval may transfer the API to a new
+subagent. Never let two workers own or edit the same API concurrently.
 
 After handoff, integrate the worker patch or commit into the coordinator
 worktree, resolve conflicts, freeze the target revision, and execute that API's

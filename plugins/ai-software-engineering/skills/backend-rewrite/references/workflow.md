@@ -112,15 +112,18 @@ must remain stable as workers change the selected API.
 
 The assigned worker owns AI diagnosis, code edits, and local tests after every
 API reaches `implementation_required`. The orchestrator dispatches before
-executing evidence. With multiple APIs, a positive `api_inventory.pending`
-count makes it read `backend-rewrite inventory`, select an exact pending item,
-and run `backend-rewrite next --api '<exact METHOD pattern>'`; it does not wait
-for the worker unless no pending API can advance or the coordinator returns
+executing evidence. Its first issue creates the dedicated subagent binding;
+every later issue resumes that exact stored handle, even when the issue ID or
+attempt changes. With multiple APIs, a positive `api_inventory.pending` count
+makes the orchestrator read `backend-rewrite inventory`, select an exact
+pending item, and run
+`backend-rewrite next --api '<exact METHOD pattern>'`; it does not wait for the
+worker unless no pending API can advance or the coordinator returns
 `wait_required`. An API's evidence and acceptance commands are opaque and
-remain bound to that API. If the target fingerprint changes during
-a focused Replay, that result is discarded and the API returns to Replay. If
-later edits change the fingerprint after an API completed, its prior evidence
-is requeued before whole-workflow completion.
+remain bound to that API. If the target fingerprint changes during a focused
+Replay, that result is discarded and the API returns to Replay. If later edits
+change the fingerprint after an API completed, its prior evidence is requeued
+before whole-workflow completion.
 
 Per-API failure retries reuse the same cases for that API. A fresh standard
 recording is still allowed only under the explicit conditions below and resets
@@ -185,11 +188,13 @@ is required; the AI does not choose that transition itself.
 ### `implementation_required`
 
 `action.details` contains one bounded issue, one representative when available,
-and possible causes. The orchestrator first creates the worktree and dispatches
-a real subagent without running evidence. `action.commands.evidence` contains
-the worker's permitted evidence queries, while `action.commands.acceptance` is
-the orchestrator's only acceptance transition. Traffic facts come from those
-queries and immutable artifacts. `representatives` returns the
+and possible causes. Without running evidence, the orchestrator creates the
+worktree and dedicated subagent binding for the API's first issue, or resumes
+its stored subagent handle for every later issue.
+`action.commands.evidence` contains the worker's permitted evidence queries,
+while `action.commands.acceptance` is the orchestrator's only acceptance
+transition. Traffic facts come from those queries and immutable artifacts.
+`representatives` returns the
 exact standard or comparison case directory and structured response difference;
 inspect that case first and other artifact cases as needed. For dependency
 evidence, execute its returned `dependencies_command`; the target summary then
