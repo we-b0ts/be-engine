@@ -1,6 +1,6 @@
 ---
 name: backend-rewrite
-description: "Plan, implement, verify, and deliver backend service rewrites and migrations from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns migration sequencing, repair routing, completion state, and pull-request delivery."
+description: "Plan, implement, verify, and deliver backend service rewrites and migrations from observable behavior and traffic evidence. Use for cross-language ports, incremental API or capability migrations, compatibility rewrites, and capability replacements; this skill owns migration sequencing, mandatory worker isolation for multi-API implementation, repair routing, completion state, and pull-request delivery."
 ---
 
 # Backend Rewrite
@@ -15,8 +15,9 @@ This skill is self-contained for ordinary rewrites. Do not load the
 `traffic-e2e` skill. `backend-rewrite` uses the `traffic_e2e` crate and is the
 complete executable coordinator interface; the target AI must not reconstruct
 its operations from lower-level `traffic-e2e` commands. Load
-`backend-engineering` only when an action requires target-code implementation
-or review.
+`backend-engineering` only in the agent that performs target-code
+implementation or review. In a multi-API workflow, that is the assigned worker,
+not the main orchestrator before dispatch.
 
 ## Control Protocol
 
@@ -86,14 +87,28 @@ Read the bounded `api_inventory` summary from every initialized `next` or
 `implementation_required`, `current_index`, and `current_api`. When the main
 orchestrator first observes `api_inventory.total > 1` in the current task, it
 must read [parallel-api-coordination.md](references/parallel-api-coordination.md)
-once before assigning subagents. Use the stable `total` as the trigger; do not
-retrigger on the changing unfinished count. Subagents do not read that guide
-merely because their API-scoped status includes the same inventory. An
-individual worker may act only on its assigned API and must not stop when that
-API alone completes. `terminal_allowed=true` means every inventory item has
-current focused E2E and comparison evidence for the same target revision.
-`workflow.scope` describes the standard-recording selector
-(`all_configured_apis` when it was omitted); it is not the active action target.
+once. Use the stable `total` as the trigger; do not retrigger on the changing
+unfinished count.
+
+For that multi-API workflow, the first action for each API with
+`action.kind=implementation_required` is mandatory worker dispatch. Before the
+main orchestrator runs an evidence command, reads case/source/target code, or
+performs API-level diagnosis, it must create the API worktree and start a real
+subagent with the complete action and canonical command context. A task-list
+entry such as `TaskCreate`, a TODO, or a statement that dispatch will happen
+later is not a subagent. Do not wait for a second implementation issue. If the
+runtime cannot dispatch a subagent, report that capability blocker instead of
+silently continuing the API implementation in the main orchestrator. After
+dispatch, keep the main orchestrator available to select another pending API
+and operate the serialized traffic lane.
+
+Subagents do not read the parallel guide merely because their API-scoped status
+includes the same inventory. An individual worker may act only on its assigned
+API and must not stop when that API alone completes. `terminal_allowed=true`
+means every inventory item has current focused E2E and comparison evidence for
+the same target revision. `workflow.scope` describes the standard-recording
+selector (`all_configured_apis` when it was omitted); it is not the active
+action target.
 
 `backend-rewrite` emits one compact JSON object per command by default so the
 result can be captured atomically without `head`/`tail`. Use global `--pretty`
@@ -106,12 +121,13 @@ to a fresh comparison recording automatically.
 
 For a multi-API workflow, the orchestrator owns worktree allocation,
 state-mutating coordinator commands, integration, and serialized verification;
-workers own API-level diagnosis, implementation, and focused tests in assigned
-worktrees. Follow
-[parallel-api-coordination.md](references/parallel-api-coordination.md) instead
-of allowing workers to create worktrees or run private coordinators. Completed
-API evidence is requeued when later integrated edits change the target
-fingerprint.
+workers exclusively own API-level diagnosis, implementation, and focused tests
+in assigned worktrees. The orchestrator may inspect implementation code only
+for integration review, shared-module conflicts, or a system-scoped issue.
+Follow [parallel-api-coordination.md](references/parallel-api-coordination.md)
+instead of allowing workers to create worktrees or run private coordinators.
+Completed API evidence is requeued when later integrated edits change the
+target fingerprint.
 
 After any focused attempt, read `latest_focused_e2e` from the `backend-rewrite next`
 or `backend-rewrite status` result. Its `execution_mode` explicitly distinguishes

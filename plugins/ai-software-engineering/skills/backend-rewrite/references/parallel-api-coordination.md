@@ -7,7 +7,7 @@ continue the same workflow without requiring another worker.
 
 ## Execution Model
 
-Parallelize expensive AI work after distinct APIs reach
+Parallelize expensive AI work as soon as each API reaches
 `implementation_required`:
 
 - evidence and source-code analysis;
@@ -20,14 +20,37 @@ Keep recording, focused Replay, and comparison serial. They share one
 `retry_after_seconds` and execute only its returned status command. Do not run
 `recover` while the owner is live.
 
+## Mandatory Dispatch Gate
+
+Treat the first `implementation_required` action for an API as an immediate
+dispatch barrier. The orchestrator may read the action envelope, but before it
+runs an evidence command, opens a case artifact, inspects source or target code,
+or develops an API-level hypothesis, it must:
+
+1. preserve the complete action, API, issue ID, canonical `cwd`, and command
+   specs;
+2. create the API's worker worktree from the current integrated target
+   revision;
+3. invoke the runtime's actual subagent-dispatch tool with that context and the
+   required handoff;
+4. retain the returned worker handle and then select another pending API or do
+   other orchestrator work.
+
+Do not wait for two implementation issues before dispatching the first worker.
+Creating a task-list item, changing task status, or announcing future dispatch
+does not satisfy this gate. If no subagent-dispatch capability is available,
+report the blocker; do not silently fall back to main-agent diagnosis or
+implementation.
+
 ## Ownership And Worktrees
 
 The main Agent is a thin orchestrator. It owns the coordinator worktree,
 worker/worktree assignment, state-mutating coordinator commands, integration,
 serialized traffic verification, shared or cross-API refactoring, repository
-checks, and the final `terminal_allowed` decision. It must not repeat a
-worker's API-level diagnosis or implementation unless integration exposes a
-shared conflict or invalidates the diagnosis.
+checks, and the final `terminal_allowed` decision. It must not perform or repeat
+a worker's API-level diagnosis or implementation unless integration exposes a
+shared conflict, invalidates the diagnosis, or proves the issue is
+system-scoped.
 
 Each subagent owns one API's diagnosis-to-tested-change cycle. It inspects the
 assigned bounded evidence and source behavior, proves one cause, implements the
@@ -35,8 +58,9 @@ smallest compatible repair, runs local tests, and returns a reviewable handoff.
 It does not select another API or declare the whole rewrite complete.
 
 The orchestrator stores worker worktrees under
-`<coordinator-root>/.traffic-e2e/local/rewrite-worktrees/<task-id>/<api-slug>`
-and gives each worker its absolute path. Repository initialization ensures
+`<coordinator-root>/.traffic-e2e/local/rewrite-worktrees/<workflow-id>/<api-slug>`
+using the coordinator's `workflow.id`, and gives each worker its absolute path.
+Repository initialization ensures
 `.gitignore` contains `/.traffic-e2e/local/`; never commit worktree contents.
 Workers must not create, switch, reset, remove, or repurpose worktrees. They
 also must not initialize a private coordinator: coordinator
