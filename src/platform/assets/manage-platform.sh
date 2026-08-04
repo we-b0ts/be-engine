@@ -715,7 +715,7 @@ run_comparison_recording() {
     start_genuine_source host
     run_no_fallback
     run_target stop
-    run_target start --e2e --start-breeze off --boot-dir "$TRAFFIC_E2E_TARGET_BOOT_DIR" --port "$TRAFFIC_E2E_TARGET_PORT"
+    run_target start --e2e --boot-dir "$TRAFFIC_E2E_TARGET_BOOT_DIR" --port "$TRAFFIC_E2E_TARGET_PORT"
     target_started=true
     wait_http "$TRAFFIC_E2E_TARGET_ORIGIN" "$TRAFFIC_E2E_TARGET_READY_PATH" \
         "$TRAFFIC_E2E_TARGET_READY_STATUS" target "" \

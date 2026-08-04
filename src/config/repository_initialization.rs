@@ -141,8 +141,7 @@ fn initialize_repository_config_with(
         boot_dir: PathBuf::from(BOOT_DIR),
         boot_dir_created: false,
         target_start_contract: format!(
-            "scripts/{repository_name}-cli start --e2e --start-breeze off --boot-dir {BOOT_DIR} \
-             --port {}",
+            "scripts/{repository_name}-cli start --e2e --boot-dir {BOOT_DIR} --port {}",
             options.target_port
         ),
         target_compile_contract: "every start --e2e compiles once before launch; when the \
@@ -381,6 +380,13 @@ mod tests {
         assert_eq!(
             result.rewrite_command,
             "backend-rewrite next --api '<METHOD path-or-pattern>'"
+        );
+        assert_eq!(
+            result.target_start_contract,
+            format!(
+                "scripts/{}-cli start --e2e --boot-dir {BOOT_DIR} --port 8081",
+                crate::repository::directory_name(target.path()).unwrap()
+            )
         );
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
         assert!(target.path().join(RECORDER_CONFIG_PATH).is_file());

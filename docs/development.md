@@ -1014,10 +1014,13 @@ generated state.
 The target exposes only:
 
 ```text
-scripts/<project>-cli start --e2e --start-breeze off \
+scripts/<project>-cli start --e2e \
   --boot-dir .traffic-e2e/local/boot --port <configured-port>
 scripts/<project>-cli stop
 ```
+
+For a Breeze-dependent target, `start --e2e` must not start Breeze. The
+managed runtime owns the shared Breeze lifecycle.
 
 For Breeze-aware standard recording, the managed runtime keeps one
 target-scoped source-adapter cache tag. Each run fingerprints the inspected

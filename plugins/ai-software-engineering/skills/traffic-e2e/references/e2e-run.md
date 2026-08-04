@@ -51,7 +51,7 @@ One attempt:
 
 1. starts Replay and loads the selected cases;
 2. invokes the target once as
-   `scripts/<project>-cli start --e2e --start-breeze off --boot-dir
+   `scripts/<project>-cli start --e2e --boot-dir
    .traffic-e2e/local/boot --port <configured-port>`;
 3. waits for configured HTTP readiness;
 4. decrypts request headers into a private temporary view when required;

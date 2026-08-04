@@ -11,8 +11,8 @@ traffic-e2e record-comparison --target-root <target> \
   --brz-no-fallback true --api '<METHOD path>'
 ```
 
-traffic-e2e owns source, one shared Breeze, target start with
-`--start-breeze off --boot-dir .traffic-e2e/local/boot --port <configured-port>`,
+traffic-e2e owns source, one shared Breeze, target start with `--e2e --boot-dir
+.traffic-e2e/local/boot --port <configured-port>`,
 readiness, comparison recorder, finalization, signals, and cleanup. Do not
 generate or invoke repository comparison wrappers.
 

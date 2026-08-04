@@ -333,7 +333,7 @@ mod tests {
 
         assert!(status.success());
         assert!(MANAGER.contains(
-            "start --e2e --start-breeze off --boot-dir \"$TRAFFIC_E2E_TARGET_BOOT_DIR\" --port \"$TRAFFIC_E2E_TARGET_PORT\""
+            "start --e2e --boot-dir \"$TRAFFIC_E2E_TARGET_BOOT_DIR\" --port \"$TRAFFIC_E2E_TARGET_PORT\""
         ));
         assert!(MANAGER.contains("--env RUN_COMMAND=traffic-e2e-source-root-launcher"));
         assert!(MANAGER.contains("source_run_command=\"./${source_run_command}\""));

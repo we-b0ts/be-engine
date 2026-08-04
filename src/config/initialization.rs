@@ -123,7 +123,7 @@ fn init_result(
         managed_record_command: "traffic-e2e record --target-root .".to_string(),
         managed_comparison_command: "traffic-e2e record-comparison --target-root .".to_string(),
         target_start_contract: format!(
-            "<project>-cli start --e2e --start-breeze off --boot-dir {} --port {}",
+            "<project>-cli start --e2e --boot-dir {} --port {}",
             crate::repository::LOCAL_BOOT_ROOT,
             options.candidate_http_port
         ),
@@ -470,8 +470,7 @@ mod tests {
         );
         assert_eq!(
             result.target_start_contract,
-            "<project>-cli start --e2e --start-breeze off --boot-dir \
-             .traffic-e2e/local/boot --port 8081"
+            "<project>-cli start --e2e --boot-dir .traffic-e2e/local/boot --port 8081"
         );
         assert_eq!(
             result.target_compile_contract,

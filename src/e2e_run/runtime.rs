@@ -121,8 +121,6 @@ pub(super) async fn start_project_with_replay_ca(
         &[
             "start",
             "--e2e",
-            "--start-breeze",
-            "off",
             "--boot-dir",
             &target_boot_dir,
             "--port",
@@ -546,8 +544,6 @@ mod tests {
                 config.project_cli.display().to_string(),
                 "start",
                 "--e2e",
-                "--start-breeze",
-                "off",
                 "--boot-dir",
                 ".traffic-e2e/local/boot",
                 "--port",
