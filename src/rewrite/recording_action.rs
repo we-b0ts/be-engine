@@ -4,7 +4,7 @@ use anyhow::Result;
 
 use super::model::{RewriteAction, RewriteCommandSpec, RewritePhase, RewriteState};
 use super::recording_execution::RecordingExecutionState;
-use super::{action, artifacts, fingerprint, inventory, recording_execution};
+use super::{action, artifacts, fingerprint, inventory, recording, recording_execution};
 
 pub(super) fn status_action(
     target_root: &Path,
@@ -88,9 +88,9 @@ pub(super) fn recording_action_id(state: &RewriteState, comparison: bool) -> Str
         &state.recording_run_id
     };
     let input_source = if comparison {
-        state.case_source.as_ref()
+        state.case_source.as_deref()
     } else {
-        state.recording_input_case_source.as_ref()
+        recording::standard_recording_input_source(state)
     };
     let input_source = input_source
         .map(|path| path.to_string_lossy())

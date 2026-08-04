@@ -116,6 +116,15 @@ impl fmt::Display for RewriteRecordingReason {
     }
 }
 
+impl RewriteRecordingReason {
+    pub(super) fn requires_external_live_traffic(self) -> bool {
+        matches!(
+            self,
+            Self::UserRequested | Self::RecorderContractChanged | Self::SourceBaselineChanged
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct RewriteRecordingSettings {
     pub duration_seconds: NonZeroU64,
@@ -241,6 +250,16 @@ pub(super) enum RewriteDependencyRuleSpec {
         key_suffix: String,
     },
     RedisGet {
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        initial_load_timeout_ms: u64,
+    },
+    RedisScard {
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        initial_load_timeout_ms: u64,
+    },
+    RedisHgetall {
         ports: Vec<u16>,
         keys: Vec<String>,
         initial_load_timeout_ms: u64,
@@ -572,6 +591,8 @@ pub struct RewriteDependencyRuleReport {
     pub plan_id: String,
     pub issue_id: String,
     pub traffic_e2e_report: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence_reclassification: Option<Value>,
     pub next_command: RewriteCommandSpec,
 }
 

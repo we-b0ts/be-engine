@@ -8,6 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
 use super::model::{ApiCountMap, ApiCounts};
+use crate::recording_completion::RecordingCompletionReason;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub(super) struct ComparisonRecordingCounts {
@@ -45,6 +46,8 @@ struct ComparisonRecordingRunReport {
     recording_apis: Vec<String>,
     started_at: DateTime<Utc>,
     finished_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completion_reason: Option<RecordingCompletionReason>,
     ready: bool,
     in_flight: usize,
     counts: ComparisonRecordingCounts,
@@ -70,6 +73,7 @@ impl ComparisonRecordingSummary {
                 recording_apis,
                 started_at: Utc::now(),
                 finished_at: None,
+                completion_reason: None,
                 ready: false,
                 in_flight: 0,
                 counts: ComparisonRecordingCounts::default(),
@@ -105,7 +109,7 @@ impl ComparisonRecordingSummary {
         self.state.lock().await.errors.push(error);
     }
 
-    pub(super) async fn finish(&self) -> Result<()> {
+    pub(super) async fn finish(&self, completion_reason: RecordingCompletionReason) -> Result<()> {
         {
             let mut state = self.state.lock().await;
             state.status = if state.errors.is_empty() {
@@ -114,6 +118,7 @@ impl ComparisonRecordingSummary {
                 "completed_with_errors".to_string()
             };
             state.finished_at = Some(Utc::now());
+            state.completion_reason = Some(completion_reason);
             state.in_flight = 0;
         }
         self.flush().await
@@ -143,5 +148,34 @@ impl ComparisonRecordingSummary {
         tokio::fs::rename(&temporary, self.path.as_ref())
             .await
             .with_context(|| format!("failed to publish {}", self.path.display()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn finalized_summary_records_the_completion_reason() {
+        let temp = tempfile::tempdir().unwrap();
+        let summary = ComparisonRecordingSummary::new(
+            "20260803120000".to_string(),
+            temp.path(),
+            vec!["GET /api".to_string()],
+        );
+
+        summary
+            .finish(RecordingCompletionReason::PerApiCaseLimitReached)
+            .await
+            .unwrap();
+
+        let report: serde_json::Value = serde_json::from_slice(
+            &tokio::fs::read(temp.path().join("comparison-recording-run.json"))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(report["status"], "completed");
+        assert_eq!(report["completion_reason"], "per_api_case_limit_reached");
     }
 }

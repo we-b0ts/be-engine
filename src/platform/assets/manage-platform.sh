@@ -239,6 +239,20 @@ finalize_recorder() {
     recorder_finalized=true
 }
 
+wait_for_recorder_or_duration() {
+    local exit_code status
+    if exit_code=$(timeout --foreground "$duration_seconds" docker wait "$recorder_name"); then
+        [[ "$exit_code" == 0 ]] || {
+            printf 'error: Recorder exited before the duration with status %s\n' "$exit_code" >&2
+            return 1
+        }
+        recorder_finalized=true
+        return 0
+    fi
+    status=$?
+    [[ "$status" == 124 ]] || return "$status"
+}
+
 capture_diagnostics() {
     local name
     for name in "$recorder_name" "$breeze_name" "$source_name"; do
@@ -681,7 +695,7 @@ run_standard_recording() {
     run_no_fallback
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket "$control_socket"
     start_recording_input
-    sleep "$duration_seconds"
+    wait_for_recorder_or_duration
     stop_recording_input
     finalize_recorder
     jq -e '.status == "completed" and .failed_cases == 0 and (.errors | length == 0)' \

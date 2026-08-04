@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::config::{RecordingAccessPolicy, RecordingConfig, TrafficJsonlMode};
+use crate::recording_completion::ExplicitApiCaseLimits;
 use crate::request_headers::RequestHeaderCapture;
 
 mod artifact_owner;
@@ -41,7 +42,7 @@ struct RecorderOptions {
     buffer_settings: jsonl::JsonlBufferSettings,
     writer_queue_capacity: usize,
     run_id: Option<String>,
-    recording_apis: Vec<String>,
+    recording_api_limits: Vec<(String, usize)>,
     artifact_owner: Option<ArtifactOwner>,
     request_header_capture: RequestHeaderCapture,
 }
@@ -56,6 +57,7 @@ pub struct Recorder {
     pub(crate) dependency_write_lock: Arc<Mutex<()>>,
     pub(crate) finalized_cases: Arc<Mutex<HashSet<Uuid>>>,
     pub(crate) access_policy: RecordingAccessPolicy,
+    explicit_api_case_limits: ExplicitApiCaseLimits,
     request_header_capture: RequestHeaderCapture,
 }
 
@@ -80,7 +82,7 @@ impl Recorder {
                 },
                 writer_queue_capacity: defaults.writer_queue_capacity,
                 run_id: None,
-                recording_apis: Vec::new(),
+                recording_api_limits: Vec::new(),
                 artifact_owner: None,
                 request_header_capture: RequestHeaderCapture::from_environment(
                     &defaults.encrypt_request_headers,
@@ -110,7 +112,7 @@ impl Recorder {
         config: &RecordingConfig,
         output_dir: impl AsRef<Path>,
         run_id: Option<String>,
-        recording_apis: Vec<String>,
+        recording_api_limits: Vec<(String, usize)>,
         artifact_owner: Option<ArtifactOwner>,
     ) -> Result<Self> {
         Self::new_with_options(
@@ -124,7 +126,7 @@ impl Recorder {
                 },
                 writer_queue_capacity: config.writer_queue_capacity,
                 run_id,
-                recording_apis,
+                recording_api_limits,
                 artifact_owner,
                 request_header_capture: RequestHeaderCapture::from_environment(
                     &config.encrypt_request_headers,
@@ -150,7 +152,7 @@ impl Recorder {
             buffer_settings,
             writer_queue_capacity,
             run_id,
-            recording_apis,
+            recording_api_limits,
             artifact_owner,
             request_header_capture,
         } = options;
@@ -179,6 +181,10 @@ impl Recorder {
             finalized_cases.clone(),
         )
         .await?;
+        let recording_apis = recording_api_limits
+            .iter()
+            .map(|(api, _)| api.clone())
+            .collect();
         let recorder = Self {
             artifact_owner,
             traffic_jsonl,
@@ -192,6 +198,7 @@ impl Recorder {
             dependency_write_lock: Arc::new(Mutex::new(())),
             finalized_cases,
             access_policy,
+            explicit_api_case_limits: ExplicitApiCaseLimits::new(recording_api_limits),
             request_header_capture,
         };
         recorder.write_run_report("running").await?;

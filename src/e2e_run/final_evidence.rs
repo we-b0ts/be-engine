@@ -8,11 +8,34 @@ use super::model::{
 use super::store;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{
-    ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport,
-    aggregate_replay_reports_with_options,
+    BackgroundReclassification, ReplayAggregateCounts, ReplayAggregateOptions,
+    ReplayAggregateReport, aggregate_replay_reports_with_options,
+    reclassify_background_dependencies,
 };
 
 pub(super) fn build_final_evidence(
+    config: &ResolvedProjectConfig,
+    layout: &RunLayout,
+    inventory: &CaseGroupInventory,
+    state: &mut ActiveRunState,
+) -> Result<()> {
+    refresh_background_evidence(config, state)?;
+    build_final_evidence_from_current_report(config, layout, inventory, state)
+}
+
+pub(super) fn refresh_background_evidence(
+    config: &ResolvedProjectConfig,
+    state: &ActiveRunState,
+) -> Result<BackgroundReclassification> {
+    let case_dirs = state
+        .cases
+        .iter()
+        .map(|case| (case.case_id.clone(), case.case_dir.clone()))
+        .collect::<BTreeMap<_, _>>();
+    reclassify_background_dependencies(&config.recorder_config, &state.replay_report, &case_dirs)
+}
+
+pub(super) fn build_final_evidence_from_current_report(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
     inventory: &CaseGroupInventory,

@@ -60,6 +60,11 @@ variables without printing their values.
 earlier action response was lost or when resuming an interrupted AI session.
 `plan_apply_required` recovers the exact pending
 `action.commands.apply` command with its `apply <plan-id>` argv.
+The stored plan is an evidence-validated snapshot: the workflow revision
+created by planning does not make its apply stale. If the plan report proves
+that the selector is incomplete, rerun the same planner with the same evidence
+ID and corrected selector inputs before apply; this replaces only the pending
+preview and does not mutate recorder configuration.
 `resume_required` means the coordinator detected a completed recording result
 or a target change; execute its exact `action.commands.resume` argv instead of
 repeating the prior recording or implementation action. If a previously
@@ -74,6 +79,8 @@ active API completes. Use the read-only `backend-rewrite inventory` command
 only for an explicit scope audit or final delivery check. Its full stable list
 does not authorize selecting a pending API. `terminal_allowed=true` means
 every inventory item has current focused E2E and comparison evidence.
+`workflow.scope` describes the standard-recording selector
+(`all_configured_apis` when it was omitted); it is not the active action target.
 
 `backend-rewrite` emits one compact JSON object per command by default so the
 result can be captured atomically without `head`/`tail`. Use global `--pretty`
@@ -136,9 +143,16 @@ driver parameters. Do not inspect internal state, search the traffic-e2e
 implementation, or synthesize requests. A failed E2E attempt alone never
 authorizes this transition.
 
+For a recording bound to one or more explicit API selectors, the worker may
+finalize as soon as every selected API reaches its per-API case limit; the
+configured duration is an upper bound. An all-configured recording with no API
+selector always observes the complete duration so low-frequency APIs still
+have an opportunity to appear. This early completion is coordinator-owned and
+does not change the status/resume polling protocol.
+
 The public coordinator surface is the `backend-rewrite` binary with `next`,
-`status`, `evidence`, `rule`, `dependency-rule`, `route`, `repair`, `recording`,
-and `recover` subcommands. `repair verify` and `recording execute` are ID-bound action
+`status`, `inventory`, `case`, `evidence`, `rule`, `dependency-rule`, `route`,
+`repair`, `recording`, and `recover` subcommands. `repair verify` and `recording execute` are ID-bound action
 commands returned by the coordinator, not commands whose arguments the AI
 invents. The target AI may choose and compose these bounded transitions according to their documented
 preconditions. Reading traffic artifacts may support diagnosis, but never
@@ -160,7 +174,13 @@ When the action is `implementation_required`:
    `action.commands.evidence[*].command` argv for traffic facts.
 2. For `representatives`, inspect the returned immutable `case_dir` and its
    request, expected response, candidate response when present, dependencies,
-   and other persisted case evidence. Inspect additional cases under
+   and other persisted case evidence. When the result contains a
+   `dependencies_command`, execute its exact argv for a compact target summary;
+   select only the relevant target and execute its returned `detail_command`
+   for bounded representative exchanges that keep keys, arguments, and
+   responses associated. Do not write an
+   ad hoc parser for `dependencies.jsonl` while this query answers the question.
+   Inspect additional cases under
    `.traffic-e2e/artifacts/` when they can distinguish the active hypotheses.
 3. Read [problem-diagnosis.md](references/problem-diagnosis.md) and follow its
    issue-specific evidence and source-proof route.
@@ -183,7 +203,22 @@ the correlated pre-readiness interaction count; query `pre_readiness_traffic`
 for the complete startup summary. `unused_global` and target activity outside
 an active case do not fail the case gate. Treat pre-readiness traffic as
 reference context for startup jobs, warmup, and local-cache hypotheses, never
-as a gate or as proof of ownership.
+as a gate or as proof of ownership. The dirty-cluster result includes a
+`representative_dependencies_command` for its selected case when available;
+execute it before expanding raw dependency artifacts.
+
+`backend-rewrite case dependencies <case-dir>` is read-only and returns a
+bounded target summary. It deliberately omits keys and response bodies; every
+target carries an opaque `target_id` and an exact `detail_command`. The detail
+query expands only that target and caps representative values. Redis detail
+labels keys only for command shapes the coordinator understands. Memcached
+detail returns representative keys and response outcome summaries but never
+interprets or exposes flags, whose meaning is application-specific. Dependency
+response previews are capped at 256 bytes and retain encoding, original length,
+and truncation metadata. Complete small Redis scalar frames also expose a
+`response_value`, so the AI does not need to parse RESP framing; inspect the
+read-only artifact only when the preview is insufficient. Use raw
+read-only case artifacts only when the selected detail remains insufficient.
 
 For a dependency issue, the `dirty_clusters` evidence report's
 `applicable_rule_planners` lists only the background-rule protocol planners
@@ -194,14 +229,32 @@ the source-proven selector inputs shown there. The coordinator resolves the
 current replay evidence, immutable case source, and source revision; none are
 rule selector inputs. HTTP and Memcached expose different inputs, and
 irrelevant protocol flags are intentionally unavailable; Redis exposes
-command-specific `zcount` and `get` selector inputs. When the plan reports
-`reused_existing=true`, the protocol selector is already covered: do not apply
-a duplicate rule; execute the returned fresh-recording request. If an apply is
-nevertheless resumed by plan ID, it is an idempotent reuse and makes no config
-change. Otherwise execute the plan report's exact apply argv by plan ID.
-After apply, execute its exact fresh-recording request because the Recorder
-contract changed. Do not use the lower-level
+command-specific `zcount`, `get`, `scard`, and `hgetall` selector inputs.
+`get`, `scard`, and `hgetall` require exact keys; do not infer prefixes or
+wildcards from recorded examples. When the plan reports
+`reused_existing=true`, the protocol selector is already covered: execute the
+returned apply-by-plan-ID action to confirm that reuse and refresh the current
+derived evidence; it makes no duplicate config change. Inspect the bounded
+plan coverage before apply. When it exposes an
+incomplete selector, rerun the planner with the same evidence ID and complete
+source-proven inputs; the new preview replaces the pending one without a
+special replacement flag. Otherwise execute the plan report's exact apply argv
+by plan ID.
+After apply, inspect `evidence_reclassification` and execute its exact `next`.
+The coordinator preserves immutable request, response, and dependency capture
+files, reapplies the current background rules to the latest focused replay
+report, rebuilds bounded dependency evidence, and revises that same attempt.
+If responses already pass and the effective dependency view becomes clean, it
+advances directly to comparison recording. Residual dirty evidence remains an
+`implementation_required` action. A background rule is not a Recorder capture
+contract change, so this path must not request fresh standard traffic or return
+`recorder-contract-changed`. Do not use the lower-level
 `config recorder plan|apply background-dependencies` interface during a rewrite.
+If a session was interrupted after apply, discard cached actions and execute
+the current `backend-rewrite next`. The coordinator repairs an obsolete
+dependency-finalize failure against the current clean derived view and resumes
+the same attempt; do not retry E2E, inspect internal state, or request new
+traffic to recover it.
 
 A background rule changes case ownership only: it proves that matching
 asynchronous traffic is process-scoped and case-independent. It carries no

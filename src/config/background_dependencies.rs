@@ -248,21 +248,21 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                             512,
                         )?;
                     }
-                    "GET" => {
+                    "GET" | "SCARD" | "HGETALL" => {
                         if !key_prefix.is_empty() || !key_suffix.is_empty() {
                             bail!(
-                                "Redis GET background dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
+                                "Redis {command} background dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
                             );
                         }
-                        validate_exact_redis_keys(name, keys)?;
+                        validate_exact_redis_keys(name, command, keys)?;
                         if initial_load_timeout_ms.is_none_or(|timeout| timeout == 0) {
                             bail!(
-                                "Redis GET background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
+                                "Redis {command} background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
                             );
                         }
                     }
                     _ => bail!(
-                        "Redis background dependency rule {name:?} currently supports only commands \"ZCOUNT\" and \"GET\""
+                        "Redis background dependency rule {name:?} currently supports only commands \"ZCOUNT\", \"GET\", \"SCARD\", and \"HGETALL\""
                     ),
                 }
                 if !source_revision.is_empty() {
@@ -465,18 +465,24 @@ fn validate_redis_ports(rule_name: &str, ports: &[u16]) -> Result<()> {
     Ok(())
 }
 
-fn validate_exact_redis_keys(rule_name: &str, keys: &[String]) -> Result<()> {
+fn validate_exact_redis_keys(rule_name: &str, command: &str, keys: &[String]) -> Result<()> {
     const MAX_KEYS: usize = 4_096;
     if keys.is_empty() || keys.len() > MAX_KEYS {
         bail!(
-            "Redis GET background dependency rule {rule_name:?} must include between 1 and {MAX_KEYS} exact keys"
+            "Redis {command} background dependency rule {rule_name:?} must include between 1 and {MAX_KEYS} exact keys"
         );
     }
     let mut unique = HashSet::new();
     for key in keys {
-        validate_single_line("Redis GET background dependency key", key, 512)?;
+        validate_single_line(
+            &format!("Redis {command} background dependency key"),
+            key,
+            512,
+        )?;
         if !unique.insert(key) {
-            bail!("Redis GET background dependency rule {rule_name:?} has duplicate key {key:?}");
+            bail!(
+                "Redis {command} background dependency rule {rule_name:?} has duplicate key {key:?}"
+            );
         }
     }
     Ok(())

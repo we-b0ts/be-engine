@@ -182,7 +182,8 @@ fn dependency_representative_returns_case_entrypoint_and_bounded_difference() {
         }),
     };
 
-    let representative = dependency_representative(&cluster);
+    let target = tempfile::tempdir().unwrap();
+    let representative = dependency_representative(target.path(), &cluster);
 
     assert_eq!(representative["cluster_id"], "dirty-stable");
     assert_eq!(representative["scope"], "case");
@@ -197,31 +198,45 @@ fn dependency_representative_returns_case_entrypoint_and_bounded_difference() {
         representative["source_pre_readiness_role"],
         "reference_only"
     );
+    assert_eq!(
+        representative["dependencies_command"]["argv"],
+        serde_json::json!([
+            "backend-rewrite",
+            "case",
+            "dependencies",
+            "/recording/case-a"
+        ])
+    );
     assert!(representative.get("response").is_none());
 }
 
 #[test]
 fn dirty_cluster_facts_omit_the_duplicate_full_startup_summary() {
-    let facts = dirty_cluster_facts(E2eDirtyCounts {
-        complete: true,
-        dirty: false,
-        case_event_counts: Default::default(),
-        clusters: Vec::new(),
-        omitted_clusters: 0,
-        source_pre_readiness: Some(E2eSourcePreReadiness {
-            phase: "source_pre_readiness".to_string(),
-            role: "reference_only".to_string(),
-            interaction_count: 128,
-            endpoints: Vec::new(),
-            unresolved_interactions: 0,
-            omitted_interactions: 0,
-            truncated: false,
-        }),
-    });
+    let target = tempfile::tempdir().unwrap();
+    let facts = dirty_cluster_facts(
+        target.path(),
+        E2eDirtyCounts {
+            complete: true,
+            dirty: false,
+            case_event_counts: Default::default(),
+            clusters: Vec::new(),
+            omitted_clusters: 0,
+            source_pre_readiness: Some(E2eSourcePreReadiness {
+                phase: "source_pre_readiness".to_string(),
+                role: "reference_only".to_string(),
+                interaction_count: 128,
+                endpoints: Vec::new(),
+                unresolved_interactions: 0,
+                omitted_interactions: 0,
+                truncated: false,
+            }),
+        },
+    );
 
     assert!(facts.get("source_pre_readiness").is_none());
     assert_eq!(facts["clusters"], serde_json::json!([]));
     assert_eq!(facts["complete"], true);
+    assert!(facts["representative_dependencies_command"].is_null());
 }
 
 #[test]
@@ -236,15 +251,17 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
                 {"protocol": "memcached"},
                 {"protocol": "http"},
                 {"protocol": "memcached"},
+                {"protocol": "redis", "operations": {"SCARD": 29, "HGETALL": 1}},
                 {"protocol": "mysql"}
             ]
         }),
         "evidence-current",
     );
 
-    assert_eq!(planners.len(), 2);
+    assert_eq!(planners.len(), 3);
     assert_eq!(planners[0].protocol, "http");
     assert_eq!(planners[1].protocol, "memcached");
+    assert_eq!(planners[2].protocol, "redis");
     assert_eq!(planners[1].evidence_id, "evidence-current");
     assert_eq!(planners[1].command.cwd, target.path());
     assert_eq!(
@@ -254,6 +271,16 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
             "dependency-rule",
             "plan",
             "memcached",
+            "--help",
+        ]
+    );
+    assert_eq!(
+        planners[2].command.argv,
+        [
+            "backend-rewrite",
+            "dependency-rule",
+            "plan",
+            "redis",
             "--help",
         ]
     );

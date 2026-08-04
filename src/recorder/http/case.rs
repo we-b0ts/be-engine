@@ -103,6 +103,10 @@ pub(crate) async fn finalize_http_case(
         }
         recorder.fail_case(case, reason, message).await
     } else {
+        let recording_api = request
+            .api_pattern
+            .as_ref()
+            .map(|pattern| format!("{} {pattern}", request.method));
         recorder
             .write_case_json(case, "request.json", &request)
             .await?;
@@ -114,7 +118,9 @@ pub(crate) async fn finalize_http_case(
                 .fail_case(case, "dependency_replay_unsafe", message)
                 .await;
         }
-        recorder.publish_case(case).await
+        recorder
+            .publish_case_for_api(case, recording_api.as_deref())
+            .await
     }
 }
 
@@ -250,6 +256,37 @@ mod tests {
         assert_eq!(expected["body"]["original_len"], 0);
         assert_eq!(expected["body"]["stored_len"], 0);
         assert_eq!(expected["body"]["data"], "");
+    }
+
+    #[tokio::test]
+    async fn published_http_case_advances_its_explicit_api_limit() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = crate::config::RecordingConfig::default();
+        let recorder = Recorder::new_with_recording_config_at_and_run_id(
+            &config,
+            temp.path(),
+            None,
+            vec![("GET /api/resource/getprivkey/*".to_string(), 1)],
+            None,
+        )
+        .await
+        .unwrap();
+        let case = CaseContext {
+            id: Uuid::new_v4(),
+            rule_name: "api".to_string(),
+            uri_group: Some("api-resource-getprivkey-wildcard".to_string()),
+        };
+
+        finalize_http_case(&recorder, &case, request(), json_response(b"{}"), None)
+            .await
+            .unwrap();
+
+        tokio::time::timeout(
+            std::time::Duration::from_millis(20),
+            recorder.wait_for_explicit_api_case_limit(),
+        )
+        .await
+        .unwrap();
     }
 
     #[test]

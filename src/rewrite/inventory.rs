@@ -8,11 +8,10 @@ use crate::RecordingApi;
 
 pub(super) fn initialize_legacy(state: &mut RewriteState) -> bool {
     let mut changed = false;
-    if state.recording_apis.is_empty() && !state.api.is_empty() {
-        state.recording_apis.push(state.api.clone());
-        changed = true;
-    }
     if state.api_inventory.is_empty() && !state.api.is_empty() {
+        if state.recording_apis.is_empty() {
+            state.recording_apis.push(state.api.clone());
+        }
         let complete = state.phase == RewritePhase::SliceComplete;
         state.api_inventory.push(RewriteApiProgress {
             api: state.api.clone(),
@@ -29,11 +28,25 @@ pub(super) fn initialize_legacy(state: &mut RewriteState) -> bool {
         state.current_api_index = (!complete).then_some(0);
         changed = true;
     }
+    if explicit_recording_scope_conflicts_with_inventory(state) {
+        state.recording_apis.clear();
+        changed = true;
+    }
     changed
 }
 
+fn explicit_recording_scope_conflicts_with_inventory(state: &RewriteState) -> bool {
+    !state.recording_apis.is_empty()
+        && !state.api_inventory.is_empty()
+        && (state.recording_apis.len() != state.api_inventory.len()
+            || state
+                .recording_apis
+                .iter()
+                .any(|api| !state.api_inventory.iter().any(|item| item.api == *api)))
+}
+
 pub(super) fn recording_scope(state: &RewriteState) -> Vec<String> {
-    if state.recording_apis.is_empty() && !state.api.is_empty() {
+    if state.recording_apis.is_empty() && state.api_inventory.is_empty() && !state.api.is_empty() {
         vec![state.api.clone()]
     } else {
         state.recording_apis.clone()
@@ -174,6 +187,28 @@ pub(super) fn reset_for_recording(state: &mut RewriteState) {
     }
 }
 
+pub(super) fn restore_recorded_progress(
+    state: &mut RewriteState,
+    apis: Vec<String>,
+    active_api: &str,
+) -> Result<()> {
+    install(state, apis)?;
+    let active = state
+        .api_inventory
+        .iter()
+        .position(|item| item.api == active_api)
+        .with_context(|| format!("recorded API inventory does not contain {active_api:?}"))?;
+    for (index, item) in state.api_inventory.iter_mut().enumerate() {
+        item.status = match index.cmp(&active) {
+            std::cmp::Ordering::Less => RewriteApiStatus::Complete,
+            std::cmp::Ordering::Equal => RewriteApiStatus::Active,
+            std::cmp::Ordering::Greater => RewriteApiStatus::Pending,
+        };
+    }
+    state.current_api_index = Some(active);
+    load_current(state)
+}
+
 pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
     RewriteApiInventoryView {
         total: state.api_inventory.len(),
@@ -245,6 +280,56 @@ fn clear_active_evidence(state: &mut RewriteState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modern_all_configured_inventory_keeps_its_omitted_recording_scope() {
+        let mut state = crate::rewrite::test_state();
+        install(
+            &mut state,
+            vec!["GET /a".to_string(), "POST /b".to_string()],
+        )
+        .unwrap();
+        state.recording_apis.clear();
+
+        assert!(!initialize_legacy(&mut state));
+        assert!(state.recording_apis.is_empty());
+        assert_eq!(
+            crate::rewrite::action::workflow_view(&state).scope,
+            "all_configured_apis"
+        );
+    }
+
+    #[test]
+    fn stale_single_api_scope_is_cleared_from_a_multi_api_inventory() {
+        let mut state = crate::rewrite::test_state();
+        install(
+            &mut state,
+            vec!["GET /a".to_string(), "POST /b".to_string()],
+        )
+        .unwrap();
+        state.recording_apis = vec!["GET /a".to_string()];
+
+        assert!(initialize_legacy(&mut state));
+        assert!(state.recording_apis.is_empty());
+        assert_eq!(
+            crate::rewrite::action::workflow_view(&state).scope,
+            "all_configured_apis"
+        );
+    }
+
+    #[test]
+    fn explicit_single_api_scope_remains_bound_to_its_inventory() {
+        let mut state = crate::rewrite::test_state();
+        install(&mut state, vec!["GET /a".to_string()]).unwrap();
+        state.recording_apis = vec!["GET /a".to_string()];
+
+        assert!(!initialize_legacy(&mut state));
+        assert_eq!(state.recording_apis, ["GET /a"]);
+        assert_eq!(
+            crate::rewrite::action::workflow_view(&state).scope,
+            "GET /a"
+        );
+    }
 
     #[test]
     fn advances_across_recorded_apis_without_replacing_the_standard_run() {

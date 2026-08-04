@@ -30,6 +30,7 @@ use crate::gateway::http::rules::{
 };
 use crate::gateway::http::transport::{GatewayBody, build_fixed_response, simple_response};
 use crate::recording_api::{RecordingApi, validate_selection};
+use crate::recording_completion::RecordingCompletionReason;
 use crate::request_headers::RequestHeaderCapture;
 
 #[derive(Debug, Clone, Default)]
@@ -113,10 +114,22 @@ pub async fn run_with_options(
         .to_string();
     let run_id = run_id.unwrap_or_else(|| Utc::now().format("%Y%m%d%H%M%S").to_string());
     validate_run_id(&run_id)?;
+    let recording_api_limits = recording_apis
+        .iter()
+        .map(|api| {
+            (
+                api.to_string(),
+                config
+                    .http_gateway
+                    .per_api_case_limits
+                    .limit_for(api.path_pattern()),
+            )
+        })
+        .collect();
     let store = ComparisonRecordingStore::create(
         &config.comparison_recording_output_dir(),
         &run_id,
-        recording_apis.iter().map(ToString::to_string).collect(),
+        recording_api_limits,
     )
     .await?;
     let gateway = config.http_gateway.clone();
@@ -156,6 +169,8 @@ pub async fn run_with_options(
     let summary_task = tokio::spawn(run_summary_flush(runtime.clone()));
     let duration_wait = wait_for_duration(runtime.clone(), duration);
     tokio::pin!(duration_wait);
+    let case_limit_completion = runtime.store.wait_for_explicit_api_case_limit();
+    tokio::pin!(case_limit_completion);
     info!(
         listen = %gateway.listen,
         baseline = %baseline_upstream,
@@ -165,15 +180,19 @@ pub async fn run_with_options(
     );
 
     let mut connections = JoinSet::new();
-    loop {
+    let completion_reason = loop {
         tokio::select! {
             signal = shutdown_signal() => {
                 signal?;
-                break;
+                break RecordingCompletionReason::ShutdownSignal;
             }
             _ = &mut duration_wait => {
                 info!("comparison recording duration elapsed");
-                break;
+                break RecordingCompletionReason::DurationElapsed;
+            }
+            _ = &mut case_limit_completion => {
+                info!("every explicitly selected comparison API reached its case limit");
+                break RecordingCompletionReason::PerApiCaseLimitReached;
             }
             accepted = listener.accept() => {
                 let (stream, peer) =
@@ -204,7 +223,7 @@ pub async fn run_with_options(
                 }
             }
         }
-    }
+    };
     drop(listener);
     connections.abort_all();
     while connections.join_next().await.is_some() {}
@@ -227,7 +246,7 @@ pub async fn run_with_options(
         ))
         .await;
     runtime.store.fail_unfinished().await?;
-    runtime.store.summary().finish().await?;
+    runtime.store.summary().finish(completion_reason).await?;
     Ok(())
 }
 
@@ -344,9 +363,10 @@ async fn handle_request(
         .gateway
         .per_api_case_limits
         .limit_for(&group.pattern);
+    let recording_api = format!("{method} {}", group.pattern);
     let Some(reservation) = runtime
         .store
-        .try_reserve(&rule.name, &group.pattern, limit)
+        .try_reserve(&recording_api, &rule.name, &group.pattern, limit)
         .await
     else {
         return fixed_response(&runtime).await;

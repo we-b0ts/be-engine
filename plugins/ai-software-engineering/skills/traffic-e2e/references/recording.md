@@ -28,7 +28,10 @@ The fixed adapter may only establish Platform transport interception. It must
 not alter source business code, caches, feature switches, or response behavior.
 
 Use `--per-api-case-limit` only as an invocation-local per-pattern bound. Do not edit recorder
-scope for a temporary API selection.
+scope for a temporary API selection. With explicit `--api` selectors, the
+duration is an upper bound: Recorder finalizes normally when every selected API
+reaches the bound. Without `--api`, Recorder observes the complete duration so
+low-frequency APIs can still be discovered.
 
 When request-header encryption is configured,
 `TRAFFIC_E2E_ENCRYPTION_KEY_B64` must decode to exactly 32 bytes. Keep it only

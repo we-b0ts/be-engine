@@ -90,6 +90,16 @@ provide `--api` only for an explicitly narrowed fresh recording. Executing the
 returned action starts a detached coordinator worker and returns immediately;
 poll `backend-rewrite status` until it reports `resume_required`.
 
+Background dependency rules are evidence-ownership rules, not fresh-capture
+contracts. `backend-rewrite dependency-rule apply <plan-id>` preserves the
+published cases and raw dependency JSONL, reapplies the current rules to the
+latest focused replay report, rebuilds bounded evidence, and returns `next`.
+If an interrupted or older coordinator state still carries the strict
+dependency-finalize error after that derived view becomes clean, the next
+coordinator step repairs the same attempt in place before choosing its action.
+If that removes the remaining case-scoped dirty evidence, the same focused
+attempt advances to comparison without a new standard recording.
+
 `backend-rewrite` emits one compact JSON object per command by default; use
 global `--pretty` for interactive inspection. Normal `next` and `status`
 responses contain only the bounded API-inventory summary. Query the full
@@ -108,6 +118,14 @@ and a compact expected/actual dependency difference. Source traffic observed
 before readiness is returned separately as reference context. Unused global
 traffic and target activity outside a case do not make a case dirty.
 
+Use `backend-rewrite case dependencies <case-dir>` to summarize one returned
+case by dependency target. Each target includes an exact `detail_command` that
+expands only bounded representative exchanges for that target. Redis key,
+argument, and response association is preserved; response previews are capped
+at 256 bytes with length and truncation metadata, and complete small Redis
+scalars also expose a decoded `response_value`. Memcached flags are not
+interpreted or returned.
+
 Evidence-driven recorder and verification-policy changes live under
 `traffic-e2e config ... plan|apply`; low-level grouping and report commands live
 under `traffic-e2e diagnose`. Managed recording, replay, fixed-user target
@@ -120,7 +138,10 @@ response and one candidate response. Set
 source response after the candidate for source-drift diagnosis. Passing
 `record-comparison --baseline-recheck` enables it for one run without changing
 the configuration. Comparison recording defaults to 60 seconds; automated
-calls pass `--duration-seconds 60` or another positive integer explicitly.
+calls pass `--duration-seconds 60` or another positive integer explicitly. An
+explicitly scoped recording may finish earlier when every selected API reaches
+its per-API case limit; an unscoped recording retains the complete window for
+low-frequency API discovery.
 Offline `compare` reuses
 `.traffic-e2e/verification.yaml`; see
 [development.md](docs/development.md#running-locally).
@@ -195,8 +216,9 @@ or control socket.
 
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are normally consumed in recorded connection
-order. Exact Redis `GET` and Memcached `get` exchanges explicitly recorded by a
-process-scoped background rule remain single-use but are matched without source
+order. Exact-key Redis `GET`, `SCARD`, and `HGETALL` exchanges and Memcached
+`get` exchanges explicitly recorded by a process-scoped background rule remain
+single-use but are matched without source
 connection binding or lane blockers. The
 v5 replay report keeps complete unmatched, unsupported, unsafe, and unused
 evidence, records exact success totals, and retains a bounded prefix of success

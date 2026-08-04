@@ -54,6 +54,10 @@ that execution; `recording_in_progress` exposes it as
 lifecycle, and validates that exact finalized manifest. Never discover a run by recency or add
 manual curl, replay, shell pipelines, backgrounding, or driver flags. Duration and case limit
 belong to the preceding recording request and are bound into the action ID.
+When the action is scoped to explicit APIs, the duration is an upper bound and
+the managed runtime may finalize after every selected API reaches its case
+limit. An omitted API selector still waits for the complete duration to retain
+low-frequency API discovery.
 When the workflow was started without `--api`, an empty run-local selector is
 intentional: recorder configuration limits traffic and the finalized cases
 produce the stable API inventory. Do not add selectors to the returned action.
@@ -72,10 +76,27 @@ and comparison, the coordinator marks it complete and returns
 prepares and runs that API from the same standard recording. If the current
 pattern is dynamic and lacks a proven source registration route, the action is
 `input_required`; provide only the requested `--source-route` when resuming.
+`workflow.scope` is the selector of that shared standard recording, not the
+active API. It is `all_configured_apis` when the selector was omitted and must
+remain stable as `current_api` advances.
 
 Per-API failure retries reuse the same cases for that API. A fresh standard
 recording is still allowed only under the explicit conditions below and resets
 evidence for the whole inventory because all slices share that baseline.
+
+Applying or confirming a source-proven background dependency rule is not a
+fresh-recording condition. The coordinator treats published capture artifacts
+as immutable, recomputes only the effective case/global ownership view in the
+latest focused replay report, rebuilds dependency evidence, and revises the
+same attempt in the progress ledger. Clean effective evidence advances to
+comparison; residual case-scoped dirty evidence stays in the repair loop. The
+apply result therefore returns `next`, never a
+`recorder-contract-changed` recording request.
+On resume, `next` also repairs a finalized attempt whose derived dependency
+view is already clean but whose persisted failure still contains the obsolete
+strict dirty-finalize result. This recovery removes only dependency-derived
+errors, preserves real lifecycle failures, and does not execute another E2E
+attempt.
 
 ### Fresh standard recording
 
@@ -126,7 +147,11 @@ and possible causes. `action.commands.evidence` contains the permitted evidence
 queries, while `action.commands.acceptance` is the only acceptance transition.
 Traffic facts come from those queries and immutable artifacts. `representatives` returns the
 exact standard or comparison case directory and structured response difference;
-inspect that case first and other artifact cases as needed. Source inspection
+inspect that case first and other artifact cases as needed. For dependency
+evidence, execute its returned `dependencies_command`; the target summary then
+returns an exact `detail_command` for each target, so only the selected target's
+bounded exchanges need expansion. Each exchange preserves key/argument/response
+association; response previews are capped and length annotated. Source inspection
 supplies the final business attribution. Apply
 [problem-diagnosis.md](problem-diagnosis.md), repair one proven cause, run local
 target tests, then execute `action.commands.acceptance`.
@@ -134,14 +159,25 @@ target tests, then execute `action.commands.acceptance`.
 For a dependency issue, the `dirty_clusters` evidence report may also contain
 `applicable_rule_planners`. Each entry is limited to a supported protocol
 actually present in the current clusters and returns a protocol-specific help
-argv. A background rule is process-scoped, not API-scoped: the coordinator
+argv. The report also returns a `representative_dependencies_command` for the
+selected dirty case when available. A background rule is process-scoped, not API-scoped: the coordinator
 binds its plan to the active API evidence, case source, and source revision
 internally. After `backend-rewrite dependency-rule apply <plan-id>`, execute the exact
-fresh-standard-recording request returned by the report.
+`next` returned by the report. The apply result includes bounded
+`evidence_reclassification` describing rule coverage, remaining dirty cases,
+and the same focused result after reclassification.
+Planning persists an evidence-validated preview. Its own workflow revision
+change does not invalidate apply. If bounded coverage shows that the selector
+is incomplete, rerun the same planner with the same evidence ID and corrected
+selector inputs before apply; the newer preview atomically replaces the
+pending one and recorder configuration remains unchanged until apply.
+For Redis, select the command-specific planner. `get`, `scard`, and `hgetall`
+accept only exact keys proven by the selected immutable evidence; do not
+generalize them into prefix or wildcard selectors.
 If planning returns `reused_existing=true`, an equivalent protocol selector is
-already configured under `effective_name`. Skip apply and execute the returned
-fresh-recording request directly. Status reconstructs that same transition;
-calling apply anyway is a successful no-op reuse rather than a duplicate rule.
+already configured under `effective_name`. Execute the returned apply action;
+it is a successful no-op config reuse that still refreshes current evidence,
+not a duplicate rule. Status reconstructs that same plan-ID transition.
 
 Background ownership and response causality are separate. A background rule
 makes the matching asynchronous dependency process-scoped and case-independent;

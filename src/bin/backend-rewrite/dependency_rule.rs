@@ -17,7 +17,7 @@ pub(super) struct DependencyRuleArgs {
 enum DependencyRuleCommand {
     /// Validate current dirty-cluster evidence and preview one recorder rule.
     Plan(DependencyRulePlanArgs),
-    /// Revalidate and atomically apply an unchanged pending plan.
+    /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(DependencyRuleApplyArgs),
 }
 
@@ -106,7 +106,11 @@ enum RedisDependencyRuleModeArgs {
     /// Process-owned Redis ZCOUNT traffic selected by key affixes.
     Zcount(RedisZcountDependencyRuleArgs),
     /// Process-owned Redis GET traffic selected by exact keys.
-    Get(RedisGetDependencyRuleArgs),
+    Get(RedisExactKeyDependencyRuleArgs),
+    /// Process-owned Redis SCARD traffic selected by exact keys.
+    Scard(RedisExactKeyDependencyRuleArgs),
+    /// Process-owned Redis HGETALL traffic selected by exact keys.
+    Hgetall(RedisExactKeyDependencyRuleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -122,7 +126,7 @@ struct RedisZcountDependencyRuleArgs {
 }
 
 #[derive(Debug, Args)]
-struct RedisGetDependencyRuleArgs {
+struct RedisExactKeyDependencyRuleArgs {
     #[command(flatten)]
     common: DependencyRuleCommonArgs,
     #[arg(long = "port", required = true)]
@@ -194,6 +198,22 @@ impl From<DependencyRuleProtocolArgs> for RewriteDependencyRulePlanOptions {
                 RedisDependencyRuleModeArgs::Get(args) => dependency_rule_options(
                     args.common,
                     RewriteDependencyRuleSelector::RedisGet {
+                        ports: args.ports,
+                        keys: args.keys,
+                        initial_load_timeout_ms: args.initial_load_timeout_ms,
+                    },
+                ),
+                RedisDependencyRuleModeArgs::Scard(args) => dependency_rule_options(
+                    args.common,
+                    RewriteDependencyRuleSelector::RedisScard {
+                        ports: args.ports,
+                        keys: args.keys,
+                        initial_load_timeout_ms: args.initial_load_timeout_ms,
+                    },
+                ),
+                RedisDependencyRuleModeArgs::Hgetall(args) => dependency_rule_options(
+                    args.common,
+                    RewriteDependencyRuleSelector::RedisHgetall {
                         ports: args.ports,
                         keys: args.keys,
                         initial_load_timeout_ms: args.initial_load_timeout_ms,

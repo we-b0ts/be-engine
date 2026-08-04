@@ -338,7 +338,7 @@ fn parse_replay_evidence(
             .collect::<BTreeSet<_>>();
         ensure!(
             evidence.matched_keys == expected_keys,
-            "Redis GET background selector must match every configured exact key in immutable case dependency evidence"
+            "Redis {command} background selector must match every configured exact key in immutable case dependency evidence"
         );
     }
     Ok(EvidenceMatch {

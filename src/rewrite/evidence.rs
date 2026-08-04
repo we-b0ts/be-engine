@@ -244,12 +244,12 @@ fn facts(
         QUERY_DIRTY_CLUSTERS => {
             let counts = query_e2e_dirty_counts(e2e_context(target_root, state)?, group_id(state)?)?;
             Ok((
-                dirty_cluster_facts(counts),
+                dirty_cluster_facts(target_root, counts),
                 vec![
                     "dirty event counts do not prove process ownership".to_string(),
                     "they do not prove response causality".to_string(),
                 ],
-                "Start with the largest endpoint cluster and its representative case directory; compare the source pre-readiness count, then prove request or process ownership and response causality in source code."
+                "Start with the largest endpoint cluster. Execute representative_dependencies_command when present to summarize that case's dependency targets, then select a returned detail_command before proving request or process ownership and response causality in source code."
                     .to_string(),
             ))
         }
@@ -269,13 +269,21 @@ fn facts(
     }
 }
 
-fn dirty_cluster_facts(counts: E2eDirtyCounts) -> Value {
+fn dirty_cluster_facts(target_root: &Path, counts: E2eDirtyCounts) -> Value {
+    let representative_dependencies_command = counts
+        .clusters
+        .iter()
+        .find_map(|cluster| cluster.representative.as_ref())
+        .map(|representative| {
+            super::case_dependencies::summary_command(target_root, &representative.case_dir)
+        });
     json!({
         "clusters": counts.clusters,
         "complete": counts.complete,
         "dirty": counts.dirty,
         "case_event_counts": counts.case_event_counts,
         "omitted_clusters": counts.omitted_clusters,
+        "representative_dependencies_command": representative_dependencies_command,
     })
 }
 
@@ -309,7 +317,10 @@ fn representative_facts(
         let Some(cluster) = evidence.clusters.first() else {
             return Ok(("not_applicable", Value::Null));
         };
-        return Ok(("not_applicable", dependency_representative(cluster)));
+        return Ok((
+            "not_applicable",
+            dependency_representative(target_root, cluster),
+        ));
     }
     let Some(observation) = issue.comparison_observation.as_ref() else {
         return Ok(("not_applicable", Value::Null));
@@ -356,7 +367,7 @@ fn representative_facts(
     ))
 }
 
-fn dependency_representative(cluster: &E2eDirtyCluster) -> Value {
+fn dependency_representative(target_root: &Path, cluster: &E2eDirtyCluster) -> Value {
     let representative = cluster.representative.as_ref();
     json!({
         "cluster_id": cluster.cluster_id,
@@ -371,6 +382,9 @@ fn dependency_representative(cluster: &E2eDirtyCluster) -> Value {
         "source_pre_readiness_role": "reference_only",
         "case_id": representative.map(|value| &value.case_id),
         "case_dir": representative.map(|value| &value.case_dir),
+        "dependencies_command": representative.map(|value| {
+            super::case_dependencies::summary_command(target_root, &value.case_dir)
+        }),
         "dependency_difference": representative.map(|value| &value.difference),
     })
 }
@@ -384,7 +398,7 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
                 "an unused recorded exchange does not prove that the target should reproduce it"
                     .to_string(),
             ],
-            "Inspect the representative case directory and the clustered dependency difference, then use source code to prove request ownership, startup/background ownership, and response causality."
+            "Execute the returned dependencies_command for the representative case, select a target detail_command when needed, then use source code to prove request ownership, startup/background ownership, and response causality."
                 .to_string(),
         ),
         _ => (

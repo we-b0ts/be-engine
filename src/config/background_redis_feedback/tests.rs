@@ -272,3 +272,67 @@ fn redis_get_requires_every_exact_key_in_unused_case_evidence() {
     assert!(raw.contains("initial_load_timeout_ms = 30000"));
     assert!(!raw.contains("response_role"));
 }
+
+#[test]
+fn scard_and_hgetall_plan_from_exact_key_unused_case_evidence() {
+    for (command, key) in [
+        ("SCARD", "106.2020tagid_020_007.itagv3"),
+        ("HGETALL", "guide.bar.hots.key"),
+    ] {
+        let fixture = Fixture::new("unrelated-case-key");
+        fs::write(
+            &fixture.config,
+            "[http_gateway]\nenabled = true\n\
+             [http_gateway.ready]\nenabled = true\n\
+             [recording]\ntraffic_jsonl = \"full\"\n",
+        )
+        .unwrap();
+        fs::write(
+            &fixture.dependencies,
+            format!(
+                "{}\n",
+                json!({
+                    "event_type": "redis_exchange",
+                    "target_host": "cache.service",
+                    "target_port": 20917,
+                    "command": command,
+                    "args": [capture(key)],
+                    "response_kind": "integer",
+                    "response": capture(":1\r\n"),
+                    "replay_safe": true,
+                })
+            ),
+        )
+        .unwrap();
+        let mut replay = report(&fixture.dependencies);
+        replay["redis"]["unused_case"] = json!([{
+            "index": 0,
+            "case_id": "case-a",
+            "target": { "host": "cache.service", "port": 20917 },
+            "command": command,
+        }]);
+        fs::write(
+            &fixture.replay_report,
+            serde_json::to_vec_pretty(&replay).unwrap(),
+        )
+        .unwrap();
+
+        let mut feedback = fixture.feedback();
+        feedback.name = format!("{}-background", command.to_ascii_lowercase());
+        feedback.command = command.to_string();
+        feedback.keys = vec![key.to_string()];
+        feedback.key_prefix.clear();
+        feedback.key_suffix.clear();
+        feedback.initial_load_timeout_ms = Some(60_000);
+
+        let plan = plan_redis_background_dependency(feedback).unwrap();
+        assert_eq!(plan.report().command, command);
+        assert_eq!(plan.report().keys, [key]);
+        assert_eq!(plan.report().matched_unused_exchanges, 1);
+        plan.apply().unwrap();
+
+        let raw = fs::read_to_string(&fixture.config).unwrap();
+        assert!(raw.contains(&format!("command = \"{command}\"")));
+        assert!(raw.contains(&format!("keys = [\"{key}\"]")));
+    }
+}

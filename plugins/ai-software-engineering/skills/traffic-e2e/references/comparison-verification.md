@@ -22,6 +22,9 @@ source and candidate. Use repeatable `--api`, optional positive
 `--per-api-case-limit`,
 and `--baseline-recheck` only when the verification policy or diagnosis needs
 source-after evidence.
+With explicit API selectors, comparison recording finalizes normally when
+every selected API reaches its case limit; `--duration-seconds` remains the
+upper bound. Without selectors, it keeps the full recording window.
 
 ## Verify
 

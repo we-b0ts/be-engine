@@ -52,6 +52,7 @@ use model::*;
 use mysql::*;
 use policy::*;
 use report::*;
+pub(crate) use report::{BackgroundReclassification, reclassify_background_dependencies};
 
 const SO_ORIGINAL_DST: libc::c_int = 80;
 

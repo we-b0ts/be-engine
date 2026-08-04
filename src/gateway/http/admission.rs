@@ -11,16 +11,25 @@ pub(super) async fn try_admit_case(
     state: &AppState,
     case: &CaseContext,
     case_pattern: &str,
+    recording_api: Option<&str>,
     max_cases: usize,
     upstream_base: &str,
     uri: &Uri,
 ) -> Option<ActiveCaseGuard> {
-    let published_cases = state.recorder().published_case_count(case).await;
+    let published_cases = match recording_api {
+        Some(recording_api) => state
+            .recorder()
+            .published_recording_api_count(recording_api)
+            .await
+            .unwrap_or_default(),
+        None => state.recorder().published_case_count(case).await,
+    };
     if published_cases >= max_cases {
         info!(
             reason = "case_limit_reached",
             rule = %case.rule_name,
             case_pattern,
+            recording_api,
             published_cases,
             max_cases,
             uri = %uri,
@@ -162,6 +171,7 @@ mod tests {
             &state,
             &first,
             "/api/resource/isok",
+            None,
             50,
             "http://127.0.0.1:7171",
             &uri,
@@ -180,6 +190,7 @@ mod tests {
                 &state,
                 &second,
                 "/api/resource/isok",
+                None,
                 50,
                 "http://127.0.0.1:7171",
                 &uri,
@@ -225,6 +236,7 @@ mod tests {
                 &state_for_task,
                 &case_for_task,
                 "/api/resource/isok",
+                None,
                 50,
                 "http://127.0.0.1:7171",
                 &uri,
@@ -282,6 +294,7 @@ mod tests {
                 &state_for_task,
                 &first_for_task,
                 "/api/resource/isok",
+                None,
                 50,
                 "http://127.0.0.1:7171",
                 &uri,
@@ -316,6 +329,7 @@ mod tests {
             &state,
             &second,
             "/api/resource/isok",
+            None,
             50,
             "http://127.0.0.1:7171",
             &uri,

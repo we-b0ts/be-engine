@@ -7,10 +7,11 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteContext, RewriteNextOptions,
-    RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
-    RewriteRouteOptions, RewriteRulePlanOptions, apply_rewrite_rule, inventory_rewrite,
-    next_rewrite, plan_rewrite_rule, query_rewrite_evidence, recover_rewrite,
+    DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteCaseDependenciesOptions,
+    RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
+    RewriteRecordingRequestOptions, RewriteRouteOptions, RewriteRulePlanOptions,
+    apply_rewrite_rule, inventory_rewrite, next_rewrite, plan_rewrite_rule,
+    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
     request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
     verify_rewrite_repair,
 };
@@ -90,6 +91,8 @@ enum RewriteCommand {
     Status,
     /// Show the full stable API inventory without advancing it.
     Inventory,
+    /// Inspect bounded dependency evidence from one published case.
+    Case(CaseArgs),
     /// Execute one current, bounded evidence query.
     Evidence(EvidenceArgs),
     /// Plan or apply one evidence-backed response rule.
@@ -123,6 +126,26 @@ struct EvidenceArgs {
 }
 
 #[derive(Debug, Args)]
+struct CaseArgs {
+    #[command(subcommand)]
+    command: CaseCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum CaseCommand {
+    /// Summarize dependency targets, or inspect one target returned by the summary.
+    Dependencies(CaseDependenciesArgs),
+}
+
+#[derive(Debug, Args)]
+struct CaseDependenciesArgs {
+    /// Coordinator-returned immutable case directory.
+    case_dir: PathBuf,
+    /// Opaque target id returned by the dependency summary.
+    target_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
 struct RuleArgs {
     #[command(subcommand)]
     command: RuleCommand,
@@ -132,7 +155,7 @@ struct RuleArgs {
 enum RuleCommand {
     /// Validate current evidence and preview one response-rule change.
     Plan(RulePlanArgs),
-    /// Revalidate and atomically apply an unchanged pending plan.
+    /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(RuleApplyArgs),
 }
 
@@ -294,6 +317,16 @@ async fn run(cli: Cli) -> Result<()> {
         RewriteCommand::Inventory => {
             print_json(&inventory_rewrite(RewriteContext { target_root })?, pretty)
         }
+        RewriteCommand::Case(args) => match args.command {
+            CaseCommand::Dependencies(args) => print_json(
+                &query_rewrite_case_dependencies(RewriteCaseDependenciesOptions {
+                    target_root,
+                    case_dir: args.case_dir,
+                    target_id: args.target_id,
+                })?,
+                pretty,
+            ),
+        },
         RewriteCommand::Evidence(args) => print_json(
             &query_rewrite_evidence(RewriteContext { target_root }, &args.query_id)?,
             pretty,

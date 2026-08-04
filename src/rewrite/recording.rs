@@ -2,7 +2,7 @@ use std::fs::{self, OpenOptions};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::process::CommandExt as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -96,7 +96,8 @@ pub fn request_rewrite_recording(
         state.recording_input_diagnosis = None;
         inventory::reset_for_recording(&mut state);
     }
-    if state.recording_input_case_source.is_none() {
+    if standard_recording_input_source(&state).is_none() && !requires_external_live_traffic(&state)
+    {
         let excluded_run_id = state.recording_run_id.clone();
         super::recording_input::bind(&target_root, &mut state, Some(&excluded_run_id))?;
     }
@@ -362,7 +363,7 @@ async fn execute_rewrite_recording_locked(
                 .context("comparison recording has no finalized standard case source")?,
         )
     } else {
-        state.recording_input_case_source.clone()
+        standard_recording_input_source(&state).map(Path::to_path_buf)
     };
     let apis = if comparison {
         vec![state.api.parse::<RecordingApi>()?]
@@ -480,10 +481,14 @@ pub(super) fn reset_for_fresh_recording(
     settings: RewriteRecordingSettings,
     reason: RewriteRecordingReason,
 ) {
-    state.recording_input_case_source = state
-        .case_source
-        .clone()
-        .or_else(|| state.recording_input_case_source.clone());
+    state.recording_input_case_source = if reason.requires_external_live_traffic() {
+        None
+    } else {
+        state
+            .case_source
+            .clone()
+            .or_else(|| state.recording_input_case_source.clone())
+    };
     state.recording_input_diagnosis = None;
     state.phase = RewritePhase::RecordingRequired;
     inventory::reset_for_recording(state);
@@ -507,6 +512,18 @@ pub(super) fn reset_for_fresh_recording(
     state.e2e_current = false;
     state.comparison_current = false;
     state.bump();
+}
+
+pub(super) fn requires_external_live_traffic(state: &RewriteState) -> bool {
+    state
+        .recording_request_reason
+        .is_some_and(RewriteRecordingReason::requires_external_live_traffic)
+}
+
+pub(super) fn standard_recording_input_source(state: &RewriteState) -> Option<&Path> {
+    (!requires_external_live_traffic(state))
+        .then_some(state.recording_input_case_source.as_deref())
+        .flatten()
 }
 
 #[cfg(test)]
@@ -560,14 +577,32 @@ mod tests {
             ]
         );
         assert_eq!(command.cwd, target.path());
-        assert_eq!(
-            state.recording_input_case_source,
-            Some(PathBuf::from("old-cases"))
-        );
+        assert!(state.recording_input_case_source.is_none());
         assert_eq!(
             summary,
-            "fresh standard recording requested (user_requested) for GET /api"
+            "fresh standard recording requested (user_requested) for GET /api; the request reason requires fresh external live traffic"
         );
+    }
+
+    #[test]
+    fn recorder_contract_change_keeps_the_atomic_all_api_scope_but_not_old_input() {
+        let mut state = crate::rewrite::test_state();
+        state.api.clear();
+        state.source_route.clear();
+        state.recording_apis.clear();
+        state.case_source = Some(PathBuf::from("old-all-api-cases"));
+
+        let settings = state.recording_settings;
+        reset_for_fresh_recording(
+            &mut state,
+            "20260802000003".to_string(),
+            settings,
+            RewriteRecordingReason::RecorderContractChanged,
+        );
+
+        assert!(state.recording_apis.is_empty());
+        assert!(state.recording_input_case_source.is_none());
+        assert!(requires_external_live_traffic(&state));
     }
 
     #[test]

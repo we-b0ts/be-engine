@@ -9,7 +9,7 @@ use super::model::{
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
     RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
 };
-use super::{evidence, fingerprint, inventory, recording_action};
+use super::{evidence, fingerprint, inventory, recording, recording_action};
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
     envelope(state, state_action(target_root, state))
@@ -84,17 +84,16 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             };
         }
         if let Some(plan) = &state.dependency_rule_plan {
-            if plan.reused_existing {
-                return resume_required_with_command(
-                    format!(
-                        "background-dependency selector is already covered by rule {}; skip apply and refresh standard recording evidence",
-                        plan.effective_name.as_deref().unwrap_or(&plan.name)
-                    ),
-                    super::dependency_rule::fresh_recording_request(target_root, state),
-                );
-            }
             return RewriteAction::PlanApplyRequired {
-                summary: "apply the unchanged pending background-dependency plan".to_string(),
+                summary: if plan.reused_existing {
+                    format!(
+                        "confirm reused background-dependency rule {} and reclassify the current attempt",
+                        plan.effective_name.as_deref().unwrap_or(&plan.name)
+                    )
+                } else {
+                    "apply the unchanged pending background-dependency plan and reclassify the current attempt"
+                        .to_string()
+                },
                 command: dependency_rule_apply_command(target_root, &plan.id),
             };
         }
@@ -103,12 +102,15 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
         RewritePhase::RecordingRequired => RewriteAction::RecordingRequired {
             summary: recording_summary(state),
             run_id: state.recording_run_id.clone(),
-            input_mode: if state.recording_input_case_source.is_some() {
+            input_mode: if recording::standard_recording_input_source(state).is_some() {
                 RewriteRecordingInputMode::ReusedAtomicRecording
             } else {
                 RewriteRecordingInputMode::ExternalLiveTraffic
             },
-            recording_input_diagnosis: if state.recording_input_case_source.is_none() {
+            recording_input_diagnosis: if recording::standard_recording_input_source(state)
+                .is_none()
+                && !recording::requires_external_live_traffic(state)
+            {
                 state.recording_input_diagnosis.clone()
             } else {
                 None
@@ -201,7 +203,9 @@ fn recording_summary(state: &RewriteState) -> String {
             ),
         }
     };
-    if state.recording_input_case_source.is_none() {
+    if recording::requires_external_live_traffic(state) {
+        format!("{summary}; the request reason requires fresh external live traffic")
+    } else if recording::standard_recording_input_source(state).is_none() {
         format!(
             "{summary}; no exact-scope atomic historical input is reusable, capture fresh external live traffic"
         )
@@ -268,7 +272,13 @@ pub(super) fn latest_focused_e2e(state: &RewriteState) -> Option<RewriteFocusedE
         .iter()
         .rev()
         .nth(1)
-        .map(|attempt| attempt.attempt);
+        .map(|attempt| attempt.attempt)
+        .or_else(|| {
+            current
+                .attempt
+                .checked_sub(1)
+                .filter(|attempt| *attempt > 0)
+        });
     Some(RewriteFocusedE2eExecution {
         execution_mode: if previous_attempt.is_some() {
             RewriteFocusedE2eExecutionMode::ReusedStandardCases
@@ -379,8 +389,8 @@ mod tests {
 
     use super::super::model::{
         RewriteAttemptSummary, RewriteDependencyRulePlanRecord, RewriteDependencyRuleSpec,
-        RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteRepairAcceptanceKind,
-        RewriteRouteRecord, RewriteRulePlanRecord,
+        RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteRecordingReason,
+        RewriteRepairAcceptanceKind, RewriteRouteRecord, RewriteRulePlanRecord,
     };
 
     #[test]
@@ -524,6 +534,17 @@ mod tests {
 
         state.recording_input_case_source = Some(PathBuf::from("another-recording"));
         assert_ne!(recording_action_id(&state, false), original);
+
+        state.recording_request_reason = Some(RewriteRecordingReason::RecorderContractChanged);
+        let fresh = recording_action_id(&state, false);
+        state.recording_input_case_source = Some(PathBuf::from("ignored-old-recording"));
+        assert_eq!(recording_action_id(&state, false), fresh);
+
+        let status = serde_json::to_value(for_state(Path::new("/target"), &state)).unwrap();
+        assert_eq!(
+            status.pointer("/action/details/input_mode"),
+            Some(&serde_json::json!("external_live_traffic"))
+        );
     }
 
     #[test]
@@ -635,11 +656,16 @@ mod tests {
         let reused = serde_json::to_value(for_state(target, &state)).unwrap();
         assert_eq!(
             reused.pointer("/action/kind"),
-            Some(&serde_json::json!("resume_required"))
+            Some(&serde_json::json!("plan_apply_required"))
         );
         assert_eq!(
-            reused.pointer("/action/commands/resume/argv/2"),
-            Some(&serde_json::json!("request"))
+            reused.pointer("/action/commands/apply/argv"),
+            Some(&serde_json::json!([
+                "backend-rewrite",
+                "dependency-rule",
+                "apply",
+                "plan-dependency"
+            ]))
         );
         assert!(
             reused
@@ -693,7 +719,7 @@ mod tests {
             ".traffic-e2e/artifacts/recordings/20260802000000",
         ));
         state.case_inventory_id = Some("fnv1a64:case-inventory".to_string());
-        state.attempts.push(test_attempt(4, false));
+        state.attempts.push(test_attempt(1, false));
 
         let target = Path::new("/target");
         let fresh = serde_json::to_value(for_state(target, &state)).unwrap();
@@ -716,10 +742,10 @@ mod tests {
         );
         assert_eq!(
             fresh.pointer("/latest_focused_e2e/current_attempt"),
-            Some(&serde_json::json!(4))
+            Some(&serde_json::json!(1))
         );
 
-        state.attempts.push(test_attempt(5, true));
+        state.attempts.push(test_attempt(2, true));
         let reused = serde_json::to_value(for_state(target, &state)).unwrap();
         assert_eq!(
             reused.pointer("/latest_focused_e2e/execution_mode"),
@@ -727,11 +753,11 @@ mod tests {
         );
         assert_eq!(
             reused.pointer("/latest_focused_e2e/previous_attempt"),
-            Some(&serde_json::json!(4))
+            Some(&serde_json::json!(1))
         );
         assert_eq!(
             reused.pointer("/latest_focused_e2e/current_attempt"),
-            Some(&serde_json::json!(5))
+            Some(&serde_json::json!(2))
         );
         assert_eq!(
             reused.pointer("/latest_focused_e2e/passed"),
