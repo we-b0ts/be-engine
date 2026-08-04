@@ -19,8 +19,9 @@ pub fn update_comparison_progress(
     }
     let mut progress = load(progress_path, VerificationStage::Comparison)?
         .unwrap_or_else(|| ProgressReport::new(VerificationStage::Comparison));
+    let requires_persistence = progress.requires_persistence();
     let applied = progress.apply(observation(report)?)?;
-    if applied {
+    if applied || requires_persistence {
         write(progress_path, &progress)?;
     }
     Ok(applied)
@@ -137,6 +138,17 @@ mod tests {
         assert_eq!(progress.totals.runs.executed, 2);
         assert_eq!(progress.success_streak.runs, 2);
         assert_eq!(progress.success_streak.cases, 200);
+        assert!(
+            !std::fs::read_to_string(path)
+                .unwrap()
+                .contains("counted_runs:")
+        );
+        assert!(
+            directory
+                .path()
+                .join("artifacts/progress/comparison-counted-runs.yaml")
+                .is_file()
+        );
     }
 
     #[test]

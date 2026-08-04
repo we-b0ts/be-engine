@@ -142,8 +142,9 @@ pub(super) fn write_replay_progress(
         }
         None => ProgressReport::new(VerificationStage::Replay),
     };
+    let requires_persistence = report.requires_persistence();
     let applied = report.apply(observation(state, kind)?)?;
-    if applied || migrated {
+    if applied || migrated || requires_persistence {
         write(progress_path, &report)?;
     }
     if progress_path != legacy_progress_path && legacy_progress_path.exists() {
@@ -155,7 +156,8 @@ pub(super) fn write_replay_progress(
 pub(super) fn revise_replay_progress(progress_path: &Path, state: &ActiveRunState) -> Result<()> {
     let mut report = load(progress_path, VerificationStage::Replay)?
         .context("replay progress is missing for focused evidence revision")?;
-    if report.revise_latest(observation(state, ReplayRunKind::Focused)?)? {
+    let requires_persistence = report.requires_persistence();
+    if report.revise_latest(observation(state, ReplayRunKind::Focused)?)? || requires_persistence {
         write(progress_path, &report)?;
     }
     Ok(())
@@ -332,6 +334,7 @@ fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
                 )
             })
             .collect(),
+        requires_persistence: false,
     })
 }
 

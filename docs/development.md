@@ -1058,7 +1058,11 @@ Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
 logical run, while each finalized attempt is counted once in
 `replay-progress.yaml`. Reprocessing the same published attempt is idempotent.
-Focused evidence never replaces the global full-round `latest`.
+The committed progress file contains aggregate and latest-run evidence; its
+per-run idempotency ledger is stored in the ignored
+`.traffic-e2e/artifacts/progress/replay-counted-runs.yaml` sidecar. Comparison
+progress uses the sibling `comparison-counted-runs.yaml` sidecar. Focused
+evidence never replaces the global full-round `latest`.
 
 After every published case is prepared exactly once and every focused group
 passes, the grouped result is sufficient unless behavior-affecting code changed
