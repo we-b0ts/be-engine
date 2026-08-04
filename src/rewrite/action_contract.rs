@@ -104,11 +104,11 @@ impl Serialize for RewriteAction {
                 commands: RewriteApplyCommands { apply: command },
             }
             .serialize(serializer),
-            Self::ResumeRequired { summary, command } => RewriteActionView {
-                kind: "resume_required",
+            Self::AdvanceRequired { summary, command } => RewriteActionView {
+                kind: "advance_required",
                 summary,
                 details: RewriteNoDetails {},
-                commands: RewriteResumeCommands { resume: command },
+                commands: RewriteAdvanceCommands { advance: command },
             }
             .serialize(serializer),
             Self::ComparisonRecordingRequired {
@@ -276,8 +276,8 @@ struct RewriteApplyCommands<'a> {
 }
 
 #[derive(Serialize)]
-struct RewriteResumeCommands<'a> {
-    resume: &'a RewriteCommandSpec,
+struct RewriteAdvanceCommands<'a> {
+    advance: &'a RewriteCommandSpec,
 }
 
 #[derive(Serialize)]

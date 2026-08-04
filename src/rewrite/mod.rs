@@ -948,7 +948,7 @@ mod tests {
                 .to_string()
                 .contains(".traffic-e2e/local/ai-forbidden")
         );
-        assert!(value.pointer("/action/commands/resume").is_none());
+        assert!(value.pointer("/action/commands/advance").is_none());
     }
 
     fn git_ok(repository: &Path, args: &[&str]) {

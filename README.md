@@ -90,7 +90,8 @@ the exact recording argv. Omitting `--api` on that request resets any prior
 single-API scope and records every API admitted by recorder configuration;
 provide `--api` only for an explicitly narrowed fresh recording. Executing the
 returned action starts a detached coordinator worker and returns immediately;
-poll `backend-rewrite status` until it reports `resume_required`.
+poll `backend-rewrite status` until it reports `advance_required`, then execute
+the exact `action.commands.advance` command once.
 
 Background dependency rules are evidence-ownership rules, not fresh-capture
 contracts. `backend-rewrite dependency-rule apply <plan-id>` preserves the

@@ -30,10 +30,10 @@ pub(super) fn for_status(
             if state.target_fingerprint.as_deref()
                 != Some(fingerprint::repository_fingerprint(target_root)?.as_str()) =>
         {
-            resume_required(
+            advance_required(
                 target_root,
                 Some(&state.api),
-                "target repository changed after the latest focused attempt; resume coordinator verification"
+                "target repository changed after the latest focused attempt; advance coordinator verification"
                     .to_string(),
             )
         }
@@ -148,7 +148,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             .as_ref()
             .is_some_and(|route| route.repair_id.is_none())
     {
-        return resume_required(
+        return advance_required(
             target_root,
             Some(&state.api),
             "initialize coordinator-issued acceptance for the pending legacy system repair"
@@ -206,7 +206,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             },
             command: recording_action::command(target_root, state, false),
         },
-        RewritePhase::ApiPending => resume_required(
+        RewritePhase::ApiPending => advance_required(
             target_root,
             Some(&state.api),
             format!("continue with the next recorded API {}", state.api),
@@ -270,22 +270,22 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
     }
 }
 
-fn resume_required(target_root: &Path, api: Option<&str>, summary: String) -> RewriteAction {
-    resume_required_with_command(summary, next_command_with_optional_api(target_root, api))
+fn advance_required(target_root: &Path, api: Option<&str>, summary: String) -> RewriteAction {
+    advance_required_with_command(summary, next_command_with_optional_api(target_root, api))
 }
 
-fn resume_required_with_command(summary: String, command: RewriteCommandSpec) -> RewriteAction {
-    RewriteAction::ResumeRequired { summary, command }
+fn advance_required_with_command(summary: String, command: RewriteCommandSpec) -> RewriteAction {
+    RewriteAction::AdvanceRequired { summary, command }
 }
 
-pub(super) fn resume_envelope(
+pub(super) fn advance_envelope(
     target_root: &Path,
     state: &RewriteState,
     summary: String,
 ) -> RewriteActionEnvelope {
     envelope(
         state,
-        resume_required(target_root, Some(&state.api), summary),
+        advance_required(target_root, Some(&state.api), summary),
     )
 }
 
@@ -579,13 +579,13 @@ mod tests {
             br#"{"status":"completed","recording_apis":["GET /api"],"published_cases":1,"failed_cases":0,"errors":[]}"#,
         )
         .unwrap();
-        let resumable = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
+        let advanceable = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
         assert_eq!(
-            resumable.pointer("/action/kind"),
-            Some(&serde_json::json!("resume_required"))
+            advanceable.pointer("/action/kind"),
+            Some(&serde_json::json!("advance_required"))
         );
         assert_eq!(
-            resumable.pointer("/action/commands/resume/argv"),
+            advanceable.pointer("/action/commands/advance/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
                 "next",
@@ -618,11 +618,11 @@ mod tests {
             br#"{"status":"completed","ready":true,"recording_apis":["GET /api"],"counts":{"published":1,"failed":0},"errors":[]}"#,
         )
         .unwrap();
-        let comparison_resumable =
+        let comparison_advanceable =
             serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
         assert_eq!(
-            comparison_resumable.pointer("/action/kind"),
-            Some(&serde_json::json!("resume_required"))
+            comparison_advanceable.pointer("/action/kind"),
+            Some(&serde_json::json!("advance_required"))
         );
     }
 
@@ -835,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn status_requests_resume_after_the_target_changes() {
+    fn status_requests_advance_after_the_target_changes() {
         let target = tempfile::tempdir().unwrap();
         fs::create_dir_all(target.path().join("src")).unwrap();
         fs::write(
@@ -862,10 +862,10 @@ mod tests {
         let status = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
         assert_eq!(
             status.pointer("/action/kind"),
-            Some(&serde_json::json!("resume_required"))
+            Some(&serde_json::json!("advance_required"))
         );
         assert_eq!(
-            status.pointer("/action/commands/resume/argv"),
+            status.pointer("/action/commands/advance/argv"),
             Some(&serde_json::json!([
                 "backend-rewrite",
                 "next",

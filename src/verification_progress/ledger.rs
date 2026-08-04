@@ -142,7 +142,10 @@ pub(super) fn path(progress_path: &Path, stage: VerificationStage) -> Result<Pat
         VerificationStage::Replay => "replay-counted-runs.yaml",
         VerificationStage::Comparison => "comparison-counted-runs.yaml",
     };
-    Ok(traffic_e2e_dir.join("artifacts/progress").join(name))
+    Ok(traffic_e2e_dir
+        .join(crate::repository::LOCAL_ARTIFACTS_RELATIVE_ROOT)
+        .join("progress")
+        .join(name))
 }
 
 #[cfg(test)]
@@ -151,6 +154,16 @@ mod tests {
     use crate::verification_progress::{
         ApiObservation, LatestCounts, ProgressObservation, ProgressReport,
     };
+
+    #[test]
+    fn stores_counted_runs_below_the_ignored_local_root() {
+        let progress_path = Path::new("/target/.traffic-e2e/replay-progress.yaml");
+
+        assert_eq!(
+            path(progress_path, VerificationStage::Replay).unwrap(),
+            Path::new("/target/.traffic-e2e/local/artifacts/progress/replay-counted-runs.yaml")
+        );
+    }
 
     #[test]
     fn failed_ledger_write_leaves_an_embedded_recovery_copy() {

@@ -822,7 +822,7 @@ backend-rewrite repair verify <repair-id>
 Rewrite action schema v8 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
-`execute`, `status`, `resume`, `recover`, `evidence`, `apply`, and `acceptance`.
+`execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
 Status does not duplicate an `active_issue` or publish an unconditional
 top-level `next`. Every returned command contains a canonical `cwd` plus exact
 argv.
@@ -839,7 +839,9 @@ callers do not add curl loops, replayers, shell pipelines, backgrounding, or
 driver parameters. `execute` starts a detached coordinator-owned worker and
 returns immediately. Poll
 `backend-rewrite status`; `recording_in_progress` never returns a second execute action,
-and `resume_required` means finalization and cleanup completed. Historical
+and `advance_required` means finalization and cleanup completed, so its exact
+`action.commands.advance` can advance coordinator state. It does not mean
+rerunning the completed action. Historical
 input is reused only when its API selector exactly equals the requested
 selector; recordings are never split or merged. When no exact atomic input
 exists, `action.details.input_mode=external_live_traffic` opens a fresh
@@ -853,7 +855,7 @@ The read-only `backend-rewrite inventory` command returns the full ordered
 per-API list. A parallel AI orchestrator may assign distinct pending or
 implementation-required items, and each worker selects only its assignment
 with `next --api`. After status returns
-`resume_required`, `next` validates the
+`advance_required`, the returned `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next comparison action. Once
 comparison passes, the following `next` prepares the next inventory item from
@@ -874,14 +876,14 @@ discarded; later code changes also requeue already-completed API evidence.
 persisted workflow revision. Before execution starts it reconstructs the same
 run ID and argv; owner status for a live detached worker may return
 `recording_in_progress`, and only a
-finalized manifest returns `resume_required`. A running manifest without a live
+finalized manifest returns `advance_required`. A running manifest without a live
 owner returns `recovery_required`; `backend-rewrite recover` removes only that run's
 managed resources and allocates a replacement run. A pending rule plan produces
 `plan_apply_required` with only the stored plan ID. The persisted plan keeps
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. A target repository change also returns `resume_required` with
+by apply. A target repository change also returns `advance_required` with
 `backend-rewrite next`.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
@@ -894,7 +896,7 @@ new exact recording action. Omitting `--api` means all APIs admitted by recorder
 configuration, even when the prior workflow was narrowed; explicit `--api`
 keeps the fresh recording single-API. An identical pending request returns the existing
 action and run. A different pending request is rejected unless
-`--replace-pending` is explicit; a matching completed manifest returns a resume action.
+`--replace-pending` is explicit; a matching completed manifest returns an advance action.
 The coordinator defaults both standard and comparison recording actions to 60
 seconds and 100 cases.
 

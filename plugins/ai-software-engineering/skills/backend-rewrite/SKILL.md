@@ -20,7 +20,7 @@ or review.
 
 ## Control Protocol
 
-From the initialized target repository, begin and resume with the default
+From the initialized target repository, start or continue the default
 all-configured-traffic workflow:
 
 ```bash
@@ -32,7 +32,7 @@ only when the caller explicitly narrows the recording to one API. After the
 recording installs its API inventory, `next --api '<METHOD pattern>'` selects
 that exact inventory item for one AI worker. When a selected dynamic pattern
 needs its source registration route, the coordinator returns `input_required`;
-resume with the requested `--source-route` for that API. Do not invent routes
+continue with the requested `--source-route` for that API. Do not invent routes
 for other inventory items.
 
 The coordinator shares one immutable standard recording across the discovered
@@ -47,7 +47,7 @@ Coordinator action schema v8 always has exactly four fields:
 `kind`, `summary`, `details`, and `commands`. Read variant-specific facts only
 from `action.details`; read executable commands only from
 `action.commands.<role>`. Command roles are explicit (`execute`, `status`,
-`resume`, `recover`, `evidence`, `apply`, or `acceptance`), and absent roles are
+`advance`, `recover`, `evidence`, `apply`, or `acceptance`), and absent roles are
 not legal transitions. Concurrent issues remain API-scoped and are never
 published as parallel top-level `active_issue` or `next` fields. There are no
 legacy action-level `command`, `issue`, `evidence_commands`, or `acceptance`
@@ -70,9 +70,10 @@ created by planning does not make its apply stale. If the plan report proves
 that the selector is incomplete, rerun the same planner with the same evidence
 ID and corrected selector inputs before apply; this replaces only the pending
 preview and does not mutate recorder configuration.
-`resume_required` means the coordinator detected a completed recording result
-or a target change; execute its exact `action.commands.resume` argv instead of
-repeating the prior recording or implementation action. If
+`advance_required` means the prerequisite named in `action.summary` is already
+available and the coordinator is ready for its next state transition. Execute
+the exact `action.commands.advance` argv once; do not repeat the prior
+recording, Replay, comparison, or implementation action. If
 `action.kind=wait_required`, read the blocking API and live operation from
 `action.details`, wait at least `retry_after_seconds`, and execute only
 `action.commands.status`. Never use `recover` for a live owner and never launch
@@ -138,7 +139,7 @@ only when the caller explicitly requests a single-API fresh recording. The
 defaults are 60 seconds and 100 cases per configured API pattern; the limit is
 not a recording-wide total. Caller-supplied
 positive values may replace them. A request identical to the current pending request returns the
-same action and run; a matching completed manifest returns a resume action. A different
+same action and run; a matching completed manifest returns an advance action. A different
 pending request is rejected unless the caller explicitly supplies
 `--replace-pending`. The command invalidates evidence for every API derived
 from the shared prior standard recording, preserves old artifacts, allocates a
@@ -148,8 +149,8 @@ argv exactly. It starts a detached coordinator-owned worker and returns
 immediately; do not background it, pipe it through `head`/`tail`, or wait on a
 shell task. Poll the exact status command returned by execution. While running,
 owner status may return `recording_in_progress` with
-`action.commands.status`; after finalization it returns `resume_required` with
-`action.commands.resume`. `recovery_required` means the owner exited and its
+`action.commands.status`; after finalization it returns `advance_required` with
+`action.commands.advance`. `recovery_required` means the owner exited and its
 exact `action.commands.recover` must run before retrying.
 `action.details.input_mode=reused_atomic_recording` means
 the coordinator found one finalized historical recording whose API selector
@@ -169,7 +170,7 @@ finalize as soon as every selected API reaches its per-API case limit; the
 configured duration is an upper bound. An all-configured recording with no API
 selector always observes the complete duration so low-frequency APIs still
 have an opportunity to appear. This early completion is coordinator-owned and
-does not change the status/resume polling protocol.
+does not change the status/advance polling protocol.
 
 The public coordinator surface is the `backend-rewrite` binary with `next`,
 `status`, `inventory`, `case`, `evidence`, `rule`, `dependency-rule`, `route`,

@@ -525,7 +525,7 @@ pub enum RewriteAction {
         summary: String,
         command: RewriteCommandSpec,
     },
-    ResumeRequired {
+    AdvanceRequired {
         summary: String,
         command: RewriteCommandSpec,
     },

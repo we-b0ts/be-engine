@@ -56,9 +56,9 @@ pub(super) fn status_action(
             "recording executor stopped before coordinator completion",
         ),
         RecordingExecutionState::Absent => match publication {
-            artifacts::RecordingPublication::Finalized => RewriteAction::ResumeRequired {
+            artifacts::RecordingPublication::Finalized => RewriteAction::AdvanceRequired {
                 summary: format!(
-                    "{label} recording result for run {run_id} is finalized; resume coordinator validation"
+                    "{label} recording result for run {run_id} is finalized; advance coordinator validation"
                 ),
                 command: action::next_command_for_api(target_root, &state.api),
             },

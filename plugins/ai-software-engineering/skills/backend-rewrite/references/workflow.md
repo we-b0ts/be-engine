@@ -61,8 +61,8 @@ Execute the exact opaque `action.commands.execute` argv from its canonical
 `cwd` with the named environment variables. The command starts a detached
 coordinator worker and returns immediately. Poll the status command returned by
 that execution; `recording_in_progress` exposes it as
-`action.commands.status`. Run `action.commands.resume` only after
-`resume_required`. The allocated recording identity is
+`action.commands.status`. Run `action.commands.advance` only after
+`advance_required`. The allocated recording identity is
 `action.details.run_id`; the coordinator owns its recording input mode and
 lifecycle, and validates that exact finalized manifest. Never discover a run by recency or add
 manual curl, replay, shell pipelines, backgrounding, or driver flags. Duration and case limit
@@ -74,6 +74,13 @@ low-frequency API discovery.
 When the workflow was started without `--api`, an empty run-local selector is
 intentional: recorder configuration limits traffic and the finalized cases
 produce the stable API inventory. Do not add selectors to the returned action.
+
+### `advance_required`
+
+The prerequisite named in `summary` is already available and the coordinator
+is ready to advance its state. Execute the exact `commands.advance` argv once.
+This action never means rerun the previous recording, Replay, comparison, or
+implementation command.
 
 ### API inventory and `api_pending`
 
@@ -256,7 +263,7 @@ current or requested API action without advancing state:
 it returns the original `action.commands.execute` before recording execution,
 an exact `action.commands.apply` for a pending plan,
 `action.commands.status` while the detached worker is live, or
-`action.commands.resume` only after a finalized recording manifest or target
+`action.commands.advance` only after a finalized recording manifest or target
 change is ready for `backend-rewrite next`. A running
 manifest whose owner exited returns `recovery_required`; recovery removes only
 the matching managed run resources and allocates a replacement run. This makes
