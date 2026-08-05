@@ -65,6 +65,17 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_ok()
     );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "init",
+            "--source-container",
+            "friendship",
+            "--recording-port",
+            "18181",
+        ])
+        .is_err()
+    );
     let RewriteCommand::Init(default_init) =
         Cli::try_parse_from(["test", "init", "--source-container", "friendship"])
             .unwrap()
@@ -73,8 +84,8 @@ fn parses_the_bounded_rewrite_surface() {
         panic!("expected init command");
     };
     assert_eq!(
-        default_init.recording_port,
-        traffic_e2e::DEFAULT_RECORDING_PORT
+        default_init.http_gateway_port,
+        traffic_e2e::DEFAULT_HTTP_GATEWAY_PORT
     );
     assert!(
         Cli::try_parse_from([
@@ -83,7 +94,7 @@ fn parses_the_bounded_rewrite_surface() {
             "--source-container",
             "friendship",
             "--breeze=custom-breeze",
-            "--recording-port",
+            "--http-gateway-port",
             "18181",
         ])
         .is_ok()

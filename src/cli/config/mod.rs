@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use traffic_e2e::{
-    DEFAULT_RECORDING_PORT, RepositoryConfigInitOptions, initialize_repository_config,
+    DEFAULT_HTTP_GATEWAY_PORT, RepositoryConfigInitOptions, initialize_repository_config,
 };
 
 mod comparison;
@@ -47,8 +47,8 @@ struct InitArgs {
     #[arg(long, default_value_t = 8081)]
     target_port: u16,
     /// HTTP gateway port that receives traffic selected for recording.
-    #[arg(long, default_value_t = DEFAULT_RECORDING_PORT)]
-    recording_port: u16,
+    #[arg(long, default_value_t = DEFAULT_HTTP_GATEWAY_PORT)]
+    http_gateway_port: u16,
     /// Readiness path shared by source recording and target startup.
     #[arg(long, default_value = "/healthz")]
     readiness_path: String,
@@ -69,7 +69,7 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
                 breeze_container: init.breeze,
                 source_http_port: init.source_http_port,
                 target_port: init.target_port,
-                recording_port: init.recording_port,
+                http_gateway_port: init.http_gateway_port,
                 readiness_path: init.readiness_path,
                 readiness_status: init.readiness_status,
                 upstream_dns: init.upstream_dns,
@@ -115,7 +115,7 @@ mod tests {
         assert_eq!(init.breeze.as_deref(), Some("breeze"));
         assert_eq!(init.source_http_port, 8080);
         assert_eq!(init.target_port, 8081);
-        assert_eq!(init.recording_port, DEFAULT_RECORDING_PORT);
+        assert_eq!(init.http_gateway_port, DEFAULT_HTTP_GATEWAY_PORT);
         assert_eq!(init.readiness_path, "/healthz");
         assert_eq!(init.readiness_status, 404);
         assert_eq!(init.upstream_dns, "10.10.10.11:53".parse().unwrap());
@@ -129,11 +129,14 @@ mod tests {
             "--source-container",
             "source",
             "--breeze=custom-breeze",
+            "--http-gateway-port",
+            "18181",
         ])
         .unwrap();
         let ConfigCommand::Init(init) = parsed.config.command else {
             panic!("expected init command");
         };
         assert_eq!(init.breeze.as_deref(), Some("custom-breeze"));
+        assert_eq!(init.http_gateway_port, 18_181);
     }
 }

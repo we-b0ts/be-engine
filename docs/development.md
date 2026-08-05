@@ -992,7 +992,7 @@ coordinator session:
 ```bash
 backend-rewrite --target-root ../target init \
   --source-container <existing-source-container> [--breeze] \
-  [--recording-port 17171]
+  [--http-gateway-port 17171]
 ```
 
 From the target root, `--target-root` is unnecessary. `--breeze` uses the

@@ -13,7 +13,7 @@ Run from the target repository, or bind it with global `--target-root`:
 backend-rewrite init \
   --source-container <existing-source-container> \
   [--breeze[=<container>]] \
-  [--recording-port 17171]
+  [--http-gateway-port 17171]
 ```
 
 `--breeze` selects the conventional existing container named `breeze`;
@@ -24,7 +24,7 @@ The recording port is the Recorder HTTP gateway that accepts selected source
 traffic. It is distinct from the source service port and target replay port.
 Defaults are:
 
-- recording gateway `17171`;
+- HTTP recording gateway `17171`;
 - source service `8080`;
 - target service `8081`;
 - readiness `/healthz` with final status `404`; and

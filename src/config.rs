@@ -66,7 +66,7 @@ pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
 pub use initialization::{
-    DEFAULT_RECORDING_PORT, DEFAULT_RECORDING_RULE, RecorderConfigInitOptions,
+    DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_RECORDING_RULE, RecorderConfigInitOptions,
     RecorderConfigInitResult, initialize_recorder_config,
 };
 pub use recording::{

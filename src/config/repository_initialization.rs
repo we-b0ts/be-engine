@@ -23,7 +23,7 @@ pub struct RepositoryConfigInitOptions {
     pub breeze_container: Option<String>,
     pub source_http_port: u16,
     pub target_port: u16,
-    pub recording_port: u16,
+    pub http_gateway_port: u16,
     pub readiness_path: String,
     pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
@@ -37,7 +37,7 @@ pub struct RepositoryConfigInitResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_container: Option<InspectedContainer>,
     pub upstream_dns: SocketAddr,
-    pub recording_port: u16,
+    pub http_gateway_port: u16,
     pub local_dir: PathBuf,
     pub gitignore: PathBuf,
     pub gitignore_updated: bool,
@@ -95,7 +95,7 @@ fn initialize_repository_config_with(
         target_root: target_root.clone(),
         source_http_port: options.source_http_port,
         candidate_http_port: options.target_port,
-        recording_port: options.recording_port,
+        http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         readiness_status: options.readiness_status,
         upstream_dns: options.upstream_dns,
@@ -138,7 +138,7 @@ fn initialize_repository_config_with(
         source_container: source,
         breeze_container: breeze,
         upstream_dns: options.upstream_dns,
-        recording_port: options.recording_port,
+        http_gateway_port: options.http_gateway_port,
         local_dir: PathBuf::from(LOCAL_DIR),
         gitignore,
         gitignore_updated,
@@ -359,7 +359,7 @@ mod tests {
                 breeze_container: Some("breeze".to_string()),
                 source_http_port: 8080,
                 target_port: 8081,
-                recording_port: 17_171,
+                http_gateway_port: 17_171,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -369,7 +369,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.generated.len(), 3);
-        assert_eq!(result.recording_port, 17_171);
+        assert_eq!(result.http_gateway_port, 17_171);
         assert_eq!(result.local_dir, PathBuf::from(LOCAL_DIR));
         assert_eq!(result.gitignore, target.path().join(".gitignore"));
         assert!(result.gitignore_updated);
@@ -422,7 +422,7 @@ mod tests {
                 breeze_container: Some("breeze".to_string()),
                 source_http_port: 8080,
                 target_port: 8081,
-                recording_port: 17_171,
+                http_gateway_port: 17_171,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),

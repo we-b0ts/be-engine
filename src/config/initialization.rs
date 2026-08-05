@@ -10,7 +10,7 @@ use super::AppConfig;
 use super::edit::create_atomic;
 
 pub const DEFAULT_RECORDING_RULE: &str = "record-api";
-pub const DEFAULT_RECORDING_PORT: u16 = 17_171;
+pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 17_171;
 const RECORDER_CONFIG_PATH: &str = ".traffic-e2e/recorder.toml";
 
 #[derive(Debug, Clone)]
@@ -18,7 +18,7 @@ pub struct RecorderConfigInitOptions {
     pub target_root: PathBuf,
     pub source_http_port: u16,
     pub candidate_http_port: u16,
-    pub recording_port: u16,
+    pub http_gateway_port: u16,
     pub readiness_path: String,
     pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
@@ -31,7 +31,7 @@ pub struct RecorderConfigInitResult {
     pub recording_rule: &'static str,
     pub matched_upstream: String,
     pub candidate_upstream: String,
-    pub recording_port: u16,
+    pub http_gateway_port: u16,
     pub readiness_path: String,
     pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
@@ -64,17 +64,17 @@ pub(crate) fn render_validated_recorder_config(
         "candidate_http_port must be greater than zero"
     );
     ensure!(
-        options.recording_port > 0,
-        "recording_port must be greater than zero"
+        options.http_gateway_port > 0,
+        "http_gateway_port must be greater than zero"
     );
     ensure!(
         options.candidate_http_port != options.source_http_port,
         "candidate_http_port must differ from source_http_port"
     );
     ensure!(
-        options.recording_port != options.source_http_port
-            && options.recording_port != options.candidate_http_port,
-        "recording_port must differ from source_http_port and candidate_http_port"
+        options.http_gateway_port != options.source_http_port
+            && options.http_gateway_port != options.candidate_http_port,
+        "http_gateway_port must differ from source_http_port and candidate_http_port"
     );
     validate_readiness_path(&options.readiness_path)?;
     let readiness_status = StatusCode::from_u16(options.readiness_status)
@@ -116,7 +116,7 @@ fn init_result(
         recording_rule: DEFAULT_RECORDING_RULE,
         matched_upstream,
         candidate_upstream: candidate_upstream.clone(),
-        recording_port: options.recording_port,
+        http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         readiness_status: options.readiness_status,
         upstream_dns: options.upstream_dns,
@@ -200,7 +200,10 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
             "__CANDIDATE_HTTP_PORT__",
             &options.candidate_http_port.to_string(),
         )
-        .replace("__RECORDING_PORT__", &options.recording_port.to_string())
+        .replace(
+            "__HTTP_GATEWAY_PORT__",
+            &options.http_gateway_port.to_string(),
+        )
         .replace("__READINESS_PATH__", &readiness_path)
         .replace(
             "__READINESS_STATUS__",
@@ -293,7 +296,9 @@ forward = false
 
 [http_gateway]
 enabled = true
-listen = "0.0.0.0:__RECORDING_PORT__"
+# Set by `init --http-gateway-port`; this listener receives selected HTTP
+# recording traffic and is distinct from the source and target service ports.
+listen = "0.0.0.0:__HTTP_GATEWAY_PORT__"
 matched_upstream = "http://127.0.0.1:__SOURCE_HTTP_PORT__"
 fallback_mode = "fixed_response"
 preserve_host = true
@@ -442,7 +447,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             source_http_port: 8080,
             candidate_http_port: 8081,
-            recording_port: 18_181,
+            http_gateway_port: 18_181,
             readiness_path: "/healthy".to_string(),
             readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -472,7 +477,7 @@ mod tests {
                 .baseline_recheck
         );
         assert_eq!(result.runtime, "breeze");
-        assert_eq!(result.recording_port, 18_181);
+        assert_eq!(result.http_gateway_port, 18_181);
         assert_eq!(config.http_gateway.listen.to_string(), "0.0.0.0:18181");
         assert_eq!(
             result.managed_record_command,
@@ -508,6 +513,8 @@ mod tests {
         assert!(raw.contains("# keys = [\"cache:init:a\", \"cache:init:b\"]"));
         assert!(raw.contains("# bounds are unsigned 64-bit values"));
         assert!(raw.contains("# remains incomplete, warn and continue case admission."));
+        assert!(raw.contains("# Set by `init --http-gateway-port`"));
+        assert!(!raw.contains("__HTTP_GATEWAY_PORT__"));
         assert!(raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
         assert!(!raw.contains("verified_excludes"));
         assert!(!raw.contains("allow_side_effecting_methods"));
@@ -517,7 +524,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             source_http_port: 8080,
             candidate_http_port: 8081,
-            recording_port: 18_181,
+            http_gateway_port: 18_181,
             readiness_path: "/healthy".to_string(),
             readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -534,7 +541,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             source_http_port: 0,
             candidate_http_port: 0,
-            recording_port: 0,
+            http_gateway_port: 0,
             readiness_path: "healthy".to_string(),
             readiness_status: 99,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -551,7 +558,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             source_http_port: 8080,
             candidate_http_port: 8080,
-            recording_port: 18_181,
+            http_gateway_port: 18_181,
             readiness_path: "/healthz".to_string(),
             readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -563,13 +570,13 @@ mod tests {
     }
 
     #[test]
-    fn requires_recording_port_to_be_distinct_from_upstreams() {
+    fn requires_http_gateway_port_to_be_distinct_from_upstreams() {
         let target = tempdir().unwrap();
         let error = initialize_recorder_config(RecorderConfigInitOptions {
             target_root: target.path().to_path_buf(),
             source_http_port: 8080,
             candidate_http_port: 8081,
-            recording_port: 8081,
+            http_gateway_port: 8081,
             readiness_path: "/healthz".to_string(),
             readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -577,7 +584,7 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(error.to_string().contains("recording_port must differ"));
+        assert!(error.to_string().contains("http_gateway_port must differ"));
     }
 
     #[test]
@@ -587,7 +594,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             source_http_port: 8080,
             candidate_http_port: 8181,
-            recording_port: 18_181,
+            http_gateway_port: 18_181,
             readiness_path: "/healthz".to_string(),
             readiness_status: 404,
             upstream_dns: "10.10.10.11:53".parse().unwrap(),

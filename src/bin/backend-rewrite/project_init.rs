@@ -5,7 +5,7 @@ use anyhow::Result;
 use clap::Args;
 use serde::Serialize;
 use traffic_e2e::{
-    DEFAULT_RECORDING_PORT, InspectedContainer, RepositoryConfigInitOptions,
+    DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer, RepositoryConfigInitOptions,
     RepositoryConfigInitResult, initialize_repository_config,
 };
 
@@ -18,8 +18,8 @@ pub(super) struct ProjectInitArgs {
     #[arg(long, num_args = 0..=1, default_missing_value = "breeze", value_name = "CONTAINER")]
     breeze: Option<String>,
     /// HTTP gateway port that receives traffic selected for recording.
-    #[arg(long, default_value_t = DEFAULT_RECORDING_PORT)]
-    pub(super) recording_port: u16,
+    #[arg(long, default_value_t = DEFAULT_HTTP_GATEWAY_PORT)]
+    pub(super) http_gateway_port: u16,
     /// Source HTTP port used by the managed recorder.
     #[arg(long, default_value_t = 8080)]
     source_http_port: u16,
@@ -43,7 +43,7 @@ struct ProjectInitReport {
     source_container: InspectedContainer,
     #[serde(skip_serializing_if = "Option::is_none")]
     breeze_container: Option<InspectedContainer>,
-    recording_port: u16,
+    http_gateway_port: u16,
     local_dir: PathBuf,
     gitignore: PathBuf,
     gitignore_updated: bool,
@@ -61,7 +61,7 @@ pub(super) fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: bool) -> 
         breeze_container: args.breeze,
         source_http_port: args.source_http_port,
         target_port: args.target_port,
-        recording_port: args.recording_port,
+        http_gateway_port: args.http_gateway_port,
         readiness_path: args.readiness_path,
         readiness_status: args.readiness_status,
         upstream_dns: args.upstream_dns,
@@ -75,7 +75,7 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
             generated: result.generated,
             source_container: result.source_container,
             breeze_container: result.breeze_container,
-            recording_port: result.recording_port,
+            http_gateway_port: result.http_gateway_port,
             local_dir: result.local_dir,
             gitignore: result.gitignore,
             gitignore_updated: result.gitignore_updated,

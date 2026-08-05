@@ -81,7 +81,7 @@ pub use config::{
     BreezeMemcachedBackgroundDependencyReport, BreezeResourceCaptureFeedback,
     BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,
     CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport, ComparisonRecordingConfig,
-    DEFAULT_FAKE_CIDR, DEFAULT_RECORDING_PORT, DEFAULT_RECORDING_RULE, DnsBypassStrategyConfig,
+    DEFAULT_FAKE_CIDR, DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_RECORDING_RULE, DnsBypassStrategyConfig,
     DnsMockConfig, HttpConfig, HttpGatewayCaseLimitsConfig, HttpGatewayConfig,
     HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig,
     HttpGatewayRuleConfig, HttpResponseRewriteConfig, HttpResponseRewritePluginConfig,
