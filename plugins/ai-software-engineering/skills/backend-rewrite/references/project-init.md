@@ -58,6 +58,12 @@ scripts/<project>-cli start --e2e \
 scripts/<project>-cli stop
 ```
 
+Even an empty or mock scaffold must parse and accept both
+`--boot-dir <path>` and `--port <port>` on `start --e2e`. It does not need to
+inspect or populate the boot directory during initialization. When the real
+target startup is implemented, it must use the exact supplied directory and
+port rather than replacing them with repository-local defaults.
+
 Initialization does not require this scaffold to compile or launch the real
 target. It may be an explicitly unimplemented entrypoint or start a stable
 mock/fallback service. When target execution is first required, complete the
