@@ -54,16 +54,28 @@ repository files do not establish effective configuration or startup behavior.
 Inspect only necessary configuration, environment variable names and
 provenance, startup arguments, deployment metadata, and dependency wiring.
 Never print or persist secret values observed in source-process memory. Never
-manually dump or persist values obtained from a remote system; persistence is
-allowed only through a source-compatible SDK-owned snapshot lifecycle proven
-by source behavior. Otherwise keep runtime state in memory and use its genuine
-retrieval and refresh path. Never hard-code externally supplied secrets. A
-constant present in the source repository or pinned compiled artifact may be
-migrated directly into target source code as source behavior. Do not replace a
-genuine runtime dependency with an environment variable inferred from traffic.
+manually dump or persist values obtained from a remote system. Configuration
+or discovery-service snapshots MUST NOT be read, copied, or used as application
+startup input, including snapshots managed by the source SDK. Keep runtime
+state in memory and use its genuine retrieval and refresh path. Never hard-code
+externally supplied secrets. A constant present in the source repository or
+pinned compiled artifact may be migrated directly into target source code as
+source behavior. Do not replace a genuine runtime dependency with an
+environment variable inferred from traffic.
 
 ## Non-Negotiable Baseline
 
+- Every newly created backend repository MUST be a Cargo workspace with the
+  primary product as the root package, reusable libraries under `crates/`, and
+  additional deployable roles under `apps/<role>/`. Every third-party
+  dependency version and source and every internal path dependency MUST be
+  declared in root `[workspace.dependencies]` and inherited by root and member
+  packages. Existing non-workspace repositories require an explicitly scoped
+  migration rather than a silent conversion during focused work.
+- Access to MySQL, Redis, Memcached, Kafka, Queue, TAuth2, Vintage, and Motan,
+  plus shared logging and runtime switches, MUST go through the canonical
+  `crates/breeze/<package>` library named `brz-<package>`. Product packages MUST
+  NOT depend directly on the corresponding raw driver or SDK.
 - Every queue, buffer, cache, batch, fan-out, task set, and in-flight request
   population MUST have an explicit bound or an evidenced external bound.
 - Every remote operation MUST have a deadline consistent with the caller's
@@ -130,15 +142,10 @@ defects before they become scale defects.
   composition.
 - Read [concurrency-and-backpressure.md](references/concurrency-and-backpressure.md)
   when adding async work, threads, queues, batching, fan-out, or background work.
-- Read [dependency-clients.md](references/dependency-clients.md) whenever the
-  change touches databases, caches, HTTP/RPC, queues, discovery, or another
-  remote system.
-- Read [breeze-platform.md](references/breeze-platform.md) when source or
-  repository evidence assigns a platform foundation or remote-resource
-  lifecycle to Breeze. For descriptor-backed resources, also read
-  [breeze-descriptors.md](references/breeze-descriptors.md). For Motan or
-  Vintage, also read
-  [breeze-motan-vintage.md](references/breeze-motan-vintage.md).
+- Read [breeze-platform.md](references/breeze-platform.md) whenever a change
+  touches shared logging, runtime switches, MySQL, Redis, Memcached, Kafka,
+  Queue, TAuth2, Vintage, Motan, or another Breeze-owned platform foundation or
+  remote-resource, runtime-configuration, or discovery lifecycle.
 - Read [data-and-memory.md](references/data-and-memory.md) for JSON, large
   payloads, serialization, buffering, compression, or allocation-sensitive paths.
 - Read [resilience-and-observability.md](references/resilience-and-observability.md)
@@ -150,18 +157,23 @@ defects before they become scale defects.
 
 Before claiming completion, confirm that:
 
-1. repository-required `cargo fmt`, build or check, test, Clippy, and other
+1. a newly created backend satisfies the mandatory Cargo workspace shape and
+   workspace-owned dependency rules;
+2. every touched common service and runtime switch uses its canonical
+   `crates/breeze/<package>` boundary without a product-level raw driver or SDK
+   dependency;
+3. repository-required `cargo fmt`, build or check, test, Clippy, and other
    static-analysis gates pass for the affected workspace scope;
-2. normal startup and shutdown remain valid for runnable components;
-3. resource bounds, deadlines, retries, cancellation, and dependency ownership
+4. normal startup and shutdown remain valid for runnable components;
+5. resource bounds, deadlines, retries, cancellation, and dependency ownership
    are explicit on every changed runtime path;
-4. large data and hot paths do not introduce avoidable copies, unbounded
+6. large data and hot paths do not introduce avoidable copies, unbounded
    buffering, high-cardinality telemetry, or blocking work on async executors;
-5. failure and overload behavior are tested or otherwise evidenced where they
+7. failure and overload behavior are tested or otherwise evidenced where they
    can affect correctness or availability;
-6. performance claims include a benchmark, load test, production-equivalent
+8. performance claims include a benchmark, load test, production-equivalent
    observation, or an explicitly limited analytical claim;
-7. the final structure owns the responsibilities introduced by the change and
+9. the final structure owns the responsibilities introduced by the change and
    leaves unrelated legacy cleanup untouched.
 
 If required evidence is unavailable, report the assumption or remaining risk.

@@ -27,9 +27,9 @@ fixtures.
 Run repository-required commands. Without stricter equivalents, use:
 
 ```bash
-cargo fmt --check
-cargo test
-cargo clippy --all-targets -- -D warnings
+cargo fmt --all --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 In a Cargo workspace with a root package, root-level commands may select only

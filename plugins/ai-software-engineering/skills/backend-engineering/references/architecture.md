@@ -46,6 +46,11 @@ boundary to reproduce.
 
 ## Workspace And Deployment Shape
 
+- Every newly created backend repository governed by this skill MUST use a
+  Cargo workspace. Keep the primary product as the root package with both
+  `[package]` and `[workspace]` in the root `Cargo.toml`, keep its source under
+  root `src/`, put reusable library packages under `crates/`, and put additional
+  independently deployed roles under `apps/<role>/`.
 - Give each independently deployed runtime role a clear binary package. Do not
   combine roles behind a mode flag merely because they share source code; move
   cohesive shared behavior into library crates.
@@ -65,12 +70,40 @@ boundary to reproduce.
 - Keep crate dependencies acyclic and prevent libraries from depending on
   application packages.
 
-When a repository adopts the Platform workspace standard, keep the primary
-product as the root package with both `[package]` and `[workspace]` in the root
-`Cargo.toml`, keep its source under root `src/`, put reusable libraries under
-`crates/`, and put additional deployable roles under `apps/<role>/`. Do not
-silently impose this layout on a repository governed by a different explicit
-standard.
+The root manifest MUST own workspace dependency policy:
+
+- Declare every third-party dependency version and source once in
+  `[workspace.dependencies]`, including dependencies used by only one package.
+  Root and member packages MUST inherit them with `{ workspace = true }` from
+  `[dependencies]`, `[dev-dependencies]`, or `[build-dependencies]` rather than
+  repeating a version, registry, Git source, or path.
+- Declare every internal path dependency in `[workspace.dependencies]` and
+  inherit it in consumers. A dependency path MUST resolve to a package in the
+  same workspace unless an explicit repository contract documents why it is an
+  external source checkout.
+- Centralize common package metadata and lint policy in `[workspace.package]`
+  and `[workspace.lints]` when multiple members share them; members MUST opt in
+  rather than copy the values.
+- Set the workspace dependency resolver explicitly to the newest resolver
+  compatible with the repository's Rust edition and MSRV. Review additive
+  Cargo feature unification so one deployable does not silently enable an
+  adapter or capability in another.
+- Keep one root `Cargo.lock` for applications. Member packages MUST NOT own
+  independent lockfiles or nested workspaces.
+- Root and `apps/<role>` application packages MAY depend on capability and
+  infrastructure libraries. Library packages MUST NOT depend on the root
+  package or any package under `apps/`.
+
+Do not create empty workspace members, one crate per type, or speculative
+`crates/` and `apps/` entries. Create a member only for a real capability,
+independent consumer, lifecycle, deployable role, or dependency boundary.
+
+For an existing repository that does not satisfy this workspace standard, a
+focused feature or bug fix MUST NOT silently restructure the whole repository.
+Report the deviation and required migration boundary. Project initialization
+or explicitly scoped repository-architecture work MUST converge it to this
+standard unless a higher-priority repository instruction requires a documented
+exception.
 
 In a workspace with a root package, root-level Cargo commands may select only
 that package. Repository-wide checks MUST use the repository's canonical
@@ -224,9 +257,10 @@ Centralize configuration source loading while distributing typed ownership:
   that deployable.
 - Let only the configuration or bootstrap boundary read files, environment
   variables, command-line values, or configuration services.
-- Pass each component only its validated configuration or runtime snapshot.
+- Pass each component only its validated configuration or current runtime
+  configuration view.
 - Keep static startup configuration separate from dynamic configuration.
-- Give every dynamic configuration stream one owner, typed snapshots, and
+- Give every dynamic configuration stream one owner, typed current values, and
   explicit update behavior.
 - Use configuration to select implementations and behavior, not to describe an
   arbitrary object graph equivalent to a dependency-injection container.
@@ -272,20 +306,23 @@ backstops while splitting by responsibility rather than line count alone.
 
 Before accepting an architecture or implementation, confirm that:
 
-1. every independently deployed role has a clear binary owner;
-2. product code is organized by capability rather than catch-all technical
+1. every newly created backend uses the required root-package workspace shape,
+   centralized workspace dependencies, one root lockfile, and no nested
+   workspace;
+2. every independently deployed role has a clear binary owner;
+3. product code is organized by capability rather than catch-all technical
    crates;
-3. binary entrypoints contain wiring and lifecycle but no business behavior;
-4. crate and module dependencies follow the declared acyclic direction;
-5. application services have narrow, explicit collaborators;
-6. transport and generated wire or storage types do not leak into application
+4. binary entrypoints contain wiring and lifecycle but no business behavior;
+5. crate and module dependencies follow the declared acyclic direction;
+6. application services have narrow, explicit collaborators;
+7. transport and generated wire or storage types do not leak into application
    or domain interfaces;
-7. resource and remote clients are constructed once by an explicit owner;
-8. routes and middleware ordering are visible;
-9. configuration loading is centralized and component configuration is typed;
-10. startup, readiness, background work, and shutdown have explicit owners;
-11. workspace-wide checks include every relevant member package; and
-12. no global service locator, dependency registry, or catch-all application
+8. resource and remote clients are constructed once by an explicit owner;
+9. routes and middleware ordering are visible;
+10. configuration loading is centralized and component configuration is typed;
+11. startup, readiness, background work, and shutdown have explicit owners;
+12. workspace-wide checks include every relevant member package; and
+13. no global service locator, dependency registry, or catch-all application
     context bypasses the intended boundaries.
 
 Report each deliberate exception with its owner, reason, and affected
