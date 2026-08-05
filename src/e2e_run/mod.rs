@@ -25,8 +25,8 @@ use crate::case_group::{
     load_complete_case_group_inventory,
 };
 
+pub(crate) use config::render_project_config;
 pub(crate) use config::resolve_project;
-pub(crate) use config::{render_project_config, validate_project_pr_base};
 pub use dirty_evidence::{
     E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
     E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eSourcePreReadiness,

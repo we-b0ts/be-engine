@@ -104,3 +104,28 @@ Do not report initialization complete until all of the following are true:
 Initialization ends after these repository requirements are delivered. It
 does not start the target, validate traffic, record, Replay, compare, or invoke
 or advance the `backend-rewrite next` workflow.
+
+## Optional Initialization PR
+
+After initialization is complete, explicitly ask the user whether they want
+to create or confirm a `dev-migration` branch and deliver the initialization
+changes through a PR targeting that branch. Do not create a branch, commit,
+push, or PR without that confirmation.
+
+If the user confirms:
+
+1. Use the repository's intended pre-initialization migration baseline for
+   `dev-migration`. If that baseline is ambiguous, ask the user instead of
+   guessing. Reuse an existing local or `origin/dev-migration` branch when
+   present; never replace or move it silently.
+2. Keep the initialization changes on a separate feature branch. The source
+   branch must not be `dev-migration`.
+3. Commit only the three generated configuration files, the root-scoped
+   `.gitignore` update, the mock/empty `scripts/<project>-cli`, and any minimal
+   target scaffold required by that CLI. Exclude unrelated work and all
+   `.traffic-e2e/local/` content.
+4. Push the necessary branches and create a PR whose target branch is
+   `dev-migration`. Report the branch names and PR URL to the user.
+
+If the user declines, stop after initialization and leave Git delivery to the
+user. This optional delivery does not start or advance the rewrite workflow.

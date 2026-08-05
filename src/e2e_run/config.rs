@@ -16,10 +16,6 @@ const CONFIG_VERSION: u32 = 9;
 const DEFAULT_AI_FORBIDDEN_ROOT: &str = crate::internal_runtime::TRAFFIC_E2E_RELATIVE_ROOT;
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
-pub(crate) fn validate_project_pr_base(target_root: &Path, pr_base: &str) -> Result<()> {
-    branch::validate_pr_base(target_root, pr_base)
-}
-
 pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
     let target_root = fs::canonicalize(&options.target_root).with_context(|| {
         format!(

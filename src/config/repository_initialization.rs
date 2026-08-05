@@ -82,8 +82,6 @@ fn initialize_repository_config_with(
     ]
     .map(|relative| target_root.join(relative));
     require_configuration_targets_absent(&generated)?;
-    crate::e2e_run::validate_project_pr_base(&target_root, "dev-migration")?;
-
     let source = inspect(&options.source_container)?;
     let breeze = options
         .breeze_container
@@ -300,12 +298,12 @@ mod tests {
     }
 
     #[test]
-    fn unified_init_generates_three_valid_files_without_boot_or_internal_directories() {
+    fn unified_init_allows_dev_migration_to_be_created_afterward() {
         let target = tempdir().unwrap();
         fs::write(target.path().join("README.md"), "# target\n").unwrap();
         assert!(
             Command::new("git")
-                .args(["init", "-q", "-b", "dev-migration"])
+                .args(["init", "-q", "-b", "initialization-work"])
                 .arg(target.path())
                 .status()
                 .unwrap()
@@ -409,6 +407,21 @@ mod tests {
         assert!(project.contains("ai_forbidden_root: local/ai-forbidden"));
         assert!(project.contains("boot_dir: .traffic-e2e/local/boot"));
         assert!(project.contains("container: breeze"));
+        assert!(project.contains("pr_base: dev-migration"));
+        assert!(
+            !Command::new("git")
+                .arg("-C")
+                .arg(target.path())
+                .args([
+                    "show-ref",
+                    "--verify",
+                    "--quiet",
+                    "refs/heads/dev-migration"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
         let recorder =
             crate::config::AppConfig::load(target.path().join(RECORDER_CONFIG_PATH)).unwrap();
         assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:17171");
