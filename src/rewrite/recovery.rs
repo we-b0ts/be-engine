@@ -73,6 +73,9 @@ pub(super) async fn recover(context: RewriteContext) -> Result<RewriteRecoveryRe
                 match operation {
                     ManagedRecordingOperation::Record => {
                         state.recording_run_id = replacement.clone();
+                        if let Some(refresh) = state.recording_refresh.as_mut() {
+                            refresh.recording_run_id = Some(replacement.clone());
+                        }
                         state.recording_rejection = Some(
                             "previous standard recording was interrupted before finalization"
                                 .to_string(),

@@ -82,6 +82,10 @@ pub fn request_rewrite_recording(
         state.phase != RewritePhase::SystemRepairRequired,
         "system repair must pass its coordinator-issued acceptance before requesting new traffic"
     );
+    ensure!(
+        state.recording_refresh.is_none(),
+        "a recorder-capture refresh is coordinator-owned; execute the action returned by `backend-rewrite status`"
+    );
     let settings = RewriteRecordingSettings {
         duration_seconds: options.duration_seconds,
         per_api_case_limit: options.per_api_case_limit,
@@ -627,10 +631,48 @@ pub(super) fn reset_for_fresh_recording(
     state.active_issue = None;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
+    state.recorder_capture_plan = None;
     state.route = None;
     state.e2e_current = false;
     state.comparison_current = false;
     state.bump();
+}
+
+pub(super) fn begin_pending_capture_refresh(
+    target_root: &Path,
+    state: &mut RewriteState,
+) -> Result<bool> {
+    let Some(refresh) = state.recording_refresh.as_ref() else {
+        return Ok(false);
+    };
+    if refresh.recording_run_id.is_some() {
+        return Ok(false);
+    }
+    if inventory::has_runnable_work(state) {
+        return Ok(false);
+    }
+    ensure!(
+        super::fingerprint::recorder_config_revision(target_root)?
+            == refresh.recorder_config_revision,
+        "recorder config changed after applying capture plans; re-plan the affected capture rule"
+    );
+    let run_id = artifacts::allocate_run_id_excluding(
+        target_root,
+        ManagedRecordingOperation::Record,
+        &[&state.recording_run_id],
+    )?;
+    state
+        .recording_refresh
+        .as_mut()
+        .expect("refresh was checked")
+        .recording_run_id = Some(run_id.clone());
+    reset_for_fresh_recording(
+        state,
+        run_id,
+        state.recording_settings,
+        RewriteRecordingReason::RecorderContractChanged,
+    );
+    Ok(true)
 }
 
 pub(super) fn requires_external_live_traffic(state: &RewriteState) -> bool {
@@ -825,6 +867,57 @@ mod tests {
             )
             .unwrap(),
             ExistingRecordingDisposition::Replace
+        );
+    }
+
+    #[test]
+    fn drained_capture_plans_start_one_all_scope_fresh_recording() {
+        let target = tempfile::tempdir().unwrap();
+        fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
+        fs::write(target.path().join(".traffic-e2e/recorder.toml"), "").unwrap();
+        let mut state = crate::rewrite::test_state();
+        inventory::install(
+            &mut state,
+            vec!["GET /a".to_string(), "POST /b".to_string()],
+        )
+        .unwrap();
+        state.recording_apis.clear();
+        for item in &mut state.api_inventory {
+            item.status = super::super::model::RewriteApiStatus::AwaitingRecordingRefresh;
+        }
+        state.current_api_index = None;
+        state.recording_refresh = Some(super::super::model::RewriteRecordingRefreshState {
+            applied: vec![super::super::model::RewriteRecorderCaptureAppliedRecord {
+                plan_id: "capture-1".to_string(),
+                issue_id: "issue-1".to_string(),
+                evidence_id: "evidence-1".to_string(),
+                api: "GET /a".to_string(),
+                endpoint: "counter.example.com:9332".to_string(),
+                resource_identity: "resource-1".to_string(),
+                source_revision: "source-1".to_string(),
+                source_evidence: "CounterService.java:88".to_string(),
+            }],
+            recorder_config_revision: super::super::fingerprint::recorder_config_revision(
+                target.path(),
+            )
+            .unwrap(),
+            recording_run_id: None,
+        });
+
+        assert!(begin_pending_capture_refresh(target.path(), &mut state).unwrap());
+        assert_eq!(state.phase, RewritePhase::RecordingRequired);
+        assert_eq!(
+            state.recording_request_reason,
+            Some(RewriteRecordingReason::RecorderContractChanged)
+        );
+        assert!(state.recording_apis.is_empty());
+        assert!(state.api_inventory.is_empty());
+        assert_eq!(
+            state
+                .recording_refresh
+                .as_ref()
+                .and_then(|refresh| refresh.recording_run_id.as_deref()),
+            Some(state.recording_run_id.as_str())
         );
     }
 }

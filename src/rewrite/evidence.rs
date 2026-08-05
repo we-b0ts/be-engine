@@ -97,8 +97,34 @@ fn applicable_rule_planners(
     facts: &Value,
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
+    let mut planners = Vec::new();
+    if query_kind == QUERY_REPRESENTATIVES
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response
+                | RewriteIssueKind::Dependency
+                | RewriteIssueKind::Comparison
+        )
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "recorder_capture".to_string(),
+            protocol: "breeze_dns_bypass".to_string(),
+            evidence_id: evidence_id.to_string(),
+            command: super::action::command(
+                target_root,
+                vec![
+                    "recorder-capture".to_string(),
+                    "plan".to_string(),
+                    "--evidence-id".to_string(),
+                    evidence_id.to_string(),
+                    "--help".to_string(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if issue_kind != RewriteIssueKind::Dependency || query_kind != QUERY_DIRTY_CLUSTERS {
-        return Vec::new();
+        return planners;
     }
     let protocols = facts
         .get("clusters")
@@ -108,24 +134,26 @@ fn applicable_rule_planners(
         .filter_map(|cluster| cluster.get("protocol").and_then(Value::as_str))
         .filter(|protocol| matches!(*protocol, "http" | "memcached" | "motan" | "redis"))
         .collect::<std::collections::BTreeSet<_>>();
-    protocols
-        .into_iter()
-        .map(|protocol| RewriteApplicableRulePlanner {
-            kind: "background_dependencies".to_string(),
-            protocol: protocol.to_string(),
-            evidence_id: evidence_id.to_string(),
-            command: super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".to_string(),
-                    "plan".to_string(),
-                    protocol.to_string(),
-                    "--help".to_string(),
-                ],
-                Vec::new(),
-            ),
-        })
-        .collect()
+    planners.extend(
+        protocols
+            .into_iter()
+            .map(|protocol| RewriteApplicableRulePlanner {
+                kind: "background_dependencies".to_string(),
+                protocol: protocol.to_string(),
+                evidence_id: evidence_id.to_string(),
+                command: super::action::command(
+                    target_root,
+                    vec![
+                        "dependency-rule".to_string(),
+                        "plan".to_string(),
+                        protocol.to_string(),
+                        "--help".to_string(),
+                    ],
+                    Vec::new(),
+                ),
+            }),
+    );
+    planners
 }
 
 fn facts(

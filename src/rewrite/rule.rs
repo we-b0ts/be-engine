@@ -78,6 +78,7 @@ pub(super) fn plan(
     let traffic_plan = build_plan(target_root, state, &record)?;
     let traffic_report = project_report(traffic_plan.report())?;
     state.dependency_rule_plan = None;
+    state.recorder_capture_plan = None;
     state.rule_plan = Some(record.clone());
     state.bump();
     Ok(RewriteRuleReport {

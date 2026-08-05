@@ -51,8 +51,8 @@ pub use background_redis_feedback::{
     RedisBackgroundDependencyReport, plan_redis_background_dependency,
 };
 pub use breeze_capture_feedback::{
-    BreezeResourceCaptureFeedback, BreezeResourceCapturePlan, BreezeResourceCaptureReport,
-    plan_breeze_resource_capture,
+    BreezeEndpointCaptureFeedback, BreezeResourceCaptureFeedback, BreezeResourceCapturePlan,
+    BreezeResourceCaptureReport, plan_breeze_endpoint_capture, plan_breeze_resource_capture,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use comparison_recording::ComparisonRecordingConfig;

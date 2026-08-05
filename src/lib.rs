@@ -76,7 +76,7 @@ pub use comparison_recording::{
 pub use config::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
     AppConfig, ArtifactsConfig, BackgroundDependencyFeedback, BackgroundDependencyPlan,
-    BackgroundDependencyReport, BackgroundDependencyRuleConfig,
+    BackgroundDependencyReport, BackgroundDependencyRuleConfig, BreezeEndpointCaptureFeedback,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyReport, BreezeResourceCaptureFeedback,
     BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,
@@ -93,7 +93,7 @@ pub use config::{
     RepositoryConfigInitResult, TcpApplicationProtocol, TcpGatewayConfig,
     TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
     UdpGatewayConfig, initialize_recorder_config, initialize_repository_config,
-    plan_allowed_unused_http_hosts, plan_background_dependency,
+    plan_allowed_unused_http_hosts, plan_background_dependency, plan_breeze_endpoint_capture,
     plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
     plan_case_path_pattern_feedback, plan_motan_background_dependency,
     plan_redis_background_dependency,
@@ -158,6 +158,7 @@ pub use rewrite::{
     RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason, RewriteInventoryReport,
     RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteMemcachedExchangeDetail,
     RewriteMemcachedOperationDetail, RewriteNextOptions, RewritePhase,
+    RewriteRecorderCapturePlanOptions, RewriteRecorderCaptureReport,
     RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
     RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
@@ -167,11 +168,12 @@ pub use rewrite::{
     RewriteRouteReport, RewriteRulePlanOptions, RewriteRuleReport, RewriteStatusReport,
     RewriteTrafficOperationKind, RewriteTrafficOperationView, RewriteWorkerBlockingReason,
     RewriteWorkerConfirmOptions, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
-    RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_rule, confirm_rewrite_worker,
-    execute_rewrite_recording_worker, inventory_rewrite, next_rewrite,
-    plan_rewrite_dependency_rule, plan_rewrite_rule, query_rewrite_case_dependencies,
-    query_rewrite_evidence, recover_rewrite, request_rewrite_recording, route_rewrite,
-    start_rewrite_recording, status_rewrite, status_rewrite_for_api, verify_rewrite_repair,
+    RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_recorder_capture,
+    apply_rewrite_rule, confirm_rewrite_worker, execute_rewrite_recording_worker,
+    inventory_rewrite, next_rewrite, plan_rewrite_dependency_rule, plan_rewrite_recorder_capture,
+    plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
+    status_rewrite_for_api, verify_rewrite_repair,
 };
 pub use tls::MitmCa;
 

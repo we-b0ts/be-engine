@@ -7,7 +7,7 @@ chooses the only repair attempted before the next focused E2E run.
 ## Contents
 
 - Contract and evidence queries
-- Response, cache, runtime, and Replay issues
+- Response, missing-recording, cache, runtime, and Replay issues
 - Dirty dependency and comparison issues
 - Repair routing and blocker criteria
 
@@ -48,7 +48,9 @@ Run only query IDs returned by `action.commands.evidence`:
 
 - `representatives`: the representative case ID, exact immutable standard or
   comparison `case_dir`, and bounded structured response or dependency
-  difference; it does not prove the cause;
+  difference; it does not prove the cause. For response, dependency, and
+  comparison issues it may advertise a `recorder_capture` planner; planner
+  availability does not prove that traffic was omitted;
 - `source_variation`: source values across recorded cases; variation alone
   does not prove nondeterminism or cache ownership;
 - `collection_equivalence`: array multiset equality; equality does not prove
@@ -129,6 +131,47 @@ mapping, boot/request context, and dependency-driven branches before inspecting
 body-field policy. For array order, prove both equal contents and a source
 ordering contract; map/set iteration is a hypothesis, not proof.
 
+## Missing Recorded Dependency Evidence
+
+Treat a recording omission as a bounded hypothesis when a response, Replay, or
+comparison difference traces through source code to one exact response-driving
+backend endpoint, but the representative recording contains no corresponding
+dependency target or exchange. The absence alone is not proof of Breeze bypass,
+an external-data blocker, or a Recorder capability gap.
+
+Prove the hypothesis in this order:
+
+1. Trace the differing response field or status through source construction,
+   cache/loading lifecycle, and the exact dependency client call. Identify the
+   source-proven hostname and port when source configuration proves one.
+2. Execute the representative `dependencies_command`, inspect any potentially
+   equivalent returned target detail, and read raw immutable dependency
+   evidence only when the bounded projection cannot establish presence or
+   absence. Do not infer omission from a truncated preview or one empty
+   protocol cluster.
+3. Exclude a target call-topology defect, a legitimate source cache/snapshot
+   path that made no dependency call in the recording lifecycle, an equivalent
+   endpoint recorded under another resolved target, and unsupported Replay of
+   evidence that is actually present.
+
+When those checks prove that the source consumes an exact response-driving
+endpoint that is absent from recorded dependencies, and the `representatives`
+report advertises `applicable_rule_planners.kind=recorder_capture`, return its
+`evidence_id`, the endpoint, and one single-line source file/symbol proof to the
+orchestrator. The worker may execute the planner's returned read-only help argv
+but never runs `recorder-capture plan|apply` itself and never guesses a Breeze
+resource or descriptor.
+
+The orchestrator owns plan and apply. A plan that resolves the endpoint to one
+configured bypassed Breeze resource makes this an API-scoped capture refresh:
+apply immediately, park that API as `awaiting_recording_refresh`, continue other
+runnable APIs, and let the coordinator schedule one consolidated full-scope
+recording after they drain. This is not `recorder_capability_gap`, system repair,
+or a blocker. If the planner cannot resolve the endpoint, retain the exact
+source/recording proof and planner error; do not invent configuration. Use a
+Recorder capability route only when the required capture mechanism itself is
+unsupported.
+
 ## Local Cache And Runtime State
 
 A response-affecting local cache is target behavior. Preserve source cache:
@@ -183,6 +226,10 @@ evidence. Use the returned issue and dirty-cluster query to distinguish:
 - semantic dependency evidence exists but Replay cannot match or reproduce it;
 - interception, readiness, begin/end, finalize, or cleanup failed;
 - the recording lacks required semantic evidence.
+
+For the last case, follow
+[Missing Recorded Dependency Evidence](#missing-recorded-dependency-evidence)
+before classifying a capability gap or external-data blocker.
 
 If target topology differs, repair target behavior. If semantic evidence exists
 but the coordinator lacks support, return the current evidence ID, source
@@ -240,10 +287,16 @@ Route the proven cause to exactly one action:
   to the orchestrator;
 - supported nondeterminism/order/counter: return source proof and proposed rule
   inputs; the orchestrator owns `backend-rewrite rule plan|apply` and rerun;
-- Recorder/Replay capability gap, source change, or external-data issue: return
-  exact route evidence and required system change; the orchestrator owns
-  `backend-rewrite route` and the returned `repair verify <repair-id>` action;
-  do not patch the target;
+- source-proven omitted dependency with an advertised `recorder_capture`
+  planner: return the evidence ID, endpoint, and source proof; the orchestrator
+  owns immediate plan/apply and the coordinator-owned recording refresh;
+- true Recorder/Replay capability gap, where the supported planners and engine
+  cannot express the required mechanism: return exact route evidence and the
+  required system change; the orchestrator owns `backend-rewrite route` and the
+  returned `repair verify <repair-id>` action;
+- source change or external-data issue: return exact route evidence and the
+  required transition without patching the target; the orchestrator owns
+  `backend-rewrite route` and its returned acceptance;
 - unresolved: gather the named missing source/runtime proof before changing
   code or policy.
 

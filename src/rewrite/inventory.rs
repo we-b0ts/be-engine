@@ -282,6 +282,16 @@ pub(super) fn api_for_dependency_rule_plan(state: &RewriteState, plan_id: &str) 
     })
 }
 
+pub(super) fn api_for_recorder_capture_plan(state: &RewriteState, plan_id: &str) -> Option<String> {
+    slices(state).find_map(|slice| {
+        slice
+            .recorder_capture_plan
+            .as_ref()
+            .is_some_and(|plan| plan.id == plan_id)
+            .then(|| slice.api.clone())
+    })
+}
+
 pub(super) fn api_for_repair(state: &RewriteState, repair_id: &str) -> Option<String> {
     slices(state).find_map(|slice| {
         slice
@@ -365,6 +375,85 @@ pub(super) fn complete_current_and_advance(state: &mut RewriteState) -> Result<b
         state.active_slice = pending_slice(&state.api_inventory[next])?;
     }
     Ok(true)
+}
+
+pub(super) fn mark_awaiting_recording_refresh(state: &mut RewriteState, api: &str) -> Result<bool> {
+    let index = state
+        .api_inventory
+        .iter()
+        .position(|item| item.api == api)
+        .with_context(|| format!("recorded API inventory does not contain {api:?}"))?;
+    let active_attempts = (state.api == api).then(|| state.attempts.len());
+    let item = &mut state.api_inventory[index];
+    item.status = RewriteApiStatus::AwaitingRecordingRefresh;
+    if let Some(attempts) = active_attempts {
+        item.attempts = attempts;
+    }
+    item.e2e_current = false;
+    item.comparison_current = false;
+    item.verified_target_fingerprint = None;
+
+    if state.current_api_index == Some(index) {
+        state
+            .parked_slices
+            .insert(api.to_string(), state.active_slice.clone());
+        let next = next_runnable_index(state);
+        if let Some(next) = next {
+            state.api_inventory[next].status = RewriteApiStatus::Active;
+            state.current_api_index = Some(next);
+            let next_api = state.api_inventory[next].api.clone();
+            state.active_slice = match state.parked_slices.remove(&next_api) {
+                Some(slice) => slice,
+                None => pending_slice(&state.api_inventory[next])?,
+            };
+        } else {
+            state.current_api_index = None;
+        }
+    }
+    state.bump();
+    Ok(has_runnable_work(state))
+}
+
+pub(super) fn has_runnable_work(state: &RewriteState) -> bool {
+    state.api_inventory.iter().any(|item| {
+        matches!(
+            item.status,
+            RewriteApiStatus::Active
+                | RewriteApiStatus::Pending
+                | RewriteApiStatus::ImplementationRequired
+        )
+    })
+}
+
+pub(super) fn rebase_target_fingerprint(state: &mut RewriteState, previous: &str, current: &str) {
+    for item in &mut state.api_inventory {
+        if item.verified_target_fingerprint.as_deref() == Some(previous) {
+            item.verified_target_fingerprint = Some(current.to_string());
+        }
+    }
+    rebase_slice_fingerprint(&mut state.active_slice, previous, current);
+    for slice in state.parked_slices.values_mut() {
+        rebase_slice_fingerprint(slice, previous, current);
+    }
+}
+
+fn rebase_slice_fingerprint(slice: &mut RewriteSliceState, previous: &str, current: &str) {
+    if slice.target_fingerprint.as_deref() == Some(previous) {
+        slice.target_fingerprint = Some(current.to_string());
+    }
+}
+
+fn next_runnable_index(state: &RewriteState) -> Option<usize> {
+    state
+        .api_inventory
+        .iter()
+        .position(|item| item.status == RewriteApiStatus::Pending)
+        .or_else(|| {
+            state
+                .api_inventory
+                .iter()
+                .position(|item| item.status == RewriteApiStatus::ImplementationRequired)
+        })
 }
 
 pub(super) fn reset_for_recording(state: &mut RewriteState) {
@@ -457,6 +546,11 @@ pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
             .api_inventory
             .iter()
             .filter(|item| item.status == RewriteApiStatus::ImplementationRequired)
+            .count(),
+        awaiting_recording_refresh: state
+            .api_inventory
+            .iter()
+            .filter(|item| item.status == RewriteApiStatus::AwaitingRecordingRefresh)
             .count(),
         current_index: state.current_api_index,
         current_api: state
@@ -755,5 +849,61 @@ mod tests {
             super::super::worker::dispatch_view(&state, None).state,
             crate::rewrite::model::RewriteWorkerDispatchState::ResumeRequired
         );
+    }
+
+    #[test]
+    fn capture_refresh_waiter_is_parked_while_the_next_api_advances() {
+        let mut state = crate::rewrite::test_state();
+        install(
+            &mut state,
+            vec!["GET /a".to_string(), "POST /b".to_string()],
+        )
+        .unwrap();
+        state.phase = RewritePhase::AwaitingRecordingRefresh;
+
+        assert!(mark_awaiting_recording_refresh(&mut state, "GET /a").unwrap());
+        assert_eq!(state.api, "POST /b");
+        assert_eq!(state.phase, RewritePhase::ApiPending);
+        assert_eq!(
+            state.api_inventory[0].status,
+            RewriteApiStatus::AwaitingRecordingRefresh
+        );
+        assert_eq!(state.api_inventory[1].status, RewriteApiStatus::Active);
+        assert_eq!(view(&state).awaiting_recording_refresh, 1);
+
+        state.phase = RewritePhase::AwaitingRecordingRefresh;
+        assert!(!mark_awaiting_recording_refresh(&mut state, "POST /b").unwrap());
+        assert!(state.current_api_index.is_none());
+        assert_eq!(view(&state).awaiting_recording_refresh, 2);
+    }
+
+    #[test]
+    fn coordinator_config_change_rebases_only_matching_target_fingerprints() {
+        let mut state = crate::rewrite::test_state();
+        install(
+            &mut state,
+            vec!["GET /a".to_string(), "POST /b".to_string()],
+        )
+        .unwrap();
+        state.api_inventory[0].status = RewriteApiStatus::Complete;
+        state.api_inventory[0].verified_target_fingerprint = Some("before".to_string());
+        state.api_inventory[1].verified_target_fingerprint = Some("unrelated".to_string());
+        state.target_fingerprint = Some("before".to_string());
+
+        rebase_target_fingerprint(&mut state, "before", "after");
+
+        assert_eq!(
+            state.api_inventory[0]
+                .verified_target_fingerprint
+                .as_deref(),
+            Some("after")
+        );
+        assert_eq!(
+            state.api_inventory[1]
+                .verified_target_fingerprint
+                .as_deref(),
+            Some("unrelated")
+        );
+        assert_eq!(state.target_fingerprint.as_deref(), Some("after"));
     }
 }

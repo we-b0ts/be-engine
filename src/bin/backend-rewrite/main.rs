@@ -17,6 +17,7 @@ use traffic_e2e::{
 };
 
 mod dependency_rule;
+mod recorder_capture;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -99,6 +100,8 @@ enum RewriteCommand {
     Rule(RuleArgs),
     /// Plan or apply one source-proven background dependency rule.
     DependencyRule(dependency_rule::DependencyRuleArgs),
+    /// Plan or apply one source-proven Breeze resource capture rule.
+    RecorderCapture(recorder_capture::RecorderCaptureArgs),
     /// Submit a source-backed non-target-code attribution for controlled routing.
     Route(RouteArgs),
     /// Verify one coordinator-issued system repair acceptance.
@@ -396,6 +399,7 @@ async fn run(cli: Cli) -> Result<()> {
             ),
         },
         RewriteCommand::DependencyRule(args) => dependency_rule::run(target_root, args, pretty),
+        RewriteCommand::RecorderCapture(args) => recorder_capture::run(target_root, args, pretty),
         RewriteCommand::Route(args) => print_json(
             &route_rewrite(RewriteRouteOptions {
                 target_root,

@@ -47,7 +47,7 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v9 contains an `action` object with exactly `kind`, `summary`,
+Response schema v10 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read facts only from `action.details` and
 execute only command roles actually present under `action.commands`; never
@@ -95,50 +95,45 @@ focused attempt changes the target and reuses those cases; it does not itself
 authorize fresh traffic. Later integrated edits may invalidate an API's target
 fingerprint and requeue its prior evidence.
 
+When a worker proves that source code consumes an exact response-driving
+endpoint absent from recorded dependencies, it returns the endpoint and one
+source file/symbol proof; it never guesses a Breeze resource or descriptor.
+The orchestrator uses `recorder-capture plan` to resolve configured Breeze
+capture, then applies the exact returned command immediately. That API waits
+while other runnable work continues; after it drains, the coordinator combines
+all applied capture rules into one fresh full-scope standard recording.
+
 ## Mandatory Dedicated API Implementation Workers
 
 Each exact inventory API has one dedicated subagent handle and one worktree
-from its first `implementation_required` until coordinator `complete`. The API
-method/pattern is the binding identity. A new issue ID, attempt, workflow
-revision, action kind, or comparison failure updates the assignment but never
-creates another subagent for that API.
+from its first `implementation_required` until workflow
+`terminal_allowed=true`. The API method/pattern is the binding identity. A new
+issue ID, attempt, workflow revision, action kind, or comparison failure updates
+the assignment but never creates another subagent for that API.
 
-The first `implementation_required`, including in a single-API workflow, is a
-hard dispatch barrier. Before the main orchestrator executes evidence, opens a
-case, reads source or target implementation code, or forms an API hypothesis,
-it must:
+Every `implementation_required`, including a single-API workflow, is a hard
+dispatch barrier. Before evidence, artifacts, code, or an API hypothesis, the
+orchestrator creates the first worktree and real subagent or reactivates that
+API's existing binding, hands off the complete action and canonical commands,
+and executes the exact `confirm_worker` command with the returned handle.
+Require `action.details.worker.state=confirmed` before any later `next`.
 
-1. preserve the exact API, workflow/issue identity, complete action, canonical
-   `cwd`, and all opaque command specs;
-2. create the isolated worktree from the current integrated target revision;
-3. invoke the runtime's real subagent mechanism with that handoff;
-4. capture the returned subagent handle and optional human-readable name;
-5. execute the exact returned `action.commands.confirm_worker`, supplying the
-   handle through `BACKEND_REWRITE_SUBAGENT_HANDLE` and, when available, the
-   name through `BACKEND_REWRITE_SUBAGENT_NAME`; and
-6. require `action.details.worker.state=confirmed` before any later `next`,
-   including same-API acceptance or selection of another API. Retain the
-   `API -> subagent handle -> worktree` binding until workflow completion.
+`resume_required` means the same handle and worktree, updated from the
+integrated revision; a newly created subagent is replacement, not resume. Never
+replace it silently. If it cannot be resumed, preserve the worktree and report
+a capability blocker; ownership transfer requires explicit caller approval.
 
-On every later `implementation_required`, update the bound worktree from the
-integrated revision and resume or reactivate the stored handle with the new
-complete action and raw acceptance result. A new subagent invocation without
-that handle is replacement, not resume, even if its prompt says "resuming".
-After reactivation, execute the new `confirm_worker` command with the same
-handle. `resume_required` is not satisfied by a new subagent.
-Never replace the dedicated subagent silently. If the stored handle cannot be
-resumed, preserve its worktree and report a capability blocker; transfer
-requires explicit caller approval.
+Before waiting for a bound worker, and once after a main-session restart or
+user interruption, send one continue/reactivate message with the current
+action to its stored handle. If the worker is active, let it continue; if it is
+idle, this message resumes the same worker. Then wait only for the runtime's
+worker-completion notification. Never infer worker activity from output-file
+timestamps, process lists, worktree changes, or shell sleeps.
 
-`TaskCreate`, TODO state, narration, or delayed intent is not dispatch. If a
-real subagent is unavailable, report that capability blocker instead of
-implementing in the main orchestrator.
-
-The worker executes only its assigned evidence, case-dependency, and returned
-read-only help commands, proves one cause, implements one compatible repair,
-runs focused local tests, and returns its handoff. It returns source proof and
-proposed inputs when a rule, route, or other coordinator mutation is needed;
-only the orchestrator executes that mutation. Follow
+`TaskCreate`, TODO state, or narration is not dispatch. A real worker executes
+only its assigned read-only evidence, proves and repairs one cause, runs local
+tests, and returns source proof or proposed inputs for any coordinator-owned
+mutation. Follow
 [implementation-worker-coordination.md](references/implementation-worker-coordination.md)
 for exact worktree placement, scheduling, integration, reactivation, and
 cleanup.
@@ -161,8 +156,10 @@ Keep these states distinct:
   the caller-required repository checks and finish delivery.
 
 Thus worker handoff ready is not API completion, and API completion is not
-workflow completion. Remove an API worktree and release its binding only after
-that API is complete and the worktree is no longer needed.
+workflow completion. A later integrated change may requeue an API that was
+already complete, so retain every API binding and worktree through per-API
+completion. Release them only after `terminal_allowed=true` and they are no
+longer needed for delivery.
 
 An evidence-proven unavailable external response-driving value may stop work as
 blocked under [problem-diagnosis.md](references/problem-diagnosis.md). A blocker

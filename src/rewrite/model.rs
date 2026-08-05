@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 9;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 10;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -21,6 +21,7 @@ pub enum RewritePhase {
     RecordingRequired,
     ApiPending,
     ImplementationRequired,
+    AwaitingRecordingRefresh,
     ComparisonRecordingRequired,
     SystemRepairRequired,
     SliceComplete,
@@ -33,6 +34,7 @@ pub enum RewriteApiStatus {
     Pending,
     Active,
     ImplementationRequired,
+    AwaitingRecordingRefresh,
     Complete,
 }
 
@@ -59,6 +61,7 @@ pub struct RewriteApiInventoryView {
     pub completed: usize,
     pub pending: usize,
     pub implementation_required: usize,
+    pub awaiting_recording_refresh: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,6 +290,39 @@ pub(super) struct RewriteDependencyRulePlanRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteRecorderCapturePlanRecord {
+    pub id: String,
+    pub issue_id: String,
+    pub evidence_id: String,
+    pub endpoint: String,
+    pub source_evidence: String,
+    pub source_revision: String,
+    pub recorder_config_revision: String,
+    pub resource_identity: String,
+    pub target_fingerprint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteRecorderCaptureAppliedRecord {
+    pub plan_id: String,
+    pub issue_id: String,
+    pub evidence_id: String,
+    pub api: String,
+    pub endpoint: String,
+    pub resource_identity: String,
+    pub source_revision: String,
+    pub source_evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteRecordingRefreshState {
+    pub applied: Vec<RewriteRecorderCaptureAppliedRecord>,
+    pub recorder_config_revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recording_run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteWorkerBinding {
     pub agent_handle_fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,6 +350,8 @@ pub(super) struct RewriteSliceState {
     pub rule_plan: Option<RewriteRulePlanRecord>,
     #[serde(default)]
     pub dependency_rule_plan: Option<RewriteDependencyRulePlanRecord>,
+    #[serde(default)]
+    pub recorder_capture_plan: Option<RewriteRecorderCapturePlanRecord>,
     pub route: Option<RewriteRouteRecord>,
     pub e2e_current: bool,
     pub comparison_current: bool,
@@ -337,6 +375,7 @@ impl RewriteSliceState {
             active_issue: None,
             rule_plan: None,
             dependency_rule_plan: None,
+            recorder_capture_plan: None,
             route: None,
             e2e_current: false,
             comparison_current: false,
@@ -370,6 +409,8 @@ pub(super) struct RewriteState {
     pub recording_input_case_source: Option<PathBuf>,
     #[serde(default)]
     pub recording_input_diagnosis: Option<RewriteRecordingInputDiagnosis>,
+    #[serde(default)]
+    pub recording_refresh: Option<RewriteRecordingRefreshState>,
     #[serde(flatten)]
     pub active_slice: RewriteSliceState,
 }
@@ -579,6 +620,12 @@ pub enum RewriteAction {
         route: Option<RewriteRouteRecord>,
         acceptance: Option<RewriteCommandSpec>,
     },
+    RecordingRefreshPending {
+        summary: String,
+        plan_ids: Vec<String>,
+        resource_identities: Vec<String>,
+        status: RewriteCommandSpec,
+    },
     Complete {
         summary: String,
         e2e_current: bool,
@@ -720,6 +767,17 @@ pub struct RewriteDependencyRuleReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct RewriteRecorderCaptureReport {
+    pub plan_id: String,
+    pub issue_id: String,
+    pub api: String,
+    pub traffic_e2e_report: Value,
+    pub recording_refresh_pending: bool,
+    pub awaiting_apis: Vec<String>,
+    pub next_command: RewriteCommandSpec,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RewriteRouteReport {
     pub accepted: bool,
     pub issue_id: String,
@@ -848,7 +906,7 @@ mod tests {
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(9)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(10)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }

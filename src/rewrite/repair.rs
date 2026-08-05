@@ -73,6 +73,7 @@ pub(super) fn route(
     state.phase = super::model::RewritePhase::SystemRepairRequired;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
+    state.recorder_capture_plan = None;
     state.bump();
     Ok(RewriteRouteReport {
         accepted: true,
@@ -145,6 +146,7 @@ pub(super) fn verify(
             state.route = None;
             state.rule_plan = None;
             state.dependency_rule_plan = None;
+            state.recorder_capture_plan = None;
             state.e2e_current = false;
             state.comparison_current = false;
             state.bump();

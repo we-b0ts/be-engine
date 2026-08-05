@@ -22,6 +22,9 @@ record configured traffic -> stable API inventory
 
 explicit new traffic / changed recording contract / changed source baseline
            -> fresh standard recording -> prepare -> focused E2E
+
+source-proven bypassed backend -> apply capture rule -> API waits
+           -> drain other runnable API work -> one full-scope fresh recording
 ```
 
 The main orchestrator repeatedly executes `backend-rewrite next` or the opaque
@@ -35,7 +38,7 @@ command returned by the current action. It waits only for:
 
 ## Action Handling
 
-The `action` object in response schema v9 has one stable shape for every kind:
+The `action` object in response schema v10 has one stable shape for every kind:
 
 ```json
 {
@@ -50,9 +53,9 @@ The `action` object in response schema v9 has one stable shape for every kind:
 location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
-`next` command. Response schema v9 is independent of target repository
-configuration versions. Schema v9 adds the mandatory implementation-worker
-dispatch confirmation gate.
+`next` command. Response schema v10 is independent of target repository
+configuration versions. It retains the mandatory implementation-worker
+dispatch confirmation gate and adds recorder-capture refresh state.
 
 ### `wait_required`
 
@@ -97,8 +100,9 @@ implementation command.
 
 Every initialized action/status envelope includes a bounded `api_inventory`
 summary: `total`, `completed`, `pending`, `implementation_required`,
-`current_index`, and `current_api`. The coordinator owns the stable inventory
-for the shared standard recording. The main orchestrator reads
+`awaiting_recording_refresh`, `current_index`, and `current_api`. The coordinator
+owns the stable inventory for the shared standard recording. The main
+orchestrator reads
 [implementation-worker-coordination.md](implementation-worker-coordination.md)
 once when `total > 1`, or before the first implementation dispatch when
 `total = 1`. Every `implementation_required` action uses a worker; inventory
@@ -129,6 +133,14 @@ before whole-workflow completion.
 Per-API failure retries reuse the same cases for that API. A fresh standard
 recording is still allowed only under the explicit conditions below and resets
 evidence for the whole inventory because all slices share that baseline.
+
+`awaiting_recording_refresh` means the API has an applied, source-proven capture
+rule but cannot be reverified against the old standard baseline. It is parked,
+not complete or blocked. Continue pending APIs and resume existing
+implementation workers; other APIs may still run comparison against the
+current baseline. When no runnable inventory item remains, the coordinator
+atomically changes to `recording_required` for one consolidated full-scope
+refresh.
 
 Applying or confirming a source-proven background dependency rule is not a
 fresh-recording condition. The coordinator treats published capture artifacts
@@ -181,6 +193,14 @@ window and includes bounded recent candidate scopes and rejection counts in
 `action.details.recording_input_diagnosis`. Treat that diagnosis as complete
 and do not inspect internal state or invent traffic.
 
+A recorder-capture apply is the exception owned entirely by the coordinator:
+do not follow it with `recording request`. The apply result either returns the
+next runnable API command or, when the epoch is drained, the exact consolidated
+recording command. Multiple applied capture rules accumulate before that one
+recording. The new finalized recording atomically replaces the shared baseline
+and invalidates old Replay/comparison evidence; it does not create per-API
+recording generations.
+
 After a system repair, only the returned coordinator-issued
 `backend-rewrite repair verify <repair-id>` action can advance the workflow. Successful
 verification chooses whether fresh standard traffic or replaying the same cases
@@ -189,15 +209,11 @@ is required; the AI does not choose that transition itself.
 ### `implementation_required`
 
 `action.details` contains one bounded issue, one representative when available,
-possible causes, and a `worker` gate. `dispatch_required` creates the worktree
-and dedicated subagent; `resume_required` reactivates its stored handle. After
-the runtime returns the handle, execute `action.commands.confirm_worker` with
-the required handle environment variable and optional subagent-name variable.
-Do not execute any later `next` until the worker state is `confirmed`; this
-includes same-API acceptance and cross-API selection. A refused cross-API
-selection also returns `blocking_reason=worker_dispatch_unconfirmed`, the
-requested API, and the same confirmation command instead of an unstructured
-error.
+possible causes, and the mandatory dedicated-worker gate defined in
+[implementation-worker-coordination.md](implementation-worker-coordination.md).
+Confirm `dispatch_required` or `resume_required` with the runtime handle before
+any later `next`; a refused cross-API selection returns the same structured
+confirmation action.
 `action.commands.evidence` contains the worker's permitted evidence queries,
 while `action.commands.acceptance` is the orchestrator's only acceptance
 transition. Traffic facts come from those queries and immutable artifacts.
@@ -213,6 +229,30 @@ supplies the final business attribution. The worker applies
 local target tests, and returns the tested change plus unchanged acceptance
 command. The orchestrator integrates it and executes acceptance from the
 coordinator worktree.
+
+The `representatives` evidence report advertises a `recorder_capture` planner
+for response, dependency, and comparison issues. Use it only after the worker
+proves that a response-driving hostname is absent from recorded dependencies
+and source code shows that exact backend is consumed. Run:
+
+```text
+backend-rewrite recorder-capture plan \
+  --evidence-id <returned-evidence-id> \
+  --endpoint <source-proven-hostname[:port]> \
+  --source-evidence '<single-line source file/symbol proof>'
+```
+
+The planner reverse-resolves the hostname through configured Breeze snapshots
+and accepts only one canonical resource. A source-proven port can disambiguate
+resources sharing one domain; otherwise shared or unknown domains and IP
+literals are rejected. The AI never supplies a Breeze descriptor or resource
+name.
+Execute the exact returned apply argv. Apply is immediate, add-only, atomic,
+and stale-safe. If serialized recording, Replay, or comparison is live, wait
+and inspect `status` before retrying apply. Its
+`recording_refresh_pending=true` report lists waiting APIs and returns either
+another API's `next` command or the full recording action. A scoped waiting API
+returns `recording_refresh_pending`; poll `status`, not its old acceptance.
 
 For a dependency issue, the `dirty_clusters` evidence report may also contain
 `applicable_rule_planners`. Each entry is limited to a supported protocol
@@ -273,6 +313,11 @@ the exact `action.commands.acceptance` argv for
 Successful verification reruns the same cases for Replay or external-input
 repairs, or allocates fresh standard recording for Recorder or source-baseline
 changes.
+
+Use `recorder_capability_gap` only when the recorder binary lacks a required
+mechanism and the supported recorder-capture planner cannot express the fix.
+A configured Breeze resource that was bypassed and therefore omitted from
+evidence is an API-scoped recorder-capture refresh, not system repair.
 
 ### `complete`
 

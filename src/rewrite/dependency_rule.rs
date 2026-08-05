@@ -161,6 +161,7 @@ pub(super) fn plan(
     }
     let report = plan.report()?;
     state.rule_plan = None;
+    state.recorder_capture_plan = None;
     state.dependency_rule_plan = Some(record.clone());
     state.bump();
     Ok(RewriteDependencyRuleReport {

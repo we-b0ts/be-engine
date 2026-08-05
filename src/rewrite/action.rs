@@ -9,7 +9,7 @@ use super::model::{
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
     RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
 };
-use super::{fingerprint, inventory, recording, recording_action, worker};
+use super::{fingerprint, inventory, recorder_capture, recording, recording_action, worker};
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
     envelope(state, state_action(target_root, state))
@@ -166,6 +166,9 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
         };
     }
     if state.phase == RewritePhase::ImplementationRequired {
+        if let Some(action) = recorder_capture::pending_plan_action(target_root, state) {
+            return action;
+        }
         if let Some(plan) = &state.rule_plan {
             return RewriteAction::PlanApplyRequired {
                 summary: "apply the unchanged pending response-rule plan".to_string(),
@@ -213,6 +216,9 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
         ),
         RewritePhase::ImplementationRequired => {
             worker::implementation_action(target_root, state, None)
+        }
+        RewritePhase::AwaitingRecordingRefresh => {
+            recorder_capture::pending_refresh_action(target_root, state)
         }
         RewritePhase::ComparisonRecordingRequired => RewriteAction::ComparisonRecordingRequired {
             summary: state.comparison_rejection.as_ref().map_or_else(

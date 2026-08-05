@@ -96,6 +96,15 @@ pub(super) fn traffic_e2e_revision() -> Result<String> {
     Ok(hash.finish())
 }
 
+pub(super) fn recorder_config_revision(target_root: &Path) -> Result<String> {
+    let path = target_root.join(".traffic-e2e/recorder.toml");
+    let bytes = std::fs::read(&path)
+        .with_context(|| format!("failed to read recorder config {}", path.display()))?;
+    let mut hash = Fnv1a::default();
+    hash.update(&bytes);
+    Ok(hash.finish())
+}
+
 pub(super) fn source_runtime_inputs_revision(
     target_root: &Path,
     source_container: &str,

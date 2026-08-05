@@ -605,6 +605,26 @@ does not include literal IPs, and identifies resources sharing captured
 domains. Apply is add-only, atomic, and stale-safe. Start a new recording after
 the change; existing artifacts remain unchanged.
 
+For an active backend rewrite, the AI-facing coordinator accepts the
+source-visible backend endpoint instead of a Breeze resource selector:
+
+```bash
+backend-rewrite --target-root ../target recorder-capture plan \
+  --evidence-id <current-evidence-id> \
+  --endpoint counter.example.com:9332 \
+  --source-evidence 'src/UserCounter.java:load reads the counter backend'
+
+backend-rewrite --target-root ../target recorder-capture apply \
+  <returned-plan-id>
+```
+
+The coordinator reverse-resolves a unique canonical resource from configured
+snapshots, using a source-proven port to disambiguate a shared domain when
+needed. It applies the capture rule immediately and parks only the affected API.
+Other API work continues. Once no API remains runnable, all accumulated rules
+trigger one full-scope standard recording; callers must not request a separate
+recording per rule.
+
 Pass the config and rule together for direct replay:
 
 ```bash

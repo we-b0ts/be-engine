@@ -145,6 +145,21 @@ impl Serialize for RewriteAction {
                 },
             }
             .serialize(serializer),
+            Self::RecordingRefreshPending {
+                summary,
+                plan_ids,
+                resource_identities,
+                status,
+            } => RewriteActionView {
+                kind: "recording_refresh_pending",
+                summary,
+                details: RewriteRecordingRefreshPendingDetails {
+                    plan_ids,
+                    resource_identities,
+                },
+                commands: RewriteStatusCommands { status },
+            }
+            .serialize(serializer),
             Self::Complete {
                 summary,
                 e2e_current,
@@ -194,6 +209,12 @@ struct RewriteRecordingRequiredDetails<'a> {
 #[derive(Serialize)]
 struct RewriteRecordingRunDetails<'a> {
     run_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct RewriteRecordingRefreshPendingDetails<'a> {
+    plan_ids: &'a [String],
+    resource_identities: &'a [String],
 }
 
 #[derive(Serialize)]

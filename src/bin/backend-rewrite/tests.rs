@@ -20,6 +20,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "evidence",
             "rule",
             "dependency-rule",
+            "recorder-capture",
             "route",
             "repair",
             "worker",
@@ -61,6 +62,29 @@ fn parses_the_bounded_rewrite_surface() {
             "GET /api/users/*",
             "--source-route",
             "/api/users/:id",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "recorder-capture",
+            "plan",
+            "--evidence-id",
+            "evidence-1",
+            "--endpoint",
+            "counter.example.com:9332",
+            "--source-evidence",
+            "CounterService.java:88 reads the counter backend",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "recorder-capture",
+            "apply",
+            "recorder-capture-plan-0123456789abcdef",
         ])
         .is_ok()
     );

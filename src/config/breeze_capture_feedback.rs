@@ -1,9 +1,12 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::str::FromStr as _;
 
 use anyhow::{Context, Result, bail, ensure};
+use hyper::http::uri::Authority;
 use serde::Serialize;
 
 use crate::breeze::snapshot::{Snapshot, SnapshotResource};
@@ -28,11 +31,21 @@ pub struct BreezeResourceCaptureFeedback {
     pub source_evidence: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct BreezeEndpointCaptureFeedback {
+    pub config_path: PathBuf,
+    pub endpoint: String,
+    pub source_revision: String,
+    pub source_evidence: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BreezeResourceCaptureReport {
     pub config: PathBuf,
     pub snapshot_dir: PathBuf,
     pub requested_resource: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_endpoint: Option<String>,
     pub resource: String,
     pub resource_identity: String,
     pub descriptor: PathBuf,
@@ -87,10 +100,52 @@ pub fn plan_breeze_resource_capture(
     feedback: BreezeResourceCaptureFeedback,
 ) -> Result<BreezeResourceCapturePlan> {
     validate_feedback(&feedback)?;
-    ensure_regular_config(&feedback.config_path)?;
-    let original = read_config(&feedback.config_path)?;
-    let config = parse_and_validate(&original, &feedback.config_path)?;
-    let candidate = resolve_candidate(&config, &feedback.resource)?;
+    plan_capture(
+        feedback.config_path,
+        CaptureSelector::Resource(feedback.resource),
+        feedback.source_revision,
+        feedback.source_evidence,
+    )
+}
+
+pub fn plan_breeze_endpoint_capture(
+    feedback: BreezeEndpointCaptureFeedback,
+) -> Result<BreezeResourceCapturePlan> {
+    validate_endpoint_feedback(&feedback)?;
+    plan_capture(
+        feedback.config_path,
+        CaptureSelector::Endpoint(feedback.endpoint),
+        feedback.source_revision,
+        feedback.source_evidence,
+    )
+}
+
+enum CaptureSelector {
+    Resource(String),
+    Endpoint(String),
+}
+
+fn plan_capture(
+    config_path: PathBuf,
+    selector: CaptureSelector,
+    source_revision: String,
+    source_evidence: String,
+) -> Result<BreezeResourceCapturePlan> {
+    ensure_regular_config(&config_path)?;
+    let original = read_config(&config_path)?;
+    let config = parse_and_validate(&original, &config_path)?;
+    let (candidate, requested_resource, requested_endpoint) = match selector {
+        CaptureSelector::Resource(resource) => {
+            let candidate = resolve_candidate(&config, &resource)?;
+            (candidate, resource, None)
+        }
+        CaptureSelector::Endpoint(endpoint) => {
+            let selector = endpoint_selector(&endpoint)?;
+            let candidate = resolve_endpoint_candidate(&config, &selector)?;
+            let requested_resource = candidate.resource.name.clone();
+            (candidate, requested_resource, Some(endpoint))
+        }
+    };
     ensure!(
         !candidate.resource.domains.is_empty(),
         "Breeze resource {:?} has no hostname backend; IP literals are not part of DNS bypass and cannot be enabled by this strategy",
@@ -148,40 +203,35 @@ pub fn plan_breeze_resource_capture(
     updated.push_str(&original[..block.start]);
     updated.push_str(&new_block);
     updated.push_str(&original[block.end..]);
-    parse_and_validate(&updated, &feedback.config_path)
+    parse_and_validate(&updated, &config_path)
         .context("generated recorder config failed validation")?;
 
     let changed = updated != original;
     let diff = if changed {
-        managed_block_diff(
-            &feedback.config_path,
-            &original,
-            block.start,
-            old_block,
-            &new_block,
-        )
+        managed_block_diff(&config_path, &original, block.start, old_block, &new_block)
     } else {
         String::new()
     };
     let shared_domain_resources = shared_domain_resources(&candidate.snapshot, &candidate.resource);
 
     Ok(BreezeResourceCapturePlan {
-        config_path: feedback.config_path.clone(),
+        config_path: config_path.clone(),
         original_config: original,
         updated_config: updated,
         snapshot_dir: candidate.snapshot_dir.clone(),
         expected_resource: candidate.resource.clone(),
         report: BreezeResourceCaptureReport {
-            config: feedback.config_path,
+            config: config_path,
             snapshot_dir: candidate.snapshot_dir,
-            requested_resource: feedback.resource,
+            requested_resource,
+            requested_endpoint,
             resource: candidate.resource.name.clone(),
             resource_identity: candidate.resource.identity.clone(),
             descriptor: candidate.resource.descriptor_path.clone(),
             domains: candidate.resource.domains.iter().cloned().collect(),
             shared_domain_resources,
-            source_revision: feedback.source_revision,
-            source_evidence: feedback.source_evidence,
+            source_revision,
+            source_evidence,
             capture_resources_before: before.into_iter().collect(),
             capture_resources_after: after.into_iter().collect(),
             changed,
@@ -207,19 +257,7 @@ struct LoadedStrategy {
 }
 
 fn resolve_candidate(config: &AppConfig, selector: &str) -> Result<Candidate> {
-    let mut loaded = Vec::new();
-    for (strategy_index, strategy) in config.dns_mock.bypass_strategies.iter().enumerate() {
-        let DnsBypassStrategyConfig::Breeze {
-            snapshot_dir,
-            capture_resources,
-        } = strategy;
-        loaded.push(LoadedStrategy {
-            strategy_index,
-            snapshot_dir: snapshot_dir.clone(),
-            capture_resources: capture_resources.clone(),
-            snapshot: Snapshot::load(snapshot_dir)?,
-        });
-    }
+    let mut loaded = load_strategies(config)?;
 
     let mut exact = Vec::new();
     let mut named = Vec::new();
@@ -265,6 +303,114 @@ fn resolve_candidate(config: &AppConfig, selector: &str) -> Result<Candidate> {
     })
 }
 
+struct BackendEndpointSelector {
+    domain: String,
+    port: Option<u16>,
+}
+
+fn resolve_endpoint_candidate(
+    config: &AppConfig,
+    selector: &BackendEndpointSelector,
+) -> Result<Candidate> {
+    let mut loaded = load_strategies(config)?;
+    let mut matches = Vec::new();
+    let exact_endpoint = selector
+        .port
+        .map(|port| format!("{}:{port}", selector.domain));
+    for (loaded_index, strategy) in loaded.iter().enumerate() {
+        for (resource_index, resource) in strategy.snapshot.resources().iter().enumerate() {
+            let selected = exact_endpoint.as_ref().map_or_else(
+                || resource.domains.contains(&selector.domain),
+                |endpoint| resource.endpoints.contains(endpoint),
+            );
+            if selected {
+                matches.push((loaded_index, resource_index));
+            }
+        }
+    }
+    if matches.is_empty() {
+        bail!(
+            "backend endpoint {:?} does not belong to any resource in the configured Breeze snapshot bypass strategies",
+            exact_endpoint.as_deref().unwrap_or(&selector.domain)
+        );
+    }
+    if matches.len() > 1 {
+        let identities = matches
+            .iter()
+            .map(|(strategy, resource)| {
+                loaded[*strategy].snapshot.resources()[*resource]
+                    .identity
+                    .as_str()
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        bail!(
+            "backend endpoint {:?} is shared by multiple Breeze resources; provide its source-proven port when available: {identities}",
+            exact_endpoint.as_deref().unwrap_or(&selector.domain)
+        );
+    }
+
+    let (loaded_index, resource_index) = matches[0];
+    let selected = loaded.swap_remove(loaded_index);
+    let resource = selected.snapshot.resources()[resource_index].clone();
+    Ok(Candidate {
+        strategy_index: selected.strategy_index,
+        snapshot_dir: selected.snapshot_dir,
+        capture_resources: selected.capture_resources,
+        snapshot: selected.snapshot,
+        resource,
+    })
+}
+
+fn load_strategies(config: &AppConfig) -> Result<Vec<LoadedStrategy>> {
+    config
+        .dns_mock
+        .bypass_strategies
+        .iter()
+        .enumerate()
+        .map(|(strategy_index, strategy)| {
+            let DnsBypassStrategyConfig::Breeze {
+                snapshot_dir,
+                capture_resources,
+            } = strategy;
+            Ok(LoadedStrategy {
+                strategy_index,
+                snapshot_dir: snapshot_dir.clone(),
+                capture_resources: capture_resources.clone(),
+                snapshot: Snapshot::load(snapshot_dir)?,
+            })
+        })
+        .collect()
+}
+
+fn endpoint_selector(endpoint: &str) -> Result<BackendEndpointSelector> {
+    let authority = Authority::from_str(endpoint)
+        .with_context(|| format!("backend endpoint {endpoint:?} is not a hostname[:port]"))?;
+    let domain = authority.host().trim_end_matches('.').to_ascii_lowercase();
+    let port = authority.port_u16();
+    ensure!(
+        authority.port().is_none() || port.is_some(),
+        "backend endpoint contains an invalid port"
+    );
+    ensure!(
+        domain.contains('.') && domain.parse::<IpAddr>().is_err(),
+        "backend endpoint must contain a hostname domain; IP literals are not part of Breeze DNS bypass"
+    );
+    ensure!(
+        domain.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+        }),
+        "backend endpoint contains an invalid hostname domain"
+    );
+    Ok(BackendEndpointSelector { domain, port })
+}
+
 fn validate_existing_resources(snapshot: &Snapshot, selectors: &BTreeSet<String>) -> Result<()> {
     for selector in selectors {
         let resource = snapshot.resolve(selector)?;
@@ -298,6 +444,14 @@ fn validate_feedback(feedback: &BreezeResourceCaptureFeedback) -> Result<()> {
         !feedback.resource.contains(['/', '\\']),
         "Breeze resource must be a short name or descriptor filename"
     );
+    validate_single_line("source revision", &feedback.source_revision, 256)?;
+    validate_single_line("source evidence", &feedback.source_evidence, 1_024)?;
+    Ok(())
+}
+
+fn validate_endpoint_feedback(feedback: &BreezeEndpointCaptureFeedback) -> Result<()> {
+    validate_single_line("backend endpoint", &feedback.endpoint, 512)?;
+    endpoint_selector(&feedback.endpoint)?;
     validate_single_line("source revision", &feedback.source_revision, 256)?;
     validate_single_line("source evidence", &feedback.source_evidence, 1_024)?;
     Ok(())

@@ -151,8 +151,9 @@ The worker handoff is ready after local tests when it returns:
 - required coordinator transition inputs and unresolved risks.
 
 The worker's current turn becomes idle after handoff and does not wait for
-Replay. Retain the `API -> subagent -> worktree` binding until that API reaches
-coordinator `complete` or ownership is explicitly transferred.
+Replay. Retain the `API -> subagent -> worktree` binding through per-API
+`complete` and until workflow `terminal_allowed=true`, unless ownership is
+explicitly transferred.
 
 If serialized acceptance returns `implementation_required`, update that
 worker's worktree from the integrated target revision and resume the stored
@@ -166,5 +167,6 @@ After handoff, integrate the worker patch or commit into the coordinator
 worktree, resolve conflicts, freeze the target revision, and execute that API's
 coordinator-issued acceptance. Later integrations may change the target
 fingerprint and requeue completed evidence; rerun affected acceptance instead
-of preserving stale results. Release the binding and remove the worktree after
-the API reaches `complete` and the worktree is no longer needed.
+of preserving stale results. Release bindings and remove worker worktrees only
+after workflow `terminal_allowed=true` and they are no longer needed for
+delivery.

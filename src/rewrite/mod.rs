@@ -9,6 +9,7 @@ mod inventory;
 mod issue;
 mod model;
 mod preparation;
+mod recorder_capture;
 mod recording;
 mod recording_action;
 mod recording_execution;
@@ -18,6 +19,8 @@ mod repair;
 mod rule;
 mod status;
 mod store;
+#[cfg(test)]
+mod test_support;
 mod traffic_operation;
 mod transition;
 mod worker;
@@ -40,7 +43,7 @@ pub use model::{
     RewriteDependencyRuleReport, RewriteEvidenceCommand, RewriteEvidenceReport,
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
     RewriteInventoryReport, RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewritePhase,
-    RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteRecorderCaptureReport, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
     RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
     RewriteRecordingReason, RewriteRecordingStartReport, RewriteRecordingStartState,
@@ -48,6 +51,10 @@ pub use model::{
     RewriteStatusReport, RewriteTrafficOperationKind, RewriteTrafficOperationView,
     RewriteWorkerBlockingReason, RewriteWorkerDispatchState, RewriteWorkerDispatchView,
     RewriteWorkflowView,
+};
+pub use recorder_capture::{
+    RewriteRecorderCapturePlanOptions, apply_rewrite_recorder_capture,
+    plan_rewrite_recorder_capture,
 };
 pub use recording::{
     RewriteRecordingRequestOptions, execute_rewrite_recording_worker, request_rewrite_recording,
@@ -62,6 +69,8 @@ use model::{
     ACTION_SCHEMA_VERSION, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
 };
 use store::{RewriteLockState, RewriteStore};
+#[cfg(test)]
+pub(in crate::rewrite) use test_support::test_state;
 
 use crate::e2e_run::{
     FocusedBackgroundReclassification, reclassify_focused_background_dependencies,
@@ -149,6 +158,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             let invalidated =
                 inventory::invalidate_completed_for_target_change(&mut state, &target_fingerprint)?;
+            if recording::begin_pending_capture_refresh(&target_root, &mut state)? {
+                store.save(&state)?;
+            }
             let active_comparison_stale = state.phase == RewritePhase::ComparisonRecordingRequired
                 && state.target_fingerprint.as_deref() != Some(target_fingerprint.as_str());
             if active_comparison_stale {
@@ -260,6 +272,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 recording_request_reason: None,
                 recording_input_case_source: None,
                 recording_input_diagnosis: None,
+                recording_refresh: None,
                 active_slice: RewriteSliceState {
                     phase: RewritePhase::RecordingRequired,
                     api,
@@ -276,6 +289,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                     active_issue: None,
                     rule_plan: None,
                     dependency_rule_plan: None,
+                    recorder_capture_plan: None,
                     route: None,
                     e2e_current: false,
                     comparison_current: false,
@@ -333,6 +347,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                         &target_root,
                         ManagedRecordingOperation::Record,
                     )?;
+                    if let Some(refresh) = state.recording_refresh.as_mut() {
+                        refresh.recording_run_id = Some(state.recording_run_id.clone());
+                    }
                     state.bump();
                     store.save(&state)?;
                     return Ok(action::for_state(&target_root, &state));
@@ -340,6 +357,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             };
             state.recording_rejection = None;
             inventory::install(&mut state, apis)?;
+            state.recording_refresh = None;
             if inventory::current_requires_source_route(&state) {
                 state.phase = RewritePhase::ApiPending;
                 state.bump();
@@ -422,9 +440,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             store.save(&state)?;
             Ok(action::for_state(&target_root, &state))
         }
-        RewritePhase::SystemRepairRequired | RewritePhase::SliceComplete => {
-            Ok(action::for_state(&target_root, &state))
-        }
+        RewritePhase::AwaitingRecordingRefresh
+        | RewritePhase::SystemRepairRequired
+        | RewritePhase::SliceComplete => Ok(action::for_state(&target_root, &state)),
     }
 }
 
@@ -706,7 +724,9 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
     state.comparison_current = report.passed;
     if report.passed {
         state.active_issue = None;
-        if !inventory::complete_current_and_advance(state)? {
+        if !inventory::complete_current_and_advance(state)?
+            && !recording::begin_pending_capture_refresh(target_root, state)?
+        {
             state.phase = RewritePhase::SliceComplete;
         }
     } else {
@@ -757,46 +777,6 @@ fn validate_single_line(label: &str, value: &str) -> Result<()> {
 }
 
 #[cfg(test)]
-pub(in crate::rewrite) fn test_state() -> RewriteState {
-    RewriteState {
-        version: STATE_VERSION,
-        revision: 1,
-        workflow_id: "rewrite-test".to_string(),
-        recording_apis: vec!["GET /api".to_string()],
-        api_inventory: Vec::new(),
-        current_api_index: None,
-        parked_slices: std::collections::BTreeMap::new(),
-        worker_bindings: std::collections::BTreeMap::new(),
-        recording_run_id: "20260802000000".to_string(),
-        recording_rejection: None,
-        recording_settings: RewriteRecordingSettings::default(),
-        recording_request_reason: None,
-        recording_input_case_source: Some(PathBuf::from("recording-input")),
-        recording_input_diagnosis: None,
-        active_slice: RewriteSliceState {
-            phase: RewritePhase::RecordingRequired,
-            api: "GET /api".to_string(),
-            source_route: "/api".to_string(),
-            comparison_run_id: None,
-            comparison_rejection: None,
-            case_source: None,
-            case_inventory_id: None,
-            source_revision: None,
-            group_id: None,
-            target_fingerprint: None,
-            attempts: Vec::new(),
-            attempt_delta: None,
-            active_issue: None,
-            rule_plan: None,
-            dependency_rule_plan: None,
-            route: None,
-            e2e_current: false,
-            comparison_current: false,
-        },
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use std::fs;
     use std::process::Command;
@@ -814,7 +794,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(9)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(10)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),
