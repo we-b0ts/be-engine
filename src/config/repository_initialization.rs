@@ -47,6 +47,7 @@ pub struct RepositoryConfigInitResult {
     pub target_compile_contract: &'static str,
     pub target_stop_contract: String,
     pub rewrite_command: &'static str,
+    pub preflight_command: &'static str,
     pub record_command: &'static str,
     pub comparison_command: &'static str,
 }
@@ -150,6 +151,7 @@ fn initialize_repository_config_with(
                                   and launch that artifact; never pass --release to start",
         target_stop_contract: format!("scripts/{repository_name}-cli stop"),
         rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
+        preflight_command: "backend-rewrite init preflight",
         record_command: "traffic-e2e record --target-root .",
         comparison_command: "traffic-e2e record-comparison --target-root .",
     })
@@ -385,6 +387,7 @@ mod tests {
             result.rewrite_command,
             "backend-rewrite next --api '<METHOD path-or-pattern>'"
         );
+        assert_eq!(result.preflight_command, "backend-rewrite init preflight");
         assert_eq!(
             result.target_start_contract,
             format!(

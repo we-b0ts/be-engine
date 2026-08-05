@@ -8,6 +8,7 @@ use clap::{ArgAction, Args};
 use tracing::info;
 use traffic_e2e::{
     AppConfig, AppState, ArtifactOwner, HttpResponseRewritePluginConfig, RecordingApi, TlsConfig,
+    TrafficJsonlMode,
 };
 
 use super::interception::{DnsConfig, FakeIpConfig, Guard};
@@ -32,6 +33,9 @@ pub(super) struct RecordArgs {
     /// Override the per-API case limit for this run.
     #[arg(long = "per-api-case-limit", value_name = "N")]
     per_api_case_limit: Option<NonZeroUsize>,
+    /// Retain every run-level event regardless of the configured traffic JSONL mode.
+    #[arg(long)]
+    full_traffic_jsonl: bool,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -56,6 +60,9 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     let mut config = AppConfig::load(&args.config)?;
     if let Some(per_api_case_limit) = args.per_api_case_limit {
         config.override_per_api_case_limit_for_run(per_api_case_limit);
+    }
+    if args.full_traffic_jsonl {
+        config.recording.traffic_jsonl = TrafficJsonlMode::Full;
     }
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
@@ -383,6 +390,15 @@ mod tests {
             cli.record.control_socket.as_deref(),
             Some(Path::new("/run/traffic-e2e/recording.sock"))
         );
+    }
+
+    #[test]
+    fn accepts_a_full_traffic_jsonl_runtime_override() {
+        let cli =
+            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--full-traffic-jsonl"])
+                .unwrap();
+
+        assert!(cli.record.full_traffic_jsonl);
     }
 
     #[test]

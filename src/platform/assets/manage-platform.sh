@@ -32,7 +32,7 @@ for name in "${required_environment[@]}"; do
 done
 
 case "$operation" in
-    record|record-comparison) ;;
+    record|record-comparison|preflight) ;;
     *)
         printf 'error: unsupported managed recording operation %s\n' "$operation" >&2
         exit 1
@@ -102,12 +102,12 @@ fi
     printf 'error: run ID must contain 14 digits\n' >&2
     exit 2
 }
-if [[ "$operation" == record && "$baseline_recheck" == true ]]; then
+if [[ "$operation" != record-comparison && "$baseline_recheck" == true ]]; then
     printf 'error: baseline recheck is comparison-only\n' >&2
     exit 2
 fi
 
-for command_name in docker jq curl nc timeout base64 readlink id date find sort sed grep awk wc tr rm sha256sum; do
+for command_name in docker jq curl nc timeout base64 id date find awk wc tr rm tar; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf 'error: required command not found: %s\n' "$command_name" >&2
         exit 1
@@ -169,24 +169,31 @@ repo_name=${repo_name%-}
     printf 'error: target repository name cannot form a Docker image name\n' >&2
     exit 1
 }
+recording_image_project=$(printf '%s' "$repo_name" | tr '[:upper:]' '[:lower:]')
 token="${run_id}-$$"
 prefix="traffic-e2e-${repo_name}-${operation}-${token}"
 anchor_name="${prefix}-anchor"
 recorder_name="${prefix}-recorder"
 breeze_name="${prefix}-breeze"
 source_name="${prefix}-source"
-adapter_image="traffic-e2e/${repo_name}-recording-source:cache"
+adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
+adapter_dockerfile="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording"
 
 runtime_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/local"
-data_dir="$runtime_root/data"
-artifacts_dir="$runtime_root/artifacts"
+if [[ "$operation" == preflight ]]; then
+    preflight_root="$runtime_root/preflight/$run_id"
+    data_dir="$preflight_root/data"
+    artifacts_dir="$preflight_root/artifacts"
+else
+    data_dir="$runtime_root/data"
+    artifacts_dir="$runtime_root/artifacts"
+fi
 local_dir="$runtime_root/ai-forbidden/platform"
 diagnostics_dir="$local_dir/diagnostics/${operation}-${token}"
 control_dir="$local_dir/control/${token}"
-adapter_context="$local_dir/adapters/${token}"
-mkdir -p "$data_dir" "$artifacts_dir" "$diagnostics_dir" "$control_dir" "$adapter_context"
-chmod 0700 "$diagnostics_dir" "$control_dir" "$adapter_context"
+mkdir -p "$data_dir" "$artifacts_dir" "$diagnostics_dir" "$control_dir"
+chmod 0700 "$diagnostics_dir" "$control_dir"
 
 anchor_started=false
 recorder_started=false
@@ -296,7 +303,6 @@ cleanup() {
     "$recorder_started" && stop_container "$recorder_name"
     "$anchor_started" && stop_container "$anchor_name"
     remove_private_runtime_dir "$control_dir" "$local_dir/control" || status=1
-    remove_private_runtime_dir "$adapter_context" "$local_dir/adapters" || status=1
     exit "$status"
 }
 trap cleanup EXIT
@@ -350,15 +356,21 @@ load_runtime_spec() {
     local inspect_json=$1
     local mount_mode=$2
     local environment_mode=$3
+    local launch_mode=$4
+    [[ "$launch_mode" == exact || "$launch_mode" == image ]] || {
+        printf 'error: unsupported container launch mode %s\n' "$launch_mode" >&2
+        return 1
+    }
     runtime_args=(--platform linux/amd64)
     runtime_command=()
-    local workdir
-    workdir=$(jq -r '.[0].Config.WorkingDir // empty' <<<"$inspect_json")
-    [[ -z "$workdir" ]] || runtime_args+=(--workdir "$workdir")
-    local configured_user
-    configured_user=$(jq -r '.[0].Config.User // empty' <<<"$inspect_json")
-    [[ -z "$configured_user" ]] || runtime_args+=(--user "$configured_user")
-    [[ "$(jq -r '.[0].HostConfig.Privileged // false' <<<"$inspect_json")" != true ]] || runtime_args+=(--privileged)
+    if [[ "$launch_mode" == exact ]]; then
+        local workdir configured_user
+        workdir=$(jq -r '.[0].Config.WorkingDir // empty' <<<"$inspect_json")
+        [[ -z "$workdir" ]] || runtime_args+=(--workdir "$workdir")
+        configured_user=$(jq -r '.[0].Config.User // empty' <<<"$inspect_json")
+        [[ -z "$configured_user" ]] || runtime_args+=(--user "$configured_user")
+        [[ "$(jq -r '.[0].HostConfig.Privileged // false' <<<"$inspect_json")" != true ]] || runtime_args+=(--privileged)
+    fi
     [[ "$(jq -r '.[0].HostConfig.ReadonlyRootfs // false' <<<"$inspect_json")" != true ]] || runtime_args+=(--read-only)
     [[ "$(jq -r '.[0].HostConfig.Init // false' <<<"$inspect_json")" != true ]] || runtime_args+=(--init)
 
@@ -369,7 +381,7 @@ load_runtime_spec() {
         name=${entry%%=*}
         [[ "$name" == HOSTNAME ]] && continue
         if [[ "$environment_mode" == recording ]] &&
-            [[ "$name" == RUN_COMMAND || "$name" == MESH_CONNECT_HOST || "$name" == JAVA_TOOL_OPTIONS || "$name" == TRAFFIC_E2E_SOURCE_RUN_COMMAND || "$name" == TRAFFIC_E2E_SOURCE_WORKDIR ]]; then
+            [[ "$name" == RUN_COMMAND || "$name" == MESH_CONNECT_HOST || "$name" == JAVA_TOOL_OPTIONS ]]; then
             continue
         fi
         runtime_args+=(--env "$entry")
@@ -420,15 +432,17 @@ load_runtime_spec() {
         fi
     done < <(jq -r '.[0].Mounts[]? | [.Source, .Destination, .RW, (.Name // "")] | @tsv' <<<"$inspect_json")
 
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].Config.Entrypoint[]? | ., "\u0000"' <<<"$inspect_json")
-    if ((${#entries[@]} > 0)); then
-        runtime_args+=(--entrypoint "${entries[0]}")
-        ((${#entries[@]} == 1)) || runtime_command+=("${entries[@]:1}")
+    if [[ "$launch_mode" == exact ]]; then
+        entries=()
+        mapfile -d '' -t entries < <(jq -j '.[0].Config.Entrypoint[]? | ., "\u0000"' <<<"$inspect_json")
+        if ((${#entries[@]} > 0)); then
+            runtime_args+=(--entrypoint "${entries[0]}")
+            ((${#entries[@]} == 1)) || runtime_command+=("${entries[@]:1}")
+        fi
+        entries=()
+        mapfile -d '' -t entries < <(jq -j '.[0].Config.Cmd[]? | ., "\u0000"' <<<"$inspect_json")
+        runtime_command+=("${entries[@]}")
     fi
-    entries=()
-    mapfile -d '' -t entries < <(jq -j '.[0].Config.Cmd[]? | ., "\u0000"' <<<"$inspect_json")
-    runtime_command+=("${entries[@]}")
 }
 
 normalize_breeze_directories() {
@@ -446,7 +460,7 @@ normalize_breeze_directories() {
 
 start_breeze() {
     local network=$1
-    load_runtime_spec "$breeze_inspect" exact exact
+    load_runtime_spec "$breeze_inspect" exact exact exact
     docker run --detach --name "$breeze_name" --network "$network" \
         "${runtime_args[@]}" "$breeze_image" "${runtime_command[@]}" >/dev/null
     breeze_started=true
@@ -455,7 +469,7 @@ start_breeze() {
 
 start_genuine_source() {
     local network=$1
-    load_runtime_spec "$source_inspect" exact exact
+    load_runtime_spec "$source_inspect" exact exact exact
     local image
     image=$(jq -r '.[0].Config.Image' <<<"$source_inspect")
     docker run --detach --name "$source_name" --network "$network" \
@@ -465,11 +479,9 @@ start_genuine_source() {
         "$TRAFFIC_E2E_SOURCE_READY_STATUS" source "$source_name"
 }
 
-prepare_recording_adapter() {
+build_recording_adapter() {
     local source_image source_image_id resolved_source_image_id
-    local source_launcher_path source_run_command source_workdir
-    local adapter_fingerprint cached_adapter_record cached_adapter_image_id
-    local cached_adapter_fingerprint adapter_iid_file path file_hash
+    local adapter_iid_file
     source_image=$(jq -r '.[0].Config.Image' <<<"$source_inspect")
     source_image_id=$(jq -r '.[0].Image' <<<"$source_inspect")
     [[ "$source_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
@@ -481,84 +493,21 @@ prepare_recording_adapter() {
         printf 'error: source image reference no longer resolves to the inspected container image\n' >&2
         return 1
     }
-    source_run_command=$(jq -r '.[0].Config.Env[]? | select(startswith("RUN_COMMAND=")) | sub("^RUN_COMMAND="; "")' <<<"$source_inspect" | tail -n 1)
-    source_workdir=$(jq -r '.[0].Config.WorkingDir // "/"' <<<"$source_inspect")
-    [[ -n "$source_run_command" ]] || {
-        printf 'error: Breeze source adapter requires the source container to expose its final application command through RUN_COMMAND\n' >&2
+    [[ -f "$adapter_dockerfile" && ! -L "$adapter_dockerfile" ]] || {
+        printf 'error: recording source adaptor Dockerfile is missing or not a regular file: %s\n' \
+            "$adapter_dockerfile" >&2
         return 1
     }
-    case "$source_run_command" in
-        /* | ./* | ../*) ;;
-        *) source_run_command="./${source_run_command}" ;;
-    esac
-    [[ "$source_workdir" == /* && "$source_workdir" != *[[:space:]\\\"]* ]] || {
-        printf 'error: Breeze source adapter requires an absolute source working directory without whitespace, quotes, or backslashes\n' >&2
-        return 1
-    }
-    source_launcher_path="${source_workdir%/}/traffic-e2e-source-root-launcher"
-    cp "$TRAFFIC_E2E_PLATFORM_ASSETS/MeshConnectUtil.java" "$adapter_context/MeshConnectUtil.java"
-    cp "$TRAFFIC_E2E_PLATFORM_ASSETS/apply-breeze-sdk-patch" "$adapter_context/apply-breeze-sdk-patch"
-    chmod 0700 "$adapter_context/apply-breeze-sdk-patch"
-    printf '%s' "$source_run_command" >"$adapter_context/source-run-command"
-    printf '%s' "$source_workdir" >"$adapter_context/source-workdir"
-    cat >"$adapter_context/source-java-launcher" <<'LAUNCHER'
-#!/bin/sh
-set -eu
-cd "${TRAFFIC_E2E_SOURCE_WORKDIR:?}"
-exec /bin/sh -c "${TRAFFIC_E2E_SOURCE_RUN_COMMAND:?}"
-LAUNCHER
-    cat >"$adapter_context/source-root-launcher" <<'LAUNCHER'
-#!/bin/sh
-set -eu
-exec /usr/sbin/chroot --userspec=998:998 --groups=0 / /usr/local/bin/traffic-e2e-source-java-launcher
-LAUNCHER
-    chmod 0700 "$adapter_context/source-java-launcher" "$adapter_context/source-root-launcher"
-    cat >"$adapter_context/Dockerfile" <<DOCKERFILE
-FROM ${source_image}
-COPY MeshConnectUtil.java /usr/local/share/traffic-e2e/MeshConnectUtil.java
-COPY apply-breeze-sdk-patch /usr/local/bin/apply-breeze-sdk-patch
-RUN chmod 0755 /usr/local/bin/apply-breeze-sdk-patch \\
-    && /usr/local/bin/apply-breeze-sdk-patch \\
-    && chown -R 998:998 /data1/weibo
-COPY source-java-launcher /usr/local/bin/traffic-e2e-source-java-launcher
-COPY source-root-launcher ${source_launcher_path}
-RUN chmod 0755 /usr/local/bin/traffic-e2e-source-java-launcher ${source_launcher_path} \\
-    && java_bin="\$(readlink -f "\$(command -v java)")" \\
-    && java_jli_path="\$(ldd "\${java_bin}" | awk '\$1 == "libjli.so" { print \$3 }')" \\
-    && java_jli_dir="\$(dirname "\$(readlink -f "\${java_jli_path}")")" \\
-    && printf '%s\\n' "\${java_jli_dir}" >/etc/ld.so.conf.d/traffic-e2e-java.conf \\
-    && ldconfig \\
-    && setcap cap_net_bind_service=+ep "\${java_bin}" \\
-    && getcap "\${java_bin}" | grep -F 'cap_net_bind_service+ep'
-DOCKERFILE
-    adapter_fingerprint=$(
-        {
-            printf '%s\0' "$source_image_id"
-            while IFS= read -r -d '' path; do
-                file_hash=$(sha256sum "$path")
-                printf '%s\0%s\0' "${path##*/}" "${file_hash%% *}"
-            done < <(find "$adapter_context" -mindepth 1 -maxdepth 1 -type f -print0 | sort -z)
-        } | sha256sum
-    )
-    adapter_fingerprint=${adapter_fingerprint%% *}
-    cached_adapter_record=$(docker image inspect \
-        --format '{{.Id}} {{ index .Config.Labels "com.weibo.traffic-e2e.recording-adapter.fingerprint" }}' \
-        "$adapter_image" 2>/dev/null || true)
-    cached_adapter_image_id=${cached_adapter_record%% *}
-    cached_adapter_fingerprint=${cached_adapter_record#* }
-    if [[ "$cached_adapter_fingerprint" == "$adapter_fingerprint" ]]; then
-        adapter_image_id=$cached_adapter_image_id
-        printf 'reusing cached recording source adapter %s (%s)\n' \
-            "$adapter_image" "$adapter_image_id" >&2
-        return 0
-    fi
     adapter_iid_file="$control_dir/adapter-image-id"
     rm -f "$adapter_iid_file"
-    docker build --platform linux/amd64 --network none \
+    (
+        cd "$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e"
+        find . -mindepth 1 -maxdepth 1 -type f -print0 | \
+            tar --create --file - --null --files-from -
+    ) | docker build --platform linux/amd64 --network none \
         --iidfile "$adapter_iid_file" \
-        --label "com.weibo.traffic-e2e.recording-adapter.fingerprint=${adapter_fingerprint}" \
-        --label "com.weibo.traffic-e2e.recording-adapter.source-image-id=${source_image_id}" \
-        --tag "$adapter_image" "$adapter_context"
+        --build-arg "SOURCE_IMAGE=${source_image_id}" \
+        --tag "$adapter_image" --file Dockerfile.recording -
     adapter_image_id=$(<"$adapter_iid_file")
     [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
         printf 'error: adapter build did not publish an image ID\n' >&2
@@ -566,24 +515,47 @@ DOCKERFILE
     }
 }
 
+resolve_or_build_recording_adapter() {
+    adapter_image_id=$(docker image inspect --format '{{.Id}}' "$adapter_image" 2>/dev/null || true)
+    if [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+        printf 'reusing initialized recording source image %s (%s)\n' \
+            "$adapter_image" "$adapter_image_id" >&2
+        return 0
+    fi
+    printf 'initialized recording source image %s is missing; building it once\n' \
+        "$adapter_image" >&2
+    build_recording_adapter
+}
+
+require_initialized_recording_adapter() {
+    adapter_image_id=$(docker image inspect --format '{{.Id}}' "$adapter_image" 2>/dev/null || true)
+    [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+        printf 'error: initialization must build recording source image %s before preflight\n' \
+            "$adapter_image" >&2
+        return 1
+    }
+    printf 'using initialized recording source image %s (%s) for preflight\n' \
+        "$adapter_image" "$adapter_image_id" >&2
+}
+
 start_recording_source() {
     local truststore=$1
-    load_runtime_spec "$source_inspect" recording recording
-    local source_run_command source_workdir
-    source_run_command=$(<"$adapter_context/source-run-command")
-    source_workdir=$(<"$adapter_context/source-workdir")
+    load_runtime_spec "$source_inspect" recording recording image
     runtime_args+=(
-        --user 0:0
-        --env RUN_COMMAND=traffic-e2e-source-root-launcher
-        --env MESH_CONNECT_HOST=breeze.recording
-        --env "TRAFFIC_E2E_SOURCE_RUN_COMMAND=${source_run_command}"
-        --env "TRAFFIC_E2E_SOURCE_WORKDIR=${source_workdir}"
         --env 'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/traffic-e2e/source-truststore.jks -Djavax.net.ssl.trustStorePassword=changeit'
         --volume "$data_dir/traffic-recorder-ca.pem:/traffic-e2e/traffic-recorder-ca.pem:ro"
         --volume "$truststore:/traffic-e2e/source-truststore.jks:ro"
     )
+    if [[ "$operation" == preflight ]]; then
+        runtime_args+=(
+            --volume "$TRAFFIC_E2E_PLATFORM_ASSETS/HttpsProbe.class:/traffic-e2e/HttpsProbe.class:ro"
+        )
+    fi
+    if "$breeze_enabled"; then
+        runtime_args+=(--env MESH_CONNECT_HOST=breeze.recording)
+    fi
     docker run --detach --name "$source_name" --network "container:${anchor_name}" \
-        "${runtime_args[@]}" "$adapter_image_id" "${runtime_command[@]}" >/dev/null
+        "${runtime_args[@]}" "$adapter_image_id" >/dev/null
     source_started=true
     wait_port 880 source "$source_name"
     docker exec "$source_name" /bin/sh -ec '
@@ -606,6 +578,31 @@ run_no_fallback() {
     "$brz_no_fallback" || return 0
     env -u TRAFFIC_E2E_ENCRYPTION_KEY_B64 -u BASH_ENV \
         "$TRAFFIC_E2E_PLATFORM_ASSETS/brz-no-fallback.sh"
+}
+
+run_preflight_https_probe() {
+    [[ "$operation" == preflight ]] || return 0
+    local status=0
+    docker exec "$source_name" /bin/sh -ec '
+        command -v java >/dev/null
+        java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e \
+            HttpsProbe https://demo.test/
+    ' || status=$?
+    if ((status != 0)); then
+        printf 'warning: automatic HTTPS probe exited with status %s; recorded evidence remains authoritative\n' \
+            "$status" >&2
+    fi
+}
+
+announce_preflight_business_input() {
+    [[ "$operation" == preflight ]] || return 0
+    jq -cn \
+        --arg recording_origin "$TRAFFIC_E2E_RECORDING_ORIGIN" \
+        '{
+            phase: "preflight-business-input-required",
+            ready: true,
+            recording_origin: $recording_origin
+        }'
 }
 
 start_recording_input() {
@@ -641,8 +638,12 @@ run_standard_recording() {
         printf 'error: recording run already exists: %s\n' "$run_id" >&2
         return 1
     }
+    if [[ "$operation" == preflight ]]; then
+        require_initialized_recording_adapter
+    else
+        resolve_or_build_recording_adapter
+    fi
     if "$breeze_enabled"; then
-        prepare_recording_adapter
         normalize_breeze_directories
         docker pull "$breeze_image" >/dev/null
     fi
@@ -652,6 +653,9 @@ run_standard_recording() {
         "$anchor_image" >/dev/null
     anchor_started=true
     local -a recorder_command=(internal recorder-run --config /workspace/recorder.toml --control-socket "$control_socket" --artifact-owner "$artifact_owner" --dns --run-id "$run_id")
+    if [[ "$operation" == preflight ]]; then
+        recorder_command+=(--full-traffic-jsonl)
+    fi
     local -a recorder_mounts=()
     if "$breeze_enabled"; then
         recorder_mounts+=(
@@ -677,29 +681,32 @@ run_standard_recording() {
         "${recorder_command[@]}" >/dev/null
     recorder_started=true
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-listeners --control-socket "$control_socket"
+    docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh \
+        --volume "$data_dir:/workspace/data" "$adapter_image_id" -ec '
+            test -s /workspace/data/traffic-recorder-ca.pem
+            rm -f /workspace/data/source-truststore.jks
+            keytool -importcert -noprompt -alias traffic-recorder-ca \
+                -file /workspace/data/traffic-recorder-ca.pem \
+                -keystore /workspace/data/source-truststore.jks -storepass changeit >/dev/null
+            chmod 0644 /workspace/data/traffic-recorder-ca.pem /workspace/data/source-truststore.jks
+        '
     if "$breeze_enabled"; then
-        docker run --rm --platform linux/amd64 --network none --entrypoint /bin/sh \
-            --volume "$data_dir:/workspace/data" "$adapter_image_id" -ec '
-                test -s /workspace/data/traffic-recorder-ca.pem
-                rm -f /workspace/data/source-truststore.jks
-                keytool -importcert -noprompt -alias traffic-recorder-ca \
-                    -file /workspace/data/traffic-recorder-ca.pem \
-                    -keystore /workspace/data/source-truststore.jks -storepass changeit >/dev/null
-                chmod 0644 /workspace/data/traffic-recorder-ca.pem /workspace/data/source-truststore.jks
-            '
         start_breeze "container:${anchor_name}"
-        start_recording_source "$truststore"
-    else
-        start_genuine_source "container:${anchor_name}"
     fi
+    start_recording_source "$truststore"
     run_no_fallback
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket "$control_socket"
+    run_preflight_https_probe
+    announce_preflight_business_input
     start_recording_input
     wait_for_recorder_or_duration
     stop_recording_input
     finalize_recorder
-    jq -e '.status == "completed" and .failed_cases == 0 and (.errors | length == 0)' \
-        "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null
+    local manifest_filter='.status == "completed" and .failed_cases == 0 and (.errors | length == 0)'
+    if [[ "$operation" == preflight ]]; then
+        manifest_filter+=' and .published_cases > 0'
+    fi
+    jq -e "$manifest_filter" "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null
 }
 
 run_comparison_recording() {
@@ -746,4 +753,5 @@ run_comparison_recording() {
 case "$operation" in
     record) run_standard_recording ;;
     record-comparison) run_comparison_recording ;;
+    preflight) run_standard_recording ;;
 esac

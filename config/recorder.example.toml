@@ -3,7 +3,8 @@ root_dir = "./.traffic-e2e/local/artifacts"
 
 [comparison_recording]
 # Comparison recording reuses http_gateway.matched_upstream as the baseline.
-# Every configured HTTP gateway rule must use only GET, HEAD, or OPTIONS.
+# Comparison recording uses the methods declared by each HTTP gateway rule
+# without an additional read-only-method restriction.
 candidate_upstream = "http://127.0.0.1:6161"
 # Optional: capture baseline -> candidate -> baseline so source-side time or
 # mutable-data drift is visible to offline verification.
@@ -244,72 +245,6 @@ redact_headers = [
   "proxy-authorization",
   "proxy-authenticate",
 ]
-
-# Source-proven process work can be moved from case ownership into the shared
-# Global replay pool. Use `config recorder plan|apply background-dependencies`;
-# do not hand-edit generated rules.
-# [[recording.background_dependencies]]
-# name = "config-refresh"
-# protocol = "http"
-# authorities = ["config.api.demo.test"]
-# methods = ["GET"]
-# path_prefixes = ["/1/config/service"]
-# source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
-
-# Process-owned Motan traffic uses an exact logical RPC identity. Do not
-# persist node IPs, ports, Vintage aliases, or payload values.
-# [[recording.background_dependencies]]
-# name = "kunpeng-refresh"
-# protocol = "motan"
-# group = "kunpeng-config-rpc"
-# interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc"
-# method_name = "getConfigByName"
-# source_evidence = "MapiConfigLoader.java:init scheduled refresh unrelated to selected API"
-
-# Source-proven Redis ZCOUNT process traffic uses the stable service port
-# set plus one exact command and bounded key shape. Domains are diagnostic only.
-# [[recording.background_dependencies]]
-# name = "interest-tag-mining-cache-refresh"
-# protocol = "redis"
-# ports = [20917, 20918, 20919]
-# command = "ZCOUNT"
-# key_prefix = "1042015:"
-# key_suffix = ".wtm2"
-# source_evidence = "InterestTagCardServiceImpl.java:init process-owned WAIC cache refresh"
-
-# Process-owned Redis startup reads use an exact key set with GET, SCARD, or
-# HGETALL. Background-rule Global exchanges replay independently from the
-# source connection lane.
-# [[recording.background_dependencies]]
-# name = "startup-cache-warm"
-# protocol = "redis"
-# ports = [20917]
-# command = "GET"
-# keys = ["cache:init:a", "cache:init:b"]
-# initial_load_timeout_ms = 60000
-# source_evidence = "src/cache/warm.rs:init loads response-driving local state"
-
-# Breeze-backed Memcached local-cache warm rules use a stable descriptor
-# identity without its dynamic port. The tool resolves the business resource
-# and writes this identity after validating finalized replay evidence. Numeric
-# bounds are unsigned 64-bit values so full UID-derived keys are supported.
-# [[recording.background_dependencies]]
-# name = "planet-video-cache-warm"
-# protocol = "memcached"
-# breeze_identity = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc@cs"
-# command = "get"
-# key_start = 0
-# key_end = 4095
-# key_separator = "."
-# key_suffix = "pl_video"
-# Once HTTP readiness succeeds, observe the initial load for up to the
-# configured window and log progress every 10 seconds. If the expected load
-# remains incomplete, warn and continue case admission.
-# initial_load_timeout_ms = 60000
-# source_evidence = "TopUserServiceImpl.java:691 scheduled local-cache warm"
-
-# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
-# END AI-MANAGED BACKGROUND DEPENDENCIES
 
 # MySQL-only first version of explicit write allowances. Every field is exact
 # and all configured dimensions must match. operations, databases, and tables

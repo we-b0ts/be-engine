@@ -304,7 +304,7 @@ async fn response_limit_preserves_baseline_and_records_partial_response() {
 }
 
 #[tokio::test]
-async fn non_read_request_is_never_mirrored() {
+async fn unconfigured_post_is_not_mirrored() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
@@ -314,8 +314,7 @@ async fn non_read_request_is_never_mirrored() {
         spawn_counting_upstream(StatusCode::OK, "candidate", 1, None).await;
     let gateway = free_addr();
     let run_id = "20260722160007";
-    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
-    config.recording.max_body_bytes = 4;
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
     let task = tokio::spawn(traffic_e2e::run_comparison_recording(
         config,
         Some(run_id.to_string()),
@@ -330,6 +329,36 @@ async fn non_read_request_is_never_mirrored() {
     assert!(response.contains("fixed"));
     assert_eq!(baseline_requests.load(Ordering::SeqCst), 0);
     assert_eq!(candidate_requests.load(Ordering::SeqCst), 0);
+    task.abort();
+}
+
+#[tokio::test]
+async fn configured_post_is_mirrored_to_both_upstreams() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let (baseline, baseline_requests) =
+        spawn_counting_upstream(StatusCode::OK, "baseline", 1, None).await;
+    let (candidate, candidate_requests) =
+        spawn_counting_upstream(StatusCode::OK, "candidate", 1, None).await;
+    let gateway = free_addr();
+    let run_id = "20260722160008";
+    let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    config.http_gateway.rules[0].methods = vec!["POST".to_string()];
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
+    wait_for_port(gateway).await;
+
+    let response = raw_request(
+        gateway,
+        b"POST /api/write HTTP/1.1\r\nHost: example.com\r\nContent-Length: 5\r\nConnection: close\r\n\r\n12345",
+    )
+    .await;
+    assert!(response.contains("baseline"));
+    wait_for_counter(&baseline_requests, 1).await;
+    wait_for_counter(&candidate_requests, 1).await;
     task.abort();
 }
 
