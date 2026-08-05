@@ -277,7 +277,7 @@ pub(super) fn require_internal_root_ignored(
 fn load_project_config(target_root: &Path, config_path: &Path) -> Result<ProjectConfig> {
     if !config_path.exists() {
         bail!(
-            "{} is missing; from the target repository run `traffic-e2e config init \
+            "{} is missing; from the target repository run `backend-rewrite init \
              --source-container <container> [--breeze]`",
             config_path.display()
         );
@@ -777,6 +777,6 @@ mod tests {
         let error = resolve_layout(target.path(), &cases, None).unwrap_err();
 
         assert!(error.to_string().contains("project.yaml"));
-        assert!(error.to_string().contains("traffic-e2e config init"));
+        assert!(error.to_string().contains("backend-rewrite init"));
     }
 }

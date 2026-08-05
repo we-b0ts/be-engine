@@ -11,6 +11,9 @@ Initialize all repository configuration once from the target root:
 traffic-e2e config init --source-container <existing-source-container> [--breeze]
 ```
 
+The generated Recorder HTTP gateway listens on port `17171` by default; use
+`--recording-port` only when that port is unavailable.
+
 The generated version-9 configuration has separate `source`, optional `breeze`, `target`,
 `replay`, `recording`, `delivery`, and `state` sections. Relevant target fields
 are the conventional CLI, `.traffic-e2e/local/boot`, HTTP host, port, readiness,

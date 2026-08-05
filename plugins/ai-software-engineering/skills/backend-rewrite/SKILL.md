@@ -33,6 +33,11 @@ before its first implementation dispatch. An assigned worker reads
 code. Do not load worker engineering guidance in the main orchestrator merely
 to prepare a handoff.
 
+Read [project-init.md](references/project-init.md) only when the caller
+explicitly asks to initialize an uninitialized target repository. Project
+initialization is manual and one-time; normal rewrite and resumed sessions
+assume it is complete and never rerun it.
+
 ## Coordinator Contract
 
 Start or resume an initialized, all-configured-API workflow from the canonical
@@ -175,7 +180,7 @@ replace coordinator aggregation with bulk scripts, make target code consume
 recorded results, or modify source business behavior to manufacture evidence.
 
 The initialized target repository provides ordinary product implementation,
-source-compatible configuration, and the generic lifecycle boundary:
+source-compatible configuration, and this lifecycle boundary:
 
 ```text
 scripts/<project>-cli start --e2e \
@@ -184,12 +189,11 @@ scripts/<project>-cli stop
 ```
 
 Compile once per E2E start and launch release output when the normal compile
-supports it. Keep `stop` idempotent. The target CLI must not read cases, Replay
-sessions, expected responses, or reports.
+supports it. Keep `stop` idempotent. For Breeze-dependent targets, `--e2e`
+means the target CLI does not launch Breeze; the coordinator owns its shared
+lifecycle. The target CLI must not read cases, Replay sessions, expected
+responses, or reports.
 
 Read [configuration-compatibility.md](references/configuration-compatibility.md)
 before implementing target configuration loading or accepting
-configuration-dependent startup. Read
-[platform-breeze-runtime.md](references/platform-breeze-runtime.md) only for a
-Platform Java/Tomcat source whose dependency clients are Breeze-owned; that
-reference adds the Breeze-specific startup contract.
+configuration-dependent startup.

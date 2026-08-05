@@ -13,6 +13,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
     assert_eq!(
         visible,
         [
+            "init",
             "next",
             "status",
             "inventory",
@@ -54,6 +55,39 @@ fn compact_json_is_default_and_pretty_is_explicit() {
 
 #[test]
 fn parses_the_bounded_rewrite_surface() {
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "init",
+            "--source-container",
+            "friendship",
+            "--breeze",
+        ])
+        .is_ok()
+    );
+    let RewriteCommand::Init(default_init) =
+        Cli::try_parse_from(["test", "init", "--source-container", "friendship"])
+            .unwrap()
+            .command
+    else {
+        panic!("expected init command");
+    };
+    assert_eq!(
+        default_init.recording_port,
+        traffic_e2e::DEFAULT_RECORDING_PORT
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "init",
+            "--source-container",
+            "friendship",
+            "--breeze=custom-breeze",
+            "--recording-port",
+            "18181",
+        ])
+        .is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

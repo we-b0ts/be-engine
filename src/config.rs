@@ -66,8 +66,8 @@ pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
 pub use initialization::{
-    DEFAULT_RECORDING_RULE, RecorderConfigInitOptions, RecorderConfigInitResult,
-    initialize_recorder_config,
+    DEFAULT_RECORDING_PORT, DEFAULT_RECORDING_RULE, RecorderConfigInitOptions,
+    RecorderConfigInitResult, initialize_recorder_config,
 };
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,

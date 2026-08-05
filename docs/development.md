@@ -986,23 +986,22 @@ command, and `next` or `recording request` cannot bypass the repair. Successful
 verification decides whether to rerun the same cases or allocate fresh standard
 recording evidence.
 
-The lower-level commands in the remainder of this section are the traffic
-engine interface used by the coordinator and by traffic-e2e maintainers. They
-are not the normal rewrite-AI workflow.
-
-Initialize all three generated documents once:
+Initialize a rewrite target's three generated documents once, before its first
+coordinator session:
 
 ```bash
-traffic-e2e config init --target-root ../target \
-  --source-container <existing-source-container> [--breeze]
+backend-rewrite --target-root ../target init \
+  --source-container <existing-source-container> [--breeze] \
+  [--recording-port 17171]
 ```
 
 From the target root, `--target-root` is unnecessary. `--breeze` uses the
 conventional existing container named `breeze`; use `--breeze=<container>` only
-for a non-standard name. Defaults are source port `8080`, target port `8081`,
-readiness `/healthz` with status `404`, and upstream DNS `10.10.10.11:53`.
-Override a default only when the inspected application contract proves it is
-different. Source and Breeze containers need only be inspectable, not running.
+for a non-standard name. Defaults are Recorder HTTP gateway port `17171`,
+source port `8080`, target port `8081`, readiness `/healthz` with status `404`,
+and upstream DNS `10.10.10.11:53`. Override a default only when the inspected
+application contract proves it is different. Source and Breeze containers
+need only be inspectable, not running.
 
 The command atomically generates version-9 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
@@ -1059,6 +1058,10 @@ replayed case.
 The runner sends HTTP requests itself; the target CLI does not read cases or
 write response reports. The configured port is shared by target start,
 readiness, replay requests, and comparison requests.
+
+The lower-level commands in the remainder of this section are the traffic
+engine interface used by the coordinator and by traffic-e2e maintainers. They
+are not the normal rewrite-AI workflow.
 
 Prepare each API after confirming whether its source URI is static or dynamic:
 

@@ -17,6 +17,7 @@ use traffic_e2e::{
 };
 
 mod dependency_rule;
+mod project_init;
 mod recorder_capture;
 
 #[derive(Debug, Parser)]
@@ -41,7 +42,7 @@ struct Cli {
     /// Pretty-print JSON for human inspection; compact JSON is the default.
     #[arg(long, global = true)]
     pretty: bool,
-    /// Initialized target repository root.
+    /// Target repository root.
     #[arg(long, default_value = ".")]
     target_root: PathBuf,
     #[command(subcommand)]
@@ -86,6 +87,8 @@ fn report_error(error: &anyhow::Error) {
 
 #[derive(Debug, Subcommand)]
 enum RewriteCommand {
+    /// Initialize one target repository for a backend rewrite.
+    Init(project_init::ProjectInitArgs),
     /// Advance deterministic stages and return the only allowed next action.
     Next(NextArgs),
     /// Show bounded coordinator state without advancing it.
@@ -326,6 +329,7 @@ async fn run(cli: Cli) -> Result<()> {
     let target_root = cli.target_root;
     let pretty = cli.pretty;
     match cli.command {
+        RewriteCommand::Init(args) => project_init::run(target_root, args, pretty),
         RewriteCommand::Next(args) => {
             let recovery_root = target_root.clone();
             let mut operation = Box::pin(next_rewrite(RewriteNextOptions {
