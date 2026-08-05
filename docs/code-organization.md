@@ -39,10 +39,20 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
-- `rewrite` owns migration sequencing, the single coordinator state, bounded
-  action/evidence projection, rule routing, and the active-slice completion
-  gate. It consumes public traffic operations and must not move rewrite state
-  or completion semantics into Recorder, Replay, comparison, or `e2e_run`.
+- `rewrite` owns migration sequencing, the single coordinator state with
+  API-scoped AI work slices, the serialized recording/Replay/comparison runtime
+  lease, bounded action/evidence projection, rule routing, and the whole-target
+  completion gate. It consumes public traffic operations and must not move
+  rewrite state or completion semantics into Recorder, Replay, comparison, or
+  `e2e_run`.
+- Within `rewrite`, `mod.rs` remains the atomic coordinator-transition facade,
+  `action.rs` keeps the exhaustive action/command projection, and `recording.rs`
+  keeps the managed recording request/start/worker lifecycle. `worker.rs` owns
+  dedicated API-subagent identity binding and dispatch/resume confirmation.
+  Together, these files are intentionally cohesive near the review threshold;
+  status projection and the traffic lease are separate modules, and further
+  splitting should follow a real responsibility boundary rather than divide
+  one transaction or action contract.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
 
 Prefer these boundaries while they remain accurate. When implementation proves

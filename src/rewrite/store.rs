@@ -9,6 +9,13 @@ use super::model::{RewriteState, STATE_VERSION};
 
 const INCOMPLETE_LOCK_GRACE: Duration = Duration::from_secs(2);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum RewriteLockState {
+    Absent,
+    Live,
+    Stale,
+}
+
 pub(super) struct RewriteStore {
     root: PathBuf,
     state_path: PathBuf,
@@ -105,8 +112,37 @@ impl RewriteStore {
 
     pub(super) fn lock(&self) -> Result<RewriteLock> {
         self.try_lock()?.context(
-            "rewrite workflow is already being advanced; execute `backend-rewrite recover`",
+            "rewrite workflow is already being advanced; inspect `backend-rewrite status` and wait when it returns `wait_required`",
         )
+    }
+
+    pub(super) fn lock_state(&self) -> Result<RewriteLockState> {
+        let path = self.root.join("lock");
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(RewriteLockState::Absent);
+            }
+            Err(error) => return Err(error).context("failed to read rewrite lock"),
+        };
+        if let Ok(pid) = raw.trim().parse::<u32>() {
+            return Ok(if process_exists(pid) {
+                RewriteLockState::Live
+            } else {
+                RewriteLockState::Stale
+            });
+        }
+        let modified = fs::metadata(&path)?
+            .modified()
+            .context("rewrite lock has no modification time")?;
+        let age = SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or_default();
+        Ok(if age < INCOMPLETE_LOCK_GRACE {
+            RewriteLockState::Live
+        } else {
+            RewriteLockState::Stale
+        })
     }
 
     pub(super) fn recover_lock(&self) -> Result<bool> {
@@ -182,9 +218,11 @@ mod tests {
         assert_eq!(store.load().unwrap().unwrap().revision, 2);
 
         let lock = store.lock().unwrap();
+        assert_eq!(store.lock_state().unwrap(), RewriteLockState::Live);
         assert!(store.try_lock().unwrap().is_none());
         assert!(store.lock().is_err());
         drop(lock);
+        assert_eq!(store.lock_state().unwrap(), RewriteLockState::Absent);
         assert!(store.try_lock().unwrap().is_some());
     }
 
@@ -208,6 +246,7 @@ mod tests {
             )
             .unwrap();
 
+        assert_eq!(store.lock_state().unwrap(), RewriteLockState::Stale);
         assert!(store.recover_lock().unwrap());
         assert!(store.try_lock().unwrap().is_some());
     }

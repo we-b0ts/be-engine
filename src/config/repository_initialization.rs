@@ -13,8 +13,8 @@ use crate::e2e_run::{E2eRunInitOptions, render_project_config};
 const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
 const RECORDER_CONFIG_PATH: &str = ".traffic-e2e/recorder.toml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
-const BOOT_DIR: &str = ".traffic-e2e/boot";
-const INTERNAL_DIR: &str = crate::internal_runtime::REPOSITORY_RELATIVE_ROOT;
+const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
+const BOOT_DIR: &str = crate::repository::LOCAL_BOOT_ROOT;
 
 #[derive(Debug, Clone)]
 pub struct RepositoryConfigInitOptions {
@@ -23,6 +23,7 @@ pub struct RepositoryConfigInitOptions {
     pub breeze_container: Option<String>,
     pub source_http_port: u16,
     pub target_port: u16,
+    pub http_gateway_port: u16,
     pub readiness_path: String,
     pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
@@ -36,6 +37,10 @@ pub struct RepositoryConfigInitResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_container: Option<InspectedContainer>,
     pub upstream_dns: SocketAddr,
+    pub http_gateway_port: u16,
+    pub local_dir: PathBuf,
+    pub gitignore: PathBuf,
+    pub gitignore_updated: bool,
     pub boot_dir: PathBuf,
     pub boot_dir_created: bool,
     pub target_start_contract: String,
@@ -70,10 +75,13 @@ fn initialize_repository_config_with(
         )
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
-    require_ignored(&target_root, INTERNAL_DIR)?;
-    require_ignored(&target_root, BOOT_DIR)?;
-    crate::e2e_run::validate_project_pr_base(&target_root, "dev-migration")?;
-
+    let generated = [
+        PROJECT_CONFIG_PATH,
+        RECORDER_CONFIG_PATH,
+        VERIFICATION_POLICY_PATH,
+    ]
+    .map(|relative| target_root.join(relative));
+    require_configuration_targets_absent(&generated)?;
     let source = inspect(&options.source_container)?;
     let breeze = options
         .breeze_container
@@ -85,6 +93,7 @@ fn initialize_repository_config_with(
         target_root: target_root.clone(),
         source_http_port: options.source_http_port,
         candidate_http_port: options.target_port,
+        http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         readiness_status: options.readiness_status,
         upstream_dns: options.upstream_dns,
@@ -114,12 +123,7 @@ fn initialize_repository_config_with(
         force: false,
     })?;
 
-    let generated = [
-        PROJECT_CONFIG_PATH,
-        RECORDER_CONFIG_PATH,
-        VERIFICATION_POLICY_PATH,
-    ]
-    .map(|relative| target_root.join(relative));
+    let (gitignore, gitignore_updated) = ensure_local_gitignore(&target_root)?;
     super::edit::create_many_atomic(&[
         (generated[0].clone(), project),
         (generated[1].clone(), recorder.into_bytes()),
@@ -132,11 +136,14 @@ fn initialize_repository_config_with(
         source_container: source,
         breeze_container: breeze,
         upstream_dns: options.upstream_dns,
+        http_gateway_port: options.http_gateway_port,
+        local_dir: PathBuf::from(LOCAL_DIR),
+        gitignore,
+        gitignore_updated,
         boot_dir: PathBuf::from(BOOT_DIR),
         boot_dir_created: false,
         target_start_contract: format!(
-            "scripts/{repository_name}-cli start --e2e --start-breeze off --boot-dir {BOOT_DIR} \
-             --port {}",
+            "scripts/{repository_name}-cli start --e2e --boot-dir {BOOT_DIR} --port {}",
             options.target_port
         ),
         target_compile_contract: "every start --e2e compiles once before launch; when the \
@@ -147,6 +154,60 @@ fn initialize_repository_config_with(
         record_command: "traffic-e2e record --target-root .",
         comparison_command: "traffic-e2e record-comparison --target-root .",
     })
+}
+
+fn require_configuration_targets_absent(paths: &[PathBuf]) -> Result<()> {
+    for path in paths {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => anyhow::bail!(
+                "{} already exists; refusing to initialize any configuration",
+                path.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn ensure_local_gitignore(target_root: &Path) -> Result<(PathBuf, bool)> {
+    let path = target_root.join(".gitignore");
+    let (mut contents, exists) = match std::fs::symlink_metadata(&path) {
+        Ok(metadata) => {
+            ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "{} must be a regular file and not a symlink",
+                path.display()
+            );
+            (
+                std::fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read {}", path.display()))?,
+                true,
+            )
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (String::new(), false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {}", path.display()));
+        }
+    };
+    let rule = crate::repository::LOCAL_GITIGNORE_RULE;
+    let updated = !contents.lines().any(|line| line.trim() == rule);
+    if updated {
+        if !contents.is_empty() && !contents.ends_with('\n') {
+            contents.push('\n');
+        }
+        contents.push_str(rule);
+        contents.push('\n');
+        if exists {
+            super::edit::write_atomic(&path, contents.as_bytes())?;
+        } else {
+            super::edit::create_atomic(&path, contents.as_bytes())?;
+        }
+    }
+    require_ignored(target_root, LOCAL_DIR)?;
+    Ok((path, updated))
 }
 
 fn require_ignored(target_root: &Path, relative_dir: &str) -> Result<()> {
@@ -216,8 +277,12 @@ mod tests {
 
     #[test]
     fn conventional_paths_are_bounded_and_boot_is_not_created() {
-        assert_eq!(BOOT_DIR, ".traffic-e2e/boot");
-        assert_eq!(INTERNAL_DIR, ".traffic-e2e/.ai-forbidden");
+        assert_eq!(LOCAL_DIR, ".traffic-e2e/local");
+        assert_eq!(BOOT_DIR, ".traffic-e2e/local/boot");
+        assert_eq!(
+            crate::internal_runtime::REPOSITORY_RELATIVE_ROOT,
+            ".traffic-e2e/local/ai-forbidden"
+        );
         assert_eq!(
             [
                 PROJECT_CONFIG_PATH,
@@ -233,16 +298,12 @@ mod tests {
     }
 
     #[test]
-    fn unified_init_generates_three_valid_files_without_boot_or_internal_directories() {
+    fn unified_init_allows_dev_migration_to_be_created_afterward() {
         let target = tempdir().unwrap();
-        fs::write(
-            target.path().join(".gitignore"),
-            "/.traffic-e2e/.ai-forbidden/\n/.traffic-e2e/boot/\n",
-        )
-        .unwrap();
+        fs::write(target.path().join("README.md"), "# target\n").unwrap();
         assert!(
             Command::new("git")
-                .args(["init", "-q", "-b", "dev-migration"])
+                .args(["init", "-q", "-b", "initialization-work"])
                 .arg(target.path())
                 .status()
                 .unwrap()
@@ -258,7 +319,7 @@ mod tests {
                     "-c",
                     "user.email=e2e-test@example.invalid",
                     "add",
-                    ".gitignore",
+                    "README.md",
                 ])
                 .status()
                 .unwrap()
@@ -296,6 +357,7 @@ mod tests {
                 breeze_container: Some("breeze".to_string()),
                 source_http_port: 8080,
                 target_port: 8081,
+                http_gateway_port: 17_171,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
@@ -305,21 +367,64 @@ mod tests {
         .unwrap();
 
         assert_eq!(result.generated.len(), 3);
+        assert_eq!(result.http_gateway_port, 17_171);
+        assert_eq!(result.local_dir, PathBuf::from(LOCAL_DIR));
+        assert_eq!(result.gitignore, target.path().join(".gitignore"));
+        assert!(result.gitignore_updated);
+        assert_eq!(
+            fs::read_to_string(&result.gitignore).unwrap(),
+            "/.traffic-e2e/local/\n"
+        );
+        let (_, updated) = ensure_local_gitignore(target.path()).unwrap();
+        assert!(!updated);
+        assert_eq!(
+            fs::read_to_string(&result.gitignore).unwrap(),
+            "/.traffic-e2e/local/\n"
+        );
         assert_eq!(
             result.rewrite_command,
             "backend-rewrite next --api '<METHOD path-or-pattern>'"
+        );
+        assert_eq!(
+            result.target_start_contract,
+            format!(
+                "scripts/{}-cli start --e2e --boot-dir {BOOT_DIR} --port 8081",
+                crate::repository::directory_name(target.path()).unwrap()
+            )
         );
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
         assert!(target.path().join(RECORDER_CONFIG_PATH).is_file());
         assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());
         assert!(!target.path().join(BOOT_DIR).exists());
-        assert!(!target.path().join(INTERNAL_DIR).exists());
+        assert!(
+            !target
+                .path()
+                .join(crate::internal_runtime::REPOSITORY_RELATIVE_ROOT)
+                .exists()
+        );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 8"));
-        assert!(project.contains("ai_forbidden_root: .ai-forbidden"));
-        assert!(project.contains("boot_dir: .traffic-e2e/boot"));
+        assert!(project.contains("version: 9"));
+        assert!(project.contains("ai_forbidden_root: local/ai-forbidden"));
+        assert!(project.contains("boot_dir: .traffic-e2e/local/boot"));
         assert!(project.contains("container: breeze"));
-        crate::config::AppConfig::load(target.path().join(RECORDER_CONFIG_PATH)).unwrap();
+        assert!(project.contains("pr_base: dev-migration"));
+        assert!(
+            !Command::new("git")
+                .arg("-C")
+                .arg(target.path())
+                .args([
+                    "show-ref",
+                    "--verify",
+                    "--quiet",
+                    "refs/heads/dev-migration"
+                ])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let recorder =
+            crate::config::AppConfig::load(target.path().join(RECORDER_CONFIG_PATH)).unwrap();
+        assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:17171");
         crate::replay::validate_replay_policy(&target.path().join(VERIFICATION_POLICY_PATH))
             .unwrap();
 
@@ -330,6 +435,7 @@ mod tests {
                 breeze_container: Some("breeze".to_string()),
                 source_http_port: 8080,
                 target_port: 8081,
+                http_gateway_port: 17_171,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),

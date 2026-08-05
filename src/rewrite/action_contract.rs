@@ -6,7 +6,7 @@ use crate::E2eRepresentativeDifference;
 use super::model::{
     RewriteAction, RewriteCommandSpec, RewriteEvidenceCommand, RewriteInputRequiredReason,
     RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteRecordingInputDiagnosis,
-    RewriteRecordingInputMode, RewriteRouteRecord,
+    RewriteRecordingInputMode, RewriteRouteRecord, RewriteWorkerDispatchView,
 };
 
 impl Serialize for RewriteAction {
@@ -31,6 +31,28 @@ impl Serialize for RewriteAction {
                 summary,
                 details: RewriteNoDetails {},
                 commands: RewriteRecoveryCommands { recover: command },
+            }
+            .serialize(serializer),
+            Self::WaitRequired {
+                summary,
+                resource,
+                requested_api,
+                blocking_api,
+                active_operation,
+                retry_after_seconds,
+                status,
+            } => RewriteActionView {
+                kind: "wait_required",
+                summary,
+                details: RewriteWaitRequiredDetails {
+                    reason: "resource_busy",
+                    resource,
+                    requested_api: requested_api.as_deref(),
+                    blocking_api: blocking_api.as_deref(),
+                    active_operation: active_operation.as_ref(),
+                    retry_after_seconds: *retry_after_seconds,
+                },
+                commands: RewriteStatusCommands { status },
             }
             .serialize(serializer),
             Self::RecordingRequired {
@@ -62,14 +84,21 @@ impl Serialize for RewriteAction {
             }
             .serialize(serializer),
             Self::ImplementationRequired {
+                summary,
                 issue,
+                worker,
+                confirm_worker,
                 evidence_commands,
                 acceptance,
             } => RewriteActionView {
                 kind: "implementation_required",
-                summary: &issue.summary,
-                details: RewriteIssueDetails::from(issue),
+                summary,
+                details: RewriteImplementationDetails {
+                    issue: RewriteIssueDetails::from(issue),
+                    worker,
+                },
                 commands: RewriteImplementationCommands {
+                    confirm_worker: confirm_worker.as_ref(),
                     evidence: evidence_commands,
                     acceptance,
                 },
@@ -82,11 +111,11 @@ impl Serialize for RewriteAction {
                 commands: RewriteApplyCommands { apply: command },
             }
             .serialize(serializer),
-            Self::ResumeRequired { summary, command } => RewriteActionView {
-                kind: "resume_required",
+            Self::AdvanceRequired { summary, command } => RewriteActionView {
+                kind: "advance_required",
                 summary,
                 details: RewriteNoDetails {},
-                commands: RewriteResumeCommands { resume: command },
+                commands: RewriteAdvanceCommands { advance: command },
             }
             .serialize(serializer),
             Self::ComparisonRecordingRequired {
@@ -114,6 +143,21 @@ impl Serialize for RewriteAction {
                 commands: RewriteAcceptanceCommands {
                     acceptance: acceptance.as_ref(),
                 },
+            }
+            .serialize(serializer),
+            Self::RecordingRefreshPending {
+                summary,
+                plan_ids,
+                resource_identities,
+                status,
+            } => RewriteActionView {
+                kind: "recording_refresh_pending",
+                summary,
+                details: RewriteRecordingRefreshPendingDetails {
+                    plan_ids,
+                    resource_identities,
+                },
+                commands: RewriteStatusCommands { status },
             }
             .serialize(serializer),
             Self::Complete {
@@ -168,6 +212,25 @@ struct RewriteRecordingRunDetails<'a> {
 }
 
 #[derive(Serialize)]
+struct RewriteRecordingRefreshPendingDetails<'a> {
+    plan_ids: &'a [String],
+    resource_identities: &'a [String],
+}
+
+#[derive(Serialize)]
+struct RewriteWaitRequiredDetails<'a> {
+    reason: &'static str,
+    resource: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_api: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blocking_api: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_operation: Option<&'a super::model::RewriteTrafficOperationView>,
+    retry_after_seconds: u64,
+}
+
+#[derive(Serialize)]
 struct RewriteIssueDetails<'a> {
     issue_id: &'a str,
     issue_kind: &'a RewriteIssueKind,
@@ -182,6 +245,13 @@ struct RewriteIssueDetails<'a> {
     attempt: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     comparison_observation: Option<&'a Value>,
+}
+
+#[derive(Serialize)]
+struct RewriteImplementationDetails<'a> {
+    #[serde(flatten)]
+    issue: RewriteIssueDetails<'a>,
+    worker: &'a RewriteWorkerDispatchView,
 }
 
 impl<'a> From<&'a RewriteIssue> for RewriteIssueDetails<'a> {
@@ -231,6 +301,8 @@ struct RewriteStatusCommands<'a> {
 
 #[derive(Serialize)]
 struct RewriteImplementationCommands<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    confirm_worker: Option<&'a RewriteCommandSpec>,
     evidence: &'a [RewriteEvidenceCommand],
     acceptance: &'a RewriteCommandSpec,
 }
@@ -241,8 +313,8 @@ struct RewriteApplyCommands<'a> {
 }
 
 #[derive(Serialize)]
-struct RewriteResumeCommands<'a> {
-    resume: &'a RewriteCommandSpec,
+struct RewriteAdvanceCommands<'a> {
+    advance: &'a RewriteCommandSpec,
 }
 
 #[derive(Serialize)]

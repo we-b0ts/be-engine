@@ -4,6 +4,7 @@ mod justification;
 mod model;
 
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -159,7 +160,7 @@ fn hydrate_assertion_details(assertions: &mut AssertionEvidence) -> Result<()> {
             .detail_fingerprint
             .take()
             .context("assertion summary has no detail fingerprint")?;
-        let detail_bytes = read_regular(&detail_report, "assertion detail report")?;
+        let detail_bytes = read_published_report(&detail_report, "assertion detail report")?;
         ensure!(
             fingerprint(&detail_bytes) == expected_fingerprint,
             "assertion detail report fingerprint changed: {}",
@@ -635,15 +636,55 @@ pub fn plan_dynamic_response_rule(
 }
 
 fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
+    read_regular_at(path, path, label)
+}
+
+fn read_published_report(path: &Path, label: &str) -> Result<Vec<u8>> {
+    let resolved = resolve_published_report_path(path);
+    read_regular_at(&resolved, path, label)
+}
+
+fn read_regular_at(resolved: &Path, reported: &Path, label: &str) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(resolved)
+        .with_context(|| format!("failed to inspect {label} {}", reported.display()))?;
     ensure!(
         metadata.is_file() && !metadata.file_type().is_symlink(),
         "{label} must be a regular file and not a symlink"
     );
-    fs::read(path).with_context(|| format!("failed to read {label} {}", path.display()))
+    fs::read(resolved).with_context(|| format!("failed to read {label} {}", reported.display()))
 }
 
+/// Resolve a report path that may carry a stale `.active` segment left over from a
+/// finalized E2E attempt. Older publishes wrote assertion-detail paths anchored at the
+/// focused API `.active` directory; after publish renamed that directory to `latest`,
+/// the inner paths dangled. Fall back to the `latest` sibling so existing response-rule
+/// evidence remains hydratable without a fresh E2E attempt.
+fn resolve_published_report_path(path: &Path) -> PathBuf {
+    match fs::symlink_metadata(path) {
+        Ok(_) => return path.to_path_buf(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return path.to_path_buf(),
+    }
+    let Some(active_dir) = path
+        .ancestors()
+        .find(|ancestor| ancestor.file_name() == Some(OsStr::new(".active")))
+    else {
+        return path.to_path_buf();
+    };
+    let Ok(relative) = path.strip_prefix(active_dir) else {
+        return path.to_path_buf();
+    };
+    let candidate = active_dir.with_file_name("latest").join(relative);
+    if fs::symlink_metadata(&candidate).is_ok() {
+        candidate
+    } else {
+        path.to_path_buf()
+    }
+}
+
+#[cfg(test)]
+#[path = "feedback/path_tests.rs"]
+mod path_tests;
 #[cfg(test)]
 #[path = "feedback/tests.rs"]
 mod tests;

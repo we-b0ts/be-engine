@@ -20,9 +20,7 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
         "HEAD",
         "--",
         ".",
-        crate::internal_runtime::GIT_PATHSPEC,
-        ":(exclude).traffic-e2e/artifacts/**",
-        ":(exclude).traffic-e2e/data/**",
+        crate::internal_runtime::LOCAL_GIT_PATHSPEC,
     ];
     diff_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     let diff = git_bytes(target_root, &diff_args)?;
@@ -33,9 +31,7 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
         "-z",
         "--",
         ".",
-        crate::internal_runtime::GIT_PATHSPEC,
-        ":(exclude).traffic-e2e/artifacts/**",
-        ":(exclude).traffic-e2e/data/**",
+        crate::internal_runtime::LOCAL_GIT_PATHSPEC,
     ];
     untracked_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
     let untracked = git_bytes(target_root, &untracked_args)?;
@@ -100,6 +96,15 @@ pub(super) fn traffic_e2e_revision() -> Result<String> {
     Ok(hash.finish())
 }
 
+pub(super) fn recorder_config_revision(target_root: &Path) -> Result<String> {
+    let path = target_root.join(".traffic-e2e/recorder.toml");
+    let bytes = std::fs::read(&path)
+        .with_context(|| format!("failed to read recorder config {}", path.display()))?;
+    let mut hash = Fnv1a::default();
+    hash.update(&bytes);
+    Ok(hash.finish())
+}
+
 pub(super) fn source_runtime_inputs_revision(
     target_root: &Path,
     source_container: &str,
@@ -108,7 +113,7 @@ pub(super) fn source_runtime_inputs_revision(
     let mut hash = Fnv1a::default();
     hash.update(source_revision.as_bytes());
     hash.update(&[0]);
-    let boot = target_root.join(".traffic-e2e/boot");
+    let boot = target_root.join(crate::repository::LOCAL_BOOT_ROOT);
     let mut files = 0_usize;
     let mut bytes = 0_u64;
     hash_runtime_input_path(&boot, &boot, &mut hash, &mut files, &mut bytes)?;
@@ -294,6 +299,11 @@ mod tests {
             )
             .unwrap();
         }
+        assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
+
+        let local_artifacts = repository.path().join(".traffic-e2e/local/artifacts");
+        fs::create_dir_all(&local_artifacts).unwrap();
+        fs::write(local_artifacts.join("runtime.jsonl"), "local evidence\n").unwrap();
         assert_eq!(repository_fingerprint(repository.path()).unwrap(), baseline);
 
         fs::write(

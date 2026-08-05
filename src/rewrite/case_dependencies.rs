@@ -435,14 +435,21 @@ fn memcached_response_classification(event: &Value) -> &'static str {
 }
 
 fn resolve_case_dir(target_root: &Path, case_dir: &Path) -> Result<PathBuf> {
-    let artifacts = std::fs::canonicalize(target_root.join(".traffic-e2e/artifacts"))
-        .context("target repository has no readable .traffic-e2e/artifacts directory")?;
+    let artifacts =
+        std::fs::canonicalize(target_root.join(crate::repository::LOCAL_ARTIFACTS_ROOT))
+            .with_context(|| {
+                format!(
+                    "target repository has no readable {} directory",
+                    crate::repository::LOCAL_ARTIFACTS_ROOT
+                )
+            })?;
     let case_dir = std::fs::canonicalize(case_dir)
         .with_context(|| format!("failed to resolve case directory {}", case_dir.display()))?;
     ensure!(case_dir.is_dir(), "case path must be a directory");
     ensure!(
         case_dir.starts_with(&artifacts),
-        "case directory must be inside the target repository .traffic-e2e/artifacts directory"
+        "case directory must be inside the target repository {} directory",
+        crate::repository::LOCAL_ARTIFACTS_ROOT
     );
     Ok(case_dir)
 }

@@ -4,6 +4,13 @@ Use this reference for every `implementation_required` action. Problem
 diagnosis is a required rewrite phase, not optional troubleshooting. Its result
 chooses the only repair attempted before the next focused E2E run.
 
+## Contents
+
+- Contract and evidence queries
+- Response, missing-recording, cache, runtime, and Replay issues
+- Dirty dependency and comparison issues
+- Repair routing and blocker criteria
+
 ## Contract
 
 The coordinator supplies one active issue in `action.details`, including
@@ -11,13 +18,14 @@ bounded possible causes and one representative when available. Exact
 evidence-query argv are under `action.commands.evidence`, and the sole
 acceptance command is `action.commands.acceptance`. Treat possible causes as
 hypotheses. Traffic facts come only from the returned queries and immutable
-artifacts; business causality comes from source and target code.
+artifacts; business causality comes from source and target code. Return the
+acceptance command unchanged to the orchestrator; never execute it as a worker.
 
 Standard and comparison artifacts are readable, read-only diagnostic evidence.
 Start from the representative `case_dir` returned by the coordinator and
 inspect its complete contents. Inspect other cases under
-`.traffic-e2e/artifacts/` when they help distinguish hypotheses. Never read,
-search, or list `.traffic-e2e/.ai-forbidden/**`; use bounded coordinator queries
+`.traffic-e2e/local/artifacts/` when they help distinguish hypotheses. Never read,
+search, or list `.traffic-e2e/local/ai-forbidden/**`; use bounded coordinator queries
 instead. Do not edit internal state, infer the active run by recency, or use
 ad-hoc scripts to recreate a coordinator query. Never patch multiple
 speculative categories in one iteration.
@@ -40,7 +48,9 @@ Run only query IDs returned by `action.commands.evidence`:
 
 - `representatives`: the representative case ID, exact immutable standard or
   comparison `case_dir`, and bounded structured response or dependency
-  difference; it does not prove the cause;
+  difference; it does not prove the cause. For response, dependency, and
+  comparison issues it may advertise a `recorder_capture` planner; planner
+  availability does not prove that traffic was omitted;
 - `source_variation`: source values across recorded cases; variation alone
   does not prove nondeterminism or cache ownership;
 - `collection_equivalence`: array multiset equality; equality does not prove
@@ -121,6 +131,47 @@ mapping, boot/request context, and dependency-driven branches before inspecting
 body-field policy. For array order, prove both equal contents and a source
 ordering contract; map/set iteration is a hypothesis, not proof.
 
+## Missing Recorded Dependency Evidence
+
+Treat a recording omission as a bounded hypothesis when a response, Replay, or
+comparison difference traces through source code to one exact response-driving
+backend endpoint, but the representative recording contains no corresponding
+dependency target or exchange. The absence alone is not proof of Breeze bypass,
+an external-data blocker, or a Recorder capability gap.
+
+Prove the hypothesis in this order:
+
+1. Trace the differing response field or status through source construction,
+   cache/loading lifecycle, and the exact dependency client call. Identify the
+   source-proven hostname and port when source configuration proves one.
+2. Execute the representative `dependencies_command`, inspect any potentially
+   equivalent returned target detail, and read raw immutable dependency
+   evidence only when the bounded projection cannot establish presence or
+   absence. Do not infer omission from a truncated preview or one empty
+   protocol cluster.
+3. Exclude a target call-topology defect, a legitimate source cache/snapshot
+   path that made no dependency call in the recording lifecycle, an equivalent
+   endpoint recorded under another resolved target, and unsupported Replay of
+   evidence that is actually present.
+
+When those checks prove that the source consumes an exact response-driving
+endpoint that is absent from recorded dependencies, and the `representatives`
+report advertises `applicable_rule_planners.kind=recorder_capture`, return its
+`evidence_id`, the endpoint, and one single-line source file/symbol proof to the
+orchestrator. The worker may execute the planner's returned read-only help argv
+but never runs `recorder-capture plan|apply` itself and never guesses a Breeze
+resource or descriptor.
+
+The orchestrator owns plan and apply. A plan that resolves the endpoint to one
+configured bypassed Breeze resource makes this an API-scoped capture refresh:
+apply immediately, park that API as `awaiting_recording_refresh`, continue other
+runnable APIs, and let the coordinator schedule one consolidated full-scope
+recording after they drain. This is not `recorder_capability_gap`, system repair,
+or a blocker. If the planner cannot resolve the endpoint, retain the exact
+source/recording proof and planner error; do not invent configuration. Use a
+Recorder capability route only when the required capture mechanism itself is
+unsupported.
+
 ## Local Cache And Runtime State
 
 A response-affecting local cache is target behavior. Preserve source cache:
@@ -168,7 +219,7 @@ expected-response access to the target repository.
 
 ## Replay Issues
 
-`replay=incomplete` means the engine did not publish complete lifecycle
+`replay=incomplete` means the coordinator did not publish complete lifecycle
 evidence. Use the returned issue and dirty-cluster query to distinguish:
 
 - target never emitted the expected genuine dependency call;
@@ -176,12 +227,16 @@ evidence. Use the returned issue and dirty-cluster query to distinguish:
 - interception, readiness, begin/end, finalize, or cleanup failed;
 - the recording lacks required semantic evidence.
 
+For the last case, follow
+[Missing Recorded Dependency Evidence](#missing-recorded-dependency-evidence)
+before classifying a capability gap or external-data blocker.
+
 If target topology differs, repair target behavior. If semantic evidence exists
-but the engine lacks support, submit `backend-rewrite route` with a current evidence ID,
-source reference, and exact system change. Then apply the repair and use only
-the coordinator-issued `repair verify <repair-id>` acceptance. Never implement
-a target workaround for a Replay capability gap or supply an arbitrary
-acceptance command.
+but the coordinator lacks support, return the current evidence ID, source
+reference, and exact required system change to the orchestrator. It owns
+`backend-rewrite route` and the coordinator-issued
+`repair verify <repair-id>` acceptance. Never implement a target workaround for
+a Replay capability gap or supply an arbitrary acceptance command.
 
 ## Dirty Dependency Issues
 
@@ -195,17 +250,15 @@ Classify the representative protocol cluster by source ownership:
 - unresolved: retain the dirty evidence and name the missing proof.
 
 Timing overlap, high volume, scheduler names, unused exchanges, and passing
-responses do not prove background ownership. A recording-rule change must use
+responses do not prove background ownership. A recording-rule proposal must use
 the current dirty-cluster evidence ID and one protocol-specific planner returned
-in `applicable_rule_planners`. Run its exact help argv, supply only the
-source-proven selector inputs to `backend-rewrite dependency-rule plan <protocol>`, and
-apply the returned plan ID. Replay evidence, case source, and source revision
-come from coordinator state and are not background-rule inputs. Execute the
-apply report's exact `next`. The coordinator, not the target AI, reclassifies
-the same focused replay report under the current rules and returns either
-residual dirty evidence or the next comparison action. Never call the
-lower-level Recorder config planner, manually rewrite replay reports, trim
-traffic, or edit immutable request/response/dependency capture files.
+in `applicable_rule_planners`. Run its exact read-only help argv and return only
+the source-proven selector inputs to the orchestrator. Replay evidence, case
+source, and source revision come from coordinator state and are not rule
+inputs. The orchestrator owns `backend-rewrite dependency-rule plan|apply` and
+the apply report's exact `next`; the coordinator then reclassifies the same
+focused replay report. Never manually rewrite replay reports, trim traffic, or
+edit immutable request/response/dependency capture files.
 
 ## Comparison Issues
 
@@ -227,15 +280,23 @@ coordinator must rerun focused E2E before requesting a fresh comparison.
 Route the proven cause to exactly one action:
 
 - target implementation or cache defect: change target code with
-  `backend-engineering`, run focused target tests, then execute
-  `action.commands.acceptance`;
+  `backend-engineering`, run focused target tests, and return the tested handoff
+  plus unchanged `action.commands.acceptance` to the orchestrator;
 - startup/configuration defect: repair source-compatible loading or the fixed
-  start/stop boundary, then execute `action.commands.acceptance`;
-- supported nondeterminism/order/counter: run exact `backend-rewrite rule plan`, review
-  the evidence, then `apply` and rerun;
-- Recorder/Replay capability gap, source change, or external-data issue: submit
-  exact `backend-rewrite route` evidence, apply the routed change, then execute the
-  returned `repair verify <repair-id>` action; do not patch the target;
+  start/stop boundary, test it, and return the handoff plus unchanged acceptance
+  to the orchestrator;
+- supported nondeterminism/order/counter: return source proof and proposed rule
+  inputs; the orchestrator owns `backend-rewrite rule plan|apply` and rerun;
+- source-proven omitted dependency with an advertised `recorder_capture`
+  planner: return the evidence ID, endpoint, and source proof; the orchestrator
+  owns immediate plan/apply and the coordinator-owned recording refresh;
+- true Recorder/Replay capability gap, where the supported planners and engine
+  cannot express the required mechanism: return exact route evidence and the
+  required system change; the orchestrator owns `backend-rewrite route` and the
+  returned `repair verify <repair-id>` action;
+- source change or external-data issue: return exact route evidence and the
+  required transition without patching the target; the orchestrator owns
+  `backend-rewrite route` and its returned acceptance;
 - unresolved: gather the named missing source/runtime proof before changing
   code or policy.
 

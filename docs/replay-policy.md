@@ -300,7 +300,7 @@ traffic-e2e config comparison plan response-rule \
   --target-example '101' \
   --api 'GET /api/users/show' \
   --json-pointer /followers_count \
-  --comparison-run .traffic-e2e/artifacts/comparison-recordings/<run-id>
+  --comparison-run .traffic-e2e/local/artifacts/comparison-recordings/<run-id>
 ```
 
 Review the plan, then repeat with `apply`. Number matches only number. String

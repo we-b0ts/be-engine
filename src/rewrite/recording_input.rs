@@ -47,7 +47,9 @@ fn inspect(
     requested_apis: &[String],
     excluded_run_id: Option<&str>,
 ) -> Result<(Option<PathBuf>, Option<RewriteRecordingInputDiagnosis>)> {
-    let root = target_root.join(".traffic-e2e/artifacts/recordings");
+    let root = target_root
+        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+        .join("recordings");
     let mut entries = match fs::read_dir(&root) {
         Ok(entries) => entries.filter_map(std::io::Result::ok).collect::<Vec<_>>(),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -452,7 +454,8 @@ mod tests {
         dirty: bool,
     ) -> PathBuf {
         let run = target_root
-            .join(".traffic-e2e/artifacts/recordings")
+            .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+            .join("recordings")
             .join(run_id);
         fs::create_dir_all(&run).unwrap();
         for (index, uri) in uris.iter().enumerate() {

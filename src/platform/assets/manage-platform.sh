@@ -178,10 +178,10 @@ source_name="${prefix}-source"
 adapter_image="traffic-e2e/${repo_name}-recording-source:cache"
 adapter_image_id=""
 
-runtime_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e"
+runtime_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/local"
 data_dir="$runtime_root/data"
 artifacts_dir="$runtime_root/artifacts"
-local_dir="$runtime_root/.ai-forbidden/platform"
+local_dir="$runtime_root/ai-forbidden/platform"
 diagnostics_dir="$local_dir/diagnostics/${operation}-${token}"
 control_dir="$local_dir/control/${token}"
 adapter_context="$local_dir/adapters/${token}"
@@ -667,8 +667,8 @@ run_standard_recording() {
         --user 0:0 --cap-add NET_ADMIN --cap-add NET_RAW --workdir /workspace \
         --volume "$TRAFFIC_E2E_BIN:/usr/local/bin/traffic-e2e:ro" \
         --volume "$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/recorder.toml:ro" \
-        --volume "$data_dir:/workspace/data" \
-        --volume "$artifacts_dir:/workspace/.traffic-e2e/artifacts" \
+        --volume "$data_dir:/workspace/.traffic-e2e/local/data" \
+        --volume "$artifacts_dir:/workspace/.traffic-e2e/local/artifacts" \
         --volume "$control_dir:/workspace/control" \
         "${recorder_mounts[@]}" \
         --env TRAFFIC_E2E_ENCRYPTION_KEY_B64 \
@@ -715,7 +715,7 @@ run_comparison_recording() {
     start_genuine_source host
     run_no_fallback
     run_target stop
-    run_target start --e2e --start-breeze off --boot-dir "$TRAFFIC_E2E_TARGET_BOOT_DIR" --port "$TRAFFIC_E2E_TARGET_PORT"
+    run_target start --e2e --boot-dir "$TRAFFIC_E2E_TARGET_BOOT_DIR" --port "$TRAFFIC_E2E_TARGET_PORT"
     target_started=true
     wait_http "$TRAFFIC_E2E_TARGET_ORIGIN" "$TRAFFIC_E2E_TARGET_READY_PATH" \
         "$TRAFFIC_E2E_TARGET_READY_STATUS" target "" \

@@ -51,8 +51,8 @@ pub use background_redis_feedback::{
     RedisBackgroundDependencyReport, plan_redis_background_dependency,
 };
 pub use breeze_capture_feedback::{
-    BreezeResourceCaptureFeedback, BreezeResourceCapturePlan, BreezeResourceCaptureReport,
-    plan_breeze_resource_capture,
+    BreezeEndpointCaptureFeedback, BreezeResourceCaptureFeedback, BreezeResourceCapturePlan,
+    BreezeResourceCaptureReport, plan_breeze_endpoint_capture, plan_breeze_resource_capture,
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use comparison_recording::ComparisonRecordingConfig;
@@ -66,8 +66,8 @@ pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
 pub use initialization::{
-    DEFAULT_RECORDING_RULE, RecorderConfigInitOptions, RecorderConfigInitResult,
-    initialize_recorder_config,
+    DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_RECORDING_RULE, RecorderConfigInitOptions,
+    RecorderConfigInitResult, initialize_recorder_config,
 };
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
@@ -442,8 +442,10 @@ impl Default for MysqlRouteConfig {
 impl Default for TlsConfig {
     fn default() -> Self {
         Self {
-            ca_cert_path: PathBuf::from("./data/traffic-recorder-ca.pem"),
-            ca_key_path: PathBuf::from("./data/traffic-recorder-ca-key.pem"),
+            ca_cert_path: PathBuf::from(crate::repository::LOCAL_DATA_ROOT)
+                .join("traffic-recorder-ca.pem"),
+            ca_key_path: PathBuf::from(crate::repository::LOCAL_DATA_ROOT)
+                .join("traffic-recorder-ca-key.pem"),
         }
     }
 }
@@ -478,11 +480,11 @@ mod tests {
         assert_eq!(config.http_gateway.rules.len(), 1);
         assert_eq!(
             config.recording_output_dir(),
-            PathBuf::from("./.traffic-e2e/artifacts/recordings")
+            PathBuf::from("./.traffic-e2e/local/artifacts/recordings")
         );
         assert_eq!(
             config.comparison_recording_output_dir(),
-            PathBuf::from("./.traffic-e2e/artifacts/comparison-recordings")
+            PathBuf::from("./.traffic-e2e/local/artifacts/comparison-recordings")
         );
 
         config.recording.encrypt_request_headers = vec!["not a header".to_string()];

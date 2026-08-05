@@ -46,6 +46,7 @@ pub(super) fn from_e2e_result(
     state.route = None;
     state.rule_plan = None;
     state.dependency_rule_plan = None;
+    state.recorder_capture_plan = None;
     if result.passed {
         state.active_issue = None;
         state.phase = RewritePhase::ComparisonRecordingRequired;

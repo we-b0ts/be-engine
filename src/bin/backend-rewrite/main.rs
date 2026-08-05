@@ -10,13 +10,15 @@ use traffic_e2e::{
     DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteCaseDependenciesOptions,
     RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
     RewriteRecordingRequestOptions, RewriteRouteOptions, RewriteRulePlanOptions,
-    apply_rewrite_rule, inventory_rewrite, next_rewrite, plan_rewrite_rule,
-    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
-    verify_rewrite_repair,
+    RewriteWorkerConfirmOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
+    next_rewrite, plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence,
+    recover_rewrite, request_rewrite_recording, route_rewrite, start_rewrite_recording,
+    status_rewrite, status_rewrite_for_api, verify_rewrite_repair,
 };
 
 mod dependency_rule;
+mod project_init;
+mod recorder_capture;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -40,7 +42,7 @@ struct Cli {
     /// Pretty-print JSON for human inspection; compact JSON is the default.
     #[arg(long, global = true)]
     pretty: bool,
-    /// Initialized target repository root.
+    /// Target repository root.
     #[arg(long, default_value = ".")]
     target_root: PathBuf,
     #[command(subcommand)]
@@ -85,10 +87,12 @@ fn report_error(error: &anyhow::Error) {
 
 #[derive(Debug, Subcommand)]
 enum RewriteCommand {
+    /// Initialize one target repository for a backend rewrite.
+    Init(project_init::ProjectInitArgs),
     /// Advance deterministic stages and return the only allowed next action.
     Next(NextArgs),
     /// Show bounded coordinator state without advancing it.
-    Status,
+    Status(StatusArgs),
     /// Show the full stable API inventory without advancing it.
     Inventory,
     /// Inspect bounded dependency evidence from one published case.
@@ -99,10 +103,14 @@ enum RewriteCommand {
     Rule(RuleArgs),
     /// Plan or apply one source-proven background dependency rule.
     DependencyRule(dependency_rule::DependencyRuleArgs),
+    /// Plan or apply one source-proven Breeze resource capture rule.
+    RecorderCapture(recorder_capture::RecorderCaptureArgs),
     /// Submit a source-backed non-target-code attribution for controlled routing.
     Route(RouteArgs),
     /// Verify one coordinator-issued system repair acceptance.
     Repair(RepairArgs),
+    /// Confirm the runtime identity of one dispatched or resumed API subagent.
+    Worker(WorkerArgs),
     /// Request a fresh coordinator-owned recording with explicit bounded parameters.
     Recording(RecordingArgs),
     /// Remove only a stale coordinator lock after its process has exited.
@@ -117,6 +125,13 @@ struct NextArgs {
     /// Source registration route for the active dynamic API when requested by the coordinator.
     #[arg(long)]
     source_route: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct StatusArgs {
+    /// API work item whose action should be reconstructed while other AI work proceeds.
+    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
+    api: Option<RecordingApi>,
 }
 
 #[derive(Debug, Args)]
@@ -230,6 +245,30 @@ struct RepairVerifyArgs {
 }
 
 #[derive(Debug, Args)]
+struct WorkerArgs {
+    #[command(subcommand)]
+    command: WorkerCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum WorkerCommand {
+    /// Bind an actual subagent handle to the current implementation dispatch.
+    Confirm(WorkerConfirmArgs),
+}
+
+#[derive(Debug, Args)]
+struct WorkerConfirmArgs {
+    /// Opaque dispatch id returned by the current implementation_required action.
+    dispatch_id: String,
+    /// Runtime-returned subagent handle. Supply through the named environment variable.
+    #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
+    agent_handle: String,
+    /// Optional human-readable subagent name for diagnostics.
+    #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_NAME", hide_env_values = true)]
+    agent_name: Option<String>,
+}
+
+#[derive(Debug, Args)]
 struct RecordingArgs {
     #[command(subcommand)]
     command: RecordingCommand,
@@ -290,6 +329,7 @@ async fn run(cli: Cli) -> Result<()> {
     let target_root = cli.target_root;
     let pretty = cli.pretty;
     match cli.command {
+        RewriteCommand::Init(args) => project_init::run(target_root, args, pretty),
         RewriteCommand::Next(args) => {
             let recovery_root = target_root.clone();
             let mut operation = Box::pin(next_rewrite(RewriteNextOptions {
@@ -311,8 +351,14 @@ async fn run(cli: Cli) -> Result<()> {
                 }
             }
         }
-        RewriteCommand::Status => {
-            print_json(&status_rewrite(RewriteContext { target_root })?, pretty)
+        RewriteCommand::Status(args) => {
+            let context = RewriteContext { target_root };
+            let report = if let Some(api) = args.api.as_ref() {
+                status_rewrite_for_api(context, Some(api))?
+            } else {
+                status_rewrite(context)?
+            };
+            print_json(&report, pretty)
         }
         RewriteCommand::Inventory => {
             print_json(&inventory_rewrite(RewriteContext { target_root })?, pretty)
@@ -357,6 +403,7 @@ async fn run(cli: Cli) -> Result<()> {
             ),
         },
         RewriteCommand::DependencyRule(args) => dependency_rule::run(target_root, args, pretty),
+        RewriteCommand::RecorderCapture(args) => recorder_capture::run(target_root, args, pretty),
         RewriteCommand::Route(args) => print_json(
             &route_rewrite(RewriteRouteOptions {
                 target_root,
@@ -370,6 +417,17 @@ async fn run(cli: Cli) -> Result<()> {
         RewriteCommand::Repair(args) => match args.command {
             RepairCommand::Verify(args) => print_json(
                 &verify_rewrite_repair(RewriteContext { target_root }, &args.repair_id)?,
+                pretty,
+            ),
+        },
+        RewriteCommand::Worker(args) => match args.command {
+            WorkerCommand::Confirm(args) => print_json(
+                &confirm_rewrite_worker(RewriteWorkerConfirmOptions {
+                    target_root,
+                    dispatch_id: args.dispatch_id,
+                    agent_handle: args.agent_handle,
+                    agent_name: args.agent_name,
+                })?,
                 pretty,
             ),
         },

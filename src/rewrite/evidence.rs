@@ -97,8 +97,34 @@ fn applicable_rule_planners(
     facts: &Value,
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
+    let mut planners = Vec::new();
+    if query_kind == QUERY_REPRESENTATIVES
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response
+                | RewriteIssueKind::Dependency
+                | RewriteIssueKind::Comparison
+        )
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "recorder_capture".to_string(),
+            protocol: "breeze_dns_bypass".to_string(),
+            evidence_id: evidence_id.to_string(),
+            command: super::action::command(
+                target_root,
+                vec![
+                    "recorder-capture".to_string(),
+                    "plan".to_string(),
+                    "--evidence-id".to_string(),
+                    evidence_id.to_string(),
+                    "--help".to_string(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if issue_kind != RewriteIssueKind::Dependency || query_kind != QUERY_DIRTY_CLUSTERS {
-        return Vec::new();
+        return planners;
     }
     let protocols = facts
         .get("clusters")
@@ -108,24 +134,26 @@ fn applicable_rule_planners(
         .filter_map(|cluster| cluster.get("protocol").and_then(Value::as_str))
         .filter(|protocol| matches!(*protocol, "http" | "memcached" | "motan" | "redis"))
         .collect::<std::collections::BTreeSet<_>>();
-    protocols
-        .into_iter()
-        .map(|protocol| RewriteApplicableRulePlanner {
-            kind: "background_dependencies".to_string(),
-            protocol: protocol.to_string(),
-            evidence_id: evidence_id.to_string(),
-            command: super::action::command(
-                target_root,
-                vec![
-                    "dependency-rule".to_string(),
-                    "plan".to_string(),
-                    protocol.to_string(),
-                    "--help".to_string(),
-                ],
-                Vec::new(),
-            ),
-        })
-        .collect()
+    planners.extend(
+        protocols
+            .into_iter()
+            .map(|protocol| RewriteApplicableRulePlanner {
+                kind: "background_dependencies".to_string(),
+                protocol: protocol.to_string(),
+                evidence_id: evidence_id.to_string(),
+                command: super::action::command(
+                    target_root,
+                    vec![
+                        "dependency-rule".to_string(),
+                        "plan".to_string(),
+                        protocol.to_string(),
+                        "--help".to_string(),
+                    ],
+                    Vec::new(),
+                ),
+            }),
+    );
+    planners
 }
 
 fn facts(
@@ -460,10 +488,31 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
 }
 
 fn query_id(state: &RewriteState, issue: &RewriteIssue, kind: &str) -> String {
+    // Global workflow revisions change while other API workers are active. Bind
+    // the command only to evidence inputs owned by this API slice.
+    let attempt = issue.attempt.to_string();
+    let case_source = state
+        .case_source
+        .as_ref()
+        .map(|path| path.to_string_lossy())
+        .unwrap_or_default();
+    let scope = fingerprint::id(&[
+        "rewrite-evidence-query-v2",
+        &state.workflow_id,
+        &state.api,
+        &issue.id,
+        &attempt,
+        &issue.observed_target_fingerprint,
+        state.case_inventory_id.as_deref().unwrap_or_default(),
+        state.source_revision.as_deref().unwrap_or_default(),
+        state.group_id.as_deref().unwrap_or_default(),
+        state.comparison_run_id.as_deref().unwrap_or_default(),
+        case_source.as_ref(),
+        kind,
+    ]);
     format!(
-        "evq-r{}-{}-{}",
-        state.revision,
-        issue.id.trim_start_matches("issue-"),
+        "evq-{}-{}",
+        scope.trim_start_matches("fnv1a64:"),
         kind.replace('_', "-")
     )
 }

@@ -3,14 +3,14 @@
 The target repository exposes one thin conventional executable:
 
 ```text
-scripts/<project>-cli start --e2e --start-breeze off \
-  --boot-dir .traffic-e2e/boot --port <port>
+scripts/<project>-cli start --e2e \
+  --boot-dir .traffic-e2e/local/boot --port <port>
 scripts/<project>-cli stop
 ```
 
 `start` launches the normal target and genuine dependency clients. It must use
-the exact supplied configuration directory and port. `--start-breeze off`
-means traffic-e2e owns any shared Breeze lifecycle. When
+the exact supplied configuration directory and port. For a Breeze-dependent
+target, `start --e2e` must not start Breeze. When
 `TRAFFIC_E2E_REPLAY_CA_CERT_PATH` is present, `start` may stage that read-only
 public certificate through the target's normal trust mechanism. It must not
 inspect Replay sessions or receive a CA private key.
@@ -35,10 +35,10 @@ Target product code, CLI, configuration, tests, and support must not read:
 - `expected-response.json` or candidate response artifacts;
 - `dependencies.jsonl` or Global dependency files;
 - Replay session/control files;
-- generated `.traffic-e2e/.ai-forbidden/` state or reports;
+- generated `.traffic-e2e/local/ai-forbidden/` state or reports;
 - request-header encryption keys.
 
-`.traffic-e2e/boot` may be absent at initialization. When startup proves a
+`.traffic-e2e/local/boot` may be absent at initialization. When startup proves a
 required configuration root, place only authoritative source-compatible
 inputs there. Never materialize configuration from source-process memory,
 remote responses, recordings, logs, or diagnostics. A complete

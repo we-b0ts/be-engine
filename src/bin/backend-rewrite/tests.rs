@@ -13,6 +13,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
     assert_eq!(
         visible,
         [
+            "init",
             "next",
             "status",
             "inventory",
@@ -20,8 +21,10 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "evidence",
             "rule",
             "dependency-rule",
+            "recorder-capture",
             "route",
             "repair",
+            "worker",
             "recording",
             "recover",
         ]
@@ -55,11 +58,78 @@ fn parses_the_bounded_rewrite_surface() {
     assert!(
         Cli::try_parse_from([
             "test",
+            "init",
+            "--source-container",
+            "friendship",
+            "--breeze",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "init",
+            "--source-container",
+            "friendship",
+            "--recording-port",
+            "18181",
+        ])
+        .is_err()
+    );
+    let RewriteCommand::Init(default_init) =
+        Cli::try_parse_from(["test", "init", "--source-container", "friendship"])
+            .unwrap()
+            .command
+    else {
+        panic!("expected init command");
+    };
+    assert_eq!(
+        default_init.http_gateway_port,
+        traffic_e2e::DEFAULT_HTTP_GATEWAY_PORT
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "init",
+            "--source-container",
+            "friendship",
+            "--breeze=custom-breeze",
+            "--http-gateway-port",
+            "18181",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
             "next",
             "--api",
             "GET /api/users/*",
             "--source-route",
             "/api/users/:id",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "recorder-capture",
+            "plan",
+            "--evidence-id",
+            "evidence-1",
+            "--endpoint",
+            "counter.example.com:9332",
+            "--source-evidence",
+            "CounterService.java:88 reads the counter backend",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "recorder-capture",
+            "apply",
+            "recorder-capture-plan-0123456789abcdef",
         ])
         .is_ok()
     );
@@ -98,9 +168,20 @@ fn parses_the_bounded_rewrite_surface() {
     assert!(
         Cli::try_parse_from([
             "test",
+            "--target-root",
+            "/canonical/target",
+            "evidence",
+            "evq-r1-issue-representatives",
+        ])
+        .is_ok()
+    );
+    assert!(Cli::try_parse_from(["test", "status", "--api", "GET /api/widgets/*"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
             "case",
             "dependencies",
-            "/repo/.traffic-e2e/artifacts/run/api/case-a",
+            "/repo/.traffic-e2e/local/artifacts/run/api/case-a",
         ])
         .is_ok()
     );
@@ -109,7 +190,7 @@ fn parses_the_bounded_rewrite_surface() {
             "test",
             "case",
             "dependencies",
-            "/repo/.traffic-e2e/artifacts/run/api/case-a",
+            "/repo/.traffic-e2e/local/artifacts/run/api/case-a",
             "dependency-target-0123456789abcdef",
         ])
         .is_ok()
@@ -147,6 +228,19 @@ fn parses_the_bounded_rewrite_surface() {
         .is_err()
     );
     assert!(Cli::try_parse_from(["test", "repair", "verify", "repair-1"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "worker",
+            "confirm",
+            "fnv1a64:dispatch",
+            "--agent-handle",
+            "runtime-agent-42",
+            "--agent-name",
+            "friends-ids-worker",
+        ])
+        .is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

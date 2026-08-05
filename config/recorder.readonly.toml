@@ -72,5 +72,5 @@ redact_headers = [
 # tables = ["request_log"]
 
 [tls]
-ca_cert_path = "./data/traffic-recorder-readonly-ca.pem"
-ca_key_path = "./data/traffic-recorder-readonly-ca-key.pem"
+ca_cert_path = "./.traffic-e2e/local/data/traffic-recorder-readonly-ca.pem"
+ca_key_path = "./.traffic-e2e/local/data/traffic-recorder-readonly-ca-key.pem"

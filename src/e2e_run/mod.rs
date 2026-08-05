@@ -25,8 +25,8 @@ use crate::case_group::{
     load_complete_case_group_inventory,
 };
 
+pub(crate) use config::render_project_config;
 pub(crate) use config::resolve_project;
-pub(crate) use config::{render_project_config, validate_project_pr_base};
 pub use dirty_evidence::{
     E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyObservation,
     E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eSourcePreReadiness,
@@ -183,7 +183,7 @@ pub fn initialize_standard_e2e_project_with_force(
         source_container,
         breeze_container: None,
         project_cli: PathBuf::from(format!("scripts/{repository_name}-cli")),
-        target_boot_dir: PathBuf::from(".traffic-e2e/boot"),
+        target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
         target_http_host,
         target_port,
         target_readiness_path: recorder.http_gateway.ready.path.clone(),

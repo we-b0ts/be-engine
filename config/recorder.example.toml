@@ -1,5 +1,5 @@
 [artifacts]
-root_dir = "./.traffic-e2e/artifacts"
+root_dir = "./.traffic-e2e/local/artifacts"
 
 [comparison_recording]
 # Comparison recording reuses http_gateway.matched_upstream as the baseline.
@@ -21,7 +21,7 @@ listen = "127.0.0.153:15353"
 upstream_dns = "10.10.10.10:53"
 fake_cidr = "198.19.0.0/16"
 ttl_seconds = 60
-registry_path = "./.traffic-e2e/artifacts/fake_dns_registry.json"
+registry_path = "./.traffic-e2e/local/artifacts/fake_dns_registry.json"
 # Exact names, suffixes starting with ".", and glob wildcards using "*" or "?"
 # are returned from upstream DNS unchanged.
 bypass_domains = [
@@ -328,5 +328,5 @@ redact_headers = [
 # tables = ["request_log"]
 
 [tls]
-ca_cert_path = "./data/traffic-recorder-ca.pem"
-ca_key_path = "./data/traffic-recorder-ca-key.pem"
+ca_cert_path = "./.traffic-e2e/local/data/traffic-recorder-ca.pem"
+ca_key_path = "./.traffic-e2e/local/data/traffic-recorder-ca-key.pem"

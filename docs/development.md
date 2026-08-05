@@ -229,7 +229,7 @@ policy already used by E2E:
 
 ```bash
 traffic-e2e compare \
-  .traffic-e2e/artifacts/comparison-recordings/<run-id> \
+  .traffic-e2e/local/artifacts/comparison-recordings/<run-id> \
   --policy .traffic-e2e/verification.yaml
 ```
 
@@ -259,7 +259,7 @@ traffic-e2e config replay plan response-rule \
   --target-example '<redacted UUID from target>' \
   --api "GET /api/token" \
   --json-pointer /token \
-  --comparison-run .traffic-e2e/artifacts/comparison-recordings/<run-id>
+  --comparison-run .traffic-e2e/local/artifacts/comparison-recordings/<run-id>
 ```
 
 Neither `record-comparison` nor `compare` enables the fixed recording user,
@@ -605,6 +605,26 @@ does not include literal IPs, and identifies resources sharing captured
 domains. Apply is add-only, atomic, and stale-safe. Start a new recording after
 the change; existing artifacts remain unchanged.
 
+For an active backend rewrite, the AI-facing coordinator accepts the
+source-visible backend endpoint instead of a Breeze resource selector:
+
+```bash
+backend-rewrite --target-root ../target recorder-capture plan \
+  --evidence-id <current-evidence-id> \
+  --endpoint counter.example.com:9332 \
+  --source-evidence 'src/UserCounter.java:load reads the counter backend'
+
+backend-rewrite --target-root ../target recorder-capture apply \
+  <returned-plan-id>
+```
+
+The coordinator reverse-resolves a unique canonical resource from configured
+snapshots, using a source-proven port to disambiguate a shared domain when
+needed. It applies the capture rule immediately and parks only the affected API.
+Other API work continues. Once no API remains runnable, all accumulated rules
+trigger one full-scope standard recording; callers must not request a separate
+recording per rule.
+
 Pass the config and rule together for direct replay:
 
 ```bash
@@ -634,8 +654,8 @@ granting the fixed user access to the workspace or build cache:
 
 ```bash
 traffic-e2e target exec \
-  --env-file .traffic-e2e/boot/.env \
-  --copy-env APP_CONFIG=.traffic-e2e/boot/config/application.yaml \
+  --env-file .traffic-e2e/local/boot/.env \
+  --copy-env APP_CONFIG=.traffic-e2e/local/boot/config/application.yaml \
   --copy-env REPLAY_CA=path/to/replay-ca.pem \
   --path-env CASE_DIR=path/to/readable/case-group \
   --write-dir logs \
@@ -655,7 +675,7 @@ helper clears inherited proxy and shell-hook variables, verifies the effective
 UID, and never accepts a user or UID option. Keep replay lifecycle commands
 outside the target process.
 
-`.traffic-e2e/boot/` is input-only transport for source-proven startup inputs.
+`.traffic-e2e/local/boot/` is input-only transport for source-proven startup inputs.
 Its name or Git-ignore status does not authorize generating content from a
 source process, remote response, recording, log, debug output, or diagnostic.
 
@@ -723,7 +743,7 @@ traffic-e2e diagnose case-group ensure \
   --source-route '/api/users/:id' \
   --pattern '/api/users/*' \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
-  --output ../target/.traffic-e2e/run-reports/<run-id>-case-groups.json \
+  --output ../target/.traffic-e2e/local/run-reports/<run-id>-case-groups.json \
   --recorder-config ../target/.traffic-e2e/recorder.toml \
   --rule record-api
 ```
@@ -797,7 +817,7 @@ failures, not product behavior evidence.
 ## Migration E2E Runner
 
 Use the rewrite coordinator as the normal AI-facing migration command. It
-keeps internal state under `.traffic-e2e/.ai-forbidden/`, exposes one active
+keeps internal state under `.traffic-e2e/local/ai-forbidden/`, exposes one active
 issue, and never returns raw internal report paths. Target rewrite agents must
 not read, search, or list that directory:
 
@@ -807,6 +827,7 @@ backend-rewrite next
 backend-rewrite next --api 'GET /api/widgets/*' \
   --source-route '/api/widgets/:id'
 backend-rewrite status
+backend-rewrite status --api 'GET /api/widgets/*'
 backend-rewrite inventory
 backend-rewrite evidence <query-id>
 backend-rewrite recording request \
@@ -818,13 +839,15 @@ backend-rewrite recording execute <action-id>
 backend-rewrite repair verify <repair-id>
 ```
 
-Rewrite action schema v7 always returns `action.kind`, `action.summary`,
+Rewrite action schema v8 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
-`execute`, `status`, `resume`, `recover`, `evidence`, `apply`, and `acceptance`.
+`execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
 Status does not duplicate an `active_issue` or publish an unconditional
 top-level `next`. Every returned command contains a canonical `cwd` plus exact
-argv.
+argv. The argv includes the canonical absolute `--target-root`, so executing a
+read-only evidence command from an isolated worker worktree still addresses the
+single coordinator state.
 
 The binary writes one compact JSON object per command by default. Pass global
 `--pretty` only for interactive human inspection. This keeps automation output
@@ -838,7 +861,9 @@ callers do not add curl loops, replayers, shell pipelines, backgrounding, or
 driver parameters. `execute` starts a detached coordinator-owned worker and
 returns immediately. Poll
 `backend-rewrite status`; `recording_in_progress` never returns a second execute action,
-and `resume_required` means finalization and cleanup completed. Historical
+and `advance_required` means finalization and cleanup completed, so its exact
+`action.commands.advance` can advance coordinator state. It does not mean
+rerunning the completed action. Historical
 input is reused only when its API selector exactly equals the requested
 selector; recordings are never split or merged. When no exact atomic input
 exists, `action.details.input_mode=external_live_traffic` opens a fresh
@@ -846,31 +871,46 @@ recording window and includes bounded candidate/rejection diagnostics under
 `action.details.recording_input_diagnosis`. When startup omits `--api`, recorder
 configuration limits the standard run and the coordinator derives a stable
 API inventory from its published cases. `next` and `status` expose only its
-bounded summary (`total`, `completed`, `pending`, `current_index`, and
-`current_api`) so their size does not grow with API count. The read-only
-`backend-rewrite inventory` command returns the full ordered per-API list for
-explicit scope audits and final delivery checks. It does not advance the
-workflow or authorize choosing a pending API. After status returns
-`resume_required`, `next` validates the
+bounded summary (`total`, `completed`, `pending`, `implementation_required`,
+`current_index`, and `current_api`) so their size does not grow with API count.
+The read-only `backend-rewrite inventory` command returns the full ordered
+per-API list. Every `implementation_required` action is assigned to an isolated
+subagent, including a single-API workflow. The main orchestrator dispatches
+before executing evidence, and each worker owns evidence, diagnosis, target
+code, and local tests for only its API. With multiple APIs, the orchestrator
+uses `backend-rewrite inventory` to choose an exact pending item and continues
+with `next --api` after dispatch rather than waiting for the current worker.
+After status returns
+`advance_required`, the returned `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next comparison action. Once
 comparison passes, the following `next` prepares the next inventory item from
 the same standard recording. A repository or policy change makes prior
 E2E/comparison evidence stale and causes `next` to
 rerun the required stage. `terminal_allowed` is false until every inventory
-item has both passing E2E and comparison evidence.
+item has both passing E2E and comparison evidence for the same target revision.
 
-`status` is read-only and returns the current `action` from the persisted
-workflow revision. Before execution starts it reconstructs the same run ID and
-argv; a live detached worker returns `recording_in_progress`, and only a
-finalized manifest returns `resume_required`. A running manifest without a live
+Recording, focused Replay, and comparison share one serialized traffic-runtime
+lease. When another API owns it, action schema v8 returns `wait_required` with
+the requested and blocking APIs, the live operation when available, a retry
+delay, and the exact `commands.status` argv. This lease serializes each traffic
+operation, not a complete API lifecycle: while worker A implements, the
+orchestrator may run Replay for API B and dispatch worker B. No worker may start
+a traffic operation. If code changes during Replay, that result is discarded;
+later code changes also requeue already-completed API evidence.
+
+`status [--api]` is read-only and returns the selected API's `action` from the
+persisted workflow revision. Before execution starts it reconstructs the same
+run ID and argv; owner status for a live detached worker may return
+`recording_in_progress`, and only a
+finalized manifest returns `advance_required`. A running manifest without a live
 owner returns `recovery_required`; `backend-rewrite recover` removes only that run's
 managed resources and allocates a replacement run. A pending rule plan produces
 `plan_apply_required` with only the stored plan ID. The persisted plan keeps
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. A target repository change also returns `resume_required` with
+by apply. A target repository change also returns `advance_required` with
 `backend-rewrite next`.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
@@ -883,7 +923,7 @@ new exact recording action. Omitting `--api` means all APIs admitted by recorder
 configuration, even when the prior workflow was narrowed; explicit `--api`
 keeps the fresh recording single-API. An identical pending request returns the existing
 action and run. A different pending request is rejected unless
-`--replace-pending` is explicit; a matching completed manifest returns a resume action.
+`--replace-pending` is explicit; a matching completed manifest returns an advance action.
 The coordinator defaults both standard and comparison recording actions to 60
 seconds and 100 cases.
 
@@ -902,7 +942,7 @@ response difference. A focused E2E difference contains expected and actual
 observations; a comparison difference contains source-before, candidate, and
 source-after observations. It does not duplicate the complete Replay response
 or expose a Replay-local result directory. The AI may inspect all persisted
-files under `.traffic-e2e/artifacts/`, starting with the representative case for
+files under `.traffic-e2e/local/artifacts/`, starting with the representative case for
 efficiency. Artifacts remain read-only, and coordinator results remain
 authoritative for the active run and legal transitions.
 
@@ -946,25 +986,24 @@ command, and `next` or `recording request` cannot bypass the repair. Successful
 verification decides whether to rerun the same cases or allocate fresh standard
 recording evidence.
 
-The lower-level commands in the remainder of this section are the traffic
-engine interface used by the coordinator and by traffic-e2e maintainers. They
-are not the normal rewrite-AI workflow.
-
-Initialize all three generated documents once:
+Initialize a rewrite target's three generated documents once, before its first
+coordinator session:
 
 ```bash
-traffic-e2e config init --target-root ../target \
-  --source-container <existing-source-container> [--breeze]
+backend-rewrite --target-root ../target init \
+  --source-container <existing-source-container> [--breeze] \
+  [--http-gateway-port 17171]
 ```
 
 From the target root, `--target-root` is unnecessary. `--breeze` uses the
 conventional existing container named `breeze`; use `--breeze=<container>` only
-for a non-standard name. Defaults are source port `8080`, target port `8081`,
-readiness `/healthz` with status `404`, and upstream DNS `10.10.10.11:53`.
-Override a default only when the inspected application contract proves it is
-different. Source and Breeze containers need only be inspectable, not running.
+for a non-standard name. Defaults are Recorder HTTP gateway port `17171`,
+source port `8080`, target port `8081`, readiness `/healthz` with status `404`,
+and upstream DNS `10.10.10.11:53`. Override a default only when the inspected
+application contract proves it is different. Source and Breeze containers
+need only be inspectable, not running.
 
-The command atomically generates version-7 `.traffic-e2e/project.yaml`,
+The command atomically generates version-9 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
 configuration has explicit source, optional Breeze, target, replay, recording,
 delivery, and state sections. A typical
@@ -973,7 +1012,7 @@ target section is:
 ```yaml
 target:
   cli: scripts/<project>-cli
-  boot_dir: .traffic-e2e/boot
+  boot_dir: .traffic-e2e/local/boot
   http_host: 127.0.0.1
   port: 8081
   readiness_path: /healthz
@@ -986,16 +1025,21 @@ target:
 Existing configuration is never overwritten. If any generated file exists,
 the whole initialization refuses without creating another file. In-place
 migration of obsolete versions is a separate future command. The initializer
-records `.traffic-e2e/boot` but neither requires nor creates it. Do not
-hand-write generated state.
+idempotently adds `/.traffic-e2e/local/` to the repository `.gitignore`; all
+non-versioned runtime data lives below that root. It records
+`.traffic-e2e/local/boot` but neither requires nor creates it. Do not hand-write
+generated state.
 
 The target exposes only:
 
 ```text
-scripts/<project>-cli start --e2e --start-breeze off \
-  --boot-dir .traffic-e2e/boot --port <configured-port>
+scripts/<project>-cli start --e2e \
+  --boot-dir .traffic-e2e/local/boot --port <configured-port>
 scripts/<project>-cli stop
 ```
+
+For a Breeze-dependent target, `start --e2e` must not start Breeze. The
+managed runtime owns the shared Breeze lifecycle.
 
 For Breeze-aware standard recording, the managed runtime keeps one
 target-scoped source-adapter cache tag. Each run fingerprints the inspected
@@ -1014,6 +1058,10 @@ replayed case.
 The runner sends HTTP requests itself; the target CLI does not read cases or
 write response reports. The configured port is shared by target start,
 readiness, replay requests, and comparison requests.
+
+The lower-level commands in the remainder of this section are the traffic
+engine interface used by the coordinator and by traffic-e2e maintainers. They
+are not the normal rewrite-AI workflow.
 
 Prepare each API after confirming whether its source URI is static or dynamic:
 
@@ -1049,7 +1097,7 @@ Normal AI operation starts with the bounded terminal result. Representative
 evidence links directly to an immutable recorded case for request, expected
 response, and dependency inspection, and the AI may inspect any other artifact
 as needed. A target rewrite agent must not read, search, or list
-`.traffic-e2e/.ai-forbidden/**`; use coordinator output instead. Engine
+`.traffic-e2e/local/ai-forbidden/**`; use coordinator output instead. Engine
 maintainers may inspect it only under this repository's `AGENTS.md`. Generated
 assertion details, aggregate reports, `.active`, and `latest` are internal
 surfaces rather than ordinary migration evidence.
@@ -1060,7 +1108,7 @@ logical run, while each finalized attempt is counted once in
 `replay-progress.yaml`. Reprocessing the same published attempt is idempotent.
 The committed progress file contains aggregate and latest-run evidence; its
 per-run idempotency ledger is stored in the ignored
-`.traffic-e2e/artifacts/progress/replay-counted-runs.yaml` sidecar. Comparison
+`.traffic-e2e/local/artifacts/progress/replay-counted-runs.yaml` sidecar. Comparison
 progress uses the sibling `comparison-counted-runs.yaml` sidecar. Focused
 evidence never replaces the global full-round `latest`.
 
@@ -1149,7 +1197,7 @@ Generated runtime artifacts are ignored by git:
 
 - `target/`
 - `data/`
-- `.traffic-e2e/artifacts/`
+- `.traffic-e2e/local/`
 - legacy `recordings/`
 - `*.swp`
 

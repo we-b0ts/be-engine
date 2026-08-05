@@ -16,7 +16,7 @@ Usage:
 
 Installs or removes the recorder root CA from the Linux system trust store.
 CA_SOURCE can override the source CA path; by default it uses:
-  ./data/traffic-recorder-ca.pem
+  ./.traffic-e2e/local/data/traffic-recorder-ca.pem
 EOF
 }
 
@@ -46,7 +46,7 @@ case "$ACTION" in
     require_root
     if [ ! -f "$CA_SOURCE" ]; then
       echo "CA file not found: $CA_SOURCE" >&2
-      echo "start the recorder once so it can generate ./data/traffic-recorder-ca.pem, or set CA_SOURCE." >&2
+      echo "start the recorder once so it can generate ./.traffic-e2e/local/data/traffic-recorder-ca.pem, or set CA_SOURCE." >&2
       exit 1
     fi
     install -m 0644 "$CA_SOURCE" "$DEST_FILE"

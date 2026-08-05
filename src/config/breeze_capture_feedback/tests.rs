@@ -82,6 +82,7 @@ fn plans_and_applies_unique_resource_as_canonical_identity() {
     assert!(plan.report().changed);
     assert!(!plan.report().applied);
     assert_eq!(plan.report().resource, "usercounter");
+    assert!(plan.report().requested_endpoint.is_none());
     assert_eq!(plan.report().domains.len(), 2);
     assert_eq!(plan.report().shared_domain_resources.len(), 1);
     assert!(
@@ -103,6 +104,61 @@ fn plans_and_applies_unique_resource_as_canonical_identity() {
 
     let repeated = plan_breeze_resource_capture(fixture.feedback()).unwrap();
     assert!(!repeated.report().changed);
+}
+
+#[test]
+fn resolves_a_backend_endpoint_to_its_canonical_resource() {
+    let fixture = Fixture::new();
+
+    let plan = plan_breeze_endpoint_capture(BreezeEndpointCaptureFeedback {
+        config_path: fixture.config_path.clone(),
+        endpoint: "COUNTER.EXAMPLE.COM.:7917".to_string(),
+        source_revision: "abc123".to_string(),
+        source_evidence: "src/UserCounter.java:load resolves the counter backend".to_string(),
+    })
+    .unwrap();
+
+    assert_eq!(plan.report().resource, "usercounter");
+    assert_eq!(
+        plan.report().requested_endpoint.as_deref(),
+        Some("COUNTER.EXAMPLE.COM.:7917")
+    );
+    assert!(
+        plan.report()
+            .resource_identity
+            .ends_with("+rediscounter+user+usercounter")
+    );
+}
+
+#[test]
+fn endpoint_resolution_rejects_unknown_shared_or_literal_hosts() {
+    let fixture = Fixture::new();
+
+    let feedback = |endpoint: &str| BreezeEndpointCaptureFeedback {
+        config_path: fixture.config_path.clone(),
+        endpoint: endpoint.to_string(),
+        source_revision: "abc123".to_string(),
+        source_evidence: "src/UserCounter.java:load resolves the counter backend".to_string(),
+    };
+
+    let unknown = plan_breeze_endpoint_capture(feedback("missing.example.com:7917"))
+        .unwrap_err()
+        .to_string();
+    assert!(unknown.contains("does not belong to any resource"));
+
+    let shared = plan_breeze_endpoint_capture(feedback("shared.example.com"))
+        .unwrap_err()
+        .to_string();
+    assert!(shared.contains("shared by multiple Breeze resources"));
+
+    let shared_with_port =
+        plan_breeze_endpoint_capture(feedback("shared.example.com:6379")).unwrap();
+    assert_eq!(shared_with_port.report().resource, "other");
+
+    let literal = plan_breeze_endpoint_capture(feedback("10.0.0.1:7917"))
+        .unwrap_err()
+        .to_string();
+    assert!(literal.contains("IP literals"));
 }
 
 #[test]

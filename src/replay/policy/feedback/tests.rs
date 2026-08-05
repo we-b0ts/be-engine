@@ -108,7 +108,13 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
     let policy = temp.path().join("replay.yaml");
     let assertions = temp.path().join("assertions.json");
     let aggregate = temp.path().join("aggregate.json");
-    let detail = temp.path().join("assertion-detail.json");
+    let stale_detail = temp
+        .path()
+        .join("focused/api-1/.active/reports/assertion-detail.json");
+    let published_detail = temp
+        .path()
+        .join("focused/api-1/latest/reports/assertion-detail.json");
+    fs::create_dir_all(published_detail.parent().unwrap()).unwrap();
     fs::write(
         &policy,
         "version: 2\nexpected_response: assertions_only\nrules: []\n",
@@ -116,7 +122,7 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
     fs::write(
-        &detail,
+        &published_detail,
         serde_json::to_vec(&json!({
             "method": "GET",
             "path": "/api/resource/token",
@@ -132,7 +138,8 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
         .unwrap(),
     )
     .unwrap();
-    let detail_fingerprint = crate::replay::policy::fingerprint(&fs::read(&detail).unwrap());
+    let detail_fingerprint =
+        crate::replay::policy::fingerprint(&fs::read(&published_detail).unwrap());
     fs::write(
         &assertions,
         serde_json::to_vec(&json!({
@@ -145,7 +152,7 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
                 "response": {
                     "passed": false,
                     "difference_count": 1,
-                    "detail_report": detail,
+                    "detail_report": stale_detail,
                     "detail_fingerprint": detail_fingerprint
                 }
             }]

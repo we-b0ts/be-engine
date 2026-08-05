@@ -7,7 +7,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
-use super::model::{ActiveRunState, CurrentPointer, RunIndex, RunLayout, STATE_VERSION};
+use super::model::{
+    ActiveRunState, AssertionReport, CurrentPointer, RunIndex, RunLayout, STATE_VERSION,
+};
 
 pub(super) fn begin_active(layout: &RunLayout, state: &ActiveRunState) -> Result<()> {
     let parent = layout
@@ -113,6 +115,8 @@ pub(super) fn publish_terminal(
     write_active(layout, &published_state)?;
     write_yaml(&layout.index_path, index)?;
 
+    retarget_assertion_reports(state, &layout.active_dir, &layout.latest_dir)?;
+
     let previous = layout
         .run_root
         .join(format!(".previous-{}", Uuid::new_v4()));
@@ -154,6 +158,7 @@ pub(super) fn publish_snapshot(
     remove_decrypted_request_views(active_dir)?;
     let published_state = state_for_published_directory(state, active_dir, latest_dir)?;
     write_yaml(&active_dir.join("state.yaml"), &published_state)?;
+    retarget_assertion_reports(state, active_dir, latest_dir)?;
     let parent = latest_dir
         .parent()
         .context("latest directory has no parent")?;
@@ -217,6 +222,48 @@ fn retarget_path(path: &mut PathBuf, active_dir: &Path, latest_dir: &Path) -> Re
             .strip_prefix(active_dir)
             .context("published state path escaped the active directory")?;
         *path = latest_dir.join(relative);
+    }
+    Ok(())
+}
+
+fn retarget_assertion_reports(
+    state: &ActiveRunState,
+    active_dir: &Path,
+    latest_dir: &Path,
+) -> Result<()> {
+    let mut report_paths = Vec::with_capacity(state.apis.len() + 1);
+    report_paths.push(state.assertions_report.clone());
+    report_paths.extend(
+        state
+            .apis
+            .iter()
+            .map(|api| api.report_dir.join("assertions.json")),
+    );
+    for report_path in &report_paths {
+        ensure!(
+            report_path.starts_with(active_dir),
+            "assertion report escaped the active E2E directory: {}",
+            report_path.display()
+        );
+        let bytes = match fs::read(report_path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to read assertion report {}", report_path.display())
+                });
+            }
+        };
+        let mut report: AssertionReport = serde_json::from_slice(&bytes)
+            .with_context(|| format!("invalid assertion report {}", report_path.display()))?;
+        for case in &mut report.cases {
+            let Some(response) = &mut case.response else {
+                continue;
+            };
+            retarget_path(&mut response.detail_report, active_dir, latest_dir)?;
+            retarget_path(&mut response.actual_response, active_dir, latest_dir)?;
+        }
+        write_json(report_path, &report)?;
     }
     Ok(())
 }
@@ -361,6 +408,7 @@ mod tests {
 
     use super::*;
     use crate::case_group::CaseGroupInventory;
+    use crate::e2e_run::model::{ApiExecution, AssertionCase, ResponseAssertionSummary};
 
     fn state(active_dir: &Path, status: super::super::model::RunStatus) -> ActiveRunState {
         let mut state = ActiveRunState::new(
@@ -429,5 +477,78 @@ mod tests {
             latest.join("reports/assertions.json")
         );
         assert!(!latest.join("tmp/decrypted-request-views").exists());
+    }
+
+    #[test]
+    fn terminal_snapshot_retargets_paths_in_assertion_reports() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("focused");
+        let active = root.join(".active");
+        let latest = root.join("latest");
+        let detail_report = active.join("reports/assertion-detail-0001.json");
+        let actual_response = active.join("tmp/actual-response-0001.json");
+        fs::create_dir_all(active.join("reports")).unwrap();
+        fs::create_dir_all(active.join("tmp")).unwrap();
+        fs::write(&detail_report, "{}").unwrap();
+        fs::write(&actual_response, "{}").unwrap();
+
+        let mut terminal = state(&active, super::super::model::RunStatus::Failed);
+        let mut assertions = AssertionReport::new(&terminal, true);
+        assertions.cases.push(AssertionCase {
+            case_id: "case-1".to_string(),
+            passed: false,
+            response: Some(ResponseAssertionSummary {
+                passed: false,
+                difference_count: 1,
+                representative_difference: None,
+                detail_report: detail_report.clone(),
+                detail_fingerprint: "detail-fingerprint".to_string(),
+                expected_response: PathBuf::from("/cases/case-1/response.json"),
+                actual_response: actual_response.clone(),
+                policy_path: "/target/replay.yaml".to_string(),
+                policy_fingerprint: "policy-fingerprint".to_string(),
+            }),
+        });
+        write_json(&terminal.assertions_report, &assertions).unwrap();
+
+        let api_report_dir = active.join("apis/api-0001");
+        fs::create_dir_all(&api_report_dir).unwrap();
+        write_json(&api_report_dir.join("assertions.json"), &assertions).unwrap();
+        terminal.apis.push(ApiExecution {
+            api_key: "GET /api".to_string(),
+            group_id: "GET /api".to_string(),
+            method: "GET".to_string(),
+            api_pattern: "/api".to_string(),
+            case_ids: vec!["case-1".to_string()],
+            total: 1,
+            passed: 0,
+            failed: 1,
+            incomplete: 0,
+            complete_pass: false,
+            report_dir: api_report_dir,
+        });
+
+        publish_snapshot(&active, &latest, &terminal).unwrap();
+
+        for report_path in [
+            latest.join("reports/assertions.json"),
+            latest.join("apis/api-0001/assertions.json"),
+        ] {
+            let published: AssertionReport =
+                serde_json::from_slice(&fs::read(report_path).unwrap()).unwrap();
+            let response = published.cases[0].response.as_ref().unwrap();
+            assert_eq!(
+                response.detail_report,
+                latest.join("reports/assertion-detail-0001.json")
+            );
+            assert_eq!(
+                response.actual_response,
+                latest.join("tmp/actual-response-0001.json")
+            );
+            assert_eq!(
+                response.expected_response,
+                PathBuf::from("/cases/case-1/response.json")
+            );
+        }
     }
 }

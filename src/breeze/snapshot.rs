@@ -13,6 +13,7 @@ pub(crate) struct SnapshotResource {
     pub(crate) name: String,
     pub(crate) descriptor_path: PathBuf,
     pub(crate) domains: BTreeSet<String>,
+    pub(crate) endpoints: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -50,12 +51,14 @@ impl Snapshot {
             })?;
             let name = resource_name(&source, &identity);
             let mut domains = BTreeSet::new();
-            extract_backend_domains(&source, &mut domains);
+            let mut endpoints = BTreeSet::new();
+            extract_backends(&source, &mut domains, &mut endpoints);
             resources.push(SnapshotResource {
                 identity,
                 name,
                 descriptor_path,
                 domains,
+                endpoints,
             });
         }
 
@@ -171,7 +174,11 @@ fn resource_name(source: &str, identity: &str) -> String {
         .to_string()
 }
 
-fn extract_backend_domains(source: &str, domains: &mut BTreeSet<String>) {
+fn extract_backends(
+    source: &str,
+    domains: &mut BTreeSet<String>,
+    endpoints: &mut BTreeSet<String>,
+) {
     for token in source.split(|character: char| {
         character.is_ascii_whitespace()
             || matches!(character, ',' | '[' | ']' | '{' | '}' | '(' | ')' | ';')
@@ -181,11 +188,12 @@ fn extract_backend_domains(source: &str, domains: &mut BTreeSet<String>) {
         let Some((host, port)) = token.rsplit_once(':') else {
             continue;
         };
-        if port.parse::<u16>().ok().filter(|port| *port > 0).is_none() {
+        let Some(port) = port.parse::<u16>().ok().filter(|port| *port > 0) else {
             continue;
-        }
+        };
         let host = normalize_domain(host);
         if is_hostname(&host) {
+            endpoints.insert(format!("{host}:{port}"));
             domains.insert(host);
         }
     }
@@ -260,6 +268,10 @@ mod tests {
         assert_eq!(
             short.domains,
             BTreeSet::from(["rm7917.example.com".to_string()])
+        );
+        assert_eq!(
+            short.endpoints,
+            BTreeSet::from(["rm7917.example.com:7917".to_string()])
         );
     }
 

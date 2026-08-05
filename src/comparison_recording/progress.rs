@@ -146,7 +146,7 @@ mod tests {
         assert!(
             directory
                 .path()
-                .join("artifacts/progress/comparison-counted-runs.yaml")
+                .join("local/artifacts/progress/comparison-counted-runs.yaml")
                 .is_file()
         );
     }
