@@ -329,7 +329,7 @@ async fn run(cli: Cli) -> Result<()> {
     let target_root = cli.target_root;
     let pretty = cli.pretty;
     match cli.command {
-        RewriteCommand::Init(args) => project_init::run(target_root, args, pretty),
+        RewriteCommand::Init(args) => project_init::run(target_root, args, pretty).await,
         RewriteCommand::Next(args) => {
             let recovery_root = target_root.clone();
             let mut operation = Box::pin(next_rewrite(RewriteNextOptions {

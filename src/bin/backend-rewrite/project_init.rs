@@ -1,19 +1,23 @@
 use std::net::SocketAddr;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::PathBuf;
 
-use anyhow::Result;
-use clap::Args;
+use anyhow::{Context, Result};
+use clap::{Args, Subcommand};
 use serde::Serialize;
 use traffic_e2e::{
-    DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer, RepositoryConfigInitOptions,
-    RepositoryConfigInitResult, initialize_repository_config,
+    DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer, ManagedRecordingPreflightOptions, RecordingApi,
+    RepositoryConfigInitOptions, RepositoryConfigInitResult, initialize_repository_config,
+    run_managed_recording_preflight,
 };
 
 #[derive(Debug, Args)]
 pub(super) struct ProjectInitArgs {
+    #[command(subcommand)]
+    pub(super) command: Option<ProjectInitCommand>,
     /// Existing genuine source application container to inspect and reproduce.
     #[arg(long)]
-    source_container: String,
+    source_container: Option<String>,
     /// Enable Breeze using the conventional `breeze` container, or provide a non-standard name.
     #[arg(long, num_args = 0..=1, default_missing_value = "breeze", value_name = "CONTAINER")]
     breeze: Option<String>,
@@ -37,6 +41,33 @@ pub(super) struct ProjectInitArgs {
     upstream_dns: SocketAddr,
 }
 
+#[derive(Debug, Subcommand)]
+pub(super) enum ProjectInitCommand {
+    /// Validate the initialized source recording environment without advancing rewrite state.
+    Preflight(ProjectPreflightArgs),
+}
+
+#[derive(Debug, Args)]
+pub(super) struct ProjectPreflightArgs {
+    /// Keep the disposable recording window open for at most this many seconds.
+    #[arg(long, default_value = "60")]
+    duration_seconds: NonZeroU64,
+    /// Apply the fixed Platform Mesh no-fallback commands after source readiness.
+    #[arg(
+        long,
+        default_value = "true",
+        action = clap::ArgAction::Set,
+        value_parser = parse_bool
+    )]
+    brz_no_fallback: bool,
+    /// Record only this API; repeat for multiple METHOD/path selectors.
+    #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
+    apis: Vec<RecordingApi>,
+    /// Override the per-API case limit for every selected API.
+    #[arg(long = "per-api-case-limit", value_name = "N", default_value = "1")]
+    per_api_case_limit: NonZeroUsize,
+}
+
 #[derive(Debug, Serialize)]
 struct ProjectInitReport {
     generated: Vec<PathBuf>,
@@ -52,12 +83,31 @@ struct ProjectInitReport {
     target_start_contract: String,
     target_compile_contract: &'static str,
     target_stop_contract: String,
+    preflight_command: &'static str,
 }
 
-pub(super) fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: bool) -> Result<()> {
+pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: bool) -> Result<()> {
+    if let Some(command) = args.command {
+        return match command {
+            ProjectInitCommand::Preflight(args) => {
+                let result = run_managed_recording_preflight(ManagedRecordingPreflightOptions {
+                    target_root,
+                    duration_seconds: args.duration_seconds,
+                    breeze_no_fallback: args.brz_no_fallback,
+                    apis: args.apis,
+                    per_api_case_limit: Some(args.per_api_case_limit),
+                })
+                .await?;
+                super::print_json(&result, pretty)
+            }
+        };
+    }
+    let source_container = args
+        .source_container
+        .context("--source-container is required when creating repository configuration")?;
     let result = initialize_repository_config(RepositoryConfigInitOptions {
         target_root,
-        source_container: args.source_container,
+        source_container,
         breeze_container: args.breeze,
         source_http_port: args.source_http_port,
         target_port: args.target_port,
@@ -84,6 +134,15 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
             target_start_contract: result.target_start_contract,
             target_compile_contract: result.target_compile_contract,
             target_stop_contract: result.target_stop_contract,
+            preflight_command: result.preflight_command,
         }
+    }
+}
+
+fn parse_bool(value: &str) -> std::result::Result<bool, String> {
+    match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err("value must be literal true or false".to_string()),
     }
 }

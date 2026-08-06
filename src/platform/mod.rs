@@ -13,18 +13,19 @@ use uuid::Uuid;
 use crate::e2e_run::resolve_project;
 use crate::recording_api::RecordingApi;
 
+mod preflight;
 mod recording_input;
 mod recovery;
 
+pub use preflight::{ManagedRecordingPreflightOptions, ManagedRecordingPreflightResult};
 pub use recording_input::{
     ManagedRecordingInputOptions, ManagedRecordingInputResult, drive_managed_recording_input,
 };
 pub use recovery::{ManagedRecordingRecoveryResult, recover_managed_recording};
 
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
-const MESH_CONNECT_UTIL: &str = include_str!("assets/MeshConnectUtil.java");
-const APPLY_BREEZE_PATCH: &str = include_str!("assets/apply-breeze-sdk-patch");
 const BREEZE_NO_FALLBACK: &str = include_str!("assets/brz-no-fallback.sh");
+const HTTPS_PROBE: &[u8] = include_bytes!("assets/HttpsProbe.class");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -38,6 +39,43 @@ impl ManagedRecordingOperation {
         match self {
             Self::Record => "record",
             Self::RecordComparison => "record-comparison",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManagedRuntimeOperation {
+    Recording(ManagedRecordingOperation),
+    Preflight,
+}
+
+impl ManagedRuntimeOperation {
+    fn script_name(self) -> &'static str {
+        match self {
+            Self::Recording(operation) => operation.script_name(),
+            Self::Preflight => "preflight",
+        }
+    }
+
+    fn manifest(self, target_root: &Path, run_id: &str) -> PathBuf {
+        match self {
+            Self::Recording(ManagedRecordingOperation::Record) => target_root
+                .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+                .join("recordings")
+                .join(run_id)
+                .join("recording-run.json"),
+            Self::Recording(ManagedRecordingOperation::RecordComparison) => target_root
+                .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+                .join("comparison-recordings")
+                .join(run_id)
+                .join("comparison-recording-run.json"),
+            Self::Preflight => target_root
+                .join(crate::repository::LOCAL_ROOT)
+                .join("preflight")
+                .join(run_id)
+                .join("artifacts/recordings")
+                .join(run_id)
+                .join("recording-run.json"),
         }
     }
 }
@@ -67,6 +105,14 @@ pub struct ManagedRecordingResult {
     pub managed_by: &'static str,
 }
 
+struct ManagedRuntimeResult {
+    run_id: String,
+    target_root: PathBuf,
+    source_container: String,
+    breeze_container: Option<String>,
+    manifest: PathBuf,
+}
+
 pub async fn run_managed_recording(
     options: ManagedRecordingOptions,
 ) -> Result<ManagedRecordingResult> {
@@ -75,21 +121,61 @@ pub async fn run_managed_recording(
             || !options.baseline_recheck,
         "--baseline-recheck is valid only for record-comparison"
     );
+    let operation = options.operation;
+    let result =
+        run_managed_runtime(options, ManagedRuntimeOperation::Recording(operation)).await?;
+    Ok(ManagedRecordingResult {
+        operation,
+        run_id: result.run_id,
+        target_root: result.target_root,
+        source_container: result.source_container,
+        breeze_container: result.breeze_container,
+        manifest: result.manifest,
+        managed_by: "traffic-e2e",
+    })
+}
+
+pub async fn run_managed_recording_preflight(
+    options: ManagedRecordingPreflightOptions,
+) -> Result<ManagedRecordingPreflightResult> {
+    let runtime = run_managed_runtime(
+        ManagedRecordingOptions {
+            target_root: options.target_root,
+            operation: ManagedRecordingOperation::Record,
+            run_id: None,
+            duration_seconds: options.duration_seconds,
+            baseline_recheck: false,
+            breeze_no_fallback: options.breeze_no_fallback,
+            apis: options.apis,
+            per_api_case_limit: options.per_api_case_limit,
+            request_source: None,
+        },
+        ManagedRuntimeOperation::Preflight,
+    )
+    .await?;
+    let evidence = preflight::validate(&runtime.manifest)?;
+    Ok(ManagedRecordingPreflightResult {
+        status: "passed",
+        run_id: runtime.run_id,
+        target_root: runtime.target_root,
+        source_container: runtime.source_container,
+        breeze_container: runtime.breeze_container,
+        manifest: runtime.manifest,
+        published_cases: evidence.published_cases,
+        https_interception_verified: evidence.https_interception_verified,
+        managed_by: "traffic-e2e",
+    })
+}
+
+async fn run_managed_runtime(
+    options: ManagedRecordingOptions,
+    runtime_operation: ManagedRuntimeOperation,
+) -> Result<ManagedRuntimeResult> {
     let (target_root, config) = resolve_project(&options.target_root)?;
     let run_id = options
         .run_id
         .unwrap_or_else(|| Utc::now().format("%Y%m%d%H%M%S").to_string());
-    let manifest = target_root
-        .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
-        .join(match options.operation {
-            ManagedRecordingOperation::Record => "recordings",
-            ManagedRecordingOperation::RecordComparison => "comparison-recordings",
-        })
-        .join(&run_id)
-        .join(match options.operation {
-            ManagedRecordingOperation::Record => "recording-run.json",
-            ManagedRecordingOperation::RecordComparison => "comparison-recording-run.json",
-        });
+    let manifest = runtime_operation.manifest(&target_root, &run_id);
     ensure!(
         config.project_cli.is_file(),
         "project CLI does not exist: {}",
@@ -127,13 +213,13 @@ pub async fn run_managed_recording(
             crate::repository::LOCAL_ARTIFACTS_ROOT
         );
     }
-    let executable = std::env::current_exe().context("failed to resolve traffic-e2e binary")?;
+    let executable = crate::engine_binary::executable()?;
     ensure_executable(&executable, "traffic-e2e binary")?;
     let assets = stage_assets(&target_root)?;
     let mut command = Command::new("bash");
     command
         .arg(assets.join("manage-platform.sh"))
-        .arg(options.operation.script_name())
+        .arg(runtime_operation.script_name())
         .current_dir(&target_root)
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -213,14 +299,12 @@ pub async fn run_managed_recording(
         "managed recording runtime exited with {status}"
     );
     asset_cleanup?;
-    Ok(ManagedRecordingResult {
-        operation: options.operation,
+    Ok(ManagedRuntimeResult {
         run_id,
         target_root,
         source_container: config.source_container,
         breeze_container: config.breeze_container,
         manifest,
-        managed_by: "traffic-e2e",
     })
 }
 
@@ -281,17 +365,18 @@ fn stage_assets(target_root: &Path) -> Result<PathBuf> {
     fs::create_dir_all(&root)
         .with_context(|| format!("failed to create Platform asset root {}", root.display()))?;
     write_asset(&root.join("manage-platform.sh"), MANAGER, 0o700)?;
-    write_asset(&root.join("MeshConnectUtil.java"), MESH_CONNECT_UTIL, 0o600)?;
-    write_asset(
-        &root.join("apply-breeze-sdk-patch"),
-        APPLY_BREEZE_PATCH,
-        0o700,
-    )?;
     write_asset(&root.join("brz-no-fallback.sh"), BREEZE_NO_FALLBACK, 0o700)?;
+    write_binary_asset(&root.join("HttpsProbe.class"), HTTPS_PROBE, 0o644)?;
     Ok(root)
 }
 
 fn write_asset(path: &Path, content: &str, mode: u32) -> Result<()> {
+    fs::write(path, content).with_context(|| format!("failed to write {}", path.display()))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+        .with_context(|| format!("failed to set permissions on {}", path.display()))
+}
+
+fn write_binary_asset(path: &Path, content: &[u8], mode: u32) -> Result<()> {
     fs::write(path, content).with_context(|| format!("failed to write {}", path.display()))?;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))
         .with_context(|| format!("failed to set permissions on {}", path.display()))
@@ -335,34 +420,68 @@ mod tests {
         assert!(MANAGER.contains(
             "start --e2e --boot-dir \"$TRAFFIC_E2E_TARGET_BOOT_DIR\" --port \"$TRAFFIC_E2E_TARGET_PORT\""
         ));
-        assert!(MANAGER.contains("--env RUN_COMMAND=traffic-e2e-source-root-launcher"));
-        assert!(MANAGER.contains("source_run_command=\"./${source_run_command}\""));
-        assert!(
-            MANAGER.contains("adapter_image=\"traffic-e2e/${repo_name}-recording-source:cache\"")
-        );
-        assert!(MANAGER.contains("reusing cached recording source adapter"));
         assert!(MANAGER.contains(
-            "com.weibo.traffic-e2e.recording-adapter.fingerprint=${adapter_fingerprint}"
+            "adapter_dockerfile=\"$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording\""
         ));
+        assert!(MANAGER.contains("--build-arg \"SOURCE_IMAGE=${source_image_id}\""));
+        assert!(MANAGER.contains("find . -mindepth 1 -maxdepth 1 -type f -print0"));
+        assert!(MANAGER.contains("--file Dockerfile.recording -"));
+        assert!(!MANAGER.contains("MeshConnectUtil.class"));
+        assert!(MANAGER.contains(
+            "recording_image_project=$(printf '%s' \"$repo_name\" | tr '[:upper:]' '[:lower:]')"
+        ));
+        assert!(
+            MANAGER.contains(
+                "adapter_image=\"traffic-e2e/${recording_image_project}-recording:cache\""
+            )
+        );
+        assert!(MANAGER.contains("build_recording_adapter"));
+        assert!(MANAGER.contains("resolve_or_build_recording_adapter"));
+        assert!(MANAGER.contains("require_initialized_recording_adapter"));
+        assert!(MANAGER.contains("reusing initialized recording source image"));
+        assert!(MANAGER.contains("initialization must build recording source image"));
+        assert!(MANAGER.contains("is missing; building it once"));
+        assert!(!MANAGER.contains("recording-adapter.fingerprint"));
         assert!(MANAGER.contains("--iidfile \"$adapter_iid_file\""));
         assert!(
-            MANAGER
-                .contains("\"${runtime_args[@]}\" \"$adapter_image_id\" \"${runtime_command[@]}\"")
+            MANAGER.contains("load_runtime_spec \"$source_inspect\" recording recording image")
         );
+        assert!(MANAGER.contains("\"${runtime_args[@]}\" \"$adapter_image_id\" >/dev/null"));
+        let adapted_source = MANAGER
+            .split_once("start_recording_source()")
+            .unwrap()
+            .1
+            .split_once("run_no_fallback()")
+            .unwrap()
+            .0;
+        assert!(!adapted_source.contains("--user"));
+        assert!(!adapted_source.contains("--privileged"));
+        assert!(MANAGER.contains(
+            "docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh"
+        ));
+        assert!(!MANAGER.contains("cat >\"$adapter_context/Dockerfile\""));
+        assert!(!MANAGER.contains("apply-breeze-sdk-patch"));
+        assert!(!MANAGER.contains("TRAFFIC_E2E_SOURCE_RUN_COMMAND"));
         assert!(!MANAGER.contains("docker image rm \"$adapter_image\""));
-        assert!(
-            MANAGER
-                .find("cached_adapter_record=$(docker image inspect")
-                .unwrap()
-                < MANAGER
-                    .find("docker build --platform linux/amd64 --network none")
-                    .unwrap()
-        );
+        assert!(MANAGER.contains("[[ \"$operation\" == preflight ]]"));
         assert!(MANAGER.contains(
             "registry.api.demo.test/weibo_rd_if/breeze:v0.1.21-e2e@sha256:5aba065755724d43c7da3f6b79ac82890a0a0a08c6ae3f43af12558b5e52462f"
         ));
         assert!(MANAGER.contains("internal recorder-run --config"));
         assert!(MANAGER.contains("internal comparison-run --config"));
+        assert!(MANAGER.contains("record|record-comparison|preflight"));
+        assert!(MANAGER.contains("preflight_root=\"$runtime_root/preflight/$run_id\""));
+        assert!(MANAGER.contains("[[ \"$operation\" == preflight ]]"));
+        assert!(MANAGER.contains("manifest_filter+=' and .published_cases > 0'"));
+        assert!(MANAGER.contains("run_preflight_https_probe"));
+        assert!(MANAGER.contains("recorder_command+=(--full-traffic-jsonl)"));
+        assert!(MANAGER.contains(
+            "$TRAFFIC_E2E_PLATFORM_ASSETS/HttpsProbe.class:/traffic-e2e/HttpsProbe.class:ro"
+        ));
+        assert!(MANAGER.contains("java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e"));
+        assert!(!MANAGER.contains("command -v javac"));
+        assert!(!MANAGER.contains("getent ahostsv4 demo.test"));
+        assert!(MANAGER.contains("phase: \"preflight-business-input-required\""));
         assert!(MANAGER.contains("wait_for_recorder_or_duration"));
         assert!(
             MANAGER.contains(
@@ -386,6 +505,25 @@ mod tests {
                 & 0o777,
             0o700
         );
-        assert!(assets.join("MeshConnectUtil.java").is_file());
+        assert_eq!(
+            fs::metadata(assets.join("brz-no-fallback.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(assets.join("HttpsProbe.class"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o644
+        );
+        assert_eq!(&HTTPS_PROBE[..4], b"\xca\xfe\xba\xbe");
+        assert_eq!(u16::from_be_bytes([HTTPS_PROBE[6], HTTPS_PROBE[7]]), 52);
+        assert!(!assets.join("MeshConnectUtil.java").exists());
+        assert!(!assets.join("apply-breeze-sdk-patch").exists());
     }
 }

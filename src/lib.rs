@@ -118,8 +118,9 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use platform::{
     ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
-    ManagedRecordingOptions, ManagedRecordingRecoveryResult, ManagedRecordingResult,
-    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
+    ManagedRecordingOptions, ManagedRecordingPreflightOptions, ManagedRecordingPreflightResult,
+    ManagedRecordingRecoveryResult, ManagedRecordingResult, drive_managed_recording_input,
+    recover_managed_recording, run_managed_recording, run_managed_recording_preflight,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,

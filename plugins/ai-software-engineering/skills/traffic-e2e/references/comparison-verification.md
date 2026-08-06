@@ -17,9 +17,10 @@ readiness, comparison recorder, finalization, signals, and cleanup. Do not
 generate or invoke repository comparison wrappers.
 
 When Breeze is absent, the same command selects the configured runtime without
-starting Breeze. Comparison sends admitted read-only requests symmetrically to
-source and candidate. Use repeatable `--api`, optional positive
-`--per-api-case-limit`,
+starting Breeze. Comparison sends every admitted request symmetrically to
+source and candidate, using the methods declared by the selected HTTP gateway
+rule without a separate read-only-method restriction. Use repeatable `--api`,
+optional positive `--per-api-case-limit`,
 and `--baseline-recheck` only when the verification policy or diagnosis needs
 source-after evidence.
 With explicit API selectors, comparison recording finalizes normally when

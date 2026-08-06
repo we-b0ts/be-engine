@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{HttpGatewayConfig, HttpGatewayFallbackMode};
 
-const SAFE_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ComparisonRecordingConfig {
@@ -68,13 +66,6 @@ impl ComparisonRecordingConfig {
                 !rule.methods.is_empty(),
                 "comparison recording HTTP gateway rule {name:?} must declare explicit methods"
             );
-            for method in &rule.methods {
-                let canonical = method.trim().to_ascii_uppercase();
-                ensure!(
-                    SAFE_METHODS.contains(&canonical.as_str()),
-                    "comparison recording HTTP gateway rule {name:?} method {method:?} is not read-only; only GET, HEAD, and OPTIONS may be mirrored"
-                );
-            }
         }
         Ok(())
     }
@@ -153,17 +144,21 @@ mod tests {
     }
 
     #[test]
-    fn requires_explicit_safe_methods_by_default() {
+    fn requires_explicit_methods_and_accepts_mutating_methods() {
         let config = ComparisonRecordingConfig::default();
         assert!(config.validate(&gateway(&[])).is_err());
         assert!(config.validate(&gateway(&["GET", "HEAD"])).is_ok());
-        assert!(config.validate(&gateway(&["POST"])).is_err());
-    }
+        assert!(
+            config
+                .validate(&gateway(&["POST", "PUT", "PATCH", "DELETE"]))
+                .is_ok()
+        );
 
-    #[test]
-    fn rejects_side_effecting_methods_even_without_baseline_recheck() {
-        let config = ComparisonRecordingConfig::default();
-        assert!(config.validate(&gateway(&["POST"])).is_err());
+        let config = ComparisonRecordingConfig {
+            baseline_recheck: true,
+            ..Default::default()
+        };
+        assert!(config.validate(&gateway(&["POST"])).is_ok());
     }
 
     #[test]
@@ -180,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_removed_side_effecting_method_override() {
+    fn rejects_obsolete_side_effecting_method_override() {
         let result = toml::from_str::<ComparisonRecordingConfig>(
             r#"
             allow_side_effecting_methods = true

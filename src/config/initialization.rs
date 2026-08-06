@@ -256,7 +256,6 @@ root_dir = "./.traffic-e2e/local/artifacts"
 [comparison_recording]
 # http_gateway.matched_upstream is the baseline service. During initialization,
 # the generated project CLI serves a fixed-response candidate on this port.
-# Comparison recording rejects every configured method except GET/HEAD/OPTIONS.
 candidate_upstream = "http://127.0.0.1:__CANDIDATE_HTTP_PORT__"
 # source_match: before_or_after in verification.yaml enables this automatically.
 baseline_recheck = false
@@ -361,73 +360,6 @@ redact_headers = [
   "proxy-authenticate",
 ]
 
-# Source-proven process work can be moved from case ownership into the shared
-# Global replay pool. Use `config recorder plan|apply background-dependencies`;
-# do not hand-edit generated rules.
-# [[recording.background_dependencies]]
-# name = "config-refresh"
-# protocol = "http"
-# authorities = ["config.api.demo.test"]
-# methods = ["GET"]
-# path_prefixes = ["/1/config/service"]
-# source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
-
-# Process-owned Motan traffic uses an exact logical RPC identity. Do not
-# persist node IPs, ports, Vintage aliases, or payload values.
-# [[recording.background_dependencies]]
-# name = "kunpeng-refresh"
-# protocol = "motan"
-# group = "kunpeng-config-rpc"
-# interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc"
-# method_name = "getConfigByName"
-# source_evidence = "MapiConfigLoader.java:init scheduled refresh unrelated to selected API"
-
-# Source-proven Redis ZCOUNT process traffic uses the stable service port
-# set plus one exact command and bounded key shape. Domains are diagnostic only
-# and are intentionally not persisted.
-# [[recording.background_dependencies]]
-# name = "interest-tag-mining-cache-refresh"
-# protocol = "redis"
-# ports = [20917, 20918, 20919]
-# command = "ZCOUNT"
-# key_prefix = "1042015:"
-# key_suffix = ".wtm2"
-# source_evidence = "InterestTagCardServiceImpl.java:init process-owned WAIC cache refresh"
-
-# Process-owned Redis startup reads use an exact key set with GET, SCARD, or
-# HGETALL. Background-rule Global exchanges replay independently from the
-# source connection lane.
-# [[recording.background_dependencies]]
-# name = "startup-cache-warm"
-# protocol = "redis"
-# ports = [20917]
-# command = "GET"
-# keys = ["cache:init:a", "cache:init:b"]
-# initial_load_timeout_ms = 60000
-# source_evidence = "src/cache/warm.rs:init loads response-driving local state"
-
-# Breeze-backed Memcached local-cache warm rules use a stable descriptor
-# identity without its dynamic port. The tool resolves the business resource
-# and writes this identity after validating finalized replay evidence. Numeric
-# bounds are unsigned 64-bit values so full UID-derived keys are supported.
-# [[recording.background_dependencies]]
-# name = "planet-video-cache-warm"
-# protocol = "memcached"
-# breeze_identity = "config.api.demo.test+3+config+v1+cache.pool+all:user-video@mc@cs"
-# command = "get"
-# key_start = 0
-# key_end = 4095
-# key_separator = "."
-# key_suffix = "pl_video"
-# Once HTTP readiness succeeds, observe the initial load for up to the
-# configured window and log progress every 10 seconds. If the expected load
-# remains incomplete, warn and continue case admission.
-# initial_load_timeout_ms = 60000
-# source_evidence = "TopUserServiceImpl.java:691 scheduled local-cache warm"
-
-# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
-# END AI-MANAGED BACKGROUND DEPENDENCIES
-
 [tls]
 ca_cert_path = "./.traffic-e2e/local/data/traffic-recorder-ca.pem"
 ca_key_path = "./.traffic-e2e/local/data/traffic-recorder-ca-key.pem"
@@ -520,13 +452,12 @@ mod tests {
         assert!(!raw.contains("max_response_bytes"));
         assert!(!raw.contains("max_decoded_body_bytes"));
         assert!(config.recording.background_dependencies.is_empty());
-        assert!(raw.contains("# initial_load_timeout_ms = 60000"));
-        assert!(raw.contains("# keys = [\"cache:init:a\", \"cache:init:b\"]"));
-        assert!(raw.contains("# bounds are unsigned 64-bit values"));
-        assert!(raw.contains("# remains incomplete, warn and continue case admission."));
+        assert!(!raw.contains("[[recording.background_dependencies]]"));
+        assert!(!raw.contains("startup-cache-warm"));
+        assert!(!raw.contains("planet-video-cache-warm"));
         assert!(raw.contains("# Set by `init --http-gateway-port`"));
         assert!(!raw.contains("__HTTP_GATEWAY_PORT__"));
-        assert!(raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
+        assert!(!raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
         assert!(!raw.contains("verified_excludes"));
         assert!(!raw.contains("allow_side_effecting_methods"));
         assert!(raw.contains(r#""msg":"not_in_"#));

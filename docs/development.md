@@ -156,12 +156,11 @@ are decoded according to their own `Content-Encoding` before being stored for
 semantic comparison, while the baseline response returned to the frontend
 retains its original encoding. Comparison request and response bodies each
 default to a 64 MiB limit.
-Explicit named HTTP gateway rules and methods are required. Only GET, HEAD, and
-OPTIONS may be mirrored. Any configured POST, PUT, PATCH, DELETE, or other
-non-read method fails configuration validation before the listener starts, so
-comparison recording cannot duplicate a write across both upstreams. Reaching
-an API case limit stops later requests for that API from reaching either
-upstream.
+Explicit named HTTP gateway rules and methods are required. Comparison
+recording accepts every method declared by the selected HTTP gateway rule and
+sends each admitted request to both upstreams without a separate read-only
+method restriction. Reaching an API case limit stops later requests for that
+API from reaching either upstream.
 
 Comparison recording requires
 `http_gateway.fallback_mode = "fixed_response"`. A request is admitted only
@@ -173,8 +172,8 @@ receives the configured fixed response. The runtime never intentionally
 forwards comparison traffic only to the source.
 
 By default the source baseline is requested once. Set
-`[comparison_recording].baseline_recheck = true` to capture the same read-only
-request in strict source-before, candidate, source-after order. The frontend
+`[comparison_recording].baseline_recheck = true` to capture the same request in
+strict source-before, candidate, source-after order. The frontend
 still receives the first source response without waiting for the later
 captures. The recheck adds `expected-response-after.json` and is diagnostic
 evidence for source-time drift by default. It runs only for admitted cases.
@@ -1051,11 +1050,20 @@ For a Breeze-dependent target, `start --e2e` must not start Breeze. The
 managed runtime owns the shared Breeze lifecycle.
 
 For Breeze-aware standard recording, the managed runtime keeps one
-target-scoped source-adapter cache tag. Each run fingerprints the inspected
-source image ID and complete adapter build context: a matching image is reused,
-while a missing or stale image is rebuilt. Cleanup removes the run-private
-context and containers but retains the matching adapter image. Comparison
-recording continues to use the genuine source image directly.
+target-scoped source-adapter cache tag. The target repository owns the reviewed
+`.traffic-e2e/Dockerfile.recording` build contract. Each run fingerprints that
+file and the exact image ID inspected from the source container: a matching
+image is reused, while a missing or stale image is rebuilt. Optional inputs such
+as the Breeze-only `.traffic-e2e/MeshConnectUtil.class` are owned and validated
+by the Dockerfile; the generic manager does not inspect them. The manager forms
+a non-recursive build context from regular files at the top of `.traffic-e2e`,
+so `.traffic-e2e/local/` is never included.
+The adaptor image's own `USER`, working directory, entrypoint, and command are
+used at runtime; the manager does not regenerate a Dockerfile or infer launch
+from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
+matching adaptor image. Comparison recording continues to use the genuine
+source image directly. Breeze itself always uses the centrally managed pinned
+image and is not built from a target-repository Dockerfile.
 
 Each `start --e2e` invocation must run the project's normal compile command
 once before launch, even when an artifact already exists. If that compile
