@@ -1,10 +1,9 @@
 use std::ffi::OsString;
 
 use anyhow::Result;
+use traffic_e2e::TRAFFIC_PROCESS_UID;
 
-use super::{
-    FIXED_USER, FakeIpConfig, checked_output, checked_status, fixed_user_uid, status_success,
-};
+use super::{FIXED_USER, FakeIpConfig, checked_output, checked_status, status_success};
 use crate::cli::output::stdout_line;
 
 pub(super) fn up(config: &FakeIpConfig) -> Result<()> {
@@ -16,8 +15,7 @@ pub(super) fn up(config: &FakeIpConfig) -> Result<()> {
 }
 
 fn try_up(config: &FakeIpConfig) -> Result<()> {
-    let uid = fixed_user_uid()?;
-    delete_rules(config, uid)?;
+    delete_rules(config)?;
     if !route_exists(&config.fake_cidr)? {
         checked_status(
             "ip",
@@ -25,25 +23,23 @@ fn try_up(config: &FakeIpConfig) -> Result<()> {
         )?;
     }
     if config.tcp {
-        add_rule("tcp", config.tcp_port, &config.fake_cidr, uid)?;
+        add_rule("tcp", config.tcp_port, &config.fake_cidr)?;
     }
     if config.udp {
-        add_rule("udp", config.udp_port, &config.fake_cidr, uid)?;
+        add_rule("udp", config.udp_port, &config.fake_cidr)?;
     }
     stdout_line(format_args!(
         "fake IP redirect enabled: {} tcp={}:{} udp={}:{}",
         config.fake_cidr, config.tcp, config.tcp_port, config.udp, config.udp_port
     ))?;
-    stdout_line(format_args!("owner scope: {FIXED_USER} (uid {uid})"))?;
+    stdout_line(format_args!(
+        "owner scope: {FIXED_USER} (uid {TRAFFIC_PROCESS_UID})"
+    ))?;
     Ok(())
 }
 
 pub(super) fn down(config: &FakeIpConfig) -> Result<()> {
-    if let Ok(uid) = fixed_user_uid() {
-        delete_rules(config, uid)?;
-    } else {
-        delete_rules_without_owner_lookup(config)?;
-    }
+    delete_rules(config)?;
     if route_exists(&config.fake_cidr)? {
         checked_status(
             "ip",
@@ -58,9 +54,10 @@ pub(super) fn down(config: &FakeIpConfig) -> Result<()> {
 }
 
 pub(super) fn status(config: &FakeIpConfig) -> Result<()> {
-    let uid = fixed_user_uid()?;
     stdout_line(format_args!("Fake IP CIDR: {}", config.fake_cidr))?;
-    stdout_line(format_args!("Owner scope: {FIXED_USER} (uid {uid})"))?;
+    stdout_line(format_args!(
+        "Owner scope: {FIXED_USER} (uid {TRAFFIC_PROCESS_UID})"
+    ))?;
     stdout_line(format_args!(
         "Local route installed: {}",
         route_exists(&config.fake_cidr)?
@@ -83,7 +80,7 @@ fn route_exists(cidr: &str) -> Result<bool> {
     }))
 }
 
-fn rule(operation: &str, protocol: &str, port: u16, cidr: &str, uid: u32) -> Vec<OsString> {
+fn rule(operation: &str, protocol: &str, port: u16, cidr: &str) -> Vec<OsString> {
     [
         OsString::from("-t"),
         OsString::from("nat"),
@@ -94,7 +91,7 @@ fn rule(operation: &str, protocol: &str, port: u16, cidr: &str, uid: u32) -> Vec
         OsString::from("-m"),
         OsString::from("owner"),
         OsString::from("--uid-owner"),
-        OsString::from(uid.to_string()),
+        OsString::from(TRAFFIC_PROCESS_UID.to_string()),
         OsString::from("-d"),
         OsString::from(cidr),
         OsString::from("-j"),
@@ -105,29 +102,14 @@ fn rule(operation: &str, protocol: &str, port: u16, cidr: &str, uid: u32) -> Vec
     .into()
 }
 
-fn add_rule(protocol: &str, port: u16, cidr: &str, uid: u32) -> Result<()> {
-    if !status_success("iptables", rule("-C", protocol, port, cidr, uid))? {
-        checked_status("iptables", rule("-A", protocol, port, cidr, uid))?;
+fn add_rule(protocol: &str, port: u16, cidr: &str) -> Result<()> {
+    if !status_success("iptables", rule("-C", protocol, port, cidr))? {
+        checked_status("iptables", rule("-A", protocol, port, cidr))?;
     }
     Ok(())
 }
 
-fn delete_rules(config: &FakeIpConfig, uid: u32) -> Result<()> {
-    for (protocol, port) in [("tcp", config.tcp_port), ("udp", config.udp_port)] {
-        while status_success(
-            "iptables",
-            rule("-C", protocol, port, &config.fake_cidr, uid),
-        )? {
-            checked_status(
-                "iptables",
-                rule("-D", protocol, port, &config.fake_cidr, uid),
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn delete_rules_without_owner_lookup(config: &FakeIpConfig) -> Result<()> {
+fn delete_rules(config: &FakeIpConfig) -> Result<()> {
     let output = checked_output("iptables", ["-t", "nat", "-S", "OUTPUT"])?;
     let tcp_port = config.tcp_port.to_string();
     let udp_port = config.udp_port.to_string();
@@ -150,4 +132,18 @@ fn delete_rules_without_owner_lookup(config: &FakeIpConfig) -> Result<()> {
         checked_status("iptables", args)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fake_ip_rule_is_scoped_to_the_container_traffic_uid() {
+        assert!(
+            rule("-A", "tcp", 15001, "198.18.0.0/15")
+                .windows(2)
+                .any(|values| values == ["--uid-owner", "998"])
+        );
+    }
 }

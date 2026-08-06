@@ -1,10 +1,9 @@
 use std::ffi::OsString;
 
 use anyhow::Result;
+use traffic_e2e::TRAFFIC_PROCESS_UID;
 
-use super::{
-    DnsConfig, FIXED_USER, checked_output, checked_status, fixed_user_uid, status_success,
-};
+use super::{DnsConfig, FIXED_USER, checked_output, checked_status, status_success};
 use crate::cli::output::{stdout, stdout_line};
 
 const CHAIN: &str = "TRP_DNS";
@@ -18,8 +17,7 @@ pub(super) fn up(config: &DnsConfig) -> Result<()> {
 }
 
 fn try_up(config: &DnsConfig) -> Result<()> {
-    let uid = fixed_user_uid()?;
-    delete_output_rules(uid)?;
+    delete_output_rules()?;
     if !chain_exists()? {
         checked_status("iptables", ["-t", "nat", "-N", CHAIN])?;
     }
@@ -42,22 +40,20 @@ fn try_up(config: &DnsConfig) -> Result<()> {
                 OsString::from(format!("{}:{}", config.dns_ip, config.dns_port)),
             ],
         )?;
-        add_output_rule(protocol, uid)?;
+        add_output_rule(protocol)?;
     }
     stdout_line(format_args!(
         "local DNS capture enabled: *:53 -> {}:{}",
         config.dns_ip, config.dns_port
     ))?;
-    stdout_line(format_args!("owner scope: {FIXED_USER} (uid {uid})"))?;
+    stdout_line(format_args!(
+        "owner scope: {FIXED_USER} (uid {TRAFFIC_PROCESS_UID})"
+    ))?;
     Ok(())
 }
 
 pub(super) fn down(config: &DnsConfig) -> Result<()> {
-    if let Ok(uid) = fixed_user_uid() {
-        delete_output_rules(uid)?;
-    } else {
-        delete_output_rules_without_owner_lookup()?;
-    }
+    delete_output_rules()?;
     if chain_exists()? {
         checked_status("iptables", ["-t", "nat", "-F", CHAIN])?;
         checked_status("iptables", ["-t", "nat", "-X", CHAIN])?;
@@ -70,12 +66,13 @@ pub(super) fn down(config: &DnsConfig) -> Result<()> {
 }
 
 pub(super) fn status(config: &DnsConfig) -> Result<()> {
-    let uid = fixed_user_uid()?;
     stdout_line(format_args!(
         "DNS listener expected at {}:{}",
         config.dns_ip, config.dns_port
     ))?;
-    stdout_line(format_args!("Owner scope: {FIXED_USER} (uid {uid})"))?;
+    stdout_line(format_args!(
+        "Owner scope: {FIXED_USER} (uid {TRAFFIC_PROCESS_UID})"
+    ))?;
     let output = checked_output("iptables", ["-t", "nat", "-S", "OUTPUT"])?;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
         if line.contains(&format!("-j {CHAIN}")) {
@@ -93,7 +90,7 @@ fn chain_exists() -> Result<bool> {
     status_success("iptables", ["-t", "nat", "-L", CHAIN])
 }
 
-fn output_rule(protocol: &str, uid: u32, operation: &str) -> Vec<OsString> {
+fn output_rule(protocol: &str, operation: &str) -> Vec<OsString> {
     [
         "-t",
         "nat",
@@ -104,7 +101,7 @@ fn output_rule(protocol: &str, uid: u32, operation: &str) -> Vec<OsString> {
         "-m",
         "owner",
         "--uid-owner",
-        &uid.to_string(),
+        &TRAFFIC_PROCESS_UID.to_string(),
         "--dport",
         "53",
         "-j",
@@ -115,23 +112,14 @@ fn output_rule(protocol: &str, uid: u32, operation: &str) -> Vec<OsString> {
     .collect()
 }
 
-fn add_output_rule(protocol: &str, uid: u32) -> Result<()> {
-    if !status_success("iptables", output_rule(protocol, uid, "-C"))? {
-        checked_status("iptables", output_rule(protocol, uid, "-A"))?;
+fn add_output_rule(protocol: &str) -> Result<()> {
+    if !status_success("iptables", output_rule(protocol, "-C"))? {
+        checked_status("iptables", output_rule(protocol, "-A"))?;
     }
     Ok(())
 }
 
-fn delete_output_rules(uid: u32) -> Result<()> {
-    for protocol in ["udp", "tcp"] {
-        while status_success("iptables", output_rule(protocol, uid, "-C"))? {
-            checked_status("iptables", output_rule(protocol, uid, "-D"))?;
-        }
-    }
-    Ok(())
-}
-
-fn delete_output_rules_without_owner_lookup() -> Result<()> {
+fn delete_output_rules() -> Result<()> {
     let output = checked_output("iptables", ["-t", "nat", "-S", "OUTPUT"])?;
     for line in String::from_utf8_lossy(&output.stdout)
         .lines()
@@ -147,4 +135,18 @@ fn delete_output_rules_without_owner_lookup() -> Result<()> {
         checked_status("iptables", args)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dns_rule_is_scoped_to_the_container_traffic_uid() {
+        assert!(
+            output_rule("udp", "-A")
+                .windows(2)
+                .any(|values| values == ["--uid-owner", "998"])
+        );
+    }
 }

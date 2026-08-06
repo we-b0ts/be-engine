@@ -203,16 +203,18 @@ validate the policy. See
 
 `traffic-e2e replay` starts the replay DNS and fake-IP TCP gateway, then applies
 the same local interception rules used for recording. Interception is always
-limited to `trp-record`, so the dependency-producing target process must run as
-that user. Build steps, replay itself, and replay-control commands may remain
-under the developer account. Use `--no-intercept` only when the target already
-routes dependencies directly to the replay listeners.
+limited to numeric UID `998`, so every containerized dependency-producing
+target process must run as `998:998`. The host's `trp-record` account and its
+UID do not determine this owner scope. Build steps, replay itself, and
+replay-control commands may remain under the developer account. Use
+`--no-intercept` only when the target already routes dependencies directly to
+the replay listeners.
 
 For an in-process E2E, build its executable as the developer and run the
 prebuilt command through `traffic-e2e target exec`. The command stages the
 executable and copied inputs, clears the inherited environment, provides a
-private writable work directory, and resolves the fixed interception identity.
-It never accepts a username or UID. Keep
+private writable work directory, and drops to the fixed numeric identity
+`998:998` without resolving a host account. It never accepts a username or UID. Keep
 `traffic-e2e diagnose replay-control begin/end/finalize` in the outer
 developer-owned process; the target process must not access the replay session
 or control socket.
@@ -501,9 +503,9 @@ protocol = "redis" # redis | memcached | kafka | motan | raw
 
 Set up local DNS capture. This keeps the recorder on non-privileged port
 `15353`, then captures local UDP/TCP DNS traffic on port `53` and sends it to
-`127.0.0.153:15353`. Capture is limited to the fixed `trp-record` user. Run the
-Recorder under root or a developer account so its own upstream DNS queries are
-outside that owner scope:
+`127.0.0.153:15353`. Capture is limited to numeric UID `998`, independent of
+host account resolution. Run the Recorder under root or a developer account so
+its own upstream DNS queries are outside that owner scope:
 
 ```bash
 sudo traffic-e2e diagnose interception dns up \
@@ -568,8 +570,8 @@ Port `5353` is intentionally avoided because it is commonly used by mDNS/Avahi
 on UDP. Binding to `127.0.0.153:15353` also avoids the common systemd-resolved
 stub listeners on `127.0.0.53:53` and `127.0.0.54:53`. Interception does
 not depend on `resolvectl`; it works by adding a narrow nat chain in iptables.
-Every DNS request emitted by `trp-record` is redirected to the local DNS mock;
-no destination DNS server is excluded.
+Every DNS request emitted by a process running as UID `998` is redirected to
+the local DNS mock; no destination DNS server is excluded.
 
 To remove the DNS and fake-IP rules:
 

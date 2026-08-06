@@ -60,6 +60,13 @@ use crate::recorder::background::BackgroundDependencyMatcher;
 use crate::recorder::http::case::CaseInvalidation;
 use crate::recording_control::{RecordingLifecycle, RecordingListener};
 
+/// Numeric UID used by every containerized process whose dependency traffic is intercepted.
+pub const TRAFFIC_PROCESS_UID: u32 = 998;
+/// Numeric GID used by every containerized process whose dependency traffic is intercepted.
+pub const TRAFFIC_PROCESS_GID: u32 = 998;
+/// OCI user specification for containerized processes whose dependency traffic is intercepted.
+pub const TRAFFIC_PROCESS_USER: &str = "998:998";
+
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
     ensure_case_group, resolve_recording_api_member,

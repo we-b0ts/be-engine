@@ -378,14 +378,15 @@ traffic-e2e diagnose recorder --config config/recorder.example.toml
 
 Managed recording uses `dns_mock.upstream_dns` from the Recorder TOML for
 fake-DNS forwarding. Local interception redirects every port-53 query emitted
-by `trp-record`; it has no destination DNS bypass. Recorder itself runs as root,
-so its upstream queries are outside the fixed-user owner scope.
+by a container process running as UID `998`; it has no destination DNS bypass.
+Recorder itself runs as root, so its upstream queries are outside the fixed
+owner scope.
 
-The legacy fixed-user local interception path limits DNS and fake-IP interception to the
-dedicated Unix user `trp-record`. Run the source service as that user so
-bootstrap and case dependencies are not polluted by unrelated local processes.
-The owner scope cannot be overridden by CLI options, environment variables, or
-recorder configuration.
+The local interception path limits DNS and fake-IP interception to numeric UID
+`998`. Run the containerized source service as `998:998` so bootstrap and case
+dependencies are not polluted by unrelated processes. Host account resolution
+does not affect this contract. The owner scope cannot be overridden by CLI
+options, environment variables, or recorder configuration.
 
 HTTP gateway recording is intentionally conservative. Until the configured
 ready probe succeeds, matching traffic uses the configured fallback strategy
@@ -696,12 +697,12 @@ diagnostic. A target request that is unmatched or unsupported remains dirty,
 including requests sent to an allowed host. Restart replay after applying a
 new host; running sessions do not hot-reload recorder configuration.
 
-`traffic-e2e replay` also uses the fixed `trp-record` owner filter. Run the
-dependency-producing target process as that user. Build steps, replay itself,
-and replay-control commands remain under the developer account or root; replay
-startup rejects `trp-record` as its controller identity. If the
-target cannot run as `trp-record`, intercepted replay is blocked; do not widen
-the owner scope to the login user or all local users.
+`traffic-e2e replay` also uses the fixed numeric UID `998` owner filter. Run the
+containerized dependency-producing target process as `998:998`. Build steps,
+replay itself, and replay-control commands remain under the developer account
+or root; replay startup rejects UID `998` as its controller identity. If the
+target cannot run as `998:998`, intercepted replay is blocked; do not widen the
+owner scope to the login user or all local users.
 
 For a prebuilt in-process E2E command, use `traffic-e2e target exec` rather than
 granting the fixed user access to the workspace or build cache:
@@ -717,8 +718,9 @@ traffic-e2e target exec \
 ```
 
 The caller must have non-interactive sudo permission for staging ownership and
-for running as the recorder's fixed user. Copied inputs are read-only to the
-target; the temporary work tree is writable and removed after execution.
+for applying the fixed numeric identity `998:998`; host account lookup is not
+used. Copied inputs are read-only to the target; the temporary work tree is
+writable and removed after execution.
 Environment files use dotenv syntax. Later files override earlier files, and
 same-named caller environment values or explicit `--env` assignments override
 file values. Reserved identity, path, shell-hook, and replay-session variables

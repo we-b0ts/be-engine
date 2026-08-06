@@ -8,11 +8,10 @@ use std::process::{Command as StdCommand, Stdio};
 use anyhow::{Context, Result, ensure};
 use clap::{Args, Subcommand};
 use tokio::process::{Child, Command};
+use traffic_e2e::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID};
 use uuid::Uuid;
 
-use super::interception::{
-    FIXED_USER, effective_uid, fixed_user_gid, fixed_user_uid, system_program, temp_root,
-};
+use super::interception::{FIXED_USER, effective_uid, system_program, temp_root};
 use super::signal::shutdown_signal;
 
 mod environment;
@@ -169,25 +168,17 @@ async fn run_exec(args: TargetExecArgs) -> Result<()> {
             .chain(&args.path_env)
             .chain(&args.environment),
     )?;
-    let target_uid = fixed_user_uid()?;
-    let target_gid = fixed_user_gid()?;
     prepare_privilege()?;
-    verify_target_identity(target_uid)?;
+    verify_target_identity()?;
 
     let command = resolve_command(&args.command[0])?;
     let stage = Stage::create()?;
-    let result = run_staged_target(&args, &command, &stage, target_uid, target_gid).await;
+    let result = run_staged_target(&args, &command, &stage).await;
     stage.cleanup();
     result
 }
 
-async fn run_staged_target(
-    args: &TargetExecArgs,
-    command: &Path,
-    stage: &Stage,
-    target_uid: u32,
-    target_gid: u32,
-) -> Result<()> {
+async fn run_staged_target(args: &TargetExecArgs, command: &Path, stage: &Stage) -> Result<()> {
     stage.stage_command(command)?;
     stage.create_write_dirs(&args.write_dirs)?;
     let mut environment = load_files(&args.env_files)?;
@@ -218,9 +209,12 @@ async fn run_staged_target(
     for assignment in &args.environment {
         environment.insert(assignment.name.clone(), assignment.value.clone());
     }
-    stage.assign_group(target_gid)?;
+    stage.assign_group(TRAFFIC_PROCESS_GID)?;
 
-    eprintln!("replay target identity: user={FIXED_USER} uid={target_uid}");
+    eprintln!(
+        "replay target identity: user={FIXED_USER} uid={TRAFFIC_PROCESS_UID} \
+         gid={TRAFFIC_PROCESS_GID}"
+    );
     let mut child = spawn_target(args, stage, &environment)?;
     let status = tokio::select! {
         status = child.wait() => status?,
@@ -263,21 +257,36 @@ fn spawn_target(
 }
 
 fn target_command() -> Result<Command> {
-    if effective_uid() == 0 {
-        let mut command = Command::new(system_program("runuser")?);
-        command.args(["-u", FIXED_USER, "--"]);
-        Ok(command)
+    Ok(Command::from(target_std_command()?))
+}
+
+fn target_std_command() -> Result<StdCommand> {
+    let setpriv = system_program("setpriv")?;
+    let mut command = if effective_uid() == 0 {
+        StdCommand::new(setpriv)
     } else {
-        let mut command = Command::new(system_program("sudo")?);
-        command.args(["-n", "-u", FIXED_USER, "--"]);
-        Ok(command)
-    }
+        let mut command = StdCommand::new(system_program("sudo")?);
+        command.args(["-n", "--"]).arg(setpriv);
+        command
+    };
+    command.args(target_identity_args());
+    Ok(command)
+}
+
+fn target_identity_args() -> [OsString; 6] {
+    [
+        OsString::from("--reuid"),
+        OsString::from(TRAFFIC_PROCESS_UID.to_string()),
+        OsString::from("--regid"),
+        OsString::from(TRAFFIC_PROCESS_GID.to_string()),
+        OsString::from("--clear-groups"),
+        OsString::from("--"),
+    ]
 }
 
 fn prepare_privilege() -> Result<()> {
+    system_program("setpriv").context("setpriv is required to apply the fixed numeric identity")?;
     if effective_uid() == 0 {
-        system_program("runuser")
-            .context("runuser is required when traffic-e2e target runs as root")?;
         return Ok(());
     }
     let sudo = system_program("sudo").context("sudo is required")?;
@@ -290,45 +299,33 @@ fn prepare_privilege() -> Result<()> {
             .success(),
         "the caller needs non-interactive sudo permission"
     );
-    ensure!(
-        StdCommand::new(sudo)
-            .args(["-n", "-u", FIXED_USER])
-            .arg(system_program("true")?)
-            .status()
-            .context("failed to check fixed-user sudo permission")?
-            .success(),
-        "the caller needs non-interactive sudo permission for {FIXED_USER}"
-    );
     Ok(())
 }
 
-fn verify_target_identity(expected_uid: u32) -> Result<()> {
+fn verify_target_identity() -> Result<()> {
+    verify_target_identity_field("-u", TRAFFIC_PROCESS_UID, "UID")?;
+    verify_target_identity_field("-g", TRAFFIC_PROCESS_GID, "GID")
+}
+
+fn verify_target_identity_field(flag: &str, expected: u32, field: &str) -> Result<()> {
     let id = system_program("id")?;
-    let output = if effective_uid() == 0 {
-        let mut command = StdCommand::new(system_program("runuser")?);
-        command.args(["-u", FIXED_USER, "--"]).arg(&id).arg("-u");
-        command.output()
-    } else {
-        let mut command = StdCommand::new(system_program("sudo")?);
-        command
-            .args(["-n", "-u", FIXED_USER, "--"])
-            .arg(&id)
-            .arg("-u");
-        command.output()
-    }
-    .context("failed to verify fixed-user target identity")?;
+    let output = target_std_command()?
+        .arg(&id)
+        .arg(flag)
+        .output()
+        .context("failed to verify fixed numeric target identity")?;
     ensure!(
         output.status.success(),
-        "failed to verify fixed-user target identity: {}",
+        "failed to verify fixed numeric target identity: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
     let actual = String::from_utf8_lossy(&output.stdout)
         .trim()
         .parse::<u32>()
-        .context("fixed-user identity command returned a non-numeric UID")?;
+        .with_context(|| format!("fixed identity command returned a non-numeric {field}"))?;
     ensure!(
-        actual == expected_uid,
-        "effective UID does not match fixed interception user"
+        actual == expected,
+        "effective {field} {actual} does not match fixed traffic identity {expected}"
     );
     Ok(())
 }
@@ -352,24 +349,12 @@ fn ensure_target_can_read(path: &Path) -> Result<()> {
 
 fn target_test(flag: &str, path: &Path) -> Result<bool> {
     let test = system_program("test")?;
-    let status = if effective_uid() == 0 {
-        let mut command = StdCommand::new(system_program("runuser")?);
-        command
-            .args(["-u", FIXED_USER, "--"])
-            .arg(&test)
-            .arg(flag)
-            .arg(path);
-        command.status()
-    } else {
-        let mut command = StdCommand::new(system_program("sudo")?);
-        command
-            .args(["-n", "-u", FIXED_USER, "--"])
-            .arg(&test)
-            .arg(flag)
-            .arg(path);
-        command.status()
-    }
-    .context("failed to check fixed-user path access")?;
+    let status = target_std_command()?
+        .arg(&test)
+        .arg(flag)
+        .arg(path)
+        .status()
+        .context("failed to check fixed-identity path access")?;
     Ok(status.success())
 }
 
@@ -514,5 +499,13 @@ mod tests {
         assert!(validate_relative(Path::new("../logs")).is_err());
         assert!(validate_relative(Path::new("/tmp/logs")).is_err());
         assert!(validate_relative(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn target_identity_is_numeric_and_does_not_use_host_account_resolution() {
+        assert_eq!(
+            target_identity_args(),
+            ["--reuid", "998", "--regid", "998", "--clear-groups", "--",].map(OsString::from)
+        );
     }
 }
