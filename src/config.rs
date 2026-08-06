@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_FAKE_CIDR: &str = "198.19.0.0/16";
+pub(crate) const DEFAULT_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 mod allowed_unused_http;
 mod artifacts;
@@ -238,6 +239,7 @@ impl AppConfig {
 
     pub fn validate_comparison_recording(&self) -> Result<()> {
         self.validate_artifacts()?;
+        self.recording.validate_body_limits()?;
         self.recording.validate_request_header_encryption()?;
         http_gateway::validate_config(&self.http_gateway)?;
         let comparison_recording = self.comparison_recording.as_ref().context(
@@ -510,7 +512,11 @@ mod tests {
             config.http_gateway.per_api_case_limits.default,
             case_limits::DEFAULT_MAX_CASES_PER_PATTERN
         );
-        assert_eq!(config.recording.max_body_bytes, 1024 * 1024);
+        assert_eq!(config.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
+        assert_eq!(
+            config.recording.decoded_body_limit(),
+            DEFAULT_BODY_LIMIT_BYTES
+        );
         assert_eq!(config.recording.traffic_jsonl, TrafficJsonlMode::Full);
         assert_eq!(config.recording.jsonl_buffer_capacity_bytes, 256 * 1024);
         assert_eq!(config.recording.jsonl_flush_interval_ms, 1_000);

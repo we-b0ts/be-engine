@@ -12,7 +12,7 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-const CONFIG_VERSION: u32 = 9;
+const CONFIG_VERSION: u32 = 10;
 const DEFAULT_AI_FORBIDDEN_ROOT: &str = crate::internal_runtime::TRAFFIC_E2E_RELATIVE_ROOT;
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -132,7 +132,6 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
             readiness_status: options.target_readiness_status,
             startup_timeout_seconds: options.target_startup_timeout_seconds,
             request_timeout_seconds: options.target_request_timeout_seconds,
-            max_response_bytes: options.target_max_response_bytes,
         },
         replay: ReplayProjectConfig {
             policy: options.replay_policy.clone(),
@@ -218,6 +217,9 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         policy.runner_owned_response_assertions,
         "managed project replay requires verification policy version 2 with runner-owned response assertions"
     );
+    let recorder_config = resolve_under(&target_root, &config.recording.config);
+    let recorder = crate::config::AppConfig::load(&recorder_config)?;
+    let target_max_response_bytes = recorder.recording.max_body_bytes;
     Ok((
         target_root.clone(),
         ResolvedProjectConfig {
@@ -232,13 +234,13 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_readiness_status: config.target.readiness_status,
             target_startup_timeout: Duration::from_secs(config.target.startup_timeout_seconds),
             target_request_timeout: Duration::from_secs(config.target.request_timeout_seconds),
-            target_max_response_bytes: config.target.max_response_bytes,
+            target_max_response_bytes,
             source_container: config.source.container,
             breeze_container: config.breeze.map(|breeze| breeze.container),
             replay_policy: policy_path,
             replay_startup_timeout: Duration::from_secs(config.replay.startup_timeout_seconds),
             pr_base: config.delivery.pr_base,
-            recorder_config: resolve_under(&target_root, &config.recording.config),
+            recorder_config,
             recording_rule: config.recording.rule,
             runner_owned_response_assertions: policy.runner_owned_response_assertions,
         },
@@ -345,10 +347,6 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
     ensure!(
         config.target.request_timeout_seconds > 0,
         "target.request_timeout_seconds must be greater than zero"
-    );
-    ensure!(
-        config.target.max_response_bytes > 0,
-        "target.max_response_bytes must be greater than zero"
     );
     ensure!(
         !config.replay.policy.as_os_str().is_empty(),
@@ -508,7 +506,6 @@ mod tests {
             target_readiness_status: 404,
             target_startup_timeout_seconds: 60,
             target_request_timeout_seconds: 30,
-            target_max_response_bytes: 32 * 1024 * 1024,
             replay_policy: PathBuf::from("config/replay.yaml"),
             replay_startup_timeout_seconds: DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
             pr_base: "integration".to_string(),
@@ -547,6 +544,22 @@ mod tests {
             config.state.ai_forbidden_root,
             PathBuf::from(DEFAULT_AI_FORBIDDEN_ROOT)
         );
+    }
+
+    #[test]
+    fn managed_replay_uses_the_recorder_body_limit() {
+        let target = target();
+        let recorder_path = target.path().join("config/recorder.toml");
+        let mut recorder = fs::read_to_string(&recorder_path).unwrap();
+        recorder.push_str("\n[recording]\nmax_body_bytes = 1234\n");
+        fs::write(recorder_path, recorder).unwrap();
+        initialize(options(target.path())).unwrap();
+        let cases = target.path().join("cases/run");
+        fs::create_dir_all(&cases).unwrap();
+
+        let (config, _) = resolve_layout(target.path(), &cases, None).unwrap();
+
+        assert_eq!(config.target_max_response_bytes, 1234);
     }
 
     #[test]

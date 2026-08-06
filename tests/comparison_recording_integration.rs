@@ -276,11 +276,7 @@ async fn response_limit_preserves_baseline_and_records_partial_response() {
     let gateway = free_addr();
     let run_id = "20260722160002";
     let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
-    config
-        .comparison_recording
-        .as_mut()
-        .unwrap()
-        .max_response_bytes = 8;
+    config.recording.max_body_bytes = 8;
     let task = tokio::spawn(traffic_e2e::run_comparison_recording(
         config,
         Some(run_id.to_string()),
@@ -302,7 +298,7 @@ async fn response_limit_preserves_baseline_and_records_partial_response() {
         baseline["error"]
             .as_str()
             .unwrap()
-            .contains("max_response_bytes")
+            .contains("recording.max_body_bytes")
     );
     task.abort();
 }
@@ -319,11 +315,7 @@ async fn non_read_request_is_never_mirrored() {
     let gateway = free_addr();
     let run_id = "20260722160007";
     let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
-    config
-        .comparison_recording
-        .as_mut()
-        .unwrap()
-        .max_request_bytes = 4;
+    config.recording.max_body_bytes = 4;
     let task = tokio::spawn(traffic_e2e::run_comparison_recording(
         config,
         Some(run_id.to_string()),
@@ -392,11 +384,7 @@ async fn request_limit_rejects_before_either_upstream() {
     let gateway = free_addr();
     let run_id = "20260722160004";
     let mut config = comparison_recording_config(&temp, gateway, baseline, candidate);
-    config
-        .comparison_recording
-        .as_mut()
-        .unwrap()
-        .max_request_bytes = 4;
+    config.recording.max_body_bytes = 4;
     let task = tokio::spawn(traffic_e2e::run_comparison_recording(
         config,
         Some(run_id.to_string()),

@@ -6,8 +6,8 @@ use anyhow::{Context, Result, ensure};
 use hyper::StatusCode;
 use serde::Serialize;
 
-use super::AppConfig;
 use super::edit::create_atomic;
+use super::{AppConfig, DEFAULT_BODY_LIMIT_BYTES};
 
 pub const DEFAULT_RECORDING_RULE: &str = "record-api";
 pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 17_171;
@@ -191,6 +191,10 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
         ""
     };
     RECORDER_TEMPLATE
+        .replace(
+            "__DEFAULT_BODY_LIMIT_BYTES__",
+            &DEFAULT_BODY_LIMIT_BYTES.to_string(),
+        )
         .replace("__UPSTREAM_DNS__", &options.upstream_dns.to_string())
         .replace(
             "__SOURCE_HTTP_PORT__",
@@ -259,8 +263,6 @@ baseline_recheck = false
 upstream_timeout_ms = 30000
 max_in_flight = 256
 summary_flush_interval_ms = 1000
-max_request_bytes = 10485760
-max_response_bytes = 10485760
 
 [dns_mock]
 enabled = true
@@ -339,8 +341,7 @@ headers = {}
 record_raw_packets = false
 
 [recording]
-max_body_bytes = 10485760
-max_decoded_body_bytes = 33554432
+max_body_bytes = __DEFAULT_BODY_LIMIT_BYTES__
 traffic_jsonl = "errors"
 jsonl_buffer_capacity_bytes = 262144
 jsonl_flush_interval_ms = 1000
@@ -508,6 +509,16 @@ mod tests {
         );
         assert_eq!(config.recording.post_ready_settle_ms, 10_000);
         assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);
+        assert_eq!(config.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
+        assert_eq!(config.recording.max_decoded_body_bytes, None);
+        assert_eq!(
+            config.recording.decoded_body_limit(),
+            DEFAULT_BODY_LIMIT_BYTES
+        );
+        assert!(config.comparison_recording.is_some());
+        assert!(!raw.contains("max_request_bytes"));
+        assert!(!raw.contains("max_response_bytes"));
+        assert!(!raw.contains("max_decoded_body_bytes"));
         assert!(config.recording.background_dependencies.is_empty());
         assert!(raw.contains("# initial_load_timeout_ms = 60000"));
         assert!(raw.contains("# keys = [\"cache:init:a\", \"cache:init:b\"]"));

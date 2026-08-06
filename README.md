@@ -501,14 +501,14 @@ protocol = "redis" # redis | memcached | kafka | motan | raw
 
 Set up local DNS capture. This keeps the recorder on non-privileged port
 `15353`, then captures local UDP/TCP DNS traffic on port `53` and sends it to
-`127.0.0.153:15353`. The configured upstream DNS is excluded so the recorder can
-forward queries without recursively hitting itself:
+`127.0.0.153:15353`. Capture is limited to the fixed `trp-record` user. Run the
+Recorder under root or a developer account so its own upstream DNS queries are
+outside that owner scope:
 
 ```bash
 sudo traffic-e2e diagnose interception dns up \
   --dns-ip 127.0.0.153 \
-  --dns-port 15353 \
-  --upstream-dns 10.10.10.10:53
+  --dns-port 15353
 ```
 
 On Linux, the whole `127.0.0.0/8` block routes to loopback, so this does not
@@ -568,7 +568,8 @@ Port `5353` is intentionally avoided because it is commonly used by mDNS/Avahi
 on UDP. Binding to `127.0.0.153:15353` also avoids the common systemd-resolved
 stub listeners on `127.0.0.53:53` and `127.0.0.54:53`. Interception does
 not depend on `resolvectl`; it works by adding a narrow nat chain in iptables.
-Keep `--upstream-dns` aligned with `[dns_mock].upstream_dns`.
+Every DNS request emitted by `trp-record` is redirected to the local DNS mock;
+no destination DNS server is excluded.
 
 To remove the DNS and fake-IP rules:
 
@@ -579,8 +580,7 @@ sudo traffic-e2e diagnose interception fake-ip down \
   --udp false
 sudo traffic-e2e diagnose interception dns down \
   --dns-ip 127.0.0.153 \
-  --dns-port 15353 \
-  --upstream-dns 10.10.10.10:53
+  --dns-port 15353
 sudo ./scripts/setup_system_ca.sh down
 ```
 

@@ -6,10 +6,10 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use tracing::{info, warn};
 
+use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 use crate::recorded_request::RecordedHttpClient;
 
 const MAX_REQUEST_FILES: usize = 1_000;
-const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_INTERVAL: Duration = Duration::from_millis(100);
 const MAX_LOGGED_ERRORS: usize = 10;
 
@@ -45,7 +45,7 @@ pub async fn drive_managed_recording_input(
     let client = RecordedHttpClient::new_recording_input(
         options.origin,
         options.request_timeout,
-        MAX_RESPONSE_BYTES,
+        DEFAULT_BODY_LIMIT_BYTES,
     );
     let mut attempted = 0_usize;
     let mut succeeded = 0_usize;

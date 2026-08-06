@@ -372,11 +372,8 @@ async fn handle_request(
         return fixed_response(&runtime).await;
     };
 
-    let body_result = collect_limited(
-        request.into_body(),
-        runtime.comparison_recording.max_request_bytes,
-    )
-    .await;
+    let body_result =
+        collect_limited(request.into_body(), runtime.config.recording.max_body_bytes).await;
     let body = match body_result {
         Ok(body) => body,
         Err(LimitedBodyError::TooLarge) => {

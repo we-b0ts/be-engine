@@ -15,9 +15,8 @@ pub use self::model::{
     ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference, ResponseDifferenceKind,
 };
 use super::policy::{fingerprint, load_replay_policy, uri_path};
+use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 use crate::http::content_encoding;
-
-const LEGACY_COMPARISON_DECODED_BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
 pub struct ResponseAssertionOptions {
     pub case_id: String,
@@ -195,9 +194,7 @@ fn captured_body(response: &ComparisonResponse, label: &str) -> Result<Vec<u8>> 
     let Some(content_encoding) = content_encoding else {
         return Ok(captured);
     };
-    let limit = body
-        .limit_bytes
-        .unwrap_or(LEGACY_COMPARISON_DECODED_BODY_LIMIT_BYTES);
+    let limit = body.limit_bytes.unwrap_or(DEFAULT_BODY_LIMIT_BYTES);
     let decoded = content_encoding::decode(&captured, &content_encoding, limit)
         .with_context(|| format!("{label} body content decoding failed"))?;
     ensure!(

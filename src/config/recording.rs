@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::BackgroundDependencyRuleConfig;
+use super::{BackgroundDependencyRuleConfig, DEFAULT_BODY_LIMIT_BYTES};
 use crate::mysql::operation::MysqlWriteOperation;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -100,13 +100,18 @@ impl RecordingConfig {
         self.max_decoded_body_bytes.unwrap_or(self.max_body_bytes)
     }
 
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(super) fn validate_body_limits(&self) -> Result<()> {
         if self.max_body_bytes == 0 {
             bail!("recording.max_body_bytes must be greater than zero");
         }
         if self.max_decoded_body_bytes == Some(0) {
             bail!("recording.max_decoded_body_bytes must be greater than zero");
         }
+        Ok(())
+    }
+
+    pub(super) fn validate(&self) -> Result<()> {
+        self.validate_body_limits()?;
         if self.jsonl_buffer_capacity_bytes == 0 {
             bail!("recording.jsonl_buffer_capacity_bytes must be greater than zero");
         }
@@ -202,7 +207,7 @@ impl Default for RecordingConfig {
     fn default() -> Self {
         Self {
             output_dir: PathBuf::from("./recordings"),
-            max_body_bytes: 1024 * 1024,
+            max_body_bytes: DEFAULT_BODY_LIMIT_BYTES,
             max_decoded_body_bytes: None,
             traffic_jsonl: TrafficJsonlMode::Full,
             jsonl_buffer_capacity_bytes: 256 * 1024,
@@ -297,6 +302,11 @@ mod tests {
     #[test]
     fn decoded_body_limit_defaults_to_wire_limit() {
         let mut config = AppConfig::default();
+        assert_eq!(config.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
+        assert_eq!(
+            config.recording.decoded_body_limit(),
+            DEFAULT_BODY_LIMIT_BYTES
+        );
         config.recording.max_body_bytes = 1234;
         assert_eq!(config.recording.decoded_body_limit(), 1234);
 

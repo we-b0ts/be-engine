@@ -18,7 +18,6 @@ pub(super) const ASSERTION_REPORT_VERSION: u32 = 2;
 pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
-pub(super) const DEFAULT_TARGET_MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -59,8 +58,6 @@ pub(super) struct TargetProjectConfig {
     pub startup_timeout_seconds: u64,
     #[serde(default = "default_target_request_timeout_seconds")]
     pub request_timeout_seconds: u64,
-    #[serde(default = "default_target_max_response_bytes")]
-    pub max_response_bytes: usize,
 }
 
 fn default_target_startup_timeout_seconds() -> u64 {
@@ -69,10 +66,6 @@ fn default_target_startup_timeout_seconds() -> u64 {
 
 fn default_target_request_timeout_seconds() -> u64 {
     DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS
-}
-
-fn default_target_max_response_bytes() -> usize {
-    DEFAULT_TARGET_MAX_RESPONSE_BYTES
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
