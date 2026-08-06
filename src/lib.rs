@@ -17,6 +17,7 @@ mod kafka;
 mod memcached;
 mod motan;
 mod mysql;
+mod network_probe;
 mod path_pattern;
 mod platform;
 mod proxy;
@@ -38,6 +39,7 @@ mod udp_gateway;
 mod verification_progress;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -124,12 +126,15 @@ pub use e2e_run::{
     run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
+pub use network_probe::PreflightProbeKind;
 pub use platform::{
     ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
     ManagedRecordingOptions, ManagedRecordingPreflightOptions,
     ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
-    ManagedRecordingRecoveryResult, ManagedRecordingResult, drive_managed_recording_input,
-    recover_managed_recording, run_managed_recording, run_managed_recording_preflight,
+    ManagedRecordingRecoveryResult, ManagedRecordingResult, ManagedReplayNetworkPreflightResult,
+    ReplayDirectEgressProbeResult, ReplayNegativeProbeResult, ReplayPositiveProbeResult,
+    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
+    run_managed_recording_preflight,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
@@ -209,6 +214,8 @@ struct AppStateInner {
     kubectl_proxy_manager: KubectlProxyManager,
     recording_lifecycle: RecordingLifecycle,
     background_dependencies: BackgroundDependencyMatcher,
+    preflight_probe: Option<PreflightProbeKind>,
+    preflight_probe_recorded: AtomicBool,
 }
 
 impl AppState {
@@ -233,6 +240,16 @@ impl AppState {
         run_id: Option<String>,
         recording_apis: Vec<RecordingApi>,
         artifact_owner: Option<ArtifactOwner>,
+    ) -> Result<Self> {
+        Self::new_with_recording_options(config, run_id, recording_apis, artifact_owner, None).await
+    }
+
+    pub async fn new_with_recording_options(
+        config: AppConfig,
+        run_id: Option<String>,
+        recording_apis: Vec<RecordingApi>,
+        artifact_owner: Option<ArtifactOwner>,
+        preflight_probe: Option<PreflightProbeKind>,
     ) -> Result<Self> {
         config
             .validate()
@@ -302,6 +319,8 @@ impl AppState {
                 kubectl_proxy_manager: KubectlProxyManager::default(),
                 recording_lifecycle,
                 background_dependencies,
+                preflight_probe,
+                preflight_probe_recorded: AtomicBool::new(false),
             }),
         })
     }
@@ -615,14 +634,33 @@ impl AppState {
         targets: DependencyTargets,
     ) {
         let background_match = self.inner.background_dependencies.matching_rule(&event);
-        let background_rule_name = background_match
-            .as_ref()
-            .map(|matched| matched.rule_name().to_string());
+        let (probe_attribution, suppress_default_global) = self.preflight_probe_attribution(&event);
+        let background_attributed =
+            probe_attribution.is_none() && !suppress_default_global && background_match.is_some();
+        let global_attribution = probe_attribution.or_else(|| {
+            (!suppress_default_global)
+                .then(|| {
+                    background_match.as_ref().map(|matched| {
+                        crate::recorder::GlobalDependencyAttribution {
+                            reason: "background_rule",
+                            phase: if targets.bootstrap_open {
+                                "bootstrap"
+                            } else {
+                                "runtime"
+                            },
+                            matched_by: matched.rule_name().to_string(),
+                        }
+                    })
+                })
+                .flatten()
+        });
         let event_type = event.kind();
-        if let Err(err) = self
-            .recorder()
-            .try_record_event(event, targets, background_rule_name)
-        {
+        if let Err(err) = self.recorder().try_record_event(
+            event,
+            targets,
+            global_attribution,
+            suppress_default_global,
+        ) {
             warn!(
                 error = %err,
                 event_type,
@@ -642,11 +680,40 @@ impl AppState {
                     "active recording case invalidated by recorder writer failure"
                 );
             }
-        } else if let Some(matched) = &background_match {
+        } else if background_attributed && let Some(matched) = &background_match {
             self.inner
                 .background_dependencies
                 .record_completed_match(matched);
         }
+    }
+
+    fn preflight_probe_attribution(
+        &self,
+        event: &RecorderEvent,
+    ) -> (Option<crate::recorder::GlobalDependencyAttribution>, bool) {
+        let Some(kind) = self.inner.preflight_probe else {
+            return (None, false);
+        };
+        let Some(successful) = kind.classify_recording_event(event) else {
+            return (None, false);
+        };
+        if !successful
+            || self
+                .inner
+                .preflight_probe_recorded
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return (None, true);
+        }
+        (
+            Some(crate::recorder::GlobalDependencyAttribution {
+                reason: "preflight_probe",
+                phase: "runtime",
+                matched_by: kind.matched_by().to_string(),
+            }),
+            true,
+        )
     }
 }
 

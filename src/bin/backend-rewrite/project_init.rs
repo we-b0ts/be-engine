@@ -117,6 +117,8 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
                         let reason = bounded_failure_reason(format!("{error:#}"));
                         let stage = if reason.contains("target_container preflight failed") {
                             "target_container"
+                        } else if reason.contains("replay_network preflight failed") {
+                            "replay_network"
                         } else {
                             "recording"
                         };

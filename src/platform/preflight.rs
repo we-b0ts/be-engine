@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use crate::RecordingApi;
+use crate::{PreflightProbeKind, RecordingApi};
 
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_RUN_ENTRIES: usize = 20_000;
@@ -25,6 +25,7 @@ pub struct ManagedRecordingPreflightResult {
     pub status: &'static str,
     pub target_container: crate::TargetContainerPreflightResult,
     pub recording: ManagedRecordingPreflightRecordingResult,
+    pub replay_network: super::ManagedReplayNetworkPreflightResult,
     pub managed_by: &'static str,
 }
 
@@ -34,11 +35,13 @@ pub struct ManagedRecordingPreflightRecordingResult {
     pub run_id: String,
     pub target_root: PathBuf,
     pub source_container: String,
+    pub probe_kind: PreflightProbeKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_container: Option<String>,
     pub manifest: PathBuf,
     pub published_cases: usize,
     pub https_interception_verified: bool,
+    pub global_probe_dependency_verified: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,6 +56,8 @@ struct RecordingManifest {
 pub(super) struct PreflightEvidence {
     pub published_cases: usize,
     pub https_interception_verified: bool,
+    pub global_probe_dependency_verified: bool,
+    pub probe_kind: PreflightProbeKind,
 }
 
 #[derive(Debug, Deserialize)]
@@ -62,9 +67,21 @@ struct DependencyEventProbe {
     #[serde(default)]
     scheme: String,
     #[serde(default)]
+    method: String,
+    #[serde(default)]
+    uri: String,
+    #[serde(default)]
+    authority: Option<String>,
+    #[serde(default)]
     response_status: Option<serde_json::Value>,
     #[serde(default)]
     error: Option<String>,
+    #[serde(default)]
+    global_dependency_reason: Option<String>,
+    #[serde(default)]
+    global_dependency_phase: Option<String>,
+    #[serde(default)]
+    global_dependency_matched_by: Option<String>,
 }
 
 pub(super) fn validate(manifest_path: &Path) -> Result<PreflightEvidence> {
@@ -109,32 +126,30 @@ pub(super) fn validate(manifest_path: &Path) -> Result<PreflightEvidence> {
         observation.responses >= manifest.published_cases,
         "preflight recording is missing finalized source responses"
     );
-    let mut https_interception_verified = false;
-    for path in &observation.http_evidence {
-        if has_successful_https_exchange(path)? {
-            https_interception_verified = true;
-            break;
-        }
-    }
+    let (probe_count, probe_kind) =
+        count_global_probe_dependencies(&run_dir.join("global-dependencies.jsonl"))?;
     ensure!(
-        https_interception_verified,
-        "preflight recording did not capture a successful HTTPS interception"
+        probe_count == 1,
+        "preflight recording must publish exactly one successful demo.test probe as a Global dependency; found {probe_count}"
     );
+    let probe_kind = probe_kind
+        .context("preflight recording probe is missing its system-selected runtime attribution")?;
     Ok(PreflightEvidence {
         published_cases: manifest.published_cases,
         https_interception_verified: true,
+        global_probe_dependency_verified: true,
+        probe_kind,
     })
 }
 
-fn has_successful_https_exchange(path: &Path) -> Result<bool> {
-    if !path.exists() {
-        return Ok(false);
-    }
+fn count_global_probe_dependencies(path: &Path) -> Result<(usize, Option<PreflightProbeKind>)> {
     regular_file_metadata(path, "preflight HTTP evidence")?;
     let file = File::open(path)
         .with_context(|| format!("failed to open preflight HTTP evidence {}", path.display()))?;
     let events = serde_json::Deserializer::from_reader(BufReader::new(file))
         .into_iter::<DependencyEventProbe>();
+    let mut matches = 0_usize;
+    let mut probe_kind = None;
     for event in events {
         let event = event.with_context(|| {
             format!(
@@ -142,27 +157,45 @@ fn has_successful_https_exchange(path: &Path) -> Result<bool> {
                 path.display()
             )
         })?;
-        let is_https = matches!(event.scheme.as_str(), "https" | "fake_ip_https");
+        let authority_matches = event.authority.as_deref().is_some_and(|authority| {
+            authority
+                .strip_suffix(":443")
+                .unwrap_or(authority)
+                .eq_ignore_ascii_case(crate::network_probe::POSITIVE_AUTHORITY)
+        });
+        let uri_matches = event.uri == "/"
+            || event.uri == crate::network_probe::POSITIVE_URL
+            || event.uri == "https://demo.test";
         let has_response_status = event
             .response_status
             .as_ref()
             .and_then(serde_json::Value::as_u64)
             .is_some_and(|status| (100..=599).contains(&status));
+        let event_probe_kind = match event.global_dependency_matched_by.as_deref() {
+            Some("java_truststore") => Some(PreflightProbeKind::JavaTruststore),
+            Some("system_network") => Some(PreflightProbeKind::SystemNetwork),
+            _ => None,
+        };
         if event.event_type == "http_exchange"
-            && is_https
+            && matches!(event.scheme.as_str(), "https" | "fake_ip_https")
+            && event.method == "GET"
+            && authority_matches
+            && uri_matches
             && has_response_status
             && event.error.is_none()
+            && event.global_dependency_reason.as_deref() == Some("preflight_probe")
+            && event.global_dependency_phase.as_deref() == Some("runtime")
         {
-            return Ok(true);
+            matches += 1;
+            probe_kind = event_probe_kind;
         }
     }
-    Ok(false)
+    Ok((matches, probe_kind))
 }
 
 #[derive(Debug, Default)]
 struct RunObservation {
     responses: usize,
-    http_evidence: Vec<PathBuf>,
 }
 
 fn inspect_run(run_dir: &Path) -> Result<RunObservation> {
@@ -210,23 +243,10 @@ fn inspect_run(run_dir: &Path) -> Result<RunObservation> {
                 Some("expected-response.json") | Some("expected_response.json") => {
                     observation.responses += 1;
                 }
-                Some("dependencies.jsonl")
-                | Some("global-dependencies.jsonl")
-                | Some("traffic.jsonl") => {
-                    observation.http_evidence.push(path);
-                }
                 _ => {}
             }
         }
     }
-    observation.http_evidence.sort_by_key(|path| {
-        match path.file_name().and_then(|name| name.to_str()) {
-            Some("dependencies.jsonl") => 0,
-            Some("traffic.jsonl") => 1,
-            Some("global-dependencies.jsonl") => 2,
-            _ => 3,
-        }
-    });
     Ok(observation)
 }
 
@@ -245,29 +265,38 @@ fn regular_file_metadata(path: &Path, label: &str) -> Result<fs::Metadata> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn accepts_a_clean_case_and_streamed_https_probe() {
+    fn fixture() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
         let run = temp.path().join("recordings/20260805000000");
         let case = run.join("record-api/example/case-1");
         fs::create_dir_all(&case).unwrap();
         fs::write(case.join("expected-response.json"), "{}\n").unwrap();
-        fs::write(case.join("dependencies.jsonl"), "").unwrap();
         let manifest = run.join("recording-run.json");
         fs::write(
             &manifest,
             r#"{"status":"completed","published_cases":1,"failed_cases":0,"errors":[]}"#,
         )
         .unwrap();
-        fs::write(
-            run.join("traffic.jsonl"),
+        (temp, manifest)
+    }
+
+    fn probe_event(matched_by: &str) -> String {
+        format!(
             concat!(
-                r#"{"event_type":"http_exchange","scheme":"http","authority":"demo.test","response_status":200,"error":null}"#,
-                "\n",
-                r#"{"event_type":"http_exchange","scheme":"fake_ip_https","authority":"demo.test:443","response_status":302,"error":null}"#,
-                "\n",
-                "this trailing content must not be parsed\n"
+                r#"{{"event_type":"http_exchange","scheme":"fake_ip_https","method":"GET","uri":"/","authority":"demo.test:443","response_status":302,"error":null,"global_dependency_reason":"preflight_probe","global_dependency_phase":"runtime","global_dependency_matched_by":"{}"}}"#,
+                "\n"
             ),
+            matched_by
+        )
+    }
+
+    #[test]
+    fn accepts_exactly_one_java_global_probe_dependency() {
+        let (_temp, manifest) = fixture();
+        let run = manifest.parent().unwrap();
+        fs::write(
+            run.join("global-dependencies.jsonl"),
+            probe_event("java_truststore"),
         )
         .unwrap();
 
@@ -276,62 +305,61 @@ mod tests {
             PreflightEvidence {
                 published_cases: 1,
                 https_interception_verified: true,
+                global_probe_dependency_verified: true,
+                probe_kind: PreflightProbeKind::JavaTruststore,
             }
         );
     }
 
     #[test]
-    fn accepts_a_successful_https_exchange_from_case_evidence() {
-        let temp = tempfile::tempdir().unwrap();
-        let run = temp.path().join("recordings/20260805000000");
-        let case = run.join("record-api/example/case-1");
-        fs::create_dir_all(&case).unwrap();
-        fs::write(case.join("expected-response.json"), "{}\n").unwrap();
-        let manifest = run.join("recording-run.json");
+    fn accepts_system_selected_network_probe() {
+        let (_temp, manifest) = fixture();
+        let run = manifest.parent().unwrap();
         fs::write(
-            &manifest,
-            r#"{"status":"completed","published_cases":1,"failed_cases":0,"errors":[]}"#,
-        )
-        .unwrap();
-        fs::write(
-            case.join("dependencies.jsonl"),
-            concat!(
-                r#"{"event_type":"motan_exchange","response_status":"VALUE u2978698387 4096 72"}"#,
-                "\n",
-                r#"{"event_type":"http_exchange","scheme":"https","authority":"unrelated.example","response_status":200,"error":null}"#,
-                "\n"
-            ),
+            run.join("global-dependencies.jsonl"),
+            probe_event("system_network"),
         )
         .unwrap();
 
-        assert!(validate(&manifest).is_ok());
+        assert_eq!(
+            validate(&manifest).unwrap().probe_kind,
+            PreflightProbeKind::SystemNetwork
+        );
     }
 
     #[test]
-    fn rejects_a_clean_case_without_a_successful_https_exchange() {
-        let temp = tempfile::tempdir().unwrap();
-        let run = temp.path().join("recordings/20260805000000");
-        let case = run.join("record-api/example/case-1");
-        fs::create_dir_all(&case).unwrap();
-        fs::write(case.join("expected-response.json"), "{}\n").unwrap();
-        let manifest = run.join("recording-run.json");
-        fs::write(
-            &manifest,
-            r#"{"status":"completed","published_cases":1,"failed_cases":0,"errors":[]}"#,
-        )
-        .unwrap();
+    fn rejects_probe_found_only_in_traffic_jsonl() {
+        let (_temp, manifest) = fixture();
+        let run = manifest.parent().unwrap();
+        fs::write(run.join("traffic.jsonl"), probe_event("java_truststore")).unwrap();
+
+        let error = validate(&manifest).unwrap_err().to_string();
+        assert!(error.contains("global-dependencies.jsonl"));
+    }
+
+    #[test]
+    fn rejects_unknown_probe_attribution_or_duplicates() {
+        let (_temp, manifest) = fixture();
+        let run = manifest.parent().unwrap();
         fs::write(
             run.join("global-dependencies.jsonl"),
-            concat!(
-                r#"{"event_type":"http_exchange","scheme":"http","authority":"example.com","response_status":200,"error":null}"#,
-                "\n",
-                r#"{"event_type":"http_exchange","scheme":"fake_ip_https","authority":"demo.test","response_status":null,"error":"certificate rejected"}"#,
-                "\n"
+            probe_event("declared_language"),
+        )
+        .unwrap();
+        let error = validate(&manifest).unwrap_err().to_string();
+        assert!(error.contains("system-selected runtime attribution"));
+
+        fs::write(
+            run.join("global-dependencies.jsonl"),
+            format!(
+                "{}{}",
+                probe_event("java_truststore"),
+                probe_event("java_truststore")
             ),
         )
         .unwrap();
 
         let error = validate(&manifest).unwrap_err().to_string();
-        assert!(error.contains("successful HTTPS interception"));
+        assert!(error.contains("found 2"));
     }
 }

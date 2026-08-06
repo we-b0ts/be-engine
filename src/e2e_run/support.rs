@@ -37,15 +37,6 @@ pub(super) fn allocate_replay_report(
     Ok(report_dir.join("replay-report.json"))
 }
 
-pub(super) fn allocate_control_socket() -> PathBuf {
-    #[cfg(unix)]
-    let temporary_root = PathBuf::from("/tmp");
-    #[cfg(not(unix))]
-    let temporary_root = std::env::temp_dir();
-
-    temporary_root.join(format!("trp-e2e-{}.sock", uuid::Uuid::new_v4().simple()))
-}
-
 pub(super) async fn wait_for_pid_exit(pid: u32) {
     if wait_until_pid_exits(pid, 100).await {
         return;
@@ -122,16 +113,5 @@ mod tests {
         );
         assert!(report.parent().unwrap().is_dir());
         assert!(report.starts_with(temporary.path().join(".replay/e2e-runs/run")));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn control_socket_stays_below_unix_path_limit() {
-        use std::os::unix::ffi::OsStrExt;
-
-        let socket = allocate_control_socket();
-
-        assert!(socket.starts_with("/tmp"));
-        assert!(socket.as_os_str().as_bytes().len() < 100);
     }
 }

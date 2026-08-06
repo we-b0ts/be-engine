@@ -147,7 +147,9 @@ async fn queued_dependencies_hold_bootstrap_reservations_until_persisted() {
     for sequence in 0..2_048 {
         let event = test_proxy_error(&format!("{sequence}:{}", "x".repeat(4_096)));
         let targets = active_cases.current_targets_for_event();
-        recorder.try_record_event(event, targets, None).unwrap();
+        recorder
+            .try_record_event(event, targets, None, false)
+            .unwrap();
     }
 
     active_cases.close_bootstrap();

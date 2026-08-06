@@ -7,8 +7,8 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{ArgAction, Args};
 use tracing::info;
 use traffic_e2e::{
-    AppConfig, AppState, ArtifactOwner, HttpResponseRewritePluginConfig, RecordingApi, TlsConfig,
-    TrafficJsonlMode,
+    AppConfig, AppState, ArtifactOwner, HttpResponseRewritePluginConfig, PreflightProbeKind,
+    RecordingApi, TlsConfig, TrafficJsonlMode,
 };
 
 use super::interception::{DnsConfig, FakeIpConfig, Guard};
@@ -36,6 +36,9 @@ pub(super) struct RecordArgs {
     /// Retain every run-level event regardless of the configured traffic JSONL mode.
     #[arg(long)]
     full_traffic_jsonl: bool,
+    /// Attribute one exact successful system probe as a runtime Global dependency.
+    #[arg(long, value_enum, hide = true)]
+    preflight_probe: Option<PreflightProbeKind>,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -67,11 +70,12 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
     let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
-    let state = AppState::new_with_recording_apis_and_artifact_owner(
+    let state = AppState::new_with_recording_options(
         config,
         args.run_id,
         args.apis,
         args.artifact_owner,
+        args.preflight_probe,
     )
     .await?;
     let mut interception = if args.dns && !args.no_dns {

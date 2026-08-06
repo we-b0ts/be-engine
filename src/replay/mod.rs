@@ -123,6 +123,15 @@ pub async fn run_mysql_replay_control(config: MysqlReplayControlConfig) -> Resul
     run_replay_control(config).await
 }
 
+pub(crate) fn allocate_control_socket() -> PathBuf {
+    #[cfg(unix)]
+    let temporary_root = PathBuf::from("/tmp");
+    #[cfg(not(unix))]
+    let temporary_root = std::env::temp_dir();
+
+    temporary_root.join(format!("trp-e2e-{}.sock", Uuid::new_v4().simple()))
+}
+
 pub async fn run_replay(config: ReplayConfig) -> Result<()> {
     validate_replay_request_headers(&config).await?;
     let tcp_listener = TcpListener::bind(config.tcp_listen)

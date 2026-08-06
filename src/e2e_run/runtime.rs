@@ -12,9 +12,9 @@ use uuid::Uuid;
 
 use super::model::{ActiveRunState, ResolvedProjectConfig, RunLayout};
 use super::store;
-use super::support::{allocate_control_socket, wait_for_pid_exit};
+use super::support::wait_for_pid_exit;
 use crate::case_group::CaseGroupInventory;
-use crate::replay::{ReplayControlConfig, run_replay_control};
+use crate::replay::{ReplayControlConfig, allocate_control_socket, run_replay_control};
 
 pub(super) fn spawn_replay(
     config: &ResolvedProjectConfig,

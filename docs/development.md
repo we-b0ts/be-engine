@@ -28,6 +28,7 @@ runtime images:
 
 ```text
 docker/network-anchor/Dockerfile
+docker/network-probe/Dockerfile
 docker/recorder-runtime/Dockerfile
 docker/builder/Dockerfile
 docker/target-runtime/Dockerfile
@@ -82,6 +83,29 @@ Recorder remains root inside this runtime for managed DNS and interception.
 When its recording output is a host bind mount, the host wrapper must pass
 `traffic-e2e internal recorder-run --artifact-owner "$(id -u):$(id -g)"` so finalization
 assigns only the exact run tree back to the invoking host user.
+
+Build the fixed Linux/amd64 network probe through the host network:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --network host \
+  --build-arg HTTP_PROXY \
+  --build-arg HTTPS_PROXY \
+  --build-arg ALL_PROXY \
+  --build-arg NO_PROXY \
+  --load \
+  --file docker/network-probe/Dockerfile \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-network-probe:0.0.1 \
+  docker/network-probe
+```
+
+Runtime consumers pin the published manifest as
+`traffic-e2e-network-probe:0.0.1@sha256:6804ffe944eb4709c4f8387e984dfcf524be14241c571756a6b6b85a8cb13f8e`.
+The probe contains only curl and the public CA bundle, defaults to `998:998`,
+and is used when the recording source image has no runnable Java environment
+and for every Replay network preflight. It must not contain Java, Recorder,
+Replay, Docker, or networking capabilities.
 
 Build the Linux/amd64 Rust builder through the host network. The explicit
 platform is required because its legacy upstream image omits architecture
@@ -1154,11 +1178,15 @@ backend-rewrite init preflight
 ```
 
 It first builds and runs one disposable target container, then starts the
-recording-environment preflight only after the target phase passes. Success
-returns overall `status: passed` with separate `target_container` and
-`recording` results. A failure prints bounded JSON containing `status: failed`,
-the failing stage, and a reason, exits nonzero, and does not advance rewrite
-state. Manual `docker build`/`docker run` output is diagnostic only.
+recording-environment preflight, and finally starts a real Replay session with
+the fixed network probe image. Recording publishes exactly one marked
+`demo.test` Global dependency; Replay must consume it through fake DNS, reject
+unrecorded `example.com`, and block direct external egress for UID `998`.
+Success returns overall `status: passed` with separate `target_container`,
+`recording`, and `replay_network` results. A failure prints bounded JSON
+containing `status: failed`, the failing stage, and a reason, exits nonzero, and
+does not advance rewrite state. Manual `docker build`/`docker run` output is
+diagnostic only.
 
 The lower-level commands in the remainder of this section are the traffic
 engine interface used by the coordinator and by traffic-e2e maintainers. They

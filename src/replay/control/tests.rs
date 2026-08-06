@@ -18,3 +18,14 @@ fn failure_references_report_without_embedding_it() {
     assert!(!message.contains("large_payload"));
     assert!(message.len() < 256);
 }
+
+#[cfg(unix)]
+#[test]
+fn allocated_control_socket_stays_below_unix_path_limit() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let socket = crate::replay::allocate_control_socket();
+
+    assert!(socket.starts_with("/tmp"));
+    assert!(socket.as_os_str().as_bytes().len() < 100);
+}

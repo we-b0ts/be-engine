@@ -119,6 +119,7 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_ok()
     );
+    assert!(Cli::try_parse_from(["test", "init", "--source-container", "friendship"]).is_ok());
     assert!(
         Cli::try_parse_from([
             "test",

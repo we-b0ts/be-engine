@@ -223,12 +223,14 @@ impl Recorder {
         &self,
         event: RecorderEvent,
         targets: crate::active_case::DependencyTargets,
-        background_rule: Option<String>,
+        global_attribution: Option<GlobalDependencyAttribution>,
+        suppress_default_global: bool,
     ) -> Result<()> {
         self.writer.try_record(writer::RecordEnvelope {
             event,
             targets,
-            background_rule,
+            global_attribution,
+            suppress_default_global,
         })
     }
 
@@ -258,6 +260,12 @@ impl Recorder {
             .await
             .with_context(|| format!("failed to write case recording file {}", path.display()))
     }
+}
+
+pub(crate) struct GlobalDependencyAttribution {
+    pub(crate) reason: &'static str,
+    pub(crate) phase: &'static str,
+    pub(crate) matched_by: String,
 }
 
 pub(super) fn should_write_traffic_event(mode: TrafficJsonlMode, event: &RecorderEvent) -> bool {
