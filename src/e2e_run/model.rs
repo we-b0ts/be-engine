@@ -48,7 +48,7 @@ pub(super) struct BreezeProjectConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct TargetProjectConfig {
-    pub cli: PathBuf,
+    pub dockerfile: PathBuf,
     pub boot_dir: PathBuf,
     pub http_host: String,
     pub port: u16,
@@ -106,7 +106,7 @@ fn default_ai_forbidden_root() -> PathBuf {
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedProjectConfig {
-    pub(crate) project_cli: PathBuf,
+    pub(crate) target_dockerfile: PathBuf,
     pub(crate) target_boot_dir: PathBuf,
     pub(crate) target_http_origin: String,
     pub(crate) target_port: u16,
@@ -234,6 +234,12 @@ pub(super) struct ActiveRunState {
     pub replay_pid: Option<u32>,
     #[serde(default)]
     pub target_started: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_container_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_anchor_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_image_id: Option<String>,
     pub replay_finalized: bool,
     pub aggregate_complete: bool,
     pub aggregate_clean: bool,
@@ -296,6 +302,9 @@ impl ActiveRunState {
             session_id: None,
             replay_pid: None,
             target_started: false,
+            target_container_name: None,
+            target_anchor_name: None,
+            target_image_id: None,
             replay_finalized: false,
             aggregate_complete: false,
             aggregate_clean: false,

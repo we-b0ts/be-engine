@@ -6,38 +6,15 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
-use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::process::{Child, Command};
+use uuid::Uuid;
 
 use super::model::{ActiveRunState, ResolvedProjectConfig, RunLayout};
 use super::store;
 use super::support::{allocate_control_socket, wait_for_pid_exit};
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{ReplayControlConfig, run_replay_control};
-use crate::request_headers::ENCRYPTION_KEY_ENV;
-
-pub(super) const REPLAY_CA_CERT_ENV: &str = "TRAFFIC_E2E_REPLAY_CA_CERT_PATH";
-
-const PROXY_ENVIRONMENT: &[&str] = &[
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "ALL_PROXY",
-    "NO_PROXY",
-    "http_proxy",
-    "https_proxy",
-    "all_proxy",
-    "no_proxy",
-];
-
-#[derive(Debug, Serialize)]
-pub(super) struct CommandEvidence {
-    pub(super) command: Vec<String>,
-    pub(super) exit_code: Option<i32>,
-    pub(super) success: bool,
-    pub(super) stdout: String,
-    pub(super) stderr: String,
-}
 
 pub(super) fn spawn_replay(
     config: &ResolvedProjectConfig,
@@ -98,71 +75,91 @@ fn recorder_config_args(config: &ResolvedProjectConfig) -> Vec<OsString> {
     ]
 }
 
-pub(super) async fn run_project(
+pub(super) async fn build_target_image(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
-    args: &[&str],
-    evidence_path: &Path,
-) -> Result<CommandEvidence> {
-    run_project_with_environment(config, layout, args, evidence_path, None).await
-}
-
-pub(super) async fn start_project_with_replay_ca(
-    config: &ResolvedProjectConfig,
-    layout: &RunLayout,
-    evidence_path: &Path,
-    replay_ca_cert_path: &Path,
-) -> Result<CommandEvidence> {
-    let target_boot_dir = config.target_boot_dir.display().to_string();
-    let target_port = config.target_port.to_string();
-    run_project_with_environment(
+) -> Result<crate::TargetImage> {
+    let target = crate::target_container::TargetContainerConfig::from_project(
+        layout.target_root.clone(),
         config,
-        layout,
-        &[
-            "start",
-            "--e2e",
-            "--boot-dir",
-            &target_boot_dir,
-            "--port",
-            &target_port,
-        ],
-        evidence_path,
-        Some(replay_ca_cert_path),
-    )
-    .await
+    );
+    crate::target_container::build_image(&target).await
 }
 
-async fn run_project_with_environment(
+pub(super) async fn start_target_with_replay_ca(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
-    args: &[&str],
-    evidence_path: &Path,
-    replay_ca_cert_path: Option<&Path>,
-) -> Result<CommandEvidence> {
-    let mut command = Command::new(&config.project_cli);
-    command.current_dir(&layout.target_root).args(args);
-    sanitize_project_environment(&mut command);
-    if let Some(path) = replay_ca_cert_path {
-        command.env(REPLAY_CA_CERT_ENV, path);
+    state: &mut ActiveRunState,
+    image: &crate::TargetImage,
+    replay_ca_cert_path: &Path,
+) -> Result<()> {
+    let runtime_id = Uuid::new_v4().simple().to_string();
+    let anchor_name = crate::target_container::runtime_name(
+        &layout.target_root,
+        "replay",
+        &runtime_id,
+        "anchor",
+    )?;
+    let container_name = crate::target_container::runtime_name(
+        &layout.target_root,
+        "replay",
+        &runtime_id,
+        "target",
+    )?;
+    state.target_started = true;
+    state.target_anchor_name = Some(anchor_name.clone());
+    state.target_container_name = Some(container_name.clone());
+    state.target_image_id = Some(image.id.clone());
+    store::write_active(layout, state)?;
+
+    crate::target_container::create_anchor(&anchor_name, true, "replay", &runtime_id).await?;
+    let target = crate::target_container::TargetContainerConfig::from_project(
+        layout.target_root.clone(),
+        config,
+    );
+    let evidence =
+        crate::target_container::start_target(crate::target_container::TargetStartOptions {
+            config: &target,
+            image,
+            container_name,
+            network_container: anchor_name,
+            operation: "replay",
+            run_id: runtime_id,
+            replay_ca_cert: Some(replay_ca_cert_path.to_path_buf()),
+        })
+        .await?;
+    store::write_json(
+        &layout.active_dir.join("reports/target-start.json"),
+        &evidence,
+    )?;
+    Ok(())
+}
+
+pub(super) async fn stop_target_runtime(
+    layout: &RunLayout,
+    state: &mut ActiveRunState,
+) -> Result<()> {
+    let container = state
+        .target_container_name
+        .as_deref()
+        .context("active E2E state has no target container name")?;
+    let evidence = crate::target_container::stop_target(container).await?;
+    store::write_json(
+        &layout.active_dir.join("reports/target-stop.json"),
+        &evidence,
+    )?;
+    state.target_started = false;
+    state.target_container_name = None;
+    if let Some(anchor) = state.target_anchor_name.clone() {
+        crate::target_container::force_remove_runtime(&[&anchor]).await?;
+        state.target_anchor_name = None;
     }
-    let output = command.output().await.with_context(|| {
-        format!(
-            "failed to run project CLI {} {}",
-            config.project_cli.display(),
-            args.join(" ")
-        )
-    })?;
-    let evidence = CommandEvidence {
-        command: std::iter::once(config.project_cli.display().to_string())
-            .chain(args.iter().map(|value| (*value).to_string()))
-            .collect(),
-        exit_code: output.status.code(),
-        success: output.status.success(),
-        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-    };
-    store::write_json(evidence_path, &evidence)?;
-    Ok(evidence)
+    ensure!(
+        evidence.exit_code == 0,
+        "target exited with {} after SIGTERM",
+        evidence.exit_code
+    );
+    Ok(())
 }
 
 pub(super) fn replay_ca_cert_path(ready: &serde_json::Value) -> Result<PathBuf> {
@@ -189,13 +186,6 @@ pub(super) fn replay_ca_cert_path(ready: &serde_json::Value) -> Result<PathBuf> 
         path.display()
     );
     Ok(path)
-}
-
-fn sanitize_project_environment(command: &mut Command) {
-    for name in PROXY_ENVIRONMENT {
-        command.env_remove(name);
-    }
-    command.env_remove(ENCRYPTION_KEY_ENV);
 }
 
 pub(super) async fn control(
@@ -367,22 +357,27 @@ fn terminate_process_group(replay: &Child, signal: libc::c_int) {
 }
 
 pub(super) async fn best_effort_stop(
-    config: &ResolvedProjectConfig,
-    layout: &RunLayout,
+    _config: &ResolvedProjectConfig,
+    _layout: &RunLayout,
     state: &mut ActiveRunState,
 ) {
-    if state.target_started {
-        if let Err(error) = run_project(
-            config,
-            layout,
-            &["stop"],
-            &layout.active_dir.join("reports/target-stop-recovery.json"),
-        )
-        .await
-        {
+    if state.target_started
+        || state.target_container_name.is_some()
+        || state.target_anchor_name.is_some()
+    {
+        let names = [
+            state.target_container_name.as_deref(),
+            state.target_anchor_name.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        if let Err(error) = crate::target_container::force_remove_runtime(&names).await {
             state.push_error(format!("target cleanup failed: {error:#}"));
         }
         state.target_started = false;
+        state.target_container_name = None;
+        state.target_anchor_name = None;
     }
     let replay_pid = state.replay_pid;
     if replay_pid.is_some()
@@ -405,13 +400,13 @@ pub(super) async fn best_effort_stop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::e2e_run::model::{ResolvedProjectConfig, RunLayout};
+    use crate::e2e_run::model::ResolvedProjectConfig;
     use std::fs;
     use std::time::Duration;
 
-    fn resolved_project(project_cli: PathBuf) -> ResolvedProjectConfig {
+    fn resolved_project(target_dockerfile: PathBuf) -> ResolvedProjectConfig {
         ResolvedProjectConfig {
-            project_cli,
+            target_dockerfile,
             target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
             target_http_origin: "http://127.0.0.1:8081".to_string(),
             target_port: 8081,
@@ -478,80 +473,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn replay_ca_environment_is_explicit_and_absent_from_evidence() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let directory = tempfile::tempdir().unwrap();
-        let project_cli = directory.path().join("project-cli");
-        fs::write(
-            &project_cli,
-            format!("#!/bin/sh\nprintf '%s' \"${{{REPLAY_CA_CERT_ENV}:-unset}}\"\n"),
-        )
-        .unwrap();
-        let mut permissions = fs::metadata(&project_cli).unwrap().permissions();
-        permissions.set_mode(0o755);
-        fs::set_permissions(&project_cli, permissions).unwrap();
-        let mut config = resolved_project(project_cli);
-        config.replay_policy = directory.path().join("verification.yaml");
-        let layout = RunLayout {
-            target_root: directory.path().to_path_buf(),
-            run_key: "run".to_string(),
-            case_source: directory.path().join("cases"),
-            progress_path: directory.path().join("progress.yaml"),
-            legacy_progress_path: directory.path().join("legacy-progress.yaml"),
-            internal_root: directory.path().join("internal"),
-            current_path: directory.path().join("current.yaml"),
-            run_root: directory.path().join("run"),
-            index_path: directory.path().join("index.yaml"),
-            group_index_path: directory.path().join("groups.json"),
-            active_dir: directory.path().join("active"),
-            latest_dir: directory.path().join("latest"),
-        };
-        fs::create_dir_all(&layout.active_dir).unwrap();
-        let ca_cert = directory.path().join("replay-ca.pem");
-        fs::write(&ca_cert, "certificate").unwrap();
-
-        let ordinary = run_project(
-            &config,
-            &layout,
-            &["status"],
-            &directory.path().join("ordinary.json"),
-        )
-        .await
-        .unwrap();
-        assert_eq!(ordinary.stdout, "unset");
-
-        let start = start_project_with_replay_ca(
-            &config,
-            &layout,
-            &directory.path().join("start.json"),
-            &ca_cert,
-        )
-        .await
-        .unwrap();
-        assert_eq!(start.stdout, ca_cert.display().to_string());
-        let evidence: serde_json::Value =
-            serde_json::from_slice(&fs::read(directory.path().join("start.json")).unwrap())
-                .unwrap();
-        let command = evidence.pointer("/command").unwrap().to_string();
-        assert!(!command.contains(REPLAY_CA_CERT_ENV));
-        assert!(!command.contains(&ca_cert.display().to_string()));
-        assert_eq!(
-            evidence["command"],
-            serde_json::json!([
-                config.project_cli.display().to_string(),
-                "start",
-                "--e2e",
-                "--boot-dir",
-                ".traffic-e2e/local/boot",
-                "--port",
-                "8081"
-            ])
-        );
-    }
-
     #[tokio::test]
     async fn replay_startup_progress_relay_preserves_partial_lines() {
         use std::io::Write;
@@ -587,7 +508,7 @@ mod tests {
 
     #[test]
     fn standard_runner_passes_recorder_config_and_rule_to_replay() {
-        let mut config = resolved_project(PathBuf::from("/target/scripts/project"));
+        let mut config = resolved_project(PathBuf::from("/target/.traffic-e2e/Dockerfile.e2e"));
         config.replay_startup_timeout = Duration::from_secs(60);
         config.pr_base = "integration".to_string();
         config.recorder_config = PathBuf::from("/target/config/recorder.toml");
@@ -602,21 +523,6 @@ mod tests {
                 OsString::from("--recording-rule"),
                 OsString::from("pluto"),
             ]
-        );
-    }
-
-    #[test]
-    fn project_commands_do_not_receive_request_header_encryption_keys() {
-        let mut command = Command::new("true");
-        command.env(ENCRYPTION_KEY_ENV, "test-secret");
-
-        sanitize_project_environment(&mut command);
-
-        assert!(
-            command
-                .as_std()
-                .get_envs()
-                .any(|(name, value)| { name == ENCRYPTION_KEY_ENV && value.is_none() })
         );
     }
 }

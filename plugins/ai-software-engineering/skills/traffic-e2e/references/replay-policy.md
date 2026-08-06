@@ -169,10 +169,10 @@ acceptance check. Do not compensate in target code or the test harness.
 
 ## Dynamic Response Fields
 
-Version two makes the runner, rather than the target facade, compare expected
-and actual responses. The target facade reads `request.json`, sends the genuine
-request, and writes the runner-named version-one actual-response artifact. It
-MUST NOT read `expected-response.json`.
+Version two makes the runner compare expected and actual responses. The runner
+reads `request.json`, sends the genuine request to the managed target HTTP
+endpoint, and writes the actual-response artifact. The target MUST NOT read
+`request.json` or `expected-response.json`.
 
 `response_rules.dynamic` selects an exact scalar JSON value by canonical API
 group and JSON Pointer:

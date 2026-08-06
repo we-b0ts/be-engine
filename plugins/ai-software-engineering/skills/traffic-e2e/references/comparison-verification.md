@@ -11,10 +11,11 @@ traffic-e2e record-comparison --target-root <target> \
   --brz-no-fallback true --api '<METHOD path>'
 ```
 
-traffic-e2e owns source, one shared Breeze, target start with `--e2e --boot-dir
-.traffic-e2e/local/boot --port <configured-port>`,
-readiness, comparison recorder, finalization, signals, and cleanup. Do not
-generate or invoke repository comparison wrappers.
+traffic-e2e builds `.traffic-e2e/Dockerfile.e2e` and owns source, one shared
+Breeze, target container, their shared network namespace, readiness,
+comparison recorder, finalization, signals, and cleanup. The target receives
+the fixed config mount and port environment contract. Do not generate or
+invoke repository comparison wrappers.
 
 When Breeze is absent, the same command selects the configured runtime without
 starting Breeze. Comparison sends every admitted request symmetrically to

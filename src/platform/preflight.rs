@@ -23,6 +23,14 @@ pub struct ManagedRecordingPreflightOptions {
 #[derive(Debug, Clone, Serialize)]
 pub struct ManagedRecordingPreflightResult {
     pub status: &'static str,
+    pub target_container: crate::TargetContainerPreflightResult,
+    pub recording: ManagedRecordingPreflightRecordingResult,
+    pub managed_by: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagedRecordingPreflightRecordingResult {
+    pub status: &'static str,
     pub run_id: String,
     pub target_root: PathBuf,
     pub source_container: String,
@@ -31,7 +39,6 @@ pub struct ManagedRecordingPreflightResult {
     pub manifest: PathBuf,
     pub published_cases: usize,
     pub https_interception_verified: bool,
-    pub managed_by: &'static str,
 }
 
 #[derive(Debug, Deserialize)]

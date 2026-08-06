@@ -211,11 +211,12 @@ then the normal target boundary:
 2. supplied boot/config roots and source-compatible loader;
 3. configured port and readiness endpoint/status;
 4. Replay CA trust and dependency client construction;
-5. process ownership and idempotent stop behavior.
+5. container identity, foreground process ownership, and bounded `SIGTERM`
+   shutdown behavior.
 
-Repair product startup, composition, configuration loading, or the conventional
-project CLI. Do not add case execution, report parsing, Replay control, or
-expected-response access to the target repository.
+Repair product startup, composition, configuration loading, or
+`.traffic-e2e/Dockerfile.e2e`. Do not add case execution, report parsing,
+Replay control, or expected-response access to the target repository.
 
 ## Replay Issues
 

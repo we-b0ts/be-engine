@@ -13,25 +13,15 @@ Read this reference for every replay execution.
 
 ## Target Isolation
 
-Inspect the target E2E entrypoint, startup, config, and dependency endpoints.
-Reuse its existing framework and add only the smallest missing recorded-E2E
-orchestration.
+Inspect `.traffic-e2e/Dockerfile.e2e`, the OCI entrypoint, startup
+configuration, and dependency endpoints. Reuse the target's existing framework
+and add only the smallest missing runtime integration.
 
-When the target uses the standard managed workflow, invoke recorded E2E through
-`traffic-e2e run-api` or `traffic-e2e run`. The runner calls the target's
-standard version-two
-`scripts/<project>-cli e2e --case-dir <path> --actual-response <path>` once per
-active case. That facade executes the request and writes the actual response;
-it does not read the expected response or own replay startup, begin/end,
-response comparison, aggregate, or progress operations.
-
-Clear inherited HTTP proxy variables only inside the recorded-E2E invocation so
-dependency traffic can reach DNS and fake-IP interception. Do not change the
-agent's global proxy settings or normal product configuration.
-
-Require the case source through `--case-dir` or an equivalent explicit input.
-Never hardcode or silently default to a developer-machine recording path or an
-older batch.
+Invoke recorded E2E through `traffic-e2e run-api` or `traffic-e2e run`. The
+runner builds the target image, starts its entrypoint once, drives every case
+over HTTP, and writes the actual-response evidence itself. The target never
+receives case directories, expected responses, Replay controls, or report
+paths.
 
 ## Recorder Commands
 
@@ -39,7 +29,8 @@ The normal AI-facing command is `traffic-e2e`. It orchestrates these recorder
 surfaces:
 
 - `traffic-e2e replay` for the replay session;
-- `traffic-e2e target exec` for a prebuilt in-process target command;
+- `traffic-e2e target exec` for legacy low-level diagnosis of a prebuilt
+  in-process target command;
 - `traffic-e2e config replay plan|apply response-rule` for evidence-driven
   replay response-rule maintenance;
 - `traffic-e2e config comparison plan|apply response-rule` for
@@ -69,11 +60,11 @@ Recorder and Replay themselves MUST NOT run as the fixed user; interception
 startup rejects that identity so their control traffic cannot enter the target
 owner scope.
 
-For a prebuilt in-process E2E, use `traffic-e2e target exec`; do not run the
-build tool as the fixed user or widen workspace, build cache, control socket,
-report, session, or private CA-key permissions. Keep replay lifecycle control
-under the developer account and stage only the required executable, readable
-inputs, and target-owned output directories.
+The standard managed target image runs as `998:998` in a system-owned network
+namespace. Replay keeps interception control under the developer account,
+allows intercepted/local traffic, and rejects uncontrolled external egress.
+Do not widen workspace, build cache, control socket, report, session, or
+private CA-key permissions.
 
 Target tests, facades, docs, and state MUST NOT pass or emulate `--owner-uid`,
 `--user`, `--all-users`, `OWNER_UID`, or another owner-selection mechanism. If
@@ -94,15 +85,16 @@ For each focused API attempt or full round, the runner performs:
 2. start `traffic-e2e replay` with the policy and exact case selection;
 3. call `traffic-e2e diagnose replay-control wait-ready` and stop on any
    readiness failure;
-4. start the normal target once and confirm its status;
+4. build the target image, start its OCI entrypoint once in the Replay
+   namespace, mount the public Replay CA, and confirm HTTP readiness;
 5. call `traffic-e2e diagnose replay-control begin <case-id>`;
-6. call the target facade for that exact case, exercising genuine dependencies
-   and capturing the actual response;
+6. send the exact recorded request to the target HTTP endpoint, exercising
+   genuine dependencies and capturing the actual response;
 7. compare the actual response with the assertion-only expected response under
    the validated replay policy;
 8. call `traffic-e2e diagnose replay-control end <case-id> --fail-on-dirty`;
 9. repeat begin through end for every exact selected case;
-10. stop the target once and call
+10. send `SIGTERM`, require a clean target exit, remove its namespace, and call
     `traffic-e2e diagnose replay-control finalize --fail-on-dirty --fail-on-incomplete`.
 
 Require the final version-six report to contain the exact selected case ids,
@@ -111,8 +103,8 @@ atomically publishes the report and stops replay. A validation or report-write
 failure leaves the session incomplete; retain diagnostics and use the canonical
 stop command only for cleanup.
 
-One target-facade invocation handles one active case. The target MUST NOT own
-the control socket or call lifecycle commands.
+One system HTTP-driver invocation handles one active case. The target MUST NOT
+own the control socket or call lifecycle commands.
 
 ## Aggregate
 

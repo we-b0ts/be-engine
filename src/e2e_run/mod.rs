@@ -15,7 +15,7 @@ mod runtime;
 mod store;
 mod support;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
@@ -38,6 +38,7 @@ pub use evidence::{
 };
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
+pub(crate) use model::ResolvedProjectConfig;
 use model::RunStatus;
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, focused_background_reclassification_recovery_required,
@@ -55,7 +56,7 @@ pub struct E2eRunInitOptions {
     pub target_root: PathBuf,
     pub source_container: String,
     pub breeze_container: Option<String>,
-    pub project_cli: PathBuf,
+    pub target_dockerfile: PathBuf,
     pub target_boot_dir: PathBuf,
     pub target_http_host: String,
     pub target_port: u16,
@@ -147,7 +148,6 @@ pub fn initialize_standard_e2e_project_with_force(
 ) -> Result<E2eRunInitResult> {
     let resolved_root = std::fs::canonicalize(&target_root)
         .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
-    let repository_name = crate::repository::directory_name(&resolved_root)?;
     let recorder_config = PathBuf::from(".traffic-e2e/recorder.toml");
     let recorder = crate::config::AppConfig::load(resolved_root.join(&recorder_config))?;
     let comparison = recorder
@@ -181,7 +181,7 @@ pub fn initialize_standard_e2e_project_with_force(
         target_root,
         source_container,
         breeze_container: None,
-        project_cli: PathBuf::from(format!("scripts/{repository_name}-cli")),
+        target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
         target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
         target_http_host,
         target_port,
@@ -392,20 +392,4 @@ fn run_status_label(status: RunStatus) -> &'static str {
         RunStatus::Failed => "failed",
         RunStatus::Interrupted => "interrupted",
     }
-}
-
-fn require_executable(path: &Path, label: &str) -> Result<()> {
-    let metadata = std::fs::metadata(path)
-        .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
-    ensure!(metadata.is_file(), "{label} must be a regular file");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        ensure!(
-            metadata.permissions().mode() & 0o111 != 0,
-            "{label} is not executable: {}",
-            path.display()
-        );
-    }
-    Ok(())
 }

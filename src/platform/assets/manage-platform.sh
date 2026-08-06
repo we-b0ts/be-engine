@@ -9,7 +9,6 @@ required_environment=(
     TRAFFIC_E2E_BIN
     TRAFFIC_E2E_TARGET_ROOT
     TRAFFIC_E2E_SOURCE_CONTAINER
-    TRAFFIC_E2E_PROJECT_CLI
     TRAFFIC_E2E_TARGET_BOOT_DIR
     TRAFFIC_E2E_TARGET_ORIGIN
     TRAFFIC_E2E_TARGET_PORT
@@ -117,10 +116,12 @@ done
     printf 'error: traffic-e2e binary is not executable\n' >&2
     exit 1
 }
-[[ -x "$TRAFFIC_E2E_PROJECT_CLI" ]] || {
-    printf 'error: project CLI is not executable\n' >&2
-    exit 1
-}
+if [[ "$operation" == record-comparison ]]; then
+    [[ "${TRAFFIC_E2E_TARGET_IMAGE_ID-}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+        printf 'error: comparison requires an immutable target image ID\n' >&2
+        exit 1
+    }
+fi
 [[ -f "$TRAFFIC_E2E_RECORDER_CONFIG" ]] || {
     printf 'error: recorder config is missing\n' >&2
     exit 1
@@ -176,6 +177,7 @@ anchor_name="${prefix}-anchor"
 recorder_name="${prefix}-recorder"
 breeze_name="${prefix}-breeze"
 source_name="${prefix}-source"
+target_name="${prefix}-target"
 adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
 adapter_dockerfile="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording"
@@ -217,19 +219,39 @@ stop_container() {
     docker rm "$name" >/dev/null 2>&1 || true
 }
 
-run_target() {
-    env -u TRAFFIC_E2E_ENCRYPTION_KEY_B64 -u BASH_ENV \
-        -u TRAFFIC_E2E_BIN -u TRAFFIC_E2E_TARGET_ROOT \
-        -u TRAFFIC_E2E_SOURCE_CONTAINER -u TRAFFIC_E2E_BREEZE_CONTAINER \
-        -u TRAFFIC_E2E_PROJECT_CLI -u TRAFFIC_E2E_TARGET_BOOT_DIR \
-        -u TRAFFIC_E2E_TARGET_ORIGIN -u TRAFFIC_E2E_TARGET_PORT \
-        -u TRAFFIC_E2E_TARGET_READY_PATH -u TRAFFIC_E2E_TARGET_READY_STATUS \
-        -u TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS \
-        -u TRAFFIC_E2E_SOURCE_ORIGIN -u TRAFFIC_E2E_RECORDING_ORIGIN \
-        -u TRAFFIC_E2E_REQUEST_SOURCE -u TRAFFIC_E2E_SOURCE_READY_PATH \
-        -u TRAFFIC_E2E_SOURCE_READY_STATUS -u TRAFFIC_E2E_RECORDER_CONFIG \
-        -u TRAFFIC_E2E_REPLAY_POLICY -u TRAFFIC_E2E_PLATFORM_ASSETS \
-        "$TRAFFIC_E2E_PROJECT_CLI" "$@"
+start_target() {
+    local -a mounts=(
+        --mount "type=bind,source=${TRAFFIC_E2E_TARGET_BOOT_DIR},target=/traffic-e2e/config,readonly"
+    )
+    if "$breeze_enabled"; then
+        mounts+=(
+            --mount type=bind,source=/data1/breeze/socks,target=/data1/breeze/socks,readonly
+            --mount type=bind,source=/data1/breeze/snapshot,target=/data1/breeze/snapshot,readonly
+        )
+    fi
+    docker run --detach --name "$target_name" --platform linux/amd64 \
+        --network "container:${anchor_name}" --user 998:998 \
+        --label com.weibo.traffic-e2e.managed=true \
+        --label com.weibo.traffic-e2e.role=target \
+        --label "com.weibo.traffic-e2e.operation=${operation}" \
+        --label "com.weibo.traffic-e2e.run-id=${run_id}" \
+        --env TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config \
+        --env "TRAFFIC_E2E_TARGET_PORT=${TRAFFIC_E2E_TARGET_PORT}" \
+        "${mounts[@]}" "$TRAFFIC_E2E_TARGET_IMAGE_ID" >/dev/null
+    target_started=true
+}
+
+stop_target() {
+    local exit_code
+    "$target_started" || return 0
+    docker stop --time 15 "$target_name" >/dev/null
+    exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$target_name")
+    docker rm "$target_name" >/dev/null
+    target_started=false
+    [[ "$exit_code" == 0 ]] || {
+        printf 'error: target exited with status %s after SIGTERM\n' "$exit_code" >&2
+        return 1
+    }
 }
 
 finalize_recorder() {
@@ -262,7 +284,7 @@ wait_for_recorder_or_duration() {
 
 capture_diagnostics() {
     local name
-    for name in "$recorder_name" "$breeze_name" "$source_name"; do
+    for name in "$recorder_name" "$breeze_name" "$source_name" "$target_name"; do
         if container_exists "$name"; then
             docker logs "$name" >"$diagnostics_dir/${name}.log" 2>&1 || true
         fi
@@ -295,12 +317,13 @@ cleanup() {
         finalize_recorder || status=1
     fi
     if "$target_started"; then
-        run_target stop || status=1
+        stop_target || status=1
     fi
     capture_diagnostics
     "$source_started" && stop_container "$source_name"
     "$breeze_started" && stop_container "$breeze_name"
     "$recorder_started" && stop_container "$recorder_name"
+    "$target_started" && stop_container "$target_name"
     "$anchor_started" && stop_container "$anchor_name"
     remove_private_runtime_dir "$control_dir" "$local_dir/control" || status=1
     exit "$status"
@@ -714,18 +737,24 @@ run_comparison_recording() {
         printf 'error: comparison run already exists: %s\n' "$run_id" >&2
         return 1
     }
+    docker pull "$anchor_image" >/dev/null
+    docker run --detach --name "$anchor_name" --platform linux/amd64 --network host \
+        --label com.weibo.traffic-e2e.managed=true \
+        --label com.weibo.traffic-e2e.role=target-network-anchor \
+        --label "com.weibo.traffic-e2e.operation=${operation}" \
+        --label "com.weibo.traffic-e2e.run-id=${run_id}" \
+        "$anchor_image" >/dev/null
+    anchor_started=true
     if "$breeze_enabled"; then
         normalize_breeze_directories
         docker pull "$breeze_image" >/dev/null
-        start_breeze host
+        start_breeze "container:${anchor_name}"
     fi
-    start_genuine_source host
+    start_genuine_source "container:${anchor_name}"
     run_no_fallback
-    run_target stop
-    run_target start --e2e --boot-dir "$TRAFFIC_E2E_TARGET_BOOT_DIR" --port "$TRAFFIC_E2E_TARGET_PORT"
-    target_started=true
+    start_target
     wait_http "$TRAFFIC_E2E_TARGET_ORIGIN" "$TRAFFIC_E2E_TARGET_READY_PATH" \
-        "$TRAFFIC_E2E_TARGET_READY_STATUS" target "" \
+        "$TRAFFIC_E2E_TARGET_READY_STATUS" target "$target_name" \
         "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
     local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds")
     "$baseline_recheck" && comparison_command+=(--baseline-recheck)
@@ -744,8 +773,7 @@ run_comparison_recording() {
     comparison_pid=""
     stop_recording_input || status=1
     ((status == 0)) || return "$status"
-    run_target stop
-    target_started=false
+    stop_target
     jq -e '.status == "completed"' \
         "$artifacts_dir/comparison-recordings/$run_id/comparison-recording-run.json" >/dev/null
 }

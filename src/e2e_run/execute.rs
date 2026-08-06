@@ -4,6 +4,7 @@ use anyhow::{Context, Result, bail, ensure};
 use chrono::Utc;
 use tokio::process::Child;
 
+use super::E2eRunContext;
 use super::case_progress;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{
@@ -14,12 +15,12 @@ use super::progress::{ReplayRunKind, update_focused_index, update_index, write_r
 use super::request_view::RequestCaseView;
 use super::result::{E2eApiRunResult, E2eRunResult, api_result, run_result};
 use super::runtime::{
-    best_effort_stop, control, finalize_replay, replay_ca_cert_path, run_project, spawn_replay,
-    start_project_with_replay_ca, stop_replay_process, wait_for_replay, wait_for_replay_ready,
+    best_effort_stop, build_target_image, control, finalize_replay, replay_ca_cert_path,
+    spawn_replay, start_target_with_replay_ca, stop_replay_process, stop_target_runtime,
+    wait_for_replay, wait_for_replay_ready,
 };
 use super::store;
 use super::support::{allocate_replay_report, api_directory, process_exists};
-use super::{E2eRunContext, require_executable};
 use super::{branch, config};
 use crate::case_group::{
     CaseGroupInventory, load_case_group_inventory, load_complete_case_group_inventory,
@@ -349,7 +350,11 @@ fn resolve_for_execution(context: &E2eRunContext) -> Result<(ResolvedProjectConf
     )?;
     branch::require_work_branch(&layout.target_root, &config.pr_base)?;
     config::require_internal_root_ignored(&layout.target_root, &layout.internal_root)?;
-    require_executable(&config.project_cli, "project CLI")?;
+    ensure!(
+        config.target_dockerfile.is_file(),
+        "target Dockerfile does not exist: {}",
+        config.target_dockerfile.display()
+    );
     ensure!(
         config.replay_policy.is_file(),
         "replay policy does not exist: {}",
@@ -365,10 +370,12 @@ async fn run_active(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
 ) -> Result<()> {
+    let target_image = build_target_image(config, layout).await?;
     let mut replay = spawn_replay(config, layout, inventory, state)?;
     state.replay_pid = replay.id();
     store::write_active(layout, state)?;
-    let outcome = run_active_with_replay(config, layout, inventory, state, &mut replay).await;
+    let outcome =
+        run_active_with_replay(config, layout, inventory, state, &target_image, &mut replay).await;
     if outcome.is_err() {
         stop_replay_process(state, &mut replay).await;
     }
@@ -380,6 +387,7 @@ async fn run_active_with_replay(
     layout: &RunLayout,
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
+    target_image: &crate::TargetImage,
     replay: &mut Child,
 ) -> Result<()> {
     let ready = tokio::select! {
@@ -402,16 +410,7 @@ async fn run_active_with_replay(
     let replay_ca_cert_path = replay_ca_cert_path(&ready)?;
     store::write_active(layout, state)?;
 
-    state.target_started = true;
-    store::write_active(layout, state)?;
-    let start = start_project_with_replay_ca(
-        config,
-        layout,
-        &layout.active_dir.join("reports/target-start.json"),
-        &replay_ca_cert_path,
-    )
-    .await?;
-    ensure!(start.success, "project CLI start failed");
+    start_target_with_replay_ca(config, layout, state, target_image, &replay_ca_cert_path).await?;
     super::http_driver::wait_until_ready(config).await?;
 
     let total_cases = state.cases.len();
@@ -429,18 +428,7 @@ async fn run_active_with_replay(
         case_progress::log_completion(position + 1, total_cases);
     }
 
-    let stop = run_project(
-        config,
-        layout,
-        &["stop"],
-        &layout.active_dir.join("reports/target-stop.json"),
-    )
-    .await?;
-    if stop.success {
-        state.target_started = false;
-    } else {
-        state.push_error("project CLI stop failed");
-    }
+    stop_target_runtime(layout, state).await?;
     state.status = RunStatus::Finalizing;
     store::write_active(layout, state)?;
 

@@ -38,9 +38,8 @@ pub struct RecorderConfigInitResult {
     pub runtime: &'static str,
     pub managed_record_command: String,
     pub managed_comparison_command: String,
-    pub target_start_contract: String,
-    pub target_compile_contract: &'static str,
-    pub target_stop_contract: &'static str,
+    pub target_dockerfile: PathBuf,
+    pub target_runtime_contract: &'static str,
 }
 
 pub fn initialize_recorder_config(
@@ -127,15 +126,9 @@ fn init_result(
         },
         managed_record_command: "traffic-e2e record --target-root .".to_string(),
         managed_comparison_command: "traffic-e2e record-comparison --target-root .".to_string(),
-        target_start_contract: format!(
-            "<project>-cli start --e2e --boot-dir {} --port {}",
-            crate::repository::LOCAL_BOOT_ROOT,
-            options.candidate_http_port
-        ),
-        target_compile_contract: "every start --e2e compiles once before launch; when the \
-                                  compile command supports --release, compile with --release \
-                                  and launch that artifact; never pass --release to start",
-        target_stop_contract: "<project>-cli stop",
+        target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
+        target_runtime_contract: "traffic-e2e builds and runs the target image with the fixed \
+                                  configuration, identity, network, readiness, and cleanup contract",
     }
 }
 
@@ -255,7 +248,7 @@ root_dir = "./.traffic-e2e/local/artifacts"
 
 [comparison_recording]
 # http_gateway.matched_upstream is the baseline service. During initialization,
-# the generated project CLI serves a fixed-response candidate on this port.
+# the generated target container serves a fixed-response candidate on this port.
 candidate_upstream = "http://127.0.0.1:__CANDIDATE_HTTP_PORT__"
 # source_match: before_or_after in verification.yaml enables this automatically.
 baseline_recheck = false
@@ -417,16 +410,14 @@ mod tests {
             "traffic-e2e record --target-root ."
         );
         assert_eq!(
-            result.target_start_contract,
-            "<project>-cli start --e2e --boot-dir .traffic-e2e/local/boot --port 8081"
+            result.target_dockerfile,
+            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
         );
-        assert_eq!(
-            result.target_compile_contract,
-            "every start --e2e compiles once before launch; when the compile command supports \
-             --release, compile with --release and launch that artifact; never pass --release \
-             to start"
+        assert!(
+            result
+                .target_runtime_contract
+                .contains("fixed configuration")
         );
-        assert_eq!(result.target_stop_contract, "<project>-cli stop");
         assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
         assert_eq!(config.dns_mock.bypass_strategies.len(), 1);
         assert_eq!(config.http_response_rewrite.rules.len(), 2);
@@ -550,7 +541,10 @@ mod tests {
             result.managed_record_command,
             "traffic-e2e record --target-root ."
         );
-        assert!(result.target_start_contract.ends_with("--port 8181"));
+        assert_eq!(
+            result.target_dockerfile,
+            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
+        );
         assert!(config.recording.encrypt_request_headers.is_empty());
         assert!(config.dns_mock.bypass_strategies.is_empty());
         assert!(config.http_response_rewrite.rules.is_empty());

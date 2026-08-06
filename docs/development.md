@@ -21,14 +21,16 @@ The build produces sibling `traffic-e2e` and `backend-rewrite` executables.
 Keep them together in installed packages because detached coordinator actions
 delegate engine work to `traffic-e2e`.
 
-## Shared Recording Images
+## Shared Container Images
 
-The repository owns the Dockerfiles for the two project-independent recording
-images:
+The repository owns Dockerfiles for project-independent recording and target
+runtime images:
 
 ```text
 docker/network-anchor/Dockerfile
 docker/recorder-runtime/Dockerfile
+docker/builder/Dockerfile
+docker/target-runtime/Dockerfile
 ```
 
 Published Linux/amd64 references:
@@ -36,6 +38,8 @@ Published Linux/amd64 references:
 ```text
 registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
 registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
+registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1@sha256:99663c03c7da6d638f9bef5d84d923840e2069e3f32067851b43ea7abf3f0004
+registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1@sha256:63072803f35282f2134f08779bd1652e51c4ff30ba08728716b616ef96b3dc80
 ```
 
 Build the inert Linux/amd64 network-namespace anchor without network access:
@@ -78,6 +82,51 @@ Recorder remains root inside this runtime for managed DNS and interception.
 When its recording output is a host bind mount, the host wrapper must pass
 `traffic-e2e internal recorder-run --artifact-owner "$(id -u):$(id -g)"` so finalization
 assigns only the exact run tree back to the invoking host user.
+
+Build the Linux/amd64 Rust builder through the host network. The explicit
+platform is required because its legacy upstream image omits architecture
+metadata; the published builder itself must inspect as `linux/amd64`:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --network host \
+  --build-arg HTTP_PROXY \
+  --build-arg HTTPS_PROXY \
+  --build-arg ALL_PROXY \
+  --build-arg NO_PROXY \
+  --load \
+  --file docker/builder/Dockerfile \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1 \
+  .
+```
+
+The builder source pins that upstream by digest. Proxies are one-time build
+inputs only; do not persist them in the image or expose them to target builds.
+
+Build the Linux/amd64 target runtime through the host network:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --network host \
+  --build-arg HTTP_PROXY \
+  --build-arg HTTPS_PROXY \
+  --build-arg ALL_PROXY \
+  --build-arg NO_PROXY \
+  --load \
+  --file docker/target-runtime/Dockerfile \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1 \
+  docker/target-runtime
+```
+
+The target runtime contains common dynamically linked Rust prerequisites and
+the normal public CA bundle, creates `trp-record` as UID/GID `998:998`, and
+defaults to that identity. It reserves `/app`, `/traffic-e2e/config`, and
+`/traffic-e2e/trust`; target images add only their release binary and explicit
+foreground entrypoint. The runtime clears the Debian base command so Docker
+does not append `bash` to that entrypoint. Publish only versioned tags, verify
+the pushed manifest digest, and pin target Dockerfiles to `tag@sha256`.
 
 ## CLI Boundaries
 
@@ -1008,7 +1057,7 @@ and upstream DNS `10.10.10.11:53`. Override a default only when the inspected
 application contract proves it is different. Source and Breeze containers
 need only be inspectable, not running.
 
-The command atomically generates version-10 `.traffic-e2e/project.yaml`,
+The command atomically generates version-11 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
 configuration has explicit source, optional Breeze, target, replay, recording,
 delivery, and state sections. A typical
@@ -1016,7 +1065,7 @@ target section is:
 
 ```yaml
 target:
-  cli: scripts/<project>-cli
+  dockerfile: .traffic-e2e/Dockerfile.e2e
   boot_dir: .traffic-e2e/local/boot
   http_host: 127.0.0.1
   port: 8081
@@ -1038,16 +1087,39 @@ non-versioned runtime data lives below that root. It records
 `.traffic-e2e/local/boot` but neither requires nor creates it. Do not hand-write
 generated state.
 
-The target exposes only:
+The target repository supplies `.traffic-e2e/Dockerfile.e2e`. It is a
+BuildKit multi-stage build whose final image has a non-empty OCI entrypoint and
+defaults to `USER 998:998`. traffic-e2e builds it from the repository root,
+tags the cache as `traffic-e2e/<project>-target:cache`, validates the resulting
+immutable image ID, and runs that ID directly. A target start receives:
 
 ```text
-scripts/<project>-cli start --e2e \
-  --boot-dir .traffic-e2e/local/boot --port <configured-port>
-scripts/<project>-cli stop
+TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config
+TRAFFIC_E2E_TARGET_PORT=<configured-port>
+.traffic-e2e/local/boot -> /traffic-e2e/config (read-only)
 ```
 
-For a Breeze-dependent target, `start --e2e` must not start Breeze. The
-managed runtime owns the shared Breeze lifecycle.
+Before mounting, traffic-e2e creates the boot directory when absent and
+normalizes the directory itself to mode `0755`. This deliberately overrides a
+restrictive coordinator `umask` so the fixed container identity `998:998` can
+traverse the bind mount. The target AI does not create or chmod this directory.
+Individual configuration files retain their existing permissions and remain
+the target repository owner's responsibility.
+
+When Breeze is configured, traffic-e2e also mounts `/data1/breeze/socks` and
+`/data1/breeze/snapshot` read-only. During Replay it mounts the public Replay
+CA at `/traffic-e2e/trust/replay-ca.pem` and sets
+`TRAFFIC_E2E_REPLAY_CA_CERT_PATH`; target TLS clients must add that certificate
+to their normal trust store without reading Replay sessions or private key
+material. The entrypoint must log to stdout/stderr, remain in the foreground,
+and stop cleanly on `SIGTERM`. traffic-e2e owns network namespaces, readiness,
+signals, and cleanup.
+
+Use the pinned shared Rust builder/runtime images and stable BuildKit cache
+mount IDs described by the backend-rewrite initialization contract. A source
+change reruns the relevant Cargo build layer, but cached registry, git, and
+target artifacts prevent downloading the dependency graph again when the
+builder identity and cache IDs are unchanged.
 
 For Breeze-aware standard recording, the managed runtime keeps one
 target-scoped source-adapter cache tag. The target repository owns the reviewed
@@ -1065,16 +1137,26 @@ matching adaptor image. Comparison recording continues to use the genuine
 source image directly. Breeze itself always uses the centrally managed pinned
 image and is not built from a target-repository Dockerfile.
 
-Each `start --e2e` invocation must run the project's normal compile command
-once before launch, even when an artifact already exists. If that compile
-command supports `--release`, pass `--release` to the compile command and
-launch the resulting release artifact. Do not append `--release` to the
-`start` command itself. The compile runs once per target start, not once per
-replayed case.
+The runner sends HTTP requests itself; the target image does not read cases or
+write response reports. The configured port is shared by the image
+environment, readiness, replay requests, and comparison requests. Comparison
+places source, optional Breeze, and target in one system-owned network
+namespace. Replay starts the target once for the selected cases, intercepts
+dependency traffic by fixed UID, and prevents uncontrolled external egress.
 
-The runner sends HTTP requests itself; the target CLI does not read cases or
-write response reports. The configured port is shared by target start,
-readiness, replay requests, and comparison requests.
+After the initialization AI has supplied both Dockerfiles and any target mock,
+run the existing authoritative preflight:
+
+```bash
+backend-rewrite init preflight
+```
+
+It first builds and runs one disposable target container, then starts the
+recording-environment preflight only after the target phase passes. Success
+returns overall `status: passed` with separate `target_container` and
+`recording` results. A failure prints bounded JSON containing `status: failed`,
+the failing stage, and a reason, exits nonzero, and does not advance rewrite
+state. Manual `docker build`/`docker run` output is diagnostic only.
 
 The lower-level commands in the remainder of this section are the traffic
 engine interface used by the coordinator and by traffic-e2e maintainers. They

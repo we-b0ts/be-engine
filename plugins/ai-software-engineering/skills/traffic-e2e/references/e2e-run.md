@@ -14,14 +14,16 @@ traffic-e2e config init --source-container <existing-source-container> [--breeze
 The generated Recorder HTTP gateway listens on port `17171` by default; use
 `--http-gateway-port` only when that port is unavailable.
 
-The generated version-9 configuration has separate `source`, optional `breeze`, `target`,
-`replay`, `recording`, `delivery`, and `state` sections. Relevant target fields
-are the conventional CLI, `.traffic-e2e/local/boot`, HTTP host, port, readiness,
-timeouts, and response-size bound. Do not hand-write it.
+The generated version-11 configuration has separate `source`, optional
+`breeze`, `target`, `replay`, `recording`, `delivery`, and `state` sections.
+Relevant target fields are `.traffic-e2e/Dockerfile.e2e`,
+`.traffic-e2e/local/boot`, HTTP host, port, readiness, and timeouts. Do not
+hand-write it.
 
 Before a run, the runner requires:
 
-- executable `scripts/<project>-cli`;
+- a regular `.traffic-e2e/Dockerfile.e2e` and a root `.dockerignore` that
+  excludes `.git/`, `.traffic-e2e/local/`, and `target/`;
 - valid recorder and replay config;
 - ignored `.traffic-e2e/local/`, ensured by repository initialization;
 - `.traffic-e2e/local/boot/` may remain absent until
@@ -53,20 +55,18 @@ traffic-e2e run-api --target-root <target> \
 One attempt:
 
 1. starts Replay and loads the selected cases;
-2. invokes the target once as
-   `scripts/<project>-cli start --e2e --boot-dir
-   .traffic-e2e/local/boot --port <configured-port>`;
+2. builds `.traffic-e2e/Dockerfile.e2e`, validates its immutable image, and
+   starts its OCI entrypoint once as `998:998` in a system-owned namespace;
 3. waits for configured HTTP readiness;
 4. decrypts request headers into a private temporary view when required;
 5. sends every recorded request through the normal target HTTP endpoint;
 6. asserts each response and keeps the target alive across the whole group;
-7. invokes `scripts/<project>-cli stop` once and finalizes Replay.
+7. sends `SIGTERM`, requires a clean target exit, removes the target namespace,
+   and finalizes Replay.
 
-The target CLI must force one compile during step 2. When its compile command
-supports `--release`, that compile command must use `--release` and the CLI
-must launch the release artifact. The option belongs to compilation; it is not
-added to the `start` command shown above. Compilation occurs once per target
-start, not once per case.
+BuildKit cache mounts preserve Cargo registry, git, and target artifacts across
+builds. Source changes may rerun Cargo, but must not force dependency downloads
+when the pinned builder and stable cache IDs are unchanged.
 
 Keeping one target lifetime preserves observable local-cache, connection-pool,
 startup, and warmup behavior. The target never reads a case or writes an actual

@@ -108,7 +108,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
         resolved.recording_rule.clone(),
     )?;
     let mut interception = if resolved.intercept {
-        Some(Guard::enable(
+        Some(Guard::enable_replay(
             DnsConfig {
                 dns_ip: resolved.dns_listen.ip().to_string(),
                 dns_port: resolved.dns_listen.port(),

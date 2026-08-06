@@ -89,7 +89,7 @@ Configured sensitive request-header values may be stored as
 The header name is authenticated and matching is case-insensitive. The
 standard runner requires `TRAFFIC_E2E_ENCRYPTION_KEY_B64`, authenticates and
 decrypts these values into a private short-lived case view, and gives only that
-view to the target facade. It never rewrites the published `request.json`.
+view to the system HTTP driver. It never rewrites the published `request.json`.
 Missing or wrong key material blocks replay startup. A legacy `<redacted>`
 request value is not recoverable and must be re-recorded when the original
 value is required for behavior or dependency association.
