@@ -16,6 +16,7 @@ use crate::recording_api::RecordingApi;
 mod preflight;
 mod recording_input;
 mod recovery;
+mod replay_preflight;
 
 pub use preflight::{
     ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
@@ -25,6 +26,10 @@ pub use recording_input::{
     ManagedRecordingInputOptions, ManagedRecordingInputResult, drive_managed_recording_input,
 };
 pub use recovery::{ManagedRecordingRecoveryResult, recover_managed_recording};
+pub use replay_preflight::{
+    ManagedReplayNetworkPreflightResult, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
+    ReplayPositiveProbeResult,
+};
 
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
 const BREEZE_NO_FALLBACK: &str = include_str!("assets/brz-no-fallback.sh");
@@ -163,6 +168,14 @@ pub async fn run_managed_recording_preflight(
     )
     .await?;
     let evidence = preflight::validate(&runtime.manifest)?;
+    let replay_network = replay_preflight::run(
+        &runtime.target_root,
+        &project,
+        &runtime.run_id,
+        &runtime.manifest,
+    )
+    .await
+    .context("replay_network preflight failed")?;
     Ok(ManagedRecordingPreflightResult {
         status: "passed",
         target_container,
@@ -171,11 +184,14 @@ pub async fn run_managed_recording_preflight(
             run_id: runtime.run_id,
             target_root: runtime.target_root,
             source_container: runtime.source_container,
+            probe_kind: evidence.probe_kind,
             breeze_container: runtime.breeze_container,
             manifest: runtime.manifest,
             published_cases: evidence.published_cases,
             https_interception_verified: evidence.https_interception_verified,
+            global_probe_dependency_verified: evidence.global_probe_dependency_verified,
         },
+        replay_network,
         managed_by: "traffic-e2e",
     })
 }
@@ -502,7 +518,13 @@ mod tests {
         assert!(MANAGER.contains("[[ \"$operation\" == preflight ]]"));
         assert!(MANAGER.contains("manifest_filter+=' and .published_cases > 0'"));
         assert!(MANAGER.contains("run_preflight_https_probe"));
-        assert!(MANAGER.contains("recorder_command+=(--full-traffic-jsonl)"));
+        assert!(!MANAGER.contains("recorder_command+=(--full-traffic-jsonl)"));
+        assert!(MANAGER.contains("recorder_command+=(--preflight-probe java-truststore)"));
+        assert!(MANAGER.contains("recorder_command+=(--preflight-probe system-network)"));
+        assert!(MANAGER.contains("detect_source_java_runtime"));
+        assert!(MANAGER.contains("--entrypoint java \"$adapter_image_id\" -version"));
+        assert!(!MANAGER.contains("TRAFFIC_E2E_SOURCE_LANGUAGE"));
+        assert!(MANAGER.contains("traffic-e2e-network-probe:0.0.1"));
         assert!(MANAGER.contains(
             "$TRAFFIC_E2E_PLATFORM_ASSETS/HttpsProbe.class:/traffic-e2e/HttpsProbe.class:ro"
         ));

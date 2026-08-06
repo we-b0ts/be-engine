@@ -21,7 +21,8 @@ type WriterAck = oneshot::Sender<std::result::Result<(), String>>;
 pub(super) struct RecordEnvelope {
     pub(super) event: RecorderEvent,
     pub(super) targets: DependencyTargets,
-    pub(super) background_rule: Option<String>,
+    pub(super) global_attribution: Option<super::GlobalDependencyAttribution>,
+    pub(super) suppress_default_global: bool,
 }
 
 enum WriterCommand {
@@ -328,27 +329,24 @@ impl WriterState {
         let RecordEnvelope {
             event,
             targets,
-            background_rule,
+            global_attribution,
+            suppress_default_global,
         } = envelope;
         self.append_traffic(&event).await?;
         if !should_append_case_dependency(&event) {
             return Ok(());
         }
-        if let Some(rule_name) = background_rule {
+        if let Some(attribution) = global_attribution {
             self.append_global(
                 &event,
-                "background_rule",
-                if targets.bootstrap_open {
-                    "bootstrap"
-                } else {
-                    "runtime"
-                },
-                &rule_name,
+                attribution.reason,
+                attribution.phase,
+                &attribution.matched_by,
             )
             .await?;
             return Ok(());
         }
-        if targets.bootstrap_open {
+        if targets.bootstrap_open && !suppress_default_global {
             self.append_global(&event, "bootstrap_window", "bootstrap", "bootstrap_window")
                 .await?;
         }

@@ -10,8 +10,8 @@ use super::model::{
     TargetStartOptions,
 };
 use super::{
-    PROBE_IMAGE, bounded_logs, build_image, create_anchor, force_remove_runtime, is_running,
-    runtime_name, start_target, stop_target, verify_config_mount, verify_listen_address,
+    bounded_logs, build_image, create_anchor, force_remove_runtime, is_running, runtime_name,
+    start_target, stop_target, verify_config_mount, verify_listen_address,
     verify_required_environment, verify_target_identity,
 };
 
@@ -126,9 +126,13 @@ async fn probe_http_status(anchor: &str, url: &str) -> Result<Option<u16>> {
                 "linux/amd64",
                 "--network",
                 &format!("container:{anchor}"),
-                "--entrypoint",
-                "/usr/bin/curl",
-                PROBE_IMAGE,
+                "--user",
+                crate::TRAFFIC_PROCESS_USER,
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                crate::network_probe::IMAGE,
                 "--silent",
                 "--show-error",
                 "--output",

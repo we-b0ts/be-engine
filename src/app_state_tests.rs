@@ -73,6 +73,60 @@ fn http_dependency(authority: &str, uri: &str) -> RecorderEvent {
     })
 }
 
+fn preflight_probe_dependency(user_agent: &str) -> RecorderEvent {
+    let mut event = http_dependency("demo.test:443", "/");
+    let RecorderEvent::HttpExchange(exchange) = &mut event else {
+        unreachable!();
+    };
+    exchange.scheme = "fake_ip_https".to_string();
+    exchange
+        .request_headers
+        .insert("user-agent".to_string(), vec![user_agent.to_string()]);
+    event
+}
+
+#[tokio::test]
+async fn preflight_probe_publishes_one_exact_global_dependency() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    config.dns_mock.registry_path = temp.path().join("fake-dns.json");
+    let state = AppState::new_with_recording_options(
+        config,
+        None,
+        Vec::new(),
+        None,
+        Some(PreflightProbeKind::JavaTruststore),
+    )
+    .await
+    .unwrap();
+
+    state.record_event(preflight_probe_dependency(
+        crate::network_probe::JAVA_USER_AGENT,
+    ));
+    state.record_event(preflight_probe_dependency(
+        crate::network_probe::JAVA_USER_AGENT,
+    ));
+    state.record_event(preflight_probe_dependency("ordinary-client"));
+    state.recorder().finish_run().await.unwrap();
+
+    let global =
+        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
+            .await
+            .unwrap();
+    assert_eq!(global.lines().count(), 2);
+    assert_eq!(
+        global
+            .matches("\"global_dependency_reason\":\"preflight_probe\"")
+            .count(),
+        1
+    );
+    assert!(global.contains("\"global_dependency_phase\":\"runtime\""));
+    assert!(global.contains("\"global_dependency_matched_by\":\"java_truststore\""));
+}
+
 fn motan_dependency(group: &str, interface_name: &str, method_name: &str) -> RecorderEvent {
     RecorderEvent::MotanExchange(MotanExchangeEvent {
         id: Uuid::new_v4(),

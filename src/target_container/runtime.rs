@@ -13,6 +13,7 @@ use super::{
     NETWORK_ANCHOR_IMAGE, TARGET_CONFIG_DIR, TARGET_CONFIG_ENV, TARGET_PORT_ENV,
     TARGET_REPLAY_CA_ENV, TARGET_REPLAY_CA_PATH, TARGET_USER,
 };
+use crate::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER};
 
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(60);
 const STOP_SECONDS: &str = "15";
@@ -204,20 +205,20 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
 
 pub(crate) async fn verify_target_identity(container: &str) -> Result<()> {
     validate_name(container)?;
+    let script = format!(
+        "test \"$(awk '/^Uid:/{{print $2}}' /proc/1/status)\" = {TRAFFIC_PROCESS_UID}; \
+         test \"$(awk '/^Gid:/{{print $2}}' /proc/1/status)\" = {TRAFFIC_PROCESS_GID}"
+    );
     let output = docker_output(
-        Command::new("docker").args([
-            "exec",
-            container,
-            "/bin/sh",
-            "-ec",
-            "test \"$(awk '/^Uid:/{print $2}' /proc/1/status)\" = 998; test \"$(awk '/^Gid:/{print $2}' /proc/1/status)\" = 998",
-        ]),
+        Command::new("docker")
+            .args(["exec", container, "/bin/sh", "-ec"])
+            .arg(script),
         "verify target process identity",
     )
     .await?;
     ensure!(
         output.status.success(),
-        "target process is not running as 998:998: {}",
+        "target process is not running as {TRAFFIC_PROCESS_USER}: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     );
     Ok(())

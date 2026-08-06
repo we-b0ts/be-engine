@@ -52,13 +52,13 @@ target.
 
 ## Fixed-User Interception
 
-Resolve the interception identity with
-`traffic-e2e diagnose interception identity` and require it to exist. Build
-and orchestration may run as the developer, but the process emitting
-dependency traffic MUST run as that recorder-owned fixed user.
-Recorder and Replay themselves MUST NOT run as the fixed user; interception
-startup rejects that identity so their control traffic cannot enter the target
-owner scope.
+Confirm the fixed numeric interception identity with
+`traffic-e2e diagnose interception identity`. It is UID/GID `998:998` and does
+not depend on a same-named account or its numeric identity on the host. Build
+and orchestration may run as the developer, but every containerized process
+emitting dependency traffic MUST run as `998:998`. Recorder and Replay
+themselves MUST NOT run as UID `998`; interception startup rejects that identity
+so their control traffic cannot enter the target owner scope.
 
 The standard managed target image runs as `998:998` in a system-owned network
 namespace. Replay keeps interception control under the developer account,

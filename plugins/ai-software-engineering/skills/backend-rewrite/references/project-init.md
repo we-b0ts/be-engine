@@ -20,6 +20,14 @@ backend-rewrite init \
 provide a value only for a non-standard name. Source and Breeze containers
 need to be inspectable, not running.
 
+Do not declare or persist a source language. During every managed recording,
+traffic-e2e tests the completed source adaptor image in a disposable,
+network-disabled container as `998:998`, overriding its entrypoint to run only
+`java -version`. It grants only `NET_BIND_SERVICE` so the contract's
+capability-bearing Java executable remains runnable, but it does not start the
+business entrypoint or mount business data. A successful probe selects the
+fixed Java 8 truststore probe; otherwise the system-owned network probe is used.
+
 The recording port is the Recorder HTTP gateway that accepts selected source
 traffic. It is distinct from the source service port and target replay port.
 Defaults are:
@@ -74,13 +82,13 @@ determined. Declare `ARG SOURCE_IMAGE` before `FROM` and use
 image ID inspected from the configured source container.
 
 The adapted source must retain its port `880` listener while running as
-`998:998`. Because `880` is a privileged port, resolve the real Java executable
-behind any symlink and grant only that executable
-`cap_net_bind_service=+ep`; do not run the application as root or make the
-container privileged. A capability-bearing Java executable enters secure
-loader mode, so add its resolved `libjli.so` directory to the system dynamic
-loader configuration and run `ldconfig` during the image build. Fail the build
-unless `getcap` confirms the expected capability.
+`998:998`. Because `880` is a privileged port, grant
+`cap_net_bind_service=+ep` only to the real source executable; do not run the
+application as root or make the container privileged. For Java, resolve the
+real Java executable behind any symlink. A capability-bearing Java executable
+enters secure loader mode, so add its resolved `libjli.so` directory to the
+system dynamic loader configuration and run `ldconfig` during the image build.
+Fail the build unless `getcap` confirms the expected capability.
 
 When Breeze is enabled, copy the bundled
 [`MeshConnectUtil.class`](../assets/MeshConnectUtil.class) byte-for-byte to
@@ -97,13 +105,17 @@ complete patch operation. At runtime set
 `MESH_CONNECT_HOST=breeze.recording` so the patched SDK connects to the managed
 Breeze container instead of source-local loopback.
 
-Include the ability to use a runtime-mounted Java truststore, but do not embed
-a Recorder CA, private key, credential, recording, or machine-local container
-state in the image. The current source-adaptor contract supports Java
-applications: retain `keytool`, `/bin/sh`, and `java` in the adaptor so the
-managed runtime can construct Java trust and execute its bundled Java 8 HTTPS
-probe through the same JKS used by the source application. Do not require a
-compiler or curl in the source adaptor solely for preflight.
+Do not embed a Recorder CA, private key, credential, recording, or
+machine-local container state in the image. When Java is part of the source
+runtime, retain `keytool`, `/bin/sh`, and `java` and support a runtime-mounted
+Java truststore; the managed runtime constructs Java trust and executes its
+system-supplied Java 8 HTTPS probe through the same truststore used by the
+source application. `HttpsProbe.class` is embedded in traffic-e2e and staged
+below ignored local runtime state only during preflight; the target AI must not
+create, copy, or commit it. Do not require a compiler or curl in the source
+adaptor solely for preflight. For non-Java sources, do not add Java or curl
+solely for probing; the system-owned network probe image performs the recording
+probe.
 
 After creating `Dockerfile.recording`, the target AI must build it during
 initialization and tag the resulting image as
@@ -144,8 +156,8 @@ backend-rewrite init preflight \
 ```
 
 Do not create another target-validation command. `backend-rewrite init
-preflight` owns two ordered phases: `target_container`, defined below, followed
-by the existing `recording` phase. Run it from the target repository after the
+preflight` owns three ordered phases: `target_container`, defined below,
+`recording`, and `replay_network`. Run it from the target repository after the
 generated configuration, `Dockerfile.recording`,
 `traffic-e2e/<project>-recording:cache`, `.traffic-e2e/Dockerfile.e2e`, and
 `.dockerignore` exist. Provide the same
@@ -153,42 +165,54 @@ generated configuration, `Dockerfile.recording`,
 defaults each selected API to one admitted case and opens a bounded recording
 window; while it is running, send one deterministic
 controlled business request to the configured HTTP gateway port. The system
-independently sends an HTTPS background probe from the running source adaptor
-container. The business request must match the selected API. The command does
+independently sends one exact HTTPS probe. The business request must match the
+selected API. The command does
 not invent its path, request body, or business input because those values must
 come from the inspected source contract.
 
-1. Start Recorder first so it creates its runtime CA, then create a Java
-   truststore from that public certificate without copying the CA private key
-   into either image.
+1. Start Recorder first so it creates its runtime CA. When Java was detected,
+   create a Java truststore from that public certificate without copying the CA
+   private key into either image.
 2. When Breeze is enabled, start the fixed Breeze image with the inspected
    Breeze runtime arguments.
-3. Start the source adaptor with the inspected source runtime inputs, the
-   generated truststore mounted read-only, and the explicit adaptor entrypoint.
-4. Verify the source application process runs as UID/GID `998:998`, its port
+3. Start the source adaptor with the inspected source runtime inputs and the
+   explicit adaptor entrypoint. Mount the generated truststore read-only only
+   when the system detected Java.
+4. Verify the source entrypoint runs as UID/GID `998:998`, its port
    `880` listener is reachable without root or privileged-container execution,
    Breeze is ready when enabled, the source readiness contract passes, and
    Recorder admits cases.
-5. After source readiness, have the managed runtime execute a Java HTTPS
-   request inside the source adaptor container against `https://demo.test/`.
-   It must use the mounted JKS through the container's `JAVA_TOOL_OPTIONS`, the
-   same trust path as the source application. The CA is local trust input and
-   is not transmitted to the remote server. In preflight only, retain full
-   run-level `traffic.jsonl` events without changing the repository recorder
-   configuration. The probe command's exit status is diagnostic only.
+5. After source readiness, send exactly one GET to `https://demo.test/`. When
+   the system detected Java, execute the bundled Java 8 class inside the source
+   adaptor and require it to
+   use the mounted Java truststore through `JAVA_TOOL_OPTIONS`, the same trust
+   path as the source application. Otherwise execute the pinned
+   `traffic-e2e-network-probe:0.0.1` image as `998:998` in the Recorder
+   anchor namespace with the public Recorder CA mounted read-only. Probe
+   failure fails the phase; never fall back from the Java probe to the generic
+   probe because doing so would mask a Java truststore defect.
 6. After the command reports
    `phase = "preflight-business-input-required"`, admit the controlled request
    matching the configured HTTP gateway rule,
    using the rule's declared method without a separate read-only-method
    restriction. Finalize the disposable run and require a clean manifest with
    at least one published case and its source response.
-7. Await the preflight command's final result. Do not infer success from the
-   probe command's exit status or response alone. Only `status = "passed"` is
-   authoritative: the system must find any successful HTTPS exchange in the
-   run-level traffic log or case/global dependency evidence as well as the
-   cleanly published business case. The exchange may come from the automatic
-   `demo.test` probe or existing source traffic; the controlled business request
-   itself does not need to produce outbound HTTPS.
+7. Require Recorder to publish exactly that successful `demo.test` exchange
+   once in `global-dependencies.jsonl` with
+   `global_dependency_reason = "preflight_probe"`, runtime phase, and
+   `java_truststore` or `system_network` attribution. Do not enable full
+   `traffic.jsonl`, accept an arbitrary HTTPS exchange, or synthesize Global
+   evidence from another file.
+8. Start a disposable real Replay session over the recording run. In a
+   Replay-owned host network namespace, run the fixed network probe image as
+   `998:998`: require `demo.test` to resolve to its assigned fake IP, return the
+   recorded response, and consume one Global HTTP exchange; require
+   `example.com` to be absent from Replay targets and fail DNS resolution; and
+   require a direct real-IP egress attempt to be rejected. This phase does not
+   start the target or activate a business case. Stop Replay and remove the
+   namespace before returning.
+9. Await the final result. Do not infer success from probe output alone. Only
+   overall `status = "passed"` with all three phase results is authoritative.
 
 Run this through the same managed recording machinery used by backend-rewrite
 for normal source recording, including Recorder, network isolation, the source
@@ -196,14 +220,14 @@ adaptor, optional Breeze, CA creation, readiness, finalization, and cleanup.
 Keep its run identity and artifacts in a dedicated preflight area below
 `.traffic-e2e/local/preflight/<run-id>/`; never publish them as the workflow's
 standard recording, Replay, or comparison evidence. Success output reports
-`status = "passed"`, the isolated manifest, `published_cases`, and
-`https_interception_verified = true`. The command fails when no complete case
-is recorded or the required HTTPS background probe was not intercepted
-successfully. It streams the run-level traffic log and case/global dependency
-evidence only until that HTTPS witness is found and imposes no total-file-size
-limit; these files commonly reach multiple gigabytes. The recording phase does
-not start the target; the preceding `target_container` phase starts it only for
-the bounded launch-contract check. Neither phase initializes API inventory or
+`status = "passed"`, the isolated manifest, `published_cases`, exact Global
+probe verification, and the bounded Replay positive/negative/egress result.
+The command fails when no complete case is recorded, the required probe is not
+published exactly once, Replay cannot consume it, unrecorded DNS resolves, or
+external egress is available. The recording phase does not start the target;
+the preceding `target_container` phase starts it only for the bounded
+launch-contract check, while `replay_network` starts Replay and its probe but
+not the target. No phase initializes API inventory or
 advances coordinator workflow state. Do not invoke
 `backend-rewrite next` to manufacture this check. If image construction, source
 identity, readiness, CA truststore setup, request admission, case publication,
@@ -430,9 +454,12 @@ Do not report initialization complete until all of the following are true:
   bounded `SIGTERM` shutdown, and complete cleanup; an explicit mock is allowed
   but is not business evidence;
 - the disposable recording preflight passed with the adapted source process
-  running as `998:998`, CA truststore setup completed, the independent
-  HTTPS background interception verified, and one cleanly published case;
-  and
+  running as `998:998`, system-owned Java probe execution and truststore setup
+  completed when applicable, exactly one `demo.test` probe published as a
+  Global dependency, and one cleanly published case;
+- the disposable Replay network preflight consumed that Global probe through
+  its assigned fake IP, blocked DNS for unrecorded `example.com`, rejected
+  direct external egress for UID `998`, and completed cleanup; and
 - the initialization changes contain no generated runtime data, credentials,
   recordings, or `.traffic-e2e/local/` content.
 

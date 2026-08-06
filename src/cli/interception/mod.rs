@@ -4,7 +4,7 @@ use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
-use traffic_e2e::DEFAULT_FAKE_CIDR;
+use traffic_e2e::{DEFAULT_FAKE_CIDR, TRAFFIC_PROCESS_UID};
 
 use super::output::{stderr_line, stdout_line};
 
@@ -125,10 +125,9 @@ impl Guard {
         fake_ip: FakeIpConfig,
         reject_external_egress: bool,
     ) -> Result<Self> {
-        let uid = fixed_user_uid()?;
-        ensure_controller_not_fixed_user(effective_uid(), uid)?;
+        ensure_controller_not_traffic_process(effective_uid())?;
         stderr_line(format_args!(
-            "local interception owner filter enabled: {FIXED_USER} (uid {uid})"
+            "local interception owner filter enabled: {FIXED_USER} (uid {TRAFFIC_PROCESS_UID})"
         ));
         let mut guard = Self {
             dns,
@@ -283,7 +282,7 @@ pub(super) fn run(args: InterceptionArgs) -> Result<()> {
             run_egress(args.action)
         }
         InterceptionCommand::Identity => {
-            stdout_line(format_args!("{FIXED_USER} {}", fixed_user_uid()?))
+            stdout_line(format_args!("{FIXED_USER} {TRAFFIC_PROCESS_UID}"))
         }
     }
 }
@@ -312,38 +311,16 @@ fn run_fake_ip(action: RuleAction, config: &FakeIpConfig) -> Result<()> {
     }
 }
 
-pub(super) fn fixed_user_uid() -> Result<u32> {
-    let output = checked_output("id", ["-u", FIXED_USER]).map_err(|error| {
-        anyhow::anyhow!(
-            "traffic interception user not found: {FIXED_USER}\n\
-             Create it with:\n  sudo useradd --system --create-home --shell /bin/bash \
-             {FIXED_USER}\n{error:#}"
-        )
-    })?;
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .context("fixed interception user has a non-numeric UID")
-}
-
-pub(super) fn fixed_user_gid() -> Result<u32> {
-    let output = checked_output("id", ["-g", FIXED_USER])?;
-    String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u32>()
-        .context("fixed interception user has a non-numeric GID")
-}
-
 pub(super) fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-fn ensure_controller_not_fixed_user(controller_uid: u32, fixed_uid: u32) -> Result<()> {
+fn ensure_controller_not_traffic_process(controller_uid: u32) -> Result<()> {
     ensure!(
-        controller_uid != fixed_uid,
-        "traffic-e2e interception controller must not run as {FIXED_USER} (uid {fixed_uid}); \
-         run Recorder or Replay as root or a developer account and reserve {FIXED_USER} for the \
-         dependency-producing Source or Target process"
+        controller_uid != TRAFFIC_PROCESS_UID,
+        "traffic-e2e interception controller must not run as uid {TRAFFIC_PROCESS_UID}; \
+         run Recorder or Replay as root or a developer account and reserve uid \
+         {TRAFFIC_PROCESS_UID} for the dependency-producing Source or Target process"
     );
     Ok(())
 }
@@ -505,18 +482,18 @@ mod tests {
     }
 
     #[test]
-    fn rejects_fixed_user_as_interception_controller() {
-        let error = ensure_controller_not_fixed_user(998, 998)
+    fn rejects_traffic_process_as_interception_controller() {
+        let error = ensure_controller_not_traffic_process(TRAFFIC_PROCESS_UID)
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("must not run as trp-record"));
+        assert!(error.contains("must not run as uid 998"));
         assert!(error.contains("uid 998"));
     }
 
     #[test]
     fn accepts_separate_interception_controller() {
-        assert!(ensure_controller_not_fixed_user(0, 998).is_ok());
-        assert!(ensure_controller_not_fixed_user(1000, 998).is_ok());
+        assert!(ensure_controller_not_traffic_process(0).is_ok());
+        assert!(ensure_controller_not_traffic_process(1000).is_ok());
     }
 }

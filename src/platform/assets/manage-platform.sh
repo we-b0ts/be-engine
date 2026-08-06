@@ -161,6 +161,7 @@ fi
 
 anchor_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62'
 recorder_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107'
+network_probe_image='registry.api.demo.test/weibo_rd_if/traffic-e2e-network-probe:0.0.1@sha256:6804ffe944eb4709c4f8387e984dfcf524be14241c571756a6b6b85a8cb13f8e'
 breeze_image='registry.api.demo.test/weibo_rd_if/breeze:v0.1.21-e2e@sha256:5aba065755724d43c7da3f6b79ac82890a0a0a08c6ae3f43af12558b5e52462f'
 
 repo_name=$(basename "$TRAFFIC_E2E_TARGET_ROOT" | tr -cs 'A-Za-z0-9_.-' '-')
@@ -180,6 +181,7 @@ source_name="${prefix}-source"
 target_name="${prefix}-target"
 adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
+source_uses_java=false
 adapter_dockerfile="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording"
 
 runtime_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/local"
@@ -561,18 +563,32 @@ require_initialized_recording_adapter() {
         "$adapter_image" "$adapter_image_id" >&2
 }
 
+detect_source_java_runtime() {
+    source_uses_java=false
+    if docker run --rm --platform linux/amd64 --network none --user 998:998 \
+        --cap-drop ALL --cap-add NET_BIND_SERVICE \
+        --entrypoint java "$adapter_image_id" -version >/dev/null 2>&1; then
+        source_uses_java=true
+        printf 'detected runnable Java environment in recording source image; using Java 8 truststore probe\n' >&2
+    else
+        printf 'recording source image has no runnable Java environment; using system network probe\n' >&2
+    fi
+}
+
 start_recording_source() {
     local truststore=$1
     load_runtime_spec "$source_inspect" recording recording image
-    runtime_args+=(
-        --env 'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/traffic-e2e/source-truststore.jks -Djavax.net.ssl.trustStorePassword=changeit'
-        --volume "$data_dir/traffic-recorder-ca.pem:/traffic-e2e/traffic-recorder-ca.pem:ro"
-        --volume "$truststore:/traffic-e2e/source-truststore.jks:ro"
-    )
-    if [[ "$operation" == preflight ]]; then
+    if "$source_uses_java"; then
         runtime_args+=(
-            --volume "$TRAFFIC_E2E_PLATFORM_ASSETS/HttpsProbe.class:/traffic-e2e/HttpsProbe.class:ro"
+            --env 'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/traffic-e2e/source-truststore.jks -Djavax.net.ssl.trustStorePassword=changeit'
+            --volume "$data_dir/traffic-recorder-ca.pem:/traffic-e2e/traffic-recorder-ca.pem:ro"
+            --volume "$truststore:/traffic-e2e/source-truststore.jks:ro"
         )
+        if [[ "$operation" == preflight ]]; then
+            runtime_args+=(
+                --volume "$TRAFFIC_E2E_PLATFORM_ASSETS/HttpsProbe.class:/traffic-e2e/HttpsProbe.class:ro"
+            )
+        fi
     fi
     if "$breeze_enabled"; then
         runtime_args+=(--env MESH_CONNECT_HOST=breeze.recording)
@@ -582,18 +598,12 @@ start_recording_source() {
     source_started=true
     wait_port 880 source "$source_name"
     docker exec "$source_name" /bin/sh -ec '
-        pid=
-        for process_dir in /proc/[0-9]*; do
-            name=$(awk "/^Name:/{print \$2}" "$process_dir/status" 2>/dev/null || true)
-            if [ "$name" = java ]; then
-                pid=${process_dir#/proc/}
-                break
-            fi
-        done
-        test -n "$pid"
-        test "$(awk "/^Uid:/{print \$2}" "/proc/$pid/status")" = 998
-        test "$(awk "/^Gid:/{print \$2}" "/proc/$pid/status")" = 998
-    '
+        test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998
+        test "$(awk "/^Gid:/{print \$2}" /proc/1/status)" = 998
+    ' || {
+        printf 'error: adapted source entrypoint must run as 998:998\n' >&2
+        return 1
+    }
 }
 
 run_no_fallback() {
@@ -605,15 +615,29 @@ run_no_fallback() {
 
 run_preflight_https_probe() {
     [[ "$operation" == preflight ]] || return 0
-    local status=0
-    docker exec "$source_name" /bin/sh -ec '
-        command -v java >/dev/null
-        java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e \
-            HttpsProbe https://demo.test/
-    ' || status=$?
-    if ((status != 0)); then
-        printf 'warning: automatic HTTPS probe exited with status %s; recorded evidence remains authoritative\n' \
-            "$status" >&2
+    if "$source_uses_java"; then
+        docker exec "$source_name" /bin/sh -ec '
+            command -v java >/dev/null
+            java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e \
+                HttpsProbe https://demo.test/
+        ' || {
+            printf 'error: Java truststore HTTPS probe failed\n' >&2
+            return 1
+        }
+    else
+        docker run --rm --platform linux/amd64 \
+            --network "container:${anchor_name}" --user 998:998 \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --mount "type=bind,source=${data_dir}/traffic-recorder-ca.pem,target=/traffic-e2e/trust/recorder-ca.pem,readonly" \
+            "$network_probe_image" \
+            --silent --show-error --connect-timeout 10 --max-time 15 \
+            --cacert /traffic-e2e/trust/recorder-ca.pem \
+            --user-agent traffic-e2e-system-network-preflight \
+            --output /dev/null --write-out 'system network HTTPS probe returned %{http_code}\n' \
+            https://demo.test/ || {
+                printf 'error: system network HTTPS probe failed\n' >&2
+                return 1
+            }
     fi
 }
 
@@ -666,18 +690,26 @@ run_standard_recording() {
     else
         resolve_or_build_recording_adapter
     fi
+    detect_source_java_runtime
     if "$breeze_enabled"; then
         normalize_breeze_directories
         docker pull "$breeze_image" >/dev/null
     fi
     docker pull "$anchor_image" >/dev/null
     docker pull "$recorder_image" >/dev/null
+    if [[ "$operation" == preflight ]] && ! "$source_uses_java"; then
+        docker pull "$network_probe_image" >/dev/null
+    fi
     docker run --detach --name "$anchor_name" --platform linux/amd64 --network host \
         "$anchor_image" >/dev/null
     anchor_started=true
     local -a recorder_command=(internal recorder-run --config /workspace/recorder.toml --control-socket "$control_socket" --artifact-owner "$artifact_owner" --dns --run-id "$run_id")
     if [[ "$operation" == preflight ]]; then
-        recorder_command+=(--full-traffic-jsonl)
+        if "$source_uses_java"; then
+            recorder_command+=(--preflight-probe java-truststore)
+        else
+            recorder_command+=(--preflight-probe system-network)
+        fi
     fi
     local -a recorder_mounts=()
     if "$breeze_enabled"; then
@@ -704,15 +736,20 @@ run_standard_recording() {
         "${recorder_command[@]}" >/dev/null
     recorder_started=true
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-listeners --control-socket "$control_socket"
-    docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh \
-        --volume "$data_dir:/workspace/data" "$adapter_image_id" -ec '
-            test -s /workspace/data/traffic-recorder-ca.pem
-            rm -f /workspace/data/source-truststore.jks
-            keytool -importcert -noprompt -alias traffic-recorder-ca \
-                -file /workspace/data/traffic-recorder-ca.pem \
-                -keystore /workspace/data/source-truststore.jks -storepass changeit >/dev/null
-            chmod 0644 /workspace/data/traffic-recorder-ca.pem /workspace/data/source-truststore.jks
-        '
+    if "$source_uses_java"; then
+        docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh \
+            --volume "$data_dir:/workspace/data" "$adapter_image_id" -ec '
+                test -s /workspace/data/traffic-recorder-ca.pem
+                rm -f /workspace/data/source-truststore.jks
+                keytool -importcert -noprompt -alias traffic-recorder-ca \
+                    -file /workspace/data/traffic-recorder-ca.pem \
+                    -keystore /workspace/data/source-truststore.jks -storetype JKS \
+                    -storepass changeit >/dev/null
+                chmod 0644 /workspace/data/traffic-recorder-ca.pem /workspace/data/source-truststore.jks
+            '
+    else
+        chmod 0644 "$data_dir/traffic-recorder-ca.pem"
+    fi
     if "$breeze_enabled"; then
         start_breeze "container:${anchor_name}"
     fi

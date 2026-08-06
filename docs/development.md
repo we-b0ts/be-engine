@@ -28,6 +28,7 @@ runtime images:
 
 ```text
 docker/network-anchor/Dockerfile
+docker/network-probe/Dockerfile
 docker/recorder-runtime/Dockerfile
 docker/builder/Dockerfile
 docker/target-runtime/Dockerfile
@@ -82,6 +83,29 @@ Recorder remains root inside this runtime for managed DNS and interception.
 When its recording output is a host bind mount, the host wrapper must pass
 `traffic-e2e internal recorder-run --artifact-owner "$(id -u):$(id -g)"` so finalization
 assigns only the exact run tree back to the invoking host user.
+
+Build the fixed Linux/amd64 network probe through the host network:
+
+```bash
+docker buildx build \
+  --platform linux/amd64 \
+  --network host \
+  --build-arg HTTP_PROXY \
+  --build-arg HTTPS_PROXY \
+  --build-arg ALL_PROXY \
+  --build-arg NO_PROXY \
+  --load \
+  --file docker/network-probe/Dockerfile \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-network-probe:0.0.1 \
+  docker/network-probe
+```
+
+Runtime consumers pin the published manifest as
+`traffic-e2e-network-probe:0.0.1@sha256:6804ffe944eb4709c4f8387e984dfcf524be14241c571756a6b6b85a8cb13f8e`.
+The probe contains only curl and the public CA bundle, defaults to `998:998`,
+and is used when the recording source image has no runnable Java environment
+and for every Replay network preflight. It must not contain Java, Recorder,
+Replay, Docker, or networking capabilities.
 
 Build the Linux/amd64 Rust builder through the host network. The explicit
 platform is required because its legacy upstream image omits architecture
@@ -378,14 +402,15 @@ traffic-e2e diagnose recorder --config config/recorder.example.toml
 
 Managed recording uses `dns_mock.upstream_dns` from the Recorder TOML for
 fake-DNS forwarding. Local interception redirects every port-53 query emitted
-by `trp-record`; it has no destination DNS bypass. Recorder itself runs as root,
-so its upstream queries are outside the fixed-user owner scope.
+by a container process running as UID `998`; it has no destination DNS bypass.
+Recorder itself runs as root, so its upstream queries are outside the fixed
+owner scope.
 
-The legacy fixed-user local interception path limits DNS and fake-IP interception to the
-dedicated Unix user `trp-record`. Run the source service as that user so
-bootstrap and case dependencies are not polluted by unrelated local processes.
-The owner scope cannot be overridden by CLI options, environment variables, or
-recorder configuration.
+The local interception path limits DNS and fake-IP interception to numeric UID
+`998`. Run the containerized source service as `998:998` so bootstrap and case
+dependencies are not polluted by unrelated processes. Host account resolution
+does not affect this contract. The owner scope cannot be overridden by CLI
+options, environment variables, or recorder configuration.
 
 HTTP gateway recording is intentionally conservative. Until the configured
 ready probe succeeds, matching traffic uses the configured fallback strategy
@@ -696,12 +721,12 @@ diagnostic. A target request that is unmatched or unsupported remains dirty,
 including requests sent to an allowed host. Restart replay after applying a
 new host; running sessions do not hot-reload recorder configuration.
 
-`traffic-e2e replay` also uses the fixed `trp-record` owner filter. Run the
-dependency-producing target process as that user. Build steps, replay itself,
-and replay-control commands remain under the developer account or root; replay
-startup rejects `trp-record` as its controller identity. If the
-target cannot run as `trp-record`, intercepted replay is blocked; do not widen
-the owner scope to the login user or all local users.
+`traffic-e2e replay` also uses the fixed numeric UID `998` owner filter. Run the
+containerized dependency-producing target process as `998:998`. Build steps,
+replay itself, and replay-control commands remain under the developer account
+or root; replay startup rejects UID `998` as its controller identity. If the
+target cannot run as `998:998`, intercepted replay is blocked; do not widen the
+owner scope to the login user or all local users.
 
 For a prebuilt in-process E2E command, use `traffic-e2e target exec` rather than
 granting the fixed user access to the workspace or build cache:
@@ -717,8 +742,9 @@ traffic-e2e target exec \
 ```
 
 The caller must have non-interactive sudo permission for staging ownership and
-for running as the recorder's fixed user. Copied inputs are read-only to the
-target; the temporary work tree is writable and removed after execution.
+for applying the fixed numeric identity `998:998`; host account lookup is not
+used. Copied inputs are read-only to the target; the temporary work tree is
+writable and removed after execution.
 Environment files use dotenv syntax. Later files override earlier files, and
 same-named caller environment values or explicit `--env` assignments override
 file values. Reserved identity, path, shell-hook, and replay-session variables
@@ -1152,11 +1178,15 @@ backend-rewrite init preflight
 ```
 
 It first builds and runs one disposable target container, then starts the
-recording-environment preflight only after the target phase passes. Success
-returns overall `status: passed` with separate `target_container` and
-`recording` results. A failure prints bounded JSON containing `status: failed`,
-the failing stage, and a reason, exits nonzero, and does not advance rewrite
-state. Manual `docker build`/`docker run` output is diagnostic only.
+recording-environment preflight, and finally starts a real Replay session with
+the fixed network probe image. Recording publishes exactly one marked
+`demo.test` Global dependency; Replay must consume it through fake DNS, reject
+unrecorded `example.com`, and block direct external egress for UID `998`.
+Success returns overall `status: passed` with separate `target_container`,
+`recording`, and `replay_network` results. A failure prints bounded JSON
+containing `status: failed`, the failing stage, and a reason, exits nonzero, and
+does not advance rewrite state. Manual `docker build`/`docker run` output is
+diagnostic only.
 
 The lower-level commands in the remainder of this section are the traffic
 engine interface used by the coordinator and by traffic-e2e maintainers. They
