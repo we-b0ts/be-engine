@@ -1,6 +1,6 @@
 use std::ffi::OsString;
 
-use anyhow::{Result, ensure};
+use anyhow::Result;
 
 use super::{
     DnsConfig, FIXED_USER, checked_output, checked_status, fixed_user_uid, status_success,
@@ -18,10 +18,6 @@ pub(super) fn up(config: &DnsConfig) -> Result<()> {
 }
 
 fn try_up(config: &DnsConfig) -> Result<()> {
-    ensure!(
-        !config.upstream_dns.is_empty(),
-        "upstream DNS must not be empty"
-    );
     let uid = fixed_user_uid()?;
     delete_output_rules(uid)?;
     if !chain_exists()? {
@@ -29,17 +25,6 @@ fn try_up(config: &DnsConfig) -> Result<()> {
     }
     checked_status("iptables", ["-t", "nat", "-F", CHAIN])?;
     for protocol in ["udp", "tcp"] {
-        for upstream in &config.upstream_dns {
-            let host = strip_dns_port(upstream);
-            ensure!(!host.is_empty(), "upstream DNS must not be empty");
-            checked_status(
-                "iptables",
-                [
-                    "-t", "nat", "-A", CHAIN, "-p", protocol, "-d", host, "--dport", "53", "-j",
-                    "RETURN",
-                ],
-            )?;
-        }
         checked_status(
             "iptables",
             [
@@ -60,10 +45,8 @@ fn try_up(config: &DnsConfig) -> Result<()> {
         add_output_rule(protocol, uid)?;
     }
     stdout_line(format_args!(
-        "local DNS capture enabled: *:53 -> {}:{}, excluding {}",
-        config.dns_ip,
-        config.dns_port,
-        config.upstream_dns.join(",")
+        "local DNS capture enabled: *:53 -> {}:{}",
+        config.dns_ip, config.dns_port
     ))?;
     stdout_line(format_args!("owner scope: {FIXED_USER} (uid {uid})"))?;
     Ok(())
@@ -92,10 +75,6 @@ pub(super) fn status(config: &DnsConfig) -> Result<()> {
         "DNS listener expected at {}:{}",
         config.dns_ip, config.dns_port
     ))?;
-    stdout_line(format_args!(
-        "DNS upstream exclusion: {}",
-        config.upstream_dns.join(",")
-    ))?;
     stdout_line(format_args!("Owner scope: {FIXED_USER} (uid {uid})"))?;
     let output = checked_output("iptables", ["-t", "nat", "-S", "OUTPUT"])?;
     for line in String::from_utf8_lossy(&output.stdout).lines() {
@@ -108,10 +87,6 @@ pub(super) fn status(config: &DnsConfig) -> Result<()> {
         stdout(format_args!("{}", String::from_utf8_lossy(&output.stdout)))?;
     }
     Ok(())
-}
-
-fn strip_dns_port(value: &str) -> &str {
-    value.strip_suffix(":53").unwrap_or(value)
 }
 
 fn chain_exists() -> Result<bool> {

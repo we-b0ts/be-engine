@@ -15,7 +15,6 @@ use super::signal::shutdown_signal;
 
 const DEFAULT_DNS_LISTEN: &str = "127.0.0.153:15353";
 const DEFAULT_TCP_LISTEN: &str = "127.0.0.1:15001";
-const DEFAULT_UPSTREAM_DNS: &str = "10.10.10.10:53";
 
 #[derive(Debug, Args)]
 pub(super) struct ReplayArgs {
@@ -46,8 +45,6 @@ pub(super) struct ReplayArgs {
     tcp_listen: Option<SocketAddr>,
     #[arg(long)]
     fake_cidr: Option<String>,
-    #[arg(long = "upstream-dns")]
-    upstream_dns: Option<String>,
     #[arg(long)]
     policy: Option<PathBuf>,
     #[arg(long)]
@@ -79,7 +76,6 @@ struct ReplayFileValues {
     session: Option<PathBuf>,
     control_socket: Option<PathBuf>,
     enable_intercept: Option<bool>,
-    upstream_dns: Option<String>,
     policy: Option<PathBuf>,
     owner_uid: Option<toml::Value>,
     user: Option<toml::Value>,
@@ -96,7 +92,6 @@ struct ResolvedReplay {
     dns_listen: SocketAddr,
     tcp_listen: SocketAddr,
     fake_cidr: String,
-    upstream_dns: String,
     intercept: bool,
     policy: Option<PathBuf>,
     recorder_config: Option<PathBuf>,
@@ -117,13 +112,6 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
             DnsConfig {
                 dns_ip: resolved.dns_listen.ip().to_string(),
                 dns_port: resolved.dns_listen.port(),
-                upstream_dns: resolved
-                    .upstream_dns
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned)
-                    .collect(),
             },
             FakeIpConfig {
                 fake_cidr: resolved.fake_cidr.clone(),
@@ -292,10 +280,6 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         dns_listen,
         tcp_listen,
         fake_cidr,
-        upstream_dns: args
-            .upstream_dns
-            .or(file.replay.upstream_dns)
-            .unwrap_or_else(|| DEFAULT_UPSTREAM_DNS.to_string()),
         intercept,
         policy,
         recorder_config,
@@ -415,6 +399,16 @@ mod tests {
     }
 
     #[test]
+    fn rejects_removed_upstream_dns_setting() {
+        assert!(
+            TestCli::try_parse_from(["test", "--upstream-dns", "10.10.10.10:53", "cases"]).is_err()
+        );
+        assert!(
+            toml::from_str::<ReplayFile>("[replay]\nupstream_dns = \"10.10.10.10:53\"\n").is_err()
+        );
+    }
+
+    #[test]
     fn replay_file_paths_are_relative_to_the_config() {
         let directory = tempfile::tempdir().unwrap();
         let config_dir = directory.path().join("config");
@@ -460,7 +454,6 @@ mod tests {
             dns_listen: None,
             tcp_listen: None,
             fake_cidr: None,
-            upstream_dns: None,
             policy: None,
             recorder_config: None,
             recording_rule: None,

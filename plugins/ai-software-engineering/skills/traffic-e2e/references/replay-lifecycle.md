@@ -65,6 +65,9 @@ Resolve the interception identity with
 `traffic-e2e diagnose interception identity` and require it to exist. Build
 and orchestration may run as the developer, but the process emitting
 dependency traffic MUST run as that recorder-owned fixed user.
+Recorder and Replay themselves MUST NOT run as the fixed user; interception
+startup rejects that identity so their control traffic cannot enter the target
+owner scope.
 
 For a prebuilt in-process E2E, use `traffic-e2e target exec`; do not run the
 build tool as the fixed user or widen workspace, build cache, control socket,

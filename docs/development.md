@@ -154,7 +154,8 @@ evidence is required. The policy defaults to `verification.yaml` next to the
 recorder config and may be provided explicitly with `--policy`. Response bodies
 are decoded according to their own `Content-Encoding` before being stored for
 semantic comparison, while the baseline response returned to the frontend
-retains its original encoding.
+retains its original encoding. Comparison request and response bodies each
+default to a 64 MiB limit.
 Explicit named HTTP gateway rules and methods are required. Only GET, HEAD, and
 OPTIONS may be mirrored. Any configured POST, PUT, PATCH, DELETE, or other
 non-read method fails configuration validation before the listener starts, so
@@ -327,9 +328,10 @@ development without those rules:
 traffic-e2e diagnose recorder --config config/recorder.example.toml
 ```
 
-Managed recording uses `dns_mock.upstream_dns` from the Recorder TOML for both
-fake-DNS forwarding and the local DNS interception bypass. It does not require
-or read a separate `UPSTREAM_DNS` environment variable.
+Managed recording uses `dns_mock.upstream_dns` from the Recorder TOML for
+fake-DNS forwarding. Local interception redirects every port-53 query emitted
+by `trp-record`; it has no destination DNS bypass. Recorder itself runs as root,
+so its upstream queries are outside the fixed-user owner scope.
 
 The legacy fixed-user local interception path limits DNS and fake-IP interception to the
 dedicated Unix user `trp-record`. Run the source service as that user so
@@ -424,11 +426,14 @@ case is allowed to finish for up to
 remaining staging case is retained under `failed/` with
 `recording_incomplete_at_shutdown`.
 
-`recording.max_body_bytes` bounds wire bodies and dependency captures.
+`recording.max_body_bytes` is the system-wide body limit. It bounds comparison
+requests and responses, recorded wire bodies and dependency captures, and
+managed replay target responses.
 `recording.max_decoded_body_bytes` may independently allow a larger decoded
 HTTP case body, such as compressed JSON; when omitted it inherits
 `max_body_bytes`. Content decoding reads at most the decoded limit plus one
-byte, so highly compressed input cannot cause unbounded decompression.
+byte, so highly compressed input cannot cause unbounded decompression. Both
+effective defaults are 64 MiB.
 
 ### Rewriting HTTP Responses
 
@@ -645,7 +650,8 @@ new host; running sessions do not hot-reload recorder configuration.
 
 `traffic-e2e replay` also uses the fixed `trp-record` owner filter. Run the
 dependency-producing target process as that user. Build steps, replay itself,
-and replay-control commands may remain under the developer account. If the
+and replay-control commands remain under the developer account or root; replay
+startup rejects `trp-record` as its controller identity. If the
 target cannot run as `trp-record`, intercepted replay is blocked; do not widen
 the owner scope to the login user or all local users.
 
@@ -1003,7 +1009,7 @@ and upstream DNS `10.10.10.11:53`. Override a default only when the inspected
 application contract proves it is different. Source and Breeze containers
 need only be inspectable, not running.
 
-The command atomically generates version-9 `.traffic-e2e/project.yaml`,
+The command atomically generates version-10 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
 configuration has explicit source, optional Breeze, target, replay, recording,
 delivery, and state sections. A typical
@@ -1019,8 +1025,11 @@ target:
   readiness_status: 404
   startup_timeout_seconds: 60
   request_timeout_seconds: 30
-  max_response_bytes: 33554432
 ```
+
+Managed replay reads its target response limit from
+`recording.max_body_bytes` in the recorder configuration referenced by
+`recording.config`; `project.yaml` does not duplicate that value.
 
 Existing configuration is never overwritten. If any generated file exists,
 the whole initialization refuses without creating another file. In-place

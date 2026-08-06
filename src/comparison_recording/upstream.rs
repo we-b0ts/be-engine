@@ -84,7 +84,7 @@ pub(super) async fn fetch_upstream(
         let response_headers = response.headers().clone();
         let body = collect_response(
             response.into_body(),
-            runtime.comparison_recording.max_response_bytes,
+            runtime.config.recording.max_body_bytes,
             matches!(disposition, ResponseDisposition::Downstream),
         )
         .await?;
@@ -224,14 +224,14 @@ fn response_body_capture(
 ) -> CapturedResponseBody {
     let mut body = capture_case_body(
         bytes,
-        runtime.comparison_recording.max_response_bytes,
+        runtime.config.recording.max_body_bytes,
         runtime.config.recording.decoded_body_limit(),
         Some(headers),
     );
     body.original_len = original_len;
     body.truncated |= wire_truncated;
     let error = if wire_truncated {
-        Some("response body exceeded comparison_recording.max_response_bytes".to_string())
+        Some("response body exceeded recording.max_body_bytes".to_string())
     } else if body.truncated {
         Some(format!(
             "decoded response body exceeded configured decoded body limit of {} bytes",

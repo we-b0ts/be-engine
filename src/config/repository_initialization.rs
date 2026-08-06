@@ -114,7 +114,6 @@ fn initialize_repository_config_with(
         target_readiness_status: options.readiness_status,
         target_startup_timeout_seconds: 60,
         target_request_timeout_seconds: 30,
-        target_max_response_bytes: 10 * 1024 * 1024,
         replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
         replay_startup_timeout_seconds: 60,
         pr_base: "dev-migration".to_string(),
@@ -274,6 +273,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 
     #[test]
     fn conventional_paths_are_bounded_and_boot_is_not_created() {
@@ -403,11 +403,12 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 9"));
+        assert!(project.contains("version: 10"));
         assert!(project.contains("ai_forbidden_root: local/ai-forbidden"));
         assert!(project.contains("boot_dir: .traffic-e2e/local/boot"));
         assert!(project.contains("container: breeze"));
         assert!(project.contains("pr_base: dev-migration"));
+        assert!(!project.contains("max_response_bytes"));
         assert!(
             !Command::new("git")
                 .arg("-C")
@@ -425,6 +426,7 @@ mod tests {
         let recorder =
             crate::config::AppConfig::load(target.path().join(RECORDER_CONFIG_PATH)).unwrap();
         assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:17171");
+        assert_eq!(recorder.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
         crate::replay::validate_replay_policy(&target.path().join(VERIFICATION_POLICY_PATH))
             .unwrap();
 

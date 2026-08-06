@@ -1,6 +1,5 @@
 use std::ffi::OsStr;
 use std::fs;
-use std::net::SocketAddr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -61,7 +60,6 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
     let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
-    let configured_upstream_dns = config.dns_mock.upstream_dns;
     let state = AppState::new_with_recording_apis_and_artifact_owner(
         config,
         args.run_id,
@@ -71,7 +69,7 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     .await?;
     let mut interception = if args.dns && !args.no_dns {
         Some(Guard::enable(
-            record_dns_config(configured_upstream_dns)?,
+            record_dns_config()?,
             record_fake_ip_config(&configured_fake_cidr)?,
         )?)
     } else {
@@ -246,13 +244,12 @@ fn reject_owner_config(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn record_dns_config(configured_upstream_dns: SocketAddr) -> Result<DnsConfig> {
+fn record_dns_config() -> Result<DnsConfig> {
     Ok(DnsConfig {
         dns_ip: environment("DNS_IP", "127.0.0.153"),
         dns_port: environment("DNS_PORT", "15353")
             .parse()
             .context("DNS_PORT must be a valid port")?,
-        upstream_dns: vec![configured_upstream_dns.to_string()],
     })
 }
 
@@ -488,18 +485,11 @@ mod tests {
     }
 
     #[test]
-    fn interception_dns_uses_recorder_upstream() {
-        let configured: AppConfig = toml::from_str(
-            r#"
-            [dns_mock]
-            upstream_dns = "10.10.10.11:53"
-            "#,
-        )
-        .unwrap();
+    fn interception_dns_uses_local_listener_only() {
+        let interception = record_dns_config().unwrap();
 
-        let interception = record_dns_config(configured.dns_mock.upstream_dns).unwrap();
-
-        assert_eq!(interception.upstream_dns, ["10.10.10.11:53"]);
+        assert_eq!(interception.dns_ip, "127.0.0.153");
+        assert_eq!(interception.dns_port, 15353);
     }
 
     #[test]

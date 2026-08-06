@@ -15,8 +15,6 @@ pub struct ComparisonRecordingConfig {
     pub upstream_timeout_ms: u64,
     pub max_in_flight: usize,
     pub summary_flush_interval_ms: u64,
-    pub max_request_bytes: usize,
-    pub max_response_bytes: usize,
 }
 
 impl ComparisonRecordingConfig {
@@ -50,14 +48,6 @@ impl ComparisonRecordingConfig {
         ensure!(
             self.summary_flush_interval_ms > 0,
             "comparison_recording.summary_flush_interval_ms must be greater than zero"
-        );
-        ensure!(
-            self.max_request_bytes > 0,
-            "comparison_recording.max_request_bytes must be greater than zero"
-        );
-        ensure!(
-            self.max_response_bytes > 0,
-            "comparison_recording.max_response_bytes must be greater than zero"
         );
         ensure!(
             !gateway.rules.is_empty(),
@@ -136,8 +126,6 @@ impl Default for ComparisonRecordingConfig {
             upstream_timeout_ms: 30_000,
             max_in_flight: 256,
             summary_flush_interval_ms: 1_000,
-            max_request_bytes: 10 * 1024 * 1024,
-            max_response_bytes: 10 * 1024 * 1024,
         }
     }
 }
@@ -199,6 +187,14 @@ mod tests {
             "#,
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_removed_stage_specific_body_limits() {
+        for field in ["max_request_bytes", "max_response_bytes"] {
+            let result = toml::from_str::<ComparisonRecordingConfig>(&format!("{field} = 64"));
+            assert!(result.is_err(), "accepted obsolete field {field}");
+        }
     }
 
     #[test]

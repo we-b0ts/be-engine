@@ -72,10 +72,6 @@ environment variable inferred from traffic.
   declared in root `[workspace.dependencies]` and inherited by root and member
   packages. Existing non-workspace repositories require an explicitly scoped
   migration rather than a silent conversion during focused work.
-- Access to MySQL, Redis, Memcached, Kafka, Queue, TAuth2, Vintage, and Motan,
-  plus shared logging and runtime switches, MUST go through the canonical
-  `crates/breeze/<package>` library named `brz-<package>`. Product packages MUST
-  NOT depend directly on the corresponding raw driver or SDK.
 - Every queue, buffer, cache, batch, fan-out, task set, and in-flight request
   population MUST have an explicit bound or an evidenced external bound.
 - Every remote operation MUST have a deadline consistent with the caller's
@@ -142,10 +138,6 @@ defects before they become scale defects.
   composition.
 - Read [concurrency-and-backpressure.md](references/concurrency-and-backpressure.md)
   when adding async work, threads, queues, batching, fan-out, or background work.
-- Read [breeze-platform.md](references/breeze-platform.md) whenever a change
-  touches shared logging, runtime switches, MySQL, Redis, Memcached, Kafka,
-  Queue, TAuth2, Vintage, Motan, or another Breeze-owned platform foundation or
-  remote-resource, runtime-configuration, or discovery lifecycle.
 - Read [data-and-memory.md](references/data-and-memory.md) for JSON, large
   payloads, serialization, buffering, compression, or allocation-sensitive paths.
 - Read [resilience-and-observability.md](references/resilience-and-observability.md)
@@ -159,21 +151,18 @@ Before claiming completion, confirm that:
 
 1. a newly created backend satisfies the mandatory Cargo workspace shape and
    workspace-owned dependency rules;
-2. every touched common service and runtime switch uses its canonical
-   `crates/breeze/<package>` boundary without a product-level raw driver or SDK
-   dependency;
-3. repository-required `cargo fmt`, build or check, test, Clippy, and other
+2. repository-required `cargo fmt`, build or check, test, Clippy, and other
    static-analysis gates pass for the affected workspace scope;
-4. normal startup and shutdown remain valid for runnable components;
-5. resource bounds, deadlines, retries, cancellation, and dependency ownership
+3. normal startup and shutdown remain valid for runnable components;
+4. resource bounds, deadlines, retries, cancellation, and dependency ownership
    are explicit on every changed runtime path;
-6. large data and hot paths do not introduce avoidable copies, unbounded
+5. large data and hot paths do not introduce avoidable copies, unbounded
    buffering, high-cardinality telemetry, or blocking work on async executors;
-7. failure and overload behavior are tested or otherwise evidenced where they
+6. failure and overload behavior are tested or otherwise evidenced where they
    can affect correctness or availability;
-8. performance claims include a benchmark, load test, production-equivalent
+7. performance claims include a benchmark, load test, production-equivalent
    observation, or an explicitly limited analytical claim;
-9. the final structure owns the responsibilities introduced by the change and
+8. the final structure owns the responsibilities introduced by the change and
    leaves unrelated legacy cleanup untouched.
 
 If required evidence is unavailable, report the assumption or remaining risk.

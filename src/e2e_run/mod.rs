@@ -63,7 +63,6 @@ pub struct E2eRunInitOptions {
     pub target_readiness_status: u16,
     pub target_startup_timeout_seconds: u64,
     pub target_request_timeout_seconds: u64,
-    pub target_max_response_bytes: usize,
     pub replay_policy: PathBuf,
     pub replay_startup_timeout_seconds: u64,
     pub pr_base: String,
@@ -195,7 +194,6 @@ pub fn initialize_standard_e2e_project_with_force(
             .checked_div(1_000)
             .unwrap_or(1)
             .max(1),
-        target_max_response_bytes: comparison.max_response_bytes,
         replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
         replay_startup_timeout_seconds: model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
         pr_base: "dev-migration".to_string(),

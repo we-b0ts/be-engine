@@ -37,8 +37,6 @@ struct DnsArgs {
     dns_ip: String,
     #[arg(long, global = true, default_value_t = 15353)]
     dns_port: u16,
-    #[arg(long = "upstream-dns", global = true, default_value = "10.10.10.10:53")]
-    upstream_dns: Vec<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -78,7 +76,6 @@ enum RuleAction {
 pub(super) struct DnsConfig {
     pub(super) dns_ip: String,
     pub(super) dns_port: u16,
-    pub(super) upstream_dns: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +103,7 @@ struct ActiveRules {
 impl Guard {
     pub(super) fn enable(dns: DnsConfig, fake_ip: FakeIpConfig) -> Result<Self> {
         let uid = fixed_user_uid()?;
+        ensure_controller_not_fixed_user(effective_uid(), uid)?;
         stderr_line(format_args!(
             "local interception owner filter enabled: {FIXED_USER} (uid {uid})"
         ));
@@ -152,7 +150,7 @@ impl Guard {
         if effective_uid() == 0 {
             return run_dns(action, &self.dns);
         }
-        let mut args = vec![
+        let args = [
             OsString::from("diagnose"),
             OsString::from("interception"),
             OsString::from("dns"),
@@ -162,10 +160,6 @@ impl Guard {
             OsString::from("--dns-port"),
             OsString::from(self.dns.dns_port.to_string()),
         ];
-        for upstream in &self.dns.upstream_dns {
-            args.push(OsString::from("--upstream-dns"));
-            args.push(OsString::from(upstream));
-        }
         run_self_as_root(&args)
     }
 
@@ -218,14 +212,6 @@ pub(super) fn run(args: InterceptionArgs) -> Result<()> {
                 &DnsConfig {
                     dns_ip: args.dns_ip,
                     dns_port: args.dns_port,
-                    upstream_dns: args
-                        .upstream_dns
-                        .iter()
-                        .flat_map(|value| value.split(','))
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(ToOwned::to_owned)
-                        .collect(),
                 },
             )
         }
@@ -288,6 +274,16 @@ pub(super) fn fixed_user_gid() -> Result<u32> {
 
 pub(super) fn effective_uid() -> u32 {
     unsafe { libc::geteuid() }
+}
+
+fn ensure_controller_not_fixed_user(controller_uid: u32, fixed_uid: u32) -> Result<()> {
+    ensure!(
+        controller_uid != fixed_uid,
+        "traffic-e2e interception controller must not run as {FIXED_USER} (uid {fixed_uid}); \
+         run Recorder or Replay as root or a developer account and reserve {FIXED_USER} for the \
+         dependency-producing Source or Target process"
+    );
+    Ok(())
 }
 
 pub(super) fn checked_status<I, S>(program: &str, args: I) -> Result<()>
@@ -418,7 +414,6 @@ mod tests {
             dns: DnsConfig {
                 dns_ip: "127.0.0.153".to_string(),
                 dns_port: 15353,
-                upstream_dns: vec!["10.10.10.10:53".to_string()],
             },
             fake_ip: FakeIpConfig {
                 fake_cidr: "198.18.0.0/15".to_string(),
@@ -442,5 +437,21 @@ mod tests {
         );
         assert!(!guard.fake_ip_up);
         assert!(!guard.dns_up);
+    }
+
+    #[test]
+    fn rejects_fixed_user_as_interception_controller() {
+        let error = ensure_controller_not_fixed_user(998, 998)
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("must not run as trp-record"));
+        assert!(error.contains("uid 998"));
+    }
+
+    #[test]
+    fn accepts_separate_interception_controller() {
+        assert!(ensure_controller_not_fixed_user(0, 998).is_ok());
+        assert!(ensure_controller_not_fixed_user(1000, 998).is_ok());
     }
 }
