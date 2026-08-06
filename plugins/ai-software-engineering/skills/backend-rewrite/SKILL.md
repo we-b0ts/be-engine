@@ -194,6 +194,20 @@ means the target CLI does not launch Breeze; the coordinator owns its shared
 lifecycle. The target CLI must not read cases, Replay sessions, expected
 responses, or reports.
 
+## Mandatory Breeze SDK Packages
+
+Implement every used Breeze or platform SDK capability—including Memcache,
+Redis, MySQL, Vintage, Motan, Auth, MCQ, Kafka, and equivalents—as its own
+workspace package at `crates/breeze/<capability>` and expose it through the
+corresponding `brz-<capability>` library. Use the canonical capability names
+`memcache`, `redis`, `mysql`, `vintage`, `motan`, `auth`, `mcq`, and `kafka`.
+`brz-auth` owns all authentication SDK implementations, including TAuth and
+TAuth2. MCQ is the internal Memcache-backed queue and belongs in `brz-mcq`.
+Product code MUST use the `brz-*` library; it MUST NOT depend directly on the
+raw SDK or driver, place the implementation in an application or domain crate,
+or combine multiple capabilities into one package. Create only packages the
+product uses.
+
 Read [configuration-compatibility.md](references/configuration-compatibility.md)
 before implementing target configuration loading or accepting
 configuration-dependent startup.

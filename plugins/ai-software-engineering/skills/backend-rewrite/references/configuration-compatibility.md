@@ -90,33 +90,29 @@ diagnostic lifecycle as non-evidence.
 Use the repository's Git-ignored `.traffic-e2e/local/boot/` only to transport
 source-proven startup inputs. The directory name, existence, and Git-ignore
 status do not establish provenance or authorize creating content. Only an
-authoritative startup configuration or SDK-owned snapshot directory that
-already exists in the source container may be copied. Copy the smallest
-complete root; never copy one selected file, a selected file set, or extracted
-keys. When that complete root exists only inside the source container, copy it
-verbatim to `.traffic-e2e/local/boot/<root-name>/` as the standard transport path and
+authoritative startup configuration that is supplied directly to the source
+loader may be copied. SDK- or loader-generated snapshots, caches, and other
+derived runtime state MUST NOT be read, copied, or used as startup input, even
+when the source SDK created them during its normal lifecycle. Copy the smallest
+complete authoritative configuration root; never copy one selected file, a
+selected file set, or extracted keys. When that complete root exists only
+inside the source container, copy it verbatim to
+`.traffic-e2e/local/boot/<root-name>/` as the standard transport path and
 continue the workflow. Preserve its supplied format and directory
 relationships; do not treat the transport mechanism as an operator-selected
 design choice.
 
-Treat an artifact as a snapshot only when the source SDK or loader creates and
-loads it during its normal lifecycle using a source-defined path and format. A
-one-off dump, export, decryption, or diagnostic artifact is not a snapshot,
-regardless of its name or location.
-
 Never create a boot input by dumping, decrypting, extracting, or translating
 source-process memory, remote responses, logs, or debug output. A constant
 present in the source repository or pinned compiled artifact may be inspected,
-decompiled when necessary, and migrated directly into target source code. For
+decompiled when necessary, and migrated directly into target source code; such
+a source-owned hard-coded constant is code behavior, not a snapshot. For
 remote-backed configuration, discovery, registry, or secrets, implement the
-source SDK's initialization, retrieval, refresh, fallback, and any
-source-defined snapshot lifecycle. If the source SDK keeps remotely obtained
-state only in memory, the target must not invent a snapshot or local cache. A
-copied source-owned snapshot is only compatible bootstrap input, not a static
-target configuration contract. Keep sensitive values out of commands and
-reports, never commit local boot inputs, and pass an allowed configuration
-root through the target's normal startup boundary without translating it into
-a target-only format.
+source SDK's genuine initialization, retrieval, refresh, and fallback path
+without reading or copying its snapshots or inventing a target-local cache.
+Keep sensitive values out of commands and reports, never commit local boot
+inputs, and pass an allowed configuration root through the target's normal
+startup boundary without translating it into a target-only format.
 
 ## Implement Compatible Loading
 
