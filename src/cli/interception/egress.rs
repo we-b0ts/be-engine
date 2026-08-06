@@ -17,12 +17,13 @@ pub(super) fn up() -> Result<()> {
 }
 
 fn try_up() -> Result<()> {
-    for program in ["iptables", "ip6tables"] {
+    for (program, loopback_cidr) in [("iptables", "127.0.0.0/8"), ("ip6tables", "::1/128")] {
         delete_output_rules(program)?;
         if !chain_exists(program)? {
             checked_status(program, ["-N", CHAIN])?;
         }
         checked_status(program, ["-F", CHAIN])?;
+        checked_status(program, loopback_destination_rule(loopback_cidr))?;
         checked_status(program, ["-A", CHAIN, "-o", "lo", "-j", "RETURN"])?;
         checked_status(program, ["-A", CHAIN, "-j", "REJECT"])?;
         checked_status(program, output_rule("-I"))?;
@@ -81,6 +82,13 @@ fn output_rule(operation: &str) -> Vec<OsString> {
     .collect()
 }
 
+fn loopback_destination_rule(cidr: &str) -> Vec<OsString> {
+    ["-A", CHAIN, "-d", cidr, "-j", "RETURN"]
+        .into_iter()
+        .map(OsString::from)
+        .collect()
+}
+
 fn delete_output_rules(program: &str) -> Result<()> {
     let output = checked_output(program, ["-S", "OUTPUT"])?;
     for line in String::from_utf8_lossy(&output.stdout)
@@ -119,6 +127,24 @@ mod tests {
             .into_iter()
             .map(OsString::from)
             .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn redirected_loopback_destinations_are_allowed_before_egress_rejection() {
+        assert_eq!(
+            loopback_destination_rule("127.0.0.0/8"),
+            ["-A", CHAIN, "-d", "127.0.0.0/8", "-j", "RETURN",]
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            loopback_destination_rule("::1/128"),
+            ["-A", CHAIN, "-d", "::1/128", "-j", "RETURN"]
+                .into_iter()
+                .map(OsString::from)
+                .collect::<Vec<_>>()
         );
     }
 }
