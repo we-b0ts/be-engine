@@ -43,9 +43,9 @@ pub struct RepositoryConfigInitResult {
     pub gitignore_updated: bool,
     pub boot_dir: PathBuf,
     pub boot_dir_created: bool,
-    pub target_start_contract: String,
-    pub target_compile_contract: &'static str,
-    pub target_stop_contract: String,
+    pub target_dockerfile: PathBuf,
+    pub target_image_tag: String,
+    pub target_runtime_contract: &'static str,
     pub rewrite_command: &'static str,
     pub preflight_command: &'static str,
     pub record_command: &'static str,
@@ -102,12 +102,11 @@ fn initialize_repository_config_with(
     };
     let (_, recorder) = render_validated_recorder_config(&recorder_options)?;
     let verification = crate::replay::render_validated_replay_policy()?;
-    let repository_name = crate::repository::directory_name(&target_root)?;
     let project = render_project_config(&E2eRunInitOptions {
         target_root: target_root.clone(),
         source_container: source.name.clone(),
         breeze_container: breeze.as_ref().map(|container| container.name.clone()),
-        project_cli: PathBuf::from(format!("scripts/{repository_name}-cli")),
+        target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
         target_boot_dir: PathBuf::from(BOOT_DIR),
         target_http_host: "127.0.0.1".to_string(),
         target_port: options.target_port,
@@ -129,6 +128,7 @@ fn initialize_repository_config_with(
         (generated[1].clone(), recorder.into_bytes()),
         (generated[2].clone(), verification.into_bytes()),
     ])?;
+    let target_image_tag = crate::target_container::image_tag(&target_root)?;
 
     Ok(RepositoryConfigInitResult {
         target_root,
@@ -142,14 +142,11 @@ fn initialize_repository_config_with(
         gitignore_updated,
         boot_dir: PathBuf::from(BOOT_DIR),
         boot_dir_created: false,
-        target_start_contract: format!(
-            "scripts/{repository_name}-cli start --e2e --boot-dir {BOOT_DIR} --port {}",
-            options.target_port
-        ),
-        target_compile_contract: "every start --e2e compiles once before launch; when the \
-                                  compile command supports --release, compile with --release \
-                                  and launch that artifact; never pass --release to start",
-        target_stop_contract: format!("scripts/{repository_name}-cli stop"),
+        target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
+        target_image_tag,
+        target_runtime_contract: "traffic-e2e builds Dockerfile.e2e, runs its OCI entrypoint as \
+                                  998:998 with /traffic-e2e/config mounted read-only, and owns \
+                                  readiness, signals, network namespace, and cleanup",
         rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
         preflight_command: "backend-rewrite init preflight",
         record_command: "traffic-e2e record --target-root .",
@@ -389,12 +386,10 @@ mod tests {
         );
         assert_eq!(result.preflight_command, "backend-rewrite init preflight");
         assert_eq!(
-            result.target_start_contract,
-            format!(
-                "scripts/{}-cli start --e2e --boot-dir {BOOT_DIR} --port 8081",
-                crate::repository::directory_name(target.path()).unwrap()
-            )
+            result.target_dockerfile,
+            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
         );
+        assert!(result.target_image_tag.ends_with("-target:cache"));
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
         assert!(target.path().join(RECORDER_CONFIG_PATH).is_file());
         assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());
@@ -406,7 +401,8 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 10"));
+        assert!(project.contains("version: 11"));
+        assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
         assert!(project.contains("ai_forbidden_root: local/ai-forbidden"));
         assert!(project.contains("boot_dir: .traffic-e2e/local/boot"));
         assert!(project.contains("container: breeze"));

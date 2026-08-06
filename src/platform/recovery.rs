@@ -27,7 +27,7 @@ pub async fn recover_managed_recording(
         run_id.len() == 14 && run_id.bytes().all(|byte| byte.is_ascii_digit()),
         "managed recording recovery requires a 14-digit run id"
     );
-    let (target_root, project) = crate::e2e_run::resolve_project(target_root)?;
+    let (target_root, _) = crate::e2e_run::resolve_project(target_root)?;
     let repo_name = normalized_repo_name(&target_root)?;
     let prefix = format!(
         "traffic-e2e-{repo_name}-{}-{run_id}-",
@@ -62,9 +62,6 @@ pub async fn recover_managed_recording(
         .filter_map(|name| container_token(name, &prefix, run_id))
         .collect::<std::collections::BTreeSet<_>>();
 
-    if operation == ManagedRecordingOperation::RecordComparison {
-        stop_target(&project.project_cli, &target_root).await?;
-    }
     if !containers.is_empty() {
         let status = tokio::time::timeout(
             RECOVERY_TIMEOUT,
@@ -105,7 +102,7 @@ fn matching_container_names(stdout: &str, prefix: &str) -> Result<Vec<String>> {
         .filter(|name| name.starts_with(prefix))
         .filter(|name| {
             name.rsplit_once('-').is_some_and(|(base, role)| {
-                matches!(role, "anchor" | "recorder" | "breeze" | "source")
+                matches!(role, "anchor" | "recorder" | "breeze" | "source" | "target")
                     && base.strip_prefix(prefix).is_some_and(|pid| {
                         !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())
                     })
@@ -151,32 +148,6 @@ fn normalized_repo_name(target_root: &Path) -> Result<String> {
         "target repository name cannot form a Docker container prefix"
     );
     Ok(normalized)
-}
-
-async fn stop_target(project_cli: &Path, target_root: &Path) -> Result<()> {
-    let mut command = Command::new(project_cli);
-    command
-        .arg("stop")
-        .current_dir(target_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped());
-    for name in [
-        "TRAFFIC_E2E_ENCRYPTION_KEY_B64",
-        "BASH_ENV",
-        "TRAFFIC_E2E_BIN",
-        "TRAFFIC_E2E_TARGET_ROOT",
-        "TRAFFIC_E2E_SOURCE_CONTAINER",
-        "TRAFFIC_E2E_BREEZE_CONTAINER",
-        "TRAFFIC_E2E_REQUEST_SOURCE",
-    ] {
-        command.env_remove(name);
-    }
-    let status = tokio::time::timeout(RECOVERY_TIMEOUT, command.status())
-        .await
-        .context("timed out while stopping the comparison target")??;
-    ensure!(status.success(), "failed to stop the comparison target");
-    Ok(())
 }
 
 fn remove_runtime_dir(path: &Path, parent: &Path) -> Result<()> {

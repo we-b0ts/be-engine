@@ -180,19 +180,28 @@ replace coordinator aggregation with bulk scripts, make target code consume
 recorded results, or modify source business behavior to manufacture evidence.
 
 The initialized target repository provides ordinary product implementation,
-source-compatible configuration, and this lifecycle boundary:
+source-compatible configuration, and `.traffic-e2e/Dockerfile.e2e`. That
+BuildKit multi-stage contract compiles the normal release target, copies it
+into the pinned traffic-e2e Rust runtime, and exposes the target binary as its
+foreground OCI entrypoint.
 
-```text
-scripts/<project>-cli start --e2e \
-  --boot-dir .traffic-e2e/local/boot --port <port>
-scripts/<project>-cli stop
-```
+The coordinator owns build caching, the immutable image ID used across Replay
+and Comparison, the run-owned network namespace, the read-only
+`.traffic-e2e/local/boot` mount at `/traffic-e2e/config`, UID/GID `998:998`,
+readiness, signals, and container cleanup. For Breeze-dependent targets, the
+coordinator also owns the shared Breeze lifecycle and required Breeze mounts.
+The target image must not read cases, Replay sessions, expected responses, or
+reports. See [project-init.md](references/project-init.md) for the exact build,
+runtime, TLS trust, logging, and isolation contract.
 
-Compile once per E2E start and launch release output when the normal compile
-supports it. Keep `stop` idempotent. For Breeze-dependent targets, `--e2e`
-means the target CLI does not launch Breeze; the coordinator owns its shared
-lifecycle. The target CLI must not read cases, Replay sessions, expected
-responses, or reports.
+The existing coordinator-owned `backend-rewrite init preflight` must prove both
+target `docker build`/one disposable `docker run` and the recording environment,
+then return one authoritative structured result. Do not create a second
+target-validation command or accept target-AI self-validation. An explicit
+mock entrypoint is allowed before product startup exists, but it must honor the
+final environment, mounts, UID, port/readiness, foreground lifetime, logging,
+and `SIGTERM` contract. Treat its result only as container integration evidence,
+never as migrated business behavior.
 
 ## Mandatory Breeze SDK Packages
 

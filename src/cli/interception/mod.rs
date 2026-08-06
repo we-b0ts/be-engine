@@ -9,6 +9,7 @@ use traffic_e2e::DEFAULT_FAKE_CIDR;
 use super::output::{stderr_line, stdout_line};
 
 mod dns;
+mod egress;
 mod fake_ip;
 
 pub(super) const FIXED_USER: &str = "trp-record";
@@ -25,8 +26,16 @@ enum InterceptionCommand {
     Dns(DnsArgs),
     /// Manage fixed-user fake-IP redirect rules.
     FakeIp(FakeIpArgs),
+    /// Manage fixed-user Replay external-egress rejection rules.
+    Egress(EgressArgs),
     /// Print the fixed interception identity.
     Identity,
+}
+
+#[derive(Debug, Clone, Args)]
+struct EgressArgs {
+    #[command(subcommand)]
+    action: RuleAction,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -92,16 +101,30 @@ pub(super) struct Guard {
     fake_ip: FakeIpConfig,
     dns_up: bool,
     fake_ip_up: bool,
+    egress_up: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 struct ActiveRules {
     dns: bool,
     fake_ip: bool,
+    egress: bool,
 }
 
 impl Guard {
     pub(super) fn enable(dns: DnsConfig, fake_ip: FakeIpConfig) -> Result<Self> {
+        Self::enable_with_egress(dns, fake_ip, false)
+    }
+
+    pub(super) fn enable_replay(dns: DnsConfig, fake_ip: FakeIpConfig) -> Result<Self> {
+        Self::enable_with_egress(dns, fake_ip, true)
+    }
+
+    fn enable_with_egress(
+        dns: DnsConfig,
+        fake_ip: FakeIpConfig,
+        reject_external_egress: bool,
+    ) -> Result<Self> {
         let uid = fixed_user_uid()?;
         ensure_controller_not_fixed_user(effective_uid(), uid)?;
         stderr_line(format_args!(
@@ -112,6 +135,7 @@ impl Guard {
             fake_ip,
             dns_up: false,
             fake_ip_up: false,
+            egress_up: false,
         };
         guard.run_root_dns(RuleAction::Up)?;
         guard.dns_up = true;
@@ -120,11 +144,23 @@ impl Guard {
             return Err(error);
         }
         guard.fake_ip_up = true;
+        if reject_external_egress && let Err(error) = guard.run_root_egress(RuleAction::Up) {
+            guard.disable();
+            return Err(error);
+        }
+        guard.egress_up = reject_external_egress;
         Ok(guard)
     }
 
     pub(super) fn disable(&mut self) {
         let active = self.take_active_rules();
+        if active.egress
+            && let Err(error) = self.run_root_egress(RuleAction::Down)
+        {
+            stderr_line(format_args!(
+                "failed to remove Replay egress guard: {error:#}"
+            ));
+        }
         if active.fake_ip
             && let Err(error) = self.run_root_fake_ip(RuleAction::Down)
         {
@@ -143,6 +179,7 @@ impl Guard {
         ActiveRules {
             dns: std::mem::take(&mut self.dns_up),
             fake_ip: std::mem::take(&mut self.fake_ip_up),
+            egress: std::mem::take(&mut self.egress_up),
         }
     }
 
@@ -182,6 +219,19 @@ impl Guard {
             OsString::from(self.fake_ip.tcp.to_string()),
             OsString::from("--udp"),
             OsString::from(self.fake_ip.udp.to_string()),
+        ];
+        run_self_as_root(&args)
+    }
+
+    fn run_root_egress(&self, action: RuleAction) -> Result<()> {
+        if effective_uid() == 0 {
+            return run_egress(action);
+        }
+        let args = [
+            OsString::from("diagnose"),
+            OsString::from("interception"),
+            OsString::from("egress"),
+            OsString::from(action.as_str()),
         ];
         run_self_as_root(&args)
     }
@@ -228,9 +278,21 @@ pub(super) fn run(args: InterceptionArgs) -> Result<()> {
                 },
             )
         }
+        InterceptionCommand::Egress(args) => {
+            require_root()?;
+            run_egress(args.action)
+        }
         InterceptionCommand::Identity => {
             stdout_line(format_args!("{FIXED_USER} {}", fixed_user_uid()?))
         }
+    }
+}
+
+fn run_egress(action: RuleAction) -> Result<()> {
+    match action {
+        RuleAction::Up => egress::up(),
+        RuleAction::Down => egress::down(),
+        RuleAction::Status => egress::status(),
     }
 }
 
@@ -424,6 +486,7 @@ mod tests {
             },
             dns_up: true,
             fake_ip_up: true,
+            egress_up: true,
         };
 
         let active = guard.take_active_rules();
@@ -432,11 +495,13 @@ mod tests {
             active,
             ActiveRules {
                 dns: true,
-                fake_ip: true
+                fake_ip: true,
+                egress: true,
             }
         );
         assert!(!guard.fake_ip_up);
         assert!(!guard.dns_up);
+        assert!(!guard.egress_up);
     }
 
     #[test]

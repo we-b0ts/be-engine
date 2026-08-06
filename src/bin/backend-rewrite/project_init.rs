@@ -43,7 +43,7 @@ pub(super) struct ProjectInitArgs {
 
 #[derive(Debug, Subcommand)]
 pub(super) enum ProjectInitCommand {
-    /// Validate the initialized source recording environment without advancing rewrite state.
+    /// Validate the target container and source recording environment without advancing state.
     Preflight(ProjectPreflightArgs),
 }
 
@@ -80,10 +80,23 @@ struct ProjectInitReport {
     gitignore_updated: bool,
     boot_dir: PathBuf,
     boot_dir_created: bool,
-    target_start_contract: String,
-    target_compile_contract: &'static str,
-    target_stop_contract: String,
+    target_dockerfile: PathBuf,
+    target_image_tag: String,
+    target_runtime_contract: &'static str,
     preflight_command: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectPreflightFailureReport {
+    status: &'static str,
+    failure: ProjectPreflightFailure,
+    managed_by: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct ProjectPreflightFailure {
+    stage: &'static str,
+    reason: String,
 }
 
 pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: bool) -> Result<()> {
@@ -97,8 +110,27 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
                     apis: args.apis,
                     per_api_case_limit: Some(args.per_api_case_limit),
                 })
-                .await?;
-                super::print_json(&result, pretty)
+                .await;
+                match result {
+                    Ok(result) => super::print_json(&result, pretty),
+                    Err(error) => {
+                        let reason = bounded_failure_reason(format!("{error:#}"));
+                        let stage = if reason.contains("target_container preflight failed") {
+                            "target_container"
+                        } else {
+                            "recording"
+                        };
+                        super::print_json(
+                            &ProjectPreflightFailureReport {
+                                status: "failed",
+                                failure: ProjectPreflightFailure { stage, reason },
+                                managed_by: "traffic-e2e",
+                            },
+                            pretty,
+                        )?;
+                        Err(error)
+                    }
+                }
             }
         };
     }
@@ -119,6 +151,21 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
     super::print_json(&ProjectInitReport::from(result), pretty)
 }
 
+fn bounded_failure_reason(mut reason: String) -> String {
+    const MAX_BYTES: usize = 2_048;
+    if reason.len() <= MAX_BYTES {
+        return reason;
+    }
+    let suffix = "… [truncated]";
+    let mut end = MAX_BYTES - suffix.len();
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    reason.truncate(end);
+    reason.push_str(suffix);
+    reason
+}
+
 impl From<RepositoryConfigInitResult> for ProjectInitReport {
     fn from(result: RepositoryConfigInitResult) -> Self {
         Self {
@@ -131,9 +178,9 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
             gitignore_updated: result.gitignore_updated,
             boot_dir: result.boot_dir,
             boot_dir_created: result.boot_dir_created,
-            target_start_contract: result.target_start_contract,
-            target_compile_contract: result.target_compile_contract,
-            target_stop_contract: result.target_stop_contract,
+            target_dockerfile: result.target_dockerfile,
+            target_image_tag: result.target_image_tag,
+            target_runtime_contract: result.target_runtime_contract,
             preflight_command: result.preflight_command,
         }
     }

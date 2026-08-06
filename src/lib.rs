@@ -31,6 +31,7 @@ mod replay;
 mod repository;
 mod request_headers;
 mod rewrite;
+mod target_container;
 mod tcp_gateway;
 mod tls;
 mod udp_gateway;
@@ -118,7 +119,8 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use platform::{
     ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
-    ManagedRecordingOptions, ManagedRecordingPreflightOptions, ManagedRecordingPreflightResult,
+    ManagedRecordingOptions, ManagedRecordingPreflightOptions,
+    ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
     ManagedRecordingRecoveryResult, ManagedRecordingResult, drive_managed_recording_input,
     recover_managed_recording, run_managed_recording, run_managed_recording_preflight,
 };
@@ -177,6 +179,7 @@ pub use rewrite::{
     request_rewrite_recording, route_rewrite, start_rewrite_recording, status_rewrite,
     status_rewrite_for_api, verify_rewrite_repair,
 };
+pub use target_container::{TargetContainerChecks, TargetContainerPreflightResult, TargetImage};
 pub use tls::MitmCa;
 
 type ProxyClient = Client<HttpsConnector<HttpConnector>, http_body_util::Full<bytes::Bytes>>;

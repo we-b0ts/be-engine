@@ -40,11 +40,11 @@ implemented now. It does not permit narrowing the source loader's external
 input unit, file selection, layering, merge, override, validation, or refresh
 contract.
 
-A project CLI or startup script may pass the configuration root and
-source-defined selectors to the target. It MUST NOT open configuration files,
-extract selected keys, translate them into target-only environment variables,
-hard-code their values, or implement parsing, merge, defaulting, or validation
-on behalf of product code.
+The target container entrypoint receives the mounted configuration root through
+`TRAFFIC_E2E_CONFIG_DIR`. It MUST NOT open configuration files, extract selected
+keys, translate them into target-only environment variables, hard-code their
+values, or implement parsing, merge, defaulting, or validation on behalf of
+product code. The normal target process owns all configuration loading.
 
 Only a literal proven to be consumed as a constant or default by the same
 source runtime code path may become a target code constant or default. Keep
@@ -54,13 +54,12 @@ arguments, configuration-driven with its environment-specific resolution.
 Never copy one environment's resolved value into target code as a constant,
 default, or fallback.
 
-Expose each source configuration directory through a target startup option
-named `--<root-name>-dir`, and default it to the directory's exact source-
-container path. When local execution uses a copied boot input, pass that option
-explicitly with `.traffic-e2e/local/boot/<root-name>/`; keep configuration loading in
-product code. For example, source `/data1/authconfs` becomes
-`--authconfs-dir`, defaults to `/data1/authconfs`, and local E2E startup passes
-`--authconfs-dir .traffic-e2e/local/boot/authconfs`.
+Preserve each source configuration directory as a complete subtree below the
+mounted configuration root and keep loading in product code. For example, a
+source root `/data1/authconfs` transported for local E2E may be placed at
+`.traffic-e2e/local/boot/data1/authconfs` and is visible to the container at
+`/traffic-e2e/config/data1/authconfs`. The target loader resolves the path from
+`TRAFFIC_E2E_CONFIG_DIR`; the OCI entrypoint does not translate its contents.
 
 ## Discover The Source Loader
 
@@ -138,8 +137,8 @@ Before accepting target startup or configuration-dependent behavior:
 3. For every behavior-driving source placeholder or configuration key, confirm
    that the target loader supplies it to the corresponding consumer; reject a
    resolved environment value used as a target constant, default, or fallback.
-4. Confirm the project CLI transports only configuration paths and
-   source-defined selectors; reject launcher-owned key extraction or
+4. Confirm the OCI entrypoint transports only the configuration root and
+   source-defined selectors; reject entrypoint-owned key extraction or
    translation.
 5. Start the target with the same unmodified authoritative configuration
    supplied to the source environment.

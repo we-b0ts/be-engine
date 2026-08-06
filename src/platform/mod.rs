@@ -17,7 +17,10 @@ mod preflight;
 mod recording_input;
 mod recovery;
 
-pub use preflight::{ManagedRecordingPreflightOptions, ManagedRecordingPreflightResult};
+pub use preflight::{
+    ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
+    ManagedRecordingPreflightResult,
+};
 pub use recording_input::{
     ManagedRecordingInputOptions, ManagedRecordingInputResult, drive_managed_recording_input,
 };
@@ -138,9 +141,15 @@ pub async fn run_managed_recording(
 pub async fn run_managed_recording_preflight(
     options: ManagedRecordingPreflightOptions,
 ) -> Result<ManagedRecordingPreflightResult> {
+    let (target_root, project) = resolve_project(&options.target_root)?;
+    let target_container = crate::target_container::run_preflight(
+        crate::target_container::TargetContainerConfig::from_project(target_root.clone(), &project),
+    )
+    .await
+    .context("target_container preflight failed")?;
     let runtime = run_managed_runtime(
         ManagedRecordingOptions {
-            target_root: options.target_root,
+            target_root,
             operation: ManagedRecordingOperation::Record,
             run_id: None,
             duration_seconds: options.duration_seconds,
@@ -156,13 +165,17 @@ pub async fn run_managed_recording_preflight(
     let evidence = preflight::validate(&runtime.manifest)?;
     Ok(ManagedRecordingPreflightResult {
         status: "passed",
-        run_id: runtime.run_id,
-        target_root: runtime.target_root,
-        source_container: runtime.source_container,
-        breeze_container: runtime.breeze_container,
-        manifest: runtime.manifest,
-        published_cases: evidence.published_cases,
-        https_interception_verified: evidence.https_interception_verified,
+        target_container,
+        recording: ManagedRecordingPreflightRecordingResult {
+            status: "passed",
+            run_id: runtime.run_id,
+            target_root: runtime.target_root,
+            source_container: runtime.source_container,
+            breeze_container: runtime.breeze_container,
+            manifest: runtime.manifest,
+            published_cases: evidence.published_cases,
+            https_interception_verified: evidence.https_interception_verified,
+        },
         managed_by: "traffic-e2e",
     })
 }
@@ -176,12 +189,22 @@ async fn run_managed_runtime(
         .run_id
         .unwrap_or_else(|| Utc::now().format("%Y%m%d%H%M%S").to_string());
     let manifest = runtime_operation.manifest(&target_root, &run_id);
-    ensure!(
-        config.project_cli.is_file(),
-        "project CLI does not exist: {}",
-        config.project_cli.display()
-    );
-    ensure_executable(&config.project_cli, "project CLI")?;
+    let target_image = if runtime_operation
+        == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
+    {
+        crate::target_container::prepare_boot_dir(&config.target_boot_dir).await?;
+        Some(
+            crate::target_container::build_image(
+                &crate::target_container::TargetContainerConfig::from_project(
+                    target_root.clone(),
+                    &config,
+                ),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let recorder_config = &config.recorder_config;
     ensure!(
         recorder_config.is_file(),
@@ -228,7 +251,6 @@ async fn run_managed_runtime(
         .env("TRAFFIC_E2E_BIN", executable)
         .env("TRAFFIC_E2E_TARGET_ROOT", &target_root)
         .env("TRAFFIC_E2E_SOURCE_CONTAINER", &config.source_container)
-        .env("TRAFFIC_E2E_PROJECT_CLI", &config.project_cli)
         .env("TRAFFIC_E2E_TARGET_BOOT_DIR", &config.target_boot_dir)
         .env("TRAFFIC_E2E_TARGET_ORIGIN", &config.target_http_origin)
         .env("TRAFFIC_E2E_TARGET_PORT", config.target_port.to_string())
@@ -263,6 +285,9 @@ async fn run_managed_runtime(
         .arg(&run_id)
         .arg("--brz-no-fallback")
         .arg(options.breeze_no_fallback.to_string());
+    if let Some(image) = target_image {
+        command.env("TRAFFIC_E2E_TARGET_IMAGE_ID", image.id);
+    }
     if let Some(request_source) = request_source {
         command.env("TRAFFIC_E2E_REQUEST_SOURCE", request_source);
     }
@@ -417,9 +442,12 @@ mod tests {
             .unwrap();
 
         assert!(status.success());
-        assert!(MANAGER.contains(
-            "start --e2e --boot-dir \"$TRAFFIC_E2E_TARGET_BOOT_DIR\" --port \"$TRAFFIC_E2E_TARGET_PORT\""
-        ));
+        assert!(MANAGER.contains("start_target()"));
+        assert!(MANAGER.contains("--network \"container:${anchor_name}\" --user 998:998"));
+        assert!(MANAGER.contains("TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config"));
+        assert!(MANAGER.contains("\"$TRAFFIC_E2E_TARGET_IMAGE_ID\" >/dev/null"));
+        assert!(!MANAGER.contains("TRAFFIC_E2E_PROJECT_CLI"));
+        assert!(!MANAGER.contains("start --e2e"));
         assert!(MANAGER.contains(
             "adapter_dockerfile=\"$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording\""
         ));

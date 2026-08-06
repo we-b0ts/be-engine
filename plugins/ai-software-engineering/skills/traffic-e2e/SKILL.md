@@ -24,8 +24,10 @@ do not emulate that coordinator by composing low-level engine commands.
 - Replay must exercise genuine target clients and normal target behavior.
 - traffic-e2e owns Recorder/Replay, target process orchestration, HTTP request
   execution, assertions, aggregation, comparison, and generated local state.
-- The target repository supplies only `scripts/<project>-cli start ... --port
-  <port>` and `stop`; see [target-integration.md](references/target-integration.md).
+- The target repository supplies `.traffic-e2e/Dockerfile.e2e`; traffic-e2e
+  owns its build, immutable image selection, lifecycle, namespace, readiness,
+  signals, and cleanup. See
+  [target-integration.md](references/target-integration.md).
 - The engine reports observable cache-related facts but does not diagnose or
   repair target cache semantics.
 

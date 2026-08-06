@@ -12,7 +12,7 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-const CONFIG_VERSION: u32 = 10;
+const CONFIG_VERSION: u32 = 11;
 const DEFAULT_AI_FORBIDDEN_ROOT: &str = crate::internal_runtime::TRAFFIC_E2E_RELATIVE_ROOT;
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -124,7 +124,7 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
             .clone()
             .map(|container| BreezeProjectConfig { container }),
         target: TargetProjectConfig {
-            cli: options.project_cli.clone(),
+            dockerfile: options.target_dockerfile.clone(),
             boot_dir: options.target_boot_dir.clone(),
             http_host: options.target_http_host.clone(),
             port: options.target_port,
@@ -162,11 +162,7 @@ pub(super) fn resolve_layout(
     explicit_run_key: Option<&str>,
 ) -> Result<(ResolvedProjectConfig, RunLayout)> {
     let (target_root, resolved) = resolve_project(target_root)?;
-    ensure!(
-        resolved.project_cli.is_file(),
-        "project CLI does not exist: {}",
-        resolved.project_cli.display()
-    );
+    require_regular_file(&resolved.target_dockerfile, "target Dockerfile")?;
     ensure!(
         resolved.recorder_config.is_file(),
         "recorder config does not exist: {}",
@@ -223,8 +219,8 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     Ok((
         target_root.clone(),
         ResolvedProjectConfig {
-            project_cli: resolve_under(&target_root, &config.target.cli),
-            target_boot_dir: config.target.boot_dir,
+            target_dockerfile: resolve_under(&target_root, &config.target.dockerfile),
+            target_boot_dir: resolve_under(&target_root, &config.target.boot_dir),
             target_http_origin: format!(
                 "http://{}:{}",
                 config.target.http_host, config.target.port
@@ -315,8 +311,12 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         );
     }
     ensure!(
-        !config.target.cli.as_os_str().is_empty(),
-        "target.cli must not be empty"
+        !config.target.dockerfile.as_os_str().is_empty(),
+        "target.dockerfile must not be empty"
+    );
+    ensure!(
+        config.target.dockerfile == Path::new(".traffic-e2e/Dockerfile.e2e"),
+        "target.dockerfile must be .traffic-e2e/Dockerfile.e2e"
     );
     ensure!(
         !config.target.boot_dir.as_os_str().is_empty(),
@@ -371,6 +371,17 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
     ensure!(
         !config.recording.rule.trim().is_empty(),
         "recording.rule must not be empty"
+    );
+    Ok(())
+}
+
+fn require_regular_file(path: &Path, label: &str) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "{label} must be a regular file and not a symlink: {}",
+        path.display()
     );
     Ok(())
 }
@@ -435,14 +446,17 @@ mod tests {
                 .success()
         );
         fs::write(root.join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
-        fs::create_dir_all(root.join("scripts")).unwrap();
-        let project_cli = root.join("scripts/project-cli");
-        fs::write(&project_cli, "#!/usr/bin/env bash\nexit 0\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&project_cli, fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
+        fs::write(
+            root.join(".traffic-e2e/Dockerfile.e2e"),
+            "FROM scratch\nUSER 998:998\nENTRYPOINT [\"/target\"]\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join(".dockerignore"),
+            ".git/\n.traffic-e2e/local/\ntarget/\n",
+        )
+        .unwrap();
         fs::create_dir_all(root.join("config")).unwrap();
         fs::write(
             root.join("config/replay.yaml"),
@@ -498,7 +512,7 @@ mod tests {
             target_root: target_root.to_path_buf(),
             source_container: "source-app".to_string(),
             breeze_container: Some("breeze".to_string()),
-            project_cli: PathBuf::from("scripts/project-cli"),
+            target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
             target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
             target_http_host: "127.0.0.1".to_string(),
             target_port: 8081,
@@ -518,8 +532,6 @@ mod tests {
     #[test]
     fn initialize_generates_valid_project_config() {
         let target = target();
-        fs::remove_file(target.path().join("scripts/project-cli")).unwrap();
-
         let result = initialize(options(target.path())).unwrap();
 
         assert!(!result.replaced);
@@ -532,7 +544,10 @@ mod tests {
         let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
         assert_eq!(config.version, CONFIG_VERSION);
         assert_eq!(config.source.container, "source-app");
-        assert_eq!(config.target.cli, PathBuf::from("scripts/project-cli"));
+        assert_eq!(
+            config.target.dockerfile,
+            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
+        );
         assert_eq!(config.replay.policy, PathBuf::from("config/replay.yaml"));
         assert_eq!(
             config.replay.startup_timeout_seconds,
@@ -575,7 +590,6 @@ mod tests {
                 .unwrap()
                 .success()
         );
-        let repository_name = crate::repository::directory_name(root).unwrap();
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(
             root.join(".traffic-e2e/verification.yaml"),
@@ -602,10 +616,10 @@ mod tests {
         let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
 
         assert_eq!(
-            config.target.cli,
-            PathBuf::from(format!("scripts/{repository_name}-cli"))
+            config.target.dockerfile,
+            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
         );
-        assert!(!root.join(&config.target.cli).exists());
+        assert!(root.join(&config.target.dockerfile).is_file());
         assert_eq!(
             config.replay.policy,
             PathBuf::from(".traffic-e2e/verification.yaml")
@@ -742,7 +756,7 @@ mod tests {
         fs::write(
             target.path().join(".traffic-e2e/project.yaml"),
             "version: 2\n\
-             project_cli: scripts/project-cli\n\
+             target_image: legacy\n\
              replay_policy: config/replay.yaml\n\
              ai_forbidden_root: .ai-forbidden\n",
         )
