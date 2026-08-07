@@ -52,7 +52,7 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v12 contains an `action` object with exactly `kind`, `summary`,
+Response schema v13 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read facts only from `action.details` and
 execute only command roles actually present under `action.commands`; never

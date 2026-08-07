@@ -441,6 +441,7 @@ mod tests {
             summary: "replay capability gap".to_string(),
             pointer_pattern: None,
             representative: None,
+            response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: "target".to_string(),
             attempt: 1,

@@ -18,6 +18,7 @@ pub(super) const ASSERTION_REPORT_VERSION: u32 = 2;
 pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
+pub(super) const MAX_RESPONSE_DIFFERENCE_INDEX: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -195,6 +196,8 @@ pub(super) struct CaseExecution {
 pub(super) struct ResponseAssertionSummary {
     pub passed: bool,
     pub difference_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub difference_index: Vec<ResponseDifference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub representative_difference: Option<ResponseDifference>,
     pub detail_report: PathBuf,

@@ -752,8 +752,10 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
                 "comparison has {} candidate difference(s) and {} inconclusive case(s)",
                 report.counts.failed, report.counts.inconclusive
             ),
-            pointer_pattern: (pointer != "<comparison>").then(|| issue::normalize_pointer(pointer)),
+            pointer_pattern: (pointer != "<comparison>")
+                .then(|| crate::e2e_run::response_pointer_pattern(pointer)),
             representative: None,
+            response_diagnosis: None,
             possible_causes: vec![
                 "target_behavior".to_string(),
                 "intentional_source_nondeterminism".to_string(),
@@ -788,8 +790,14 @@ mod tests {
 
     #[test]
     fn pointer_patterns_replace_only_array_indices() {
-        assert_eq!(issue::normalize_pointer("/users/17/id"), "/users/*/id");
-        assert_eq!(issue::normalize_pointer("/v2/created_at"), "/v2/created_at");
+        assert_eq!(
+            crate::e2e_run::response_pointer_pattern("/users/17/id"),
+            "/users/*/id"
+        );
+        assert_eq!(
+            crate::e2e_run::response_pointer_pattern("/v2/created_at"),
+            "/v2/created_at"
+        );
     }
 
     #[test]
@@ -797,7 +805,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(12)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(13)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),
@@ -920,7 +928,13 @@ mod tests {
             },
             diagnosis: crate::E2eDiagnosis {
                 counts,
-                failure_clusters: Vec::new(),
+                response_differences: crate::E2eResponseDifferenceDiagnosis {
+                    total_differences: 0,
+                    indexed_differences: 0,
+                    omitted_differences: 0,
+                    failure_clusters: Vec::new(),
+                    omitted_failure_clusters: 0,
+                },
                 representative: None,
                 lifecycle_errors: Vec::new(),
             },

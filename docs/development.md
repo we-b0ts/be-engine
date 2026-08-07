@@ -922,7 +922,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v12 always returns `action.kind`, `action.summary`,
+Rewrite action schema v13 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -981,7 +981,7 @@ mandatory. `terminal_allowed` is false until every inventory item has both
 passing E2E and comparison evidence for the same target content fingerprint.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v12 returns `wait_required` with
+lease. When another API owns it, action schema v13 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1030,7 +1030,14 @@ describes the latest completed attempt, so a repeated `next` with no target
 change returns the same evidence without claiming another replay occurred.
 
 Only use returned `backend-rewrite evidence` query IDs for coordinator gate and
-aggregate facts. The `representatives` result includes the representative case
+aggregate facts. For a response issue, `action.details.response_diagnosis`
+contains exact total/indexed/omitted difference counts plus at most 20 clusters
+grouped by normalized Pointer pattern and difference kind. Each cluster reports
+affected cases, total occurrences, and one exact representative. The first
+evidence command is `case_response_differences`; it returns at most 20 ordered
+differences from that representative case with bounded expected/actual values.
+When more are available it returns the next opaque evidence command instead of
+an open cursor. The `representatives` result includes the representative case
 ID, its exact immutable standard or comparison `case_dir`, and a structured
 response difference. A focused E2E difference contains expected and actual
 observations; a comparison difference contains source-before, candidate, and

@@ -112,18 +112,19 @@ pub use config::{
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
 pub use e2e_run::{
-    E2eApiRunResult, E2eDependencyCorrelation, E2eDependencyDifference, E2eDependencyEndpoint,
-    E2eDependencyGate, E2eDependencyObservation, E2eDependencyRepresentative, E2eDiagnosis,
-    E2eDiagnosisCounts, E2eDirtyCluster, E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus,
-    E2eReplayGate, E2eRepresentativeDifference, E2eResponseGate, E2eResponseRuleEvidence,
-    E2eRunContext, E2eRunInitOptions, E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult,
-    E2eRunResult, E2eRunStatus, E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint,
-    E2eSourceValueCount, E2eSourceVariation, E2eValueObservation, E2eValuePresence,
-    E2eVerificationGates, abort_e2e_run, initialize_e2e_run, initialize_standard_e2e_project,
-    initialize_standard_e2e_project_with_force, prepare_e2e_run, query_e2e_dependency_correlation,
-    query_e2e_dirty_counts, query_e2e_source_variation, recover_e2e_run,
-    resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence, run_e2e_api,
-    run_e2e_round, status_e2e_run,
+    E2eApiRunResult, E2eCaseResponseDifference, E2eCaseResponseDifferences,
+    E2eDependencyCorrelation, E2eDependencyDifference, E2eDependencyEndpoint, E2eDependencyGate,
+    E2eDependencyObservation, E2eDependencyRepresentative, E2eDiagnosis, E2eDiagnosisCounts,
+    E2eDirtyCluster, E2eDirtyCounts, E2eFailureCluster, E2eFocusedApiStatus, E2eReplayGate,
+    E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
+    E2eResponseRuleEvidence, E2eRunContext, E2eRunInitOptions, E2eRunInitResult,
+    E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus, E2eSourcePreReadiness,
+    E2eSourcePreReadinessEndpoint, E2eSourceValueCount, E2eSourceVariation, E2eValueObservation,
+    E2eValuePresence, E2eVerificationGates, abort_e2e_run, initialize_e2e_run,
+    initialize_standard_e2e_project, initialize_standard_e2e_project_with_force, prepare_e2e_run,
+    query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
+    query_e2e_source_variation, recover_e2e_run, resolve_e2e_response_rule_evidence,
+    resolve_single_e2e_response_rule_evidence, run_e2e_api, run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;

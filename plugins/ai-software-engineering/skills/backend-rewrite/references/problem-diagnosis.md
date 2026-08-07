@@ -46,6 +46,12 @@ real differences until source evidence proves otherwise.
 
 Run only query IDs returned by `action.commands.evidence`:
 
+- `case_response_differences`: for a response issue, the first evidence command
+  returns one fixed-size page of every structured response difference in the
+  representative case, including normalized Pointer patterns and explicit
+  expected/actual value presence. Execute its first page before changing target
+  code. When more differences are needed to distinguish a coherent cause,
+  execute only the exact `facts.next_page.command`; never construct a cursor;
 - `representatives`: the representative case ID, exact immutable standard or
   comparison `case_dir`, and bounded structured response or dependency
   difference; it does not prove the cause. For response, dependency, and
@@ -99,6 +105,13 @@ startup jobs, warmup, and local-cache hypotheses. Do not repair, suppress, or
 re-record traffic merely because the same endpoint appears during startup.
 
 ## Response Issues
+
+Execute the returned `case_response_differences` first page before changing
+target code. Use the API-level `response_diagnosis.failure_clusters` to select
+the largest coherent cluster, and inspect additional returned pages only when
+the first page does not distinguish its cause. Do not interpret matching
+Pointer patterns alone as proof that the differences share one implementation
+cause.
 
 Use the recorded request, expected response, dependencies, and structured
 response difference from the representative case to trace response

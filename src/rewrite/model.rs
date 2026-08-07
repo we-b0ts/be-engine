@@ -8,10 +8,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::RedisKeyPatternConfig;
-use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
+use crate::{
+    E2eDiagnosisCounts, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis,
+    E2eVerificationGates,
+};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 12;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 13;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -185,6 +188,8 @@ pub struct RewriteIssue {
     pub pointer_pattern: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub representative: Option<E2eRepresentativeDifference>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_diagnosis: Option<E2eResponseDifferenceDiagnosis>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub possible_causes: Vec<String>,
     pub observed_target_fingerprint: String,
@@ -857,6 +862,20 @@ mod tests {
                 summary: "response status differs".to_string(),
                 pointer_pattern: Some("/status".to_string()),
                 representative: None,
+                response_diagnosis: Some(E2eResponseDifferenceDiagnosis {
+                    total_differences: 7,
+                    indexed_differences: 7,
+                    omitted_differences: 0,
+                    failure_clusters: vec![crate::E2eFailureCluster {
+                        pointer_pattern: "/users/*/tree".to_string(),
+                        difference_kind: crate::ResponseDifferenceKind::MissingActual,
+                        affected_cases: 3,
+                        occurrences: 5,
+                        representative_case_id: "case-1".to_string(),
+                        representative_pointer: "/users/0/tree".to_string(),
+                    }],
+                    omitted_failure_clusters: 0,
+                }),
                 possible_causes: vec!["target behavior differs".to_string()],
                 observed_target_fingerprint: "fnv1a64:target".to_string(),
                 attempt: 2,
@@ -899,6 +918,14 @@ mod tests {
             Some(&serde_json::json!("target behavior differs"))
         );
         assert_eq!(
+            value.pointer("/details/response_diagnosis/total_differences"),
+            Some(&serde_json::json!(7))
+        );
+        assert_eq!(
+            value.pointer("/details/response_diagnosis/failure_clusters/0/affected_cases"),
+            Some(&serde_json::json!(3))
+        );
+        assert_eq!(
             value.pointer("/commands/evidence/0/query_id"),
             Some(&serde_json::json!("representatives"))
         );
@@ -926,7 +953,7 @@ mod tests {
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(12)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(13)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }

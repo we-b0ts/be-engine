@@ -554,6 +554,7 @@ mod tests {
             summary: "counter response differs".to_string(),
             pointer_pattern: None,
             representative: None,
+            response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: state.target_fingerprint.clone().unwrap(),
             attempt: 2,

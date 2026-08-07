@@ -38,7 +38,7 @@ command returned by the current action. It waits only for:
 
 ## Action Handling
 
-The `action` object in response schema v12 has one stable shape for every kind:
+The `action` object in response schema v13 has one stable shape for every kind:
 
 ```json
 {
@@ -53,7 +53,7 @@ The `action` object in response schema v12 has one stable shape for every kind:
 location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
-`next` command. Response schema v12 is independent of target repository
+`next` command. Response schema v13 is independent of target repository
 configuration versions. It retains the mandatory implementation-worker
 dispatch confirmation gate, recorder-capture refresh state, and integrated
 target repository quality gates.
@@ -233,12 +233,21 @@ is required; the AI does not choose that transition itself.
 `action.details` contains one bounded issue, one representative when available,
 possible causes, and the mandatory dedicated-worker gate defined in
 [implementation-worker-coordination.md](implementation-worker-coordination.md).
+For a response issue it also contains `response_diagnosis`: exact
+total/indexed/omitted difference counts and at most 20 clusters grouped by
+normalized Pointer pattern and difference kind. A cluster reports affected
+cases, occurrences, and one exact representative; matching patterns remain
+observable grouping rather than proof of one cause.
 Confirm `dispatch_required` or `resume_required` with the runtime handle before
 any later `next`; a refused cross-API selection returns the same structured
 confirmation action.
 `action.commands.evidence` contains the worker's permitted evidence queries,
 while `action.commands.acceptance` is the orchestrator's only acceptance
 transition. Traffic facts come from those queries and immutable artifacts.
+For a response issue, execute the first `case_response_differences` command
+before changing target code. It returns at most 20 ordered differences and an
+exact opaque `facts.next_page.command` when more remain; never construct a page
+cursor.
 `representatives` returns the
 exact standard or comparison case directory and structured response difference;
 inspect that case first and other artifact cases as needed. For dependency

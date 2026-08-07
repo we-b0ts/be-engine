@@ -14,12 +14,26 @@ pub(super) fn from_e2e(
         E2eResponseGate::Nonpassing => {
             let representative = result.diagnosis.representative.as_ref();
             let pointer = representative.map(|value| value.pointer.as_str());
+            let differences = &result.diagnosis.response_differences;
+            let observed_clusters = differences
+                .failure_clusters
+                .len()
+                .saturating_add(differences.omitted_failure_clusters);
+            let cluster_scope = if differences.omitted_differences == 0 {
+                "clusters"
+            } else {
+                "observed clusters"
+            };
             (
                 RewriteIssueKind::Response,
                 RewriteIssueOwner::TargetCode,
                 format!(
-                    "{} of {} executed cases have response mismatches",
-                    result.diagnosis.counts.response_nonpassing, result.diagnosis.counts.executed
+                    "{} of {} executed cases have {} response differences across {} {}",
+                    result.diagnosis.counts.response_nonpassing,
+                    result.diagnosis.counts.executed,
+                    differences.total_differences,
+                    observed_clusters,
+                    cluster_scope,
                 ),
                 pointer,
                 response_possible_causes(representative.map(|value| value.difference_kind)),
@@ -70,8 +84,10 @@ pub(super) fn from_e2e(
         kind,
         owner,
         summary,
-        pointer_pattern: pointer.map(normalize_pointer),
+        pointer_pattern: pointer.map(crate::e2e_run::response_pointer_pattern),
         representative: result.diagnosis.representative.clone(),
+        response_diagnosis: (kind == RewriteIssueKind::Response)
+            .then(|| result.diagnosis.response_differences.clone()),
         possible_causes,
         observed_target_fingerprint: target_fingerprint,
         attempt: result.attempt,
@@ -113,27 +129,15 @@ pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> 
     causes.iter().map(|cause| (*cause).to_string()).collect()
 }
 
-pub(super) fn normalize_pointer(pointer: &str) -> String {
-    if !pointer.starts_with('/') {
-        return pointer.to_string();
-    }
-    pointer
-        .split('/')
-        .map(|token| {
-            if !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_digit()) {
-                "*"
-            } else {
-                token
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
 pub(super) fn id(api: &str, kind: &str, pointer: &str) -> String {
     format!(
         "issue-{}",
-        fingerprint::id(&[api, kind, &normalize_pointer(pointer)]).trim_start_matches("fnv1a64:")
+        fingerprint::id(&[
+            api,
+            kind,
+            &crate::e2e_run::response_pointer_pattern(pointer)
+        ])
+        .trim_start_matches("fnv1a64:")
     )
 }
 
