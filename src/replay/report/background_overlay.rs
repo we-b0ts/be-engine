@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
+use crate::config::background_dependencies::redis_rule_matches;
 use crate::config::{AppConfig, BackgroundDependencyRuleConfig};
 use crate::recorder::background::BackgroundDependencyMatcher;
 
@@ -128,43 +129,7 @@ fn matching_rule<'a>(
 ) -> Option<&'a str> {
     rules.iter().find_map(|rule| {
         let matches = match rule {
-            BackgroundDependencyRuleConfig::Redis {
-                ports,
-                command,
-                keys,
-                key_prefix,
-                key_suffix,
-                ..
-            } => {
-                event.get("event_type").and_then(Value::as_str) == Some("redis_exchange")
-                    && !event
-                        .get("session_setup")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    && event.get("replay_safe").and_then(Value::as_bool) == Some(true)
-                    && event
-                        .get("target_port")
-                        .and_then(Value::as_u64)
-                        .and_then(|port| u16::try_from(port).ok())
-                        .is_some_and(|port| ports.contains(&port))
-                    && event
-                        .get("command")
-                        .and_then(Value::as_str)
-                        .is_some_and(|actual| actual.eq_ignore_ascii_case(command))
-                    && event
-                        .get("args")
-                        .and_then(Value::as_array)
-                        .and_then(|args| args.first())
-                        .and_then(decode_capture)
-                        .is_some_and(|key| {
-                            if keys.is_empty() {
-                                key.starts_with(key_prefix.as_bytes())
-                                    && key.ends_with(key_suffix.as_bytes())
-                            } else {
-                                keys.iter().any(|candidate| candidate.as_bytes() == key)
-                            }
-                        })
-            }
+            BackgroundDependencyRuleConfig::Redis { .. } => redis_event_matches_rule(event, rule),
             BackgroundDependencyRuleConfig::Memcached {
                 name,
                 command,
@@ -218,6 +183,36 @@ fn matching_rule<'a>(
         };
         matches.then(|| rule.name())
     })
+}
+
+fn redis_event_matches_rule(event: &Value, rule: &BackgroundDependencyRuleConfig) -> bool {
+    if event.get("event_type").and_then(Value::as_str) != Some("redis_exchange")
+        || event
+            .get("session_setup")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        || event.get("replay_safe").and_then(Value::as_bool) != Some(true)
+    {
+        return false;
+    }
+    let Some(target_port) = event
+        .get("target_port")
+        .and_then(Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+    else {
+        return false;
+    };
+    let Some(command) = event.get("command").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(args) = event
+        .get("args")
+        .and_then(Value::as_array)
+        .and_then(|args| args.iter().map(decode_capture).collect::<Option<Vec<_>>>())
+    else {
+        return false;
+    };
+    redis_rule_matches(rule, target_port, command, &args)
 }
 
 fn dependency_protocol(value: &Value) -> Option<&'static str> {
