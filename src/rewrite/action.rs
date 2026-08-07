@@ -9,7 +9,9 @@ use super::model::{
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
     RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
 };
-use super::{fingerprint, inventory, recorder_capture, recording, recording_action, worker};
+use super::{
+    fingerprint, inventory, recorder_capture, recording, recording_action, repair, worker,
+};
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
     envelope(state, state_action(target_root, state))
@@ -214,9 +216,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             Some(&state.api),
             format!("continue with the next recorded API {}", state.api),
         ),
-        RewritePhase::ImplementationRequired => {
-            worker::implementation_action(target_root, state, None)
-        }
+        RewritePhase::ImplementationRequired => worker::state_action(target_root, state),
         RewritePhase::AwaitingRecordingRefresh => {
             recorder_capture::pending_refresh_action(target_root, state)
         }
@@ -242,12 +242,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                 .clone()
                 .expect("system repair phase requires an issue"),
             route: state.route.clone(),
-            acceptance: state.route.as_ref().and_then(|route| {
-                route
-                    .repair_id
-                    .as_deref()
-                    .map(|repair_id| repair_verify_command(target_root, repair_id))
-            }),
+            acceptance: repair::pending_command(target_root, state),
         },
         RewritePhase::SliceComplete => RewriteAction::Complete {
             summary: if state

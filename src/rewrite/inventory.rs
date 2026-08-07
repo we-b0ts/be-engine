@@ -134,10 +134,8 @@ pub(super) fn activate_requested(
         "API {requested} is not available for concurrent AI work"
     );
     if state.api_inventory[requested_index].status == RewriteApiStatus::Pending {
-        let retained_work_items = state.parked_slices.len()
-            + usize::from(state.phase == RewritePhase::ImplementationRequired);
         ensure!(
-            retained_work_items < MAX_CONCURRENT_AI_WORK_ITEMS,
+            concurrent_ai_capacity_available(state),
             "concurrent AI work item limit of {MAX_CONCURRENT_AI_WORK_ITEMS} was reached"
         );
     }
@@ -558,6 +556,23 @@ pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
             .and_then(|index| state.api_inventory.get(index))
             .map(|item| item.api.clone()),
     }
+}
+
+pub(super) fn next_pending_api_for_concurrent_work(state: &RewriteState) -> Option<&str> {
+    if !concurrent_ai_capacity_available(state) {
+        return None;
+    }
+    state
+        .api_inventory
+        .iter()
+        .find(|item| item.status == RewriteApiStatus::Pending)
+        .map(|item| item.api.as_str())
+}
+
+fn concurrent_ai_capacity_available(state: &RewriteState) -> bool {
+    let retained_work_items = state.parked_slices.len()
+        + usize::from(state.phase == RewritePhase::ImplementationRequired);
+    retained_work_items < MAX_CONCURRENT_AI_WORK_ITEMS
 }
 
 pub(super) fn details(state: &RewriteState) -> RewriteApiInventoryDetails {

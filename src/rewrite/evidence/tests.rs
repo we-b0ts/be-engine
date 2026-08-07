@@ -8,6 +8,25 @@ use crate::{
 };
 
 #[test]
+fn response_pre_readiness_evidence_exposes_bootstrap_redis_planner() {
+    let planners = applicable_rule_planners(
+        Path::new("/target"),
+        RewriteIssueKind::Response,
+        QUERY_PRE_READINESS_TRAFFIC,
+        &serde_json::json!({"available": true}),
+        "evidence-bootstrap",
+    );
+
+    let planner = planners
+        .iter()
+        .find(|planner| planner.protocol == "redis_bootstrap")
+        .unwrap();
+    assert_eq!(planner.kind, "background_dependencies");
+    assert_eq!(planner.evidence_id, "evidence-bootstrap");
+    assert!(planner.command.argv.iter().any(|arg| arg == "redis"));
+}
+
+#[test]
 fn parked_api_evidence_survives_unrelated_api_revisions() {
     let target_root = Path::new("/target");
     let mut state = crate::rewrite::test_state();

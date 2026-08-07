@@ -1547,6 +1547,12 @@ than runtime configuration. If the cache warm affects API behavior, implement
 the source-compatible target cache lifecycle separately from this ownership
 rule.
 
+Bootstrap Redis `HGET`/`HMGET` rules are replay overlays rather than
+initial-load waits. They combine optional exact keys with compact
+`prefix<digits>suffix` patterns and require the exact field sequence. Matching
+replay-safe `bootstrap_window` Global exchanges become connection-independent
+for the next replay while the recording remains immutable.
+
 An applied rule with `initial_load_timeout_ms` delays source case admission
 while Recorder observes its initial load. Redis exact-key `GET`, `SCARD`, and
 `HGETALL` rules count each configured exact key once;

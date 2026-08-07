@@ -9,7 +9,8 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
 use super::background_dependencies::{
-    self, BackgroundDependencyRuleConfig, matches_exact_redis_key, matches_redis_key,
+    self, BackgroundDependencyRuleConfig, RedisKeyPatternConfig, matches_exact_redis_key,
+    matches_redis_key, matches_redis_numeric_key_pattern, redis_rule_matches,
 };
 use super::background_feedback::{RuleConfigPlan, plan_rule_config};
 use super::edit::write_atomic;
@@ -22,9 +23,11 @@ pub struct RedisBackgroundDependencyFeedback {
     pub ports: Vec<u16>,
     pub command: String,
     pub keys: Vec<String>,
+    pub key_patterns: Vec<RedisKeyPatternConfig>,
     pub key_prefix: String,
     pub key_suffix: String,
     pub initial_load_timeout_ms: Option<u64>,
+    pub fields: Vec<String>,
     pub source_revision: String,
     pub source_evidence: String,
 }
@@ -40,9 +43,11 @@ pub struct RedisBackgroundDependencyReport {
     pub ports: Vec<u16>,
     pub command: String,
     pub keys: Vec<String>,
+    pub key_patterns: Vec<RedisKeyPatternConfig>,
     pub key_prefix: String,
     pub key_suffix: String,
     pub initial_load_timeout_ms: Option<u64>,
+    pub fields: Vec<String>,
     pub source_revision: String,
     pub source_evidence: String,
     pub matched_unused_exchanges: usize,
@@ -101,15 +106,25 @@ pub fn plan_redis_background_dependency(
     ports.sort_unstable();
     let mut keys = feedback.keys;
     keys.sort();
+    let mut key_patterns = feedback.key_patterns;
+    key_patterns.sort_by(|left, right| {
+        (&left.prefix, &left.suffix, left.numeric_middle).cmp(&(
+            &right.prefix,
+            &right.suffix,
+            right.numeric_middle,
+        ))
+    });
     let command = feedback.command.to_ascii_uppercase();
     let requested = BackgroundDependencyRuleConfig::Redis {
         name: feedback.name.clone(),
         ports: ports.clone(),
         command: command.clone(),
         keys: keys.clone(),
+        key_patterns: key_patterns.clone(),
         key_prefix: feedback.key_prefix.clone(),
         key_suffix: feedback.key_suffix.clone(),
         initial_load_timeout_ms: feedback.initial_load_timeout_ms,
+        fields: feedback.fields.clone(),
         source_revision: String::new(),
         source_evidence: feedback.source_evidence.clone(),
     };
@@ -119,13 +134,7 @@ pub fn plan_redis_background_dependency(
     let evidence = parse_replay_evidence(
         &original_replay_report,
         &feedback.replay_report_path,
-        RedisEvidenceSelector {
-            ports: &ports,
-            command: &command,
-            keys: &keys,
-            key_prefix: feedback.key_prefix.as_bytes(),
-            key_suffix: feedback.key_suffix.as_bytes(),
-        },
+        &requested,
     )?;
     let RuleConfigPlan {
         original,
@@ -153,9 +162,11 @@ pub fn plan_redis_background_dependency(
             ports,
             command,
             keys,
+            key_patterns,
             key_prefix: feedback.key_prefix,
             key_suffix: feedback.key_suffix,
             initial_load_timeout_ms: feedback.initial_load_timeout_ms,
+            fields: feedback.fields,
             source_revision: feedback.source_revision,
             source_evidence: feedback.source_evidence,
             matched_unused_exchanges: evidence.count,
@@ -224,14 +235,6 @@ struct EvidenceMatch {
     files: Vec<EvidenceSnapshot>,
 }
 
-struct RedisEvidenceSelector<'a> {
-    ports: &'a [u16],
-    command: &'a str,
-    keys: &'a [String],
-    key_prefix: &'a [u8],
-    key_suffix: &'a [u8],
-}
-
 #[derive(Debug, Eq, PartialEq)]
 struct EvidenceSnapshot {
     path: PathBuf,
@@ -242,15 +245,19 @@ struct EvidenceSnapshot {
 fn parse_replay_evidence(
     raw: &str,
     report_path: &Path,
-    selector: RedisEvidenceSelector<'_>,
+    requested: &BackgroundDependencyRuleConfig,
 ) -> Result<EvidenceMatch> {
-    let RedisEvidenceSelector {
+    let BackgroundDependencyRuleConfig::Redis {
         ports,
         command,
         keys,
         key_prefix,
         key_suffix,
-    } = selector;
+        ..
+    } = requested
+    else {
+        unreachable!("Redis planner always constructs a Redis rule")
+    };
     let report: ReplayEvidenceReport = serde_json::from_str(raw)
         .with_context(|| format!("failed to parse replay report {}", report_path.display()))?;
     ensure!(
@@ -261,6 +268,9 @@ fn parse_replay_evidence(
         report.finalized,
         "background dependency evidence requires a finalized replay report"
     );
+    if matches!(command.as_str(), "HGET" | "HMGET") {
+        return parse_global_bootstrap_evidence(report, report_path, requested);
+    }
     ensure!(
         !report
             .redis
@@ -305,8 +315,8 @@ fn parse_replay_evidence(
             None,
             &mut exchange_index,
             keys,
-            key_prefix,
-            key_suffix,
+            key_prefix.as_bytes(),
+            key_suffix.as_bytes(),
             &mut evidence,
         )?;
         files.push(snapshot_bytes(path, contents.as_bytes()));
@@ -321,8 +331,8 @@ fn parse_replay_evidence(
             Some(&case.case_id),
             &mut exchange_index,
             keys,
-            key_prefix,
-            key_suffix,
+            key_prefix.as_bytes(),
+            key_suffix.as_bytes(),
             &mut evidence,
         )?;
         files.push(snapshot_bytes(path, contents.as_bytes()));
@@ -346,6 +356,118 @@ fn parse_replay_evidence(
         case_ids: evidence.case_ids.into_iter().collect(),
         observed_ports: evidence.observed_ports.into_iter().collect(),
         files,
+    })
+}
+
+fn parse_global_bootstrap_evidence(
+    report: ReplayEvidenceReport,
+    report_path: &Path,
+    requested: &BackgroundDependencyRuleConfig,
+) -> Result<EvidenceMatch> {
+    let BackgroundDependencyRuleConfig::Redis {
+        ports,
+        command,
+        keys,
+        key_patterns,
+        ..
+    } = requested
+    else {
+        unreachable!("Redis planner always constructs a Redis rule")
+    };
+    ensure!(
+        !report
+            .redis
+            .unsupported
+            .iter()
+            .chain(&report.redis.unsafe_events)
+            .any(|event| ports.contains(&event.target.port)
+                && event.command.eq_ignore_ascii_case(command)),
+        "Redis bootstrap selector shares a configured port and command with unsupported or unsafe target traffic"
+    );
+    let recorded = report
+        .global_dependencies_path
+        .context("Redis bootstrap evidence requires global_dependencies_path")?;
+    let path = resolve_evidence_path(report_path, &recorded);
+    let contents = read_file(&path, "global bootstrap dependency evidence")?;
+    let mut count = 0;
+    let mut observed_ports = BTreeSet::new();
+    let mut matched_keys = BTreeSet::new();
+    let mut matched_patterns = BTreeSet::new();
+    for (line_index, line) in contents.lines().enumerate() {
+        let value: serde_json::Value = serde_json::from_str(line).with_context(|| {
+            format!(
+                "invalid dependency JSON at {} line {}",
+                path.display(),
+                line_index + 1
+            )
+        })?;
+        if value.get("event_type").and_then(serde_json::Value::as_str) != Some("redis_exchange")
+            || value
+                .get("global_dependency_reason")
+                .and_then(serde_json::Value::as_str)
+                != Some("bootstrap_window")
+        {
+            continue;
+        }
+        let Some(port) = value
+            .get("target_port")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+        else {
+            continue;
+        };
+        let Some(observed_command) = value.get("command").and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let args = decode_args(&value)?;
+        if !redis_rule_matches(requested, port, observed_command, &args) {
+            continue;
+        }
+        ensure!(
+            value
+                .get("replay_safe")
+                .and_then(serde_json::Value::as_bool)
+                == Some(true),
+            "Redis bootstrap selector matches replay-unsafe evidence"
+        );
+        count += 1;
+        observed_ports.insert(port);
+        let key = &args[0];
+        if matches_exact_redis_key(key, keys) {
+            matched_keys.insert(key.clone());
+        }
+        for (index, pattern) in key_patterns.iter().enumerate() {
+            if matches_redis_numeric_key_pattern(
+                key,
+                pattern.prefix.as_bytes(),
+                pattern.suffix.as_bytes(),
+            ) {
+                matched_patterns.insert(index);
+            }
+        }
+    }
+    ensure!(
+        count > 0,
+        "Redis bootstrap selector matches no replay-safe bootstrap-window exchange"
+    );
+    let expected_keys = keys
+        .iter()
+        .map(|key| key.as_bytes().to_vec())
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        matched_keys == expected_keys,
+        "Redis {command} bootstrap selector must match every configured exact key"
+    );
+    ensure!(
+        matched_patterns.len() == key_patterns.len(),
+        "Redis {command} bootstrap selector must match every configured numeric key pattern"
+    );
+    Ok(EvidenceMatch {
+        count,
+        case_ids: Vec::new(),
+        observed_ports: observed_ports.into_iter().collect(),
+        files: vec![snapshot_bytes(path, contents.as_bytes())],
     })
 }
 
@@ -455,6 +577,41 @@ fn decode_first_arg(value: &serde_json::Value) -> Result<Option<Vec<u8>>> {
             .context("recorded Redis key contains invalid base64"),
         other => anyhow::bail!("recorded Redis key has unsupported encoding {other:?}"),
     }
+}
+
+fn decode_args(value: &serde_json::Value) -> Result<Vec<Vec<u8>>> {
+    value
+        .get("args")
+        .and_then(serde_json::Value::as_array)
+        .context("recorded Redis exchange is missing args")?
+        .iter()
+        .map(|arg| {
+            let arg = arg
+                .as_object()
+                .context("recorded Redis argument must be an object")?;
+            ensure!(
+                arg.get("truncated").and_then(serde_json::Value::as_bool) == Some(false),
+                "Redis bootstrap selector cannot use a truncated argument"
+            );
+            let encoding = arg
+                .get("encoding")
+                .and_then(serde_json::Value::as_str)
+                .context("recorded Redis argument is missing its encoding")?;
+            let data = arg
+                .get("data")
+                .and_then(serde_json::Value::as_str)
+                .context("recorded Redis argument is missing its data")?;
+            match encoding {
+                "utf8" => Ok(data.as_bytes().to_vec()),
+                "base64" => STANDARD
+                    .decode(data.as_bytes())
+                    .context("recorded Redis argument contains invalid base64"),
+                other => {
+                    anyhow::bail!("recorded Redis argument has unsupported encoding {other:?}")
+                }
+            }
+        })
+        .collect()
 }
 
 fn snapshot_file(path: &Path, label: &str) -> Result<EvidenceSnapshot> {

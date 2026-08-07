@@ -9,6 +9,16 @@ use serde::{Deserialize, Serialize};
 use crate::recorder::RecorderEvent;
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RedisKeyPatternConfig {
+    pub prefix: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub suffix: String,
+    #[serde(default)]
+    pub numeric_middle: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "protocol", rename_all = "snake_case", deny_unknown_fields)]
 pub enum BackgroundDependencyRuleConfig {
     Http {
@@ -39,12 +49,16 @@ pub enum BackgroundDependencyRuleConfig {
         command: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         keys: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        key_patterns: Vec<RedisKeyPatternConfig>,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         key_prefix: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         key_suffix: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         initial_load_timeout_ms: Option<u64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        fields: Vec<String>,
         #[serde(default)]
         source_revision: String,
         source_evidence: String,
@@ -119,28 +133,16 @@ impl BackgroundDependencyRuleConfig {
                         .any(|candidate| candidate.eq_ignore_ascii_case(&exchange.method))
                     && path_prefixes.iter().any(|prefix| path.starts_with(prefix))
             }
-            (
-                Self::Redis {
-                    ports,
-                    command,
-                    keys,
-                    key_prefix,
-                    key_suffix,
-                    ..
-                },
-                RecorderEvent::RedisExchange(exchange),
-            ) => {
+            (Self::Redis { .. }, RecorderEvent::RedisExchange(exchange)) => {
+                let args = exchange
+                    .args
+                    .iter()
+                    .map(decode_capture)
+                    .collect::<Option<Vec<_>>>();
                 !exchange.session_setup
                     && exchange.replay_safe
-                    && ports.contains(&exchange.target_port)
-                    && exchange.command.eq_ignore_ascii_case(command)
-                    && exchange.args.first().is_some_and(|key| {
-                        capture_matches_redis_key(
-                            key,
-                            keys,
-                            key_prefix.as_bytes(),
-                            key_suffix.as_bytes(),
-                        )
+                    && args.as_deref().is_some_and(|args| {
+                        redis_rule_matches(self, exchange.target_port, &exchange.command, args)
                     })
             }
             (
@@ -222,9 +224,11 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 ports,
                 command,
                 keys,
+                key_patterns,
                 key_prefix,
                 key_suffix,
                 initial_load_timeout_ms,
+                fields,
                 source_revision,
                 source_evidence,
                 ..
@@ -232,7 +236,11 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 validate_redis_ports(name, ports)?;
                 match command.as_str() {
                     "ZCOUNT" => {
-                        if !keys.is_empty() || initial_load_timeout_ms.is_some() {
+                        if !keys.is_empty()
+                            || !key_patterns.is_empty()
+                            || initial_load_timeout_ms.is_some()
+                            || !fields.is_empty()
+                        {
                             bail!(
                                 "Redis ZCOUNT background dependency rule {name:?} must use key_prefix/key_suffix without keys or initial_load_timeout_ms"
                             );
@@ -249,7 +257,11 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                         )?;
                     }
                     "GET" | "SCARD" | "HGETALL" => {
-                        if !key_prefix.is_empty() || !key_suffix.is_empty() {
+                        if !key_patterns.is_empty()
+                            || !key_prefix.is_empty()
+                            || !key_suffix.is_empty()
+                            || !fields.is_empty()
+                        {
                             bail!(
                                 "Redis {command} background dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
                             );
@@ -261,8 +273,22 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                             );
                         }
                     }
+                    "HGET" | "HMGET" => {
+                        if !key_prefix.is_empty() || !key_suffix.is_empty() {
+                            bail!(
+                                "Redis {command} background dependency rule {name:?} must use keys/key_patterns instead of key_prefix/key_suffix"
+                            );
+                        }
+                        if initial_load_timeout_ms.is_some() {
+                            bail!(
+                                "Redis {command} background dependency rule {name:?} must not use initial_load_timeout_ms"
+                            );
+                        }
+                        validate_redis_hash_keys(name, command, keys, key_patterns)?;
+                        validate_redis_hash_fields(name, command, fields)?;
+                    }
                     _ => bail!(
-                        "Redis background dependency rule {name:?} currently supports only commands \"ZCOUNT\", \"GET\", \"SCARD\", and \"HGETALL\""
+                        "Redis background dependency rule {name:?} currently supports only commands \"ZCOUNT\", \"GET\", \"SCARD\", \"HGETALL\", \"HGET\", and \"HMGET\""
                     ),
                 }
                 if !source_revision.is_empty() {
@@ -401,22 +427,29 @@ fn rules_overlap(
                 ports: left_ports,
                 command: left_command,
                 keys: left_keys,
+                key_patterns: left_patterns,
                 key_prefix: left_prefix,
                 key_suffix: left_suffix,
+                fields: left_fields,
                 ..
             },
             BackgroundDependencyRuleConfig::Redis {
                 ports: right_ports,
                 command: right_command,
                 keys: right_keys,
+                key_patterns: right_patterns,
                 key_prefix: right_prefix,
                 key_suffix: right_suffix,
+                fields: right_fields,
                 ..
             },
         ) => {
             left_ports.iter().any(|port| right_ports.contains(port))
                 && left_command == right_command
-                && if left_keys.is_empty() && right_keys.is_empty() {
+                && left_fields == right_fields
+                && if !left_patterns.is_empty() || !right_patterns.is_empty() {
+                    true
+                } else if left_keys.is_empty() && right_keys.is_empty() {
                     byte_affixes_overlap(
                         left_prefix.as_bytes(),
                         left_suffix.as_bytes(),
@@ -484,6 +517,78 @@ fn validate_exact_redis_keys(rule_name: &str, command: &str, keys: &[String]) ->
                 "Redis {command} background dependency rule {rule_name:?} has duplicate key {key:?}"
             );
         }
+    }
+    Ok(())
+}
+
+fn validate_redis_hash_keys(
+    rule_name: &str,
+    command: &str,
+    keys: &[String],
+    patterns: &[RedisKeyPatternConfig],
+) -> Result<()> {
+    if keys.is_empty() && patterns.is_empty() {
+        bail!(
+            "Redis {command} background dependency rule {rule_name:?} must include at least one exact key or key pattern"
+        );
+    }
+    if !keys.is_empty() {
+        validate_exact_redis_keys(rule_name, command, keys)?;
+    }
+    if patterns.len() > 64 {
+        bail!(
+            "Redis {command} background dependency rule {rule_name:?} must include at most 64 key patterns"
+        );
+    }
+    let mut unique = HashSet::new();
+    for pattern in patterns {
+        validate_single_line(
+            &format!("Redis {command} background dependency key-pattern prefix"),
+            &pattern.prefix,
+            512,
+        )?;
+        if !pattern.suffix.is_empty() {
+            validate_single_line(
+                &format!("Redis {command} background dependency key-pattern suffix"),
+                &pattern.suffix,
+                512,
+            )?;
+        }
+        if !pattern.numeric_middle {
+            bail!(
+                "Redis {command} background dependency rule {rule_name:?} key patterns must require a numeric middle"
+            );
+        }
+        if !unique.insert((
+            pattern.prefix.as_str(),
+            pattern.suffix.as_str(),
+            pattern.numeric_middle,
+        )) {
+            bail!(
+                "Redis {command} background dependency rule {rule_name:?} has a duplicate key pattern"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_redis_hash_fields(rule_name: &str, command: &str, fields: &[String]) -> Result<()> {
+    let valid_count = if command == "HGET" {
+        fields.len() == 1
+    } else {
+        !fields.is_empty() && fields.len() <= 64
+    };
+    if !valid_count {
+        bail!(
+            "Redis {command} background dependency rule {rule_name:?} has an invalid exact field shape"
+        );
+    }
+    for field in fields {
+        validate_single_line(
+            &format!("Redis {command} background dependency field"),
+            field,
+            512,
+        )?;
     }
     Ok(())
 }
@@ -601,36 +706,74 @@ pub(crate) fn matches_redis_key(key: &[u8], prefix: &[u8], suffix: &[u8]) -> boo
     key.starts_with(prefix) && key.ends_with(suffix)
 }
 
+pub(crate) fn redis_rule_matches(
+    rule: &BackgroundDependencyRuleConfig,
+    target_port: u16,
+    command: &str,
+    args: &[Vec<u8>],
+) -> bool {
+    let BackgroundDependencyRuleConfig::Redis {
+        ports,
+        command: expected_command,
+        keys,
+        key_patterns,
+        key_prefix,
+        key_suffix,
+        fields,
+        ..
+    } = rule
+    else {
+        return false;
+    };
+    let Some(key) = args.first() else {
+        return false;
+    };
+    let key_matches = if !key_patterns.is_empty() {
+        matches_exact_redis_key(key, keys)
+            || key_patterns.iter().any(|pattern| {
+                matches_redis_numeric_key_pattern(
+                    key,
+                    pattern.prefix.as_bytes(),
+                    pattern.suffix.as_bytes(),
+                )
+            })
+    } else if keys.is_empty() {
+        matches_redis_key(key, key_prefix.as_bytes(), key_suffix.as_bytes())
+    } else {
+        matches_exact_redis_key(key, keys)
+    };
+    ports.contains(&target_port)
+        && expected_command.eq_ignore_ascii_case(command)
+        && key_matches
+        && (fields.is_empty()
+            || args[1..]
+                .iter()
+                .map(Vec::as_slice)
+                .eq(fields.iter().map(|field| field.as_bytes())))
+}
+
+pub(crate) fn matches_redis_numeric_key_pattern(key: &[u8], prefix: &[u8], suffix: &[u8]) -> bool {
+    let Some(middle) = key
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+    else {
+        return false;
+    };
+    !middle.is_empty() && middle.iter().all(u8::is_ascii_digit)
+}
+
 pub(crate) fn matches_exact_redis_key(key: &[u8], keys: &[String]) -> bool {
     keys.iter().any(|candidate| candidate.as_bytes() == key)
 }
 
-fn capture_matches_redis_key(
-    capture: &crate::recorder::BodyCapture,
-    keys: &[String],
-    prefix: &[u8],
-    suffix: &[u8],
-) -> bool {
+fn decode_capture(capture: &crate::recorder::BodyCapture) -> Option<Vec<u8>> {
     if capture.truncated {
-        return false;
+        return None;
     }
     match capture.encoding {
-        "utf8" => {
-            let key = capture.data.as_bytes();
-            if keys.is_empty() {
-                matches_redis_key(key, prefix, suffix)
-            } else {
-                matches_exact_redis_key(key, keys)
-            }
-        }
-        "base64" => STANDARD.decode(capture.data.as_bytes()).is_ok_and(|key| {
-            if keys.is_empty() {
-                matches_redis_key(&key, prefix, suffix)
-            } else {
-                matches_exact_redis_key(&key, keys)
-            }
-        }),
-        _ => false,
+        "utf8" => Some(capture.data.as_bytes().to_vec()),
+        "base64" => STANDARD.decode(capture.data.as_bytes()).ok(),
+        _ => None,
     }
 }
 

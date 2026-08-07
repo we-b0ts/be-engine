@@ -6,7 +6,7 @@ use super::model::{
     RewriteWorkerDispatchView,
 };
 use super::store::RewriteStore;
-use super::{action, evidence, fingerprint};
+use super::{action, evidence, fingerprint, inventory};
 
 #[derive(Debug, Clone)]
 pub struct RewriteWorkerConfirmOptions {
@@ -63,6 +63,21 @@ pub(super) fn implementation_action(
         evidence_commands: evidence::commands(target_root, state),
         acceptance: action::next_command_for_api(target_root, &state.api),
     }
+}
+
+pub(super) fn state_action(target_root: &std::path::Path, state: &RewriteState) -> RewriteAction {
+    if current_is_confirmed(state)
+        && let Some(pending_api) = inventory::next_pending_api_for_concurrent_work(state)
+    {
+        return RewriteAction::AdvanceRequired {
+            summary: format!(
+                "dedicated subagent for API {} is confirmed; advance pending API {pending_api} before waiting",
+                state.api
+            ),
+            command: action::next_command_for_api(target_root, pending_api),
+        };
+    }
+    implementation_action(target_root, state, None)
 }
 
 pub(super) fn dispatch_view(
@@ -245,10 +260,14 @@ pub(super) fn confirm_current_for_test(state: &mut RewriteState) {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::Path;
+    use std::process::Command;
 
     use super::*;
-    use crate::rewrite::model::{RewriteIssue, RewriteIssueKind, RewriteIssueOwner};
+    use crate::rewrite::model::{
+        RewriteApiProgress, RewriteApiStatus, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
+    };
 
     #[test]
     fn one_handle_is_bound_and_resumed_for_later_dispatches() {
@@ -348,6 +367,117 @@ mod tests {
                 .pointer("/action/commands/confirm_worker")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn confirmed_worker_advances_the_next_pending_api_before_waiting() {
+        let mut state = implementation_state_with_inventory(true);
+        confirm_current_for_test(&mut state);
+
+        let action = serde_json::to_value(super::super::action::for_state(
+            Path::new("/target"),
+            &state,
+        ))
+        .unwrap();
+        assert_eq!(action["action"]["kind"], "advance_required");
+        assert_eq!(
+            action.pointer("/action/commands/advance/argv"),
+            Some(&serde_json::json!([
+                "backend-rewrite",
+                "--target-root",
+                "/target",
+                "next",
+                "--api",
+                "POST /other"
+            ]))
+        );
+    }
+
+    #[test]
+    fn confirmed_worker_without_a_pending_api_remains_implementation_required() {
+        let mut state = implementation_state_with_inventory(false);
+        confirm_current_for_test(&mut state);
+
+        let action = serde_json::to_value(super::super::action::for_state(
+            Path::new("/target"),
+            &state,
+        ))
+        .unwrap();
+        assert_eq!(action["action"]["kind"], "implementation_required");
+        assert_eq!(
+            action.pointer("/action/details/worker/state"),
+            Some(&serde_json::json!("confirmed"))
+        );
+        assert!(action.pointer("/action/commands/advance").is_none());
+    }
+
+    #[test]
+    fn status_reconstructs_post_dispatch_pending_api_advance() {
+        let target = committed_target();
+        let mut state = implementation_state_with_inventory(true);
+        confirm_current_for_test(&mut state);
+        state.target_fingerprint =
+            Some(fingerprint::repository_fingerprint(target.path()).unwrap());
+
+        let status =
+            serde_json::to_value(super::super::action::for_status(target.path(), &state).unwrap())
+                .unwrap();
+        assert_eq!(status["action"]["kind"], "advance_required");
+        assert_eq!(
+            status.pointer("/action/commands/advance/argv/5"),
+            Some(&serde_json::json!("POST /other"))
+        );
+    }
+
+    fn implementation_state_with_inventory(include_pending: bool) -> RewriteState {
+        let mut state = crate::rewrite::test_state();
+        state.phase = RewritePhase::ImplementationRequired;
+        state.active_issue = Some(issue("issue-a", 1, "target-a"));
+        state.api_inventory = vec![api_progress("GET /api", RewriteApiStatus::Active)];
+        if include_pending {
+            state
+                .api_inventory
+                .push(api_progress("POST /other", RewriteApiStatus::Pending));
+        }
+        state.current_api_index = Some(0);
+        state
+    }
+
+    fn api_progress(api: &str, status: RewriteApiStatus) -> RewriteApiProgress {
+        RewriteApiProgress {
+            api: api.to_string(),
+            source_route: Some(api.split_once(' ').unwrap().1.to_string()),
+            status,
+            attempts: 0,
+            e2e_current: false,
+            comparison_current: false,
+            verified_target_fingerprint: None,
+        }
+    }
+
+    fn committed_target() -> tempfile::TempDir {
+        let target = tempfile::tempdir().unwrap();
+        fs::write(
+            target.path().join("Cargo.toml"),
+            "[package]\nname='target'\nversion='0.1.0'\n",
+        )
+        .unwrap();
+        git_ok(target.path(), &["init"]);
+        git_ok(target.path(), &["config", "user.email", "test@example.com"]);
+        git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
+        git_ok(target.path(), &["add", "."]);
+        git_ok(target.path(), &["commit", "-m", "baseline"]);
+        target
+    }
+
+    fn git_ok(repository: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(args)
+            .status()
+            .unwrap();
+        assert!(status.success(), "git command failed: {args:?}");
     }
 
     fn issue(id: &str, attempt: u64, target_fingerprint: &str) -> RewriteIssue {

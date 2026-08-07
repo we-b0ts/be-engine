@@ -60,7 +60,7 @@ pub use recording::{
     RewriteRecordingRequestOptions, execute_rewrite_recording_worker, request_rewrite_recording,
     start_rewrite_recording,
 };
-pub use repair::RewriteRouteOptions;
+pub use repair::{RewriteRouteOptions, resume_rewrite_replay_planning};
 pub use rule::RewriteRulePlanOptions;
 pub use status::{status_rewrite, status_rewrite_for_api};
 pub use worker::{RewriteWorkerConfirmOptions, confirm as confirm_rewrite_worker};
@@ -590,7 +590,14 @@ pub fn apply_rewrite_dependency_rule(
     let owner_api = inventory::api_for_dependency_rule_plan(&state, plan_id)
         .context("dependency-rule plan is stale or belongs to no concurrent API work item")?;
     let report = inventory::with_slice_mut(&mut state, &owner_api, |state| {
+        let response_bootstrap = dependency_rule::plans_response_bootstrap(state, plan_id);
         let mut report = dependency_rule::apply(&target_root, state, plan_id)?;
+        if response_bootstrap {
+            state.target_fingerprint = None;
+            state.phase = RewritePhase::ImplementationRequired;
+            report.next_command = action::next_command_for_api(&target_root, &state.api);
+            return Ok(report);
+        }
         let case_source = state
             .case_source
             .clone()

@@ -222,6 +222,12 @@ fn run_replay_aggregate_command(args: ReplayAggregateArgs) -> Result<()> {
 }
 
 async fn run_replay_command(args: ReplayArgs) -> Result<()> {
+    let background_dependencies = args
+        .recorder_config
+        .as_deref()
+        .map(|path| AppConfig::load(path).map(|config| config.recording.background_dependencies))
+        .transpose()?
+        .unwrap_or_default();
     let allowed_unused_http = load_allowed_unused_http(args.recorder_config, args.recording_rule)?;
     run_replay(ReplayConfig {
         case_dir: args.case,
@@ -236,6 +242,7 @@ async fn run_replay_command(args: ReplayArgs) -> Result<()> {
         ca_key_path: args.ca_key,
         policy_path: args.policy,
         http_ignore_query_params: args.http_ignore_query_params,
+        background_dependencies,
         allowed_unused_http,
     })
     .await

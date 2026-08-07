@@ -236,9 +236,11 @@ pub(super) fn run(
                 ports,
                 command,
                 keys,
+                key_patterns: Vec::new(),
                 key_prefix,
                 key_suffix,
                 initial_load_timeout_ms,
+                fields: Vec::new(),
                 source_revision,
                 source_evidence: evidence,
             };

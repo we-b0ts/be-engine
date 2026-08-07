@@ -123,6 +123,26 @@ fn applicable_rule_planners(
             ),
         });
     }
+    if issue_kind == RewriteIssueKind::Response
+        && query_kind == QUERY_PRE_READINESS_TRAFFIC
+        && facts.get("available").and_then(Value::as_bool) == Some(true)
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "background_dependencies".to_string(),
+            protocol: "redis_bootstrap".to_string(),
+            evidence_id: evidence_id.to_string(),
+            command: super::action::command(
+                target_root,
+                vec![
+                    "dependency-rule".to_string(),
+                    "plan".to_string(),
+                    "redis".to_string(),
+                    "--help".to_string(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if issue_kind != RewriteIssueKind::Dependency || query_kind != QUERY_DIRTY_CLUSTERS {
         return planners;
     }

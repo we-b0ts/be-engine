@@ -51,6 +51,8 @@ The current narrow rule types are:
   suffix, with no hostname persisted in the rule;
 - Redis `GET` with one stable service port set, an exact bounded key list, and
   an initial-load observation timeout;
+- Redis bootstrap `HGET`/`HMGET` with a stable service port set, optional exact
+  keys, bounded numeric-middle key patterns, and the exact field sequence;
 - Breeze-backed Memcached `get` with one exact
   resolved resource identity, and a bounded numeric key series
   `<start..end><separator><suffix>` whose numeric bounds are unsigned 64-bit.
@@ -66,9 +68,12 @@ repair target startup or readiness when that causes a response difference.
 Global exchanges explicitly emitted by any background rule use
 connection-independent replay. They remain
 single-use and require the exact recorded target, command, and arguments, but
-earlier unrelated commands on the source connection cannot block them. Case,
-bootstrap-only, and legacy exchanges retain connection-order semantics. This
-replay treatment does not replace destination behavior.
+earlier unrelated commands on the source connection cannot block them. A
+configured `HGET`/`HMGET` rule also overlays matching replay-safe
+`bootstrap_window` Global exchanges from the immutable recording, so those
+reads become connection-independent without rewriting the artifact. Other
+case, bootstrap-only, and legacy exchanges retain connection-order semantics.
+This replay treatment does not replace destination behavior.
 
 Supply the logical resource to `plan|apply`. The tool requires one compatible
 `mc` descriptor, persists its stable identity without the dynamic port, and
@@ -177,6 +182,31 @@ case evidence for every configured key. Unmatched, unsupported, or unsafe
 traffic on the selected ports and command is rejected. Apply uses the same
 arguments, then creates a new standard recording.
 
+For source-proven bootstrap hash reads, use the coordinator planner with a
+small number of exact exceptions and numeric key shapes rather than enumerating
+every observed key:
+
+```bash
+backend-rewrite --target-root <target> dependency-rule plan redis hget \
+  --evidence-id <pre-readiness-traffic-evidence-id> \
+  --name experiment-bootstrap \
+  --source-evidence '<source file/symbol and bootstrap ownership proof>' \
+  --port 6379 \
+  --numeric-key-pattern 'exp:matchlist:<id>' \
+  --numeric-key-pattern 'exp:list:<id>' \
+  --key traffic-result \
+  --field version
+```
+
+Use `redis hmget` with repeated `--field` arguments in exact wire order for
+HMGET. Planning reads replay-safe `bootstrap_window` exchanges from the
+immutable Global dependency file, requires evidence for every exact key and
+numeric pattern, and rejects same-command unsafe or unsupported traffic.
+Unmatched target requests do not authorize the rule and remain dirty unless
+the selector makes their recorded bootstrap exchanges independently
+deliverable. Apply the returned plan, then rerun the same immutable cases; no
+new source recording is required for this replay overlay.
+
 For a process-owned Memcached `get` rule, preview before applying:
 
 ```bash
@@ -204,5 +234,6 @@ The observation window defaults to 60000 ms and starts when the source HTTP
 ready probe succeeds. Recorder logs incomplete progress as a warning and
 continues case admission when the window elapses.
 
-After any rule change, create a new standard recording. Never reclassify or
-edit an existing artifact.
+After ordinary recorder ownership-rule changes, create a new standard
+recording. The bootstrap HGET/HMGET replay overlay is the narrow exception: it
+uses the existing immutable Global artifact and never edits or reclassifies it.

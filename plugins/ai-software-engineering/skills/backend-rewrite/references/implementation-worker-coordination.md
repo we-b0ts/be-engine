@@ -62,7 +62,8 @@ inspects source or target code, or develops an API-level hypothesis, it must:
    `BACKEND_REWRITE_SUBAGENT_HANDLE` and optionally
    `BACKEND_REWRITE_SUBAGENT_NAME`; and
 6. execute no later `next`, including same-API acceptance or cross-API
-   scheduling, until the returned worker state is `confirmed`.
+   scheduling, until confirmation returns either `worker.state=confirmed` or
+   the exact post-confirmation `advance_required` action.
 
 `TaskCreate`, a TODO, task-status changes, or an announcement of future
 dispatch does not satisfy this gate. If no real subagent capability is
@@ -108,10 +109,10 @@ and never starts an unreturned coordinator operation.
 After a worker starts, inspect the current inventory instead of waiting for the
 worker by default:
 
-1. If the bounded summary has `pending > 0` and no action is `wait_required`,
-   run the read-only `backend-rewrite inventory`, select an exact item whose
-   `status=pending`, and execute
-   `backend-rewrite next --api '<METHOD pattern>'`.
+1. If confirmation or resumed `status` returns `advance_required`, execute its
+   exact `commands.advance` argv before waiting. The coordinator selects a
+   bounded pending item and reconstructs this action if the original response
+   is lost.
 2. Run only the returned serialized Replay/comparison transition and wait for
    that operation when its action requires polling.
 3. If the selected API reaches `implementation_required`, dispatch its worker

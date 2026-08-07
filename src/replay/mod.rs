@@ -70,6 +70,7 @@ pub struct ReplayConfig {
     pub ca_key_path: Option<PathBuf>,
     pub policy_path: Option<PathBuf>,
     pub http_ignore_query_params: Vec<String>,
+    pub background_dependencies: Vec<crate::BackgroundDependencyRuleConfig>,
     pub allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
 }
 
@@ -188,6 +189,7 @@ impl ReplayRuntime {
         tcp_listen: SocketAddr,
     ) -> Result<Self> {
         let root_dir = config.case_dir;
+        let background_dependencies = &config.background_dependencies;
         let replay_artifact_dir = config
             .report_path
             .as_ref()
@@ -240,6 +242,7 @@ impl ReplayRuntime {
                 &mut motan,
                 &mut targets,
                 &mut connection_identities,
+                background_dependencies,
             )
             .await?;
         }
@@ -259,6 +262,7 @@ impl ReplayRuntime {
                 &mut motan,
                 &mut targets,
                 &mut connection_identities,
+                background_dependencies,
             )
             .await?;
             load_motan_debug_file(

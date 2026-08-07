@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Result, ensure};
 use clap::{Args, Subcommand};
 use traffic_e2e::{
-    RewriteContext, RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector,
-    apply_rewrite_dependency_rule, plan_rewrite_dependency_rule,
+    RedisKeyPatternConfig, RewriteContext, RewriteDependencyRulePlanOptions,
+    RewriteDependencyRuleSelector, apply_rewrite_dependency_rule, plan_rewrite_dependency_rule,
 };
 
 #[derive(Debug, Args)]
@@ -41,7 +41,7 @@ enum DependencyRuleProtocolArgs {
 
 #[derive(Debug, Args)]
 struct DependencyRuleCommonArgs {
-    /// Current dirty-clusters evidence id returned by rewrite evidence.
+    /// Coordinator-issued evidence id returned by the applicable rule planner.
     #[arg(long)]
     evidence_id: String,
     /// Stable recorder rule name.
@@ -111,6 +111,10 @@ enum RedisDependencyRuleModeArgs {
     Scard(RedisExactKeyDependencyRuleArgs),
     /// Process-owned Redis HGETALL traffic selected by exact keys.
     Hgetall(RedisExactKeyDependencyRuleArgs),
+    /// Bootstrap Redis HGET traffic selected by compact key shapes and an exact field.
+    Hget(RedisHashReadDependencyRuleArgs),
+    /// Bootstrap Redis HMGET traffic selected by compact key shapes and exact fields.
+    Hmget(RedisHashReadDependencyRuleArgs),
 }
 
 #[derive(Debug, Args)]
@@ -138,6 +142,23 @@ struct RedisExactKeyDependencyRuleArgs {
 }
 
 #[derive(Debug, Args)]
+struct RedisHashReadDependencyRuleArgs {
+    #[command(flatten)]
+    common: DependencyRuleCommonArgs,
+    #[arg(long = "port", required = true)]
+    ports: Vec<u16>,
+    /// Optional exact Redis key; repeat for each exceptional key.
+    #[arg(long = "key")]
+    keys: Vec<String>,
+    /// Key shape containing one `<id>` numeric segment, for example `exp:list:<id>`.
+    #[arg(long = "numeric-key-pattern")]
+    key_patterns: Vec<String>,
+    /// Exact HGET/HMGET field in wire order.
+    #[arg(long = "field", required = true)]
+    fields: Vec<String>,
+}
+
+#[derive(Debug, Args)]
 struct DependencyRuleApplyArgs {
     plan_id: String,
 }
@@ -145,7 +166,10 @@ struct DependencyRuleApplyArgs {
 pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs, pretty: bool) -> Result<()> {
     match args.command {
         DependencyRuleCommand::Plan(args) => super::print_json(
-            &plan_rewrite_dependency_rule(RewriteContext { target_root }, args.protocol.into())?,
+            &plan_rewrite_dependency_rule(
+                RewriteContext { target_root },
+                args.protocol.try_into()?,
+            )?,
             pretty,
         ),
         DependencyRuleCommand::Apply(args) => super::print_json(
@@ -155,9 +179,11 @@ pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs, pretty: bool) 
     }
 }
 
-impl From<DependencyRuleProtocolArgs> for RewriteDependencyRulePlanOptions {
-    fn from(value: DependencyRuleProtocolArgs) -> Self {
-        match value {
+impl TryFrom<DependencyRuleProtocolArgs> for RewriteDependencyRulePlanOptions {
+    type Error = anyhow::Error;
+
+    fn try_from(value: DependencyRuleProtocolArgs) -> Result<Self> {
+        Ok(match value {
             DependencyRuleProtocolArgs::Http(args) => dependency_rule_options(
                 args.common,
                 RewriteDependencyRuleSelector::Http {
@@ -219,9 +245,55 @@ impl From<DependencyRuleProtocolArgs> for RewriteDependencyRulePlanOptions {
                         initial_load_timeout_ms: args.initial_load_timeout_ms,
                     },
                 ),
+                RedisDependencyRuleModeArgs::Hget(args) => redis_hash_options("HGET", args)?,
+                RedisDependencyRuleModeArgs::Hmget(args) => redis_hash_options("HMGET", args)?,
             },
-        }
+        })
     }
+}
+
+fn redis_hash_options(
+    command: &str,
+    args: RedisHashReadDependencyRuleArgs,
+) -> Result<RewriteDependencyRulePlanOptions> {
+    ensure!(
+        !args.keys.is_empty() || !args.key_patterns.is_empty(),
+        "Redis {command} requires at least one --key or --numeric-key-pattern"
+    );
+    ensure!(
+        command != "HGET" || args.fields.len() == 1,
+        "Redis HGET requires exactly one --field"
+    );
+    let patterns = args
+        .key_patterns
+        .into_iter()
+        .map(|pattern| parse_numeric_key_pattern(command, &pattern))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(dependency_rule_options(
+        args.common,
+        RewriteDependencyRuleSelector::RedisHashRead {
+            command: command.to_string(),
+            ports: args.ports,
+            keys: args.keys,
+            key_patterns: patterns,
+            fields: args.fields,
+        },
+    ))
+}
+
+fn parse_numeric_key_pattern(command: &str, value: &str) -> Result<RedisKeyPatternConfig> {
+    ensure!(
+        value.matches("<id>").count() == 1,
+        "Redis {command} --numeric-key-pattern must contain exactly one <id> segment"
+    );
+    let (prefix, suffix) = value
+        .split_once("<id>")
+        .expect("validated pattern contains the marker");
+    Ok(RedisKeyPatternConfig {
+        prefix: prefix.to_string(),
+        suffix: suffix.to_string(),
+        numeric_middle: true,
+    })
 }
 
 fn dependency_rule_options(

@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::DependencyExchangeOutcome;
+use crate::config::background_dependencies::redis_rule_matches;
 use crate::redis::{
     BufferedReader as RedisBufferedReader, RedisCommand, read_frame as read_redis_frame,
     redis_command,
@@ -147,6 +148,7 @@ impl RedisReplayState {
         source: ReplaySource,
         case_id: Option<&str>,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
+        background_dependencies: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
         validate_recorded_exchange(
             "redis_exchange",
@@ -170,7 +172,11 @@ impl RedisReplayState {
         let connection_independent = is_connection_independent_background(
             source,
             record.global_dependency_reason.as_deref(),
-        );
+        ) || (source == ReplaySource::Global
+            && record.global_dependency_reason.as_deref() == Some("bootstrap_window")
+            && background_dependencies
+                .iter()
+                .any(|rule| redis_rule_matches(rule, record.target_port, &record.command, &args)));
         self.exchanges.push(ReplayExchange {
             source,
             case_id: case_id.map(ToOwned::to_owned),

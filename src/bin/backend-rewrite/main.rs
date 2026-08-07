@@ -12,8 +12,8 @@ use traffic_e2e::{
     RewriteRecordingRequestOptions, RewriteRouteOptions, RewriteRulePlanOptions,
     RewriteWorkerConfirmOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
     next_rewrite, plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence,
-    recover_rewrite, request_rewrite_recording, route_rewrite, start_rewrite_recording,
-    status_rewrite, status_rewrite_for_api, verify_rewrite_repair,
+    recover_rewrite, request_rewrite_recording, resume_rewrite_replay_planning, route_rewrite,
+    start_rewrite_recording, status_rewrite, status_rewrite_for_api, verify_rewrite_repair,
 };
 
 mod dependency_rule;
@@ -237,6 +237,8 @@ struct RepairArgs {
 enum RepairCommand {
     /// Verify that the accepted system or source revision changed.
     Verify(RepairVerifyArgs),
+    /// Migrate a legacy external-data response blocker to bootstrap replay planning.
+    ResumeReplayPlanning(RepairVerifyArgs),
 }
 
 #[derive(Debug, Args)]
@@ -417,6 +419,10 @@ async fn run(cli: Cli) -> Result<()> {
         RewriteCommand::Repair(args) => match args.command {
             RepairCommand::Verify(args) => print_json(
                 &verify_rewrite_repair(RewriteContext { target_root }, &args.repair_id)?,
+                pretty,
+            ),
+            RepairCommand::ResumeReplayPlanning(args) => print_json(
+                &resume_rewrite_replay_planning(RewriteContext { target_root }, &args.repair_id)?,
                 pretty,
             ),
         },

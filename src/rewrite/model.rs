@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::RedisKeyPatternConfig;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
@@ -272,6 +273,13 @@ pub(super) enum RewriteDependencyRuleSpec {
         ports: Vec<u16>,
         keys: Vec<String>,
         initial_load_timeout_ms: u64,
+    },
+    RedisHashRead {
+        command: String,
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        key_patterns: Vec<RedisKeyPatternConfig>,
+        fields: Vec<String>,
     },
 }
 

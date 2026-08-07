@@ -72,6 +72,7 @@ fn pending_plan_evidence_can_replace_an_incomplete_preview() {
         &state,
         "issue-dependency",
         "evidence-dirty-clusters",
+        &state.dependency_rule_plan.as_ref().unwrap().spec,
     )
     .unwrap();
 }
@@ -85,6 +86,7 @@ fn pending_plan_evidence_cannot_cross_issue_boundaries() {
         &state,
         "issue-other",
         "evidence-dirty-clusters",
+        &state.dependency_rule_plan.as_ref().unwrap().spec,
     )
     .unwrap_err();
 

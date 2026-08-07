@@ -119,11 +119,11 @@ The assigned worker owns AI diagnosis, code edits, and local tests after every
 API reaches `implementation_required`. The orchestrator dispatches before
 executing evidence. Its first issue creates the dedicated subagent binding;
 every later issue resumes that exact stored handle, even when the issue ID or
-attempt changes. With multiple APIs, a positive `api_inventory.pending` count
-makes the orchestrator read `backend-rewrite inventory`, select an exact
-pending item, and run
-`backend-rewrite next --api '<exact METHOD pattern>'`; it does not wait for the
-worker unless no pending API can advance or the coordinator returns
+attempt changes. With multiple APIs, worker confirmation returns an
+`advance_required` action with the exact next pending API command. The
+orchestrator executes it instead of waiting; resumed `status` reconstructs the
+same action when the confirmation response is lost. It waits for the worker
+only when no pending API can advance or the coordinator returns
 `wait_required`. An API's evidence and acceptance commands are opaque and
 remain bound to that API. If the target fingerprint changes during a focused
 Replay, that result is discarded and the API returns to Replay. If later edits
@@ -302,14 +302,23 @@ source pre-readiness count. The complete startup summary is available only from
 `pre_readiness_traffic`; startup context, `unused_global`, and target activity
 outside a case do not fail the case gate.
 
+For a Response issue with available pre-readiness traffic, that query also
+exposes the Redis bootstrap dependency planner. It accepts compact HGET/HMGET
+numeric-key patterns plus exact fields, applies a replay-only overlay to the
+immutable Global bootstrap evidence, and returns to the same focused cases.
+
 ### `system_repair_required`
 
 This action exists only after `backend-rewrite route` accepts current evidence and a
 source reference and required system change. The route snapshots a
 coordinator-defined system/source revision and returns an opaque repair ID; the
 AI never supplies an acceptance command. Apply the required repair, then execute
-the exact `action.commands.acceptance` argv for
-`repair verify <repair-id>`. `next` and `recording request` cannot bypass it.
+the exact `action.commands.acceptance` argv. New repairs use
+`repair verify <repair-id>`. A legacy Response `external_data_blocker` that is
+now expressible by bootstrap replay planning instead receives
+`repair resume-replay-planning <repair-id>`; this migration does not require a
+runtime-input revision change. `next` and `recording request` cannot bypass the
+returned command.
 Successful verification reruns the same cases for Replay or external-input
 repairs, or allocates fresh standard recording for Recorder or source-baseline
 changes.

@@ -69,6 +69,13 @@ was lost or a session resumes. Never infer state from artifact recency. Never
 read, search, list, or summarize `.traffic-e2e/local/ai-forbidden/**`; report an
 insufficient public action/status/evidence surface as a coordinator API gap.
 
+At the start of a main-orchestrator session, read
+`.traffic-e2e/local/block.md` when it exists. When you determine that progress
+is blocked and are about to stop, create or update that file with the context
+you consider useful for resuming. Remove it when the blocker is resolved. Treat
+it as AI-owned handoff context, never as coordinator state;
+`backend-rewrite status` remains authoritative.
+
 ## Main Orchestrator Loop
 
 1. Execute `backend-rewrite next`, a returned opaque command, or scoped
@@ -80,9 +87,10 @@ insufficient public action/status/evidence surface as a coordinator API gap.
 4. On every `implementation_required`, stop before evidence or code analysis.
    Create and bind the API worktree and dedicated subagent on its first issue;
    reactivate that same binding on every later issue.
-5. After dispatch, if inventory still has a `status=pending` item and no
-   `wait_required`, run read-only `backend-rewrite inventory`, select its exact
-   method/pattern, and execute `backend-rewrite next --api '<exact API>'`.
+5. After confirmation, execute a returned `advance_required` action immediately;
+   it proves the current worker is confirmed and supplies the exact next pending
+   API command. If an older or lost response does not expose that action, use
+   read-only `status`, then `inventory` only as needed to recover it.
 6. When a worker returns a tested handoff, integrate it into the canonical
    worktree, freeze the target revision, and execute that API's unchanged
    coordinator-issued acceptance.
@@ -121,7 +129,8 @@ dispatch barrier. Before evidence, artifacts, code, or an API hypothesis, the
 orchestrator creates the first worktree and real subagent or reactivates that
 API's existing binding, hands off the complete action and canonical commands,
 and executes the exact `confirm_worker` command with the returned handle.
-Require `action.details.worker.state=confirmed` before any later `next`.
+Require either `action.details.worker.state=confirmed` when no API can advance,
+or the post-confirmation `advance_required` action before any later `next`.
 
 `resume_required` means the same handle and worktree, updated from the
 integrated revision; a newly created subagent is replacement, not resume. Never
