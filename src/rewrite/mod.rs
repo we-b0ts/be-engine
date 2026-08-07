@@ -528,6 +528,7 @@ pub fn query_rewrite_evidence(
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_query(&target_root, &state, query_id)
         .context("evidence query is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "querying evidence")?;
     let scoped = inventory::scoped(&state, Some(&api.parse::<RecordingApi>()?))?;
     evidence::query(&target_root, &scoped, query_id)
 }
@@ -544,6 +545,7 @@ pub fn plan_rewrite_rule(
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("rule evidence is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "planning a response rule")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         rule::plan(&target_root, state, options)
     })?;
@@ -581,6 +583,7 @@ pub fn plan_rewrite_dependency_rule(
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("dependency-rule evidence is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "planning a dependency rule")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         dependency_rule::plan(&target_root, state, options)
     })?;
@@ -649,6 +652,7 @@ pub fn route_rewrite(options: RewriteRouteOptions) -> Result<RewriteRouteReport>
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("route evidence is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "routing the issue")?;
     if state.api != api {
         let requested_api = api.parse::<RecordingApi>()?;
         inventory::activate_requested(&mut state, Some(&requested_api))?;

@@ -7,6 +7,7 @@ use super::model::{
 };
 use super::store::RewriteStore;
 use super::{action, evidence, fingerprint, inventory};
+use crate::RecordingApi;
 
 #[derive(Debug, Clone)]
 pub struct RewriteWorkerConfirmOptions {
@@ -127,6 +128,16 @@ pub(super) fn ensure_current_confirmed(state: &RewriteState) -> Result<()> {
         current_is_confirmed(state),
         "API {} cannot be parked until its dedicated subagent dispatch is confirmed",
         state.api
+    );
+    Ok(())
+}
+
+pub(super) fn ensure_api_confirmed(state: &RewriteState, api: &str, operation: &str) -> Result<()> {
+    let requested_api = api.parse::<RecordingApi>()?;
+    let scoped = inventory::scoped(state, Some(&requested_api))?;
+    ensure!(
+        current_is_confirmed(&scoped),
+        "API {api} requires a confirmed dedicated subagent dispatch before {operation}; inspect its scoped status and execute action.commands.confirm_worker"
     );
     Ok(())
 }
@@ -268,6 +279,138 @@ mod tests {
     use crate::rewrite::model::{
         RewriteApiProgress, RewriteApiStatus, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
     };
+    use crate::rewrite::{
+        RewriteContext, RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector,
+        RewriteRecorderCapturePlanOptions, RewriteRouteOptions, RewriteRulePlanOptions,
+    };
+    use crate::{DynamicResponseMechanism, ResponseRuleKind};
+
+    #[test]
+    fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
+        let target = configured_target();
+        let store = RewriteStore::new(target.path()).unwrap();
+        let mut state = implementation_state_with_inventory(false);
+        let query_id = evidence::commands(target.path(), &state)[0]
+            .query_id
+            .clone();
+        let evidence_id = evidence::query(target.path(), &state, &query_id)
+            .unwrap()
+            .evidence_id;
+        store.save(&state).unwrap();
+        let original = serde_json::to_value(&state).unwrap();
+        let context = || RewriteContext {
+            target_root: target.path().to_path_buf(),
+        };
+
+        assert_confirmation_error(
+            super::super::query_rewrite_evidence(context(), &query_id).unwrap_err(),
+            "querying evidence",
+        );
+        assert_confirmation_error(
+            super::super::plan_rewrite_rule(
+                context(),
+                RewriteRulePlanOptions {
+                    evidence_id: evidence_id.clone(),
+                    kind: ResponseRuleKind::Dynamic,
+                    json_pointer: Some("/request_id".to_string()),
+                    dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
+                    source_evidence: Some("src/id.rs:new".to_string()),
+                    source_example: None,
+                    target_example: None,
+                },
+            )
+            .unwrap_err(),
+            "planning a response rule",
+        );
+        assert_confirmation_error(
+            super::super::plan_rewrite_dependency_rule(
+                context(),
+                RewriteDependencyRulePlanOptions {
+                    evidence_id: evidence_id.clone(),
+                    name: "cache-read".to_string(),
+                    source_evidence: "src/cache.rs:read".to_string(),
+                    selector: RewriteDependencyRuleSelector::RedisGet {
+                        ports: vec![6379],
+                        keys: vec!["cache:key".to_string()],
+                        initial_load_timeout_ms: 60_000,
+                    },
+                },
+            )
+            .unwrap_err(),
+            "planning a dependency rule",
+        );
+        assert_confirmation_error(
+            super::super::plan_rewrite_recorder_capture(
+                context(),
+                RewriteRecorderCapturePlanOptions {
+                    evidence_id: evidence_id.clone(),
+                    endpoint: "cache.example.com:6379".to_string(),
+                    source_evidence: "src/cache.rs:read".to_string(),
+                },
+            )
+            .unwrap_err(),
+            "planning recorder capture",
+        );
+        assert_confirmation_error(
+            super::super::route_rewrite(RewriteRouteOptions {
+                target_root: target.path().to_path_buf(),
+                kind: "source_change".to_string(),
+                evidence_id,
+                source_ref: "SourceService.java:read".to_string(),
+                required_change: "refresh the source baseline".to_string(),
+            })
+            .unwrap_err(),
+            "routing the issue",
+        );
+
+        let persisted = store.load().unwrap().unwrap();
+        assert_eq!(serde_json::to_value(&persisted).unwrap(), original);
+        confirm_current_for_test(&mut state);
+        store.save(&state).unwrap();
+        super::super::query_rewrite_evidence(context(), &query_id).unwrap();
+    }
+
+    #[test]
+    fn diagnostic_confirmation_follows_the_parked_evidence_owner() {
+        let target = configured_target();
+        let store = RewriteStore::new(target.path()).unwrap();
+        let mut state = implementation_state_with_inventory(true);
+        confirm_current_for_test(&mut state);
+        inventory::activate_requested(
+            &mut state,
+            Some(&"POST /other".parse::<RecordingApi>().unwrap()),
+        )
+        .unwrap();
+        state.phase = RewritePhase::ImplementationRequired;
+        state.active_issue = Some(issue("issue-b", 1, "target-b"));
+        confirm_current_for_test(&mut state);
+        let parked = state.parked_slices.get_mut("GET /api").unwrap();
+        parked.active_issue = Some(issue("issue-a-resumed", 2, "target-a-2"));
+        let scoped =
+            inventory::scoped(&state, Some(&"GET /api".parse::<RecordingApi>().unwrap())).unwrap();
+        let query_id = evidence::commands(target.path(), &scoped)[0]
+            .query_id
+            .clone();
+        store.save(&state).unwrap();
+
+        let error = super::super::query_rewrite_evidence(
+            RewriteContext {
+                target_root: target.path().to_path_buf(),
+            },
+            &query_id,
+        )
+        .unwrap_err();
+        assert_confirmation_error(error, "querying evidence");
+        assert!(
+            super::super::query_rewrite_evidence(
+                RewriteContext {
+                    target_root: target.path().to_path_buf(),
+                },
+                &evidence::commands(target.path(), &state)[0].query_id,
+            )
+            .is_ok()
+        );
+    }
 
     #[test]
     fn one_handle_is_bound_and_resumed_for_later_dispatches() {
@@ -453,6 +596,49 @@ mod tests {
             comparison_current: false,
             verified_target_fingerprint: None,
         }
+    }
+
+    fn assert_confirmation_error(error: anyhow::Error, operation: &str) {
+        let message = error.to_string();
+        assert!(message.contains("API GET /api"), "{message}");
+        assert!(message.contains(operation), "{message}");
+        assert!(
+            message.contains("action.commands.confirm_worker"),
+            "{message}"
+        );
+    }
+
+    fn configured_target() -> tempfile::TempDir {
+        let target = tempfile::tempdir().unwrap();
+        fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
+        fs::write(
+            target.path().join(".traffic-e2e/project.yaml"),
+            "version: 11\n\
+             source:\n  container: source\n\
+             target:\n  dockerfile: .traffic-e2e/Dockerfile.e2e\n  boot_dir: .traffic-e2e/local/boot\n  http_host: 127.0.0.1\n  port: 8081\n  readiness_path: /healthz\n  readiness_status: 404\n\
+             replay:\n  policy: .traffic-e2e/verification.yaml\n\
+             recording:\n  config: .traffic-e2e/recorder.toml\n  rule: record-api\n\
+             delivery:\n  pr_base: master\n\
+             state:\n  ai_forbidden_root: local/ai-forbidden\n",
+        )
+        .unwrap();
+        fs::write(
+            target.path().join(".traffic-e2e/verification.yaml"),
+            "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        )
+        .unwrap();
+        fs::write(
+            target.path().join(".traffic-e2e/recorder.toml"),
+            "[[http_gateway.rules]]\nname = \"record-api\"\nmethods = [\"GET\"]\npath_prefixes = [\"/\"]\n",
+        )
+        .unwrap();
+        fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();
+        git_ok(target.path(), &["init", "-q", "-b", "master"]);
+        git_ok(target.path(), &["config", "user.email", "test@example.com"]);
+        git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
+        git_ok(target.path(), &["add", "."]);
+        git_ok(target.path(), &["commit", "-q", "-m", "baseline"]);
+        target
     }
 
     fn committed_target() -> tempfile::TempDir {

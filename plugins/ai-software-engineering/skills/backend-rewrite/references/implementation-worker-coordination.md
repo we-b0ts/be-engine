@@ -70,6 +70,12 @@ dispatch does not satisfy this gate. If no real subagent capability is
 available, report the blocker; do not silently fall back to main-Agent
 diagnosis or implementation.
 
+The coordinator enforces this barrier at its API diagnostic boundary. Until
+the worker for the evidence-owning API confirms the current dispatch, evidence
+queries, response/dependency/recorder-capture planning, and repair routing are
+rejected. For parked work, the confirmation check follows the opaque evidence
+identity to its owning API rather than using the currently active API.
+
 For a later `implementation_required` on a bound API, do not dispatch another
 subagent. Refresh the same worktree from the integrated revision and use the
 runtime's resume/reactivate operation with the stored handle. A fresh Agent or
