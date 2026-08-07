@@ -10,10 +10,12 @@ use traffic_e2e::{
     DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteCaseDependenciesOptions,
     RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
     RewriteRecordingRequestOptions, RewriteRouteOptions, RewriteRulePlanOptions,
-    RewriteWorkerConfirmOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
-    next_rewrite, plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence,
-    recover_rewrite, request_rewrite_recording, resume_rewrite_replay_planning, route_rewrite,
-    start_rewrite_recording, status_rewrite, status_rewrite_for_api, verify_rewrite_repair,
+    RewriteTargetQualityOptions, RewriteWorkerConfirmOptions, apply_rewrite_rule,
+    confirm_rewrite_worker, inventory_rewrite, next_rewrite, plan_rewrite_rule,
+    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, resume_rewrite_replay_planning, route_rewrite,
+    run_rewrite_target_quality, start_rewrite_recording, status_rewrite, status_rewrite_for_api,
+    verify_rewrite_repair,
 };
 
 mod dependency_rule;
@@ -111,6 +113,8 @@ enum RewriteCommand {
     Repair(RepairArgs),
     /// Confirm the runtime identity of one dispatched or resumed API subagent.
     Worker(WorkerArgs),
+    /// Execute coordinator-issued target repository quality gates.
+    TargetQuality(TargetQualityArgs),
     /// Request a fresh coordinator-owned recording with explicit bounded parameters.
     Recording(RecordingArgs),
     /// Remove only a stale coordinator lock after its process has exited.
@@ -268,6 +272,26 @@ struct WorkerConfirmArgs {
     /// Optional human-readable subagent name for diagnostics.
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_NAME", hide_env_values = true)]
     agent_name: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct TargetQualityArgs {
+    #[command(subcommand)]
+    command: TargetQualityCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum TargetQualityCommand {
+    /// Run the exact quality gates bound to the integrated target revision.
+    Run(TargetQualityRunArgs),
+}
+
+#[derive(Debug, Args)]
+struct TargetQualityRunArgs {
+    gate_id: String,
+    /// API acceptance whose integrated target revision issued this gate.
+    #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
+    api: RecordingApi,
 }
 
 #[derive(Debug, Args)]
@@ -433,6 +457,16 @@ async fn run(cli: Cli) -> Result<()> {
                     dispatch_id: args.dispatch_id,
                     agent_handle: args.agent_handle,
                     agent_name: args.agent_name,
+                })?,
+                pretty,
+            ),
+        },
+        RewriteCommand::TargetQuality(args) => match args.command {
+            TargetQualityCommand::Run(args) => print_json(
+                &run_rewrite_target_quality(RewriteTargetQualityOptions {
+                    target_root,
+                    gate_id: args.gate_id,
+                    api: args.api,
                 })?,
                 pretty,
             ),

@@ -166,8 +166,10 @@ subagent. Never let two workers own or edit the same API concurrently.
 
 After handoff, integrate the worker patch or commit into the coordinator
 worktree, resolve conflicts, freeze the target revision, and execute that API's
-coordinator-issued acceptance. Later integrations may change the target
-fingerprint and requeue completed evidence; rerun affected acceptance instead
-of preserving stale results. Release bindings and remove worker worktrees only
-after workflow `terminal_allowed=true` and they are no longer needed for
-delivery.
+coordinator-issued acceptance. If it returns `target_quality_required`, execute
+its exact command only in the absolute canonical worktree named by the action,
+then execute the returned `advance_required`. Worker-local tests do not satisfy
+this integrated-revision gate. Later integrations change the target fingerprint
+and require the gate and affected acceptance again instead of preserving stale
+results. Release bindings and remove worker worktrees only after workflow
+`terminal_allowed=true` and they are no longer needed for delivery.

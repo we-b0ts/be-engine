@@ -919,7 +919,7 @@ backend-rewrite recording execute <action-id>
 backend-rewrite repair verify <repair-id>
 ```
 
-Rewrite action schema v8 always returns `action.kind`, `action.summary`,
+Rewrite action schema v11 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -971,7 +971,7 @@ rerun the required stage. `terminal_allowed` is false until every inventory
 item has both passing E2E and comparison evidence for the same target revision.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v8 returns `wait_required` with
+lease. When another API owns it, action schema v11 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -990,8 +990,12 @@ managed resources and allocates a replacement run. A pending rule plan produces
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. A target repository change also returns `advance_required` with
-`backend-rewrite next`.
+by apply. For an integrated target change, Rust repositories first return
+`target_quality_required`; its exact execute command runs format, workspace
+tests, and Clippy in the canonical coordinator worktree. Passing records the
+target fingerprint and returns the `advance_required` command that starts
+Replay. Explicit `target.quality_gates` replace the inferred commands, and an
+explicit empty list disables them.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
@@ -1099,7 +1103,15 @@ target:
   readiness_status: 404
   startup_timeout_seconds: 60
   request_timeout_seconds: 30
+  # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
+  # quality_gates:
+  #   - name: project-check
+  #     argv: [make, check]
 ```
+
+Each quality gate is an exact argv executed without a shell from the canonical
+target root. At most eight uniquely named commands may be configured, with at
+most 32 arguments each. `quality_gates: []` explicitly disables inference.
 
 Managed replay reads its target response limit from
 `recording.max_body_bytes` in the recorder configuration referenced by

@@ -52,7 +52,7 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v10 contains an `action` object with exactly `kind`, `summary`,
+Response schema v11 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read facts only from `action.details` and
 execute only command roles actually present under `action.commands`; never
@@ -93,7 +93,9 @@ it as AI-owned handoff context, never as coordinator state;
    read-only `status`, then `inventory` only as needed to recover it.
 6. When a worker returns a tested handoff, integrate it into the canonical
    worktree, freeze the target revision, and execute that API's unchanged
-   coordinator-issued acceptance.
+   coordinator-issued acceptance. When it returns `target_quality_required`,
+   execute its exact command in the bound canonical worktree, then execute the
+   returned `advance_required`; workers never execute this repository gate.
 7. Repeat until the coordinator permits terminal completion or a proven blocker
    prevents further progress.
 

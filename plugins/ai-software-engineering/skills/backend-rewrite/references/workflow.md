@@ -38,7 +38,7 @@ command returned by the current action. It waits only for:
 
 ## Action Handling
 
-The `action` object in response schema v10 has one stable shape for every kind:
+The `action` object in response schema v11 has one stable shape for every kind:
 
 ```json
 {
@@ -53,9 +53,10 @@ The `action` object in response schema v10 has one stable shape for every kind:
 location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
-`next` command. Response schema v10 is independent of target repository
+`next` command. Response schema v11 is independent of target repository
 configuration versions. It retains the mandatory implementation-worker
-dispatch confirmation gate and adds recorder-capture refresh state.
+dispatch confirmation gate, recorder-capture refresh state, and integrated
+target repository quality gates.
 
 ### `wait_required`
 
@@ -229,6 +230,19 @@ supplies the final business attribution. The worker applies
 local target tests, and returns the tested change plus unchanged acceptance
 command. The orchestrator integrates it and executes acceptance from the
 coordinator worktree.
+
+### `target_quality_required`
+
+After acceptance observes a changed integrated target revision, the
+coordinator runs repository quality gates before spending the serialized
+traffic-runtime lease on Replay. Execute only `action.commands.execute`. Its
+absolute `cwd` and `--target-root` bind the canonical coordinator worktree;
+never execute it in a worker worktree. A successful run records the verified
+target fingerprint and returns `advance_required`. Execute that returned
+command to start focused Replay. Any later integration or gate-configuration
+change produces a new fingerprint and a new quality action. A failed gate does
+not advance state; fix the integrated target and recover the current action
+with scoped `status`.
 
 The `representatives` evidence report advertises a `recorder_capture` planner
 for response, dependency, and comparison issues. Use it only after the worker

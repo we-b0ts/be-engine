@@ -8,6 +8,7 @@ use super::model::{
     ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
     TargetProjectConfig,
 };
+use super::target_quality_config::{inferred_target_quality_gates, validate_target_quality_gates};
 use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
@@ -132,6 +133,7 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
             readiness_status: options.target_readiness_status,
             startup_timeout_seconds: options.target_startup_timeout_seconds,
             request_timeout_seconds: options.target_request_timeout_seconds,
+            quality_gates: None,
         },
         replay: ReplayProjectConfig {
             policy: options.replay_policy.clone(),
@@ -216,6 +218,10 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     let recorder_config = resolve_under(&target_root, &config.recording.config);
     let recorder = crate::config::AppConfig::load(&recorder_config)?;
     let target_max_response_bytes = recorder.recording.max_body_bytes;
+    let target_quality_gates = config
+        .target
+        .quality_gates
+        .unwrap_or_else(|| inferred_target_quality_gates(&target_root));
     Ok((
         target_root.clone(),
         ResolvedProjectConfig {
@@ -230,6 +236,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_readiness_status: config.target.readiness_status,
             target_startup_timeout: Duration::from_secs(config.target.startup_timeout_seconds),
             target_request_timeout: Duration::from_secs(config.target.request_timeout_seconds),
+            target_quality_gates,
             target_max_response_bytes,
             source_container: config.source.container,
             breeze_container: config.breeze.map(|breeze| breeze.container),
@@ -348,6 +355,9 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         config.target.request_timeout_seconds > 0,
         "target.request_timeout_seconds must be greater than zero"
     );
+    if let Some(gates) = &config.target.quality_gates {
+        validate_target_quality_gates(gates)?;
+    }
     ensure!(
         !config.replay.policy.as_os_str().is_empty(),
         "replay.policy must not be empty"
@@ -575,6 +585,62 @@ mod tests {
         let (config, _) = resolve_layout(target.path(), &cases, None).unwrap();
 
         assert_eq!(config.target_max_response_bytes, 1234);
+    }
+
+    #[test]
+    fn rust_target_infers_standard_quality_gates() {
+        let target = target();
+        fs::write(
+            target.path().join("Cargo.toml"),
+            "[workspace]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        initialize(options(target.path())).unwrap();
+
+        let (_, config) = resolve_project(target.path()).unwrap();
+
+        assert_eq!(
+            config
+                .target_quality_gates
+                .iter()
+                .map(|gate| gate.name.as_str())
+                .collect::<Vec<_>>(),
+            ["rust-format", "rust-test", "rust-clippy"]
+        );
+        assert_eq!(
+            config.target_quality_gates[2].argv,
+            [
+                "cargo",
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings"
+            ]
+        );
+    }
+
+    #[test]
+    fn explicit_empty_quality_gates_disable_inference() {
+        let target = target();
+        fs::write(
+            target.path().join("Cargo.toml"),
+            "[workspace]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let yaml = fs::read_to_string(&config_path).unwrap().replacen(
+            "  request_timeout_seconds: 30",
+            "  request_timeout_seconds: 30\n  quality_gates: []",
+            1,
+        );
+        fs::write(config_path, yaml).unwrap();
+
+        let (_, config) = resolve_project(target.path()).unwrap();
+
+        assert!(config.target_quality_gates.is_empty());
     }
 
     #[test]

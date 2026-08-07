@@ -25,6 +25,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "route",
             "repair",
             "worker",
+            "target-quality",
             "recording",
             "recover",
         ]
@@ -186,6 +187,17 @@ fn parses_the_bounded_rewrite_surface() {
             .is_ok()
     );
     assert!(Cli::try_parse_from(["test", "evidence", "evq-r1-issue-representatives"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "target-quality",
+            "run",
+            "target-quality-fnv1a64-0123456789abcdef",
+            "--api",
+            "GET /api/widgets/*",
+        ])
+        .is_ok()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

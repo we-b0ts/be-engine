@@ -58,6 +58,15 @@ pub(super) struct TargetProjectConfig {
     pub startup_timeout_seconds: u64,
     #[serde(default = "default_target_request_timeout_seconds")]
     pub request_timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_gates: Option<Vec<TargetQualityGateConfig>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TargetQualityGateConfig {
+    pub name: String,
+    pub argv: Vec<String>,
 }
 
 fn default_target_startup_timeout_seconds() -> u64 {
@@ -114,6 +123,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_readiness_status: u16,
     pub(crate) target_startup_timeout: Duration,
     pub(crate) target_request_timeout: Duration,
+    pub(crate) target_quality_gates: Vec<TargetQualityGateConfig>,
     pub(crate) target_max_response_bytes: usize,
     pub(crate) source_container: String,
     pub(crate) breeze_container: Option<String>,

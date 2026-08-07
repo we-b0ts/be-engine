@@ -14,6 +14,7 @@ mod result;
 mod runtime;
 mod store;
 mod support;
+mod target_quality_config;
 
 use std::path::PathBuf;
 
@@ -38,8 +39,8 @@ pub use evidence::{
 };
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
-pub(crate) use model::ResolvedProjectConfig;
 use model::RunStatus;
+pub(crate) use model::{ResolvedProjectConfig, TargetQualityGateConfig};
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, focused_background_reclassification_recovery_required,
     latest_focused_api, reclassify_focused_background_dependencies,

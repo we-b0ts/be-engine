@@ -4,13 +4,15 @@ use anyhow::Result;
 
 use crate::RecordingApi;
 
+#[cfg(test)]
+use super::fingerprint;
 use super::model::{
     ACTION_SCHEMA_VERSION, RewriteAction, RewriteActionEnvelope, RewriteCommandSpec,
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
     RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
 };
 use super::{
-    fingerprint, inventory, recorder_capture, recording, recording_action, repair, worker,
+    inventory, recorder_capture, recording, recording_action, repair, target_quality, worker,
 };
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
@@ -22,23 +24,14 @@ pub(super) fn for_status(
     state: &RewriteState,
 ) -> Result<RewriteActionEnvelope> {
     let recording_status = recording_action::status_action(target_root, state)?;
+    let target_change = target_quality::status_action(target_root, state)?;
     let action = match state.phase {
         RewritePhase::RecordingRequired | RewritePhase::ComparisonRecordingRequired
             if recording_status.is_some() =>
         {
             recording_status.expect("recording status was checked")
         }
-        RewritePhase::ImplementationRequired
-            if state.target_fingerprint.as_deref()
-                != Some(fingerprint::repository_fingerprint(target_root)?.as_str()) =>
-        {
-            advance_required(
-                target_root,
-                Some(&state.api),
-                "target repository changed after the latest focused attempt; advance coordinator verification"
-                    .to_string(),
-            )
-        }
+        _ if target_change.is_some() => target_change.expect("target change was checked"),
         _ => state_action(target_root, state),
     };
     Ok(envelope(state, action))

@@ -104,6 +104,23 @@ impl Serialize for RewriteAction {
                 },
             }
             .serialize(serializer),
+            Self::TargetQualityRequired {
+                summary,
+                gate_id,
+                target_fingerprint,
+                gates,
+                command,
+            } => RewriteActionView {
+                kind: "target_quality_required",
+                summary,
+                details: RewriteTargetQualityDetails {
+                    gate_id,
+                    target_fingerprint,
+                    gates,
+                },
+                commands: RewriteRecordingCommands { execute: command },
+            }
+            .serialize(serializer),
             Self::PlanApplyRequired { summary, command } => RewriteActionView {
                 kind: "plan_apply_required",
                 summary,
@@ -252,6 +269,13 @@ struct RewriteImplementationDetails<'a> {
     #[serde(flatten)]
     issue: RewriteIssueDetails<'a>,
     worker: &'a RewriteWorkerDispatchView,
+}
+
+#[derive(Serialize)]
+struct RewriteTargetQualityDetails<'a> {
+    gate_id: &'a str,
+    target_fingerprint: &'a str,
+    gates: &'a [String],
 }
 
 impl<'a> From<&'a RewriteIssue> for RewriteIssueDetails<'a> {

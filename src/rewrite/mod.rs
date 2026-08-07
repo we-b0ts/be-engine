@@ -19,6 +19,7 @@ mod repair;
 mod rule;
 mod status;
 mod store;
+mod target_quality;
 #[cfg(test)]
 mod test_support;
 mod traffic_operation;
@@ -63,6 +64,7 @@ pub use recording::{
 pub use repair::{RewriteRouteOptions, resume_rewrite_replay_planning};
 pub use rule::RewriteRulePlanOptions;
 pub use status::{status_rewrite, status_rewrite_for_api};
+pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
 pub use worker::{RewriteWorkerConfirmOptions, confirm as confirm_rewrite_worker};
 
 use model::{
@@ -99,7 +101,7 @@ pub fn query_rewrite_case_dependencies(
 }
 
 pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+    let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let requested_api = options.api.as_ref().map(ToString::to_string);
     let Some(_lock) = store.try_lock()? else {
@@ -266,6 +268,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 current_api_index: None,
                 parked_slices: std::collections::BTreeMap::new(),
                 worker_bindings: std::collections::BTreeMap::new(),
+                target_quality_fingerprint: None,
                 recording_run_id,
                 recording_rejection: None,
                 recording_settings: RewriteRecordingSettings::default(),
@@ -379,6 +382,14 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             let current = fingerprint::repository_fingerprint(&target_root)?;
             if state.target_fingerprint.as_deref() == Some(current.as_str()) {
                 return Ok(action::for_state(&target_root, &state));
+            }
+            if let Some(required) = target_quality::required_action(
+                &target_root,
+                &state,
+                &current,
+                &project.target_quality_gates,
+            )? {
+                return Ok(action::envelope(&state, required));
             }
             state.e2e_current = false;
             state.comparison_current = false;
@@ -801,7 +812,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(10)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(11)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),

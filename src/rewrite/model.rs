@@ -11,7 +11,7 @@ use crate::RedisKeyPatternConfig;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 10;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 11;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -406,6 +406,8 @@ pub(super) struct RewriteState {
     pub parked_slices: BTreeMap<String, RewriteSliceState>,
     #[serde(default)]
     pub worker_bindings: BTreeMap<String, RewriteWorkerBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_quality_fingerprint: Option<String>,
     pub recording_run_id: String,
     #[serde(default)]
     pub recording_rejection: Option<String>,
@@ -609,6 +611,13 @@ pub enum RewriteAction {
         confirm_worker: Option<RewriteCommandSpec>,
         evidence_commands: Vec<RewriteEvidenceCommand>,
         acceptance: RewriteCommandSpec,
+    },
+    TargetQualityRequired {
+        summary: String,
+        gate_id: String,
+        target_fingerprint: String,
+        gates: Vec<String>,
+        command: RewriteCommandSpec,
     },
     PlanApplyRequired {
         summary: String,
@@ -827,6 +836,7 @@ mod tests {
         assert!(state.current_api_index.is_none());
         assert!(state.parked_slices.is_empty());
         assert!(state.worker_bindings.is_empty());
+        assert!(state.target_quality_fingerprint.is_none());
     }
 
     #[test]
@@ -914,7 +924,7 @@ mod tests {
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(10)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(11)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }
