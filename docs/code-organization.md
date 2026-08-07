@@ -50,7 +50,9 @@ is unclear.
   keeps the managed recording request/start/worker lifecycle. `worker.rs` owns
   dedicated API-subagent identity binding and dispatch/resume confirmation.
   `inventory.rs` owns the API inventory state machine: stable installation,
-  bounded activation and parking, requeueing, and summary/detail views.
+  bounded activation and parking, deferred revalidation, and summary/detail
+  views. `revalidation.rs` owns the coordinator's explicit early-validation
+  request boundary and projection for deferred API status.
   Together, these files are intentionally cohesive near the review threshold;
   status projection and the traffic lease are separate modules, and further
   splitting should follow a real responsibility boundary rather than divide

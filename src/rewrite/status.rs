@@ -1,12 +1,38 @@
 use anyhow::Result;
 
-use super::model::{RewritePhase, RewriteStatusReport};
+use super::model::{
+    ACTION_SCHEMA_VERSION, RewriteInventoryReport, RewritePhase, RewriteStatusReport,
+};
 use super::store::{RewriteLockState, RewriteStore};
-use super::{RewriteContext, action, fingerprint, inventory, traffic_operation};
+use super::{RewriteContext, action, fingerprint, inventory, revalidation, traffic_operation};
 use crate::RecordingApi;
 
 pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
     status_rewrite_for_api(context, None)
+}
+
+pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryReport> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let state = RewriteStore::new(&target_root)?.load()?;
+    Ok(match state {
+        Some(mut state) => {
+            inventory::initialize_legacy(&mut state);
+            let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
+            inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
+            RewriteInventoryReport {
+                schema_version: ACTION_SCHEMA_VERSION,
+                initialized: true,
+                workflow: Some(action::workflow_view(&state)),
+                api_inventory: Some(inventory::details(&state)),
+            }
+        }
+        None => RewriteInventoryReport {
+            schema_version: ACTION_SCHEMA_VERSION,
+            initialized: false,
+            workflow: None,
+            api_inventory: None,
+        },
+    })
 }
 
 pub fn status_rewrite_for_api(
@@ -19,7 +45,7 @@ pub fn status_rewrite_for_api(
         Some(mut state) => {
             inventory::initialize_legacy(&mut state);
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
-            inventory::invalidate_completed_for_target_change(&mut state, &target_fingerprint)?;
+            inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             if state.phase == RewritePhase::ComparisonRecordingRequired
                 && state.target_fingerprint.as_deref() != Some(target_fingerprint.as_str())
             {
@@ -46,8 +72,7 @@ pub fn status_rewrite_for_api(
                     action::recovery_required(&target_root)
                 }
                 traffic_operation::TrafficOperationState::Live(_) => {
-                    let scoped = inventory::scoped(&state, api)?;
-                    action::for_status(&target_root, &scoped)?
+                    projected_action(&target_root, &state, api)?
                 }
                 traffic_operation::TrafficOperationState::Absent => {
                     if let Some(requested) = requested_api.as_ref()
@@ -69,8 +94,7 @@ pub fn status_rewrite_for_api(
                             ),
                             RewriteLockState::Stale => action::recovery_required(&target_root),
                             RewriteLockState::Absent => {
-                                let scoped = inventory::scoped(&state, api)?;
-                                action::for_status(&target_root, &scoped)?
+                                projected_action(&target_root, &state, api)?
                             }
                         }
                     }
@@ -111,4 +135,18 @@ pub fn status_rewrite_for_api(
             }
         }
     })
+}
+
+fn projected_action(
+    target_root: &std::path::Path,
+    state: &super::model::RewriteState,
+    api: Option<&RecordingApi>,
+) -> Result<super::model::RewriteActionEnvelope> {
+    if let Some(api) = api
+        && let Some(envelope) = revalidation::deferred_status_envelope(target_root, state, api)?
+    {
+        return Ok(envelope);
+    }
+    let scoped = inventory::scoped(state, api)?;
+    action::for_status(target_root, &scoped)
 }

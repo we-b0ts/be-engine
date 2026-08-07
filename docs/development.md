@@ -917,9 +917,12 @@ backend-rewrite recording request \
   --per-api-case-limit 100
 backend-rewrite recording execute <action-id>
 backend-rewrite repair verify <repair-id>
+backend-rewrite verification request \
+  --api 'GET /api/widgets/*' \
+  --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v11 always returns `action.kind`, `action.summary`,
+Rewrite action schema v12 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -952,7 +955,8 @@ recording window and includes bounded candidate/rejection diagnostics under
 configuration limits the standard run and the coordinator derives a stable
 API inventory from its published cases. `next` and `status` expose only its
 bounded summary (`total`, `completed`, `pending`, `implementation_required`,
-`current_index`, and `current_api`) so their size does not grow with API count.
+`awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
+`current_api`) so their size does not grow with API count.
 The read-only `backend-rewrite inventory` command returns the full ordered
 per-API list. Every `implementation_required` action is assigned to an isolated
 subagent, including a single-API workflow. The main orchestrator dispatches
@@ -965,19 +969,25 @@ After status returns
 preallocated run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next comparison action. Once
 comparison passes, the following `next` prepares the next inventory item from
-the same standard recording. A repository or policy change makes prior
-E2E/comparison evidence stale and causes `next` to
-rerun the required stage. `terminal_allowed` is false until every inventory
-item has both passing E2E and comparison evidence for the same target revision.
+the same standard recording. A repository or policy content change makes prior
+E2E/comparison evidence stale. Completed APIs become `revalidation_pending`
+and remain deferred while ordinary pending or implementation work exists. The
+coordinator drains them in one final verification epoch. A commit that
+preserves the effective worktree content does not change the fingerprint.
+`verification request` lets the main orchestrator promote selected stale APIs
+early after a high-impact shared change; the returned advance command starts
+their normal Replay/comparison flow, and final whole-inventory coverage remains
+mandatory. `terminal_allowed` is false until every inventory item has both
+passing E2E and comparison evidence for the same target content fingerprint.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v11 returns `wait_required` with
+lease. When another API owns it, action schema v12 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
 orchestrator may run Replay for API B and dispatch worker B. No worker may start
 a traffic operation. If code changes during Replay, that result is discarded;
-later code changes also requeue already-completed API evidence.
+later code changes defer already-completed API evidence to the final epoch.
 
 `status [--api]` is read-only and returns the selected API's `action` from the
 persisted workflow revision. Before execution starts it reconstructs the same

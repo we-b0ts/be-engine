@@ -38,7 +38,7 @@ command returned by the current action. It waits only for:
 
 ## Action Handling
 
-The `action` object in response schema v11 has one stable shape for every kind:
+The `action` object in response schema v12 has one stable shape for every kind:
 
 ```json
 {
@@ -53,7 +53,7 @@ The `action` object in response schema v11 has one stable shape for every kind:
 location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
-`next` command. Response schema v11 is independent of target repository
+`next` command. Response schema v12 is independent of target repository
 configuration versions. It retains the mandatory implementation-worker
 dispatch confirmation gate, recorder-capture refresh state, and integrated
 target repository quality gates.
@@ -101,7 +101,8 @@ implementation command.
 
 Every initialized action/status envelope includes a bounded `api_inventory`
 summary: `total`, `completed`, `pending`, `implementation_required`,
-`awaiting_recording_refresh`, `current_index`, and `current_api`. The coordinator
+`awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
+`current_api`. The coordinator
 owns the stable inventory for the shared standard recording. The main
 orchestrator reads
 [implementation-worker-coordination.md](implementation-worker-coordination.md)
@@ -128,8 +129,28 @@ only when no pending API can advance or the coordinator returns
 `wait_required`. An API's evidence and acceptance commands are opaque and
 remain bound to that API. If the target fingerprint changes during a focused
 Replay, that result is discarded and the API returns to Replay. If later edits
-change the fingerprint after an API completed, its prior evidence is requeued
-before whole-workflow completion.
+change the fingerprint after an API completed, it becomes
+`revalidation_pending`. These stale successes do not compete with untouched
+pending APIs or active implementation repairs. Once normal work drains, the
+coordinator automatically replays and compares every stale API against the
+same final content fingerprint. A Git commit with no effective content change
+does not create a new fingerprint or validation epoch.
+
+When a worker handoff proves a shared module, global configuration, or startup
+change has high impact, the main orchestrator may opt into earlier checks for
+selected stale APIs:
+
+```text
+backend-rewrite verification request \
+  --api 'GET /api/a' \
+  --api 'POST /api/b' \
+  --reason 'shared response mapper changed'
+```
+
+Execute the returned `next.action.commands.advance` command. Only
+`revalidation_pending` APIs are eligible: current or not-yet-verified APIs are
+already covered by normal scheduling. A false positive spends extra serialized
+Replay/comparison time; it never weakens or skips the mandatory final epoch.
 
 Per-API failure retries reuse the same cases for that API. A fresh standard
 recording is still allowed only under the explicit conditions below and resets
@@ -347,9 +368,10 @@ evidence is an API-scoped recorder-capture refresh, not system repair.
 For API-scoped status, this action may mean only that assigned API has current
 passing focused E2E and comparison evidence; `terminal_allowed` remains false
 while another inventory item is incomplete. `terminal_allowed=true` means all
-APIs are complete for the same target revision. Use `backend-rewrite inventory`
-if final delivery needs the full per-API list. Repository-wide regression and
-delivery remain under the caller's rewrite objective.
+APIs are complete for the same target content fingerprint. Use
+`backend-rewrite inventory` if final delivery needs the full per-API list.
+Repository-wide regression and delivery remain under the caller's rewrite
+objective.
 
 ## State And Recovery
 

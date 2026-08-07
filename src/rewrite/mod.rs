@@ -16,6 +16,7 @@ mod recording_execution;
 mod recording_input;
 mod recovery;
 mod repair;
+mod revalidation;
 mod rule;
 mod status;
 mod store;
@@ -62,14 +63,16 @@ pub use recording::{
     start_rewrite_recording,
 };
 pub use repair::{RewriteRouteOptions, resume_rewrite_replay_planning};
+pub use revalidation::{
+    RewriteRevalidationRequestOptions, RewriteRevalidationRequestReport,
+    request as request_rewrite_revalidation,
+};
 pub use rule::RewriteRulePlanOptions;
-pub use status::{status_rewrite, status_rewrite_for_api};
+pub use status::{inventory_rewrite, status_rewrite, status_rewrite_for_api};
 pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
 pub use worker::{RewriteWorkerConfirmOptions, confirm as confirm_rewrite_worker};
 
-use model::{
-    ACTION_SCHEMA_VERSION, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
-};
+use model::{RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION};
 use store::{RewriteLockState, RewriteStore};
 #[cfg(test)]
 pub(in crate::rewrite) use test_support::test_state;
@@ -159,7 +162,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             let migrated = inventory::initialize_legacy(&mut state);
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             let invalidated =
-                inventory::invalidate_completed_for_target_change(&mut state, &target_fingerprint)?;
+                inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             if recording::begin_pending_capture_refresh(&target_root, &mut state)? {
                 store.save(&state)?;
             }
@@ -496,28 +499,6 @@ fn claim_traffic_operation(
     }
 }
 
-pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
-    let state = RewriteStore::new(&target_root)?.load()?;
-    Ok(match state {
-        Some(mut state) => {
-            inventory::initialize_legacy(&mut state);
-            RewriteInventoryReport {
-                schema_version: ACTION_SCHEMA_VERSION,
-                initialized: true,
-                workflow: Some(action::workflow_view(&state)),
-                api_inventory: Some(inventory::details(&state)),
-            }
-        }
-        None => RewriteInventoryReport {
-            schema_version: ACTION_SCHEMA_VERSION,
-            initialized: false,
-            workflow: None,
-            api_inventory: None,
-        },
-    })
-}
-
 pub fn query_rewrite_evidence(
     context: RewriteContext,
     query_id: &str,
@@ -816,7 +797,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(11)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(12)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),

@@ -13,19 +13,9 @@ const MAX_RUNTIME_INPUT_FILES: usize = 4_096;
 const MAX_RUNTIME_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
-    let head = git(target_root, &["rev-parse", "HEAD"])?;
-    let mut diff_args = vec![
-        "diff",
-        "--binary",
-        "HEAD",
-        "--",
-        ".",
-        crate::internal_runtime::LOCAL_GIT_PATHSPEC,
-    ];
-    diff_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
-    let diff = git_bytes(target_root, &diff_args)?;
-    let mut untracked_args = vec![
+    let mut paths_args = vec![
         "ls-files",
+        "--cached",
         "--others",
         "--exclude-standard",
         "-z",
@@ -33,25 +23,80 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
         ".",
         crate::internal_runtime::LOCAL_GIT_PATHSPEC,
     ];
-    untracked_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
-    let untracked = git_bytes(target_root, &untracked_args)?;
-    let mut hash = Fnv1a::default();
-    hash.update(head.trim().as_bytes());
-    hash.update(&diff);
-    for relative in untracked
+    paths_args.extend_from_slice(RUNTIME_PROGRESS_PATHSPECS);
+    let listed = git_bytes(target_root, &paths_args)?;
+    let mut paths = listed
         .split(|byte| *byte == 0)
         .filter(|path| !path.is_empty())
-    {
-        hash.update(relative);
-        let relative = std::str::from_utf8(relative).context("untracked path is not UTF-8")?;
-        let path = target_root.join(relative);
-        if path.is_file() {
-            hash.update(&std::fs::read(&path).with_context(|| {
-                format!("failed to fingerprint untracked file {}", path.display())
-            })?);
-        }
+        .collect::<Vec<_>>();
+    paths.sort_unstable();
+    paths.dedup();
+    let mut hash = Fnv1a::default();
+    for relative in paths {
+        let relative = std::str::from_utf8(relative).context("repository path is not UTF-8")?;
+        hash_repository_path(target_root, relative, &mut hash)?;
     }
     Ok(hash.finish())
+}
+
+fn hash_repository_path(target_root: &Path, relative: &str, hash: &mut Fnv1a) -> Result<()> {
+    let path = target_root.join(relative);
+    let metadata = match fs::symlink_metadata(&path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect repository path {}", path.display()));
+        }
+    };
+    hash.update(relative.as_bytes());
+    hash.update(&[0]);
+    if metadata.file_type().is_symlink() {
+        hash.update(b"symlink");
+        hash.update(fs::read_link(&path)?.as_os_str().as_encoded_bytes());
+        hash.update(&[0]);
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        if path.join(".git").exists() {
+            hash.update(b"repository");
+            hash.update(repository_fingerprint(&path)?.as_bytes());
+        } else {
+            hash.update(b"uninitialized-repository");
+            hash.update(&git_bytes(
+                target_root,
+                &["ls-files", "--stage", "--", relative],
+            )?);
+        }
+        hash.update(&[0]);
+        return Ok(());
+    }
+    ensure!(
+        metadata.is_file(),
+        "repository entry is neither a file, directory, nor symlink: {}",
+        path.display()
+    );
+    hash.update(b"file");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        hash.update(&(metadata.permissions().mode() & 0o111).to_le_bytes());
+    }
+    hash.update(&metadata.len().to_le_bytes());
+    let mut file = fs::File::open(&path)
+        .with_context(|| format!("failed to read repository path {}", path.display()))?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .with_context(|| format!("failed to hash repository path {}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    hash.update(&[0]);
+    Ok(())
 }
 
 pub(super) fn source_container_revision(container: &str) -> Result<String> {
@@ -196,11 +241,6 @@ pub(super) fn id(parts: &[&str]) -> String {
     hash.finish()
 }
 
-fn git(target_root: &Path, args: &[&str]) -> Result<String> {
-    let bytes = git_bytes(target_root, args)?;
-    String::from_utf8(bytes).context("git output is not UTF-8")
-}
-
 fn git_bytes(target_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let output = Command::new("git")
         .arg("-C")
@@ -322,7 +362,37 @@ mod tests {
             "pub fn value() -> u8 { 2 }\n",
         )
         .unwrap();
-        assert_ne!(repository_fingerprint(repository.path()).unwrap(), baseline);
+        let dirty_source = repository_fingerprint(repository.path()).unwrap();
+        assert_ne!(dirty_source, baseline);
+
+        git_ok(repository.path(), &["add", "src/lib.rs"]);
+        git_ok(repository.path(), &["commit", "-m", "change source"]);
+        assert_eq!(
+            repository_fingerprint(repository.path()).unwrap(),
+            dirty_source
+        );
+
+        fs::write(
+            repository.path().join("src/new.rs"),
+            "pub const NEW: u8 = 1;\n",
+        )
+        .unwrap();
+        let dirty_new_file = repository_fingerprint(repository.path()).unwrap();
+        git_ok(repository.path(), &["add", "src/new.rs"]);
+        git_ok(repository.path(), &["commit", "-m", "add source"]);
+        assert_eq!(
+            repository_fingerprint(repository.path()).unwrap(),
+            dirty_new_file
+        );
+
+        fs::remove_file(repository.path().join("src/new.rs")).unwrap();
+        let dirty_deletion = repository_fingerprint(repository.path()).unwrap();
+        git_ok(repository.path(), &["add", "--update"]);
+        git_ok(repository.path(), &["commit", "-m", "remove source"]);
+        assert_eq!(
+            repository_fingerprint(repository.path()).unwrap(),
+            dirty_deletion
+        );
     }
 
     fn git_ok(repository: &Path, args: &[&str]) {

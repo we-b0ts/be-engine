@@ -11,7 +11,7 @@ use crate::RedisKeyPatternConfig;
 use crate::{E2eDiagnosisCounts, E2eRepresentativeDifference, E2eVerificationGates};
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 11;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 12;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -36,6 +36,7 @@ pub enum RewriteApiStatus {
     Active,
     ImplementationRequired,
     AwaitingRecordingRefresh,
+    RevalidationPending,
     Complete,
 }
 
@@ -63,6 +64,7 @@ pub struct RewriteApiInventoryView {
     pub pending: usize,
     pub implementation_required: usize,
     pub awaiting_recording_refresh: usize,
+    pub revalidation_pending: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -924,7 +926,7 @@ mod tests {
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(11)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(12)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }

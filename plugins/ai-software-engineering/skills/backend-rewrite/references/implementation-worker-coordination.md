@@ -139,7 +139,7 @@ work overlaps while traffic operations remain serial:
 ```text
 Replay API A -> implementation_required -> worker A diagnoses and codes
 Replay API B -> implementation_required -> worker B diagnoses and codes
-integrate compatible changes -> freeze revision -> serialized acceptance
+batch compatible changes -> freeze content fingerprint -> serialized acceptance
 ```
 
 ## Assignment And Worker Lifecycle
@@ -171,11 +171,17 @@ capability blocker. Only explicit caller approval may transfer the API to a new
 subagent. Never let two workers own or edit the same API concurrently.
 
 After handoff, integrate the worker patch or commit into the coordinator
-worktree, resolve conflicts, freeze the target revision, and execute that API's
+worktree, resolve conflicts, batch compatible handoffs, freeze the target
+content fingerprint, and execute that API's
 coordinator-issued acceptance. If it returns `target_quality_required`, execute
 its exact command only in the absolute canonical worktree named by the action,
 then execute the returned `advance_required`. Worker-local tests do not satisfy
-this integrated-revision gate. Later integrations change the target fingerprint
-and require the gate and affected acceptance again instead of preserving stale
-results. Release bindings and remove worker worktrees only after workflow
-`terminal_allowed=true` and they are no longer needed for delivery.
+this integrated-revision gate. Later integrations move old completed APIs to
+deferred `revalidation_pending`; after ordinary work drains, the coordinator
+automatically verifies all of them against the final fingerprint. When the
+handoff's shared-module impact is high, the orchestrator may first run
+`backend-rewrite verification request --api ... --reason ...` for selected
+stale APIs and execute its returned advance command. This optional early check
+does not replace final coverage. Release bindings and remove worker worktrees
+only after workflow `terminal_allowed=true` and they are no longer needed for
+delivery.
