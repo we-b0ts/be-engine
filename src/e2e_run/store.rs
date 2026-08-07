@@ -500,6 +500,7 @@ mod tests {
             response: Some(ResponseAssertionSummary {
                 passed: false,
                 difference_count: 1,
+                difference_index: Vec::new(),
                 representative_difference: None,
                 detail_report: detail_report.clone(),
                 detail_fingerprint: "detail-fingerprint".to_string(),

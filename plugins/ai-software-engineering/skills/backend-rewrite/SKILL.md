@@ -52,7 +52,7 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v10 contains an `action` object with exactly `kind`, `summary`,
+Response schema v13 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read facts only from `action.details` and
 execute only command roles actually present under `action.commands`; never
@@ -69,6 +69,13 @@ was lost or a session resumes. Never infer state from artifact recency. Never
 read, search, list, or summarize `.traffic-e2e/local/ai-forbidden/**`; report an
 insufficient public action/status/evidence surface as a coordinator API gap.
 
+At the start of a main-orchestrator session, read
+`.traffic-e2e/local/block.md` when it exists. When you determine that progress
+is blocked and are about to stop, create or update that file with the context
+you consider useful for resuming. Remove it when the blocker is resolved. Treat
+it as AI-owned handoff context, never as coordinator state;
+`backend-rewrite status` remains authoritative.
+
 ## Main Orchestrator Loop
 
 1. Execute `backend-rewrite next`, a returned opaque command, or scoped
@@ -80,13 +87,20 @@ insufficient public action/status/evidence surface as a coordinator API gap.
 4. On every `implementation_required`, stop before evidence or code analysis.
    Create and bind the API worktree and dedicated subagent on its first issue;
    reactivate that same binding on every later issue.
-5. After dispatch, if inventory still has a `status=pending` item and no
-   `wait_required`, run read-only `backend-rewrite inventory`, select its exact
-   method/pattern, and execute `backend-rewrite next --api '<exact API>'`.
-6. When a worker returns a tested handoff, integrate it into the canonical
-   worktree, freeze the target revision, and execute that API's unchanged
-   coordinator-issued acceptance.
-7. Repeat until the coordinator permits terminal completion or a proven blocker
+5. After confirmation, execute a returned `advance_required` action immediately;
+   it proves the current worker is confirmed and supplies the exact next pending
+   API command. If an older or lost response does not expose that action, use
+   read-only `status`, then `inventory` only as needed to recover it.
+6. When workers return tested handoffs, batch compatible integrations into the
+   canonical worktree, freeze its content fingerprint, and execute each API's
+   unchanged coordinator-issued acceptance. When it returns
+   `target_quality_required`, execute its exact command in the bound canonical
+   worktree, then execute the returned `advance_required`; workers never
+   execute this repository gate.
+7. If a handoff identifies a high-impact shared or global change, the main
+   orchestrator may explicitly schedule selected stale APIs with `verification
+   request`; this is extra early validation and never replaces final coverage.
+8. Repeat until the coordinator permits terminal completion or a proven blocker
    prevents further progress.
 
 Recording, focused Replay, and comparison share one serialized traffic lane.
@@ -97,8 +111,12 @@ another pending API can advance.
 
 Keep the standard cases immutable through ordinary repair attempts. A failed
 focused attempt changes the target and reuses those cases; it does not itself
-authorize fresh traffic. Later integrated edits may invalidate an API's target
-fingerprint and requeue its prior evidence.
+authorize fresh traffic. Later integrated edits may invalidate an API's
+verified content fingerprint. The coordinator exposes it as
+`revalidation_pending`, defers it while normal pending or implementation work
+remains, and drains every stale API against one final fingerprint before
+terminal completion. A commit that only packages the same effective worktree
+content does not change this fingerprint.
 
 When a worker proves that source code consumes an exact response-driving
 endpoint absent from recorded dependencies, it returns the endpoint and one
@@ -121,7 +139,8 @@ dispatch barrier. Before evidence, artifacts, code, or an API hypothesis, the
 orchestrator creates the first worktree and real subagent or reactivates that
 API's existing binding, hands off the complete action and canonical commands,
 and executes the exact `confirm_worker` command with the returned handle.
-Require `action.details.worker.state=confirmed` before any later `next`.
+Require either `action.details.worker.state=confirmed` when no API can advance,
+or the post-confirmation `advance_required` action before any later `next`.
 
 `resume_required` means the same handle and worktree, updated from the
 integrated revision; a newly created subagent is replacement, not resume. Never
@@ -153,18 +172,18 @@ Keep these states distinct:
   may become idle, but its API binding and worktree remain.
 - **API complete:** the orchestrator integrated the handoff and the
   coordinator-issued acceptance returned that API as `complete` for the current
-  target revision. If acceptance returns `implementation_required`, update the
-  same worker from the integrated revision and reactivate its stored handle
-  with the new action/result; do not create a replacement worker.
+  target content fingerprint. If acceptance returns `implementation_required`,
+  update the same worker from the integrated revision and reactivate its stored
+  handle with the new action/result; do not create a replacement worker.
 - **Workflow complete:** `terminal_allowed=true` proves every API has current
-  focused E2E and comparison evidence for the same target revision. Then run
-  the caller-required repository checks and finish delivery.
+  focused E2E and comparison evidence for the same target content fingerprint.
+  Then run the caller-required repository checks and finish delivery.
 
 Thus worker handoff ready is not API completion, and API completion is not
-workflow completion. A later integrated change may requeue an API that was
-already complete, so retain every API binding and worktree through per-API
-completion. Release them only after `terminal_allowed=true` and they are no
-longer needed for delivery.
+workflow completion. A later integrated change may move an API that was
+already complete to deferred `revalidation_pending`, so retain every API
+binding and worktree through per-API completion. Release them only after
+`terminal_allowed=true` and they are no longer needed for delivery.
 
 An evidence-proven unavailable external response-driving value may stop work as
 blocked under [problem-diagnosis.md](references/problem-diagnosis.md). A blocker

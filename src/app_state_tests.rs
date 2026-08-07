@@ -330,9 +330,11 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
         ports: vec![20917, 20918, 20919],
         command: "ZCOUNT".to_string(),
         keys: Vec::new(),
+        key_patterns: Vec::new(),
         key_prefix: "1042015:".to_string(),
         key_suffix: ".wtm2".to_string(),
         initial_load_timeout_ms: None,
+        fields: Vec::new(),
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "InterestTagCardServiceImpl.java:init process-owned refresh".to_string(),
     }];
@@ -387,9 +389,11 @@ async fn redis_get_background_rule_records_without_response_role_metadata() {
         ports: vec![20917],
         command: "GET".to_string(),
         keys: vec!["cache:init:a".to_string()],
+        key_patterns: Vec::new(),
         key_prefix: String::new(),
         key_suffix: String::new(),
         initial_load_timeout_ms: Some(1_000),
+        fields: Vec::new(),
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/cache/warm.rs:init loads response-driving local state".to_string(),
     }];

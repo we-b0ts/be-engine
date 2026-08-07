@@ -16,9 +16,11 @@ mod recording_execution;
 mod recording_input;
 mod recovery;
 mod repair;
+mod revalidation;
 mod rule;
 mod status;
 mod store;
+mod target_quality;
 #[cfg(test)]
 mod test_support;
 mod traffic_operation;
@@ -60,14 +62,17 @@ pub use recording::{
     RewriteRecordingRequestOptions, execute_rewrite_recording_worker, request_rewrite_recording,
     start_rewrite_recording,
 };
-pub use repair::RewriteRouteOptions;
+pub use repair::{RewriteRouteOptions, resume_rewrite_replay_planning};
+pub use revalidation::{
+    RewriteRevalidationRequestOptions, RewriteRevalidationRequestReport,
+    request as request_rewrite_revalidation,
+};
 pub use rule::RewriteRulePlanOptions;
-pub use status::{status_rewrite, status_rewrite_for_api};
+pub use status::{inventory_rewrite, status_rewrite, status_rewrite_for_api};
+pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
 pub use worker::{RewriteWorkerConfirmOptions, confirm as confirm_rewrite_worker};
 
-use model::{
-    ACTION_SCHEMA_VERSION, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
-};
+use model::{RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION};
 use store::{RewriteLockState, RewriteStore};
 #[cfg(test)]
 pub(in crate::rewrite) use test_support::test_state;
@@ -99,7 +104,7 @@ pub fn query_rewrite_case_dependencies(
 }
 
 pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+    let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let requested_api = options.api.as_ref().map(ToString::to_string);
     let Some(_lock) = store.try_lock()? else {
@@ -157,7 +162,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             let migrated = inventory::initialize_legacy(&mut state);
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             let invalidated =
-                inventory::invalidate_completed_for_target_change(&mut state, &target_fingerprint)?;
+                inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
             if recording::begin_pending_capture_refresh(&target_root, &mut state)? {
                 store.save(&state)?;
             }
@@ -266,6 +271,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 current_api_index: None,
                 parked_slices: std::collections::BTreeMap::new(),
                 worker_bindings: std::collections::BTreeMap::new(),
+                target_quality_fingerprint: None,
                 recording_run_id,
                 recording_rejection: None,
                 recording_settings: RewriteRecordingSettings::default(),
@@ -380,6 +386,14 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             if state.target_fingerprint.as_deref() == Some(current.as_str()) {
                 return Ok(action::for_state(&target_root, &state));
             }
+            if let Some(required) = target_quality::required_action(
+                &target_root,
+                &state,
+                &current,
+                &project.target_quality_gates,
+            )? {
+                return Ok(action::envelope(&state, required));
+            }
             state.e2e_current = false;
             state.comparison_current = false;
             let _traffic = claim_traffic_operation(
@@ -485,28 +499,6 @@ fn claim_traffic_operation(
     }
 }
 
-pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
-    let state = RewriteStore::new(&target_root)?.load()?;
-    Ok(match state {
-        Some(mut state) => {
-            inventory::initialize_legacy(&mut state);
-            RewriteInventoryReport {
-                schema_version: ACTION_SCHEMA_VERSION,
-                initialized: true,
-                workflow: Some(action::workflow_view(&state)),
-                api_inventory: Some(inventory::details(&state)),
-            }
-        }
-        None => RewriteInventoryReport {
-            schema_version: ACTION_SCHEMA_VERSION,
-            initialized: false,
-            workflow: None,
-            api_inventory: None,
-        },
-    })
-}
-
 pub fn query_rewrite_evidence(
     context: RewriteContext,
     query_id: &str,
@@ -517,6 +509,7 @@ pub fn query_rewrite_evidence(
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_query(&target_root, &state, query_id)
         .context("evidence query is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "querying evidence")?;
     let scoped = inventory::scoped(&state, Some(&api.parse::<RecordingApi>()?))?;
     evidence::query(&target_root, &scoped, query_id)
 }
@@ -533,6 +526,7 @@ pub fn plan_rewrite_rule(
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("rule evidence is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "planning a response rule")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         rule::plan(&target_root, state, options)
     })?;
@@ -570,6 +564,7 @@ pub fn plan_rewrite_dependency_rule(
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("dependency-rule evidence is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "planning a dependency rule")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         dependency_rule::plan(&target_root, state, options)
     })?;
@@ -590,7 +585,14 @@ pub fn apply_rewrite_dependency_rule(
     let owner_api = inventory::api_for_dependency_rule_plan(&state, plan_id)
         .context("dependency-rule plan is stale or belongs to no concurrent API work item")?;
     let report = inventory::with_slice_mut(&mut state, &owner_api, |state| {
+        let response_bootstrap = dependency_rule::plans_response_bootstrap(state, plan_id);
         let mut report = dependency_rule::apply(&target_root, state, plan_id)?;
+        if response_bootstrap {
+            state.target_fingerprint = None;
+            state.phase = RewritePhase::ImplementationRequired;
+            report.next_command = action::next_command_for_api(&target_root, &state.api);
+            return Ok(report);
+        }
         let case_source = state
             .case_source
             .clone()
@@ -631,6 +633,7 @@ pub fn route_rewrite(options: RewriteRouteOptions) -> Result<RewriteRouteReport>
         .context("rewrite workflow has not been initialized")?;
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("route evidence is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "routing the issue")?;
     if state.api != api {
         let requested_api = api.parse::<RecordingApi>()?;
         inventory::activate_requested(&mut state, Some(&requested_api))?;
@@ -749,8 +752,10 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
                 "comparison has {} candidate difference(s) and {} inconclusive case(s)",
                 report.counts.failed, report.counts.inconclusive
             ),
-            pointer_pattern: (pointer != "<comparison>").then(|| issue::normalize_pointer(pointer)),
+            pointer_pattern: (pointer != "<comparison>")
+                .then(|| crate::e2e_run::response_pointer_pattern(pointer)),
             representative: None,
+            response_diagnosis: None,
             possible_causes: vec![
                 "target_behavior".to_string(),
                 "intentional_source_nondeterminism".to_string(),
@@ -785,8 +790,14 @@ mod tests {
 
     #[test]
     fn pointer_patterns_replace_only_array_indices() {
-        assert_eq!(issue::normalize_pointer("/users/17/id"), "/users/*/id");
-        assert_eq!(issue::normalize_pointer("/v2/created_at"), "/v2/created_at");
+        assert_eq!(
+            crate::e2e_run::response_pointer_pattern("/users/17/id"),
+            "/users/*/id"
+        );
+        assert_eq!(
+            crate::e2e_run::response_pointer_pattern("/v2/created_at"),
+            "/v2/created_at"
+        );
     }
 
     #[test]
@@ -794,7 +805,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(10)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(13)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),
@@ -917,7 +928,13 @@ mod tests {
             },
             diagnosis: crate::E2eDiagnosis {
                 counts,
-                failure_clusters: Vec::new(),
+                response_differences: crate::E2eResponseDifferenceDiagnosis {
+                    total_differences: 0,
+                    indexed_differences: 0,
+                    omitted_differences: 0,
+                    failure_clusters: Vec::new(),
+                    omitted_failure_clusters: 0,
+                },
                 representative: None,
                 lifecycle_errors: Vec::new(),
             },

@@ -3,12 +3,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 
 use super::model::{
-    RewriteActionEnvelope, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
-    RewriteRecordingReason, RewriteRepairAcceptanceKind, RewriteRouteRecord, RewriteRouteReport,
-    RewriteState,
+    RewriteActionEnvelope, RewriteCommandSpec, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
+    RewritePhase, RewriteRecordingReason, RewriteRepairAcceptanceKind, RewriteRouteRecord,
+    RewriteRouteReport, RewriteState,
 };
-use super::{action, artifacts, evidence, fingerprint, recording};
-use crate::ManagedRecordingOperation;
+use super::store::RewriteStore;
+use super::{action, artifacts, evidence, fingerprint, inventory, recording};
+use crate::{ManagedRecordingOperation, RecordingApi, RewriteContext};
 
 #[derive(Debug, Clone)]
 pub struct RewriteRouteOptions {
@@ -159,6 +160,94 @@ pub(super) fn verify(
         kind => anyhow::bail!("unsupported repair route kind {kind:?}"),
     }
     action::for_status(target_root, state)
+}
+
+pub fn resume_rewrite_replay_planning(
+    context: RewriteContext,
+    requested_id: &str,
+) -> Result<RewriteActionEnvelope> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let store = RewriteStore::new(&target_root)?;
+    let _lock = store.lock()?;
+    let mut state = store
+        .load()?
+        .context("rewrite workflow has not been initialized")?;
+    let api = inventory::api_for_repair(&state, requested_id)
+        .context("repair migration is stale or belongs to no concurrent API work item")?;
+    if state.api != api {
+        let requested_api = api.parse::<RecordingApi>()?;
+        inventory::activate_requested(&mut state, Some(&requested_api))?;
+    }
+    let report = resume_replay_planning(&target_root, &mut state, requested_id)?;
+    store.save(&state)?;
+    Ok(report)
+}
+
+fn resume_replay_planning(
+    target_root: &Path,
+    state: &mut RewriteState,
+    requested_id: &str,
+) -> Result<RewriteActionEnvelope> {
+    ensure!(
+        state.phase == RewritePhase::SystemRepairRequired,
+        "rewrite workflow has no system repair eligible for replay planning"
+    );
+    let route = state
+        .route
+        .as_ref()
+        .context("system repair has no accepted route")?;
+    ensure!(
+        route.repair_id.as_deref() == Some(requested_id),
+        "repair migration is stale or belongs to another issue"
+    );
+    ensure!(
+        replay_planning_migration_is_available(state),
+        "repair route is not an external-data response blocker eligible for replay planning"
+    );
+    state.phase = RewritePhase::ImplementationRequired;
+    state.target_fingerprint = None;
+    state.route = None;
+    state.rule_plan = None;
+    state.dependency_rule_plan = None;
+    state.recorder_capture_plan = None;
+    state.e2e_current = false;
+    state.comparison_current = false;
+    state.bump();
+    Ok(action::advance_envelope(
+        target_root,
+        state,
+        "legacy external-data blocker migrated to bootstrap replay planning".to_string(),
+    ))
+}
+
+pub(super) fn pending_command(
+    target_root: &Path,
+    state: &RewriteState,
+) -> Option<RewriteCommandSpec> {
+    let repair_id = state.route.as_ref()?.repair_id.as_deref()?;
+    if replay_planning_migration_is_available(state) {
+        return Some(action::command(
+            target_root,
+            vec![
+                "repair".to_string(),
+                "resume-replay-planning".to_string(),
+                repair_id.to_string(),
+            ],
+            Vec::new(),
+        ));
+    }
+    Some(action::repair_verify_command(target_root, repair_id))
+}
+
+fn replay_planning_migration_is_available(state: &RewriteState) -> bool {
+    state
+        .route
+        .as_ref()
+        .is_some_and(|route| route.kind == "external_data_blocker")
+        && state
+            .active_issue
+            .as_ref()
+            .is_some_and(|issue| issue.kind == RewriteIssueKind::Response)
 }
 
 pub(super) fn initialize_legacy_acceptance(
@@ -314,6 +403,34 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn legacy_external_data_response_blocker_resumes_replay_planning_without_revision_change() {
+        let target = tempfile::tempdir().unwrap();
+        let mut state = repair_state("unchanged-runtime-inputs".to_string());
+        state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Response;
+        state.active_issue.as_mut().unwrap().owner = RewriteIssueOwner::SourceInvestigation;
+        state.route.as_mut().unwrap().kind = "external_data_blocker".to_string();
+        state.route.as_mut().unwrap().acceptance_kind =
+            Some(RewriteRepairAcceptanceKind::SourceRuntimeInputsChanged);
+
+        let command = pending_command(target.path(), &state).unwrap();
+        assert!(
+            command
+                .argv
+                .iter()
+                .any(|arg| arg == "resume-replay-planning")
+        );
+        let action = resume_replay_planning(target.path(), &mut state, "repair-current").unwrap();
+
+        assert_eq!(state.phase, RewritePhase::ImplementationRequired);
+        assert!(state.route.is_none());
+        assert!(state.target_fingerprint.is_none());
+        assert!(matches!(
+            action.action,
+            super::super::model::RewriteAction::AdvanceRequired { .. }
+        ));
+    }
+
     fn repair_state(observed_revision: String) -> RewriteState {
         let mut state = crate::rewrite::test_state();
         state.phase = RewritePhase::SystemRepairRequired;
@@ -324,6 +441,7 @@ mod tests {
             summary: "replay capability gap".to_string(),
             pointer_pattern: None,
             representative: None,
+            response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: "target".to_string(),
             attempt: 1,

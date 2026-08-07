@@ -25,6 +25,8 @@ fn exposes_only_the_rewrite_coordinator_surface() {
             "route",
             "repair",
             "worker",
+            "verification",
+            "target-quality",
             "recording",
             "recover",
         ]
@@ -189,6 +191,17 @@ fn parses_the_bounded_rewrite_surface() {
     assert!(
         Cli::try_parse_from([
             "test",
+            "target-quality",
+            "run",
+            "target-quality-fnv1a64-0123456789abcdef",
+            "--api",
+            "GET /api/widgets/*",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
             "--target-root",
             "/canonical/target",
             "evidence",
@@ -197,6 +210,30 @@ fn parses_the_bounded_rewrite_surface() {
         .is_ok()
     );
     assert!(Cli::try_parse_from(["test", "status", "--api", "GET /api/widgets/*"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "verification",
+            "request",
+            "--api",
+            "GET /api/widgets/*",
+            "--api",
+            "POST /api/widgets",
+            "--reason",
+            "shared response mapper changed",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "verification",
+            "request",
+            "--reason",
+            "shared response mapper changed",
+        ])
+        .is_err()
+    );
     assert!(
         Cli::try_parse_from([
             "test",

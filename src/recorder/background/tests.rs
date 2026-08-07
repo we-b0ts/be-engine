@@ -66,9 +66,11 @@ fn redis_get_rule() -> BackgroundDependencyRuleConfig {
         ports: vec![20917, 20918],
         command: "GET".to_string(),
         keys: vec!["cache:init:a".to_string(), "cache:init:b".to_string()],
+        key_patterns: Vec::new(),
         key_prefix: String::new(),
         key_suffix: String::new(),
         initial_load_timeout_ms: Some(50),
+        fields: Vec::new(),
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/cache/warm.rs:init loads response-driving local state".to_string(),
     }

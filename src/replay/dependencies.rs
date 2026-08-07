@@ -38,6 +38,7 @@ pub(super) async fn load_dependency_file(
     motan: &mut motan::MotanReplayState,
     targets: &mut BTreeMap<TargetKey, ReplayTarget>,
     connection_identities: &mut HashMap<Uuid, MysqlDependencyIdentity>,
+    background_dependencies: &[crate::BackgroundDependencyRuleConfig],
 ) -> Result<()> {
     let raw = tokio::fs::read_to_string(path)
         .await
@@ -101,7 +102,13 @@ pub(super) async fn load_dependency_file(
                 continue;
             }
             DependencyRecord::RedisExchange(exchange) => {
-                redis.register_exchange(*exchange, source, case_id, targets)?;
+                redis.register_exchange(
+                    *exchange,
+                    source,
+                    case_id,
+                    targets,
+                    background_dependencies,
+                )?;
                 continue;
             }
             DependencyRecord::MemcachedExchange(exchange) => {

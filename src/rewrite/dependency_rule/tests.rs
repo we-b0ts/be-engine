@@ -11,6 +11,7 @@ fn dependency_state() -> RewriteState {
         summary: "dependency evidence is dirty".to_string(),
         pointer_pattern: None,
         representative: None,
+        response_diagnosis: None,
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
@@ -72,6 +73,7 @@ fn pending_plan_evidence_can_replace_an_incomplete_preview() {
         &state,
         "issue-dependency",
         "evidence-dirty-clusters",
+        &state.dependency_rule_plan.as_ref().unwrap().spec,
     )
     .unwrap();
 }
@@ -85,6 +87,7 @@ fn pending_plan_evidence_cannot_cross_issue_boundaries() {
         &state,
         "issue-other",
         "evidence-dirty-clusters",
+        &state.dependency_rule_plan.as_ref().unwrap().spec,
     )
     .unwrap_err();
 

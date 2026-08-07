@@ -34,7 +34,7 @@ pub use allowed_unused_http::{
     plan_allowed_unused_http_hosts,
 };
 pub use artifacts::ArtifactsConfig;
-pub use background_dependencies::BackgroundDependencyRuleConfig;
+pub use background_dependencies::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 pub use background_feedback::{
     BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
     plan_background_dependency,

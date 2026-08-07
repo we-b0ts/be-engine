@@ -18,6 +18,7 @@ pub(super) const ASSERTION_REPORT_VERSION: u32 = 2;
 pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
+pub(super) const MAX_RESPONSE_DIFFERENCE_INDEX: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,6 +59,15 @@ pub(super) struct TargetProjectConfig {
     pub startup_timeout_seconds: u64,
     #[serde(default = "default_target_request_timeout_seconds")]
     pub request_timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality_gates: Option<Vec<TargetQualityGateConfig>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TargetQualityGateConfig {
+    pub name: String,
+    pub argv: Vec<String>,
 }
 
 fn default_target_startup_timeout_seconds() -> u64 {
@@ -114,6 +124,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_readiness_status: u16,
     pub(crate) target_startup_timeout: Duration,
     pub(crate) target_request_timeout: Duration,
+    pub(crate) target_quality_gates: Vec<TargetQualityGateConfig>,
     pub(crate) target_max_response_bytes: usize,
     pub(crate) source_container: String,
     pub(crate) breeze_container: Option<String>,
@@ -185,6 +196,8 @@ pub(super) struct CaseExecution {
 pub(super) struct ResponseAssertionSummary {
     pub passed: bool,
     pub difference_count: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub difference_index: Vec<ResponseDifference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub representative_difference: Option<ResponseDifference>,
     pub detail_report: PathBuf,

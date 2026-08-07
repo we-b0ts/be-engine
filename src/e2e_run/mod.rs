@@ -14,6 +14,7 @@ mod result;
 mod runtime;
 mod store;
 mod support;
+mod target_quality_config;
 
 use std::path::PathBuf;
 
@@ -33,23 +34,24 @@ pub use dirty_evidence::{
     E2eSourcePreReadinessEndpoint,
 };
 pub use evidence::{
-    E2eDependencyCorrelation, E2eSourceValueCount, E2eSourceVariation,
+    E2eCaseResponseDifference, E2eCaseResponseDifferences, E2eDependencyCorrelation,
+    E2eSourceValueCount, E2eSourceVariation, query_e2e_case_response_differences,
     query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
 };
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
-pub(crate) use model::ResolvedProjectConfig;
 use model::RunStatus;
+pub(crate) use model::{ResolvedProjectConfig, TargetQualityGateConfig};
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, focused_background_reclassification_recovery_required,
     latest_focused_api, reclassify_focused_background_dependencies,
 };
-pub(crate) use result::response_pointer_scope;
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,
-    E2eReplayGate, E2eRepresentativeDifference, E2eResponseGate, E2eRunResult, E2eValueObservation,
-    E2eValuePresence, E2eVerificationGates,
+    E2eReplayGate, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
+    E2eRunResult, E2eValueObservation, E2eValuePresence, E2eVerificationGates,
 };
+pub(crate) use result::{response_pointer_pattern, response_pointer_scope};
 
 #[derive(Debug, Clone)]
 pub struct E2eRunInitOptions {

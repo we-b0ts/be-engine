@@ -37,6 +37,7 @@ pub fn plan_rewrite_recorder_capture(
     inventory::initialize_legacy(&mut state);
     let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
         .context("recorder-capture evidence is stale or belongs to no concurrent API work item")?;
+    super::worker::ensure_api_confirmed(&state, &api, "planning recorder capture")?;
     let report =
         inventory::with_slice_mut(&mut state, &api, |state| plan(&target_root, state, options))?;
     store.save(&state)?;
@@ -553,6 +554,7 @@ mod tests {
             summary: "counter response differs".to_string(),
             pointer_pattern: None,
             representative: None,
+            response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: state.target_fingerprint.clone().unwrap(),
             attempt: 2,

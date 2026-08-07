@@ -10,6 +10,7 @@ use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 use super::{MysqlReplayConfig, ReplayRuntime};
+use crate::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 
 #[tokio::test]
 async fn replays_redis_pipeline_in_recorded_lane_order() {
@@ -120,6 +121,70 @@ async fn background_redis_gets_are_connection_independent() {
     assert_eq!(response, b"$1\r\n1\r\n$1\r\n2\r\n");
 
     let report = wait_for_matched_count(&report_path, "redis", 2).await;
+    assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
+    task.abort();
+}
+
+#[tokio::test]
+async fn configured_bootstrap_hget_is_connection_independent() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    tokio::fs::write(case_dir.join("dependencies.jsonl"), b"")
+        .await
+        .unwrap();
+    let connection_id = Uuid::new_v4();
+    let blocker = redis_hash_dependency(
+        connection_id,
+        1,
+        "HGET",
+        &["unrelated", "version"],
+        b"$1\r\n0\r\n",
+    );
+    let mut selected = redis_hash_dependency(
+        connection_id,
+        2,
+        "HGET",
+        &["exp:matchlist:123", "version"],
+        b"$1\r\n1\r\n",
+    );
+    selected["global_dependency_reason"] = Value::String("bootstrap_window".to_string());
+    let global = [blocker, selected]
+        .map(|value| serde_json::to_string(&value).unwrap())
+        .join("\n");
+    tokio::fs::write(case_dir.join("global-dependencies.jsonl"), global)
+        .await
+        .unwrap();
+    let rule = BackgroundDependencyRuleConfig::Redis {
+        name: "experiment-bootstrap".to_string(),
+        ports: vec![6379],
+        command: "HGET".to_string(),
+        keys: Vec::new(),
+        key_patterns: vec![RedisKeyPatternConfig {
+            prefix: "exp:matchlist:".to_string(),
+            suffix: String::new(),
+            numeric_middle: true,
+        }],
+        key_prefix: String::new(),
+        key_suffix: String::new(),
+        initial_load_timeout_ms: None,
+        fields: vec!["version".to_string()],
+        source_revision: String::new(),
+        source_evidence: "src/bootstrap.rs:load experiment cache".to_string(),
+    };
+    let report_path = temp.path().join("report.json");
+    let (addr, task) =
+        spawn_replay_with_background(&case_dir, Some(report_path.clone()), vec![rule]).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+
+    client
+        .write_all(b"*3\r\n$4\r\nHGET\r\n$17\r\nexp:matchlist:123\r\n$7\r\nversion\r\n")
+        .await
+        .unwrap();
+    let mut response = vec![0_u8; 7];
+    client.read_exact(&mut response).await.unwrap();
+    assert_eq!(response, b"$1\r\n1\r\n");
+    let report = wait_for_matched_count(&report_path, "redis", 1).await;
     assert!(report["redis"]["unmatched"].as_array().unwrap().is_empty());
     task.abort();
 }
@@ -527,6 +592,7 @@ async fn unsafe_redis_evidence_prevents_replay_startup() {
             ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
             policy_path: None,
             http_ignore_query_params: Vec::new(),
+            background_dependencies: Vec::new(),
             allowed_unused_http: None,
         },
         "127.0.0.1:0".parse().unwrap(),
@@ -544,6 +610,14 @@ async fn spawn_replay(
     case_dir: &Path,
     report_path: Option<PathBuf>,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_replay_with_background(case_dir, report_path, Vec::new()).await
+}
+
+async fn spawn_replay_with_background(
+    case_dir: &Path,
+    report_path: Option<PathBuf>,
+    background_dependencies: Vec<BackgroundDependencyRuleConfig>,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let runtime = ReplayRuntime::load(
@@ -560,6 +634,7 @@ async fn spawn_replay(
             ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
             policy_path: None,
             http_ignore_query_params: Vec::new(),
+            background_dependencies,
             allowed_unused_http: None,
         },
         "127.0.0.1:0".parse().unwrap(),
@@ -575,6 +650,29 @@ async fn spawn_replay(
         }
     });
     (addr, task)
+}
+
+fn redis_hash_dependency(
+    connection_id: Uuid,
+    sequence: u64,
+    command: &str,
+    args: &[&str],
+    response: &[u8],
+) -> Value {
+    let mut value = redis_dependency(connection_id, sequence, args[0], response);
+    value["command"] = Value::String(command.to_string());
+    value["args"] = Value::Array(
+        args.iter()
+            .map(|arg| {
+                serde_json::json!({
+                    "encoding": "utf8",
+                    "data": arg,
+                    "truncated": false,
+                })
+            })
+            .collect(),
+    );
+    value
 }
 
 fn redis_dependency(connection_id: Uuid, sequence: u64, key: &str, response: &[u8]) -> Value {

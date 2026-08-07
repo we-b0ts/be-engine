@@ -8,8 +8,8 @@ use super::E2eRunContext;
 use super::case_progress;
 use super::final_evidence::{build_final_evidence, summarize_apis_without_aggregate};
 use super::model::{
-    ActiveRunState, CaseStatus, ResolvedProjectConfig, ResponseAssertionSummary, RunLayout,
-    RunStatus,
+    ActiveRunState, CaseStatus, MAX_RESPONSE_DIFFERENCE_INDEX, ResolvedProjectConfig,
+    ResponseAssertionSummary, RunLayout, RunStatus,
 };
 use super::progress::{ReplayRunKind, update_focused_index, update_index, write_replay_progress};
 use super::request_view::RequestCaseView;
@@ -547,6 +547,12 @@ async fn execute_case(
                             Some(ResponseAssertionSummary {
                                 passed: report.passed,
                                 difference_count: report.differences.len(),
+                                difference_index: report
+                                    .differences
+                                    .iter()
+                                    .take(MAX_RESPONSE_DIFFERENCE_INDEX)
+                                    .cloned()
+                                    .collect(),
                                 representative_difference: report.differences.first().cloned(),
                                 detail_report,
                                 detail_fingerprint: crate::verification_progress::fingerprint(

@@ -15,9 +15,11 @@ use crate::e2e_run::response_pointer_scope;
 use crate::recorder::load_pre_readiness_traffic_summary;
 use crate::{
     E2eDirtyCluster, E2eDirtyCounts, E2eRunContext, E2eValueObservation, E2eValuePresence,
-    query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
+    query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
+    query_e2e_source_variation,
 };
 
+const QUERY_CASE_RESPONSE_DIFFERENCES: &str = "case_response_differences";
 const QUERY_REPRESENTATIVES: &str = "representatives";
 const QUERY_SOURCE_VARIATION: &str = "source_variation";
 const QUERY_COLLECTION_EQUIVALENCE: &str = "collection_equivalence";
@@ -34,7 +36,7 @@ pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteE
     query_kinds(state, issue)
         .into_iter()
         .map(|(kind, purpose)| {
-            let query_id = query_id(state, issue, kind);
+            let query_id = query_identifier(state, issue, kind, 0);
             RewriteEvidenceCommand {
                 purpose: purpose.to_string(),
                 command: super::action::command(
@@ -57,16 +59,23 @@ pub(super) fn query(
         .active_issue
         .as_ref()
         .context("rewrite workflow has no active issue")?;
-    let kind = query_kinds(state, issue)
+    let requested = query_kinds(state, issue)
         .into_iter()
-        .find_map(|(kind, _)| (query_id(state, issue, kind) == requested_id).then_some(kind))
+        .find_map(|(kind, _)| {
+            (query_identifier(state, issue, kind, 0) == requested_id).then_some((kind, 0))
+        })
+        .or_else(|| {
+            case_response_difference_offset(state, issue, requested_id)
+                .map(|offset| (QUERY_CASE_RESPONSE_DIFFERENCES, offset))
+        })
         .with_context(|| {
             format!(
                 "evidence query is stale or is not valid for active issue {}",
                 issue.id
             )
         })?;
-    let (facts, does_not_prove, next_step) = facts(target_root, state, issue, kind)?;
+    let (kind, offset) = requested;
+    let (facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
@@ -123,6 +132,26 @@ fn applicable_rule_planners(
             ),
         });
     }
+    if issue_kind == RewriteIssueKind::Response
+        && query_kind == QUERY_PRE_READINESS_TRAFFIC
+        && facts.get("available").and_then(Value::as_bool) == Some(true)
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "background_dependencies".to_string(),
+            protocol: "redis_bootstrap".to_string(),
+            evidence_id: evidence_id.to_string(),
+            command: super::action::command(
+                target_root,
+                vec![
+                    "dependency-rule".to_string(),
+                    "plan".to_string(),
+                    "redis".to_string(),
+                    "--help".to_string(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if issue_kind != RewriteIssueKind::Dependency || query_kind != QUERY_DIRTY_CLUSTERS {
         return planners;
     }
@@ -161,8 +190,12 @@ fn facts(
     state: &RewriteState,
     issue: &RewriteIssue,
     kind: &str,
+    offset: usize,
 ) -> Result<(Value, Vec<String>, String)> {
     match kind {
+        QUERY_CASE_RESPONSE_DIFFERENCES => {
+            case_response_difference_facts(target_root, state, issue, offset)
+        }
         QUERY_REPRESENTATIVES => {
             let (pointer_scope, representative) =
                 representative_facts(target_root, state, issue)?;
@@ -417,6 +450,65 @@ fn dependency_representative(target_root: &Path, cluster: &E2eDirtyCluster) -> V
     })
 }
 
+fn case_response_difference_facts(
+    target_root: &Path,
+    state: &RewriteState,
+    issue: &RewriteIssue,
+    offset: usize,
+) -> Result<(Value, Vec<String>, String)> {
+    let representative = issue
+        .representative
+        .as_ref()
+        .context("active response issue has no replay representative")?;
+    let page = query_e2e_case_response_differences(
+        e2e_context(target_root, state)?,
+        group_id(state)?,
+        &representative.case_id,
+        offset,
+    )?;
+    let case_dir =
+        resolve_published_case_dir(&case_source(target_root, state)?, &representative.case_id)?;
+    let next_page = page.next_offset.map(|next_offset| {
+        let query_id = case_response_difference_query_id(state, issue, next_offset);
+        json!({
+            "query_id": query_id,
+            "command": super::action::command(
+                target_root,
+                vec!["evidence".to_string(), query_id],
+                Vec::new(),
+            ),
+        })
+    });
+    let has_next_page = next_page.is_some();
+    let next_step = if has_next_page {
+        "Use the returned differences to identify a coherent cause. Execute facts.next_page.command only when the remaining differences are needed to distinguish that cause before implementation."
+    } else {
+        "Trace one coherent response-difference cluster through source and target code before implementing the smallest compatible repair."
+    };
+    let mut facts = json!({
+        "case_id": page.case_id,
+        "case_dir": case_dir,
+        "total_differences": page.total_differences,
+        "offset": page.offset,
+        "returned_differences": page.returned_differences,
+        "omitted_differences": page.omitted_differences,
+        "differences": page.differences,
+    });
+    if let Some(next_page) = next_page {
+        facts["next_page"] = next_page;
+    }
+    Ok((
+        facts,
+        vec![
+            "response differences establish observable incompatibilities, not their shared business cause"
+                .to_string(),
+            "matching pointer patterns do not by themselves prove one implementation root cause"
+                .to_string(),
+        ],
+        next_step.to_string(),
+    ))
+}
+
 fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
     match kind {
         RewriteIssueKind::Dependency | RewriteIssueKind::Replay => (
@@ -441,10 +533,17 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
 }
 
 fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str, &'static str)> {
-    let mut queries = vec![(
+    let mut queries = Vec::new();
+    if issue.kind == RewriteIssueKind::Response && issue.representative.is_some() {
+        queries.push((
+            QUERY_CASE_RESPONSE_DIFFERENCES,
+            "Inspect all response differences in the representative case before implementation",
+        ));
+    }
+    queries.push((
         QUERY_REPRESENTATIVES,
         "Show the bounded representative with explicit value presence",
-    )];
+    ));
     queries.push((
         QUERY_PRE_READINESS_TRAFFIC,
         "Summarize source data interactions observed before readiness by endpoint",
@@ -515,6 +614,50 @@ fn query_id(state: &RewriteState, issue: &RewriteIssue, kind: &str) -> String {
         scope.trim_start_matches("fnv1a64:"),
         kind.replace('_', "-")
     )
+}
+
+fn query_identifier(
+    state: &RewriteState,
+    issue: &RewriteIssue,
+    kind: &str,
+    offset: usize,
+) -> String {
+    if kind == QUERY_CASE_RESPONSE_DIFFERENCES {
+        case_response_difference_query_id(state, issue, offset)
+    } else {
+        query_id(state, issue, kind)
+    }
+}
+
+fn case_response_difference_query_id(
+    state: &RewriteState,
+    issue: &RewriteIssue,
+    offset: usize,
+) -> String {
+    let case_id = issue
+        .representative
+        .as_ref()
+        .map(|representative| representative.case_id.as_str())
+        .unwrap_or("<missing-representative>");
+    let case_scope = fingerprint::id(&["response-difference-case", case_id]);
+    query_id(
+        state,
+        issue,
+        &format!(
+            "{QUERY_CASE_RESPONSE_DIFFERENCES}_case_{}_page_{offset}",
+            case_scope.trim_start_matches("fnv1a64:")
+        ),
+    )
+}
+
+fn case_response_difference_offset(
+    state: &RewriteState,
+    issue: &RewriteIssue,
+    requested_id: &str,
+) -> Option<usize> {
+    let (_, offset) = requested_id.rsplit_once("-page-")?;
+    let offset = offset.parse::<usize>().ok()?;
+    (case_response_difference_query_id(state, issue, offset) == requested_id).then_some(offset)
 }
 
 fn e2e_context(target_root: &Path, state: &RewriteState) -> Result<E2eRunContext> {

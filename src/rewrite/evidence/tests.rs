@@ -8,6 +8,83 @@ use crate::{
 };
 
 #[test]
+fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages() {
+    let target = tempfile::tempdir().unwrap();
+    let mut state = crate::rewrite::test_state();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-response".to_string(),
+        kind: RewriteIssueKind::Response,
+        owner: RewriteIssueOwner::TargetCode,
+        summary: "response mismatch".to_string(),
+        pointer_pattern: Some("/items/*/value".to_string()),
+        representative: Some(E2eRepresentativeDifference {
+            case_id: "case-1".to_string(),
+            pointer: "/items/0/value".to_string(),
+            difference_kind: ResponseDifferenceKind::MissingActual,
+            expected: E2eValueObservation {
+                presence: E2eValuePresence::Present,
+                value: Some(Value::from(1)),
+            },
+            actual: E2eValueObservation {
+                presence: E2eValuePresence::Missing,
+                value: None,
+            },
+        }),
+        response_diagnosis: None,
+        possible_causes: Vec::new(),
+        observed_target_fingerprint: "target".to_string(),
+        attempt: 2,
+        comparison_observation: None,
+    });
+
+    let commands = commands(target.path(), &state);
+
+    assert_eq!(
+        commands[0].purpose,
+        "Inspect all response differences in the representative case before implementation"
+    );
+    assert!(
+        commands[0]
+            .query_id
+            .contains("case-response-differences-case-")
+    );
+    assert!(commands[0].query_id.ends_with("-page-0"));
+    assert_eq!(commands[0].command.argv[3], "evidence");
+    assert_eq!(commands[0].command.argv[4], commands[0].query_id);
+    let next_page =
+        case_response_difference_query_id(&state, state.active_issue.as_ref().unwrap(), 20);
+    assert_eq!(
+        case_response_difference_offset(&state, state.active_issue.as_ref().unwrap(), &next_page,),
+        Some(20)
+    );
+    state.active_issue.as_mut().unwrap().attempt += 1;
+    assert_eq!(
+        case_response_difference_offset(&state, state.active_issue.as_ref().unwrap(), &next_page,),
+        None
+    );
+}
+
+#[test]
+fn response_pre_readiness_evidence_exposes_bootstrap_redis_planner() {
+    let planners = applicable_rule_planners(
+        Path::new("/target"),
+        RewriteIssueKind::Response,
+        QUERY_PRE_READINESS_TRAFFIC,
+        &serde_json::json!({"available": true}),
+        "evidence-bootstrap",
+    );
+
+    let planner = planners
+        .iter()
+        .find(|planner| planner.protocol == "redis_bootstrap")
+        .unwrap();
+    assert_eq!(planner.kind, "background_dependencies");
+    assert_eq!(planner.evidence_id, "evidence-bootstrap");
+    assert!(planner.command.argv.iter().any(|arg| arg == "redis"));
+}
+
+#[test]
 fn parked_api_evidence_survives_unrelated_api_revisions() {
     let target_root = Path::new("/target");
     let mut state = crate::rewrite::test_state();
@@ -33,6 +110,7 @@ fn parked_api_evidence_survives_unrelated_api_revisions() {
         summary: "response mismatch".to_string(),
         pointer_pattern: None,
         representative: None,
+        response_diagnosis: None,
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target-a".to_string(),
         attempt: 1,
@@ -118,6 +196,7 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
                 value: Some(Value::from(200)),
             },
         }),
+        response_diagnosis: None,
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
@@ -199,6 +278,7 @@ fn comparison_representatives_link_the_comparison_case_and_three_way_difference(
         summary: "comparison mismatch".to_string(),
         pointer_pattern: Some("/users/0/name".to_string()),
         representative: None,
+        response_diagnosis: None,
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,
@@ -419,6 +499,7 @@ fn pre_readiness_query_returns_only_data_interaction_endpoint_counts() {
         summary: "response mismatch".to_string(),
         pointer_pattern: None,
         representative: None,
+        response_diagnosis: None,
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,

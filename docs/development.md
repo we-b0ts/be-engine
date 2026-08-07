@@ -917,9 +917,12 @@ backend-rewrite recording request \
   --per-api-case-limit 100
 backend-rewrite recording execute <action-id>
 backend-rewrite repair verify <repair-id>
+backend-rewrite verification request \
+  --api 'GET /api/widgets/*' \
+  --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v8 always returns `action.kind`, `action.summary`,
+Rewrite action schema v13 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -952,7 +955,8 @@ recording window and includes bounded candidate/rejection diagnostics under
 configuration limits the standard run and the coordinator derives a stable
 API inventory from its published cases. `next` and `status` expose only its
 bounded summary (`total`, `completed`, `pending`, `implementation_required`,
-`current_index`, and `current_api`) so their size does not grow with API count.
+`awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
+`current_api`) so their size does not grow with API count.
 The read-only `backend-rewrite inventory` command returns the full ordered
 per-API list. Every `implementation_required` action is assigned to an isolated
 subagent, including a single-API workflow. The main orchestrator dispatches
@@ -965,19 +969,25 @@ After status returns
 preallocated run, prepares the current API, runs focused E2E, and returns
 either one bounded implementation issue or the next comparison action. Once
 comparison passes, the following `next` prepares the next inventory item from
-the same standard recording. A repository or policy change makes prior
-E2E/comparison evidence stale and causes `next` to
-rerun the required stage. `terminal_allowed` is false until every inventory
-item has both passing E2E and comparison evidence for the same target revision.
+the same standard recording. A repository or policy content change makes prior
+E2E/comparison evidence stale. Completed APIs become `revalidation_pending`
+and remain deferred while ordinary pending or implementation work exists. The
+coordinator drains them in one final verification epoch. A commit that
+preserves the effective worktree content does not change the fingerprint.
+`verification request` lets the main orchestrator promote selected stale APIs
+early after a high-impact shared change; the returned advance command starts
+their normal Replay/comparison flow, and final whole-inventory coverage remains
+mandatory. `terminal_allowed` is false until every inventory item has both
+passing E2E and comparison evidence for the same target content fingerprint.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v8 returns `wait_required` with
+lease. When another API owns it, action schema v13 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
 orchestrator may run Replay for API B and dispatch worker B. No worker may start
 a traffic operation. If code changes during Replay, that result is discarded;
-later code changes also requeue already-completed API evidence.
+later code changes defer already-completed API evidence to the final epoch.
 
 `status [--api]` is read-only and returns the selected API's `action` from the
 persisted workflow revision. Before execution starts it reconstructs the same
@@ -990,8 +1000,12 @@ managed resources and allocates a replacement run. A pending rule plan produces
 the evidence validation performed at plan time, so its own workflow revision
 does not make apply stale. A corrected plan using the same evidence ID replaces
 the pending preview before apply; recorder configuration is still changed only
-by apply. A target repository change also returns `advance_required` with
-`backend-rewrite next`.
+by apply. For an integrated target change, Rust repositories first return
+`target_quality_required`; its exact execute command runs format, workspace
+tests, and Clippy in the canonical coordinator worktree. Passing records the
+target fingerprint and returns the `advance_required` command that starts
+Replay. Explicit `target.quality_gates` replace the inferred commands, and an
+explicit empty list disables them.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
@@ -1016,7 +1030,14 @@ describes the latest completed attempt, so a repeated `next` with no target
 change returns the same evidence without claiming another replay occurred.
 
 Only use returned `backend-rewrite evidence` query IDs for coordinator gate and
-aggregate facts. The `representatives` result includes the representative case
+aggregate facts. For a response issue, `action.details.response_diagnosis`
+contains exact total/indexed/omitted difference counts plus at most 20 clusters
+grouped by normalized Pointer pattern and difference kind. Each cluster reports
+affected cases, total occurrences, and one exact representative. The first
+evidence command is `case_response_differences`; it returns at most 20 ordered
+differences from that representative case with bounded expected/actual values.
+When more are available it returns the next opaque evidence command instead of
+an open cursor. The `representatives` result includes the representative case
 ID, its exact immutable standard or comparison `case_dir`, and a structured
 response difference. A focused E2E difference contains expected and actual
 observations; a comparison difference contains source-before, candidate, and
@@ -1099,7 +1120,15 @@ target:
   readiness_status: 404
   startup_timeout_seconds: 60
   request_timeout_seconds: 30
+  # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
+  # quality_gates:
+  #   - name: project-check
+  #     argv: [make, check]
 ```
+
+Each quality gate is an exact argv executed without a shell from the canonical
+target root. At most eight uniquely named commands may be configured, with at
+most 32 arguments each. `quality_gates: []` explicitly disables inference.
 
 Managed replay reads its target response limit from
 `recording.max_body_bytes` in the recorder configuration referenced by
@@ -1546,6 +1575,12 @@ keys above `4294967295`. The source revision remains in plan evidence rather
 than runtime configuration. If the cache warm affects API behavior, implement
 the source-compatible target cache lifecycle separately from this ownership
 rule.
+
+Bootstrap Redis `HGET`/`HMGET` rules are replay overlays rather than
+initial-load waits. They combine optional exact keys with compact
+`prefix<digits>suffix` patterns and require the exact field sequence. Matching
+replay-safe `bootstrap_window` Global exchanges become connection-independent
+for the next replay while the recording remains immutable.
 
 An applied rule with `initial_load_timeout_ms` delays source case admission
 while Recorder observes its initial load. Redis exact-key `GET`, `SCARD`, and

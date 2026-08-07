@@ -7,7 +7,7 @@ use anyhow::{Context, Result, ensure};
 use hyper::http::{Method, Uri, uri::Authority};
 use serde::{Deserialize, Serialize};
 
-use super::background_dependencies::{self, BackgroundDependencyRuleConfig};
+use super::background_dependencies::{self, BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 use super::edit::write_atomic;
 use super::rule_document::{find_managed_block, managed_block_diff, newline, parse_and_validate};
 
@@ -442,16 +442,20 @@ fn compatible_selector(
                 ports: existing_ports,
                 command: existing_command,
                 keys: existing_keys,
+                key_patterns: existing_patterns,
                 key_prefix: existing_prefix,
                 key_suffix: existing_suffix,
+                fields: existing_fields,
                 ..
             },
             BackgroundDependencyRuleConfig::Redis {
                 ports: requested_ports,
                 command: requested_command,
                 keys: requested_keys,
+                key_patterns: requested_patterns,
                 key_prefix: requested_prefix,
                 key_suffix: requested_suffix,
+                fields: requested_fields,
                 ..
             },
         ) => {
@@ -461,8 +465,10 @@ fn compatible_selector(
                     .all(|port| requested_ports.contains(port))
                 && existing_command == requested_command
                 && existing_keys == requested_keys
+                && existing_patterns == requested_patterns
                 && existing_prefix == requested_prefix
                 && existing_suffix == requested_suffix
+                && existing_fields == requested_fields
         }
         (
             BackgroundDependencyRuleConfig::Motan {
@@ -564,9 +570,11 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             ports,
             command,
             keys,
+            key_patterns,
             key_prefix,
             key_suffix,
             initial_load_timeout_ms,
+            fields,
             source_evidence,
             ..
         } => {
@@ -574,11 +582,15 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
             push_line(output, "protocol = \"redis\"", newline);
             push_u16_array(output, "ports", ports, newline);
             push_assignment(output, "command", command, newline);
-            if keys.is_empty() {
+            if !keys.is_empty() {
+                push_array(output, "keys", keys, newline);
+            }
+            if !key_patterns.is_empty() {
+                push_redis_key_patterns(output, key_patterns, newline);
+            }
+            if keys.is_empty() && key_patterns.is_empty() {
                 push_assignment(output, "key_prefix", key_prefix, newline);
                 push_assignment(output, "key_suffix", key_suffix, newline);
-            } else {
-                push_array(output, "keys", keys, newline);
             }
             if let Some(timeout_ms) = initial_load_timeout_ms {
                 push_line(
@@ -586,6 +598,9 @@ fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newli
                     &format!("initial_load_timeout_ms = {timeout_ms}"),
                     newline,
                 );
+            }
+            if !fields.is_empty() {
+                push_array(output, "fields", fields, newline);
             }
             push_assignment(output, "source_evidence", source_evidence, newline);
         }
@@ -623,6 +638,22 @@ fn push_u16_array(output: &mut String, field: &str, values: &[u16], newline: &st
         .collect::<Vec<_>>()
         .join(", ");
     push_line(output, &format!("{field} = [{values}]"), newline);
+}
+
+fn push_redis_key_patterns(output: &mut String, patterns: &[RedisKeyPatternConfig], newline: &str) {
+    let values = patterns
+        .iter()
+        .map(|pattern| {
+            let prefix = toml::Value::String(pattern.prefix.clone());
+            let suffix = toml::Value::String(pattern.suffix.clone());
+            format!(
+                "{{ prefix = {prefix}, suffix = {suffix}, numeric_middle = {} }}",
+                pattern.numeric_middle
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    push_line(output, &format!("key_patterns = [{values}]"), newline);
 }
 
 fn push_assignment(output: &mut String, field: &str, value: &str, newline: &str) {

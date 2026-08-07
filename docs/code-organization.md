@@ -49,10 +49,14 @@ is unclear.
   `action.rs` keeps the exhaustive action/command projection, and `recording.rs`
   keeps the managed recording request/start/worker lifecycle. `worker.rs` owns
   dedicated API-subagent identity binding and dispatch/resume confirmation.
+  `inventory.rs` owns the API inventory state machine: stable installation,
+  bounded activation and parking, deferred revalidation, and summary/detail
+  views. `revalidation.rs` owns the coordinator's explicit early-validation
+  request boundary and projection for deferred API status.
   Together, these files are intentionally cohesive near the review threshold;
   status projection and the traffic lease are separate modules, and further
   splitting should follow a real responsibility boundary rather than divide
-  one transaction or action contract.
+  one transaction, action contract, or inventory transition.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
 
 Prefer these boundaries while they remain accurate. When implementation proves

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
@@ -6,9 +6,11 @@ use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::model::{ActiveRunState, RunLayout, RunStatus};
+use super::model::{ActiveRunState, ResponseAssertionSummary, RunLayout, RunStatus};
 use super::support::status_label;
-use crate::replay::ResponseDifferenceKind;
+use crate::replay::{ResponseDifference, ResponseDifferenceKind};
+
+const MAX_FAILURE_CLUSTERS: usize = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -104,9 +106,21 @@ pub struct E2eDiagnosisCounts {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct E2eFailureCluster {
-    pub pointer: String,
+    pub pointer_pattern: String,
     pub difference_kind: ResponseDifferenceKind,
-    pub cases: usize,
+    pub affected_cases: usize,
+    pub occurrences: usize,
+    pub representative_case_id: String,
+    pub representative_pointer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct E2eResponseDifferenceDiagnosis {
+    pub total_differences: usize,
+    pub indexed_differences: usize,
+    pub omitted_differences: usize,
+    pub failure_clusters: Vec<E2eFailureCluster>,
+    pub omitted_failure_clusters: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -137,7 +151,7 @@ pub struct E2eValueObservation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct E2eDiagnosis {
     pub counts: E2eDiagnosisCounts,
-    pub failure_clusters: Vec<E2eFailureCluster>,
+    pub response_differences: E2eResponseDifferenceDiagnosis,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub representative: Option<E2eRepresentativeDifference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -145,50 +159,75 @@ pub struct E2eDiagnosis {
 }
 
 fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
-    let mut clusters = BTreeMap::<(String, ResponseDifferenceKind), usize>::new();
-    let mut representatives =
-        BTreeMap::<(String, ResponseDifferenceKind), (String, PathBuf, PathBuf)>::new();
+    let mut clusters =
+        BTreeMap::<(String, ResponseDifferenceKind), FailureClusterAccumulator>::new();
+    let mut total_differences = 0usize;
+    let mut indexed_differences = 0usize;
     for case in &state.cases {
         let Some(assertion) = &case.response_assertion else {
             continue;
         };
-        let Some(difference) = &assertion.representative_difference else {
-            continue;
-        };
-        let key = (difference.pointer.clone(), difference.kind);
-        *clusters.entry(key.clone()).or_default() += 1;
-        representatives.entry(key).or_insert_with(|| {
-            (
-                case.case_id.clone(),
-                assertion.expected_response.clone(),
-                published_path(layout, &assertion.actual_response),
-            )
-        });
+        total_differences = total_differences.saturating_add(assertion.difference_count);
+        let differences = indexed_response_differences(assertion);
+        indexed_differences = indexed_differences.saturating_add(differences.len());
+        for difference in differences {
+            let key = (
+                response_pointer_pattern(&difference.pointer),
+                difference.kind,
+            );
+            let cluster = clusters
+                .entry(key)
+                .or_insert_with(|| FailureClusterAccumulator {
+                    affected_cases: BTreeSet::new(),
+                    occurrences: 0,
+                    representative_case_id: case.case_id.clone(),
+                    representative_pointer: difference.pointer.clone(),
+                });
+            cluster.affected_cases.insert(case.case_id.clone());
+            cluster.occurrences = cluster.occurrences.saturating_add(1);
+        }
     }
     let mut failure_clusters = clusters
         .into_iter()
-        .map(|((pointer, difference_kind), cases)| E2eFailureCluster {
-            pointer,
-            difference_kind,
-            cases,
-        })
+        .map(
+            |((pointer_pattern, difference_kind), cluster)| E2eFailureCluster {
+                pointer_pattern,
+                difference_kind,
+                affected_cases: cluster.affected_cases.len(),
+                occurrences: cluster.occurrences,
+                representative_case_id: cluster.representative_case_id,
+                representative_pointer: cluster.representative_pointer,
+            },
+        )
         .collect::<Vec<_>>();
     failure_clusters.sort_by(|left, right| {
         right
-            .cases
-            .cmp(&left.cases)
-            .then_with(|| left.pointer.cmp(&right.pointer))
+            .affected_cases
+            .cmp(&left.affected_cases)
+            .then_with(|| right.occurrences.cmp(&left.occurrences))
+            .then_with(|| left.pointer_pattern.cmp(&right.pointer_pattern))
             .then_with(|| left.difference_kind.cmp(&right.difference_kind))
     });
+    let omitted_failure_clusters = failure_clusters.len().saturating_sub(MAX_FAILURE_CLUSTERS);
+    failure_clusters.truncate(MAX_FAILURE_CLUSTERS);
     let representative = failure_clusters.first().and_then(|cluster| {
-        representatives
-            .get(&(cluster.pointer.clone(), cluster.difference_kind))
-            .map(|(case_id, expected, actual)| E2eRepresentativeDifference {
-                case_id: case_id.clone(),
-                pointer: cluster.pointer.clone(),
+        state
+            .cases
+            .iter()
+            .find(|case| case.case_id == cluster.representative_case_id)
+            .and_then(|case| case.response_assertion.as_ref())
+            .map(|assertion| E2eRepresentativeDifference {
+                case_id: cluster.representative_case_id.clone(),
+                pointer: cluster.representative_pointer.clone(),
                 difference_kind: cluster.difference_kind,
-                expected: response_observation(expected, &cluster.pointer),
-                actual: response_observation(actual, &cluster.pointer),
+                expected: response_observation(
+                    &assertion.expected_response,
+                    &cluster.representative_pointer,
+                ),
+                actual: response_observation(
+                    &published_path(layout, &assertion.actual_response),
+                    &cluster.representative_pointer,
+                ),
             })
     });
     let executed = state
@@ -214,7 +253,13 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
             response_nonpassing,
             response_incomplete: state.cases.len().saturating_sub(executed),
         },
-        failure_clusters,
+        response_differences: E2eResponseDifferenceDiagnosis {
+            total_differences,
+            indexed_differences,
+            omitted_differences: total_differences.saturating_sub(indexed_differences),
+            failure_clusters,
+            omitted_failure_clusters,
+        },
         representative,
         lifecycle_errors: state
             .errors
@@ -223,6 +268,38 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
             .map(|error| bounded_error(error))
             .collect(),
     }
+}
+
+struct FailureClusterAccumulator {
+    affected_cases: BTreeSet<String>,
+    occurrences: usize,
+    representative_case_id: String,
+    representative_pointer: String,
+}
+
+fn indexed_response_differences(assertion: &ResponseAssertionSummary) -> &[ResponseDifference] {
+    if assertion.difference_index.is_empty() {
+        assertion.representative_difference.as_slice()
+    } else {
+        &assertion.difference_index
+    }
+}
+
+pub(crate) fn response_pointer_pattern(pointer: &str) -> String {
+    if !pointer.starts_with('/') {
+        return pointer.to_string();
+    }
+    pointer
+        .split('/')
+        .map(|token| {
+            if !token.is_empty() && token.bytes().all(|byte| byte.is_ascii_digit()) {
+                "*"
+            } else {
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn bounded_error(error: &str) -> String {
@@ -502,6 +579,7 @@ mod tests {
         state.cases[0].response_assertion = Some(ResponseAssertionSummary {
             passed: false,
             difference_count: 1,
+            difference_index: Vec::new(),
             representative_difference: Some(ResponseDifference {
                 pointer: "/value".to_string(),
                 kind: ResponseDifferenceKind::MissingActual,
@@ -539,7 +617,157 @@ mod tests {
         assert_eq!(representative.expected.value, Some(Value::Null));
         assert_eq!(representative.actual.presence, E2eValuePresence::Missing);
         assert_eq!(representative.actual.value, None);
-        assert_eq!(report.failure_clusters[0].cases, 1);
+        assert_eq!(
+            report.response_differences.failure_clusters[0].affected_cases,
+            1
+        );
+    }
+
+    #[test]
+    fn diagnosis_clusters_every_indexed_difference_across_cases() {
+        let temp = tempfile::tempdir().unwrap();
+        let active_dir = temp.path().join("active");
+        let latest_dir = temp.path().join("latest");
+        std::fs::create_dir_all(&active_dir).unwrap();
+        std::fs::create_dir_all(&latest_dir).unwrap();
+        let inventory = CaseGroupInventory {
+            case_source: PathBuf::from("/cases"),
+            source_revision: "source".to_string(),
+            case_inventory_id: "inventory".to_string(),
+            groups: vec![CanonicalCaseGroup {
+                group_id: "GET /api".to_string(),
+                method: "GET".to_string(),
+                source_route: "/api".to_string(),
+                pattern: None,
+                case_inventory_id: "inventory".to_string(),
+                cases: vec![
+                    CanonicalCase {
+                        case_id: "case-1".to_string(),
+                        case_dir: PathBuf::from("/cases/case-1"),
+                        recorded_at: None,
+                    },
+                    CanonicalCase {
+                        case_id: "case-2".to_string(),
+                        case_dir: PathBuf::from("/cases/case-2"),
+                        recorded_at: None,
+                    },
+                ],
+            }],
+        };
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, None, &active_dir);
+        let case_differences = [
+            vec![
+                difference("/users/0/tree"),
+                difference("/users/1/tree"),
+                difference("/other"),
+            ],
+            vec![difference("/users/2/tree"), difference("/other")],
+        ];
+        for (index, differences) in case_differences.into_iter().enumerate() {
+            let expected = temp.path().join(format!("expected-{index}.json"));
+            let actual = latest_dir.join(format!("actual-{index}.json"));
+            write_response(
+                &expected,
+                serde_json::json!({
+                    "users": [{"tree": 1}, {"tree": 2}, {"tree": 3}],
+                    "other": true,
+                }),
+            );
+            write_response(
+                &actual,
+                serde_json::json!({"users": [{}, {}, {}], "other": false}),
+            );
+            state.cases[index].assertion_passed = Some(false);
+            state.cases[index].response_assertion = Some(ResponseAssertionSummary {
+                passed: false,
+                difference_count: differences.len(),
+                difference_index: differences.clone(),
+                representative_difference: differences.first().cloned(),
+                detail_report: active_dir.join(format!("detail-{index}.json")),
+                detail_fingerprint: format!("detail-{index}"),
+                expected_response: expected,
+                actual_response: active_dir.join(format!("actual-{index}.json")),
+                policy_path: "replay.yaml".to_string(),
+                policy_fingerprint: "policy".to_string(),
+            });
+        }
+        let layout = RunLayout {
+            target_root: temp.path().to_path_buf(),
+            run_key: "run".to_string(),
+            case_source: PathBuf::from("/cases"),
+            progress_path: temp.path().join("progress.yaml"),
+            legacy_progress_path: temp.path().join("legacy-progress.yaml"),
+            internal_root: temp.path().join("internal"),
+            current_path: temp.path().join("current"),
+            run_root: temp.path().join("run"),
+            index_path: temp.path().join("index.yaml"),
+            group_index_path: temp.path().join("group-index.yaml"),
+            active_dir,
+            latest_dir,
+        };
+
+        let report = diagnosis(&layout, &state);
+
+        assert_eq!(report.response_differences.total_differences, 5);
+        assert_eq!(report.response_differences.indexed_differences, 5);
+        assert_eq!(report.response_differences.omitted_differences, 0);
+        assert_eq!(report.response_differences.failure_clusters.len(), 2);
+        let tree = &report.response_differences.failure_clusters[0];
+        assert_eq!(tree.pointer_pattern, "/users/*/tree");
+        assert_eq!(tree.affected_cases, 2);
+        assert_eq!(tree.occurrences, 3);
+        let representative = report.representative.unwrap();
+        assert_eq!(representative.case_id, "case-1");
+        assert_eq!(representative.pointer, "/users/0/tree");
+    }
+
+    #[test]
+    fn diagnosis_reports_bounded_index_and_cluster_omissions() {
+        let temp = tempfile::tempdir().unwrap();
+        let active_dir = temp.path().join("active");
+        let latest_dir = temp.path().join("latest");
+        std::fs::create_dir_all(&active_dir).unwrap();
+        std::fs::create_dir_all(&latest_dir).unwrap();
+        let inventory = one_case_inventory();
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, None, &active_dir);
+        let differences = (0..25)
+            .map(|index| difference(&format!("/field-{index}")))
+            .collect::<Vec<_>>();
+        state.cases[0].assertion_passed = Some(false);
+        state.cases[0].response_assertion = Some(ResponseAssertionSummary {
+            passed: false,
+            difference_count: 30,
+            difference_index: differences.clone(),
+            representative_difference: differences.first().cloned(),
+            detail_report: active_dir.join("detail.json"),
+            detail_fingerprint: "detail".to_string(),
+            expected_response: PathBuf::from("/missing/expected.json"),
+            actual_response: active_dir.join("actual.json"),
+            policy_path: "replay.yaml".to_string(),
+            policy_fingerprint: "policy".to_string(),
+        });
+        let layout = RunLayout {
+            target_root: temp.path().to_path_buf(),
+            run_key: "run".to_string(),
+            case_source: PathBuf::from("/cases"),
+            progress_path: temp.path().join("progress.yaml"),
+            legacy_progress_path: temp.path().join("legacy-progress.yaml"),
+            internal_root: temp.path().join("internal"),
+            current_path: temp.path().join("current"),
+            run_root: temp.path().join("run"),
+            index_path: temp.path().join("index.yaml"),
+            group_index_path: temp.path().join("group-index.yaml"),
+            active_dir,
+            latest_dir,
+        };
+
+        let report = diagnosis(&layout, &state);
+
+        assert_eq!(report.response_differences.total_differences, 30);
+        assert_eq!(report.response_differences.indexed_differences, 25);
+        assert_eq!(report.response_differences.omitted_differences, 5);
+        assert_eq!(report.response_differences.failure_clusters.len(), 20);
+        assert_eq!(report.response_differences.omitted_failure_clusters, 5);
     }
 
     #[test]
@@ -552,6 +780,17 @@ mod tests {
             bounded(&Value::String("secret".to_string()), "/authorization"),
             Value::String("<redacted string bytes=6>".to_string())
         );
+    }
+
+    fn difference(pointer: &str) -> ResponseDifference {
+        ResponseDifference {
+            pointer: pointer.to_string(),
+            kind: ResponseDifferenceKind::ValueMismatch,
+            expected_type: None,
+            actual_type: None,
+            expected_status: None,
+            actual_status: None,
+        }
     }
 
     fn one_case_inventory() -> CaseGroupInventory {

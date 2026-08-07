@@ -414,6 +414,7 @@ mod tests {
             target_readiness_status: 404,
             target_startup_timeout: Duration::from_secs(1),
             target_request_timeout: Duration::from_secs(1),
+            target_quality_gates: Vec::new(),
             target_max_response_bytes: 1024,
             source_container: "source".to_string(),
             breeze_container: Some("breeze".to_string()),

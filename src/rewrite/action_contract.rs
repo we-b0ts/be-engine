@@ -1,7 +1,7 @@
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 
-use crate::E2eRepresentativeDifference;
+use crate::{E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis};
 
 use super::model::{
     RewriteAction, RewriteCommandSpec, RewriteEvidenceCommand, RewriteInputRequiredReason,
@@ -102,6 +102,23 @@ impl Serialize for RewriteAction {
                     evidence: evidence_commands,
                     acceptance,
                 },
+            }
+            .serialize(serializer),
+            Self::TargetQualityRequired {
+                summary,
+                gate_id,
+                target_fingerprint,
+                gates,
+                command,
+            } => RewriteActionView {
+                kind: "target_quality_required",
+                summary,
+                details: RewriteTargetQualityDetails {
+                    gate_id,
+                    target_fingerprint,
+                    gates,
+                },
+                commands: RewriteRecordingCommands { execute: command },
             }
             .serialize(serializer),
             Self::PlanApplyRequired { summary, command } => RewriteActionView {
@@ -239,6 +256,8 @@ struct RewriteIssueDetails<'a> {
     pointer_pattern: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     representative: Option<&'a E2eRepresentativeDifference>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_diagnosis: Option<&'a E2eResponseDifferenceDiagnosis>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     possible_causes: &'a Vec<String>,
     observed_target_fingerprint: &'a str,
@@ -254,6 +273,13 @@ struct RewriteImplementationDetails<'a> {
     worker: &'a RewriteWorkerDispatchView,
 }
 
+#[derive(Serialize)]
+struct RewriteTargetQualityDetails<'a> {
+    gate_id: &'a str,
+    target_fingerprint: &'a str,
+    gates: &'a [String],
+}
+
 impl<'a> From<&'a RewriteIssue> for RewriteIssueDetails<'a> {
     fn from(issue: &'a RewriteIssue) -> Self {
         Self {
@@ -262,6 +288,7 @@ impl<'a> From<&'a RewriteIssue> for RewriteIssueDetails<'a> {
             owner: &issue.owner,
             pointer_pattern: issue.pointer_pattern.as_deref(),
             representative: issue.representative.as_ref(),
+            response_diagnosis: issue.response_diagnosis.as_ref(),
             possible_causes: &issue.possible_causes,
             observed_target_fingerprint: &issue.observed_target_fingerprint,
             attempt: issue.attempt,

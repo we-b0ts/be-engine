@@ -14,6 +14,7 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
         current_api_index: None,
         parked_slices: std::collections::BTreeMap::new(),
         worker_bindings: std::collections::BTreeMap::new(),
+        target_quality_fingerprint: None,
         recording_run_id: "20260802000000".to_string(),
         recording_rejection: None,
         recording_settings: RewriteRecordingSettings::default(),

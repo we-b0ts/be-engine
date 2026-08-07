@@ -12,9 +12,11 @@ fn rule() -> BackgroundDependencyRuleConfig {
         ports: vec![20917, 20918, 20919],
         command: "ZCOUNT".to_string(),
         keys: Vec::new(),
+        key_patterns: Vec::new(),
         key_prefix: "1042015:".to_string(),
         key_suffix: ".wtm2".to_string(),
         initial_load_timeout_ms: None,
+        fields: Vec::new(),
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "InterestTagCardServiceImpl.java:init scheduled refresh".to_string(),
     }
@@ -26,9 +28,11 @@ fn get_rule() -> BackgroundDependencyRuleConfig {
         ports: vec![20917, 20918, 20919],
         command: "GET".to_string(),
         keys: vec!["cache:init:a".to_string(), "cache:init:b".to_string()],
+        key_patterns: Vec::new(),
         key_prefix: String::new(),
         key_suffix: String::new(),
         initial_load_timeout_ms: Some(60_000),
+        fields: Vec::new(),
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "src/cache/warm.rs:init loads response-driving local state".to_string(),
     }
@@ -165,6 +169,60 @@ fn rejects_unlisted_exact_key_redis_commands() {
     assert!(error.contains("ZCOUNT"));
     assert!(error.contains("SCARD"));
     assert!(error.contains("HGETALL"));
+}
+
+#[test]
+fn matches_bootstrap_hash_reads_by_numeric_key_shape_and_exact_fields() {
+    let rule = BackgroundDependencyRuleConfig::Redis {
+        name: "experiment-bootstrap".to_string(),
+        ports: vec![6379],
+        command: "HMGET".to_string(),
+        keys: vec!["traffic-result".to_string()],
+        key_patterns: vec![RedisKeyPatternConfig {
+            prefix: "exp:matchlist:".to_string(),
+            suffix: String::new(),
+            numeric_middle: true,
+        }],
+        key_prefix: String::new(),
+        key_suffix: String::new(),
+        initial_load_timeout_ms: None,
+        fields: vec![
+            "value".to_string(),
+            "compress".to_string(),
+            "hash".to_string(),
+        ],
+        source_revision: String::new(),
+        source_evidence: "src/bootstrap.rs:load experiment cache".to_string(),
+    };
+    validate(std::slice::from_ref(&rule)).unwrap();
+    assert!(redis_rule_matches(
+        &rule,
+        6379,
+        "HMGET",
+        &[
+            b"exp:matchlist:123".to_vec(),
+            b"value".to_vec(),
+            b"compress".to_vec(),
+            b"hash".to_vec(),
+        ],
+    ));
+    assert!(!redis_rule_matches(
+        &rule,
+        6379,
+        "HMGET",
+        &[
+            b"exp:matchlist:not-a-number".to_vec(),
+            b"value".to_vec(),
+            b"compress".to_vec(),
+            b"hash".to_vec(),
+        ],
+    ));
+    assert!(!redis_rule_matches(
+        &rule,
+        6379,
+        "HMGET",
+        &[b"traffic-result".to_vec(), b"hash".to_vec()],
+    ));
 }
 
 #[test]

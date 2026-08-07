@@ -38,7 +38,7 @@ command returned by the current action. It waits only for:
 
 ## Action Handling
 
-The `action` object in response schema v10 has one stable shape for every kind:
+The `action` object in response schema v13 has one stable shape for every kind:
 
 ```json
 {
@@ -53,9 +53,10 @@ The `action` object in response schema v10 has one stable shape for every kind:
 location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
-`next` command. Response schema v10 is independent of target repository
+`next` command. Response schema v13 is independent of target repository
 configuration versions. It retains the mandatory implementation-worker
-dispatch confirmation gate and adds recorder-capture refresh state.
+dispatch confirmation gate, recorder-capture refresh state, and integrated
+target repository quality gates.
 
 ### `wait_required`
 
@@ -100,7 +101,8 @@ implementation command.
 
 Every initialized action/status envelope includes a bounded `api_inventory`
 summary: `total`, `completed`, `pending`, `implementation_required`,
-`awaiting_recording_refresh`, `current_index`, and `current_api`. The coordinator
+`awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
+`current_api`. The coordinator
 owns the stable inventory for the shared standard recording. The main
 orchestrator reads
 [implementation-worker-coordination.md](implementation-worker-coordination.md)
@@ -119,16 +121,36 @@ The assigned worker owns AI diagnosis, code edits, and local tests after every
 API reaches `implementation_required`. The orchestrator dispatches before
 executing evidence. Its first issue creates the dedicated subagent binding;
 every later issue resumes that exact stored handle, even when the issue ID or
-attempt changes. With multiple APIs, a positive `api_inventory.pending` count
-makes the orchestrator read `backend-rewrite inventory`, select an exact
-pending item, and run
-`backend-rewrite next --api '<exact METHOD pattern>'`; it does not wait for the
-worker unless no pending API can advance or the coordinator returns
+attempt changes. With multiple APIs, worker confirmation returns an
+`advance_required` action with the exact next pending API command. The
+orchestrator executes it instead of waiting; resumed `status` reconstructs the
+same action when the confirmation response is lost. It waits for the worker
+only when no pending API can advance or the coordinator returns
 `wait_required`. An API's evidence and acceptance commands are opaque and
 remain bound to that API. If the target fingerprint changes during a focused
 Replay, that result is discarded and the API returns to Replay. If later edits
-change the fingerprint after an API completed, its prior evidence is requeued
-before whole-workflow completion.
+change the fingerprint after an API completed, it becomes
+`revalidation_pending`. These stale successes do not compete with untouched
+pending APIs or active implementation repairs. Once normal work drains, the
+coordinator automatically replays and compares every stale API against the
+same final content fingerprint. A Git commit with no effective content change
+does not create a new fingerprint or validation epoch.
+
+When a worker handoff proves a shared module, global configuration, or startup
+change has high impact, the main orchestrator may opt into earlier checks for
+selected stale APIs:
+
+```text
+backend-rewrite verification request \
+  --api 'GET /api/a' \
+  --api 'POST /api/b' \
+  --reason 'shared response mapper changed'
+```
+
+Execute the returned `next.action.commands.advance` command. Only
+`revalidation_pending` APIs are eligible: current or not-yet-verified APIs are
+already covered by normal scheduling. A false positive spends extra serialized
+Replay/comparison time; it never weakens or skips the mandatory final epoch.
 
 Per-API failure retries reuse the same cases for that API. A fresh standard
 recording is still allowed only under the explicit conditions below and resets
@@ -211,12 +233,21 @@ is required; the AI does not choose that transition itself.
 `action.details` contains one bounded issue, one representative when available,
 possible causes, and the mandatory dedicated-worker gate defined in
 [implementation-worker-coordination.md](implementation-worker-coordination.md).
+For a response issue it also contains `response_diagnosis`: exact
+total/indexed/omitted difference counts and at most 20 clusters grouped by
+normalized Pointer pattern and difference kind. A cluster reports affected
+cases, occurrences, and one exact representative; matching patterns remain
+observable grouping rather than proof of one cause.
 Confirm `dispatch_required` or `resume_required` with the runtime handle before
 any later `next`; a refused cross-API selection returns the same structured
 confirmation action.
 `action.commands.evidence` contains the worker's permitted evidence queries,
 while `action.commands.acceptance` is the orchestrator's only acceptance
 transition. Traffic facts come from those queries and immutable artifacts.
+For a response issue, execute the first `case_response_differences` command
+before changing target code. It returns at most 20 ordered differences and an
+exact opaque `facts.next_page.command` when more remain; never construct a page
+cursor.
 `representatives` returns the
 exact standard or comparison case directory and structured response difference;
 inspect that case first and other artifact cases as needed. For dependency
@@ -229,6 +260,19 @@ supplies the final business attribution. The worker applies
 local target tests, and returns the tested change plus unchanged acceptance
 command. The orchestrator integrates it and executes acceptance from the
 coordinator worktree.
+
+### `target_quality_required`
+
+After acceptance observes a changed integrated target revision, the
+coordinator runs repository quality gates before spending the serialized
+traffic-runtime lease on Replay. Execute only `action.commands.execute`. Its
+absolute `cwd` and `--target-root` bind the canonical coordinator worktree;
+never execute it in a worker worktree. A successful run records the verified
+target fingerprint and returns `advance_required`. Execute that returned
+command to start focused Replay. Any later integration or gate-configuration
+change produces a new fingerprint and a new quality action. A failed gate does
+not advance state; fix the integrated target and recover the current action
+with scoped `status`.
 
 The `representatives` evidence report advertises a `recorder_capture` planner
 for response, dependency, and comparison issues. Use it only after the worker
@@ -302,14 +346,23 @@ source pre-readiness count. The complete startup summary is available only from
 `pre_readiness_traffic`; startup context, `unused_global`, and target activity
 outside a case do not fail the case gate.
 
+For a Response issue with available pre-readiness traffic, that query also
+exposes the Redis bootstrap dependency planner. It accepts compact HGET/HMGET
+numeric-key patterns plus exact fields, applies a replay-only overlay to the
+immutable Global bootstrap evidence, and returns to the same focused cases.
+
 ### `system_repair_required`
 
 This action exists only after `backend-rewrite route` accepts current evidence and a
 source reference and required system change. The route snapshots a
 coordinator-defined system/source revision and returns an opaque repair ID; the
 AI never supplies an acceptance command. Apply the required repair, then execute
-the exact `action.commands.acceptance` argv for
-`repair verify <repair-id>`. `next` and `recording request` cannot bypass it.
+the exact `action.commands.acceptance` argv. New repairs use
+`repair verify <repair-id>`. A legacy Response `external_data_blocker` that is
+now expressible by bootstrap replay planning instead receives
+`repair resume-replay-planning <repair-id>`; this migration does not require a
+runtime-input revision change. `next` and `recording request` cannot bypass the
+returned command.
 Successful verification reruns the same cases for Replay or external-input
 repairs, or allocates fresh standard recording for Recorder or source-baseline
 changes.
@@ -324,9 +377,10 @@ evidence is an API-scoped recorder-capture refresh, not system repair.
 For API-scoped status, this action may mean only that assigned API has current
 passing focused E2E and comparison evidence; `terminal_allowed` remains false
 while another inventory item is incomplete. `terminal_allowed=true` means all
-APIs are complete for the same target revision. Use `backend-rewrite inventory`
-if final delivery needs the full per-API list. Repository-wide regression and
-delivery remain under the caller's rewrite objective.
+APIs are complete for the same target content fingerprint. Use
+`backend-rewrite inventory` if final delivery needs the full per-API list.
+Repository-wide regression and delivery remain under the caller's rewrite
+objective.
 
 ## State And Recovery
 

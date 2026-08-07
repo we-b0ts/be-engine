@@ -11,6 +11,7 @@ fn response_state() -> RewriteState {
         summary: "response differs".to_string(),
         pointer_pattern: Some("/request_id".to_string()),
         representative: None,
+        response_diagnosis: None,
         possible_causes: Vec::new(),
         observed_target_fingerprint: "target".to_string(),
         attempt: 1,

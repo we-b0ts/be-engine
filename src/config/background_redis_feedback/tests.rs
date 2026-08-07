@@ -57,9 +57,11 @@ impl Fixture {
             ports: vec![20919, 20917, 20918],
             command: "zcount".to_string(),
             keys: Vec::new(),
+            key_patterns: Vec::new(),
             key_prefix: "1042015:".to_string(),
             key_suffix: ".wtm2".to_string(),
             initial_load_timeout_ms: None,
+            fields: Vec::new(),
             source_revision: REVISION.to_string(),
             source_evidence: EVIDENCE.to_string(),
         }
@@ -271,6 +273,78 @@ fn redis_get_requires_every_exact_key_in_unused_case_evidence() {
     assert!(raw.contains("keys = [\"cache:init:a\", \"cache:init:b\"]"));
     assert!(raw.contains("initial_load_timeout_ms = 30000"));
     assert!(!raw.contains("response_role"));
+}
+
+#[test]
+fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("recorder.toml");
+    let replay_report = temp.path().join("replay-report.json");
+    let global = temp.path().join("global-dependencies.jsonl");
+    fs::write(&config, "[recording]\ntraffic_jsonl = \"full\"\n").unwrap();
+    let exchanges = ["exp:matchlist:123", "traffic-result"]
+        .map(|key| {
+            json!({
+                "event_type": "redis_exchange",
+                "target_host": "cache.service",
+                "target_port": 6379,
+                "command": "HGET",
+                "args": [capture(key), capture("version")],
+                "replay_safe": true,
+                "global_dependency_reason": "bootstrap_window",
+            })
+            .to_string()
+        })
+        .join("\n");
+    fs::write(&global, format!("{exchanges}\n")).unwrap();
+    fs::write(
+        &replay_report,
+        serde_json::to_vec_pretty(&json!({
+            "version": 6,
+            "finalized": true,
+            "global_dependencies_path": global,
+            "cases": [],
+            "redis": {
+                "unmatched": [{
+                    "target": { "host": "cache.service", "port": 6379 },
+                    "command": "HGET",
+                }],
+                "unsupported": [],
+                "unsafe_events": [],
+                "unused_case": [],
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let feedback = RedisBackgroundDependencyFeedback {
+        config_path: config.clone(),
+        replay_report_path: replay_report,
+        name: "experiment-bootstrap".to_string(),
+        ports: vec![6379],
+        command: "hget".to_string(),
+        keys: vec!["traffic-result".to_string()],
+        key_patterns: vec![RedisKeyPatternConfig {
+            prefix: "exp:matchlist:".to_string(),
+            suffix: String::new(),
+            numeric_middle: true,
+        }],
+        key_prefix: String::new(),
+        key_suffix: String::new(),
+        initial_load_timeout_ms: None,
+        fields: vec!["version".to_string()],
+        source_revision: REVISION.to_string(),
+        source_evidence: "src/bootstrap.rs:load experiment cache".to_string(),
+    };
+
+    let plan = plan_redis_background_dependency(feedback).unwrap();
+    assert_eq!(plan.report().matched_unused_exchanges, 2);
+    assert!(plan.report().matched_case_ids.is_empty());
+    plan.apply().unwrap();
+    let raw = fs::read_to_string(&config).unwrap();
+    assert!(raw.contains("key_patterns = [{ prefix = \"exp:matchlist:\""));
+    assert!(raw.contains("fields = [\"version\"]"));
+    AppConfig::load(&config).unwrap();
 }
 
 #[test]

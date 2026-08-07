@@ -134,10 +134,8 @@ pub(super) fn activate_requested(
         "API {requested} is not available for concurrent AI work"
     );
     if state.api_inventory[requested_index].status == RewriteApiStatus::Pending {
-        let retained_work_items = state.parked_slices.len()
-            + usize::from(state.phase == RewritePhase::ImplementationRequired);
         ensure!(
-            retained_work_items < MAX_CONCURRENT_AI_WORK_ITEMS,
+            concurrent_ai_capacity_available(state),
             "concurrent AI work item limit of {MAX_CONCURRENT_AI_WORK_ITEMS} was reached"
         );
     }
@@ -223,7 +221,13 @@ pub(super) fn scoped(
     let item = &state.api_inventory[index];
     let slice = match state.parked_slices.get(&requested).cloned() {
         Some(slice) => slice,
-        None if item.status == RewriteApiStatus::Pending => pending_slice(item)?,
+        None if matches!(
+            item.status,
+            RewriteApiStatus::Pending | RewriteApiStatus::RevalidationPending
+        ) =>
+        {
+            pending_slice(item)?
+        }
         None if item.status == RewriteApiStatus::Complete => completed_slice(item)?,
         None => anyhow::bail!("API {requested} has no concurrent AI work state"),
     };
@@ -362,6 +366,12 @@ pub(super) fn complete_current_and_advance(state: &mut RewriteState) -> Result<b
             .iter()
             .position(|item| item.status == RewriteApiStatus::ImplementationRequired)
     });
+    let next = next.or_else(|| {
+        state
+            .api_inventory
+            .iter()
+            .position(|item| item.status == RewriteApiStatus::RevalidationPending)
+    });
     let Some(next) = next else {
         state.current_api_index = None;
         return Ok(false);
@@ -475,7 +485,7 @@ pub(super) fn reset_for_recording(state: &mut RewriteState) {
     }
 }
 
-pub(super) fn invalidate_completed_for_target_change(
+pub(super) fn defer_completed_for_target_change(
     state: &mut RewriteState,
     target_fingerprint: &str,
 ) -> Result<bool> {
@@ -484,10 +494,9 @@ pub(super) fn invalidate_completed_for_target_change(
         if item.status == RewriteApiStatus::Complete
             && item.verified_target_fingerprint.as_deref() != Some(target_fingerprint)
         {
-            item.status = RewriteApiStatus::Pending;
+            item.status = RewriteApiStatus::RevalidationPending;
             item.e2e_current = false;
             item.comparison_current = false;
-            item.verified_target_fingerprint = None;
             changed = true;
         }
     }
@@ -495,8 +504,8 @@ pub(super) fn invalidate_completed_for_target_change(
         let next = state
             .api_inventory
             .iter()
-            .position(|item| item.status == RewriteApiStatus::Pending)
-            .context("invalidated API inventory has no pending slice")?;
+            .position(|item| item.status == RewriteApiStatus::RevalidationPending)
+            .context("stale API inventory has no deferred revalidation slice")?;
         state.api_inventory[next].status = RewriteApiStatus::Active;
         state.current_api_index = Some(next);
         load_pending(state, next)?;
@@ -552,12 +561,34 @@ pub(super) fn view(state: &RewriteState) -> RewriteApiInventoryView {
             .iter()
             .filter(|item| item.status == RewriteApiStatus::AwaitingRecordingRefresh)
             .count(),
+        revalidation_pending: state
+            .api_inventory
+            .iter()
+            .filter(|item| item.status == RewriteApiStatus::RevalidationPending)
+            .count(),
         current_index: state.current_api_index,
         current_api: state
             .current_api_index
             .and_then(|index| state.api_inventory.get(index))
             .map(|item| item.api.clone()),
     }
+}
+
+pub(super) fn next_pending_api_for_concurrent_work(state: &RewriteState) -> Option<&str> {
+    if !concurrent_ai_capacity_available(state) {
+        return None;
+    }
+    state
+        .api_inventory
+        .iter()
+        .find(|item| item.status == RewriteApiStatus::Pending)
+        .map(|item| item.api.as_str())
+}
+
+fn concurrent_ai_capacity_available(state: &RewriteState) -> bool {
+    let retained_work_items = state.parked_slices.len()
+        + usize::from(state.phase == RewritePhase::ImplementationRequired);
+    retained_work_items < MAX_CONCURRENT_AI_WORK_ITEMS
 }
 
 pub(super) fn details(state: &RewriteState) -> RewriteApiInventoryDetails {
@@ -780,6 +811,7 @@ mod tests {
             summary: "implementation differs".to_string(),
             pointer_pattern: None,
             representative: None,
+            response_diagnosis: None,
             possible_causes: Vec::new(),
             observed_target_fingerprint: target_fingerprint.to_string(),
             attempt: 1,
@@ -817,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_slice_is_requeued_when_the_target_revision_changes() {
+    fn completed_slice_is_deferred_until_normal_work_drains() {
         let mut state = crate::rewrite::test_state();
         install(
             &mut state,
@@ -834,21 +866,58 @@ mod tests {
         assert_eq!(state.api_inventory[0].status, RewriteApiStatus::Complete);
         assert!(state.worker_bindings.contains_key("GET /a"));
 
-        assert!(invalidate_completed_for_target_change(&mut state, "target-r1").unwrap());
-        assert_eq!(state.api_inventory[0].status, RewriteApiStatus::Pending);
+        assert!(defer_completed_for_target_change(&mut state, "target-r1").unwrap());
+        assert_eq!(
+            state.api_inventory[0].status,
+            RewriteApiStatus::RevalidationPending
+        );
         assert!(!state.api_inventory[0].e2e_current);
         assert!(!state.api_inventory[0].comparison_current);
-        assert!(state.api_inventory[0].verified_target_fingerprint.is_none());
+        assert_eq!(
+            state.api_inventory[0]
+                .verified_target_fingerprint
+                .as_deref(),
+            Some("target-r0")
+        );
         assert!(state.worker_bindings.contains_key("GET /a"));
 
-        let api_a = "GET /a".parse::<RecordingApi>().unwrap();
-        assert!(activate_requested(&mut state, Some(&api_a)).unwrap());
-        state.phase = RewritePhase::ImplementationRequired;
-        state.active_issue = Some(test_issue("issue-a-later", "target-r1"));
+        state.target_fingerprint = Some("target-r1".to_string());
+        state.e2e_current = true;
+        state.comparison_current = true;
+        assert!(complete_current_and_advance(&mut state).unwrap());
+        assert_eq!(state.api, "GET /a");
+        assert_eq!(state.phase, RewritePhase::ApiPending);
+        assert_eq!(state.api_inventory[0].status, RewriteApiStatus::Active);
+        assert_eq!(view(&state).revalidation_pending, 0);
+    }
+
+    #[test]
+    fn terminal_target_change_starts_one_final_revalidation_slice() {
+        let mut state = crate::rewrite::test_state();
+        install(
+            &mut state,
+            vec!["GET /a".to_string(), "POST /b".to_string()],
+        )
+        .unwrap();
+        for item in &mut state.api_inventory {
+            item.status = RewriteApiStatus::Complete;
+            item.e2e_current = true;
+            item.comparison_current = true;
+            item.verified_target_fingerprint = Some("target-r0".to_string());
+        }
+        state.phase = RewritePhase::SliceComplete;
+        state.current_api_index = None;
+
+        assert!(defer_completed_for_target_change(&mut state, "target-r1").unwrap());
+
+        assert_eq!(state.phase, RewritePhase::ApiPending);
+        assert_eq!(state.current_api_index, Some(0));
+        assert_eq!(state.api_inventory[0].status, RewriteApiStatus::Active);
         assert_eq!(
-            super::super::worker::dispatch_view(&state, None).state,
-            crate::rewrite::model::RewriteWorkerDispatchState::ResumeRequired
+            state.api_inventory[1].status,
+            RewriteApiStatus::RevalidationPending
         );
+        assert_eq!(view(&state).revalidation_pending, 1);
     }
 
     #[test]

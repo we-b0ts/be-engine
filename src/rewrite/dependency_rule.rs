@@ -13,9 +13,10 @@ use crate::{
     BackgroundDependencyFeedback, BackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
     E2eRunContext, MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
-    RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan, plan_background_dependency,
-    plan_breeze_memcached_background_dependency, plan_motan_background_dependency,
-    plan_redis_background_dependency, resolve_e2e_response_rule_evidence,
+    RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan, RedisKeyPatternConfig,
+    plan_background_dependency, plan_breeze_memcached_background_dependency,
+    plan_motan_background_dependency, plan_redis_background_dependency,
+    resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Clone)]
@@ -66,6 +67,13 @@ pub enum RewriteDependencyRuleSelector {
         ports: Vec<u16>,
         keys: Vec<String>,
         initial_load_timeout_ms: u64,
+    },
+    RedisHashRead {
+        command: String,
+        ports: Vec<u16>,
+        keys: Vec<String>,
+        key_patterns: Vec<RedisKeyPatternConfig>,
+        fields: Vec<String>,
     },
 }
 
@@ -130,9 +138,9 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteDependencyRulePlanOptions,
 ) -> Result<RewriteDependencyRuleReport> {
-    let issue = dependency_issue(state)?;
-    validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
     let spec = spec_from_selector(options.selector);
+    let issue = dependency_issue(state, &spec)?;
+    validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id, &spec)?;
     let spec_json = serde_json::to_string(&spec)?;
     let mut record = RewriteDependencyRulePlanRecord {
         id: format!(
@@ -193,14 +201,19 @@ pub(super) fn apply(
     })
 }
 
-fn dependency_issue(state: &RewriteState) -> Result<super::model::RewriteIssue> {
+fn dependency_issue(
+    state: &RewriteState,
+    spec: &RewriteDependencyRuleSpec,
+) -> Result<super::model::RewriteIssue> {
     let issue = state
         .active_issue
         .clone()
         .context("rewrite workflow has no active issue")?;
     ensure!(
-        issue.kind == RewriteIssueKind::Dependency,
-        "background dependency rules require an active dependency issue"
+        issue.kind == RewriteIssueKind::Dependency
+            || (issue.kind == RewriteIssueKind::Response
+                && matches!(spec, RewriteDependencyRuleSpec::RedisHashRead { .. })),
+        "background dependency rules require a dependency issue; bootstrap Redis hash reads also accept a response issue"
     );
     Ok(issue)
 }
@@ -217,7 +230,7 @@ fn pending_plan_for_apply(
         record.id == plan_id,
         "dependency rule plan is stale or belongs to another issue"
     );
-    let issue = dependency_issue(state)?;
+    let issue = dependency_issue(state, &record.spec)?;
     ensure!(
         issue.id == record.issue_id,
         "active rewrite issue changed after dependency rule planning"
@@ -230,6 +243,7 @@ fn validate_plan_evidence(
     state: &RewriteState,
     issue_id: &str,
     evidence_id: &str,
+    spec: &RewriteDependencyRuleSpec,
 ) -> Result<()> {
     if state
         .dependency_rule_plan
@@ -239,18 +253,39 @@ fn validate_plan_evidence(
         return Ok(());
     }
 
+    let expected_query = if matches!(spec, RewriteDependencyRuleSpec::RedisHashRead { .. })
+        && state
+            .active_issue
+            .as_ref()
+            .is_some_and(|issue| issue.kind == RewriteIssueKind::Response)
+    {
+        "pre_readiness_traffic"
+    } else {
+        "dirty_clusters"
+    };
     let valid = evidence::commands(target_root, state)
         .into_iter()
         .any(|command| {
             evidence::query(target_root, state, &command.query_id).is_ok_and(|report| {
-                report.query == "dirty_clusters" && report.evidence_id == evidence_id
+                report.query == expected_query && report.evidence_id == evidence_id
             })
         });
     ensure!(
         valid,
-        "dependency rule evidence is stale, is not dirty-cluster evidence, or belongs to another issue"
+        "dependency rule evidence is stale, has the wrong query kind, or belongs to another issue"
     );
     Ok(())
+}
+
+pub(super) fn plans_response_bootstrap(state: &RewriteState, plan_id: &str) -> bool {
+    state
+        .active_issue
+        .as_ref()
+        .is_some_and(|issue| issue.kind == RewriteIssueKind::Response)
+        && state.dependency_rule_plan.as_ref().is_some_and(|plan| {
+            plan.id == plan_id
+                && matches!(plan.spec, RewriteDependencyRuleSpec::RedisHashRead { .. })
+        })
 }
 
 fn spec_from_selector(selector: RewriteDependencyRuleSelector) -> RewriteDependencyRuleSpec {
@@ -325,6 +360,19 @@ fn spec_from_selector(selector: RewriteDependencyRuleSelector) -> RewriteDepende
             ports,
             keys,
             initial_load_timeout_ms,
+        },
+        RewriteDependencyRuleSelector::RedisHashRead {
+            command,
+            ports,
+            keys,
+            key_patterns,
+            fields,
+        } => RewriteDependencyRuleSpec::RedisHashRead {
+            command,
+            ports,
+            keys,
+            key_patterns,
+            fields,
         },
     }
 }
@@ -427,9 +475,11 @@ fn build_plan(
                 ports: ports.clone(),
                 command: "ZCOUNT".to_string(),
                 keys: Vec::new(),
+                key_patterns: Vec::new(),
                 key_prefix: key_prefix.clone(),
                 key_suffix: key_suffix.clone(),
                 initial_load_timeout_ms: None,
+                fields: Vec::new(),
                 source_revision,
                 source_evidence: record.source_evidence.clone(),
             },
@@ -476,6 +526,29 @@ fn build_plan(
             source_revision,
             command: "HGETALL",
         }),
+        RewriteDependencyRuleSpec::RedisHashRead {
+            command,
+            ports,
+            keys,
+            key_patterns,
+            fields,
+        } => Ok(DependencyRulePlan::Redis(plan_redis_background_dependency(
+            RedisBackgroundDependencyFeedback {
+                config_path,
+                replay_report_path,
+                name: record.name.clone(),
+                ports: ports.clone(),
+                command: command.clone(),
+                keys: keys.clone(),
+                key_patterns: key_patterns.clone(),
+                key_prefix: String::new(),
+                key_suffix: String::new(),
+                initial_load_timeout_ms: None,
+                fields: fields.clone(),
+                source_revision,
+                source_evidence: record.source_evidence.clone(),
+            },
+        )?)),
     }
 }
 
@@ -500,9 +573,11 @@ fn plan_exact_key_redis_background_dependency(
             ports: ports.to_vec(),
             command: command.to_string(),
             keys: keys.to_vec(),
+            key_patterns: Vec::new(),
             key_prefix: String::new(),
             key_suffix: String::new(),
             initial_load_timeout_ms: Some(initial_load_timeout_ms),
+            fields: Vec::new(),
             source_revision,
             source_evidence: record.source_evidence.clone(),
         },
