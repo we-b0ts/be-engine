@@ -38,7 +38,7 @@ command returned by the current action. It waits only for:
 
 ## Action Handling
 
-The `action` object in response schema v13 has one stable shape for every kind:
+The `action` object in response schema v14 has one stable shape for every kind:
 
 ```json
 {
@@ -53,7 +53,11 @@ The `action` object in response schema v13 has one stable shape for every kind:
 location for executable argv, keyed by its role. An empty object means the
 action has no command of that class; do not infer a fallback. `status` does not
 duplicate the issue as `active_issue` or publish an unconditional top-level
-`next` command. Response schema v13 is independent of target repository
+`next` command. When present, the response's top-level
+`source_process_traffic` is bounded cross-action context from the selected
+standard recording: use it to prioritize startup, background refresh, and
+local-cache source paths, but never treat it as ownership or response-causality
+proof. Response schema v14 is independent of target repository
 configuration versions. It retains the mandatory implementation-worker
 dispatch confirmation gate, recorder-capture refresh state, and integrated
 target repository quality gates.

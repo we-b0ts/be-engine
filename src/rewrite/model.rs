@@ -13,8 +13,10 @@ use crate::{
     E2eVerificationGates,
 };
 
+use super::source_process_traffic::RewriteSourceProcessTrafficView;
+
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 13;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 14;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -355,6 +357,17 @@ pub(super) struct RewriteWorkerBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
     pub confirmed_dispatch_id: String,
+    #[serde(default)]
+    pub transfer_generation: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_transfer: Option<RewriteWorkerTransferRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteWorkerTransferRecord {
+    pub previous_agent_handle_fingerprint: String,
+    pub reason: String,
+    pub transferred_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -693,6 +706,8 @@ pub struct RewriteActionEnvelope {
     pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_process_traffic: Option<RewriteSourceProcessTrafficView>,
     pub action: RewriteAction,
     pub terminal_allowed: bool,
 }
@@ -707,6 +722,8 @@ pub struct RewriteStatusReport {
     pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_process_traffic: Option<RewriteSourceProcessTrafficView>,
     pub e2e_current: bool,
     pub comparison_current: bool,
     pub terminal_allowed: bool,
@@ -959,13 +976,14 @@ mod tests {
             workflow: None,
             api_inventory: None,
             latest_focused_e2e: None,
+            source_process_traffic: None,
             e2e_current: false,
             comparison_current: false,
             terminal_allowed: false,
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(13)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(14)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }

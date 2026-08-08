@@ -101,6 +101,7 @@ pub(super) fn deferred_status_envelope(
     }
     let scoped = inventory::scoped(state, Some(api))?;
     Ok(Some(action::envelope(
+        target_root,
         &scoped,
         RewriteAction::WaitRequired {
             summary: format!(
@@ -248,7 +249,7 @@ mod tests {
         .unwrap();
 
         let value = serde_json::to_value(&report).unwrap();
-        assert_eq!(value["schema_version"], serde_json::json!(13));
+        assert_eq!(value["schema_version"], serde_json::json!(14));
         assert_eq!(
             value.pointer("/next/action/kind"),
             Some(&serde_json::json!("advance_required"))

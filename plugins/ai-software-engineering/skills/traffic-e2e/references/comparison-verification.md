@@ -17,6 +17,11 @@ comparison recorder, finalization, signals, and cleanup. The target receives
 the fixed config mount and port environment contract. Do not generate or
 invoke repository comparison wrappers.
 
+Managed comparison runs source through the same reviewed
+`.traffic-e2e/Dockerfile.recording` adaptor used by standard recording. The
+adaptor owns the source command and fixed `998:998` identity required by
+cache-only interception; callers do not adapt or configure the source UID.
+
 When the recorder config contains Redis background rules, managed comparison
 also owns a cache-only run-local snapshot in the shared network namespace.
 Source and candidate share the first successful response for each matching

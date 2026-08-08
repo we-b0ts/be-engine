@@ -52,11 +52,13 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v13 contains an `action` object with exactly `kind`, `summary`,
+Response schema v14 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
-repository configuration versions. Read facts only from `action.details` and
-execute only command roles actually present under `action.commands`; never
-guess legacy fields or missing transitions.
+repository configuration versions. Read kind-specific facts only from
+`action.details`; when present, use the top-level `source_process_traffic` as
+bounded bootstrap/background/local-cache triage context. Execute only command
+roles actually present under `action.commands`; never guess legacy fields or
+missing transitions.
 
 Every returned command has a canonical `cwd` and argv whose absolute
 `--target-root` is already bound. Execute it opaquely without reconstructing,
@@ -144,8 +146,11 @@ or the post-confirmation `advance_required` action before any later `next`.
 
 `resume_required` means the same handle and worktree, updated from the
 integrated revision; a newly created subagent is replacement, not resume. Never
-replace it silently. If it cannot be resumed, preserve the worktree and report
-a capability blocker; ownership transfer requires explicit caller approval.
+replace it silently. If it cannot be resumed, preserve the worktree and request
+explicit caller approval. After approval, create the replacement for that same
+worktree and complete action, then execute `backend-rewrite worker transfer`
+with the current `binding_id`, replacement handle, bounded reason, and
+`--approve-ownership-transfer`. Never transfer merely to gain parallelism.
 
 Before waiting for a bound worker, and once after a main-session restart or
 user interruption, send one continue/reactivate message with the current

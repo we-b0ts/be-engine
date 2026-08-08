@@ -31,8 +31,19 @@ pub(super) async fn run(args: CacheSnapshotRunArgs) -> Result<()> {
     config.recording.traffic_jsonl = TrafficJsonlMode::Errors;
     config.http.enabled = false;
     config.dns_mock.enabled = false;
+    // The cache-snapshot container does not mount the Breeze snapshot
+    // directory, and the run only captures background Redis dependencies, so
+    // drop any Breeze bypass strategies to avoid loading a snapshot that is
+    // unavailable in this container.
+    config.dns_mock.bypass_strategies.clear();
     config.udp_gateway.enabled = false;
     config.mysql.enabled = false;
+    // The cache-snapshot run captures only background Redis dependencies; it
+    // does not perform HTTP interception or response rewriting. Disabling
+    // dns_mock and tcp_gateway.record_http below would otherwise violate the
+    // AppConfig validation requiring those to be enabled whenever
+    // http_response_rewrite is enabled, so disable it here too.
+    config.http_response_rewrite.enabled = false;
     config.tcp_gateway.enabled = true;
     config.tcp_gateway.record_http = false;
     config.tcp_gateway.mitm_https = false;

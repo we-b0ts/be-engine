@@ -13,6 +13,7 @@ mod memcached;
 mod motan;
 mod pre_readiness;
 mod redis;
+mod source_process;
 mod udp;
 use kafka::{
     KafkaDependencySummary, record_kafka_connection_summary, record_kafka_fetch_summary,
@@ -21,6 +22,9 @@ use kafka::{
 use memcached::{MemcachedDependencySummary, MemcachedSummaryBuilder};
 use motan::{MotanDependencySummary, MotanSummaryBuilder};
 use redis::{RedisDependencySummary, RedisSummaryBuilder};
+pub(crate) use source_process::{
+    SourceProcessTrafficObservation, SourceProcessTrafficSummaryBuilder,
+};
 use udp::{UdpDependencySummary, record_udp_summary};
 
 pub(crate) fn should_append_case_dependency(event: &RecorderEvent) -> bool {
@@ -48,6 +52,12 @@ pub(crate) fn load_pre_readiness_traffic_summary(
     dir: &Path,
 ) -> Result<Option<pre_readiness::PreReadinessTrafficSummary>> {
     pre_readiness::load_or_build(dir)
+}
+
+pub(crate) fn load_source_process_traffic_summary(
+    dir: &Path,
+) -> Result<Option<source_process::SourceProcessTrafficSummary>> {
+    source_process::load(dir)
 }
 
 async fn write_dependency_summary(

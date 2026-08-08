@@ -527,13 +527,14 @@ start_cache_snapshot() {
         recording wait-listeners --control-socket "$control_socket"
 }
 
-start_genuine_source() {
+start_comparison_source() {
     local network=$1
-    load_runtime_spec "$source_inspect" exact exact exact
-    local image
-    image=$(jq -r '.[0].Config.Image' <<<"$source_inspect")
+    load_runtime_spec "$source_inspect" recording recording image
+    if "$breeze_enabled"; then
+        runtime_args+=(--env MESH_CONNECT_HOST=breeze.recording)
+    fi
     docker run --detach --name "$source_name" --network "$network" \
-        "${runtime_args[@]}" "$image" "${runtime_command[@]}" >/dev/null
+        "${runtime_args[@]}" "$adapter_image_id" >/dev/null
     source_started=true
     wait_http "$TRAFFIC_E2E_SOURCE_ORIGIN" "$TRAFFIC_E2E_SOURCE_READY_PATH" \
         "$TRAFFIC_E2E_SOURCE_READY_STATUS" source "$source_name"
@@ -541,7 +542,7 @@ start_genuine_source() {
         test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998
         test "$(awk "/^Gid:/{print \$2}" /proc/1/status)" = 998
     ' || {
-        printf 'error: comparison source must run as 998:998 for cache snapshot interception\n' >&2
+        printf 'error: adapted comparison source entrypoint must run as 998:998\n' >&2
         return 1
     }
 }
@@ -816,6 +817,7 @@ run_comparison_recording() {
         printf 'error: comparison run already exists: %s\n' "$run_id" >&2
         return 1
     }
+    resolve_or_build_recording_adapter
     docker pull "$anchor_image" >/dev/null
     docker run --detach --name "$anchor_name" --platform linux/amd64 --network host \
         --label com.weibo.traffic-e2e.managed=true \
@@ -830,7 +832,7 @@ run_comparison_recording() {
         docker pull "$breeze_image" >/dev/null
         start_breeze "container:${anchor_name}"
     fi
-    start_genuine_source "container:${anchor_name}"
+    start_comparison_source "container:${anchor_name}"
     run_no_fallback
     start_target
     wait_http "$TRAFFIC_E2E_TARGET_ORIGIN" "$TRAFFIC_E2E_TARGET_READY_PATH" \

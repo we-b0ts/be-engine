@@ -16,7 +16,7 @@ use super::{
 };
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
-    envelope(state, state_action(target_root, state))
+    envelope(target_root, state, state_action(target_root, state))
 }
 
 pub(super) fn for_status(
@@ -34,7 +34,7 @@ pub(super) fn for_status(
         _ if target_change.is_some() => target_change.expect("target change was checked"),
         _ => state_action(target_root, state),
     };
-    Ok(envelope(state, action))
+    Ok(envelope(target_root, state, action))
 }
 
 pub(super) fn wait_envelope(
@@ -44,6 +44,7 @@ pub(super) fn wait_envelope(
     active: &super::traffic_operation::TrafficOperationMarker,
 ) -> RewriteActionEnvelope {
     envelope(
+        target_root,
         state,
         super::traffic_operation::wait_action(target_root, requested_api, active),
     )
@@ -55,6 +56,7 @@ pub(super) fn api_selection_wait_envelope(
     requested_api: String,
 ) -> RewriteActionEnvelope {
     envelope(
+        target_root,
         state,
         RewriteAction::WaitRequired {
             summary: format!(
@@ -84,6 +86,7 @@ pub(super) fn coordinator_wait_envelope(
         .or((!state.api.is_empty()).then_some(state.api.as_str()));
     let status = status_command_for_api(target_root, status_api);
     envelope(
+        target_root,
         state,
         RewriteAction::WaitRequired {
             summary: "wait for the live rewrite coordinator transition".to_string(),
@@ -107,6 +110,7 @@ pub(super) fn uninitialized_coordinator_wait_envelope(
         workflow: None,
         api_inventory: None,
         latest_focused_e2e: None,
+        source_process_traffic: None,
         terminal_allowed: false,
         action: RewriteAction::WaitRequired {
             summary: "wait for the live rewrite coordinator initialization".to_string(),
@@ -120,13 +124,18 @@ pub(super) fn uninitialized_coordinator_wait_envelope(
     }
 }
 
-pub(super) fn envelope(state: &RewriteState, action: RewriteAction) -> RewriteActionEnvelope {
+pub(super) fn envelope(
+    target_root: &Path,
+    state: &RewriteState,
+    action: RewriteAction,
+) -> RewriteActionEnvelope {
     let workflow = Some(workflow_view(state));
     RewriteActionEnvelope {
         schema_version: ACTION_SCHEMA_VERSION,
         workflow,
         api_inventory: Some(inventory::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
+        source_process_traffic: super::source_process_traffic::view(target_root, state),
         terminal_allowed: state.phase == RewritePhase::SliceComplete
             && state
                 .api_inventory
@@ -273,6 +282,7 @@ pub(super) fn advance_envelope(
     summary: String,
 ) -> RewriteActionEnvelope {
     envelope(
+        target_root,
         state,
         advance_required(target_root, Some(&state.api), summary),
     )
@@ -313,6 +323,7 @@ pub(super) fn input_required(_target_root: &Path) -> RewriteActionEnvelope {
         workflow: None,
         api_inventory: None,
         latest_focused_e2e: None,
+        source_process_traffic: None,
         action: RewriteAction::InputRequired {
             reason: RewriteInputRequiredReason::WorkflowNotInitialized,
             summary: "start the rewrite workflow for every API observed through recorder configuration, or optionally select one API".to_string(),
@@ -331,6 +342,7 @@ pub(super) fn source_route_required(
         workflow: None,
         api_inventory: None,
         latest_focused_e2e: None,
+        source_process_traffic: None,
         action: RewriteAction::InputRequired {
             reason: RewriteInputRequiredReason::SourceRouteRequired,
             summary: format!(
@@ -348,6 +360,7 @@ pub(super) fn recovery_required(target_root: &Path) -> RewriteActionEnvelope {
         workflow: None,
         api_inventory: None,
         latest_focused_e2e: None,
+        source_process_traffic: None,
         action: RewriteAction::RecoveryRequired {
             summary: "rewrite workflow is locked; execute the recovery command before retrying"
                 .to_string(),

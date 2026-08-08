@@ -48,7 +48,11 @@ is unclear.
 - Within `rewrite`, `mod.rs` remains the atomic coordinator-transition facade,
   `action.rs` keeps the exhaustive action/command projection, and `recording.rs`
   keeps the managed recording request/start/worker lifecycle. `worker.rs` owns
-  dedicated API-subagent identity binding and dispatch/resume confirmation.
+  the complete dedicated API-subagent identity lifecycle: dispatch,
+  confirmation, explicit ownership transfer, and their state-machine tests;
+  it does not own worktrees or the task runtime. `model.rs` owns the single
+  persisted and public coordinator serialization contract so state
+  compatibility and action-schema changes remain reviewable together.
   `inventory.rs` owns the API inventory state machine: stable installation,
   bounded activation and parking, deferred revalidation, and summary/detail
   views. `revalidation.rs` owns the coordinator's explicit early-validation

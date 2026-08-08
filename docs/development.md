@@ -287,7 +287,7 @@ upper bound. An unscoped run always observes the full duration.
 Breeze-aware recorder defaults together with project and verification
 configuration. The target repository provides no recording or comparison
 wrapper. `traffic-e2e record-comparison` owns the
-genuine source, one Breeze shared with the candidate, the candidate's fixed
+adapted source application, one Breeze shared with the candidate, the candidate's fixed
 start/stop contract, recording, signals, finalization, and cleanup. AI and
 automated invocations pass an explicit duration, run ID, and API scope.
 
@@ -921,15 +921,23 @@ backend-rewrite recording request \
   --per-api-case-limit 100
 backend-rewrite recording execute <action-id>
 backend-rewrite repair verify <repair-id>
+BACKEND_REWRITE_SUBAGENT_HANDLE='<replacement-handle>' \
+  backend-rewrite worker transfer <binding-id> \
+  --reason 'stored handle is unavailable after session replacement' \
+  --approve-ownership-transfer
 backend-rewrite verification request \
   --api 'GET /api/widgets/*' \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v13 always returns `action.kind`, `action.summary`,
+Rewrite action schema v14 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
+After a standard recording is selected, the optional top-level
+`source_process_traffic` projection gives every action bounded bootstrap,
+background-rule, and Redis snapshot observations as triage context. It is not
+an action-specific transition fact.
 Status does not duplicate an `active_issue` or publish an unconditional
 top-level `next`. Every returned command contains a canonical `cwd` plus exact
 argv. The argv includes the canonical absolute `--target-root`, so executing a
@@ -939,6 +947,15 @@ single coordinator state.
 The binary writes one compact JSON object per command by default. Pass global
 `--pretty` only for interactive human inspection. This keeps automation output
 atomic and avoids reconstructing one response with `head` and `tail`.
+
+Worker transfer is an exceptional compare-and-swap ownership change. It is
+valid only for the current `implementation_required` API and requires its
+current opaque `binding_id`, an actual replacement handle, a bounded reason,
+and explicit caller approval. The replacement handle must not own another API
+in the workflow. A successful transfer preserves the worktree, records the
+prior handle fingerprint and reason, changes the binding generation, and
+atomically confirms the replacement for the current dispatch. A stale binding
+ID is rejected so an older session cannot overwrite a newer owner.
 
 `next` returns an opaque standard/comparison
 `action.commands.execute` recording action. `action.details.run_id` identifies
@@ -985,7 +1002,7 @@ mandatory. `terminal_allowed` is false until every inventory item has both
 passing E2E and comparison evidence for the same target content fingerprint.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v13 returns `wait_required` with
+lease. When another API owns it, action schema v14 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1192,9 +1209,11 @@ so `.traffic-e2e/local/` is never included.
 The adaptor image's own `USER`, working directory, entrypoint, and command are
 used at runtime; the manager does not regenerate a Dockerfile or infer launch
 from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
-matching adaptor image. Comparison recording continues to use the genuine
-source image directly. Breeze itself always uses the centrally managed pinned
-image and is not built from a target-repository Dockerfile.
+matching adaptor image. Comparison recording uses the same adaptor image and
+fixed `998:998` source identity as standard recording, so cache-only
+interception observes both source and target traffic. Breeze itself always uses
+the centrally managed pinned image and is not built from a target-repository
+Dockerfile.
 
 The runner sends HTTP requests itself; the target image does not read cases or
 write response reports. The configured port is shared by the image
@@ -1391,6 +1410,7 @@ published inside that run:
 <run-id>/global-dependencies.jsonl
 <run-id>/global-dependencies-summary.json
 <run-id>/pre-readiness-traffic-summary.json
+<run-id>/source-process-traffic-summary.json
 <run-id>/global-dependencies-debug.jsonl
 <run-id>/<rule-name>/<uri-group>/<case-id>/request.json
 <run-id>/<rule-name>/<uri-group>/<case-id>/expected-response.json
@@ -1435,6 +1455,15 @@ logical reads.
 lifecycle events and known ping, heartbeat, and setup exchanges. The rewrite
 coordinator exposes the projection through its opaque evidence-query API, so a
 target AI does not need to read this file or the Global JSONL directly.
+`source-process-traffic-summary.json` is an independently bounded writer-owned
+projection used directly by the rewrite action envelope. It separates all
+pre-readiness data interactions from configured background-rule traffic and
+retains protocol, `host:port`, operation, and count. Redis background snapshot
+facts include successful seeds, later recorder reuses, fill failures, and the
+same counts per intercepted domain and port. Snapshot hits remain absent from
+replay dependencies; the summary counts them before that persistence filter.
+These observations are diagnostics for startup, refresh, and local-cache
+hypotheses, not proof of business ownership or response causality.
 
 Completed protocol events are moved by unique ownership into one asynchronous
 JSONL writer. `recording.writer_queue_capacity` bounds this queue by event count
@@ -1446,8 +1475,7 @@ through the same writer, so queued dependency reservations remain in flight
 until their records have been persisted.
 
 Redis reads matched by a background dependency rule use a bounded run-local
-first-value snapshot. `recording.cache_snapshot_max_entries` and
-`recording.cache_snapshot_max_bytes` bound retained responses;
+first-value snapshot. Recorder owns the internal retained-response capacity;
 `cache_snapshot_max_waiters_per_entry` bounds concurrent readers waiting for
 the first response, and `cache_snapshot_fill_timeout_ms` bounds that wait.
 Successful responses become sticky for the run; Redis errors are delivered to
