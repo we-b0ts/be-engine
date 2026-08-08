@@ -251,6 +251,48 @@ impl BackgroundDependencyMatcher {
             })
     }
 
+    pub(crate) fn matching_redis_snapshot_rule(
+        &self,
+        target_port: u16,
+        command: &str,
+        args: &[Vec<u8>],
+    ) -> Option<&str> {
+        self.redis_initial_load_rules
+            .iter()
+            .find(|rule| {
+                rule.ports.contains(&target_port)
+                    && rule.command.eq_ignore_ascii_case(command)
+                    && args
+                        .first()
+                        .is_some_and(|key| matches_exact_redis_key(key, &rule.keys))
+            })
+            .map(|rule| rule.name.as_str())
+            .or_else(|| {
+                self.rules.iter().find_map(|rule| {
+                    crate::config::background_dependencies::redis_rule_matches(
+                        rule,
+                        target_port,
+                        command,
+                        args,
+                    )
+                    .then(|| rule.name())
+                })
+            })
+    }
+
+    pub(crate) fn has_redis_snapshot_port(&self, port: u16) -> bool {
+        self.redis_initial_load_rules
+            .iter()
+            .any(|rule| rule.ports.contains(&port))
+            || self.rules.iter().any(|rule| {
+                matches!(
+                    rule,
+                    BackgroundDependencyRuleConfig::Redis { ports, .. }
+                        if ports.contains(&port)
+                )
+            })
+    }
+
     pub(crate) fn record_completed_match(&self, matched: &BackgroundDependencyMatch) {
         if !matched.completed_response {
             return;

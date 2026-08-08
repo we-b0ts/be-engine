@@ -94,6 +94,8 @@ fn redis_event(port: u16, command: &str, key: &[u8]) -> RecorderEvent {
         args: vec![crate::recorder::capture_body(key, key.len())],
         response_kind: "bulk_string".to_string(),
         response: crate::recorder::capture_body(b"$1\r\n1\r\n", 7),
+        cache_snapshot_rule: None,
+        cache_snapshot_hit: false,
         session_setup: false,
         outcome: DependencyExchangeOutcome::Response,
         duration_ms: 1,

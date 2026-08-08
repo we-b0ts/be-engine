@@ -22,6 +22,8 @@ enum InternalCommand {
     RecorderRun(record::RecordArgs),
     /// Capture comparison responses inside the managed comparison runtime.
     ComparisonRun(record_comparison::RecordComparisonArgs),
+    /// Hold configured background Redis reads at one run-local value.
+    CacheSnapshotRun(super::cache_snapshot::CacheSnapshotRunArgs),
     /// Drive coordinator-owned request templates through a managed recording gateway.
     RecordingInput(RecordingInputArgs),
     /// Run one detached rewrite recording action owned by the coordinator.
@@ -50,6 +52,7 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
     match args.command {
         InternalCommand::RecorderRun(args) => record::run(args).await,
         InternalCommand::ComparisonRun(args) => record_comparison::run(args).await,
+        InternalCommand::CacheSnapshotRun(args) => super::cache_snapshot::run(args).await,
         InternalCommand::RecordingInput(args) => {
             let report = drive_managed_recording_input(ManagedRecordingInputOptions {
                 case_source: args.case_source,

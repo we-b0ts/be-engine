@@ -1,5 +1,7 @@
 use super::*;
 use crate::rewrite::model::{RewriteIssue, RewriteIssueOwner, RewritePhase};
+use std::fs;
+use tempfile::tempdir;
 
 fn dependency_state() -> RewriteState {
     let mut state = crate::rewrite::test_state();
@@ -92,4 +94,28 @@ fn pending_plan_evidence_cannot_cross_issue_boundaries() {
     .unwrap_err();
 
     assert!(error.to_string().contains("evidence is stale"));
+}
+
+#[test]
+fn redis_rule_application_is_queued_for_a_fresh_snapshot_recording() {
+    let target = tempdir().unwrap();
+    fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
+    fs::write(
+        target.path().join(".traffic-e2e/recorder.toml"),
+        "[recording]\n",
+    )
+    .unwrap();
+    let mut state = dependency_state();
+    let applied = pending_cache_snapshot_refresh(&state, "dependency-plan-original")
+        .unwrap()
+        .unwrap();
+
+    schedule_cache_snapshot_refresh(target.path(), &mut state, applied).unwrap();
+
+    assert_eq!(state.phase, RewritePhase::AwaitingRecordingRefresh);
+    let refresh = state.recording_refresh.unwrap();
+    assert!(refresh.applied.is_empty());
+    assert_eq!(refresh.dependency_rules.len(), 1);
+    assert_eq!(refresh.dependency_rules[0].rule_name, "cache-warm");
+    assert!(refresh.recording_run_id.is_none());
 }

@@ -338,6 +338,10 @@ traffic_jsonl = "errors"
 jsonl_buffer_capacity_bytes = 262144
 jsonl_flush_interval_ms = 1000
 writer_queue_capacity = 65536
+cache_snapshot_max_entries = 16384
+cache_snapshot_max_bytes = 67108864
+cache_snapshot_max_waiters_per_entry = 1024
+cache_snapshot_fill_timeout_ms = 30000
 post_ready_settle_ms = 10000
 case_dependency_post_response_window_ms = 100
 case_dependency_drain_timeout_ms = 5000
@@ -431,6 +435,10 @@ mod tests {
             PathBuf::from("./.traffic-e2e/local/artifacts/recordings")
         );
         assert_eq!(config.recording.post_ready_settle_ms, 10_000);
+        assert_eq!(config.recording.cache_snapshot_max_entries, 16_384);
+        assert_eq!(config.recording.cache_snapshot_max_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.recording.cache_snapshot_max_waiters_per_entry, 1_024);
+        assert_eq!(config.recording.cache_snapshot_fill_timeout_ms, 30_000);
         assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);
         assert_eq!(config.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
         assert_eq!(config.recording.max_decoded_body_bytes, None);

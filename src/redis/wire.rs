@@ -90,6 +90,18 @@ where
     }
 }
 
+pub(crate) fn frame_kind(raw: &Bytes) -> Result<RedisFrameKind> {
+    let Some((frame, consumed)) =
+        redis_protocol::resp2::decode::decode_bytes(raw).map_err(|err| anyhow!(err))?
+    else {
+        return Err(anyhow!("incomplete Redis response frame"));
+    };
+    if consumed != raw.len() {
+        return Err(anyhow!("Redis response parser left trailing bytes"));
+    }
+    Ok(resp2_kind(&frame))
+}
+
 pub(crate) fn redis_command(raw: &Bytes) -> Result<RedisCommand> {
     let Some((frame, consumed)) =
         redis_protocol::resp2::decode::decode_bytes(raw).map_err(|err| anyhow!(err))?
@@ -182,6 +194,14 @@ mod tests {
 
         assert_eq!(frame.kind, RedisFrameKind::Array);
         assert_eq!(frame.raw, Bytes::from_static(b"*2\r\n$-1\r\n$-1\r\n"));
+    }
+
+    #[test]
+    fn classifies_complete_raw_response() {
+        assert_eq!(
+            frame_kind(&Bytes::from_static(b"$5\r\nvalue\r\n")).unwrap(),
+            RedisFrameKind::BulkString
+        );
     }
 
     #[tokio::test]

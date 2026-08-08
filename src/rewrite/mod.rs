@@ -584,42 +584,50 @@ pub fn apply_rewrite_dependency_rule(
         .context("rewrite workflow has not been initialized")?;
     let owner_api = inventory::api_for_dependency_rule_plan(&state, plan_id)
         .context("dependency-rule plan is stale or belongs to no concurrent API work item")?;
-    let report = inventory::with_slice_mut(&mut state, &owner_api, |state| {
-        let response_bootstrap = dependency_rule::plans_response_bootstrap(state, plan_id);
-        let mut report = dependency_rule::apply(&target_root, state, plan_id)?;
-        if response_bootstrap {
-            state.target_fingerprint = None;
-            state.phase = RewritePhase::ImplementationRequired;
-            report.next_command = action::next_command_for_api(&target_root, &state.api);
-            return Ok(report);
-        }
-        let case_source = state
-            .case_source
-            .clone()
-            .context("rewrite workflow has no case source to reclassify")?;
-        let api = state
-            .group_id
-            .clone()
-            .context("rewrite workflow has no focused API to reclassify")?;
-        let reclassification: FocusedBackgroundReclassification =
-            reclassify_focused_background_dependencies(
-                E2eRunContext {
-                    target_root: target_root.clone(),
-                    case_source,
-                    run_key: None,
-                },
-                &api,
+    let (mut report, cache_snapshot_refresh) =
+        inventory::with_slice_mut(&mut state, &owner_api, |state| {
+            let cache_snapshot_refresh =
+                dependency_rule::pending_cache_snapshot_refresh(state, plan_id)?;
+            let mut report = dependency_rule::apply(&target_root, state, plan_id)?;
+            if let Some(applied) = cache_snapshot_refresh {
+                dependency_rule::schedule_cache_snapshot_refresh(&target_root, state, applied)?;
+                report.next_command = action::next_command_for_api(&target_root, &state.api);
+                return Ok((report, true));
+            }
+            let case_source = state
+                .case_source
+                .clone()
+                .context("rewrite workflow has no case source to reclassify")?;
+            let api = state
+                .group_id
+                .clone()
+                .context("rewrite workflow has no focused API to reclassify")?;
+            let reclassification: FocusedBackgroundReclassification =
+                reclassify_focused_background_dependencies(
+                    E2eRunContext {
+                        target_root: target_root.clone(),
+                        case_source,
+                        run_key: None,
+                    },
+                    &api,
+                )?;
+            transition::from_e2e_result(
+                &target_root,
+                state,
+                &reclassification.result,
+                transition::AttemptTransition::ReclassifyCurrent,
             )?;
-        transition::from_e2e_result(
-            &target_root,
-            state,
-            &reclassification.result,
-            transition::AttemptTransition::ReclassifyCurrent,
-        )?;
-        report.evidence_reclassification = Some(serde_json::to_value(&reclassification)?);
-        report.next_command = action::next_command_for_api(&target_root, &state.api);
-        Ok(report)
-    })?;
+            report.evidence_reclassification = Some(serde_json::to_value(&reclassification)?);
+            report.next_command = action::next_command_for_api(&target_root, &state.api);
+            Ok((report, false))
+        })?;
+    if cache_snapshot_refresh {
+        let runnable = inventory::mark_awaiting_recording_refresh(&mut state, &owner_api)?;
+        if !runnable {
+            recording::begin_pending_capture_refresh(&target_root, &mut state)?;
+        }
+        report.next_command = action::next_command_for_api(&target_root, &owner_api);
+    }
     store.save(&state)?;
     Ok(report)
 }
@@ -783,11 +791,9 @@ fn validate_single_line(label: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::fs;
     use std::process::Command;
-
-    use super::*;
-
     #[test]
     fn pointer_patterns_replace_only_array_indices() {
         assert_eq!(

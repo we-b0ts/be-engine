@@ -16,6 +16,7 @@ use crate::request_headers::RequestHeaderCapture;
 
 mod artifact_owner;
 pub(crate) mod background;
+pub(crate) mod cache_snapshot;
 mod capture;
 mod dependencies;
 mod event;

@@ -191,3 +191,16 @@ fn motan_frame(request_id: u64, request: bool, inner_flag: u8, body: &[u8]) -> V
     outer.extend_from_slice(&inner);
     outer
 }
+
+#[test]
+fn direct_cache_snapshot_entry_forwards_to_the_original_ip() {
+    let ip = Ipv4Addr::new(10, 20, 30, 40);
+    let entry = direct_cache_snapshot_entry(ip);
+
+    assert_eq!(entry.domain, "10.20.30.40");
+    assert_eq!(entry.real_ips, [ip]);
+    assert_eq!(
+        upstream_addr(&entry, 6379).unwrap(),
+        "10.20.30.40:6379".parse().unwrap()
+    );
+}

@@ -582,6 +582,8 @@ mod tests {
                 "other".to_string()
             },
             response: capture_body(if command == "GET" { b"$-1\r\n" } else { b"" }, 1024),
+            cache_snapshot_rule: None,
+            cache_snapshot_hit: false,
             session_setup: false,
             outcome,
             duration_ms: 0,

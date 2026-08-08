@@ -654,7 +654,7 @@ pub(super) fn begin_pending_capture_refresh(
     ensure!(
         super::fingerprint::recorder_config_revision(target_root)?
             == refresh.recorder_config_revision,
-        "recorder config changed after applying capture plans; re-plan the affected capture rule"
+        "recorder config changed after scheduling the recording refresh; re-plan the affected rule"
     );
     let run_id = artifacts::allocate_run_id_excluding(
         target_root,
@@ -897,6 +897,7 @@ mod tests {
                 source_revision: "source-1".to_string(),
                 source_evidence: "CounterService.java:88".to_string(),
             }],
+            dependency_rules: Vec::new(),
             recorder_config_revision: super::super::fingerprint::recorder_config_revision(
                 target.path(),
             )

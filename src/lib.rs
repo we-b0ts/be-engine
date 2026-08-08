@@ -59,6 +59,7 @@ use crate::active_case::{
 use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::background::BackgroundDependencyMatcher;
+use crate::recorder::cache_snapshot::{CacheSnapshotReservation, CacheSnapshotStore};
 use crate::recorder::http::case::CaseInvalidation;
 use crate::recording_control::{RecordingLifecycle, RecordingListener};
 
@@ -217,6 +218,7 @@ struct AppStateInner {
     kubectl_proxy_manager: KubectlProxyManager,
     recording_lifecycle: RecordingLifecycle,
     background_dependencies: BackgroundDependencyMatcher,
+    cache_snapshots: CacheSnapshotStore,
     preflight_probe: Option<PreflightProbeKind>,
     preflight_probe_recorded: AtomicBool,
 }
@@ -266,6 +268,7 @@ impl AppState {
         .await
         .context("background dependency initializer task failed")?
         .context("failed to initialize background dependency rules")?;
+        let cache_snapshots = CacheSnapshotStore::new(&config.recording);
         let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
             .context("failed to initialize DNS bypass matcher")?;
         let recording_output_dir = config.recording_output_dir();
@@ -322,6 +325,7 @@ impl AppState {
                 kubectl_proxy_manager: KubectlProxyManager::default(),
                 recording_lifecycle,
                 background_dependencies,
+                cache_snapshots,
                 preflight_probe,
                 preflight_probe_recorded: AtomicBool::new(false),
             }),
@@ -629,6 +633,46 @@ impl AppState {
     pub(crate) fn record_event(&self, event: RecorderEvent) {
         let targets = self.capture_dependency_targets();
         self.record_event_for_targets(event, targets);
+    }
+
+    pub(crate) fn matching_redis_snapshot_rule(
+        &self,
+        target_port: u16,
+        command: &str,
+        args: &[Vec<u8>],
+    ) -> Option<&str> {
+        self.inner
+            .background_dependencies
+            .matching_redis_snapshot_rule(target_port, command, args)
+    }
+
+    pub(crate) fn has_redis_snapshot_port(&self, port: u16) -> bool {
+        self.inner
+            .background_dependencies
+            .has_redis_snapshot_port(port)
+    }
+
+    pub(crate) async fn reserve_cache_snapshot(
+        &self,
+        key: Vec<u8>,
+    ) -> Result<CacheSnapshotReservation> {
+        self.inner.cache_snapshots.reserve(key).await
+    }
+
+    pub(crate) async fn complete_cache_snapshot(
+        &self,
+        key: &[u8],
+        response: bytes::Bytes,
+        reusable: bool,
+    ) -> Result<()> {
+        self.inner
+            .cache_snapshots
+            .complete(key, response, reusable)
+            .await
+    }
+
+    pub(crate) async fn abort_cache_snapshot(&self, key: &[u8], reason: &str) {
+        self.inner.cache_snapshots.abort(key, reason).await;
     }
 
     pub(crate) fn record_event_for_targets(

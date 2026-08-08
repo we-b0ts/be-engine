@@ -17,6 +17,12 @@ comparison recorder, finalization, signals, and cleanup. The target receives
 the fixed config mount and port environment contract. Do not generate or
 invoke repository comparison wrappers.
 
+When the recorder config contains Redis background rules, managed comparison
+also owns a cache-only run-local snapshot in the shared network namespace.
+Source and candidate share the first successful response for each matching
+logical Redis read. This comparison snapshot starts empty and never loads the
+standard recording's Replay snapshot.
+
 When Breeze is absent, the same command selects the configured runtime without
 starting Breeze. Comparison sends every admitted request symmetrically to
 source and candidate, using the methods declared by the selected HTTP gateway

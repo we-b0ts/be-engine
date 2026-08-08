@@ -5,7 +5,7 @@ use tempfile::{TempDir, tempdir};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::{AppConfig, RecordingAccessPolicy};
+use crate::{AppConfig, BackgroundDependencyRuleConfig, RecordingAccessPolicy};
 
 use super::*;
 
@@ -60,6 +60,84 @@ async fn blocked_write_returns_ordered_error_without_reaching_upstream() {
             .is_err()
     );
     handler.abort();
+}
+
+#[tokio::test]
+async fn background_read_reuses_the_first_successful_response_for_the_run() {
+    let (state, _temp) = snapshot_test_state().await;
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let upstream_addr = upstream.peer_addr().unwrap();
+    let handler = spawn_handler(proxy_client, proxy_upstream, state.clone(), upstream_addr);
+
+    let request = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
+    let response = b"$2\r\nv1\r\n";
+    client.write_all(request).await.unwrap();
+    let mut first_request = vec![0_u8; request.len()];
+    upstream.read_exact(&mut first_request).await.unwrap();
+    upstream.write_all(response).await.unwrap();
+    let mut first_response = vec![0_u8; response.len()];
+    client.read_exact(&mut first_response).await.unwrap();
+    assert_eq!(first_response, response);
+
+    client.write_all(request).await.unwrap();
+    let mut second_response = vec![0_u8; response.len()];
+    client.read_exact(&mut second_response).await.unwrap();
+    assert_eq!(second_response, response);
+    let mut unexpected_upstream = [0_u8; 1];
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            upstream.read(&mut unexpected_upstream)
+        )
+        .await
+        .is_err(),
+        "the second matching read must not reach the real cache"
+    );
+
+    client.shutdown().await.unwrap();
+    drop(client);
+    let mut eof = [0_u8; 1];
+    assert_eq!(upstream.read(&mut eof).await.unwrap(), 0);
+    drop(upstream);
+    tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+
+    state.recorder().flush_traffic().await.unwrap();
+    let raw = tokio::fs::read_to_string(state.recorder().run_dir.join("traffic.jsonl"))
+        .await
+        .unwrap();
+    let exchanges = raw
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|value| value["event_type"] == "redis_exchange")
+        .collect::<Vec<_>>();
+    assert_eq!(exchanges.len(), 2);
+    assert_eq!(exchanges[0]["cache_snapshot_rule"], "snapshot-get");
+    assert!(exchanges[0].get("cache_snapshot_hit").is_none());
+    assert_eq!(exchanges[1]["cache_snapshot_rule"], "snapshot-get");
+    assert_eq!(exchanges[1]["cache_snapshot_hit"], true);
+
+    state
+        .recorder()
+        .flush_global_dependency_files()
+        .await
+        .unwrap();
+    let semantic =
+        tokio::fs::read_to_string(state.recorder().run_dir.join("global-dependencies.jsonl"))
+            .await
+            .unwrap();
+    assert_eq!(
+        semantic
+            .lines()
+            .filter(|line| line.contains("\"event_type\":\"redis_exchange\""))
+            .count(),
+        1,
+        "only the first cache value is a Replay seed"
+    );
 }
 
 #[tokio::test]
@@ -237,6 +315,34 @@ async fn test_state(access_policy: RecordingAccessPolicy) -> (AppState, TempDir)
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
     config.recording.access_policy = access_policy;
+    config.tls.ca_cert_path = temp.path().join("ca.pem");
+    config.tls.ca_key_path = temp.path().join("ca-key.pem");
+    (AppState::new(config).await.unwrap(), temp)
+}
+
+async fn snapshot_test_state() -> (AppState, TempDir) {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let temp = tempdir().unwrap();
+    let mut config = AppConfig::default();
+    config.recording.output_dir = temp.path().join("recordings");
+    config.http_gateway.enabled = true;
+    config.http_gateway.ready.enabled = true;
+    config
+        .recording
+        .background_dependencies
+        .push(BackgroundDependencyRuleConfig::Redis {
+            name: "snapshot-get".to_string(),
+            ports: vec![6379],
+            command: "GET".to_string(),
+            keys: vec!["key".to_string()],
+            key_patterns: Vec::new(),
+            key_prefix: String::new(),
+            key_suffix: String::new(),
+            initial_load_timeout_ms: Some(1_000),
+            fields: Vec::new(),
+            source_revision: "abcdef1".to_string(),
+            source_evidence: "Cache.java:42".to_string(),
+        });
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     (AppState::new(config).await.unwrap(), temp)
