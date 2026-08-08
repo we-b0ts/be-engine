@@ -7,6 +7,9 @@ use tokio::sync::{Mutex, oneshot};
 
 use crate::config::RecordingConfig;
 
+const MAX_ENTRIES: usize = 1_000_000;
+const MAX_RESPONSE_BYTES: usize = 1024 * 1024 * 1024;
+
 #[derive(Debug)]
 pub(crate) struct CacheSnapshotStore {
     state: Mutex<SnapshotState>,
@@ -47,8 +50,8 @@ impl CacheSnapshotStore {
     pub(crate) fn new(config: &RecordingConfig) -> Self {
         Self {
             state: Mutex::new(SnapshotState::default()),
-            max_entries: config.cache_snapshot_max_entries,
-            max_bytes: config.cache_snapshot_max_bytes,
+            max_entries: MAX_ENTRIES,
+            max_bytes: MAX_RESPONSE_BYTES,
             max_waiters_per_entry: config.cache_snapshot_max_waiters_per_entry,
             fill_timeout: Duration::from_millis(config.cache_snapshot_fill_timeout_ms),
         }
@@ -209,5 +212,13 @@ mod tests {
             store.reserve(key).await.unwrap(),
             CacheSnapshotReservation::Leader
         ));
+    }
+
+    #[test]
+    fn recorder_owns_large_snapshot_capacity_independently_of_business_config() {
+        let store = CacheSnapshotStore::new(&RecordingConfig::default());
+
+        assert_eq!(store.max_entries, 1_000_000);
+        assert_eq!(store.max_bytes, 1024 * 1024 * 1024);
     }
 }

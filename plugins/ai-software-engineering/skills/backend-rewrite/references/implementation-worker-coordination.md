@@ -166,9 +166,15 @@ If serialized acceptance returns `implementation_required`, update that
 worker's worktree from the integrated target revision and resume the stored
 subagent handle with the complete new action and raw attempt result. A changed
 issue ID or a need for an independent diagnosis does not release the binding.
-If the stored handle cannot be resumed, preserve the worktree and report a
-capability blocker. Only explicit caller approval may transfer the API to a new
-subagent. Never let two workers own or edit the same API concurrently.
+If the stored handle cannot be resumed, preserve the worktree and request
+explicit caller approval. After approval, create one replacement subagent with
+the same worktree and complete current action, then execute
+`backend-rewrite worker transfer <binding-id>` with its runtime handle, a
+single-line `--reason`, and `--approve-ownership-transfer`. The binding ID must
+come from current scoped status; stale IDs and handles already bound to another
+API are rejected.
+A successful transfer atomically confirms the current dispatch. Never let two
+workers own or edit the same API concurrently.
 
 After handoff, integrate the worker patch or commit into the coordinator
 worktree, resolve conflicts, batch compatible handoffs, freeze the target

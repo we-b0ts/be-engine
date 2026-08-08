@@ -500,6 +500,30 @@ mod tests {
             .0;
         assert!(!adapted_source.contains("--user"));
         assert!(!adapted_source.contains("--privileged"));
+        let comparison_source = MANAGER
+            .split_once("start_comparison_source()")
+            .unwrap()
+            .1
+            .split_once("build_recording_adapter()")
+            .unwrap()
+            .0;
+        assert!(
+            comparison_source
+                .contains("load_runtime_spec \"$source_inspect\" recording recording image")
+        );
+        assert!(comparison_source.contains("\"${runtime_args[@]}\" \"$adapter_image_id\""));
+        assert!(!comparison_source.contains(".[0].Config.Image"));
+        assert!(comparison_source.contains("MESH_CONNECT_HOST=breeze.recording"));
+        let comparison_runtime = MANAGER
+            .split_once("run_comparison_recording()")
+            .unwrap()
+            .1
+            .split_once("case \"$operation\"")
+            .unwrap()
+            .0;
+        assert!(comparison_runtime.contains("resolve_or_build_recording_adapter"));
+        assert!(comparison_runtime.contains("start_comparison_source"));
+        assert!(!MANAGER.contains("start_genuine_source"));
         assert!(MANAGER.contains(
             "docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh"
         ));

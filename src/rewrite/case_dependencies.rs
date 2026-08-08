@@ -163,9 +163,7 @@ impl RepresentativeMemcachedExchanges {
     }
 }
 
-pub(super) fn query(
-    options: RewriteCaseDependenciesOptions,
-) -> Result<RewriteCaseDependenciesReport> {
+pub fn query(options: RewriteCaseDependenciesOptions) -> Result<RewriteCaseDependenciesReport> {
     let target_root = std::fs::canonicalize(&options.target_root).with_context(|| {
         format!(
             "failed to resolve target root {}",

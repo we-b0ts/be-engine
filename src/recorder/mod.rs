@@ -35,7 +35,10 @@ mod writer;
 pub use artifact_owner::ArtifactOwner;
 pub use capture::*;
 pub use event::*;
-pub(crate) use summary::load_pre_readiness_traffic_summary;
+pub(crate) use summary::{
+    SourceProcessTrafficObservation, load_pre_readiness_traffic_summary,
+    load_source_process_traffic_summary,
+};
 
 struct RecorderOptions {
     access_policy: RecordingAccessPolicy,

@@ -18,6 +18,7 @@ mod recovery;
 mod repair;
 mod revalidation;
 mod rule;
+mod source_process_traffic;
 mod status;
 mod store;
 mod target_quality;
@@ -37,6 +38,7 @@ pub use case_dependencies::{
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
     RewriteCaseDependencyTargetSummary, RewriteMemcachedExchangeDetail,
     RewriteMemcachedOperationDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
+    query as query_rewrite_case_dependencies,
 };
 pub use dependency_rule::{RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector};
 pub use model::{
@@ -68,9 +70,13 @@ pub use revalidation::{
     request as request_rewrite_revalidation,
 };
 pub use rule::RewriteRulePlanOptions;
+pub use source_process_traffic::*;
 pub use status::{inventory_rewrite, status_rewrite, status_rewrite_for_api};
 pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
-pub use worker::{RewriteWorkerConfirmOptions, confirm as confirm_rewrite_worker};
+pub use worker::{
+    RewriteWorkerConfirmOptions, RewriteWorkerTransferOptions, confirm as confirm_rewrite_worker,
+    transfer as transfer_rewrite_worker,
+};
 
 use model::{RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION};
 use store::{RewriteLockState, RewriteStore};
@@ -95,12 +101,6 @@ pub struct RewriteNextOptions {
 #[derive(Debug, Clone)]
 pub struct RewriteContext {
     pub target_root: PathBuf,
-}
-
-pub fn query_rewrite_case_dependencies(
-    options: RewriteCaseDependenciesOptions,
-) -> Result<RewriteCaseDependenciesReport> {
-    case_dependencies::query(options)
 }
 
 pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
@@ -392,7 +392,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 &current,
                 &project.target_quality_gates,
             )? {
-                return Ok(action::envelope(&state, required));
+                return Ok(action::envelope(&target_root, &state, required));
             }
             state.e2e_current = false;
             state.comparison_current = false;
@@ -811,7 +811,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(13)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(14)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),

@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use super::dependencies::{case_dependency_filename, dependency_line, global_dependency_filename};
 use super::jsonl::{BufferedJsonlWriter, JsonlBufferSettings, JsonlWriterPool};
-use super::summary::should_append_case_dependency;
+use super::summary::{SourceProcessTrafficSummaryBuilder, should_append_case_dependency};
 use crate::active_case::DependencyTargets;
 use crate::config::TrafficJsonlMode;
 
@@ -68,6 +68,7 @@ struct WriterState {
     dependency_files: JsonlWriterPool,
     run_dir: Arc<PathBuf>,
     finalized_cases: Arc<Mutex<HashSet<Uuid>>>,
+    source_process_traffic: SourceProcessTrafficSummaryBuilder,
 }
 
 impl RecorderWriter {
@@ -91,6 +92,7 @@ impl RecorderWriter {
             dependency_files: JsonlWriterPool::new(settings),
             run_dir,
             finalized_cases,
+            source_process_traffic: SourceProcessTrafficSummaryBuilder::default(),
         };
         tokio::spawn(run_writer(
             receiver,
@@ -334,6 +336,21 @@ impl WriterState {
         } = envelope;
         self.append_traffic(&event).await?;
         if !should_append_case_dependency(&event) {
+            if let Some(attribution) = global_attribution.as_ref() {
+                self.source_process_traffic.observe(
+                    &event,
+                    attribution.reason,
+                    attribution.phase,
+                    &attribution.matched_by,
+                );
+            } else if targets.bootstrap_open && !suppress_default_global {
+                self.source_process_traffic.observe(
+                    &event,
+                    "bootstrap_window",
+                    "bootstrap",
+                    "bootstrap_window",
+                );
+            }
             return Ok(());
         }
         if let Some(attribution) = global_attribution {
@@ -399,6 +416,8 @@ impl WriterState {
         phase: &str,
         matched_by: &str,
     ) -> Result<()> {
+        self.source_process_traffic
+            .observe(event, reason, phase, matched_by);
         if !should_append_case_dependency(event) {
             return Ok(());
         }
@@ -418,7 +437,8 @@ impl WriterState {
         let semantic = self.run_dir.join("global-dependencies.jsonl");
         let debug = self.run_dir.join("global-dependencies-debug.jsonl");
         self.dependency_files.flush_and_remove(&semantic).await?;
-        self.dependency_files.flush_and_remove(&debug).await
+        self.dependency_files.flush_and_remove(&debug).await?;
+        self.source_process_traffic.write(&self.run_dir).await
     }
 
     async fn flush_open(&mut self) -> Result<()> {
@@ -428,7 +448,8 @@ impl WriterState {
 
     async fn flush_all(&mut self) -> Result<()> {
         self.flush_traffic().await?;
-        self.dependency_files.flush_all().await
+        self.dependency_files.flush_all().await?;
+        self.source_process_traffic.write(&self.run_dir).await
     }
 }
 
@@ -467,3 +488,7 @@ fn case_staging_dir(run_dir: &Path, case: &CaseContext) -> PathBuf {
     }
     path.join(case.id.to_string())
 }
+
+#[cfg(test)]
+#[path = "writer/tests.rs"]
+mod tests;

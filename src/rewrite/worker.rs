@@ -3,7 +3,7 @@ use anyhow::{Context, Result, ensure};
 use super::model::{
     RewriteAction, RewriteActionEnvelope, RewriteCommandSpec, RewritePhase, RewriteState,
     RewriteWorkerBinding, RewriteWorkerBlockingReason, RewriteWorkerDispatchState,
-    RewriteWorkerDispatchView,
+    RewriteWorkerDispatchView, RewriteWorkerTransferRecord,
 };
 use super::store::RewriteStore;
 use super::{action, evidence, fingerprint, inventory};
@@ -17,6 +17,16 @@ pub struct RewriteWorkerConfirmOptions {
     pub agent_name: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct RewriteWorkerTransferOptions {
+    pub target_root: std::path::PathBuf,
+    pub binding_id: String,
+    pub agent_handle: String,
+    pub agent_name: Option<String>,
+    pub reason: String,
+    pub caller_approved: bool,
+}
+
 pub(super) const AGENT_HANDLE_ENV: &str = "BACKEND_REWRITE_SUBAGENT_HANDLE";
 
 pub(super) fn gate_envelope(
@@ -25,6 +35,7 @@ pub(super) fn gate_envelope(
     requested_api: Option<String>,
 ) -> RewriteActionEnvelope {
     action::envelope(
+        target_root,
         state,
         implementation_action(target_root, state, requested_api),
     )
@@ -180,6 +191,46 @@ pub fn confirm(options: RewriteWorkerConfirmOptions) -> Result<RewriteActionEnve
     Ok(action::for_state(&target_root, &state))
 }
 
+pub fn transfer(options: RewriteWorkerTransferOptions) -> Result<RewriteActionEnvelope> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+    validate_identity("subagent handle", &options.agent_handle, 4_096)?;
+    validate_identity("ownership transfer reason", &options.reason, 512)?;
+    if let Some(name) = options.agent_name.as_deref() {
+        validate_identity("subagent name", name, 128)?;
+    }
+    ensure!(
+        options.caller_approved,
+        "worker ownership transfer requires explicit caller approval"
+    );
+
+    let store = RewriteStore::new(&target_root)?;
+    let _lock = store.lock()?;
+    let mut state = store
+        .load()?
+        .context("rewrite workflow is not initialized")?;
+    ensure!(
+        state.phase == RewritePhase::ImplementationRequired,
+        "API {} is in {:?}, not implementation_required",
+        state.api,
+        state.phase
+    );
+    ensure!(
+        options.binding_id == binding_id(&state),
+        "worker binding id is stale; inspect `backend-rewrite status --api '{}'`",
+        state.api
+    );
+
+    transfer_binding(
+        &mut state,
+        &options.agent_handle,
+        options.agent_name,
+        options.reason,
+    )?;
+    state.bump();
+    store.save(&state)?;
+    Ok(action::for_state(&target_root, &state))
+}
+
 fn confirm_binding(
     state: &mut RewriteState,
     expected_dispatch_id: &str,
@@ -188,6 +239,12 @@ fn confirm_binding(
 ) -> Result<bool> {
     let handle_fingerprint = fingerprint::id(&["rewrite-subagent-handle-v1", agent_handle]);
     let active_api = state.api.clone();
+    ensure!(
+        !state.worker_bindings.iter().any(|(api, binding)| {
+            api != &active_api && binding.agent_handle_fingerprint == handle_fingerprint
+        }),
+        "subagent handle is already dedicated to another API in this workflow"
+    );
     let mut changed = false;
     match state.worker_bindings.get_mut(&active_api) {
         Some(binding) => {
@@ -212,6 +269,8 @@ fn confirm_binding(
                     agent_handle_fingerprint: handle_fingerprint,
                     agent_name,
                     confirmed_dispatch_id: expected_dispatch_id.to_string(),
+                    transfer_generation: 0,
+                    last_transfer: None,
                 },
             );
             changed = true;
@@ -220,11 +279,56 @@ fn confirm_binding(
     Ok(changed)
 }
 
+fn transfer_binding(
+    state: &mut RewriteState,
+    agent_handle: &str,
+    agent_name: Option<String>,
+    reason: String,
+) -> Result<()> {
+    let active_api = state.api.clone();
+    let new_fingerprint = fingerprint::id(&["rewrite-subagent-handle-v1", agent_handle]);
+    ensure!(
+        !state.worker_bindings.iter().any(|(api, binding)| {
+            api != &active_api && binding.agent_handle_fingerprint == new_fingerprint
+        }),
+        "replacement subagent handle is already bound to another API in this workflow"
+    );
+    let expected_dispatch_id = dispatch_id(state);
+    let binding = state
+        .worker_bindings
+        .get_mut(&active_api)
+        .context("API has no existing worker ownership to transfer")?;
+    ensure!(
+        binding.agent_handle_fingerprint != new_fingerprint,
+        "replacement subagent handle already owns this API; use worker confirm"
+    );
+    let previous_fingerprint =
+        std::mem::replace(&mut binding.agent_handle_fingerprint, new_fingerprint);
+    binding.agent_name = agent_name;
+    binding.confirmed_dispatch_id = expected_dispatch_id;
+    binding.transfer_generation = binding.transfer_generation.saturating_add(1);
+    binding.last_transfer = Some(RewriteWorkerTransferRecord {
+        previous_agent_handle_fingerprint: previous_fingerprint,
+        reason,
+        transferred_at: chrono::Utc::now().to_rfc3339(),
+    });
+    Ok(())
+}
+
 fn binding_id(state: &RewriteState) -> String {
+    let binding = state.worker_bindings.get(&state.api);
+    let handle = binding
+        .map(|binding| binding.agent_handle_fingerprint.as_str())
+        .unwrap_or("unbound");
+    let generation = binding
+        .map(|binding| binding.transfer_generation.to_string())
+        .unwrap_or_else(|| "0".to_string());
     fingerprint::id(&[
-        "rewrite-worker-binding-v1",
+        "rewrite-worker-binding-v2",
         state.workflow_id.as_str(),
         state.api.as_str(),
+        handle,
+        generation.as_str(),
     ])
 }
 
@@ -266,7 +370,8 @@ fn validate_identity(label: &str, value: &str, max_bytes: usize) -> Result<()> {
 #[cfg(test)]
 pub(super) fn confirm_current_for_test(state: &mut RewriteState) {
     let dispatch_id = dispatch_id(state);
-    confirm_binding(state, &dispatch_id, "test-subagent-handle", None).unwrap();
+    let handle = format!("test-subagent-handle:{}", state.api);
+    confirm_binding(state, &dispatch_id, &handle, None).unwrap();
 }
 
 #[cfg(test)]
@@ -466,6 +571,99 @@ mod tests {
             confirmed.agent_name.as_deref(),
             Some("renamed-friends-worker")
         );
+    }
+
+    #[test]
+    fn explicit_transfer_replaces_one_owner_and_confirms_the_current_dispatch() {
+        let mut state = crate::rewrite::test_state();
+        state.phase = RewritePhase::ImplementationRequired;
+        state.active_issue = Some(issue("issue-a", 1, "target-a"));
+        confirm_current_for_test(&mut state);
+        let old_binding_id = binding_id(&state);
+        let old_fingerprint = state.worker_bindings["GET /api"]
+            .agent_handle_fingerprint
+            .clone();
+
+        transfer_binding(
+            &mut state,
+            "replacement-runtime-handle",
+            Some("replacement-worker".to_string()),
+            "the prior runtime handle is unavailable after a new session".to_string(),
+        )
+        .unwrap();
+
+        assert_ne!(binding_id(&state), old_binding_id);
+        assert_eq!(
+            dispatch_view(&state, None).state,
+            RewriteWorkerDispatchState::Confirmed
+        );
+        let binding = &state.worker_bindings["GET /api"];
+        assert_eq!(binding.transfer_generation, 1);
+        assert_eq!(binding.agent_name.as_deref(), Some("replacement-worker"));
+        let transfer = binding.last_transfer.as_ref().unwrap();
+        assert_eq!(transfer.previous_agent_handle_fingerprint, old_fingerprint);
+        assert!(transfer.reason.contains("prior runtime handle"));
+    }
+
+    #[test]
+    fn transfer_rejects_a_handle_owned_by_another_api() {
+        let mut state = implementation_state_with_inventory(true);
+        confirm_current_for_test(&mut state);
+        let other_fingerprint =
+            fingerprint::id(&["rewrite-subagent-handle-v1", "other-api-runtime-handle"]);
+        state.worker_bindings.insert(
+            "POST /other".to_string(),
+            RewriteWorkerBinding {
+                agent_handle_fingerprint: other_fingerprint,
+                agent_name: None,
+                confirmed_dispatch_id: "other-dispatch".to_string(),
+                transfer_generation: 0,
+                last_transfer: None,
+            },
+        );
+
+        let error = transfer_binding(
+            &mut state,
+            "other-api-runtime-handle",
+            None,
+            "replace unavailable owner".to_string(),
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("already bound to another API"));
+    }
+
+    #[test]
+    fn transfer_entrypoint_requires_approval_and_current_binding_id() {
+        let target = configured_target();
+        let store = RewriteStore::new(target.path()).unwrap();
+        let mut state = implementation_state_with_inventory(false);
+        confirm_current_for_test(&mut state);
+        let current_binding_id = binding_id(&state);
+        store.save(&state).unwrap();
+        let options = |binding_id: &str, caller_approved| RewriteWorkerTransferOptions {
+            target_root: target.path().to_path_buf(),
+            binding_id: binding_id.to_string(),
+            agent_handle: "replacement-runtime-handle".to_string(),
+            agent_name: Some("replacement-worker".to_string()),
+            reason: "stored handle is unavailable after session replacement".to_string(),
+            caller_approved,
+        };
+
+        let error = transfer(options(&current_binding_id, false)).unwrap_err();
+        assert!(error.to_string().contains("explicit caller approval"));
+        assert_eq!(
+            store.load().unwrap().unwrap().worker_bindings["GET /api"].transfer_generation,
+            0
+        );
+
+        let error = transfer(options("stale-binding-id", true)).unwrap_err();
+        assert!(error.to_string().contains("binding id is stale"));
+
+        transfer(options(&current_binding_id, true)).unwrap();
+        let persisted = store.load().unwrap().unwrap();
+        assert_eq!(persisted.worker_bindings["GET /api"].transfer_generation, 1);
+        assert!(current_is_confirmed(&persisted));
     }
 
     #[test]

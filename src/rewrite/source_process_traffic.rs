@@ -1,0 +1,221 @@
+use std::path::Path;
+
+use serde::Serialize;
+
+use super::model::RewriteState;
+use crate::recorder::load_source_process_traffic_summary;
+
+const MAX_BOOTSTRAP_OBSERVATIONS: usize = 16;
+const MAX_BACKGROUND_RULES: usize = 16;
+const MAX_RULE_OBSERVATIONS: usize = 8;
+const MAX_SNAPSHOT_ENDPOINTS: usize = 16;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteSourceProcessTrafficView {
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bootstrap: Option<RewriteSourceProcessTrafficScopeView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub background: Option<RewriteSourceProcessBackgroundView>,
+    pub interpretation: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteSourceProcessTrafficScopeView {
+    pub events: u64,
+    pub data_interactions: u64,
+    pub excluded_events: u64,
+    pub unresolved_interactions: u64,
+    pub observations: Vec<RewriteSourceProcessObservationView>,
+    pub omitted_observations: usize,
+    pub omitted_interactions: u64,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteSourceProcessObservationView {
+    pub protocol: String,
+    pub endpoint: String,
+    pub operation: String,
+    pub interactions: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteSourceProcessBackgroundView {
+    pub events: u64,
+    pub data_interactions: u64,
+    pub excluded_events: u64,
+    pub unresolved_interactions: u64,
+    pub rules_total: usize,
+    pub rules: Vec<RewriteSourceProcessBackgroundRuleView>,
+    pub omitted_rules: usize,
+    pub omitted_interactions: u64,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteSourceProcessBackgroundRuleView {
+    pub name: String,
+    pub interactions: u64,
+    pub bootstrap_interactions: u64,
+    pub runtime_interactions: u64,
+    pub other_phase_interactions: u64,
+    pub unresolved_interactions: u64,
+    pub observations: Vec<RewriteSourceProcessObservationView>,
+    pub omitted_observations: usize,
+    pub omitted_interactions: u64,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub redis_snapshot: Option<RewriteSourceProcessRedisSnapshotView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteSourceProcessRedisSnapshotView {
+    pub seeds: u64,
+    pub reuses: u64,
+    pub fill_failures: u64,
+    pub endpoints: Vec<RewriteSourceProcessRedisSnapshotEndpointView>,
+    pub omitted_endpoints: usize,
+    pub omitted_interactions: u64,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteSourceProcessRedisSnapshotEndpointView {
+    pub endpoint: String,
+    pub seeds: u64,
+    pub reuses: u64,
+    pub fill_failures: u64,
+}
+
+pub(super) fn view(
+    _target_root: &Path,
+    state: &RewriteState,
+) -> Option<RewriteSourceProcessTrafficView> {
+    let case_source = state.case_source.as_deref()?;
+    match load_source_process_traffic_summary(case_source) {
+        Ok(Some(summary)) => {
+            let bootstrap_observations_total = summary.bootstrap.observations.len();
+            let bootstrap = RewriteSourceProcessTrafficScopeView {
+                events: summary.bootstrap.events,
+                data_interactions: summary.bootstrap.data_interactions,
+                excluded_events: summary.bootstrap.excluded_events,
+                unresolved_interactions: summary.bootstrap.unresolved_interactions,
+                observations: summary
+                    .bootstrap
+                    .observations
+                    .iter()
+                    .take(MAX_BOOTSTRAP_OBSERVATIONS)
+                    .map(observation_view)
+                    .collect(),
+                omitted_observations: bootstrap_observations_total
+                    .saturating_sub(MAX_BOOTSTRAP_OBSERVATIONS),
+                omitted_interactions: summary.bootstrap.omitted_interactions,
+                truncated: summary.bootstrap.truncated
+                    || bootstrap_observations_total > MAX_BOOTSTRAP_OBSERVATIONS,
+            };
+            let rules_total = summary.background.rules.len();
+            let rules = summary
+                .background
+                .rules
+                .iter()
+                .take(MAX_BACKGROUND_RULES)
+                .map(|rule| {
+                    let observations_total = rule.observations.len();
+                    RewriteSourceProcessBackgroundRuleView {
+                        name: rule.name.clone(),
+                        interactions: rule.interactions,
+                        bootstrap_interactions: rule.bootstrap_interactions,
+                        runtime_interactions: rule.runtime_interactions,
+                        other_phase_interactions: rule.other_phase_interactions,
+                        unresolved_interactions: rule.unresolved_interactions,
+                        observations: rule
+                            .observations
+                            .iter()
+                            .take(MAX_RULE_OBSERVATIONS)
+                            .map(observation_view)
+                            .collect(),
+                        omitted_observations: observations_total
+                            .saturating_sub(MAX_RULE_OBSERVATIONS),
+                        omitted_interactions: rule.omitted_interactions,
+                        truncated: rule.truncated || observations_total > MAX_RULE_OBSERVATIONS,
+                        redis_snapshot: rule.redis_snapshot.as_ref().map(|snapshot| {
+                            let endpoints_total = snapshot.endpoints.len();
+                            RewriteSourceProcessRedisSnapshotView {
+                                seeds: snapshot.seeds,
+                                reuses: snapshot.reuses,
+                                fill_failures: snapshot.fill_failures,
+                                endpoints: snapshot
+                                    .endpoints
+                                    .iter()
+                                    .take(MAX_SNAPSHOT_ENDPOINTS)
+                                    .map(|endpoint| RewriteSourceProcessRedisSnapshotEndpointView {
+                                        endpoint: endpoint.endpoint.clone(),
+                                        seeds: endpoint.seeds,
+                                        reuses: endpoint.reuses,
+                                        fill_failures: endpoint.fill_failures,
+                                    })
+                                    .collect(),
+                                omitted_endpoints: endpoints_total
+                                    .saturating_sub(MAX_SNAPSHOT_ENDPOINTS),
+                                omitted_interactions: snapshot.omitted_interactions,
+                                truncated: snapshot.truncated
+                                    || endpoints_total > MAX_SNAPSHOT_ENDPOINTS,
+                            }
+                        }),
+                    }
+                })
+                .collect();
+            Some(RewriteSourceProcessTrafficView {
+                available: true,
+                reason: None,
+                bootstrap: Some(bootstrap),
+                background: Some(RewriteSourceProcessBackgroundView {
+                    events: summary.background.events,
+                    data_interactions: summary.background.data_interactions,
+                    excluded_events: summary.background.excluded_events,
+                    unresolved_interactions: summary.background.unresolved_interactions,
+                    rules_total,
+                    rules,
+                    omitted_rules: rules_total.saturating_sub(MAX_BACKGROUND_RULES),
+                    omitted_interactions: summary.background.omitted_interactions,
+                    truncated: summary.background.truncated || rules_total > MAX_BACKGROUND_RULES,
+                }),
+                interpretation: summary.interpretation,
+            })
+        }
+        Ok(None) => Some(unavailable(
+            "the selected standard recording predates source process traffic summaries",
+        )),
+        Err(_) => Some(unavailable(
+            "the selected standard recording has an unreadable source process traffic summary",
+        )),
+    }
+}
+
+fn observation_view(
+    observation: &crate::recorder::SourceProcessTrafficObservation,
+) -> RewriteSourceProcessObservationView {
+    RewriteSourceProcessObservationView {
+        protocol: observation.protocol.clone(),
+        endpoint: observation.endpoint.clone(),
+        operation: observation.operation.clone(),
+        interactions: observation.interactions,
+    }
+}
+
+fn unavailable(reason: &str) -> RewriteSourceProcessTrafficView {
+    RewriteSourceProcessTrafficView {
+        available: false,
+        reason: Some(reason.to_string()),
+        bootstrap: None,
+        background: None,
+        interpretation: "source process traffic is a triage hint, not proof of business ownership or response causality".to_string(),
+    }
+}
+
+#[cfg(test)]
+#[path = "source_process_traffic/tests.rs"]
+mod tests;

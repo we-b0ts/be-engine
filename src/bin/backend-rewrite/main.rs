@@ -11,11 +11,12 @@ use traffic_e2e::{
     RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
     RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions, RewriteRouteOptions,
     RewriteRulePlanOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
-    apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite, next_rewrite, plan_rewrite_rule,
-    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
-    route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
-    status_rewrite_for_api, verify_rewrite_repair,
+    RewriteWorkerTransferOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
+    next_rewrite, plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence,
+    recover_rewrite, request_rewrite_recording, request_rewrite_revalidation,
+    resume_rewrite_replay_planning, route_rewrite, run_rewrite_target_quality,
+    start_rewrite_recording, status_rewrite, status_rewrite_for_api, transfer_rewrite_worker,
+    verify_rewrite_repair,
 };
 
 mod dependency_rule;
@@ -262,6 +263,8 @@ struct WorkerArgs {
 enum WorkerCommand {
     /// Bind an actual subagent handle to the current implementation dispatch.
     Confirm(WorkerConfirmArgs),
+    /// Transfer one API to a replacement subagent after explicit caller approval.
+    Transfer(WorkerTransferArgs),
 }
 
 #[derive(Debug, Args)]
@@ -274,6 +277,24 @@ struct WorkerConfirmArgs {
     /// Optional human-readable subagent name for diagnostics.
     #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_NAME", hide_env_values = true)]
     agent_name: Option<String>,
+}
+
+#[derive(Debug, Args)]
+struct WorkerTransferArgs {
+    /// Opaque current binding id returned by implementation_required status.
+    binding_id: String,
+    /// Runtime-returned replacement subagent handle.
+    #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_HANDLE", hide_env_values = true)]
+    agent_handle: String,
+    /// Optional human-readable replacement subagent name.
+    #[arg(long, env = "BACKEND_REWRITE_SUBAGENT_NAME", hide_env_values = true)]
+    agent_name: Option<String>,
+    /// Single-line reason the stored worker cannot retain ownership.
+    #[arg(long)]
+    reason: String,
+    /// Attest that the caller explicitly approved replacing the API owner.
+    #[arg(long, required = true)]
+    approve_ownership_transfer: bool,
 }
 
 #[derive(Debug, Args)]
@@ -481,6 +502,17 @@ async fn run(cli: Cli) -> Result<()> {
                     dispatch_id: args.dispatch_id,
                     agent_handle: args.agent_handle,
                     agent_name: args.agent_name,
+                })?,
+                pretty,
+            ),
+            WorkerCommand::Transfer(args) => print_json(
+                &transfer_rewrite_worker(RewriteWorkerTransferOptions {
+                    target_root,
+                    binding_id: args.binding_id,
+                    agent_handle: args.agent_handle,
+                    agent_name: args.agent_name,
+                    reason: args.reason,
+                    caller_approved: args.approve_ownership_transfer,
                 })?,
                 pretty,
             ),

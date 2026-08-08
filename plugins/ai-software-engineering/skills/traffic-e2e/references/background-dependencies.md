@@ -40,6 +40,14 @@ Bootstrap rule matches use `reason=background_rule`, `phase=bootstrap`.
 Unruled ready-time idle traffic stays only in `traffic.jsonl`. Replay has no
 legacy bootstrap fallback.
 
+Finalized recordings also contain `source-process-traffic-summary.json`. It
+separates pre-readiness observations from configured background rules and
+reports protocol, endpoint, operation, and bounded counts. Redis snapshot
+sections additionally report seeds, reuses, fill failures, and those counts by
+intercepted domain and port. Backend-rewrite projects this summary as the
+top-level `source_process_traffic` action context; treat it as a source-path
+diagnostic hint, not proof of ownership or response causality.
+
 ## Supported Rules
 
 The current narrow rule types are:

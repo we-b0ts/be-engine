@@ -70,6 +70,33 @@ fn parses_the_bounded_rewrite_surface() {
     assert!(
         Cli::try_parse_from([
             "test",
+            "worker",
+            "transfer",
+            "fnv1a64:binding",
+            "--agent-handle",
+            "replacement-agent-43",
+            "--reason",
+            "stored handle is unavailable after session replacement",
+            "--approve-ownership-transfer",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "worker",
+            "transfer",
+            "fnv1a64:binding",
+            "--agent-handle",
+            "replacement-agent-43",
+            "--reason",
+            "stored handle is unavailable after session replacement",
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
             "init",
             "--source-container",
             "friendship",
