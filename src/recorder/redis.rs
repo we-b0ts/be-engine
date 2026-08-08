@@ -15,10 +15,13 @@ use crate::AppState;
 use crate::DependencyExchangeOutcome;
 use crate::access_policy::AccessDecision;
 use crate::dependency::termination::ConnectionTermination;
+use crate::recorder::cache_snapshot::CacheSnapshotReservation;
 use crate::recorder::{RecorderEvent, RedisConnectionEvent, RedisExchangeEvent, capture_body};
 
 use crate::redis::access::classify_command;
-use crate::redis::{BufferedReader, RedisCommand, RedisFrameKind, read_frame, redis_command};
+use crate::redis::{
+    BufferedReader, RedisCommand, RedisFrameKind, frame_kind, read_frame, redis_command,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConnectionContext {
@@ -45,6 +48,9 @@ struct PendingRedisExchange {
     session_setup: bool,
     replay_safe: bool,
     warnings: Vec<String>,
+    cache_snapshot_rule: Option<String>,
+    cache_snapshot_key: Option<Vec<u8>>,
+    cache_snapshot_hit: bool,
     started: Instant,
 }
 
@@ -185,16 +191,63 @@ pub(crate) async fn handle_connected(
             }
             let (recorded_args, session_setup, replay_safe, warnings) =
                 sanitize_and_classify(&command);
-            c2s_pending.lock().await.push_back(PendingRedisExchange {
+            let current_session = c2s_session.lock().await.clone();
+            let cache_snapshot_rule = c2s_state
+                .matching_redis_snapshot_rule(c2s_context.target_port, &command.name, &command.args)
+                .map(ToOwned::to_owned);
+            let cache_snapshot_key = cache_snapshot_rule.as_ref().map(|rule| {
+                redis_snapshot_key(rule, &current_session, &command.name, &command.args)
+            });
+            let mut pending_exchange = PendingRedisExchange {
                 sequence,
                 command,
                 recorded_args,
-                session: c2s_session.lock().await.clone(),
+                session: current_session,
                 session_setup,
                 replay_safe,
                 warnings,
+                cache_snapshot_rule,
+                cache_snapshot_key: None,
+                cache_snapshot_hit: false,
                 started: Instant::now(),
-            });
+            };
+            if let Some(key) = cache_snapshot_key {
+                match c2s_state.reserve_cache_snapshot(key.clone()).await? {
+                    CacheSnapshotReservation::Leader => {
+                        pending_exchange.cache_snapshot_key = Some(key);
+                    }
+                    CacheSnapshotReservation::Hit(response) => {
+                        pending_exchange.cache_snapshot_hit = true;
+                        let kind = frame_kind(&response)
+                            .context("cached Redis response is not a complete RESP2 frame")?;
+                        c2s_output
+                            .send(RedisOutput::Sequenced {
+                                sequence,
+                                bytes: response,
+                                completion: Some((pending_exchange, kind)),
+                            })
+                            .map_err(|_| anyhow!("Redis client response writer closed"))?;
+                        bytes += frame.raw.len() as u64;
+                        continue;
+                    }
+                    CacheSnapshotReservation::Wait(waiter) => {
+                        let response = waiter.response().await?;
+                        pending_exchange.cache_snapshot_hit = true;
+                        let kind = frame_kind(&response)
+                            .context("shared Redis response is not a complete RESP2 frame")?;
+                        c2s_output
+                            .send(RedisOutput::Sequenced {
+                                sequence,
+                                bytes: response,
+                                completion: Some((pending_exchange, kind)),
+                            })
+                            .map_err(|_| anyhow!("Redis client response writer closed"))?;
+                        bytes += frame.raw.len() as u64;
+                        continue;
+                    }
+                }
+            }
+            c2s_pending.lock().await.push_back(pending_exchange);
             upstream_write.write_all(&frame.raw).await?;
             bytes += frame.raw.len() as u64;
         }
@@ -262,6 +315,15 @@ pub(crate) async fn handle_connected(
             let response_sequence = exchange.sequence;
             exchange.session = s2c_session.lock().await.clone();
             let response_is_error = frame.kind == RedisFrameKind::Error;
+            if let Some(key) = exchange.cache_snapshot_key.take() {
+                s2c_state
+                    .complete_cache_snapshot(
+                        &key,
+                        frame.raw.clone(),
+                        exchange.replay_safe && !response_is_error,
+                    )
+                    .await?;
+            }
             if !response_is_error {
                 apply_successful_setup(&s2c_session, &exchange.command).await;
             }
@@ -312,6 +374,11 @@ pub(crate) async fn handle_connected(
     let mut replay_safe = transfer_error.is_none();
     let mut incomplete = pending.lock().await;
     while let Some(exchange) = incomplete.pop_front() {
+        if let Some(key) = exchange.cache_snapshot_key.as_deref() {
+            state
+                .abort_cache_snapshot(key, "Redis snapshot fill ended before a response")
+                .await;
+        }
         let clean_terminal_quit = is_terminal_quit(&exchange.command) && transfer_error.is_none();
         let exchange_completed = client_terminated || clean_terminal_quit;
         if !exchange_completed {
@@ -550,6 +617,8 @@ async fn record_exchange(
             args,
             response_kind: response_kind.as_str().to_string(),
             response,
+            cache_snapshot_rule: pending.cache_snapshot_rule,
+            cache_snapshot_hit: pending.cache_snapshot_hit,
             session_setup: pending.session_setup,
             outcome,
             duration_ms: pending.started.elapsed().as_millis(),
@@ -558,6 +627,33 @@ async fn record_exchange(
         }),
     )
     .await
+}
+
+fn redis_snapshot_key(
+    rule: &str,
+    session: &RedisSession,
+    command: &str,
+    args: &[Vec<u8>],
+) -> Vec<u8> {
+    let mut key = Vec::new();
+    push_snapshot_component(&mut key, b"redis");
+    push_snapshot_component(&mut key, rule.as_bytes());
+    key.extend_from_slice(&session.resp_version.to_be_bytes());
+    key.extend_from_slice(&session.database.to_be_bytes());
+    push_snapshot_component(
+        &mut key,
+        session.username.as_deref().unwrap_or_default().as_bytes(),
+    );
+    push_snapshot_component(&mut key, command.as_bytes());
+    for argument in args {
+        push_snapshot_component(&mut key, argument);
+    }
+    key
+}
+
+fn push_snapshot_component(target: &mut Vec<u8>, value: &[u8]) {
+    target.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    target.extend_from_slice(value);
 }
 
 fn is_terminal_quit(command: &RedisCommand) -> bool {

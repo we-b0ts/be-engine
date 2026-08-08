@@ -330,8 +330,20 @@ pub(super) struct RewriteRecorderCaptureAppliedRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct RewriteDependencyRuleAppliedRecord {
+    pub plan_id: String,
+    pub issue_id: String,
+    pub evidence_id: String,
+    pub api: String,
+    pub rule_name: String,
+    pub source_evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct RewriteRecordingRefreshState {
     pub applied: Vec<RewriteRecorderCaptureAppliedRecord>,
+    #[serde(default)]
+    pub dependency_rules: Vec<RewriteDependencyRuleAppliedRecord>,
     pub recorder_config_revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording_run_id: Option<String>,

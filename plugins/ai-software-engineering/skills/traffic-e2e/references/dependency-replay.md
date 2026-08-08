@@ -62,11 +62,12 @@ prepared parameters, column schema, or untruncated rows is a recording risk.
 For Redis and Memcached, preserve connection-lane ordering and protocol
 semantics. Unmatched, unsupported, unsafe, and unused evidence remains dirty.
 
-Match Case evidence before run-level Global evidence. Consume every exchange
-once. Global is shared replay inventory, not a reusable fixture: a scheduler
-that performs several refresh cycles requires corresponding repeated recorded
-exchanges. The target must issue genuine dependency calls and build its own
-local state from replayed responses.
+Match Case evidence before run-level Global evidence. Consume ordinary
+exchanges once. A marked Redis background cache-snapshot seed is the narrow
+exception: Replay may return its first successful recorded response for every
+identical logical read. Unmarked Redis, Memcached, HTTP, MySQL, Kafka, and Motan
+evidence remains finite inventory. The target must issue genuine dependency
+calls and build its own local state from replayed responses.
 
 For ordinary MySQL, Redis, Memcached, and Kafka Produce/Fetch responses, delay
 delivery by the recorded semantic exchange `duration_ms`; do not collapse

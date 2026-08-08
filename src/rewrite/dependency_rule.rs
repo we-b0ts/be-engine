@@ -5,8 +5,9 @@ use serde_json::Value;
 
 use super::fingerprint;
 use super::model::{
-    RewriteDependencyRulePlanRecord, RewriteDependencyRuleReport, RewriteDependencyRuleSpec,
-    RewriteIssueKind, RewriteState,
+    RewriteDependencyRuleAppliedRecord, RewriteDependencyRulePlanRecord,
+    RewriteDependencyRuleReport, RewriteDependencyRuleSpec, RewriteIssueKind, RewritePhase,
+    RewriteRecordingRefreshState, RewriteState,
 };
 use super::{action, evidence};
 use crate::{
@@ -277,15 +278,70 @@ fn validate_plan_evidence(
     Ok(())
 }
 
-pub(super) fn plans_response_bootstrap(state: &RewriteState, plan_id: &str) -> bool {
-    state
-        .active_issue
-        .as_ref()
-        .is_some_and(|issue| issue.kind == RewriteIssueKind::Response)
-        && state.dependency_rule_plan.as_ref().is_some_and(|plan| {
-            plan.id == plan_id
-                && matches!(plan.spec, RewriteDependencyRuleSpec::RedisHashRead { .. })
-        })
+pub(super) fn pending_cache_snapshot_refresh(
+    state: &RewriteState,
+    plan_id: &str,
+) -> Result<Option<RewriteDependencyRuleAppliedRecord>> {
+    let record = pending_plan_for_apply(state, plan_id)?;
+    if !matches!(
+        record.spec,
+        RewriteDependencyRuleSpec::RedisZcount { .. }
+            | RewriteDependencyRuleSpec::RedisGet { .. }
+            | RewriteDependencyRuleSpec::RedisScard { .. }
+            | RewriteDependencyRuleSpec::RedisHgetall { .. }
+            | RewriteDependencyRuleSpec::RedisHashRead { .. }
+    ) {
+        return Ok(None);
+    }
+    Ok(Some(RewriteDependencyRuleAppliedRecord {
+        plan_id: record.id,
+        issue_id: record.issue_id,
+        evidence_id: record.evidence_id,
+        api: state.api.clone(),
+        rule_name: record.effective_name.unwrap_or(record.name),
+        source_evidence: record.source_evidence,
+    }))
+}
+
+pub(super) fn schedule_cache_snapshot_refresh(
+    target_root: &Path,
+    state: &mut RewriteState,
+    applied: RewriteDependencyRuleAppliedRecord,
+) -> Result<()> {
+    ensure!(
+        state
+            .recording_refresh
+            .as_ref()
+            .and_then(|refresh| refresh.recording_run_id.as_ref())
+            .is_none(),
+        "a full recording refresh has already started; wait for it to finish before applying another dependency rule"
+    );
+    let config_revision = fingerprint::recorder_config_revision(target_root)?;
+    let refresh = state
+        .recording_refresh
+        .get_or_insert_with(|| RewriteRecordingRefreshState {
+            applied: Vec::new(),
+            dependency_rules: Vec::new(),
+            recorder_config_revision: config_revision.clone(),
+            recording_run_id: None,
+        });
+    refresh.recorder_config_revision = config_revision;
+    if !refresh
+        .dependency_rules
+        .iter()
+        .any(|record| record.plan_id == applied.plan_id)
+    {
+        refresh.dependency_rules.push(applied);
+    }
+    state.rule_plan = None;
+    state.dependency_rule_plan = None;
+    state.recorder_capture_plan = None;
+    state.route = None;
+    state.phase = RewritePhase::AwaitingRecordingRefresh;
+    state.e2e_current = false;
+    state.comparison_current = false;
+    state.bump();
+    Ok(())
 }
 
 fn spec_from_selector(selector: RewriteDependencyRuleSelector) -> RewriteDependencyRuleSpec {

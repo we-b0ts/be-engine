@@ -215,6 +215,13 @@ jsonl_flush_interval_ms = 1000
 # Completed events move into this bounded queue before JSONL serialization and
 # persistence so dependency writes do not delay dependency responses.
 writer_queue_capacity = 65536
+# Redis reads matched by a background dependency rule hold the first successful
+# value for the rest of one recording/comparison run. These bounds keep that
+# run-local snapshot finite and prevent an unbounded single-flight queue.
+cache_snapshot_max_entries = 16384
+cache_snapshot_max_bytes = 67108864
+cache_snapshot_max_waiters_per_entry = 1024
+cache_snapshot_fill_timeout_ms = 30000
 # Keep startup dependencies in bootstrap for this fixed interval after the
 # readiness probe succeeds. Matching traffic continues to use the configured
 # fallback until the interval ends.

@@ -315,6 +315,15 @@ cleanup() {
         wait "$input_pid" || status=1
         input_pid=""
     fi
+    if [[ "$operation" == record-comparison ]]; then
+        if "$target_started"; then
+            stop_target || status=1
+        fi
+        if "$source_started"; then
+            stop_container "$source_name"
+            source_started=false
+        fi
+    fi
     if "$recorder_started" && ! "$recorder_finalized"; then
         finalize_recorder || status=1
     fi
@@ -492,6 +501,32 @@ start_breeze() {
     wait_port 9984 Breeze "$breeze_name"
 }
 
+start_cache_snapshot() {
+    local control_socket=/workspace/control/cache-snapshot.sock
+    docker pull "$recorder_image" >/dev/null
+    TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 docker run --detach \
+        --name "$recorder_name" --platform linux/amd64 --network "container:${anchor_name}" \
+        --user 0:0 --cap-add NET_ADMIN --cap-add NET_RAW --workdir /workspace \
+        --label com.weibo.traffic-e2e.managed=true \
+        --label com.weibo.traffic-e2e.role=cache-snapshot \
+        --label "com.weibo.traffic-e2e.operation=${operation}" \
+        --label "com.weibo.traffic-e2e.run-id=${run_id}" \
+        --volume "$TRAFFIC_E2E_BIN:/usr/local/bin/traffic-e2e:ro" \
+        --volume "$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/recorder.toml:ro" \
+        --volume "$control_dir:/workspace/control" \
+        --env TRAFFIC_E2E_ENCRYPTION_KEY_B64 \
+        --entrypoint /usr/local/bin/traffic-e2e \
+        "$recorder_image" \
+        internal cache-snapshot-run \
+        --config /workspace/recorder.toml \
+        --output-dir /workspace/control/cache-snapshot \
+        --run-id "$run_id" \
+        --control-socket "$control_socket" >/dev/null
+    recorder_started=true
+    docker exec "$recorder_name" /usr/local/bin/traffic-e2e \
+        recording wait-listeners --control-socket "$control_socket"
+}
+
 start_genuine_source() {
     local network=$1
     load_runtime_spec "$source_inspect" exact exact exact
@@ -502,6 +537,13 @@ start_genuine_source() {
     source_started=true
     wait_http "$TRAFFIC_E2E_SOURCE_ORIGIN" "$TRAFFIC_E2E_SOURCE_READY_PATH" \
         "$TRAFFIC_E2E_SOURCE_READY_STATUS" source "$source_name"
+    docker exec "$source_name" /bin/sh -ec '
+        test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998
+        test "$(awk "/^Gid:/{print \$2}" /proc/1/status)" = 998
+    ' || {
+        printf 'error: comparison source must run as 998:998 for cache snapshot interception\n' >&2
+        return 1
+    }
 }
 
 build_recording_adapter() {
@@ -782,6 +824,7 @@ run_comparison_recording() {
         --label "com.weibo.traffic-e2e.run-id=${run_id}" \
         "$anchor_image" >/dev/null
     anchor_started=true
+    start_cache_snapshot
     if "$breeze_enabled"; then
         normalize_breeze_directories
         docker pull "$breeze_image" >/dev/null
@@ -811,6 +854,9 @@ run_comparison_recording() {
     stop_recording_input || status=1
     ((status == 0)) || return "$status"
     stop_target
+    stop_container "$source_name"
+    source_started=false
+    finalize_recorder
     jq -e '.status == "completed"' \
         "$artifacts_dir/comparison-recordings/$run_id/comparison-recording-run.json" >/dev/null
 }

@@ -56,6 +56,8 @@ fn event(host: &str, port: u16, command: &str, key: &str) -> RecorderEvent {
         args: vec![capture_body(key.as_bytes(), key.len())],
         response_kind: "integer".to_string(),
         response: capture_body(b":1\r\n", 4),
+        cache_snapshot_rule: None,
+        cache_snapshot_hit: false,
         session_setup: false,
         outcome: DependencyExchangeOutcome::Response,
         duration_ms: 1,

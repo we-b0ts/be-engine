@@ -188,6 +188,10 @@ pub struct RedisExchangeEvent {
     pub args: Vec<BodyCapture>,
     pub response_kind: String,
     pub response: BodyCapture,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_snapshot_rule: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cache_snapshot_hit: bool,
     pub session_setup: bool,
     pub outcome: DependencyExchangeOutcome,
     pub duration_ms: u128,

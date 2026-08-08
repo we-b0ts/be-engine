@@ -220,8 +220,11 @@ response and records the request plus baseline and candidate responses under
 `<artifacts.root_dir>/comparison-recordings/<run-id>/`. It uses
 `http_gateway.matched_upstream` as the baseline unless
 `comparison_recording.baseline_upstream` is explicitly set. It does not load
-response rules while recording, record dependencies, install interception
-rules, or initialize a MITM CA. It validates the verification policy and reads
+response rules while recording, publish dependencies, or initialize a MITM
+CA. Managed comparison installs only the cache-port interception needed for
+configured Redis background rules; source and candidate share a new run-local
+first-value snapshot independent of standard Replay evidence. It validates the
+verification policy and reads
 only `response_rules.comparison.source_match` to decide whether source recheck
 evidence is required. The policy defaults to `verification.yaml` next to the
 recorder config and may be provided explicitly with `--policy`. Response bodies
@@ -335,9 +338,10 @@ traffic-e2e config replay plan response-rule \
   --comparison-run .traffic-e2e/local/artifacts/comparison-recordings/<run-id>
 ```
 
-Neither `record-comparison` nor `compare` enables the fixed recording user,
-DNS/iptables interception, fake-IP routing, MITM, dependency replay, or any
-other isolation workflow.
+`compare` is file-only. Managed `record-comparison` uses the fixed traffic UID
+and cache-port-only interception when Redis background rules are configured;
+it does not enable DNS interception, fake-IP routing, MITM, or dependency
+Replay.
 
 AI must diagnose a failed comparison before changing code or policy. A stable
 source recheck plus a candidate mismatch is stronger implementation-defect
@@ -1423,7 +1427,9 @@ including push-metrics side effects, are recorded as semantic dependencies when
 captured by the UDP gateway. Run-level
 Global dependency files contain replay-oriented startup traffic plus explicit
 background-rule matches. Replay discovers them by walking upward from a case
-directory, prefers Case before Global, and consumes every exchange once.
+directory and prefers Case before Global. Ordinary exchanges are consumed
+once. Marked Redis background snapshot seeds are reusable for identical
+logical reads.
 `pre-readiness-traffic-summary.json` is a bounded projection of only source
 `bootstrap` data interactions grouped by `host:port`. It excludes connection
 lifecycle events and known ping, heartbeat, and setup exchanges. The rewrite
@@ -1438,6 +1444,14 @@ traffic forwarding is not delayed and an incomplete recording cannot be
 published as successful. Case and run finalization send ordered flush commands
 through the same writer, so queued dependency reservations remain in flight
 until their records have been persisted.
+
+Redis reads matched by a background dependency rule use a bounded run-local
+first-value snapshot. `recording.cache_snapshot_max_entries` and
+`recording.cache_snapshot_max_bytes` bound retained responses;
+`cache_snapshot_max_waiters_per_entry` bounds concurrent readers waiting for
+the first response, and `cache_snapshot_fill_timeout_ms` bounds that wait.
+Successful responses become sticky for the run; Redis errors are delivered to
+current waiters but are not retained.
 
 Source-proven process-level HTTP polling can be classified before recording:
 
@@ -1458,17 +1472,18 @@ not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
 `traffic.jsonl` continues to retain the exchange only when
 `recording.traffic_jsonl` permits it. It also enters
 `global-dependencies.jsonl` with `reason=background_rule` and a
-`bootstrap|runtime` phase. The rule changes
-ownership only; it does not alter forwarding, response capture, body limits,
-or protocol debugging. Add a rule only after response assertions pass and
+`bootstrap|runtime` phase. HTTP, Motan, and Memcached rules change ownership
+only. A Redis rule also enables the bounded first-value snapshot; it does not
+change response capture limits or protocol debugging. Add a rule only after
+response assertions pass and
 source inspection proves process ownership and case independence. Low-level
 Recorder use applies the rule during future capture. In the managed
-`backend-rewrite` workflow, dependency-rule apply also derives a current
-case/global ownership view from the existing immutable capture, rewrites only
-the generated replay report and dependency-evidence sidecar, and revises the
-same focused attempt. A clean result advances without a new standard recording;
-only missing semantic capture, a genuine Recorder contract change, or a source
-baseline change requires fresh traffic.
+`backend-rewrite` workflow, non-Redis dependency-rule apply can derive a
+current case/global ownership view from the existing immutable capture,
+rewrite only the generated replay report and dependency-evidence sidecar, and
+revise the same focused attempt. Redis rule apply changes the first-value
+capture contract, so it queues the affected API for one consolidated fresh
+standard recording instead of retroactively reclassifying the old artifact.
 The coordinator also detects an already-finalized attempt whose effective
 dependency view is clean but whose persisted errors still contain the obsolete
 strict dirty-finalize result. `backend-rewrite next` removes only that
@@ -1537,9 +1552,11 @@ traffic-e2e config recorder apply background-dependencies \
 ```
 
 Planning requires every configured exact key in replay-safe, unused case
-evidence. Replay consumes each response once and matches the exact target,
-command, and key, without inheriting the source connection binding or earlier
-unrelated lane commands. Case and bootstrap-only exchanges retain
+evidence. In the fresh recording, Recorder forwards the first successful
+matching read and holds that response for the rest of the run. Replay reuses
+the marked first-value seed for repeated exact target, session, command, and
+argument matches without inheriting the source connection binding or earlier
+unrelated lane commands. Case and unmarked bootstrap exchanges retain
 connection-order semantics.
 
 For example, replace `get` above with `scard` or `hgetall` while retaining the
@@ -1576,11 +1593,10 @@ than runtime configuration. If the cache warm affects API behavior, implement
 the source-compatible target cache lifecycle separately from this ownership
 rule.
 
-Bootstrap Redis `HGET`/`HMGET` rules are replay overlays rather than
-initial-load waits. They combine optional exact keys with compact
-`prefix<digits>suffix` patterns and require the exact field sequence. Matching
-replay-safe `bootstrap_window` Global exchanges become connection-independent
-for the next replay while the recording remains immutable.
+Bootstrap Redis `HGET`/`HMGET` rules do not add an initial-load wait. They
+combine optional exact keys with compact `prefix<digits>suffix` patterns and
+require the exact field sequence. Applying one through the rewrite coordinator
+still queues a fresh standard recording so its first-value seed is explicit.
 
 An applied rule with `initial_load_timeout_ms` delays source case admission
 while Recorder observes its initial load. Redis exact-key `GET`, `SCARD`, and

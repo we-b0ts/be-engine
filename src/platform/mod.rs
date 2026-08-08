@@ -513,6 +513,8 @@ mod tests {
         ));
         assert!(MANAGER.contains("internal recorder-run --config"));
         assert!(MANAGER.contains("internal comparison-run --config"));
+        assert!(MANAGER.contains("internal cache-snapshot-run"));
+        assert!(MANAGER.contains("com.weibo.traffic-e2e.role=cache-snapshot"));
         assert!(MANAGER.contains("record|record-comparison|preflight"));
         assert!(MANAGER.contains("preflight_root=\"$runtime_root/preflight/$run_id\""));
         assert!(MANAGER.contains("[[ \"$operation\" == preflight ]]"));

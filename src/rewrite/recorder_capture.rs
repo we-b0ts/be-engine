@@ -195,6 +195,7 @@ pub(super) fn apply(
         .recording_refresh
         .get_or_insert_with(|| RewriteRecordingRefreshState {
             applied: Vec::new(),
+            dependency_rules: Vec::new(),
             recorder_config_revision: config_revision.clone(),
             recording_run_id: None,
         });
@@ -242,6 +243,12 @@ pub(super) fn awaiting_apis(state: &RewriteState) -> Vec<String> {
                 .applied
                 .iter()
                 .map(|record| record.api.clone())
+                .chain(
+                    refresh
+                        .dependency_rules
+                        .iter()
+                        .map(|record| record.api.clone()),
+                )
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -368,6 +375,12 @@ pub(super) fn pending_refresh_action(target_root: &Path, state: &RewriteState) -
             .applied
             .iter()
             .map(|record| record.plan_id.clone())
+            .chain(
+                refresh
+                    .dependency_rules
+                    .iter()
+                    .map(|record| record.plan_id.clone()),
+            )
             .collect(),
         resource_identities: refresh
             .applied
@@ -435,7 +448,8 @@ mod tests {
 
     use super::*;
     use crate::rewrite::model::{
-        RewriteApiProgress, RewriteApiStatus, RewriteAttemptDelta, RewriteIssueOwner,
+        RewriteApiProgress, RewriteApiStatus, RewriteAttemptDelta,
+        RewriteDependencyRuleAppliedRecord, RewriteIssueOwner,
     };
 
     #[test]
@@ -452,6 +466,14 @@ mod tests {
                 resource_identity: "counter-resource".to_string(),
                 source_revision: "source-a".to_string(),
                 source_evidence: "CounterService.java:88".to_string(),
+            }],
+            dependency_rules: vec![RewriteDependencyRuleAppliedRecord {
+                plan_id: "dependency-plan-a".to_string(),
+                issue_id: "issue-b".to_string(),
+                evidence_id: "evidence-b".to_string(),
+                api: "GET /api".to_string(),
+                rule_name: "snapshot-get".to_string(),
+                source_evidence: "Cache.java:42".to_string(),
             }],
             recorder_config_revision: "fnv1a64:config".to_string(),
             recording_run_id: None,
@@ -475,6 +497,10 @@ mod tests {
         assert_eq!(
             value.pointer("/action/details/plan_ids/0"),
             Some(&serde_json::json!("capture-plan-a"))
+        );
+        assert_eq!(
+            value.pointer("/action/details/plan_ids/1"),
+            Some(&serde_json::json!("dependency-plan-a"))
         );
         assert_eq!(
             value.pointer("/action/details/resource_identities/0"),

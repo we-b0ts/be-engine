@@ -17,6 +17,10 @@ pub struct RecordingConfig {
     pub jsonl_buffer_capacity_bytes: usize,
     pub jsonl_flush_interval_ms: u64,
     pub writer_queue_capacity: usize,
+    pub cache_snapshot_max_entries: usize,
+    pub cache_snapshot_max_bytes: usize,
+    pub cache_snapshot_max_waiters_per_entry: usize,
+    pub cache_snapshot_fill_timeout_ms: u64,
     pub post_ready_settle_ms: u64,
     #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
@@ -121,6 +125,18 @@ impl RecordingConfig {
         if self.writer_queue_capacity == 0 {
             bail!("recording.writer_queue_capacity must be greater than zero");
         }
+        if self.cache_snapshot_max_entries == 0 {
+            bail!("recording.cache_snapshot_max_entries must be greater than zero");
+        }
+        if self.cache_snapshot_max_bytes == 0 {
+            bail!("recording.cache_snapshot_max_bytes must be greater than zero");
+        }
+        if self.cache_snapshot_max_waiters_per_entry == 0 {
+            bail!("recording.cache_snapshot_max_waiters_per_entry must be greater than zero");
+        }
+        if self.cache_snapshot_fill_timeout_ms == 0 {
+            bail!("recording.cache_snapshot_fill_timeout_ms must be greater than zero");
+        }
         if self.case_dependency_drain_timeout_ms == 0 {
             bail!("recording.case_dependency_drain_timeout_ms must be greater than zero");
         }
@@ -213,6 +229,10 @@ impl Default for RecordingConfig {
             jsonl_buffer_capacity_bytes: 256 * 1024,
             jsonl_flush_interval_ms: 1_000,
             writer_queue_capacity: 65_536,
+            cache_snapshot_max_entries: 16_384,
+            cache_snapshot_max_bytes: 64 * 1024 * 1024,
+            cache_snapshot_max_waiters_per_entry: 1_024,
+            cache_snapshot_fill_timeout_ms: 30_000,
             post_ready_settle_ms: 10_000,
             case_dependency_post_response_window_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,

@@ -2,6 +2,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
+mod cache_snapshot;
 mod compare;
 mod config;
 mod diagnose;

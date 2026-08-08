@@ -24,9 +24,9 @@ New recordings have two dependency scopes:
 <run>/global-dependencies.jsonl
 ```
 
-Global contains startup and rule-matched dependencies. Exchanges are consumed
-once; repeated scheduler cycles need repeated records. Replay prefers Case,
-then Global.
+Global contains startup and rule-matched dependencies. Replay prefers Case,
+then Global. Ordinary exchanges are consumed once. A Redis exchange marked as
+the seed of a run-local cache snapshot is reusable for repeated matching reads.
 
 Recorder adds:
 
@@ -66,14 +66,15 @@ remains incomplete. Replay does not wait for target-local initialization;
 repair target startup or readiness when that causes a response difference.
 
 Global exchanges explicitly emitted by any background rule use
-connection-independent replay. They remain
-single-use and require the exact recorded target, command, and arguments, but
-earlier unrelated commands on the source connection cannot block them. A
-configured `HGET`/`HMGET` rule also overlays matching replay-safe
-`bootstrap_window` Global exchanges from the immutable recording, so those
-reads become connection-independent without rewriting the artifact. Other
-case, bootstrap-only, and legacy exchanges retain connection-order semantics.
-This replay treatment does not replace destination behavior.
+connection-independent replay. Ordinary background exchanges remain
+single-use. For a configured Redis rule, Recorder instead holds the first
+successful response for each logical rule/session/command/argument tuple for
+the rest of that run. Only that first exchange is semantic Global evidence;
+later snapshot hits remain diagnostic traffic. Replay reuses the marked seed
+for every identical target read. The snapshot is bounded and does not cache
+Redis error responses. Other case, bootstrap-only, legacy, HTTP, Motan, and
+Memcached exchanges retain their existing consumption and connection-order
+semantics. This replay treatment does not replace destination behavior.
 
 Supply the logical resource to `plan|apply`. The tool requires one compatible
 `mc` descriptor, persists its stable identity without the dynamic port, and
@@ -202,10 +203,9 @@ Use `redis hmget` with repeated `--field` arguments in exact wire order for
 HMGET. Planning reads replay-safe `bootstrap_window` exchanges from the
 immutable Global dependency file, requires evidence for every exact key and
 numeric pattern, and rejects same-command unsafe or unsupported traffic.
-Unmatched target requests do not authorize the rule and remain dirty unless
-the selector makes their recorded bootstrap exchanges independently
-deliverable. Apply the returned plan, then rerun the same immutable cases; no
-new source recording is required for this replay overlay.
+Unmatched target requests do not authorize the rule and remain dirty. Apply the
+returned plan, then create a fresh standard recording so its first-value seed
+is explicit and reusable.
 
 For a process-owned Memcached `get` rule, preview before applying:
 
@@ -234,6 +234,7 @@ The observation window defaults to 60000 ms and starts when the source HTTP
 ready probe succeeds. Recorder logs incomplete progress as a warning and
 continues case admission when the window elapses.
 
-After ordinary recorder ownership-rule changes, create a new standard
-recording. The bootstrap HGET/HMGET replay overlay is the narrow exception: it
-uses the existing immutable Global artifact and never edits or reclassifies it.
+After recorder ownership-rule changes, create a new standard recording. The
+rewrite coordinator consolidates Redis rule changes with other pending
+recording-contract changes and schedules one fresh recording after runnable API
+work drains.

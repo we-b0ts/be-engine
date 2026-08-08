@@ -4,6 +4,7 @@ use std::os::fd::AsRawFd;
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
+use chrono::Utc;
 use tokio::io;
 use tokio::net::{TcpListener, TcpSocket, TcpStream};
 use tokio::time::{Duration, sleep, timeout};
@@ -114,19 +115,25 @@ async fn handle_connection(
     let IpAddr::V4(fake_ip) = fake_addr.ip() else {
         return Err(anyhow!("TCP gateway only supports IPv4 fake IPs"));
     };
-    let Some(entry) = state.dns_registry().get_by_fake_ip(fake_ip).await else {
-        let error = format!(
-            "no DNS mock mapping for fake IP {fake_ip}; likely stale client DNS cache, recorder restart without persisted mapping, or traffic not produced by this DNS mock"
-        );
-        record_proxy_error(
-            &state,
-            "tcp_gateway",
-            client_addr.clone(),
-            Some(fake_addr.to_string()),
-            error.clone(),
-        )
-        .await;
-        return Err(anyhow!(error));
+    let entry = match state.dns_registry().get_by_fake_ip(fake_ip).await {
+        Some(entry) => entry,
+        None if state.has_redis_snapshot_port(fake_addr.port()) => {
+            direct_cache_snapshot_entry(fake_ip)
+        }
+        None => {
+            let error = format!(
+                "no DNS mock mapping for fake IP {fake_ip}; likely stale client DNS cache, recorder restart without persisted mapping, or traffic not produced by this DNS mock"
+            );
+            record_proxy_error(
+                &state,
+                "tcp_gateway",
+                client_addr.clone(),
+                Some(fake_addr.to_string()),
+                error.clone(),
+            )
+            .await;
+            return Err(anyhow!(error));
+        }
     };
 
     if state.dns_bypass_matcher().matches(&entry.domain) {
@@ -206,6 +213,20 @@ async fn handle_connection(
         },
     )
     .await
+}
+
+fn direct_cache_snapshot_entry(ip: Ipv4Addr) -> FakeDnsEntry {
+    let now = Utc::now();
+    FakeDnsEntry {
+        domain: ip.to_string(),
+        fake_ip: ip,
+        real_ips: vec![ip],
+        response_alias: false,
+        upstream_authority: None,
+        upstream_protocol: None,
+        first_seen: now,
+        last_seen: now,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -8,9 +8,38 @@ use traffic_e2e::{DEFAULT_FAKE_CIDR, TRAFFIC_PROCESS_UID};
 
 use super::output::{stderr_line, stdout_line};
 
+mod cache_ports;
 mod dns;
 mod egress;
 mod fake_ip;
+
+pub(super) struct CachePortGuard {
+    active: bool,
+}
+
+impl CachePortGuard {
+    pub(super) fn enable(ports: &[u16], tcp_port: u16) -> Result<Self> {
+        require_root()?;
+        cache_ports::up(ports, tcp_port)?;
+        Ok(Self { active: true })
+    }
+
+    pub(super) fn disable(&mut self) {
+        if std::mem::take(&mut self.active)
+            && let Err(error) = cache_ports::down()
+        {
+            stderr_line(format_args!(
+                "failed to remove cache snapshot interception: {error:#}"
+            ));
+        }
+    }
+}
+
+impl Drop for CachePortGuard {
+    fn drop(&mut self) {
+        self.disable();
+    }
+}
 
 pub(super) const FIXED_USER: &str = "trp-record";
 

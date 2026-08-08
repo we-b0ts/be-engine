@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
@@ -61,6 +61,10 @@ pub(super) struct RecordedExchange {
     duration_ms: u64,
     replay_safe: bool,
     #[serde(default)]
+    cache_snapshot_rule: Option<String>,
+    #[serde(default)]
+    cache_snapshot_hit: bool,
+    #[serde(default)]
     global_dependency_reason: Option<String>,
 }
 
@@ -82,6 +86,8 @@ struct ReplayExchange {
     status: ReplayExchangeStatus,
     timing: ReplayExchangeTiming,
     connection_independent: bool,
+    reusable_snapshot: bool,
+    matched_once: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +175,33 @@ impl RedisReplayState {
             .collect::<Result<Vec<_>>>()?;
         let response = record.response.decode()?;
         let timing = ReplayExchangeTiming::from_recorded(record.duration_ms, record.outcome);
+        ensure!(
+            !record.cache_snapshot_hit,
+            "Redis cache snapshot hits are diagnostic events and must not be replay dependencies"
+        );
+        let reusable_snapshot = match record.cache_snapshot_rule.as_deref() {
+            Some(rule_name) => {
+                ensure!(
+                    source == ReplaySource::Global
+                        && record.global_dependency_reason.as_deref() == Some("background_rule"),
+                    "Redis cache snapshot seed must be a background Global dependency"
+                );
+                ensure!(
+                    record.outcome == DependencyExchangeOutcome::Response
+                        && record.response_kind != "error",
+                    "Redis cache snapshot seed must contain a successful response"
+                );
+                ensure!(
+                    background_dependencies.iter().any(|rule| {
+                        rule.name() == rule_name
+                            && redis_rule_matches(rule, record.target_port, &record.command, &args)
+                    }),
+                    "Redis cache snapshot seed rule is absent or no longer matches the recording"
+                );
+                true
+            }
+            None => false,
+        };
         let connection_independent = is_connection_independent_background(
             source,
             record.global_dependency_reason.as_deref(),
@@ -186,6 +219,8 @@ impl RedisReplayState {
             status: ReplayExchangeStatus::Available,
             timing,
             connection_independent,
+            reusable_snapshot,
+            matched_once: false,
         });
         Ok(())
     }
@@ -203,7 +238,8 @@ impl RedisReplayState {
         args: &[Vec<u8>],
     ) -> std::result::Result<MatchedRedisExchange, CommandMatchDiagnostic> {
         let matched = preferred_match(&self.exchanges, active_case_id, |exchange| {
-            exchange.status.is_available()
+            (exchange.status.is_available()
+                || (exchange.reusable_snapshot && exchange.status != ReplayExchangeStatus::Failed))
                 && (exchange.connection_independent
                     || bound_connection.is_none_or(|id| exchange.record.connection_id == id))
                 && target_matches(
@@ -243,7 +279,14 @@ impl RedisReplayState {
             }
         };
         let exchange = &mut self.exchanges[index];
-        exchange.status = if exchange.timing.outcome().is_client_terminated() {
+        let timing = if exchange.reusable_snapshot && exchange.matched_once {
+            ReplayExchangeTiming::from_recorded(0, DependencyExchangeOutcome::Response)
+        } else {
+            exchange.timing
+        };
+        exchange.status = if exchange.reusable_snapshot {
+            exchange.status
+        } else if exchange.timing.outcome().is_client_terminated() {
             ReplayExchangeStatus::AwaitingClientTermination
         } else {
             ReplayExchangeStatus::Responding
@@ -252,7 +295,7 @@ impl RedisReplayState {
             index,
             connection_id: exchange.record.connection_id,
             response: exchange.response.clone(),
-            timing: exchange.timing,
+            timing,
             connection_independent: exchange.connection_independent,
             report: CommandMatchedReport {
                 case_id: exchange.case_id.clone(),
@@ -323,7 +366,10 @@ impl RedisReplayState {
 
     fn complete_exchange(&mut self, matched: &MatchedRedisExchange) {
         if let Some(exchange) = self.exchanges.get_mut(matched.index) {
-            exchange.status = ReplayExchangeStatus::Consumed;
+            exchange.matched_once = true;
+            if !exchange.reusable_snapshot {
+                exchange.status = ReplayExchangeStatus::Consumed;
+            }
         }
         push_success_detail(
             &mut self.events.matched_count,
@@ -660,10 +706,11 @@ impl CommandExchangeScope for ReplayExchange {
 
     fn is_available(&self) -> bool {
         self.status.is_available()
+            || (self.reusable_snapshot && self.status != ReplayExchangeStatus::Failed)
     }
 
     fn is_consumed(&self) -> bool {
-        self.status.is_consumed()
+        self.status.is_consumed() || (self.reusable_snapshot && self.matched_once)
     }
 
     fn preserves_connection_order(&self) -> bool {
@@ -714,7 +761,14 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
     exchanges
         .iter()
         .enumerate()
-        .filter(|(_, exchange)| exchange.source == source && !exchange.status.is_consumed())
+        .filter(|(_, exchange)| {
+            exchange.source == source
+                && if exchange.reusable_snapshot {
+                    !exchange.matched_once
+                } else {
+                    !exchange.status.is_consumed()
+                }
+        })
         .map(|(index, exchange)| CommandUnusedReport {
             index,
             case_id: exchange.case_id.clone(),
@@ -728,4 +782,80 @@ fn unused(exchanges: &[ReplayExchange], source: ReplaySource) -> Vec<CommandUnus
             command: exchange.record.command.clone(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::BackgroundDependencyRuleConfig;
+
+    #[test]
+    fn cache_snapshot_seed_can_satisfy_repeated_logical_reads() {
+        let mut state = RedisReplayState::default();
+        let mut targets = BTreeMap::new();
+        let rule = BackgroundDependencyRuleConfig::Redis {
+            name: "snapshot-get".to_string(),
+            ports: vec![6379],
+            command: "GET".to_string(),
+            keys: vec!["key".to_string()],
+            key_patterns: Vec::new(),
+            key_prefix: String::new(),
+            key_suffix: String::new(),
+            initial_load_timeout_ms: Some(1_000),
+            fields: Vec::new(),
+            source_revision: "abcdef1".to_string(),
+            source_evidence: "Cache.java:42".to_string(),
+        };
+        state
+            .register_exchange(
+                RecordedExchange {
+                    connection_id: Uuid::new_v4(),
+                    sequence: 1,
+                    target_host: "redis.test".to_string(),
+                    target_port: 6379,
+                    resp_version: 2,
+                    database: 0,
+                    username: None,
+                    command: "GET".to_string(),
+                    args: vec![capture("key")],
+                    response_kind: "bulk_string".to_string(),
+                    response: capture("$2\r\nv1\r\n"),
+                    outcome: DependencyExchangeOutcome::Response,
+                    duration_ms: 1,
+                    replay_safe: true,
+                    cache_snapshot_rule: Some("snapshot-get".to_string()),
+                    cache_snapshot_hit: false,
+                    global_dependency_reason: Some("background_rule".to_string()),
+                },
+                ReplaySource::Global,
+                None,
+                &mut targets,
+                std::slice::from_ref(&rule),
+            )
+            .unwrap();
+
+        let target = TargetKey {
+            host: "redis.test".to_string(),
+            port: 6379,
+        };
+        for _ in 0..2 {
+            let matched = state
+                .match_redis(None, &target, None, 2, 0, None, "GET", &[b"key".to_vec()])
+                .unwrap();
+            assert_eq!(matched.response, b"$2\r\nv1\r\n");
+            state.complete_exchange(&matched);
+        }
+
+        let report = state.snapshot();
+        assert_eq!(report.matched_count, 2);
+        assert!(report.unused_global.is_empty());
+    }
+
+    fn capture(data: &str) -> RecordedCapture {
+        RecordedCapture {
+            encoding: "utf8".to_string(),
+            data: data.to_string(),
+            truncated: false,
+        }
+    }
 }
