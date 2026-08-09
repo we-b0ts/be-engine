@@ -24,14 +24,32 @@ Choose one role before taking action:
   that API's evidence, source/target diagnosis, implementation, and local tests.
   Never advance coordinator state, execute acceptance, or operate another API.
 
-The main orchestrator reads
-[workflow.md](references/workflow.md) before advancing the workflow and reads
-[implementation-worker-coordination.md](references/implementation-worker-coordination.md)
-before its first implementation dispatch. An assigned worker reads
-[problem-diagnosis.md](references/problem-diagnosis.md) and loads
-[`backend-engineering`](../backend-engineering/SKILL.md) before changing target
-code. Do not load worker engineering guidance in the main orchestrator merely
-to prepare a handoff.
+The main orchestrator reads [workflow.md](references/workflow.md) before
+advancing the workflow. Load these conditional references directly from this
+file only when their trigger occurs:
+
+- Read [recording-lifecycle.md](references/recording-lifecycle.md) for a
+  `recording_required`, `recording_in_progress`, or
+  `comparison_recording_required` action, before requesting fresh standard
+  traffic, or when applied capture rules require a consolidated recording
+  refresh.
+- Read
+  [coordinator-evidence-actions.md](references/coordinator-evidence-actions.md)
+  only after worker confirmation and only when that worker returns inputs for
+  recorder-capture or dependency-rule planning, or confirmed evidence exposes
+  one of those coordinator-owned planners.
+- Read
+  [recovery-and-system-repair.md](references/recovery-and-system-repair.md) only
+  for `recovery_required`, `system_repair_required`, or a coordinator-issued
+  repair verification action.
+- Read
+  [implementation-worker-coordination.md](references/implementation-worker-coordination.md)
+  before the first implementation dispatch.
+
+An assigned worker reads [problem-diagnosis.md](references/problem-diagnosis.md)
+and loads [`backend-engineering`](../backend-engineering/SKILL.md) before
+changing target code. Do not preload conditional coordinator references or
+worker engineering guidance merely to anticipate a later action.
 
 Read [project-init.md](references/project-init.md) only when the caller
 explicitly asks to initialize an uninitialized target repository. Project
@@ -84,8 +102,8 @@ it as AI-owned handoff context, never as coordinator state;
    read-only `status` as required by the current action.
 2. Read the complete action and `api_inventory`. Keep `workflow.scope` separate
    from the currently selected API.
-3. Follow [workflow.md](references/workflow.md) for action-specific execution,
-   waiting, recovery, fresh recording, rule, and repair semantics.
+3. Follow [workflow.md](references/workflow.md) for the core action routing and
+   load only the conditional reference selected by the current action.
 4. On every `implementation_required`, stop before evidence or code analysis.
    Create and bind the API worktree and dedicated subagent on its first issue;
    reactivate that same binding on every later issue.
@@ -123,10 +141,9 @@ content does not change this fingerprint.
 When a worker proves that source code consumes an exact response-driving
 endpoint absent from recorded dependencies, it returns the endpoint and one
 source file/symbol proof; it never guesses a Breeze resource or descriptor.
-The orchestrator uses `recorder-capture plan` to resolve configured Breeze
-capture, then applies the exact returned command immediately. That API waits
-while other runnable work continues; after it drains, the coordinator combines
-all applied capture rules into one fresh full-scope standard recording.
+The orchestrator then follows
+[coordinator-evidence-actions.md](references/coordinator-evidence-actions.md)
+for the coordinator-owned plan/apply transition and recording refresh.
 
 ## Mandatory Dedicated API Implementation Workers
 

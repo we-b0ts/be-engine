@@ -12,6 +12,9 @@ use super::model::{RewriteAction, RewriteActionEnvelope, RewritePhase, RewriteSt
 use super::store::RewriteStore;
 use super::{action, fingerprint, inventory, traffic_operation, worker};
 
+#[path = "target_replay_isolation.rs"]
+mod replay_isolation;
+
 #[derive(Debug, Clone)]
 pub struct RewriteTargetQualityOptions {
     pub target_root: std::path::PathBuf,
@@ -49,10 +52,6 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
         scoped.target_fingerprint.as_deref() != Some(target_fingerprint.as_str()),
         "target repository has not changed since the latest focused attempt"
     );
-    ensure!(
-        !project.target_quality_gates.is_empty(),
-        "target repository has no configured or inferred quality gates"
-    );
     let expected = id(&scoped, &target_fingerprint, &project.target_quality_gates)?;
     ensure!(
         options.gate_id == expected,
@@ -60,6 +59,12 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
         scoped.api
     );
 
+    let replay_isolation = replay_isolation::inspect(&target_root, &project.pr_base)?;
+    ensure!(
+        replay_isolation.passed(),
+        "target replay isolation gate failed:\n{}",
+        serde_json::to_string_pretty(&replay_isolation)?
+    );
     execute(&target_root, &project.target_quality_gates)?;
     let verified_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
     ensure!(
@@ -84,8 +89,7 @@ pub(super) fn required_action(
     target_fingerprint: &str,
     gates: &[TargetQualityGateConfig],
 ) -> Result<Option<RewriteAction>> {
-    if gates.is_empty()
-        || state.target_fingerprint.as_deref() == Some(target_fingerprint)
+    if state.target_fingerprint.as_deref() == Some(target_fingerprint)
         || state.target_quality_fingerprint.as_deref() == Some(target_fingerprint)
     {
         return Ok(None);
@@ -94,11 +98,13 @@ pub(super) fn required_action(
     Ok(Some(RewriteAction::TargetQualityRequired {
         summary: format!(
             "run {} target repository quality gate(s) in the integrated coordinator worktree before focused replay",
-            gates.len()
+            gates.len() + 1
         ),
         gate_id: gate_id.clone(),
         target_fingerprint: target_fingerprint.to_string(),
-        gates: gates.iter().map(|gate| gate.name.clone()).collect(),
+        gates: std::iter::once(replay_isolation::GATE_NAME.to_string())
+            .chain(gates.iter().map(|gate| gate.name.clone()))
+            .collect(),
         command: action::command(
             target_root,
             vec![
@@ -132,7 +138,7 @@ pub(super) fn status_action(
     } else {
         Vec::new()
     };
-    if !gates.is_empty() && !worker::current_is_confirmed(state) {
+    if !worker::current_is_confirmed(state) {
         return Ok(None);
     }
     if let Some(action) = required_action(target_root, state, &target_fingerprint, &gates)? {
@@ -152,10 +158,11 @@ fn id(
 ) -> Result<String> {
     let serialized = serde_json::to_string(gates)?;
     let digest = fingerprint::id(&[
-        "rewrite-target-quality-v1",
+        "rewrite-target-quality-v2",
         &state.workflow_id,
         &state.api,
         target_fingerprint,
+        replay_isolation::GATE_VERSION,
         &serialized,
     ]);
     Ok(format!("target-quality-{}", digest.replace(':', "-")))
@@ -207,6 +214,22 @@ mod tests {
         }
     }
 
+    fn target_issue() -> RewriteIssue {
+        RewriteIssue {
+            id: "issue-target".to_string(),
+            kind: RewriteIssueKind::Response,
+            owner: RewriteIssueOwner::TargetCode,
+            summary: "target response differs".to_string(),
+            pointer_pattern: Some("/result".to_string()),
+            representative: None,
+            response_diagnosis: None,
+            possible_causes: vec!["target behavior differs".to_string()],
+            observed_target_fingerprint: "fnv1a64:observed".to_string(),
+            attempt: 1,
+            comparison_observation: None,
+        }
+    }
+
     #[test]
     fn required_action_binds_the_integrated_worktree_and_gate_identity() {
         let mut state = crate::rewrite::test_state();
@@ -239,6 +262,27 @@ mod tests {
         assert_eq!(
             value.pointer("/commands/execute/argv/7"),
             Some(&serde_json::json!("GET /api"))
+        );
+        assert_eq!(
+            value.pointer("/details/gates"),
+            Some(&serde_json::json!(["replay-isolation", "check"]))
+        );
+    }
+
+    #[test]
+    fn replay_isolation_remains_required_without_configured_gates() {
+        let mut state = crate::rewrite::test_state();
+        state.phase = RewritePhase::ImplementationRequired;
+        state.target_fingerprint = Some("fnv1a64:old".to_string());
+
+        let action = required_action(Path::new("/target"), &state, "fnv1a64:new", &[])
+            .unwrap()
+            .unwrap();
+        let value = serde_json::to_value(action).unwrap();
+
+        assert_eq!(
+            value.pointer("/details/gates"),
+            Some(&serde_json::json!(["replay-isolation"]))
         );
     }
 
@@ -284,23 +328,65 @@ mod tests {
     }
 
     #[test]
+    fn run_rejects_replay_details_and_does_not_persist_the_fingerprint() {
+        let target = configured_target();
+        let mut state = crate::rewrite::test_state();
+        state.phase = RewritePhase::ImplementationRequired;
+        state.active_issue = Some(target_issue());
+        state.target_fingerprint =
+            Some(fingerprint::repository_fingerprint(target.path()).unwrap());
+        worker::confirm_current_for_test(&mut state);
+        RewriteStore::new(target.path())
+            .unwrap()
+            .save(&state)
+            .unwrap();
+        fs::write(
+            target.path().join("src/lib.rs"),
+            "pub const CACHE: &str = \"secret-cache.trp.test:15138\";\n",
+        )
+        .unwrap();
+
+        let api = "GET /api".parse().unwrap();
+        let status = super::super::status_rewrite_for_api(
+            super::super::RewriteContext {
+                target_root: target.path().to_path_buf(),
+            },
+            Some(&api),
+        )
+        .unwrap();
+        let status = serde_json::to_value(status).unwrap();
+        let gate_id = status
+            .pointer("/action/details/gate_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_string();
+
+        let error = run(RewriteTargetQualityOptions {
+            target_root: target.path().to_path_buf(),
+            gate_id,
+            api,
+        })
+        .unwrap_err();
+
+        let message = error.to_string();
+        assert!(message.contains("target replay isolation gate failed"));
+        assert!(message.contains("replay_hostname"));
+        assert!(message.contains("src/lib.rs"));
+        assert!(!message.contains("secret-cache"));
+        let saved = RewriteStore::new(target.path())
+            .unwrap()
+            .load()
+            .unwrap()
+            .unwrap();
+        assert!(saved.target_quality_fingerprint.is_none());
+    }
+
+    #[test]
     fn run_persists_repository_gate_and_advances_the_selected_api() {
         let target = configured_target();
         let mut state = crate::rewrite::test_state();
         state.phase = RewritePhase::ImplementationRequired;
-        state.active_issue = Some(RewriteIssue {
-            id: "issue-target".to_string(),
-            kind: RewriteIssueKind::Response,
-            owner: RewriteIssueOwner::TargetCode,
-            summary: "target response differs".to_string(),
-            pointer_pattern: Some("/result".to_string()),
-            representative: None,
-            response_diagnosis: None,
-            possible_causes: vec!["target behavior differs".to_string()],
-            observed_target_fingerprint: "fnv1a64:observed".to_string(),
-            attempt: 1,
-            comparison_observation: None,
-        });
+        state.active_issue = Some(target_issue());
         state.target_fingerprint =
             Some(fingerprint::repository_fingerprint(target.path()).unwrap());
         state.recording_apis = vec!["GET /api".to_string(), "POST /other".to_string()];

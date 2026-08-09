@@ -11,11 +11,14 @@ required_environment=(
     TRAFFIC_E2E_SOURCE_CONTAINER
     TRAFFIC_E2E_TARGET_BOOT_DIR
     TRAFFIC_E2E_TARGET_ORIGIN
+    TRAFFIC_E2E_TARGET_HOST
     TRAFFIC_E2E_TARGET_PORT
     TRAFFIC_E2E_TARGET_READY_PATH
     TRAFFIC_E2E_TARGET_READY_STATUS
     TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS
     TRAFFIC_E2E_SOURCE_ORIGIN
+    TRAFFIC_E2E_SOURCE_HOST
+    TRAFFIC_E2E_SOURCE_PORT
     TRAFFIC_E2E_RECORDING_ORIGIN
     TRAFFIC_E2E_SOURCE_READY_PATH
     TRAFFIC_E2E_SOURCE_READY_STATUS
@@ -149,6 +152,30 @@ docker info >/dev/null 2>&1 || {
     printf 'error: Docker daemon is unavailable\n' >&2
     exit 1
 }
+source_inspect=$(docker container inspect "$TRAFFIC_E2E_SOURCE_CONTAINER" 2>/dev/null) || {
+    printf 'error: configured source container %s must be retained in a stopped state\n' \
+        "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
+    exit 1
+}
+[[ "$(jq 'length' <<<"$source_inspect")" == 1 ]] || {
+    printf 'error: source container inspect returned an invalid result\n' >&2
+    exit 1
+}
+[[ "$(jq -r '.[0].State.Running' <<<"$source_inspect")" == false ]] || {
+    printf 'error: configured source container %s must be stopped; the managed source adaptor owns its recording ports\n' \
+        "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
+    exit 1
+}
+source_image_id=$(jq -r '.[0].Image' <<<"$source_inspect")
+[[ "$source_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    printf 'error: source container has an invalid image ID\n' >&2
+    exit 1
+}
+[[ "$(docker image inspect --format '{{.Id}}' "$source_image_id" 2>/dev/null || true)" == "$source_image_id" ]] || {
+    printf 'error: configured source container image %s is unavailable locally\n' \
+        "$source_image_id" >&2
+    exit 1
+}
 breeze_inspect=""
 breeze_enabled=false
 if [[ -n "${TRAFFIC_E2E_BREEZE_CONTAINER-}" ]]; then
@@ -179,9 +206,7 @@ source_name="${prefix}-source"
 target_name="${prefix}-target"
 adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
-adapter_runtime_name="traffic-e2e-${recording_image_project}-recording-runtime-cache"
-adapter_runtime_inspect=""
-adapter_runtime_staging_name=""
+adapter_contract_revision=""
 source_uses_java=false
 adapter_dockerfile="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording"
 
@@ -208,6 +233,8 @@ target_started=false
 recorder_finalized=false
 comparison_pid=""
 input_pid=""
+runtime_uid=$(id -u)
+runtime_gid=$(id -g)
 
 container_exists() {
     docker container inspect "$1" >/dev/null 2>&1
@@ -232,6 +259,7 @@ start_target() {
             --mount type=bind,source=/data1/breeze/snapshot,target=/data1/breeze/snapshot,readonly
         )
     fi
+    require_port_available "$TRAFFIC_E2E_TARGET_HOST" "$TRAFFIC_E2E_TARGET_PORT" target
     docker run --detach --name "$target_name" --platform linux/amd64 \
         --network "container:${anchor_name}" --user 998:998 \
         --label com.weibo.traffic-e2e.managed=true \
@@ -304,6 +332,16 @@ remove_private_runtime_dir() {
     rm -rf -- "$path"
 }
 
+normalize_cache_snapshot_ownership() {
+    [[ "$operation" == record-comparison && "$recorder_started" == true ]] || return 0
+    [[ -d "$control_dir/cache-snapshot" ]] || return 0
+    docker run --rm --platform linux/amd64 --network none --user 0:0 \
+        --entrypoint /bin/sh --volume "$control_dir:/workspace/control" \
+        "$recorder_image" -ec \
+        'chown -hR "$1:$2" -- /workspace/control/cache-snapshot' \
+        sh "$runtime_uid" "$runtime_gid"
+}
+
 cleanup() {
     local status=$?
     trap - EXIT INT TERM
@@ -337,9 +375,7 @@ cleanup() {
     "$recorder_started" && stop_container "$recorder_name"
     "$target_started" && stop_container "$target_name"
     "$anchor_started" && stop_container "$anchor_name"
-    if [[ -n "$adapter_runtime_staging_name" ]]; then
-        stop_container "$adapter_runtime_staging_name"
-    fi
+    normalize_cache_snapshot_ownership || status=1
     remove_private_runtime_dir "$control_dir" "$local_dir/control" || status=1
     exit "$status"
 }
@@ -356,8 +392,7 @@ wait_port() {
         if nc -z -w 1 127.0.0.1 "$port" >/dev/null 2>&1; then
             return 0
         fi
-        if [[ -n "$owner" ]] && container_exists "$owner" &&
-            [[ "$(docker inspect -f '{{.State.Running}}' "$owner")" != true ]]; then
+        if [[ -n "$owner" ]] && ! container_is_running "$owner"; then
             printf 'error: %s exited before port %s became ready\n' "$label" "$port" >&2
             return 1
         fi
@@ -365,6 +400,45 @@ wait_port() {
     done
     printf 'error: timed out waiting for %s on port %s\n' "$label" "$port" >&2
     return 1
+}
+
+container_is_running() {
+    [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == true ]]
+}
+
+require_container_running() {
+    local name=$1
+    local label=$2
+    container_is_running "$name" || {
+        printf 'error: %s container %s is not running after startup\n' "$label" "$name" >&2
+        return 1
+    }
+}
+
+port_is_open() {
+    nc -z -w 1 "$1" "$2" >/dev/null 2>&1
+}
+
+require_port_available() {
+    local host=$1
+    local port=$2
+    local label=$3
+    ! port_is_open "$host" "$port" || {
+        printf 'error: refusing to start %s: %s:%s is already accepting TCP connections\n' \
+            "$label" "$host" "$port" >&2
+        return 1
+    }
+}
+
+require_port_open() {
+    local host=$1
+    local port=$2
+    local label=$3
+    port_is_open "$host" "$port" || {
+        printf 'error: %s did not open expected TCP endpoint %s:%s after startup\n' \
+            "$label" "$host" "$port" >&2
+        return 1
+    }
 }
 
 wait_http() {
@@ -379,8 +453,7 @@ wait_http() {
     while ((SECONDS < deadline)); do
         status=$(curl -sS -o /dev/null -w '%{http_code}' "${origin}${path}" 2>/dev/null || true)
         [[ "$status" == "$expected" ]] && return 0
-        if [[ -n "$owner" ]] && container_exists "$owner" &&
-            [[ "$(docker inspect -f '{{.State.Running}}' "$owner")" != true ]]; then
+        if [[ -n "$owner" ]] && ! container_is_running "$owner"; then
             printf 'error: %s exited before HTTP readiness\n' "$label" >&2
             return 1
         fi
@@ -457,7 +530,7 @@ load_runtime_spec() {
             translated="/data1/${first}-recording"
             [[ "$remainder" == "$first" ]] || translated+="/${remainder#*/}"
             source=$translated
-            docker run --rm --platform linux/amd64 --network none \
+            docker run --rm --platform linux/amd64 --network none --user 0:0 \
                 --entrypoint /bin/sh --volume /data1:/host-data1 \
                 "$adapter_image_id" \
                 -ec 'mkdir -p "$1"; chown -hR 998:998 -- "$1"; chmod -R u+rwX -- "$1"' \
@@ -484,7 +557,7 @@ load_runtime_spec() {
 }
 
 normalize_breeze_directories() {
-    docker run --rm --platform linux/amd64 --network none --entrypoint /bin/sh \
+    docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh \
         --volume /data1:/host-data1 "$adapter_image_id" -ec '
             mkdir -p /host-data1/breeze/socks /host-data1/breeze/snapshot /host-data1/breeze/logs
             chown -hR 998:998 -- /host-data1/breeze/socks /host-data1/breeze/snapshot /host-data1/breeze/logs
@@ -531,15 +604,18 @@ start_cache_snapshot() {
 
 start_comparison_source() {
     local network=$1
-    load_runtime_spec "$adapter_runtime_inspect" recording recording image
+    load_runtime_spec "$source_inspect" recording recording image
     if "$breeze_enabled"; then
         runtime_args+=(--env MESH_CONNECT_HOST=breeze.recording)
     fi
+    require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
     docker run --detach --name "$source_name" --network "$network" \
         "${runtime_args[@]}" "$adapter_image_id" >/dev/null
     source_started=true
     wait_http "$TRAFFIC_E2E_SOURCE_ORIGIN" "$TRAFFIC_E2E_SOURCE_READY_PATH" \
         "$TRAFFIC_E2E_SOURCE_READY_STATUS" source "$source_name"
+    require_container_running "$source_name" source
+    require_port_open "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
     docker exec "$source_name" /bin/sh -ec '
         test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998
         test "$(awk "/^Gid:/{print \$2}" /proc/1/status)" = 998
@@ -549,120 +625,72 @@ start_comparison_source() {
     }
 }
 
+recording_adapter_contract_revision() {
+    (
+        cd "$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e"
+        find . -mindepth 1 -maxdepth 1 -type f -print0 | sort -z | \
+            while IFS= read -r -d '' path; do
+                printf '%s\0' "$path"
+                sha256sum -- "$path" | cut -c1-64
+                printf '\0'
+            done
+    ) | sha256sum | cut -c1-64
+}
+
 build_recording_adapter() {
-    local source_image source_image_id resolved_source_image_id
-    local adapter_iid_file
-    local source_inspect
-    source_inspect=$(docker container inspect "$TRAFFIC_E2E_SOURCE_CONTAINER" 2>/dev/null) || {
-        printf 'error: recording source adaptor build/refresh requires source container %s\n' \
-            "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
-        return 1
-    }
-    [[ "$(jq 'length' <<<"$source_inspect")" == 1 ]] || {
-        printf 'error: source container inspect returned an invalid result\n' >&2
-        return 1
-    }
-    source_image=$(jq -r '.[0].Config.Image' <<<"$source_inspect")
-    source_image_id=$(jq -r '.[0].Image' <<<"$source_inspect")
-    [[ "$source_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-        printf 'error: source container has an invalid image ID\n' >&2
-        return 1
-    }
-    resolved_source_image_id=$(docker image inspect --format '{{.Id}}' "$source_image")
-    [[ "$resolved_source_image_id" == "$source_image_id" ]] || {
-        printf 'error: source image reference no longer resolves to the inspected container image\n' >&2
-        return 1
-    }
+    local adapter_iid_file build_status source_image_alias
     [[ -f "$adapter_dockerfile" && ! -L "$adapter_dockerfile" ]] || {
         printf 'error: recording source adaptor Dockerfile is missing or not a regular file: %s\n' \
             "$adapter_dockerfile" >&2
         return 1
     }
     adapter_iid_file="$control_dir/adapter-image-id"
+    source_image_alias="traffic-e2e/${recording_image_project}-recording-source:${source_image_id#sha256:}"
     rm -f "$adapter_iid_file"
+    docker image tag "$source_image_id" "$source_image_alias"
     (
         cd "$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e"
         find . -mindepth 1 -maxdepth 1 -type f -print0 | \
             tar --create --file - --null --files-from -
     ) | docker build --platform linux/amd64 --network none \
         --iidfile "$adapter_iid_file" \
-        --build-arg "SOURCE_IMAGE=${source_image_id}" \
-        --tag "$adapter_image" --file Dockerfile.recording -
+        --build-arg "SOURCE_IMAGE=${source_image_alias}" \
+        --label com.weibo.traffic-e2e.managed=true \
+        --label com.weibo.traffic-e2e.role=source-adapter \
+        --label "com.weibo.traffic-e2e.source-image-id=${source_image_id}" \
+        --label "com.weibo.traffic-e2e.adapter-contract-revision=${adapter_contract_revision}" \
+        --tag "$adapter_image" --file Dockerfile.recording - \
+        && build_status=0 || build_status=$?
+    docker image rm "$source_image_alias" >/dev/null 2>&1 || true
+    ((build_status == 0)) || return "$build_status"
     adapter_image_id=$(<"$adapter_iid_file")
     [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
         printf 'error: adapter build did not publish an image ID\n' >&2
         return 1
     }
-    create_recording_adapter_runtime "$source_inspect"
-}
-
-create_recording_adapter_runtime() {
-    local source_inspect=$1
-    local existing_inspect
-    load_runtime_spec "$source_inspect" exact exact image
-    adapter_runtime_staging_name="${adapter_runtime_name}-${token}"
-    container_exists "$adapter_runtime_staging_name" && {
-        printf 'error: recording source adaptor runtime staging container already exists: %s\n' \
-            "$adapter_runtime_staging_name" >&2
-        return 1
-    }
-    docker create --name "$adapter_runtime_staging_name" \
-        "${runtime_args[@]}" \
-        --label com.weibo.traffic-e2e.managed=true \
-        --label com.weibo.traffic-e2e.role=source-adapter-runtime \
-        --label "com.weibo.traffic-e2e.project=${recording_image_project}" \
-        "$adapter_image_id" >/dev/null
-
-    if container_exists "$adapter_runtime_name"; then
-        existing_inspect=$(docker container inspect "$adapter_runtime_name")
-        [[ "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.managed"] // empty' \
-            <<<"$existing_inspect")" == true &&
-            "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.role"] // empty' \
-                <<<"$existing_inspect")" == source-adapter-runtime &&
-            "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.project"] // empty' \
-                <<<"$existing_inspect")" == "$recording_image_project" ]] || {
-            printf 'error: refusing to replace unowned recording adaptor runtime container %s\n' \
-                "$adapter_runtime_name" >&2
-            return 1
-        }
-        stop_container "$adapter_runtime_name"
-    fi
-    docker rename "$adapter_runtime_staging_name" "$adapter_runtime_name"
-    adapter_runtime_staging_name=""
-    adapter_runtime_inspect=$(docker container inspect "$adapter_runtime_name")
-    [[ "$(jq -r '.[0].Image' <<<"$adapter_runtime_inspect")" == "$adapter_image_id" ]] || {
-        printf 'error: recording source adaptor runtime template has the wrong image identity\n' >&2
-        return 1
-    }
 }
 
 load_initialized_recording_adapter() {
-    local runtime_image_id
+    local cached_contract_revision cached_source_image_id
     adapter_image_id=$(docker image inspect --format '{{.Id}}' "$adapter_image" 2>/dev/null || true)
     [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
-    container_exists "$adapter_runtime_name" || return 1
-    adapter_runtime_inspect=$(docker container inspect "$adapter_runtime_name")
-    [[ "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.managed"] // empty' \
-        <<<"$adapter_runtime_inspect")" == true &&
-        "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.role"] // empty' \
-            <<<"$adapter_runtime_inspect")" == source-adapter-runtime &&
-        "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.project"] // empty' \
-            <<<"$adapter_runtime_inspect")" == "$recording_image_project" ]] || {
-        printf 'error: recording adaptor runtime container %s is not platform-owned\n' \
-            "$adapter_runtime_name" >&2
-        return 2
-    }
-    [[ "$(jq -r '.[0].State.Running' <<<"$adapter_runtime_inspect")" == false ]] || {
-        printf 'error: recording adaptor runtime template %s must remain stopped\n' \
-            "$adapter_runtime_name" >&2
-        return 2
-    }
-    runtime_image_id=$(jq -r '.[0].Image' <<<"$adapter_runtime_inspect")
-    [[ "$runtime_image_id" == "$adapter_image_id" ]] || return 1
+    cached_source_image_id=$(docker image inspect --format \
+        '{{ index .Config.Labels "com.weibo.traffic-e2e.source-image-id" }}' \
+        "$adapter_image" 2>/dev/null || true)
+    cached_contract_revision=$(docker image inspect --format \
+        '{{ index .Config.Labels "com.weibo.traffic-e2e.adapter-contract-revision" }}' \
+        "$adapter_image" 2>/dev/null || true)
+    [[ "$cached_source_image_id" == "$source_image_id" &&
+        "$cached_contract_revision" == "$adapter_contract_revision" ]]
 }
 
 resolve_or_build_recording_adapter() {
     local status
+    adapter_contract_revision=$(recording_adapter_contract_revision)
+    [[ "$adapter_contract_revision" =~ ^[0-9a-f]{64}$ ]] || {
+        printf 'error: recording source adaptor build contract has an invalid revision\n' >&2
+        return 1
+    }
     if load_initialized_recording_adapter; then
         printf 'reusing initialized recording source adaptor %s (%s)\n' \
             "$adapter_image" "$adapter_image_id" >&2
@@ -671,7 +699,7 @@ resolve_or_build_recording_adapter() {
         status=$?
     fi
     ((status == 1)) || return "$status"
-    printf 'recording source adaptor cache is missing or stale; building it from %s\n' \
+    printf 'recording source adaptor cache does not match the source image or build contract; building it from %s\n' \
         "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
     build_recording_adapter
 }
@@ -690,7 +718,7 @@ detect_source_java_runtime() {
 
 start_recording_source() {
     local truststore=$1
-    load_runtime_spec "$adapter_runtime_inspect" recording recording image
+    load_runtime_spec "$source_inspect" recording recording image
     if "$source_uses_java"; then
         runtime_args+=(
             --env 'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/traffic-e2e/source-truststore.jks -Djavax.net.ssl.trustStorePassword=changeit'
@@ -904,6 +932,8 @@ run_comparison_recording() {
     wait_http "$TRAFFIC_E2E_TARGET_ORIGIN" "$TRAFFIC_E2E_TARGET_READY_PATH" \
         "$TRAFFIC_E2E_TARGET_READY_STATUS" target "$target_name" \
         "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
+    require_container_running "$target_name" target
+    require_port_open "$TRAFFIC_E2E_TARGET_HOST" "$TRAFFIC_E2E_TARGET_PORT" target
     local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds")
     "$baseline_recheck" && comparison_command+=(--baseline-recheck)
     local selector

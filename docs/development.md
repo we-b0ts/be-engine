@@ -1198,15 +1198,15 @@ target artifacts prevent downloading the dependency graph again when the
 builder identity and cache IDs are unchanged.
 
 For Breeze-aware standard recording, the managed runtime keeps a target-scoped
-source-adaptor cache image and a stopped, platform-owned runtime template. The
-target repository owns the reviewed `.traffic-e2e/Dockerfile.recording` build
-contract. Only adaptor build/refresh inspects the configured source container;
-it binds the exact source image ID into the adaptor and snapshots the required
-container runtime inputs into the Docker-managed template. Ordinary recording
-and comparison inspect the adaptor artifacts instead, so the original source
-container may be removed after a successful build. A missing image or template,
-or a template whose immutable image ID no longer matches the adaptor image,
-triggers a build/refresh and therefore requires the configured source container.
+source-adaptor cache image. The configured source container is the authoritative
+inspection source: it must remain present and stopped for preflight, recording,
+and comparison, and traffic-e2e only inspects it. The target repository owns the
+reviewed `.traffic-e2e/Dockerfile.recording` build contract. Adaptor build binds
+the source container's exact local image ID through a deterministic temporary
+local alias, and labels the resulting adaptor with that ID. A missing adaptor or
+one labeled for another source image or build-contract revision triggers a
+build/refresh. The manager never starts, stops, removes, or replaces the
+configured source container.
 Optional inputs such as the Breeze-only `.traffic-e2e/MeshConnectUtil.class`
 are owned and validated by the Dockerfile; the generic manager does not inspect
 them. The manager forms a non-recursive build context from regular files at the
@@ -1214,8 +1214,8 @@ top of `.traffic-e2e`, so `.traffic-e2e/local/` is never included.
 The adaptor image's own `USER`, working directory, entrypoint, and command are
 used at runtime; the manager does not regenerate a Dockerfile or infer launch
 from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
-matching adaptor image and stopped runtime template. Comparison recording uses
-the same adaptor artifacts and fixed `998:998` source identity as standard
+matching adaptor image. Comparison recording uses the same adaptor image,
+source-container runtime inputs, and fixed `998:998` source identity as standard
 recording, so cache-only interception observes both source and target traffic.
 Breeze itself always uses the centrally managed pinned image and is not built
 from a target-repository Dockerfile.
@@ -1498,8 +1498,12 @@ path_prefixes = ["/1/config/service"]
 source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
 ```
 
-All three selector dimensions and `source_evidence` are required. The source
-revision remains in the plan report instead of runtime configuration. A
+All three selector dimensions and `source_evidence` are required. HTTP rules
+accept bounded, non-empty authority and path-prefix lists and match their
+explicit cross-product with the configured method. Repository initialization
+installs the system-owned `breeze_vintage` rule for the Weibo Vintage
+configuration and naming endpoints. The source revision remains in the plan
+report instead of runtime configuration. A
 matching exchange is not attributed to an active API case and therefore does
 not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
 `traffic.jsonl` continues to retain the exchange only when
@@ -1542,8 +1546,10 @@ traffic-e2e config recorder apply background-dependencies \
 The action requires at least one matching unused case HTTP exchange and rejects
 a selector that also matches unmatched or unsupported target requests. It
 replans against the current recorder config and replay report immediately
-before its atomic write. One rule owns one exact authority, method, and path
-prefix; use separate rules for distinct request families.
+before its atomic write. Automated planning remains exact to one authority,
+method, and path prefix. When an existing multi-selector rule already covers
+that selector, planning reuses the existing rule instead of adding an
+overlapping rule.
 
 Source-proven process-owned Motan traffic uses one exact RPC identity:
 

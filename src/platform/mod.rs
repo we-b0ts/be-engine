@@ -13,11 +13,11 @@ use uuid::Uuid;
 use crate::e2e_run::resolve_project;
 use crate::recording_api::RecordingApi;
 
+mod listen_preflight;
 mod preflight;
 mod recording_input;
 mod recovery;
 mod replay_preflight;
-mod source_adapter;
 
 pub use preflight::{
     ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
@@ -31,8 +31,6 @@ pub use replay_preflight::{
     ManagedReplayNetworkPreflightResult, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
     ReplayPositiveProbeResult,
 };
-pub(crate) use source_adapter::{source_revision, source_runtime_revision};
-
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
 const BREEZE_NO_FALLBACK: &str = include_str!("assets/brz-no-fallback.sh");
 const HTTPS_PROBE: &[u8] = include_bytes!("assets/HttpsProbe.class");
@@ -207,6 +205,18 @@ async fn run_managed_runtime(
         .run_id
         .unwrap_or_else(|| Utc::now().format("%Y%m%d%H%M%S").to_string());
     let manifest = runtime_operation.manifest(&target_root, &run_id);
+    let recorder_config = &config.recorder_config;
+    ensure!(
+        recorder_config.is_file(),
+        "recorder config does not exist: {}",
+        recorder_config.display()
+    );
+    let recorder = crate::config::AppConfig::load_comparison_recording(recorder_config)?;
+    ensure!(
+        recorder.http_gateway.ready.enabled,
+        "managed recording requires an enabled http_gateway.ready probe"
+    );
+    listen_preflight::require_available(recorder.http_gateway.listen).await?;
     let target_image = if runtime_operation
         == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
     {
@@ -223,17 +233,6 @@ async fn run_managed_runtime(
     } else {
         None
     };
-    let recorder_config = &config.recorder_config;
-    ensure!(
-        recorder_config.is_file(),
-        "recorder config does not exist: {}",
-        recorder_config.display()
-    );
-    let recorder = crate::config::AppConfig::load_comparison_recording(recorder_config)?;
-    ensure!(
-        recorder.http_gateway.ready.enabled,
-        "managed recording requires an enabled http_gateway.ready probe"
-    );
     let comparison = recorder
         .comparison_recording
         .as_ref()
@@ -241,6 +240,14 @@ async fn run_managed_runtime(
     let source_origin = comparison
         .baseline_upstream(&recorder.http_gateway)
         .to_string();
+    let (source_host, source_port) = http_origin_endpoint(&source_origin, "comparison source")?;
+    let (target_host, target_port) =
+        http_origin_endpoint(&config.target_http_origin, "comparison target")?;
+    ensure!(
+        target_port == config.target_port,
+        "comparison target origin port {target_port} does not match configured target port {}",
+        config.target_port
+    );
     let recording_origin = format!("http://127.0.0.1:{}", recorder.http_gateway.listen.port());
     let request_source = options
         .request_source
@@ -271,6 +278,7 @@ async fn run_managed_runtime(
         .env("TRAFFIC_E2E_SOURCE_CONTAINER", &config.source_container)
         .env("TRAFFIC_E2E_TARGET_BOOT_DIR", &config.target_boot_dir)
         .env("TRAFFIC_E2E_TARGET_ORIGIN", &config.target_http_origin)
+        .env("TRAFFIC_E2E_TARGET_HOST", target_host)
         .env("TRAFFIC_E2E_TARGET_PORT", config.target_port.to_string())
         .env(
             "TRAFFIC_E2E_TARGET_READY_PATH",
@@ -285,6 +293,8 @@ async fn run_managed_runtime(
             config.target_startup_timeout.as_secs().to_string(),
         )
         .env("TRAFFIC_E2E_SOURCE_ORIGIN", source_origin)
+        .env("TRAFFIC_E2E_SOURCE_HOST", source_host)
+        .env("TRAFFIC_E2E_SOURCE_PORT", source_port.to_string())
         .env("TRAFFIC_E2E_RECORDING_ORIGIN", recording_origin)
         .env(
             "TRAFFIC_E2E_SOURCE_READY_PATH",
@@ -441,11 +451,36 @@ fn ensure_executable(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn http_origin_endpoint(origin: &str, label: &str) -> Result<(String, u16)> {
+    let origin = url::Url::parse(origin).with_context(|| format!("invalid {label} origin"))?;
+    ensure!(
+        matches!(origin.scheme(), "http" | "https"),
+        "{label} origin must use HTTP or HTTPS"
+    );
+    let host = origin
+        .host_str()
+        .with_context(|| format!("{label} origin has no host"))?;
+    let port = origin
+        .port_or_known_default()
+        .with_context(|| format!("{label} origin has no port"))?;
+    Ok((host.to_string(), port))
+}
+
 #[cfg(test)]
 mod tests {
     use std::process::Command as StdCommand;
 
     use super::*;
+
+    fn assert_in_order(content: &str, markers: &[&str]) {
+        let mut remainder = content;
+        for marker in markers {
+            let offset = remainder
+                .find(marker)
+                .unwrap_or_else(|| panic!("missing marker {marker:?}"));
+            remainder = &remainder[offset + marker.len()..];
+        }
+    }
 
     #[test]
     fn embedded_platform_manager_is_valid_bash() {
@@ -469,7 +504,13 @@ mod tests {
         assert!(MANAGER.contains(
             "adapter_dockerfile=\"$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording\""
         ));
-        assert!(MANAGER.contains("--build-arg \"SOURCE_IMAGE=${source_image_id}\""));
+        assert!(MANAGER.contains("--build-arg \"SOURCE_IMAGE=${source_image_alias}\""));
+        assert!(MANAGER.contains("docker image tag \"$source_image_id\" \"$source_image_alias\""));
+        assert!(MANAGER.contains("com.weibo.traffic-e2e.source-image-id=${source_image_id}"));
+        assert!(MANAGER.contains(
+            "com.weibo.traffic-e2e.adapter-contract-revision=${adapter_contract_revision}"
+        ));
+        assert!(MANAGER.contains("recording_adapter_contract_revision"));
         assert!(MANAGER.contains("find . -mindepth 1 -maxdepth 1 -type f -print0"));
         assert!(MANAGER.contains("--file Dockerfile.recording -"));
         assert!(!MANAGER.contains("MeshConnectUtil.class"));
@@ -481,19 +522,11 @@ mod tests {
                 "adapter_image=\"traffic-e2e/${recording_image_project}-recording:cache\""
             )
         );
-        assert!(MANAGER.contains(
-            "adapter_runtime_name=\"traffic-e2e-${recording_image_project}-recording-runtime-cache\""
-        ));
         assert!(MANAGER.contains("build_recording_adapter"));
         assert!(MANAGER.contains("resolve_or_build_recording_adapter"));
-        assert!(MANAGER.contains("create_recording_adapter_runtime"));
         assert!(MANAGER.contains("load_initialized_recording_adapter"));
-        assert!(!MANAGER.contains("require_initialized_recording_adapter"));
         assert!(MANAGER.contains("reusing initialized recording source adaptor"));
-        assert!(MANAGER.contains("adaptor cache is missing or stale; building it"));
-        assert!(
-            MANAGER.contains("recording source adaptor build/refresh requires source container")
-        );
+        assert!(MANAGER.contains("cache does not match the source image or build contract"));
         assert_eq!(
             MANAGER
                 .matches("docker container inspect \"$TRAFFIC_E2E_SOURCE_CONTAINER\"")
@@ -502,19 +535,23 @@ mod tests {
         );
         let before_adapter_build = MANAGER.split_once("build_recording_adapter()").unwrap().0;
         assert!(
-            !before_adapter_build
+            before_adapter_build
                 .contains("docker container inspect \"$TRAFFIC_E2E_SOURCE_CONTAINER\"")
         );
+        assert!(before_adapter_build.contains(
+            "configured source container %s must be stopped; the managed source adaptor owns its recording ports"
+        ));
         assert!(!MANAGER.contains("recording-adapter.fingerprint"));
         assert!(MANAGER.contains("--iidfile \"$adapter_iid_file\""));
         assert!(
-            MANAGER.contains(
-                "load_runtime_spec \"$adapter_runtime_inspect\" recording recording image"
-            )
+            MANAGER.contains("load_runtime_spec \"$source_inspect\" recording recording image")
         );
-        assert!(MANAGER.contains("com.weibo.traffic-e2e.role=source-adapter-runtime"));
-        assert!(MANAGER.contains("docker rename \"$adapter_runtime_staging_name\""));
+        assert!(!MANAGER.contains("source-adapter-runtime"));
+        assert!(!MANAGER.contains("recording-runtime-cache"));
         assert!(MANAGER.contains("\"${runtime_args[@]}\" \"$adapter_image_id\" >/dev/null"));
+        assert!(
+            MANAGER.contains("docker run --rm --platform linux/amd64 --network none --user 0:0")
+        );
         let adapted_source = MANAGER
             .split_once("start_recording_source()")
             .unwrap()
@@ -532,9 +569,8 @@ mod tests {
             .unwrap()
             .0;
         assert!(
-            comparison_source.contains(
-                "load_runtime_spec \"$adapter_runtime_inspect\" recording recording image"
-            )
+            comparison_source
+                .contains("load_runtime_spec \"$source_inspect\" recording recording image")
         );
         assert!(comparison_source.contains("\"${runtime_args[@]}\" \"$adapter_image_id\""));
         assert!(!comparison_source.contains(".[0].Config.Image"));
@@ -548,6 +584,39 @@ mod tests {
             .0;
         assert!(comparison_runtime.contains("resolve_or_build_recording_adapter"));
         assert!(comparison_runtime.contains("start_comparison_source"));
+        assert_in_order(
+            comparison_source,
+            &[
+                "require_port_available \"$TRAFFIC_E2E_SOURCE_HOST\"",
+                "docker run --detach --name \"$source_name\"",
+                "wait_http \"$TRAFFIC_E2E_SOURCE_ORIGIN\"",
+                "require_container_running \"$source_name\" source",
+                "require_port_open \"$TRAFFIC_E2E_SOURCE_HOST\"",
+            ],
+        );
+        let target_start = MANAGER
+            .split_once("start_target()")
+            .unwrap()
+            .1
+            .split_once("stop_target()")
+            .unwrap()
+            .0;
+        assert_in_order(
+            target_start,
+            &[
+                "require_port_available \"$TRAFFIC_E2E_TARGET_HOST\"",
+                "docker run --detach --name \"$target_name\"",
+            ],
+        );
+        assert_in_order(
+            comparison_runtime,
+            &[
+                "start_target",
+                "wait_http \"$TRAFFIC_E2E_TARGET_ORIGIN\"",
+                "require_container_running \"$target_name\" target",
+                "require_port_open \"$TRAFFIC_E2E_TARGET_HOST\"",
+            ],
+        );
         assert!(!MANAGER.contains("start_genuine_source"));
         assert!(MANAGER.contains(
             "docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh"
@@ -564,6 +633,17 @@ mod tests {
         assert!(MANAGER.contains("internal comparison-run --config"));
         assert!(MANAGER.contains("internal cache-snapshot-run"));
         assert!(MANAGER.contains("com.weibo.traffic-e2e.role=cache-snapshot"));
+        assert!(MANAGER.contains("normalize_cache_snapshot_ownership"));
+        assert!(MANAGER.contains("'chown -hR \"$1:$2\" -- /workspace/control/cache-snapshot'"));
+        let cleanup = MANAGER.split("cleanup() {").nth(1).unwrap();
+        assert_in_order(
+            cleanup,
+            &[
+                "stop_container \"$recorder_name\"",
+                "normalize_cache_snapshot_ownership",
+                "remove_private_runtime_dir \"$control_dir\"",
+            ],
+        );
         assert!(MANAGER.contains("record|record-comparison|preflight"));
         assert!(MANAGER.contains("preflight_root=\"$runtime_root/preflight/$run_id\""));
         assert!(MANAGER.contains("[[ \"$operation\" == preflight ]]"));
@@ -626,5 +706,18 @@ mod tests {
         assert_eq!(u16::from_be_bytes([HTTPS_PROBE[6], HTTPS_PROBE[7]]), 52);
         assert!(!assets.join("MeshConnectUtil.java").exists());
         assert!(!assets.join("apply-breeze-sdk-patch").exists());
+    }
+
+    #[test]
+    fn resolves_http_origin_endpoints() {
+        assert_eq!(
+            http_origin_endpoint("http://127.0.0.1:8080", "source").unwrap(),
+            ("127.0.0.1".to_string(), 8080)
+        );
+        assert_eq!(
+            http_origin_endpoint("https://example.test", "source").unwrap(),
+            ("example.test".to_string(), 443)
+        );
+        assert!(http_origin_endpoint("file:///tmp/source", "source").is_err());
     }
 }

@@ -147,6 +147,35 @@ fn equivalent_http_selector_reuses_existing_rule_even_when_name_and_proof_change
 }
 
 #[test]
+fn covered_http_selector_reuses_a_multi_selector_system_default() {
+    let fixture = Fixture::new(report_with_unused());
+    fs::write(
+        &fixture.config,
+        r#"[recording]
+traffic_jsonl = "full"
+
+# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
+[[recording.background_dependencies]]
+name = "breeze_vintage"
+protocol = "http"
+authorities = ["config.api.demo.test", "static.config.api.demo.test", "register.kailash.demo.test"]
+methods = ["GET"]
+path_prefixes = ["/1/config/service", "/naming/service"]
+source_evidence = "traffic-e2e system default: Weibo Breeze Vintage background traffic"
+# END AI-MANAGED BACKGROUND DEPENDENCIES
+"#,
+    )
+    .unwrap();
+
+    let plan = plan_background_dependency(fixture.feedback()).unwrap();
+
+    assert!(plan.report().reused_existing);
+    assert_eq!(plan.report().effective_name, "breeze_vintage");
+    assert!(!plan.report().changed);
+    assert!(plan.report().diff.is_empty());
+}
+
+#[test]
 fn rejects_incomplete_or_conflicting_replay_evidence() {
     let mut report = report_with_unused();
     report["finalized"] = json!(false);

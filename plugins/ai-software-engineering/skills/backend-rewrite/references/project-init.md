@@ -120,19 +120,17 @@ probe.
 After creating `Dockerfile.recording`, run `backend-rewrite init preflight` to
 build the target-scoped source adaptor. The managed build tags the image as
 `traffic-e2e/<project>-recording:cache`, where `<project>` is the lowercase,
-normalized target repository directory name, binds `SOURCE_IMAGE` to the exact
-image ID inspected from the configured source container, and creates a stopped,
-platform-owned runtime template. The template retains the source runtime inputs
-without writing them into repository files. Do not substitute a manual image
-build for this managed build.
+normalized target repository directory name, and binds `SOURCE_IMAGE` through a
+temporary local alias of the exact image ID inspected from the configured source
+container. Do not substitute a manual image build for this managed build.
 
-Later managed recording reuses the image and runtime template without
-inspecting or requiring the original source container. If either adaptor
-artifact is missing or their immutable image identities disagree, the managed
-runtime performs a build/refresh from the same Dockerfile and requires the
-configured source container for that build. Do not fingerprint the original
-source container or Dockerfile, check whether the cached adaptor is stale, or
-rebuild an existing matching adaptor during ordinary recording.
+The configured source container is the persistent runtime inspection source.
+Keep that container present and stopped after initialization; managed preflight,
+recording, and comparison inspect it but never start, stop, remove, or replace
+it. A missing adaptor image or one labeled for another source image triggers a
+build/refresh from the same Dockerfile. A changed top-level adaptor build
+context does the same. Reuse an adaptor only when its source-image and build
+contract labels match the current inputs.
 
 The Dockerfile alone owns optional assets such as `MeshConnectUtil.class`,
 including their presence and validation; the generic managed runtime must not
@@ -162,7 +160,8 @@ preflight` owns three ordered phases: `target_container`, defined below,
 `recording`, and `replay_network`. Run it from the target repository after the
 generated configuration, `Dockerfile.recording`,
 `.traffic-e2e/Dockerfile.e2e`, and `.dockerignore` exist. The recording phase
-builds the adaptor image and runtime template when they are absent. Provide the
+builds the adaptor image when it is absent or bound to another source image.
+The configured source container must remain stopped. Provide the
 same `TRAFFIC_E2E_ENCRYPTION_KEY_B64` required by managed recording. The command
 defaults each selected API to one admitted case and opens a bounded recording
 window; while it is running, send one deterministic
@@ -177,8 +176,8 @@ come from the inspected source contract.
    private key into either image.
 2. When Breeze is enabled, start the fixed Breeze image with the inspected
    Breeze runtime arguments.
-3. Start the source adaptor with runtime inputs read from its stopped,
-   platform-owned template and the explicit adaptor entrypoint. Mount the
+3. Start the source adaptor with runtime inputs inspected from the configured,
+   stopped source container and the explicit adaptor entrypoint. Mount the
    generated truststore read-only only when the system detected Java.
 4. Verify the source entrypoint runs as UID/GID `998:998`, its port
    `880` listener is reachable without root or privileged-container execution,
@@ -435,8 +434,8 @@ Do not report initialization complete until all of the following are true:
   files exist;
 - `Dockerfile.recording` exists, and the adaptor builds successfully without
   runtime secrets or generated trust material as
-  `traffic-e2e/<project>-recording:cache`, with its stopped platform-owned
-  runtime template bound to that immutable image;
+  `traffic-e2e/<project>-recording:cache`, bound to the configured source
+  container's immutable image ID;
 - when Breeze is enabled, `.traffic-e2e/MeshConnectUtil.class` exactly matches
   the bundled asset, and its replacement in the source Breeze SDK JAR is
   verified byte-for-byte;

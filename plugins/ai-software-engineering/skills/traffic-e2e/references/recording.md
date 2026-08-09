@@ -12,22 +12,21 @@ traffic-e2e record --target-root <target> \
   --brz-no-fallback true --api '<METHOD path>'
 ```
 
-Project config supplies the source container used to build the source adaptor
-and the optional Breeze container. traffic-e2e selects the runtime internally
-and owns the adapted source, Recorder, optional Breeze, readiness,
-finalization, signals, and cleanup. For Platform Java/Tomcat it builds its
-capture-only source adaptor. Do not generate or invoke repository recording
-wrappers.
+Project config supplies the stopped source container used as the authoritative
+runtime inspection source and the optional Breeze container. traffic-e2e
+selects the runtime internally and owns the adapted source, Recorder, optional
+Breeze, readiness, finalization, signals, and cleanup. For Platform Java/Tomcat
+it builds its capture-only source adaptor. Do not generate or invoke repository
+recording wrappers.
 
-The managed runtime retains a target-scoped adaptor image and a stopped,
-platform-owned runtime template. Building or refreshing those artifacts is the
-only phase that inspects the configured source container. Ordinary recording
-reuses the adaptor artifacts and does not require the original source
-container to still exist. If either artifact is missing or their immutable
-image identities disagree, the managed runtime performs a build/refresh; that
-operation requires the configured source container. Run-private build state is
-removed during cleanup. Do not start, remove, rename, retag, or substitute
-either adaptor artifact.
+The managed runtime retains a target-scoped adaptor image. Every managed run
+requires the configured source container to remain present and stopped, then
+inspects its immutable image ID and runtime inputs without changing it. A
+missing adaptor or one labeled for another source image or build-contract
+revision triggers a build/refresh. Run-private build state and the temporary
+exact-image alias are removed during cleanup. Do not start, remove, rename, or
+replace the configured source container, and do not retag or substitute the
+adaptor image.
 
 The fixed adapter may only establish Platform transport interception. It must
 not alter source business code, caches, feature switches, or response behavior.

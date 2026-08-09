@@ -61,6 +61,13 @@ is unclear.
   status projection and the traffic lease are separate modules, and further
   splitting should follow a real responsibility boundary rather than divide
   one transaction, action contract, or inventory transition.
+- Within `rewrite`, `target_quality.rs` owns the coordinator quality-gate
+  transaction. Its `target_replay_isolation` child owns the mandatory,
+  deterministic scan that prevents production Rust source from consuming
+  Replay-only hostnames, fake addresses, private runtime state, or recording
+  artifacts. Keep this product-policy gate separate from the generic
+  code-organization checker. Configured repository gates extend it; an empty
+  configured gate list does not disable it.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
 
 Prefer these boundaries while they remain accurate. When implementation proves
