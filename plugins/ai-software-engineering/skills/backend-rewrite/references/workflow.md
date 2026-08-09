@@ -122,12 +122,14 @@ focused Replay. A later integration or quality-gate configuration change
 creates a new fingerprint and another quality action. On failure, fix the
 integrated target and recover the same action with scoped `status`.
 
-The gate list always starts with the built-in `replay-isolation` scan. It checks
-production Rust syntax while excluding comments, documentation, and test-only
-code, and rejects direct dependencies on replay-only hostnames, fake-IP ranges,
-private runtime paths, and recording artifacts. Repository quality-gate
-configuration may add commands but cannot disable this scan; an explicit empty
-gate list still leaves `replay-isolation` active.
+The gate list always starts with the built-in `replay-isolation` scan. Relative
+to the configured `pr_base`, it checks every added or modified production Rust
+file in the integrated worktree, including staged, unstaged, and untracked
+files. It excludes comments, documentation, and test-only code, and rejects
+direct dependencies on replay-only hostnames, fake-IP ranges, private runtime
+paths, and recording artifacts. Repository quality-gate configuration may add
+commands but cannot disable this scan; an explicit empty gate list still leaves
+`replay-isolation` active.
 
 ### `system_repair_required` and `recovery_required`
 

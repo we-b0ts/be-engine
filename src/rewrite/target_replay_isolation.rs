@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 use proc_macro2::TokenTree;
@@ -9,7 +10,7 @@ use syn::visit::{self, Visit};
 use syn::{Attribute, Item, Lit, LitByteStr, LitStr, Meta};
 
 pub(super) const GATE_NAME: &str = "replay-isolation";
-pub(super) const GATE_VERSION: &str = "replay-isolation-v1";
+pub(super) const GATE_VERSION: &str = "replay-isolation-v2";
 
 const MAX_REPORTED_VIOLATIONS: usize = 64;
 const IGNORED_DIRECTORIES: &[&str] = &[
@@ -142,8 +143,8 @@ const FORBIDDEN_MARKERS: &[ForbiddenMarker] = &[
     },
 ];
 
-pub(super) fn inspect(target_root: &Path) -> Result<ReplayIsolationReport> {
-    let source_files = production_rust_files(target_root)?;
+pub(super) fn inspect(target_root: &Path, pr_base: &str) -> Result<ReplayIsolationReport> {
+    let source_files = changed_production_rust_files(target_root, pr_base)?;
     let mut violations = Vec::new();
     for source_file in &source_files {
         let source = fs::read_to_string(source_file)
@@ -178,64 +179,126 @@ pub(super) fn inspect(target_root: &Path) -> Result<ReplayIsolationReport> {
     })
 }
 
-fn production_rust_files(target_root: &Path) -> Result<Vec<PathBuf>> {
-    let mut source_roots = BTreeSet::new();
-    discover_source_roots(target_root, &mut source_roots)?;
+fn changed_production_rust_files(target_root: &Path, pr_base: &str) -> Result<Vec<PathBuf>> {
+    let base_ref = resolve_pr_base(target_root, pr_base)?;
+    let merge_base = git_text(target_root, &["merge-base", "HEAD", &base_ref])?;
     let mut files = BTreeSet::new();
-    for source_root in source_roots {
-        collect_rust_files(&source_root, &mut files)?;
-    }
+    collect_changed_paths(
+        target_root,
+        &git_bytes(
+            target_root,
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--name-only",
+                "-z",
+                "--diff-filter=ACMRT",
+                merge_base.trim(),
+                "--",
+            ],
+        )?,
+        &mut files,
+    )?;
+    collect_changed_paths(
+        target_root,
+        &git_bytes(
+            target_root,
+            &["ls-files", "--others", "--exclude-standard", "-z", "--"],
+        )?,
+        &mut files,
+    )?;
     Ok(files.into_iter().collect())
 }
 
-fn discover_source_roots(directory: &Path, source_roots: &mut BTreeSet<PathBuf>) -> Result<()> {
-    for entry in sorted_entries(directory)? {
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("failed to inspect {path:?}", path = entry.path()))?;
-        if !file_type.is_dir() || file_type.is_symlink() {
+fn resolve_pr_base(target_root: &Path, pr_base: &str) -> Result<String> {
+    for candidate in [
+        format!("refs/heads/{pr_base}"),
+        format!("refs/remotes/origin/{pr_base}"),
+    ] {
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(target_root)
+            .args(["rev-parse", "--verify", "--quiet"])
+            .arg(format!("{candidate}^{{commit}}"))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .with_context(|| format!("failed to resolve pull-request base {candidate:?}"))?;
+        if status.success() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!(
+        "pr_base {pr_base:?} does not exist as a local branch or origin remote-tracking branch"
+    )
+}
+
+fn collect_changed_paths(
+    target_root: &Path,
+    raw: &[u8],
+    files: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    for raw_path in raw.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
+        let relative =
+            std::str::from_utf8(raw_path).context("changed repository path is not UTF-8")?;
+        let relative = Path::new(relative);
+        if !is_production_rust_path(relative) {
             continue;
         }
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if IGNORED_DIRECTORIES.contains(&name.as_ref()) {
+        let path = target_root.join(relative);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect changed source {path:?}"));
+            }
+        };
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
             continue;
         }
-        let path = entry.path();
-        if name == "src" {
-            source_roots.insert(path);
-            continue;
-        }
-        discover_source_roots(&path, source_roots)?;
+        files.insert(path);
     }
     Ok(())
 }
 
-fn collect_rust_files(directory: &Path, files: &mut BTreeSet<PathBuf>) -> Result<()> {
-    for entry in sorted_entries(directory)? {
-        let file_type = entry
-            .file_type()
-            .with_context(|| format!("failed to inspect {path:?}", path = entry.path()))?;
-        if file_type.is_symlink() {
-            continue;
+fn is_production_rust_path(path: &Path) -> bool {
+    if path.extension().is_none_or(|extension| extension != "rs") {
+        return false;
+    }
+    for component in path.components() {
+        let std::path::Component::Normal(component) = component else {
+            return false;
+        };
+        let component = component.to_string_lossy();
+        if IGNORED_DIRECTORIES.contains(&component.as_ref()) {
+            return false;
         }
-        let path = entry.path();
-        if file_type.is_dir() {
-            collect_rust_files(&path, files)?;
-        } else if file_type.is_file() && path.extension().is_some_and(|value| value == "rs") {
-            files.insert(path);
+        if component == "src" {
+            return true;
         }
     }
-    Ok(())
+    false
 }
 
-fn sorted_entries(directory: &Path) -> Result<Vec<fs::DirEntry>> {
-    let mut entries = fs::read_dir(directory)
-        .with_context(|| format!("failed to read directory {directory:?}"))?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .with_context(|| format!("failed to enumerate directory {directory:?}"))?;
-    entries.sort_by_key(fs::DirEntry::file_name);
-    Ok(entries)
+fn git_text(target_root: &Path, args: &[&str]) -> Result<String> {
+    let raw = git_bytes(target_root, args)?;
+    String::from_utf8(raw).context("Git output is not UTF-8")
+}
+
+fn git_bytes(target_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .args(args)
+        .output()
+        .context("failed to inspect changed target files with Git")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "Git command failed while inspecting changed target files: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(output.stdout)
 }
 
 struct ReplayIsolationVisitor<'a> {
@@ -447,15 +510,14 @@ mod tests {
 
     #[test]
     fn reports_replay_literals_without_echoing_the_complete_value() {
-        let target = tempfile::tempdir().unwrap();
-        fs::create_dir(target.path().join("src")).unwrap();
+        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
         fs::write(
             target.path().join("src/lib.rs"),
             "pub const CACHE: &str = \"vintage-node-secret.trp.test:15138\";\n",
         )
         .unwrap();
 
-        let report = inspect(target.path()).unwrap();
+        let report = inspect(target.path(), "integration").unwrap();
         let value = serde_json::to_value(report).unwrap();
 
         assert_eq!(value["status"], "failed");
@@ -467,8 +529,7 @@ mod tests {
 
     #[test]
     fn ignores_comments_docs_test_modules_and_non_production_trees() {
-        let target = tempfile::tempdir().unwrap();
-        fs::create_dir_all(target.path().join("src")).unwrap();
+        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
         fs::create_dir_all(target.path().join("tests")).unwrap();
         fs::write(
             target.path().join("src/lib.rs"),
@@ -487,7 +548,7 @@ mod tests {
         )
         .unwrap();
 
-        let report = inspect(target.path()).unwrap();
+        let report = inspect(target.path(), "integration").unwrap();
 
         assert!(report.passed());
         assert_eq!(report.scanned_files, 1);
@@ -495,15 +556,14 @@ mod tests {
 
     #[test]
     fn checks_literals_in_production_attributes() {
-        let target = tempfile::tempdir().unwrap();
-        fs::create_dir(target.path().join("src")).unwrap();
+        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
         fs::write(
             target.path().join("src/lib.rs"),
             "#[link(name = \"cache.trp.test\")] extern \"C\" {}\n",
         )
         .unwrap();
 
-        let report = inspect(target.path()).unwrap();
+        let report = inspect(target.path(), "integration").unwrap();
         let value = serde_json::to_value(report).unwrap();
 
         assert_eq!(value["violations"][0]["rule"], "replay_hostname");
@@ -511,7 +571,7 @@ mod tests {
 
     #[test]
     fn scans_nested_production_sources_and_macro_literals() {
-        let target = tempfile::tempdir().unwrap();
+        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
         fs::create_dir_all(target.path().join("crates/client/src")).unwrap();
         fs::create_dir_all(target.path().join("apps/worker/src")).unwrap();
         fs::write(
@@ -525,12 +585,99 @@ mod tests {
         )
         .unwrap();
 
-        let report = inspect(target.path()).unwrap();
+        let report = inspect(target.path(), "integration").unwrap();
         let value = serde_json::to_value(report).unwrap();
 
         assert_eq!(value["scanned_files"], 2);
         assert_eq!(value["violations"].as_array().unwrap().len(), 2);
         assert_eq!(value["violations"][0]["rule"], "recording_artifact");
         assert_eq!(value["violations"][1]["rule"], "fake_ip_range");
+    }
+
+    #[test]
+    fn ignores_replay_literals_unchanged_from_the_pr_base() {
+        let target = target_with_source(
+            "pub const LEGACY: &str = \"vintage-node-legacy.trp.test:15138\";\n",
+        );
+        fs::write(
+            target.path().join("src/new.rs"),
+            "pub fn value() -> u8 { 2 }\n",
+        )
+        .unwrap();
+
+        let report = inspect(target.path(), "integration").unwrap();
+
+        assert!(report.passed());
+        assert_eq!(report.scanned_files, 1);
+    }
+
+    #[test]
+    fn compares_an_independent_worktree_with_the_shared_pr_base() {
+        let root = tempfile::tempdir().unwrap();
+        let primary = root.path().join("primary");
+        let worker = root.path().join("worker");
+        initialize_base(&primary, "pub fn value() -> u8 { 1 }\n");
+        git(
+            &primary,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature",
+                worker.to_str().unwrap(),
+                "integration",
+            ],
+        );
+        fs::write(
+            worker.join("src/lib.rs"),
+            "pub const CACHE: &str = \"cache.trp.test\";\n",
+        )
+        .unwrap();
+
+        let report = inspect(&worker, "integration").unwrap();
+
+        assert!(!report.passed());
+        assert_eq!(report.scanned_files, 1);
+    }
+
+    fn target_with_source(source: &str) -> tempfile::TempDir {
+        let target = tempfile::tempdir().unwrap();
+        initialize_base(target.path(), source);
+        git(target.path(), &["switch", "-q", "-c", "feature"]);
+        target
+    }
+
+    fn initialize_base(target: &Path, source: &str) {
+        fs::create_dir_all(target.join("src")).unwrap();
+        fs::write(target.join("src/lib.rs"), source).unwrap();
+        git(target, &["init", "-q", "-b", "integration"]);
+        git(target, &["add", "."]);
+        git(
+            target,
+            &[
+                "-c",
+                "user.name=Traffic E2E Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-q",
+                "-m",
+                "baseline",
+            ],
+        );
+    }
+
+    fn git(target: &Path, args: &[&str]) {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(target)
+                .args(args)
+                .status()
+                .unwrap()
+                .success(),
+            "git command failed: {args:?}"
+        );
     }
 }

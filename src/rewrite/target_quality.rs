@@ -59,7 +59,7 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
         scoped.api
     );
 
-    let replay_isolation = replay_isolation::inspect(&target_root)?;
+    let replay_isolation = replay_isolation::inspect(&target_root, &project.pr_base)?;
     ensure!(
         replay_isolation.passed(),
         "target replay isolation gate failed:\n{}",
