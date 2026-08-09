@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::e2e_run::resolve_project;
 use crate::recording_api::RecordingApi;
 
+mod listen_preflight;
 mod preflight;
 mod recording_input;
 mod recovery;
@@ -204,6 +205,18 @@ async fn run_managed_runtime(
         .run_id
         .unwrap_or_else(|| Utc::now().format("%Y%m%d%H%M%S").to_string());
     let manifest = runtime_operation.manifest(&target_root, &run_id);
+    let recorder_config = &config.recorder_config;
+    ensure!(
+        recorder_config.is_file(),
+        "recorder config does not exist: {}",
+        recorder_config.display()
+    );
+    let recorder = crate::config::AppConfig::load_comparison_recording(recorder_config)?;
+    ensure!(
+        recorder.http_gateway.ready.enabled,
+        "managed recording requires an enabled http_gateway.ready probe"
+    );
+    listen_preflight::require_available(recorder.http_gateway.listen).await?;
     let target_image = if runtime_operation
         == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
     {
@@ -220,17 +233,6 @@ async fn run_managed_runtime(
     } else {
         None
     };
-    let recorder_config = &config.recorder_config;
-    ensure!(
-        recorder_config.is_file(),
-        "recorder config does not exist: {}",
-        recorder_config.display()
-    );
-    let recorder = crate::config::AppConfig::load_comparison_recording(recorder_config)?;
-    ensure!(
-        recorder.http_gateway.ready.enabled,
-        "managed recording requires an enabled http_gateway.ready probe"
-    );
     let comparison = recorder
         .comparison_recording
         .as_ref()
