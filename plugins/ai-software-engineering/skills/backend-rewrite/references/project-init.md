@@ -117,20 +117,22 @@ adaptor solely for preflight. For non-Java sources, do not add Java or curl
 solely for probing; the system-owned network probe image performs the recording
 probe.
 
-After creating `Dockerfile.recording`, the target AI must build it during
-initialization and tag the resulting image as
+After creating `Dockerfile.recording`, run `backend-rewrite init preflight` to
+build the target-scoped source adaptor. The managed build tags the image as
 `traffic-e2e/<project>-recording:cache`, where `<project>` is the lowercase,
-normalized target repository directory name. Bind `SOURCE_IMAGE` to the exact
-image ID inspected from the configured source container. This target-specific
-build happens before `backend-rewrite init preflight`; the preflight requires
-and reuses the image and must not build it again.
+normalized target repository directory name, binds `SOURCE_IMAGE` to the exact
+image ID inspected from the configured source container, and creates a stopped,
+platform-owned runtime template. The template retains the source runtime inputs
+without writing them into repository files. Do not substitute a manual image
+build for this managed build.
 
-Later managed recording reuses the tag whenever it exists. If the local image
-is missing, the managed runtime builds it once from the same Dockerfile and
-continues. Do not fingerprint the source image or Dockerfile, check whether the
-cached image is stale, or rebuild an existing tag during ordinary recording;
-the target AI reruns the initialization build when an intentional refresh is
-required.
+Later managed recording reuses the image and runtime template without
+inspecting or requiring the original source container. If either adaptor
+artifact is missing or their immutable image identities disagree, the managed
+runtime performs a build/refresh from the same Dockerfile and requires the
+configured source container for that build. Do not fingerprint the original
+source container or Dockerfile, check whether the cached adaptor is stale, or
+rebuild an existing matching adaptor during ordinary recording.
 
 The Dockerfile alone owns optional assets such as `MeshConnectUtil.class`,
 including their presence and validation; the generic managed runtime must not
@@ -159,9 +161,9 @@ Do not create another target-validation command. `backend-rewrite init
 preflight` owns three ordered phases: `target_container`, defined below,
 `recording`, and `replay_network`. Run it from the target repository after the
 generated configuration, `Dockerfile.recording`,
-`traffic-e2e/<project>-recording:cache`, `.traffic-e2e/Dockerfile.e2e`, and
-`.dockerignore` exist. Provide the same
-`TRAFFIC_E2E_ENCRYPTION_KEY_B64` required by managed recording. The command
+`.traffic-e2e/Dockerfile.e2e`, and `.dockerignore` exist. The recording phase
+builds the adaptor image and runtime template when they are absent. Provide the
+same `TRAFFIC_E2E_ENCRYPTION_KEY_B64` required by managed recording. The command
 defaults each selected API to one admitted case and opens a bounded recording
 window; while it is running, send one deterministic
 controlled business request to the configured HTTP gateway port. The system
@@ -175,9 +177,9 @@ come from the inspected source contract.
    private key into either image.
 2. When Breeze is enabled, start the fixed Breeze image with the inspected
    Breeze runtime arguments.
-3. Start the source adaptor with the inspected source runtime inputs and the
-   explicit adaptor entrypoint. Mount the generated truststore read-only only
-   when the system detected Java.
+3. Start the source adaptor with runtime inputs read from its stopped,
+   platform-owned template and the explicit adaptor entrypoint. Mount the
+   generated truststore read-only only when the system detected Java.
 4. Verify the source entrypoint runs as UID/GID `998:998`, its port
    `880` listener is reachable without root or privileged-container execution,
    Breeze is ready when enabled, the source readiness contract passes, and
@@ -433,7 +435,8 @@ Do not report initialization complete until all of the following are true:
   files exist;
 - `Dockerfile.recording` exists, and the adaptor builds successfully without
   runtime secrets or generated trust material as
-  `traffic-e2e/<project>-recording:cache`;
+  `traffic-e2e/<project>-recording:cache`, with its stopped platform-owned
+  runtime template bound to that immutable image;
 - when Breeze is enabled, `.traffic-e2e/MeshConnectUtil.class` exactly matches
   the bundled asset, and its replacement in the source Breeze SDK JAR is
   verified byte-for-byte;

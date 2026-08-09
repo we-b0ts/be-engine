@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use super::model::{RewriteIssueKind, RewritePhase, RewriteRecordingReason, RewriteState};
-use super::{artifacts, fingerprint, inventory, transition};
+use super::{artifacts, inventory, transition};
 use crate::e2e_run::{
     focused_background_reclassification_recovery_required, latest_focused_api,
     reclassify_focused_background_dependencies,
@@ -14,11 +14,10 @@ use crate::{
 };
 
 pub(super) fn prepare_recording(target_root: &Path, state: &mut RewriteState) -> Result<()> {
-    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
     let case_source = artifacts::recording_run(target_root, &state.recording_run_id);
     let api = state.api.parse::<RecordingApi>()?;
     let member = resolve_recording_api_member(&case_source, &api)?;
-    let source_revision = fingerprint::source_container_revision(&project.source_container)?;
+    let source_revision = crate::platform::source_revision(target_root)?;
     let prepared = prepare_e2e_run(E2eRunPrepareOptions {
         context: E2eRunContext {
             target_root: target_root.to_path_buf(),
