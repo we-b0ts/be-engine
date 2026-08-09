@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::recorder::RecorderEvent;
 
+const MAX_HTTP_AUTHORITIES: usize = 64;
+const MAX_HTTP_PATH_PREFIXES: usize = 64;
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RedisKeyPatternConfig {
@@ -778,8 +781,10 @@ fn decode_capture(capture: &crate::recorder::BodyCapture) -> Option<Vec<u8>> {
 }
 
 fn validate_authorities(rule_name: &str, authorities: &[String]) -> Result<()> {
-    if authorities.len() != 1 {
-        bail!("HTTP background dependency rule {rule_name:?} must include exactly one authority");
+    if authorities.is_empty() || authorities.len() > MAX_HTTP_AUTHORITIES {
+        bail!(
+            "HTTP background dependency rule {rule_name:?} must include between 1 and {MAX_HTTP_AUTHORITIES} authorities"
+        );
     }
     let mut unique = HashSet::new();
     for authority in authorities {
@@ -817,8 +822,10 @@ fn validate_methods(rule_name: &str, methods: &[String]) -> Result<()> {
 }
 
 fn validate_path_prefixes(rule_name: &str, path_prefixes: &[String]) -> Result<()> {
-    if path_prefixes.len() != 1 {
-        bail!("HTTP background dependency rule {rule_name:?} must include exactly one path prefix");
+    if path_prefixes.is_empty() || path_prefixes.len() > MAX_HTTP_PATH_PREFIXES {
+        bail!(
+            "HTTP background dependency rule {rule_name:?} must include between 1 and {MAX_HTTP_PATH_PREFIXES} path prefixes"
+        );
     }
     let mut unique = HashSet::new();
     for prefix in path_prefixes {

@@ -1498,8 +1498,12 @@ path_prefixes = ["/1/config/service"]
 source_evidence = "src/config/refresh.rs:42 process-level scheduled refresh"
 ```
 
-All three selector dimensions and `source_evidence` are required. The source
-revision remains in the plan report instead of runtime configuration. A
+All three selector dimensions and `source_evidence` are required. HTTP rules
+accept bounded, non-empty authority and path-prefix lists and match their
+explicit cross-product with the configured method. Repository initialization
+installs the system-owned `breeze_vintage` rule for the Weibo Vintage
+configuration and naming endpoints. The source revision remains in the plan
+report instead of runtime configuration. A
 matching exchange is not attributed to an active API case and therefore does
 not enter that case's `dependencies.jsonl` or summary. The ordinary run-level
 `traffic.jsonl` continues to retain the exchange only when
@@ -1542,8 +1546,10 @@ traffic-e2e config recorder apply background-dependencies \
 The action requires at least one matching unused case HTTP exchange and rejects
 a selector that also matches unmatched or unsupported target requests. It
 replans against the current recorder config and replay report immediately
-before its atomic write. One rule owns one exact authority, method, and path
-prefix; use separate rules for distinct request families.
+before its atomic write. Automated planning remains exact to one authority,
+method, and path prefix. When an existing multi-selector rule already covers
+that selector, planning reuses the existing rule instead of adding an
+overlapping rule.
 
 Source-proven process-owned Motan traffic uses one exact RPC identity:
 

@@ -355,6 +355,23 @@ redact_headers = [
   "proxy-authenticate",
 ]
 
+# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
+[[recording.background_dependencies]]
+name = "breeze_vintage"
+protocol = "http"
+authorities = [
+  "config.api.demo.test",
+  "static.config.api.demo.test",
+  "register.kailash.demo.test",
+]
+methods = ["GET"]
+path_prefixes = [
+  "/1/config/service",
+  "/naming/service",
+]
+source_evidence = "traffic-e2e system default: Weibo Breeze Vintage configuration and naming refresh are process-owned background traffic"
+# END AI-MANAGED BACKGROUND DEPENDENCIES
+
 [tls]
 ca_cert_path = "./.traffic-e2e/local/data/traffic-recorder-ca.pem"
 ca_key_path = "./.traffic-e2e/local/data/traffic-recorder-ca-key.pem"
@@ -448,13 +465,37 @@ mod tests {
         assert!(!raw.contains("max_decoded_body_bytes"));
         assert!(!raw.contains("cache_snapshot_max_entries"));
         assert!(!raw.contains("cache_snapshot_max_bytes"));
-        assert!(config.recording.background_dependencies.is_empty());
-        assert!(!raw.contains("[[recording.background_dependencies]]"));
+        assert_eq!(config.recording.background_dependencies.len(), 1);
+        assert_eq!(
+            config.recording.background_dependencies[0].name(),
+            "breeze_vintage"
+        );
+        let crate::config::BackgroundDependencyRuleConfig::Http {
+            authorities,
+            methods,
+            path_prefixes,
+            source_evidence,
+            ..
+        } = &config.recording.background_dependencies[0]
+        else {
+            panic!("default Breeze Vintage background rule must use HTTP");
+        };
+        assert_eq!(
+            authorities,
+            &[
+                "config.api.demo.test",
+                "static.config.api.demo.test",
+                "register.kailash.demo.test"
+            ]
+        );
+        assert_eq!(methods, &["GET"]);
+        assert_eq!(path_prefixes, &["/1/config/service", "/naming/service"]);
+        assert!(source_evidence.starts_with("traffic-e2e system default:"));
         assert!(!raw.contains("startup-cache-warm"));
         assert!(!raw.contains("planet-video-cache-warm"));
         assert!(raw.contains("# Set by `init --http-gateway-port`"));
         assert!(!raw.contains("__HTTP_GATEWAY_PORT__"));
-        assert!(!raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
+        assert!(raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
         assert!(!raw.contains("verified_excludes"));
         assert!(!raw.contains("allow_side_effecting_methods"));
         assert!(raw.contains(r#""msg":"not_in_"#));
@@ -527,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn generic_initialization_does_not_install_platform_policy() {
+    fn generic_initialization_installs_only_default_vintage_background_policy() {
         let target = tempdir().unwrap();
         let result = initialize_recorder_config(RecorderConfigInitOptions {
             target_root: target.path().to_path_buf(),
@@ -554,5 +595,10 @@ mod tests {
         assert!(config.recording.encrypt_request_headers.is_empty());
         assert!(config.dns_mock.bypass_strategies.is_empty());
         assert!(config.http_response_rewrite.rules.is_empty());
+        assert_eq!(config.recording.background_dependencies.len(), 1);
+        assert_eq!(
+            config.recording.background_dependencies[0].name(),
+            "breeze_vintage"
+        );
     }
 }

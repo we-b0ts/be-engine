@@ -240,7 +240,7 @@ fn parses_and_validates_exact_motan_background_rules() {
 }
 
 #[test]
-fn rejects_host_only_or_ambiguous_http_background_rules() {
+fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
     let mut config = AppConfig::default();
     config.recording.background_dependencies = vec![BackgroundDependencyRuleConfig::Http {
         name: "too-broad".to_string(),
@@ -262,18 +262,61 @@ fn rejects_host_only_or_ambiguous_http_background_rules() {
     }];
     assert!(config.validate().is_err());
 
-    config.recording.background_dependencies = vec![BackgroundDependencyRuleConfig::Http {
-        name: "cross-product".to_string(),
+    let rule = BackgroundDependencyRuleConfig::Http {
+        name: "breeze_vintage".to_string(),
         authorities: vec![
             "config.api.demo.test".to_string(),
             "static.config.api.demo.test".to_string(),
         ],
         methods: vec!["GET".to_string()],
-        path_prefixes: vec!["/lookup".to_string()],
+        path_prefixes: vec![
+            "/1/config/service".to_string(),
+            "/naming/service".to_string(),
+        ],
         source_revision: "0123456789abcdef".to_string(),
-        source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
-    }];
+        source_evidence: "traffic-e2e system default: Breeze Vintage background".to_string(),
+    };
+    config.recording.background_dependencies = vec![rule.clone()];
+    config.validate().unwrap();
+    assert!(rule.matches(&http_event(
+        "config.api.demo.test",
+        "GET",
+        "/naming/service?action=lookup"
+    )));
+    assert!(rule.matches(&http_event(
+        "static.config.api.demo.test",
+        "GET",
+        "/1/config/service?action=getsign"
+    )));
+
+    let mut overlapping = rule;
+    let BackgroundDependencyRuleConfig::Http {
+        name,
+        authorities,
+        path_prefixes,
+        ..
+    } = &mut overlapping
+    else {
+        panic!("expected HTTP background rule");
+    };
+    *name = "overlapping-vintage".to_string();
+    *authorities = vec!["config.api.demo.test".to_string()];
+    *path_prefixes = vec!["/naming/service".to_string()];
+    config.recording.background_dependencies.push(overlapping);
     assert!(config.validate().is_err());
+
+    let mut too_many = AppConfig::default();
+    too_many.recording.background_dependencies = vec![BackgroundDependencyRuleConfig::Http {
+        name: "too-many-authorities".to_string(),
+        authorities: (0..=MAX_HTTP_AUTHORITIES)
+            .map(|index| format!("config-{index}.example.test"))
+            .collect(),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/1/config/service".to_string()],
+        source_revision: "0123456789abcdef".to_string(),
+        source_evidence: "bounded selector test".to_string(),
+    }];
+    assert!(too_many.validate().is_err());
 }
 
 #[test]

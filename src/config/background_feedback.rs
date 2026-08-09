@@ -158,7 +158,7 @@ pub(super) fn plan_rule_config(
     let requested_name = requested.name().to_string();
     let reused = rules
         .iter()
-        .find(|rule| equivalent_selector(rule, &requested))
+        .find(|rule| selector_covers(rule, &requested))
         .map(|rule| rule.name().to_string());
     if reused.is_none() {
         if let Some(existing) = rules
@@ -367,6 +367,43 @@ fn equivalent_selector(
     requested: &BackgroundDependencyRuleConfig,
 ) -> bool {
     compatible_selector(existing, requested, true)
+}
+
+fn selector_covers(
+    existing: &BackgroundDependencyRuleConfig,
+    requested: &BackgroundDependencyRuleConfig,
+) -> bool {
+    match (existing, requested) {
+        (
+            BackgroundDependencyRuleConfig::Http {
+                authorities: existing_authorities,
+                methods: existing_methods,
+                path_prefixes: existing_paths,
+                ..
+            },
+            BackgroundDependencyRuleConfig::Http {
+                authorities: requested_authorities,
+                methods: requested_methods,
+                path_prefixes: requested_paths,
+                ..
+            },
+        ) => {
+            requested_authorities.iter().all(|requested| {
+                existing_authorities.iter().any(|existing| {
+                    canonical_authority(existing).ok() == canonical_authority(requested).ok()
+                })
+            }) && requested_methods.iter().all(|requested| {
+                existing_methods
+                    .iter()
+                    .any(|existing| existing.eq_ignore_ascii_case(requested))
+            }) && requested_paths.iter().all(|requested| {
+                existing_paths
+                    .iter()
+                    .any(|existing| requested.starts_with(existing))
+            })
+        }
+        _ => equivalent_selector(existing, requested),
+    }
 }
 
 fn compatible_named_selector(
