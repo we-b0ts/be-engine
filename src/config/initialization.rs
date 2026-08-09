@@ -359,16 +359,9 @@ redact_headers = [
 [[recording.background_dependencies]]
 name = "breeze_vintage"
 protocol = "http"
-authorities = [
-  "config.api.demo.test",
-  "static.config.api.demo.test",
-  "register.kailash.demo.test",
-]
+authorities = ["config.api.demo.test", "static.config.api.demo.test", "register.kailash.demo.test"]
 methods = ["GET"]
-path_prefixes = [
-  "/1/config/service",
-  "/naming/service",
-]
+path_prefixes = ["/1/config/service", "/naming/service"]
 source_evidence = "traffic-e2e system default: Weibo Breeze Vintage configuration and naming refresh are process-owned background traffic"
 # END AI-MANAGED BACKGROUND DEPENDENCIES
 
