@@ -149,8 +149,6 @@ docker info >/dev/null 2>&1 || {
     printf 'error: Docker daemon is unavailable\n' >&2
     exit 1
 }
-source_inspect=$(docker inspect "$TRAFFIC_E2E_SOURCE_CONTAINER")
-[[ "$(jq 'length' <<<"$source_inspect")" == 1 ]] || exit 1
 breeze_inspect=""
 breeze_enabled=false
 if [[ -n "${TRAFFIC_E2E_BREEZE_CONTAINER-}" ]]; then
@@ -181,6 +179,9 @@ source_name="${prefix}-source"
 target_name="${prefix}-target"
 adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
+adapter_runtime_name="traffic-e2e-${recording_image_project}-recording-runtime-cache"
+adapter_runtime_inspect=""
+adapter_runtime_staging_name=""
 source_uses_java=false
 adapter_dockerfile="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/Dockerfile.recording"
 
@@ -336,6 +337,9 @@ cleanup() {
     "$recorder_started" && stop_container "$recorder_name"
     "$target_started" && stop_container "$target_name"
     "$anchor_started" && stop_container "$anchor_name"
+    if [[ -n "$adapter_runtime_staging_name" ]]; then
+        stop_container "$adapter_runtime_staging_name"
+    fi
     remove_private_runtime_dir "$control_dir" "$local_dir/control" || status=1
     exit "$status"
 }
@@ -455,7 +459,7 @@ load_runtime_spec() {
             source=$translated
             docker run --rm --platform linux/amd64 --network none \
                 --entrypoint /bin/sh --volume /data1:/host-data1 \
-                "$(jq -r '.[0].Config.Image' <<<"$source_inspect")" \
+                "$adapter_image_id" \
                 -ec 'mkdir -p "$1"; chown -hR 998:998 -- "$1"; chmod -R u+rwX -- "$1"' \
                 sh "/host-data1/${source#/data1/}"
         fi
@@ -480,10 +484,8 @@ load_runtime_spec() {
 }
 
 normalize_breeze_directories() {
-    local helper_image
-    helper_image=$(jq -r '.[0].Config.Image' <<<"$source_inspect")
     docker run --rm --platform linux/amd64 --network none --entrypoint /bin/sh \
-        --volume /data1:/host-data1 "$helper_image" -ec '
+        --volume /data1:/host-data1 "$adapter_image_id" -ec '
             mkdir -p /host-data1/breeze/socks /host-data1/breeze/snapshot /host-data1/breeze/logs
             chown -hR 998:998 -- /host-data1/breeze/socks /host-data1/breeze/snapshot /host-data1/breeze/logs
             chmod -R u+rwX -- /host-data1/breeze/socks /host-data1/breeze/snapshot /host-data1/breeze/logs
@@ -529,7 +531,7 @@ start_cache_snapshot() {
 
 start_comparison_source() {
     local network=$1
-    load_runtime_spec "$source_inspect" recording recording image
+    load_runtime_spec "$adapter_runtime_inspect" recording recording image
     if "$breeze_enabled"; then
         runtime_args+=(--env MESH_CONNECT_HOST=breeze.recording)
     fi
@@ -550,6 +552,16 @@ start_comparison_source() {
 build_recording_adapter() {
     local source_image source_image_id resolved_source_image_id
     local adapter_iid_file
+    local source_inspect
+    source_inspect=$(docker container inspect "$TRAFFIC_E2E_SOURCE_CONTAINER" 2>/dev/null) || {
+        printf 'error: recording source adaptor build/refresh requires source container %s\n' \
+            "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
+        return 1
+    }
+    [[ "$(jq 'length' <<<"$source_inspect")" == 1 ]] || {
+        printf 'error: source container inspect returned an invalid result\n' >&2
+        return 1
+    }
     source_image=$(jq -r '.[0].Config.Image' <<<"$source_inspect")
     source_image_id=$(jq -r '.[0].Image' <<<"$source_inspect")
     [[ "$source_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
@@ -581,29 +593,87 @@ build_recording_adapter() {
         printf 'error: adapter build did not publish an image ID\n' >&2
         return 1
     }
+    create_recording_adapter_runtime "$source_inspect"
+}
+
+create_recording_adapter_runtime() {
+    local source_inspect=$1
+    local existing_inspect
+    load_runtime_spec "$source_inspect" exact exact image
+    adapter_runtime_staging_name="${adapter_runtime_name}-${token}"
+    container_exists "$adapter_runtime_staging_name" && {
+        printf 'error: recording source adaptor runtime staging container already exists: %s\n' \
+            "$adapter_runtime_staging_name" >&2
+        return 1
+    }
+    docker create --name "$adapter_runtime_staging_name" \
+        "${runtime_args[@]}" \
+        --label com.weibo.traffic-e2e.managed=true \
+        --label com.weibo.traffic-e2e.role=source-adapter-runtime \
+        --label "com.weibo.traffic-e2e.project=${recording_image_project}" \
+        "$adapter_image_id" >/dev/null
+
+    if container_exists "$adapter_runtime_name"; then
+        existing_inspect=$(docker container inspect "$adapter_runtime_name")
+        [[ "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.managed"] // empty' \
+            <<<"$existing_inspect")" == true &&
+            "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.role"] // empty' \
+                <<<"$existing_inspect")" == source-adapter-runtime &&
+            "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.project"] // empty' \
+                <<<"$existing_inspect")" == "$recording_image_project" ]] || {
+            printf 'error: refusing to replace unowned recording adaptor runtime container %s\n' \
+                "$adapter_runtime_name" >&2
+            return 1
+        }
+        stop_container "$adapter_runtime_name"
+    fi
+    docker rename "$adapter_runtime_staging_name" "$adapter_runtime_name"
+    adapter_runtime_staging_name=""
+    adapter_runtime_inspect=$(docker container inspect "$adapter_runtime_name")
+    [[ "$(jq -r '.[0].Image' <<<"$adapter_runtime_inspect")" == "$adapter_image_id" ]] || {
+        printf 'error: recording source adaptor runtime template has the wrong image identity\n' >&2
+        return 1
+    }
+}
+
+load_initialized_recording_adapter() {
+    local runtime_image_id
+    adapter_image_id=$(docker image inspect --format '{{.Id}}' "$adapter_image" 2>/dev/null || true)
+    [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+    container_exists "$adapter_runtime_name" || return 1
+    adapter_runtime_inspect=$(docker container inspect "$adapter_runtime_name")
+    [[ "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.managed"] // empty' \
+        <<<"$adapter_runtime_inspect")" == true &&
+        "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.role"] // empty' \
+            <<<"$adapter_runtime_inspect")" == source-adapter-runtime &&
+        "$(jq -r '.[0].Config.Labels["com.weibo.traffic-e2e.project"] // empty' \
+            <<<"$adapter_runtime_inspect")" == "$recording_image_project" ]] || {
+        printf 'error: recording adaptor runtime container %s is not platform-owned\n' \
+            "$adapter_runtime_name" >&2
+        return 2
+    }
+    [[ "$(jq -r '.[0].State.Running' <<<"$adapter_runtime_inspect")" == false ]] || {
+        printf 'error: recording adaptor runtime template %s must remain stopped\n' \
+            "$adapter_runtime_name" >&2
+        return 2
+    }
+    runtime_image_id=$(jq -r '.[0].Image' <<<"$adapter_runtime_inspect")
+    [[ "$runtime_image_id" == "$adapter_image_id" ]] || return 1
 }
 
 resolve_or_build_recording_adapter() {
-    adapter_image_id=$(docker image inspect --format '{{.Id}}' "$adapter_image" 2>/dev/null || true)
-    if [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-        printf 'reusing initialized recording source image %s (%s)\n' \
+    local status
+    if load_initialized_recording_adapter; then
+        printf 'reusing initialized recording source adaptor %s (%s)\n' \
             "$adapter_image" "$adapter_image_id" >&2
         return 0
+    else
+        status=$?
     fi
-    printf 'initialized recording source image %s is missing; building it once\n' \
-        "$adapter_image" >&2
+    ((status == 1)) || return "$status"
+    printf 'recording source adaptor cache is missing or stale; building it from %s\n' \
+        "$TRAFFIC_E2E_SOURCE_CONTAINER" >&2
     build_recording_adapter
-}
-
-require_initialized_recording_adapter() {
-    adapter_image_id=$(docker image inspect --format '{{.Id}}' "$adapter_image" 2>/dev/null || true)
-    [[ "$adapter_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || {
-        printf 'error: initialization must build recording source image %s before preflight\n' \
-            "$adapter_image" >&2
-        return 1
-    }
-    printf 'using initialized recording source image %s (%s) for preflight\n' \
-        "$adapter_image" "$adapter_image_id" >&2
 }
 
 detect_source_java_runtime() {
@@ -620,7 +690,7 @@ detect_source_java_runtime() {
 
 start_recording_source() {
     local truststore=$1
-    load_runtime_spec "$source_inspect" recording recording image
+    load_runtime_spec "$adapter_runtime_inspect" recording recording image
     if "$source_uses_java"; then
         runtime_args+=(
             --env 'JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=/traffic-e2e/source-truststore.jks -Djavax.net.ssl.trustStorePassword=changeit'
@@ -728,11 +798,7 @@ run_standard_recording() {
         printf 'error: recording run already exists: %s\n' "$run_id" >&2
         return 1
     }
-    if [[ "$operation" == preflight ]]; then
-        require_initialized_recording_adapter
-    else
-        resolve_or_build_recording_adapter
-    fi
+    resolve_or_build_recording_adapter
     detect_source_java_runtime
     if "$breeze_enabled"; then
         normalize_breeze_directories

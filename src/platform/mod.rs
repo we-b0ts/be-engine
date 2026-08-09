@@ -17,6 +17,7 @@ mod preflight;
 mod recording_input;
 mod recovery;
 mod replay_preflight;
+mod source_adapter;
 
 pub use preflight::{
     ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
@@ -30,6 +31,7 @@ pub use replay_preflight::{
     ManagedReplayNetworkPreflightResult, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
     ReplayPositiveProbeResult,
 };
+pub(crate) use source_adapter::{source_revision, source_runtime_revision};
 
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
 const BREEZE_NO_FALLBACK: &str = include_str!("assets/brz-no-fallback.sh");
@@ -479,17 +481,39 @@ mod tests {
                 "adapter_image=\"traffic-e2e/${recording_image_project}-recording:cache\""
             )
         );
+        assert!(MANAGER.contains(
+            "adapter_runtime_name=\"traffic-e2e-${recording_image_project}-recording-runtime-cache\""
+        ));
         assert!(MANAGER.contains("build_recording_adapter"));
         assert!(MANAGER.contains("resolve_or_build_recording_adapter"));
-        assert!(MANAGER.contains("require_initialized_recording_adapter"));
-        assert!(MANAGER.contains("reusing initialized recording source image"));
-        assert!(MANAGER.contains("initialization must build recording source image"));
-        assert!(MANAGER.contains("is missing; building it once"));
+        assert!(MANAGER.contains("create_recording_adapter_runtime"));
+        assert!(MANAGER.contains("load_initialized_recording_adapter"));
+        assert!(!MANAGER.contains("require_initialized_recording_adapter"));
+        assert!(MANAGER.contains("reusing initialized recording source adaptor"));
+        assert!(MANAGER.contains("adaptor cache is missing or stale; building it"));
+        assert!(
+            MANAGER.contains("recording source adaptor build/refresh requires source container")
+        );
+        assert_eq!(
+            MANAGER
+                .matches("docker container inspect \"$TRAFFIC_E2E_SOURCE_CONTAINER\"")
+                .count(),
+            1
+        );
+        let before_adapter_build = MANAGER.split_once("build_recording_adapter()").unwrap().0;
+        assert!(
+            !before_adapter_build
+                .contains("docker container inspect \"$TRAFFIC_E2E_SOURCE_CONTAINER\"")
+        );
         assert!(!MANAGER.contains("recording-adapter.fingerprint"));
         assert!(MANAGER.contains("--iidfile \"$adapter_iid_file\""));
         assert!(
-            MANAGER.contains("load_runtime_spec \"$source_inspect\" recording recording image")
+            MANAGER.contains(
+                "load_runtime_spec \"$adapter_runtime_inspect\" recording recording image"
+            )
         );
+        assert!(MANAGER.contains("com.weibo.traffic-e2e.role=source-adapter-runtime"));
+        assert!(MANAGER.contains("docker rename \"$adapter_runtime_staging_name\""));
         assert!(MANAGER.contains("\"${runtime_args[@]}\" \"$adapter_image_id\" >/dev/null"));
         let adapted_source = MANAGER
             .split_once("start_recording_source()")
@@ -508,8 +532,9 @@ mod tests {
             .unwrap()
             .0;
         assert!(
-            comparison_source
-                .contains("load_runtime_spec \"$source_inspect\" recording recording image")
+            comparison_source.contains(
+                "load_runtime_spec \"$adapter_runtime_inspect\" recording recording image"
+            )
         );
         assert!(comparison_source.contains("\"${runtime_args[@]}\" \"$adapter_image_id\""));
         assert!(!comparison_source.contains(".[0].Config.Image"));

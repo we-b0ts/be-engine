@@ -99,27 +99,6 @@ fn hash_repository_path(target_root: &Path, relative: &str, hash: &mut Fnv1a) ->
     Ok(())
 }
 
-pub(super) fn source_container_revision(container: &str) -> Result<String> {
-    let output = Command::new("docker")
-        .args(["container", "inspect", "--format", "{{.Image}}", container])
-        .output()
-        .with_context(|| format!("failed to inspect source container {container:?}"))?;
-    ensure!(
-        output.status.success(),
-        "failed to resolve immutable source image for {container:?}: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
-    let revision = String::from_utf8(output.stdout)
-        .context("source image identity is not UTF-8")?
-        .trim()
-        .to_string();
-    ensure!(
-        !revision.is_empty(),
-        "source container has no image identity"
-    );
-    Ok(revision)
-}
-
 pub(super) fn traffic_e2e_revision() -> Result<String> {
     let executable = crate::engine_binary::executable()?;
     let mut file = fs::File::open(&executable)
@@ -150,13 +129,13 @@ pub(super) fn recorder_config_revision(target_root: &Path) -> Result<String> {
     Ok(hash.finish())
 }
 
-pub(super) fn source_runtime_inputs_revision(
-    target_root: &Path,
-    source_container: &str,
-) -> Result<String> {
-    let source_revision = source_container_revision(source_container)?;
+pub(super) fn source_runtime_inputs_revision(target_root: &Path) -> Result<String> {
+    let source_revision = crate::platform::source_revision(target_root)?;
+    let runtime_revision = crate::platform::source_runtime_revision(target_root)?;
     let mut hash = Fnv1a::default();
     hash.update(source_revision.as_bytes());
+    hash.update(&[0]);
+    hash.update(runtime_revision.as_bytes());
     hash.update(&[0]);
     let boot = target_root.join(crate::repository::LOCAL_BOOT_ROOT);
     let mut files = 0_usize;
