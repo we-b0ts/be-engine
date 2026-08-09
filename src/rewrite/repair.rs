@@ -309,10 +309,12 @@ fn current_revision(target_root: &Path, kind: RewriteRepairAcceptanceKind) -> Re
             fingerprint::traffic_e2e_revision()
         }
         RewriteRepairAcceptanceKind::SourceRevisionChanged => {
-            crate::platform::source_revision(target_root)
+            let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+            fingerprint::source_container_revision(&project.source_container)
         }
         RewriteRepairAcceptanceKind::SourceRuntimeInputsChanged => {
-            fingerprint::source_runtime_inputs_revision(target_root)
+            let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+            fingerprint::source_runtime_inputs_revision(target_root, &project.source_container)
         }
     }
 }

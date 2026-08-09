@@ -21,9 +21,9 @@ Managed comparison runs source through the same reviewed
 `.traffic-e2e/Dockerfile.recording` adaptor used by standard recording. The
 adaptor owns the source command and fixed `998:998` identity required by
 cache-only interception; callers do not adapt or configure the source UID.
-It also reuses the adaptor's platform-owned runtime template, so comparison
-does not inspect or require the original source container after the adaptor
-has been built.
+Comparison reads runtime inputs from the configured source container, which
+must remain present and stopped. traffic-e2e only inspects that container and
+starts the adapted, run-private source container.
 
 When the recorder config contains Redis background rules, managed comparison
 also owns a cache-only run-local snapshot in the shared network namespace.

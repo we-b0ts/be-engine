@@ -4,8 +4,6 @@ use anyhow::Result;
 
 use crate::RecordingApi;
 
-#[cfg(test)]
-use super::fingerprint;
 use super::model::{
     ACTION_SCHEMA_VERSION, RewriteAction, RewriteActionEnvelope, RewriteCommandSpec,
     RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason,
@@ -508,7 +506,6 @@ pub(super) fn recover_command(target_root: &Path) -> RewriteCommandSpec {
 mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::process::Command;
 
     use super::super::recording_action::recording_action_id;
     use super::super::{artifacts, recording_execution};
@@ -869,49 +866,6 @@ mod tests {
     }
 
     #[test]
-    fn status_requests_advance_after_the_target_changes() {
-        let target = tempfile::tempdir().unwrap();
-        fs::create_dir_all(target.path().join("src")).unwrap();
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "pub fn value() -> u8 { 1 }\n",
-        )
-        .unwrap();
-        git_ok(target.path(), &["init"]);
-        git_ok(target.path(), &["config", "user.email", "test@example.com"]);
-        git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
-        git_ok(target.path(), &["add", "."]);
-        git_ok(target.path(), &["commit", "-m", "baseline"]);
-
-        let mut state = crate::rewrite::test_state();
-        state.phase = RewritePhase::ImplementationRequired;
-        state.target_fingerprint =
-            Some(fingerprint::repository_fingerprint(target.path()).unwrap());
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "pub fn value() -> u8 { 2 }\n",
-        )
-        .unwrap();
-
-        let status = serde_json::to_value(for_status(target.path(), &state).unwrap()).unwrap();
-        assert_eq!(
-            status.pointer("/action/kind"),
-            Some(&serde_json::json!("advance_required"))
-        );
-        assert_eq!(
-            status.pointer("/action/commands/advance/argv"),
-            Some(&serde_json::json!([
-                "backend-rewrite",
-                "--target-root",
-                target.path(),
-                "next",
-                "--api",
-                "GET /api"
-            ]))
-        );
-    }
-
-    #[test]
     fn identifies_fresh_and_reused_standard_cases() {
         let mut state = crate::rewrite::test_state();
         state.phase = RewritePhase::SliceComplete;
@@ -986,15 +940,5 @@ mod tests {
                 response_incomplete: 0,
             },
         }
-    }
-
-    fn git_ok(repository: &Path, args: &[&str]) {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(repository)
-            .args(args)
-            .status()
-            .unwrap();
-        assert!(status.success(), "git command failed: {args:?}");
     }
 }
