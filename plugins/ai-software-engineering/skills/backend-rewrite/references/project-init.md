@@ -234,6 +234,61 @@ advances coordinator workflow state. Do not invoke
 identity, readiness, CA truststore setup, request admission, case publication,
 finalization, or cleanup fails, initialization is incomplete.
 
+## Analyze Source Startup Reference Evidence
+
+During the same one-time initialization, analyze one complete startup lifecycle
+of the disposable recording source adaptor. Use the source startup code, the
+runtime inputs inspected from the configured source container, bounded source
+container logs, and observed process traffic together. The analysis is
+reference evidence for the first rewrite, not coordinator state or migration
+acceptance evidence.
+
+Cover only these source-runtime concerns:
+
+- every configuration input loaded during startup, including complete local
+  configuration roots, environment or argument selectors, and remote
+  configuration access through Vintage or equivalent SDKs;
+- each Vintage dependency and access visible from source initialization,
+  refresh, fallback, logs, or observed traffic, without recording sensitive
+  values;
+- startup and post-readiness background traffic, summarized by protocol,
+  destination domain, port, lifecycle phase, and observed access count; and
+- each local cache initialized, warmed, loaded, refreshed, or consulted by
+  startup/background work, together with its proved loader dependency and
+  readiness relationship when available.
+
+Distinguish at least pre-readiness, controlled-request, and post-readiness
+background observations. Counts and log frequency are triage evidence only;
+they do not by themselves prove background ownership, cache causality, or a
+required target implementation. Correlate them with source startup and cache
+code before recording a conclusion.
+
+Copy a source-proven authoritative local configuration root as one complete
+subtree below `.traffic-e2e/local/boot/`, preserving its supplied format and
+directory relationships. Source containers commonly keep runtime configuration
+below `/data1` or `/data0`; inspect both locations together with the proved
+startup loader and container mounts. Copy every required authoritative
+configuration subtree into `.traffic-e2e/local/boot` with its source path
+preserved, for example `/data1/authconfs` as
+`.traffic-e2e/local/boot/data1/authconfs`. Do not copy selected keys, generated
+loader or SDK snapshots, local caches, decrypted output, remote responses,
+logs, or process memory into boot inputs. Keep credentials and other sensitive
+values out of commands and summaries and never commit local boot inputs.
+
+Write a concise, redacted summary of the configuration, Vintage,
+background-traffic, and local-cache findings to
+`.traffic-e2e/local/block.md`. Do not copy raw logs or build a permanent
+architecture document. The first rewrite session must read the complete
+summary. It may then delete each entry once it has fully understood the
+finding, implemented the required behavior, or proved the finding irrelevant;
+delete the file when no entries remain and retain no resolved history.
+
+This analysis must not implement target configuration loading, a Vintage
+client, background tasks, local caches, API handlers, or any other migrated
+product behavior. Initialization only discovers and transports source runtime
+facts; rewrite workers implement behavior later when their evidence requires
+it.
+
 ## Provide The Target Container Contract
 
 The same initialization task must create this source-controlled target build
@@ -461,7 +516,11 @@ Do not report initialization complete until all of the following are true:
   Global dependency, and one cleanly published case;
 - the disposable Replay network preflight consumed that Global probe through
   its assigned fake IP, blocked DNS for unrecorded `example.com`, rejected
-  direct external egress for UID `998`, and completed cleanup; and
+  direct external egress for UID `998`, and completed cleanup;
+- one disposable source-adaptor startup was analyzed for configuration and
+  Vintage access, background destinations and counts, and local-cache loading
+  or refresh behavior, with temporary findings summarized only in the ignored
+  `.traffic-e2e/local/block.md`; and
 - the initialization changes contain no generated runtime data, credentials,
   recordings, or `.traffic-e2e/local/` content.
 

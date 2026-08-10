@@ -35,6 +35,9 @@ pub(super) struct RecordComparisonArgs {
     /// Override the per-API case limit for this run.
     #[arg(long = "per-api-case-limit", value_name = "N")]
     per_api_case_limit: Option<NonZeroUsize>,
+    /// Publish comparison readiness on this Unix socket for the managed runtime.
+    #[arg(long)]
+    control_socket: Option<PathBuf>,
 }
 
 pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
@@ -60,6 +63,11 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
     if let Some(per_api_case_limit) = args.per_api_case_limit {
         config.override_per_api_case_limit_for_run(per_api_case_limit);
     }
+    config
+        .comparison_recording
+        .as_mut()
+        .expect("comparison recording config was validated")
+        .max_in_flight = 1;
     let decision = configure_baseline_recheck(&mut config, &policy_path, args.baseline_recheck)?;
     info!(
         policy = %policy_path.display(),
@@ -74,6 +82,7 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
             run_id: args.run_id,
             duration: Some(Duration::from_secs(args.duration_seconds.get())),
             recording_apis: args.apis,
+            control_socket: args.control_socket,
         },
     )
     .await
@@ -162,6 +171,8 @@ mod tests {
             "GET /api/users/*",
             "--per-api-case-limit",
             "250",
+            "--control-socket",
+            "comparison.sock",
         ])
         .unwrap();
         assert_eq!(
@@ -173,6 +184,10 @@ mod tests {
             Some(Path::new("verification.yaml"))
         );
         assert_eq!(parsed.record_comparison.duration_seconds.get(), 60);
+        assert_eq!(
+            parsed.record_comparison.control_socket.as_deref(),
+            Some(Path::new("comparison.sock"))
+        );
         assert!(parsed.record_comparison.baseline_recheck);
         assert_eq!(
             parsed.record_comparison.apis[0].to_string(),

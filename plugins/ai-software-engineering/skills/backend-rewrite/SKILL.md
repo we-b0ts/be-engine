@@ -90,10 +90,15 @@ read, search, list, or summarize `.traffic-e2e/local/ai-forbidden/**`; report an
 insufficient public action/status/evidence surface as a coordinator API gap.
 
 At the start of a main-orchestrator session, read
-`.traffic-e2e/local/block.md` when it exists. When you determine that progress
-is blocked and are about to stop, create or update that file with the context
-you consider useful for resuming. Remove it when the blocker is resolved. Treat
-it as AI-owned handoff context, never as coordinator state;
+`.traffic-e2e/local/block.md` when it exists. Project initialization may create
+it with temporary reference evidence about source configuration, Vintage
+access, startup/background traffic, and local caches. The first rewrite session
+after initialization must read that evidence completely. Remove each entry
+after the rewrite has fully understood it, implemented the required behavior,
+or proved it irrelevant; keep no resolved history and remove the file when it
+is empty. When you determine that progress is blocked and are about to stop,
+create or update the same file with the context useful for resuming. Treat it
+as AI-owned reference and handoff context, never as coordinator state;
 `backend-rewrite status` remains authoritative.
 
 ## Main Orchestrator Loop
@@ -257,7 +262,3 @@ Product code MUST use the `brz-*` library; it MUST NOT depend directly on the
 raw SDK or driver, place the implementation in an application or domain crate,
 or combine multiple capabilities into one package. Create only packages the
 product uses.
-
-Read [configuration-compatibility.md](references/configuration-compatibility.md)
-before implementing target configuration loading or accepting
-configuration-dependent startup.

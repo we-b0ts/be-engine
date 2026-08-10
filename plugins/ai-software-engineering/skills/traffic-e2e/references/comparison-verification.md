@@ -30,6 +30,9 @@ also owns a cache-only run-local snapshot in the shared network namespace.
 Source and candidate share the first successful response for each matching
 logical Redis read. This comparison snapshot starts empty and never loads the
 standard recording's Replay snapshot.
+Managed comparison waits for that snapshot recorder's sliding Redis quiet
+window before admitting input, then admits one complete source/candidate case
+at a time.
 
 When Breeze is absent, the same command selects the configured runtime without
 starting Breeze. Comparison sends every admitted request symmetrically to

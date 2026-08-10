@@ -108,6 +108,19 @@ impl RecordingLifecycle {
         }
     }
 
+    pub(crate) fn for_comparison_gateway(source_ready: bool) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(RecordingLifecycleState {
+                expected: BTreeSet::from([RecordingListener::HttpGateway]),
+                listening: BTreeSet::new(),
+                source_settling: false,
+                source_ready,
+                stopping: false,
+                error: None,
+            })),
+        }
+    }
+
     pub(crate) fn mark_listener_ready(&self, listener: RecordingListener) {
         self.lock().listening.insert(listener);
     }

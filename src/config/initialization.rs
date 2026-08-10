@@ -253,7 +253,7 @@ candidate_upstream = "http://127.0.0.1:__CANDIDATE_HTTP_PORT__"
 # source_match: before_or_after in verification.yaml enables this automatically.
 baseline_recheck = false
 upstream_timeout_ms = 30000
-max_in_flight = 256
+max_in_flight = 1
 summary_flush_interval_ms = 1000
 
 [dns_mock]
@@ -340,7 +340,8 @@ jsonl_flush_interval_ms = 1000
 writer_queue_capacity = 65536
 cache_snapshot_max_waiters_per_entry = 1024
 cache_snapshot_fill_timeout_ms = 30000
-post_ready_settle_ms = 10000
+post_ready_settle_ms = 15000
+post_ready_max_wait_ms = 180000
 case_dependency_post_response_window_ms = 100
 case_dependency_drain_timeout_ms = 5000
 shutdown_case_drain_timeout_ms = 5000
@@ -442,7 +443,8 @@ mod tests {
             config.recording_output_dir(),
             PathBuf::from("./.traffic-e2e/local/artifacts/recordings")
         );
-        assert_eq!(config.recording.post_ready_settle_ms, 10_000);
+        assert_eq!(config.recording.post_ready_settle_ms, 15_000);
+        assert_eq!(config.recording.post_ready_max_wait_ms, 180_000);
         assert_eq!(config.recording.cache_snapshot_max_waiters_per_entry, 1_024);
         assert_eq!(config.recording.cache_snapshot_fill_timeout_ms, 30_000);
         assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);

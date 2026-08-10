@@ -215,6 +215,20 @@ Unmatched target requests do not authorize the rule and remain dirty. Apply the
 returned plan, then create a fresh standard recording so its first-value seed
 is explicit and reusable.
 
+When an evidence-backed HGET/HMGET request has the same stable port set,
+command, and exact field sequence as one existing rule, planning preserves that
+rule's name and merges the new exact keys and numeric key patterns into it.
+Hostname remains diagnostic evidence rather than persisted selector identity.
+Different ports, commands, or fields remain separate rules; if more than one
+existing rule is otherwise compatible, use an existing rule name to select the
+merge target.
+
+Every configured Redis background rule also participates in the shared
+post-ready cache quiet window, including HGET/HMGET rules without an
+initial-load completion count. Case admission waits at least 15 seconds after
+source readiness, each matching Redis request restarts that window, and the
+180-second hard limit allows admission even when requests continue.
+
 For a process-owned Memcached `get` rule, preview before applying:
 
 ```bash

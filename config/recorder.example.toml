@@ -11,7 +11,7 @@ candidate_upstream = "http://127.0.0.1:6161"
 # source_match: before_or_after in verification.yaml enables this automatically.
 baseline_recheck = false
 upstream_timeout_ms = 30000
-max_in_flight = 256
+max_in_flight = 1
 summary_flush_interval_ms = 1000
 
 [dns_mock]
@@ -220,10 +220,11 @@ writer_queue_capacity = 65536
 # and their wait here; snapshot storage capacity is an internal Recorder budget.
 cache_snapshot_max_waiters_per_entry = 1024
 cache_snapshot_fill_timeout_ms = 30000
-# Keep startup dependencies in bootstrap for this fixed interval after the
-# readiness probe succeeds. Matching traffic continues to use the configured
-# fallback until the interval ends.
-post_ready_settle_ms = 10000
+# Keep startup dependencies in bootstrap until this quiet interval has elapsed
+# after readiness. Every configured background Redis request restarts the
+# interval; the maximum wait prevents periodic traffic from blocking forever.
+post_ready_settle_ms = 15000
+post_ready_max_wait_ms = 180000
 # Keep dependency admission open for a fixed interval after the HTTP response
 # completes so synchronous server-side after-hooks can start. Set to 0 to close
 # admission immediately when the response completes.

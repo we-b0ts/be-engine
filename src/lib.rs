@@ -61,6 +61,7 @@ use crate::http::rewrite::KubectlProxyManager;
 use crate::recorder::background::BackgroundDependencyMatcher;
 use crate::recorder::cache_snapshot::{CacheSnapshotReservation, CacheSnapshotStore};
 use crate::recorder::http::case::CaseInvalidation;
+use crate::recorder::readiness::PostReadyWaitOutcome;
 use crate::recording_control::{RecordingLifecycle, RecordingListener};
 
 /// Numeric UID used by every containerized process whose dependency traffic is intercepted.
@@ -548,6 +549,35 @@ impl AppState {
             .wait_for_initial_loads()
             .await;
         Ok(())
+    }
+
+    pub(crate) fn record_redis_cache_request(&self) {
+        self.inner
+            .background_dependencies
+            .record_redis_cache_request();
+    }
+
+    pub(crate) async fn wait_for_post_ready_admission(
+        &self,
+        ready_at: tokio::time::Instant,
+    ) -> Result<PostReadyWaitOutcome> {
+        let maximum_wait = self.config().recording.post_ready_max_wait();
+        let maximum_deadline = ready_at + maximum_wait;
+        if tokio::time::timeout_at(maximum_deadline, self.wait_for_background_initial_loads())
+            .await
+            .is_err()
+        {
+            return Ok(PostReadyWaitOutcome::MaximumWaitElapsed);
+        }
+        Ok(self
+            .inner
+            .background_dependencies
+            .wait_for_redis_cache_quiet_period(
+                ready_at,
+                self.config().recording.post_ready_quiet_period(),
+                maximum_wait,
+            )
+            .await)
     }
 
     pub(crate) fn begin_case_quiescing(&self) -> bool {

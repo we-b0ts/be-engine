@@ -238,9 +238,17 @@ sends each admitted request to both upstreams without a separate read-only
 method restriction. Reaching an API case limit stops later requests for that
 API from reaching either upstream.
 
+Managed comparison waits for the cache-snapshot recorder to report ready
+before it opens case admission. Recorder readiness includes a 15-second quiet
+window after its readiness probe succeeds: every configured background Redis
+request restarts that window, and a 180-second hard deadline prevents a
+periodic task from blocking the run forever. The comparison snapshot probes
+the candidate, which starts after the source, so this boundary means both are
+ready. Standard managed recording uses the same barrier after source readiness.
+
 Comparison recording requires
 `http_gateway.fallback_mode = "fixed_response"`. A request is admitted only
-when it is selected, both upstreams are ready, a concurrency slot is available,
+when it is selected, both upstreams are ready, the single managed case slot is available,
 and its API still has case quota. An admitted request reaches both source and
 candidate and creates one case. A request that is unselected, excluded,
 unmatched, not ready, overloaded, or over quota reaches neither upstream and
@@ -249,9 +257,9 @@ forwards comparison traffic only to the source.
 
 By default the source baseline is requested once. Set
 `[comparison_recording].baseline_recheck = true` to capture the same request in
-strict source-before, candidate, source-after order. The frontend
-still receives the first source response without waiting for the later
-captures. The recheck adds `expected-response-after.json` and is diagnostic
+strict source-before, candidate, source-after order. The frontend receives the
+first source response after the complete serial comparison case is captured
+and published. The recheck adds `expected-response-after.json` and is diagnostic
 evidence for source-time drift by default. It runs only for admitted cases.
 Use the enable-only `--baseline-recheck` flag for one diagnostic run without
 changing the source-controlled default. A policy with
@@ -392,9 +400,11 @@ Run the wait commands from another process that can access the socket, such as
 `docker exec` in the Recorder container. `wait-listeners` succeeds after
 Recorder initialization and every enabled listener bind, so automation can
 then prepare CA trust and start the source. `wait-ready` additionally requires
-the configured HTTP gateway source readiness probe. Neither command parses
-recorder configuration or probes listener ports. `--timeout-seconds` defaults
-to `300`.
+the configured HTTP gateway source readiness probe and the post-ready quiet
+window. Every matching configured background Redis request slides the quiet
+deadline by 15 seconds, bounded by 180 seconds from source readiness. Neither
+command parses recorder configuration or probes listener ports.
+`--timeout-seconds` defaults to `300`.
 
 The internal Recorder process enables local DNS capture and fake-IP TCP/UDP
 redirect by default inside its managed container. For focused low-level

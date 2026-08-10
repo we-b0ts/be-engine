@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ pub struct RecordingConfig {
     pub cache_snapshot_max_waiters_per_entry: usize,
     pub cache_snapshot_fill_timeout_ms: u64,
     pub post_ready_settle_ms: u64,
+    pub post_ready_max_wait_ms: u64,
     #[serde(alias = "case_dependency_quiet_period_ms")]
     pub case_dependency_post_response_window_ms: u64,
     pub case_dependency_drain_timeout_ms: u64,
@@ -98,6 +100,22 @@ impl RecordingAccessPolicy {
 }
 
 impl RecordingConfig {
+    const MIN_POST_READY_QUIET_PERIOD_MS: u64 = 15_000;
+
+    pub(crate) fn post_ready_quiet_period(&self) -> Duration {
+        let milliseconds = if self.post_ready_settle_ms == 0 {
+            0
+        } else {
+            self.post_ready_settle_ms
+                .max(Self::MIN_POST_READY_QUIET_PERIOD_MS)
+        };
+        Duration::from_millis(milliseconds)
+    }
+
+    pub(crate) fn post_ready_max_wait(&self) -> Duration {
+        Duration::from_millis(self.post_ready_max_wait_ms)
+    }
+
     pub fn decoded_body_limit(&self) -> usize {
         self.max_decoded_body_bytes.unwrap_or(self.max_body_bytes)
     }
@@ -128,6 +146,14 @@ impl RecordingConfig {
         }
         if self.cache_snapshot_fill_timeout_ms == 0 {
             bail!("recording.cache_snapshot_fill_timeout_ms must be greater than zero");
+        }
+        if self.post_ready_max_wait_ms == 0 {
+            bail!("recording.post_ready_max_wait_ms must be greater than zero");
+        }
+        if self.post_ready_quiet_period() > self.post_ready_max_wait() {
+            bail!(
+                "recording.post_ready_max_wait_ms must be at least the effective post-ready quiet period"
+            );
         }
         if self.case_dependency_drain_timeout_ms == 0 {
             bail!("recording.case_dependency_drain_timeout_ms must be greater than zero");
@@ -223,7 +249,8 @@ impl Default for RecordingConfig {
             writer_queue_capacity: 65_536,
             cache_snapshot_max_waiters_per_entry: 1_024,
             cache_snapshot_fill_timeout_ms: 30_000,
-            post_ready_settle_ms: 10_000,
+            post_ready_settle_ms: 15_000,
+            post_ready_max_wait_ms: 180_000,
             case_dependency_post_response_window_ms: 100,
             case_dependency_drain_timeout_ms: 5_000,
             shutdown_case_drain_timeout_ms: 5_000,
@@ -296,7 +323,8 @@ mod tests {
     #[test]
     fn validates_case_dependency_drain_timing() {
         let mut config = AppConfig::default();
-        assert_eq!(config.recording.post_ready_settle_ms, 10_000);
+        assert_eq!(config.recording.post_ready_settle_ms, 15_000);
+        assert_eq!(config.recording.post_ready_max_wait_ms, 180_000);
         assert_eq!(config.recording.shutdown_case_drain_timeout_ms, 5_000);
         config.recording.case_dependency_post_response_window_ms = 0;
         config.validate().unwrap();
@@ -307,6 +335,25 @@ mod tests {
         config.recording.case_dependency_drain_timeout_ms = 1;
         config.recording.shutdown_case_drain_timeout_ms = 0;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn normalizes_legacy_post_ready_settle_to_the_fifteen_second_minimum() {
+        let mut config = AppConfig::default();
+        config.recording.post_ready_settle_ms = 10_000;
+
+        assert_eq!(
+            config.recording.post_ready_quiet_period(),
+            Duration::from_secs(15)
+        );
+        config.validate().unwrap();
+
+        config.recording.post_ready_max_wait_ms = 14_999;
+        assert!(config.validate().is_err());
+
+        config.recording.post_ready_settle_ms = 0;
+        config.validate().unwrap();
+        assert!(config.recording.post_ready_quiet_period().is_zero());
     }
 
     #[test]

@@ -132,6 +132,15 @@ impl DependencyRulePlan {
             _ => None,
         }
     }
+
+    fn effective_name(&self) -> &str {
+        match self {
+            Self::Http(plan) => &plan.report().effective_name,
+            Self::Memcached(plan) => &plan.report().effective_name,
+            Self::Motan(plan) => &plan.report().effective_name,
+            Self::Redis(plan) => &plan.report().effective_name,
+        }
+    }
 }
 
 pub(super) fn plan(
@@ -164,6 +173,9 @@ pub(super) fn plan(
         effective_name: None,
     };
     let plan = build_plan(target_root, state, &record)?;
+    if plan.effective_name() != record.name {
+        record.effective_name = Some(plan.effective_name().to_string());
+    }
     if let Some(effective_name) = plan.reused_existing() {
         record.reused_existing = true;
         record.effective_name = Some(effective_name.to_string());
