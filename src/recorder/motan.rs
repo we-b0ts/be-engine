@@ -388,6 +388,7 @@ async fn record_proxy_error(
         state,
         RecorderEvent::ProxyError(ProxyErrorEvent {
             id: Uuid::new_v4(),
+            connection_id: None,
             timestamp: Utc::now(),
             protocol: "motan".to_string(),
             client_addr: context.client_addr.clone(),

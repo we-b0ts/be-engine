@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
@@ -19,13 +18,14 @@ use crate::memcached::{
     binary_access_denied_response, binary_response_is_complete, read_binary_frame,
     read_text_request, read_text_response,
 };
+use crate::recorder::capture_health::{ConnectionCaptureHealth, RawTrafficDirection};
 
 mod fallback;
 mod recording;
 #[cfg(test)]
 mod tests;
 
-use fallback::{activate_raw_fallback, forward_buffer_and_copy};
+use fallback::forward_buffer_and_copy;
 use recording::{finish_pending, record_connection, record_exchange};
 
 #[derive(Debug, Clone)]
@@ -123,8 +123,12 @@ async fn proxy_text(
 ) -> Result<(u64, u64, bool)> {
     let max_frame_bytes = state.config().recording.max_body_bytes;
     let pending = Arc::new(Mutex::new(VecDeque::<PendingMemcachedExchange>::new()));
-    let raw_fallback = Arc::new(AtomicBool::new(false));
-    let fallback_reason = Arc::new(Mutex::new(None::<String>));
+    let capture_health = Arc::new(ConnectionCaptureHealth::new(
+        connection_id,
+        "memcached",
+        context.client_addr.clone(),
+        context.target_addr.clone(),
+    ));
     let termination = ConnectionTermination::default();
     let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
@@ -133,8 +137,7 @@ async fn proxy_text(
     let c2s_state = state.clone();
     let c2s_context = context.clone();
     let c2s_pending = pending.clone();
-    let c2s_raw_fallback = raw_fallback.clone();
-    let c2s_fallback_reason = fallback_reason.clone();
+    let c2s_capture_health = capture_health.clone();
     let c2s_client_write = client_write.clone();
     let c2s_pending_drained = pending_drained.clone();
     let c2s_termination = termination.clone();
@@ -143,6 +146,18 @@ async fn proxy_text(
         let mut sequence = 0_u64;
         let mut bytes = 0_u64;
         loop {
+            if c2s_capture_health.is_degraded() {
+                bytes += forward_buffer_and_copy(
+                    &mut reader,
+                    &mut upstream_write,
+                    None,
+                    &c2s_capture_health,
+                    &c2s_state,
+                    RawTrafficDirection::ClientToServer,
+                )
+                .await?;
+                break;
+            }
             let request = match read_text_request(&mut reader).await {
                 Ok(Some(request)) => request,
                 Ok(None) => {
@@ -153,20 +168,36 @@ async fn proxy_text(
                     if reader.buffer.is_empty() && c2s_termination.observe_client_error(&error) {
                         break;
                     }
-                    activate_raw_fallback(
-                        &c2s_raw_fallback,
-                        &c2s_fallback_reason,
+                    c2s_capture_health.activate(
+                        &c2s_state,
                         format!(
                             "Memcached text request parse failed; switched to raw forwarding: {error}"
                         ),
+                    );
+                    bytes += forward_buffer_and_copy(
+                        &mut reader,
+                        &mut upstream_write,
+                        None,
+                        &c2s_capture_health,
                         &c2s_state,
-                        &c2s_context,
+                        RawTrafficDirection::ClientToServer,
                     )
                     .await?;
-                    bytes += forward_buffer_and_copy(&mut reader, &mut upstream_write).await?;
                     break;
                 }
             };
+            if c2s_capture_health.is_degraded() {
+                bytes += forward_buffer_and_copy(
+                    &mut reader,
+                    &mut upstream_write,
+                    Some(&request.raw),
+                    &c2s_capture_health,
+                    &c2s_state,
+                    RawTrafficDirection::ClientToServer,
+                )
+                .await?;
+                break;
+            }
             sequence += 1;
             let operation_class = classify_request(&request);
             if c2s_state.access_decision(operation_class) == AccessDecision::Reject {
@@ -204,8 +235,6 @@ async fn proxy_text(
             } else {
                 vec!["Memcached Meta Text is unsupported".to_string()]
             };
-            upstream_write.write_all(&request.raw).await?;
-            bytes += request.raw.len() as u64;
             let pending_exchange = PendingMemcachedExchange {
                 sequence,
                 request,
@@ -215,6 +244,10 @@ async fn proxy_text(
                 started: Instant::now(),
             };
             if no_response {
+                upstream_write
+                    .write_all(&pending_exchange.request.raw)
+                    .await?;
+                bytes += pending_exchange.request.raw.len() as u64;
                 record_exchange(
                     &c2s_state,
                     connection_id,
@@ -227,7 +260,10 @@ async fn proxy_text(
                 )
                 .await?;
             } else {
+                let raw = pending_exchange.request.raw.clone();
                 c2s_pending.lock().await.push_back(pending_exchange);
+                upstream_write.write_all(&raw).await?;
+                bytes += raw.len() as u64;
             }
         }
         let _ = upstream_write.shutdown().await;
@@ -237,8 +273,7 @@ async fn proxy_text(
     let s2c_state = state.clone();
     let s2c_context = context.clone();
     let s2c_pending = pending.clone();
-    let s2c_raw_fallback = raw_fallback.clone();
-    let s2c_fallback_reason = fallback_reason.clone();
+    let s2c_capture_health = capture_health.clone();
     let s2c_client_write = client_write.clone();
     let s2c_pending_drained = pending_drained.clone();
     let s2c_termination = termination.clone();
@@ -259,9 +294,17 @@ async fn proxy_text(
                 if !s2c_pending.lock().await.is_empty() {
                     continue;
                 }
-                if s2c_raw_fallback.load(Ordering::Acquire) {
+                if s2c_capture_health.is_degraded() {
                     let mut writer = s2c_client_write.lock().await;
-                    bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
+                    bytes += forward_buffer_and_copy(
+                        &mut reader,
+                        &mut *writer,
+                        None,
+                        &s2c_capture_health,
+                        &s2c_state,
+                        RawTrafficDirection::ServerToClient,
+                    )
+                    .await?;
                     break;
                 }
                 let mut probe = [0_u8; 1];
@@ -271,17 +314,21 @@ async fn proxy_text(
                         break;
                     }
                     Ok(_) => {
-                        activate_raw_fallback(
-                            &s2c_raw_fallback,
-                            &s2c_fallback_reason,
+                        s2c_capture_health.activate(
+                            &s2c_state,
                             "Memcached text response has no pending request; switched to raw forwarding"
                                 .to_string(),
+                        );
+                        let mut writer = s2c_client_write.lock().await;
+                        bytes += forward_buffer_and_copy(
+                            &mut reader,
+                            &mut *writer,
+                            None,
+                            &s2c_capture_health,
                             &s2c_state,
-                            &s2c_context,
+                            RawTrafficDirection::ServerToClient,
                         )
                         .await?;
-                        let mut writer = s2c_client_write.lock().await;
-                        bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                         break;
                     }
                     Err(err) => {
@@ -299,26 +346,36 @@ async fn proxy_text(
                 }
                 Err(error) => {
                     s2c_termination.observe_server_error(&error);
-                    activate_raw_fallback(
-                        &s2c_raw_fallback,
-                        &s2c_fallback_reason,
+                    s2c_capture_health.activate(
+                        &s2c_state,
                         format!(
                             "Memcached text response parse failed; switched to raw forwarding: {error}"
                         ),
+                    );
+                    let mut writer = s2c_client_write.lock().await;
+                    bytes += forward_buffer_and_copy(
+                        &mut reader,
+                        &mut *writer,
+                        None,
+                        &s2c_capture_health,
                         &s2c_state,
-                        &s2c_context,
+                        RawTrafficDirection::ServerToClient,
                     )
                     .await?;
-                    let mut writer = s2c_client_write.lock().await;
-                    bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                     break;
                 }
             };
-            if s2c_raw_fallback.load(Ordering::Acquire) {
-                s2c_client_write.lock().await.write_all(&response).await?;
-                bytes += response.len() as u64;
+            if s2c_capture_health.is_degraded() {
                 let mut writer = s2c_client_write.lock().await;
-                bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
+                bytes += forward_buffer_and_copy(
+                    &mut reader,
+                    &mut *writer,
+                    Some(&response),
+                    &s2c_capture_health,
+                    &s2c_state,
+                    RawTrafficDirection::ServerToClient,
+                )
+                .await?;
                 break;
             }
             let mut exchange = s2c_pending
@@ -393,7 +450,7 @@ async fn proxy_text(
         max_frame_bytes,
     )
     .await?;
-    if fallback_reason.lock().await.is_some() {
+    if capture_health.is_degraded() {
         replay_safe = false;
     }
     Ok((c2s_bytes, s2c_bytes, replay_safe))
@@ -408,15 +465,18 @@ async fn proxy_binary(
 ) -> Result<(u64, u64, bool)> {
     let max_frame_bytes = state.config().recording.max_body_bytes;
     let pending = Arc::new(Mutex::new(VecDeque::<PendingMemcachedExchange>::new()));
-    let raw_fallback = Arc::new(AtomicBool::new(false));
-    let fallback_reason = Arc::new(Mutex::new(None::<String>));
+    let capture_health = Arc::new(ConnectionCaptureHealth::new(
+        connection_id,
+        "memcached",
+        context.client_addr.clone(),
+        context.target_addr.clone(),
+    ));
     let termination = ConnectionTermination::default();
     let (client_read, client_write) = client.into_split();
     let (upstream_read, mut upstream_write) = upstream.into_split();
     let client_write = Arc::new(Mutex::new(client_write));
     let c2s_pending = pending.clone();
-    let c2s_raw_fallback = raw_fallback.clone();
-    let c2s_fallback_reason = fallback_reason.clone();
+    let c2s_capture_health = capture_health.clone();
     let c2s_state = state.clone();
     let c2s_context = context.clone();
     let c2s_client_write = client_write.clone();
@@ -426,6 +486,18 @@ async fn proxy_binary(
         let mut sequence = 0_u64;
         let mut bytes = 0_u64;
         loop {
+            if c2s_capture_health.is_degraded() {
+                bytes += forward_buffer_and_copy(
+                    &mut reader,
+                    &mut upstream_write,
+                    None,
+                    &c2s_capture_health,
+                    &c2s_state,
+                    RawTrafficDirection::ClientToServer,
+                )
+                .await?;
+                break;
+            }
             let frame = match read_binary_frame(&mut reader).await {
                 Ok(Some(frame)) => frame,
                 Ok(None) => {
@@ -436,36 +508,54 @@ async fn proxy_binary(
                     if reader.buffer.is_empty() && c2s_termination.observe_client_error(&error) {
                         break;
                     }
-                    activate_raw_fallback(
-                        &c2s_raw_fallback,
-                        &c2s_fallback_reason,
+                    c2s_capture_health.activate(
+                        &c2s_state,
                         format!(
                             "Memcached binary request parse failed; switched to raw forwarding: {error}"
                         ),
+                    );
+                    bytes += forward_buffer_and_copy(
+                        &mut reader,
+                        &mut upstream_write,
+                        None,
+                        &c2s_capture_health,
                         &c2s_state,
-                        &c2s_context,
+                        RawTrafficDirection::ClientToServer,
                     )
                     .await?;
-                    bytes += forward_buffer_and_copy(&mut reader, &mut upstream_write).await?;
                     break;
                 }
             };
+            if c2s_capture_health.is_degraded() {
+                bytes += forward_buffer_and_copy(
+                    &mut reader,
+                    &mut upstream_write,
+                    Some(&frame.raw),
+                    &c2s_capture_health,
+                    &c2s_state,
+                    RawTrafficDirection::ClientToServer,
+                )
+                .await?;
+                break;
+            }
             let mut request = match frame.as_request() {
                 Ok(request) => request,
                 Err(error) => {
-                    activate_raw_fallback(
-                        &c2s_raw_fallback,
-                        &c2s_fallback_reason,
+                    c2s_capture_health.activate(
+                        &c2s_state,
                         format!(
                             "Memcached binary request validation failed; switched to raw forwarding: {error}"
                         ),
+                    );
+                    bytes += forward_buffer_and_copy(
+                        &mut reader,
+                        &mut upstream_write,
+                        Some(&frame.raw),
+                        &c2s_capture_health,
                         &c2s_state,
-                        &c2s_context,
+                        RawTrafficDirection::ClientToServer,
                     )
                     .await?;
-                    upstream_write.write_all(&frame.raw).await?;
-                    bytes += frame.raw.len() as u64;
-                    bytes += forward_buffer_and_copy(&mut reader, &mut upstream_write).await?;
                     break;
                 }
             };
@@ -530,8 +620,7 @@ async fn proxy_binary(
     let s2c_state = state.clone();
     let s2c_context = context.clone();
     let s2c_pending = pending.clone();
-    let s2c_raw_fallback = raw_fallback.clone();
-    let s2c_fallback_reason = fallback_reason.clone();
+    let s2c_capture_health = capture_health.clone();
     let s2c_client_write = client_write.clone();
     let s2c_termination = termination.clone();
     let s2c = tokio::spawn(async move {
@@ -546,42 +635,54 @@ async fn proxy_binary(
                 }
                 Err(error) => {
                     s2c_termination.observe_server_error(&error);
-                    activate_raw_fallback(
-                        &s2c_raw_fallback,
-                        &s2c_fallback_reason,
+                    s2c_capture_health.activate(
+                        &s2c_state,
                         format!(
                             "Memcached binary response parse failed; switched to raw forwarding: {error}"
                         ),
+                    );
+                    let mut writer = s2c_client_write.lock().await;
+                    bytes += forward_buffer_and_copy(
+                        &mut reader,
+                        &mut *writer,
+                        None,
+                        &s2c_capture_health,
                         &s2c_state,
-                        &s2c_context,
+                        RawTrafficDirection::ServerToClient,
                     )
                     .await?;
-                    let mut writer = s2c_client_write.lock().await;
-                    bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                     break;
                 }
             };
-            if s2c_raw_fallback.load(Ordering::Acquire) {
-                s2c_client_write.lock().await.write_all(&frame.raw).await?;
-                bytes += frame.raw.len() as u64;
+            if s2c_capture_health.is_degraded() {
                 let mut writer = s2c_client_write.lock().await;
-                bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
+                bytes += forward_buffer_and_copy(
+                    &mut reader,
+                    &mut *writer,
+                    Some(&frame.raw),
+                    &s2c_capture_health,
+                    &s2c_state,
+                    RawTrafficDirection::ServerToClient,
+                )
+                .await?;
                 break;
             }
             if frame.magic != 0x81 {
-                activate_raw_fallback(
-                    &s2c_raw_fallback,
-                    &s2c_fallback_reason,
+                s2c_capture_health.activate(
+                    &s2c_state,
                     "Memcached binary upstream sent request magic; switched to raw forwarding"
                         .to_string(),
+                );
+                let mut writer = s2c_client_write.lock().await;
+                bytes += forward_buffer_and_copy(
+                    &mut reader,
+                    &mut *writer,
+                    Some(&frame.raw),
+                    &s2c_capture_health,
                     &s2c_state,
-                    &s2c_context,
+                    RawTrafficDirection::ServerToClient,
                 )
                 .await?;
-                s2c_client_write.lock().await.write_all(&frame.raw).await?;
-                bytes += frame.raw.len() as u64;
-                let mut writer = s2c_client_write.lock().await;
-                bytes += forward_buffer_and_copy(&mut reader, &mut *writer).await?;
                 break;
             }
             let (quiet_completed, completed) =
@@ -670,7 +771,7 @@ async fn proxy_binary(
         max_frame_bytes,
     )
     .await?;
-    if fallback_reason.lock().await.is_some() {
+    if capture_health.is_degraded() {
         replay_safe = false;
     }
     Ok((c2s_bytes, s2c_bytes, replay_safe))

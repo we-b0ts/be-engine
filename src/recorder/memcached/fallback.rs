@@ -1,52 +1,34 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use anyhow::Result;
-use chrono::Utc;
-use tokio::io::{self, AsyncWriteExt};
-use tokio::sync::Mutex;
-use uuid::Uuid;
+use tokio::io::AsyncWrite;
 
 use crate::AppState;
 use crate::memcached::BufferedReader;
-use crate::recorder::{ProxyErrorEvent, RecorderEvent};
-
-use super::ConnectionContext;
-
-pub(super) async fn activate_raw_fallback(
-    raw_fallback: &AtomicBool,
-    reason: &Mutex<Option<String>>,
-    message: String,
-    state: &AppState,
-    context: &ConnectionContext,
-) -> Result<()> {
-    let first = !raw_fallback.swap(true, Ordering::AcqRel);
-    let mut reason = reason.lock().await;
-    reason.get_or_insert_with(|| message.clone());
-    drop(reason);
-    if first {
-        let event = RecorderEvent::ProxyError(ProxyErrorEvent {
-            id: Uuid::new_v4(),
-            timestamp: Utc::now(),
-            protocol: "memcached".to_string(),
-            client_addr: context.client_addr.clone(),
-            target: Some(context.target_addr.clone()),
-            error: message,
-        });
-        state.record_event(event);
-    }
-    Ok(())
-}
+use crate::recorder::capture_health::{ConnectionCaptureHealth, RawTrafficDirection};
 
 pub(super) async fn forward_buffer_and_copy<R, W>(
     reader: &mut BufferedReader<R>,
     writer: &mut W,
+    prefix: Option<&[u8]>,
+    capture_health: &ConnectionCaptureHealth,
+    state: &AppState,
+    direction: RawTrafficDirection,
 ) -> Result<u64>
 where
     R: tokio::io::AsyncRead + Unpin,
-    W: tokio::io::AsyncWrite + Unpin,
+    W: AsyncWrite + Unpin,
 {
+    let mut copied = 0_u64;
+    if let Some(prefix) = prefix {
+        copied += capture_health
+            .write_raw(state, direction, writer, prefix)
+            .await?;
+    }
     let buffered = reader.buffer.split().freeze();
-    writer.write_all(&buffered).await?;
-    let copied = io::copy(&mut reader.inner, writer).await?;
-    Ok(buffered.len() as u64 + copied)
+    copied += capture_health
+        .write_raw(state, direction, writer, &buffered)
+        .await?;
+    copied += capture_health
+        .copy_raw(state, direction, &mut reader.inner, writer)
+        .await?;
+    Ok(copied)
 }

@@ -561,6 +561,8 @@ pub struct MysqlTlsRejectedEvent {
 #[derive(Debug, Clone, Serialize)]
 pub struct ProxyErrorEvent {
     pub id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connection_id: Option<Uuid>,
     pub timestamp: DateTime<Utc>,
     pub protocol: String,
     pub client_addr: Option<String>,

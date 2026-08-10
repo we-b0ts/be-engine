@@ -100,6 +100,7 @@ async fn handle_connect(
                         .recorder()
                         .record(RecorderEvent::ProxyError(ProxyErrorEvent {
                             id: Uuid::new_v4(),
+                            connection_id: None,
                             timestamp: Utc::now(),
                             protocol: "https".to_string(),
                             client_addr,
@@ -428,6 +429,7 @@ async fn record_http_error(ctx: HttpErrorContext) -> Response<ProxyBody> {
         &ctx.state,
         RecorderEvent::ProxyError(ProxyErrorEvent {
             id: Uuid::new_v4(),
+            connection_id: None,
             timestamp: Utc::now(),
             protocol: ctx.scheme,
             client_addr: ctx.client_addr,

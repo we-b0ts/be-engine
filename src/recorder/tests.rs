@@ -19,6 +19,7 @@ async fn flush_global_dependencies(recorder: &Recorder) {
 fn test_proxy_error(message: &str) -> RecorderEvent {
     RecorderEvent::ProxyError(ProxyErrorEvent {
         id: Uuid::new_v4(),
+        connection_id: None,
         timestamp: Utc::now(),
         protocol: "test".to_string(),
         client_addr: None,
@@ -224,6 +225,7 @@ async fn case_dependency_records_match_reason() {
     };
     let event = RecorderEvent::ProxyError(ProxyErrorEvent {
         id: Uuid::new_v4(),
+        connection_id: None,
         timestamp: Utc::now(),
         protocol: "test".to_string(),
         client_addr: None,
@@ -275,6 +277,7 @@ async fn global_dependency_summary_is_generated_only_when_run_finishes() {
     let recorder = Recorder::new(temp.path()).await.unwrap();
     let event = RecorderEvent::ProxyError(ProxyErrorEvent {
         id: Uuid::new_v4(),
+        connection_id: None,
         timestamp: Utc::now(),
         protocol: "test".to_string(),
         client_addr: None,
@@ -607,6 +610,7 @@ async fn finalized_case_ignores_late_dependencies() {
     };
     let event = RecorderEvent::ProxyError(ProxyErrorEvent {
         id: Uuid::new_v4(),
+        connection_id: None,
         timestamp: Utc::now(),
         protocol: "test".to_string(),
         client_addr: None,

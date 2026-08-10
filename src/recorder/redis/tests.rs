@@ -5,6 +5,7 @@ use tempfile::{TempDir, tempdir};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::recorder::CaseContext;
 use crate::{AppConfig, BackgroundDependencyRuleConfig, RecordingAccessPolicy};
 
 use super::*;
@@ -307,6 +308,88 @@ async fn partial_request_rejects_abortive_client_close() {
         .unwrap()
         .unwrap();
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn raw_fallback_reports_later_case_activity_on_the_same_connection() {
+    let (state, _temp) = test_state(RecordingAccessPolicy::Unrestricted).await;
+    let first_case = test_case("first");
+    let first_guard = state.try_reserve_active_case(first_case.clone()).unwrap();
+    state
+        .activate_case_dependencies(&first_guard)
+        .expect("first case dependencies should activate");
+    let (mut client, proxy_client) = tcp_pair().await;
+    let (mut upstream, proxy_upstream) = tcp_pair().await;
+    let upstream_addr = upstream.peer_addr().unwrap();
+    let handler = spawn_handler(proxy_client, proxy_upstream, state.clone(), upstream_addr);
+
+    upstream.write_all(b"+PONG\r\n").await.unwrap();
+    let mut unsolicited = [0_u8; 7];
+    client.read_exact(&mut unsolicited).await.unwrap();
+    assert_eq!(&unsolicited, b"+PONG\r\n");
+    drop(first_guard);
+
+    let second_case = test_case("second");
+    let second_guard = state.try_reserve_active_case(second_case.clone()).unwrap();
+    state
+        .activate_case_dependencies(&second_guard)
+        .expect("second case dependencies should activate");
+    let request = b"*2\r\n$3\r\nGET\r\n$3\r\nkey\r\n";
+    client.write_all(request).await.unwrap();
+    let mut forwarded = vec![0_u8; request.len()];
+    upstream.read_exact(&mut forwarded).await.unwrap();
+    assert_eq!(forwarded, request);
+
+    client.shutdown().await.unwrap();
+    upstream.shutdown().await.unwrap();
+    drop(client);
+    drop(upstream);
+    let result = tokio::time::timeout(Duration::from_secs(1), handler)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Redis response arrived without a pending request; switched to raw forwarding"
+    );
+
+    let first_errors = case_proxy_errors(&state, &first_case).await;
+    let second_errors = case_proxy_errors(&state, &second_case).await;
+    assert_eq!(first_errors.len(), 1);
+    assert_eq!(second_errors.len(), 1);
+    assert_eq!(
+        first_errors[0]["connection_id"],
+        second_errors[0]["connection_id"]
+    );
+    assert_eq!(second_errors[0]["protocol"], "redis");
+    assert_eq!(
+        second_errors[0]["error"],
+        "Redis response arrived without a pending request; switched to raw forwarding"
+    );
+}
+
+fn test_case(name: &str) -> CaseContext {
+    CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: name.to_string(),
+        uri_group: None,
+    }
+}
+
+async fn case_proxy_errors(state: &AppState, case: &CaseContext) -> Vec<serde_json::Value> {
+    let dir = state.recorder().case_staging_dir(case);
+    state
+        .recorder()
+        .flush_case_dependency_files(&dir)
+        .await
+        .unwrap();
+    let raw = tokio::fs::read_to_string(dir.join("dependencies.jsonl"))
+        .await
+        .unwrap();
+    raw.lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .filter(|event| event["event_type"] == "proxy_error")
+        .collect()
 }
 
 async fn test_state(access_policy: RecordingAccessPolicy) -> (AppState, TempDir) {
