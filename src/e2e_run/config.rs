@@ -13,8 +13,9 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-const CONFIG_VERSION: u32 = 11;
-const DEFAULT_AI_FORBIDDEN_ROOT: &str = crate::internal_runtime::TRAFFIC_E2E_RELATIVE_ROOT;
+pub(super) const CONFIG_VERSION: u32 = 12;
+pub(super) const LEGACY_BOOT_CONFIG_VERSION: u32 = 11;
+const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
 pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
@@ -81,9 +82,9 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         options.recording_rule
     );
 
-    let ai_forbidden_root_setting = PathBuf::from(DEFAULT_AI_FORBIDDEN_ROOT);
-    let ai_forbidden_root = traffic_e2e_dir.join(&ai_forbidden_root_setting);
-    require_internal_root_ignored(&target_root, &ai_forbidden_root)?;
+    let runtime_root_setting = PathBuf::from(DEFAULT_RUNTIME_ROOT);
+    let runtime_root = traffic_e2e_dir.join(&runtime_root_setting);
+    require_internal_root_ignored(&target_root, &runtime_root)?;
 
     let payload = render_project_config(&options)?;
     let project_config: ProjectConfig = serde_yaml::from_slice(&payload)
@@ -97,7 +98,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
 
     Ok(E2eRunInitResult {
         config: config_path,
-        ai_forbidden_root,
+        runtime_root,
         pr_base: persisted.delivery.pr_base,
         recorder_feedback: true,
         replaced,
@@ -126,7 +127,7 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
             .map(|container| BreezeProjectConfig { container }),
         target: TargetProjectConfig {
             dockerfile: options.target_dockerfile.clone(),
-            boot_dir: options.target_boot_dir.clone(),
+            startup: crate::startup::normalized_config(options.target_startup.clone())?,
             http_host: options.target_http_host.clone(),
             port: options.target_port,
             readiness_path: options.target_readiness_path.clone(),
@@ -147,7 +148,7 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
             pr_base: options.pr_base.clone(),
         },
         state: StateProjectConfig {
-            ai_forbidden_root: PathBuf::from(DEFAULT_AI_FORBIDDEN_ROOT),
+            runtime_root: PathBuf::from(DEFAULT_RUNTIME_ROOT),
         },
     };
     validate_project_config(&project_config)?;
@@ -175,10 +176,10 @@ pub(super) fn resolve_layout(
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
     let config_path = traffic_e2e_dir.join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
-    let internal_root = resolve_under(&traffic_e2e_dir, &config.state.ai_forbidden_root);
+    let internal_root = resolve_under(&traffic_e2e_dir, &config.state.runtime_root);
     ensure!(
         internal_root.starts_with(&traffic_e2e_dir) && internal_root != traffic_e2e_dir,
-        "state.ai_forbidden_root must be a child of .traffic-e2e"
+        "state.runtime_root must be a child of .traffic-e2e"
     );
     let run_key = match explicit_run_key {
         Some(value) => validate_run_key(value)?,
@@ -226,7 +227,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         target_root.clone(),
         ResolvedProjectConfig {
             target_dockerfile: resolve_under(&target_root, &config.target.dockerfile),
-            target_boot_dir: resolve_under(&target_root, &config.target.boot_dir),
+            target_startup: config.target.startup,
             target_http_origin: format!(
                 "http://{}:{}",
                 config.target.http_host, config.target.port
@@ -275,7 +276,7 @@ pub(super) fn require_internal_root_ignored(
     Ok(())
 }
 
-fn load_project_config(target_root: &Path, config_path: &Path) -> Result<ProjectConfig> {
+pub(super) fn load_project_config(target_root: &Path, config_path: &Path) -> Result<ProjectConfig> {
     if !config_path.exists() {
         bail!(
             "{} is missing; from the target repository run `backend-rewrite init \
@@ -301,7 +302,7 @@ fn load_project_config(target_root: &Path, config_path: &Path) -> Result<Project
     Ok(config)
 }
 
-fn validate_project_config(config: &ProjectConfig) -> Result<()> {
+pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
     ensure!(
         config.version == CONFIG_VERSION,
         "unsupported traffic E2E config version {}; expected {CONFIG_VERSION}",
@@ -325,15 +326,7 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         config.target.dockerfile == Path::new(".traffic-e2e/Dockerfile.e2e"),
         "target.dockerfile must be .traffic-e2e/Dockerfile.e2e"
     );
-    ensure!(
-        !config.target.boot_dir.as_os_str().is_empty(),
-        "target.boot_dir must not be empty"
-    );
-    ensure!(
-        config.target.boot_dir == Path::new(crate::repository::LOCAL_BOOT_ROOT),
-        "target.boot_dir must be {}",
-        crate::repository::LOCAL_BOOT_ROOT
-    );
+    crate::startup::validate_config(&config.target.startup)?;
     ensure!(
         !config.target.http_host.trim().is_empty()
             && !config.target.http_host.contains(['/', ':', '\r', '\n']),
@@ -371,8 +364,8 @@ fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "delivery.pr_base must not be empty"
     );
     ensure!(
-        config.state.ai_forbidden_root == Path::new(DEFAULT_AI_FORBIDDEN_ROOT),
-        "state.ai_forbidden_root must be {DEFAULT_AI_FORBIDDEN_ROOT:?}"
+        config.state.runtime_root == Path::new(DEFAULT_RUNTIME_ROOT),
+        "state.runtime_root must be {DEFAULT_RUNTIME_ROOT:?}"
     );
     ensure!(
         !config.recording.config.as_os_str().is_empty(),
@@ -523,7 +516,7 @@ mod tests {
             source_container: "source-app".to_string(),
             breeze_container: Some("breeze".to_string()),
             target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
-            target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
+            target_startup: crate::startup::StartupConfig::default(),
             target_http_host: "127.0.0.1".to_string(),
             target_port: 8081,
             target_readiness_path: "/healthz".to_string(),
@@ -566,9 +559,88 @@ mod tests {
         assert_eq!(config.delivery.pr_base, "integration");
         assert_eq!(result.pr_base, "integration");
         assert_eq!(
-            config.state.ai_forbidden_root,
-            PathBuf::from(DEFAULT_AI_FORBIDDEN_ROOT)
+            config.state.runtime_root,
+            PathBuf::from(DEFAULT_RUNTIME_ROOT)
         );
+    }
+
+    #[test]
+    fn startup_update_explicitly_migrates_version_11_boot_config() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let mut value: serde_yaml::Value = store::read_yaml(&config_path).unwrap();
+        let root = value.as_mapping_mut().unwrap();
+        root.insert(
+            serde_yaml::Value::String("version".to_string()),
+            serde_yaml::to_value(LEGACY_BOOT_CONFIG_VERSION).unwrap(),
+        );
+        let target_config = root
+            .get_mut(serde_yaml::Value::String("target".to_string()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap();
+        target_config.remove(serde_yaml::Value::String("startup".to_string()));
+        target_config.insert(
+            serde_yaml::Value::String("boot_dir".to_string()),
+            serde_yaml::Value::String(".traffic-e2e/local/boot".to_string()),
+        );
+        let state = root
+            .get_mut(serde_yaml::Value::String("state".to_string()))
+            .unwrap()
+            .as_mapping_mut()
+            .unwrap();
+        state.remove(serde_yaml::Value::String("runtime_root".to_string()));
+        state.insert(
+            serde_yaml::Value::String("ai_forbidden_root".to_string()),
+            serde_yaml::Value::String("local/ai-forbidden".to_string()),
+        );
+        fs::remove_dir_all(
+            target
+                .path()
+                .join(crate::internal_runtime::REPOSITORY_RELATIVE_ROOT),
+        )
+        .unwrap();
+        let legacy_runtime = target.path().join(".traffic-e2e/local/ai-forbidden");
+        fs::create_dir_all(&legacy_runtime).unwrap();
+        fs::write(legacy_runtime.join("state.json"), "state").unwrap();
+        fs::write(&config_path, serde_yaml::to_string(&value).unwrap()).unwrap();
+
+        let (_, source, previous) =
+            crate::e2e_run::resolve_startup_update_context(target.path()).unwrap();
+        assert_eq!(source, "source-app");
+        assert!(previous.is_none());
+        crate::e2e_run::update_project_startup(
+            target.path(),
+            crate::startup::StartupConfig {
+                mounts: vec![PathBuf::from("/data1/weibo/confs")],
+                environment_from_source: vec!["WEIBO_CONF_PATH".to_string()],
+                ..crate::startup::StartupConfig::default()
+            },
+        )
+        .unwrap();
+
+        let config: ProjectConfig = store::read_yaml(&config_path).unwrap();
+        assert_eq!(config.version, CONFIG_VERSION);
+        assert_eq!(
+            config.target.startup.mounts,
+            [PathBuf::from("/data1/weibo/confs")]
+        );
+        assert_eq!(
+            config.target.startup.environment_from_source,
+            ["WEIBO_CONF_PATH"]
+        );
+        let migrated = fs::read_to_string(config_path).unwrap();
+        assert!(!migrated.contains("boot_dir"));
+        assert!(!migrated.contains("ai_forbidden_root"));
+        assert!(migrated.contains("runtime_root: local/runtime"));
+        assert!(
+            target
+                .path()
+                .join(".traffic-e2e/local/runtime/state.json")
+                .is_file()
+        );
+        assert!(!legacy_runtime.exists());
     }
 
     #[test]

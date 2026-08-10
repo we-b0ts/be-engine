@@ -7,6 +7,7 @@ use super::model::{
 use crate::RecordingApi;
 
 const MAX_CONCURRENT_AI_WORK_ITEMS: usize = 32;
+pub(super) const RECORDED_API_INVENTORY_SCOPE: &str = "recorded_api_inventory";
 
 pub(super) fn initialize_legacy(state: &mut RewriteState) -> bool {
     let mut changed = false;
@@ -677,7 +678,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn modern_all_configured_inventory_keeps_its_omitted_recording_scope() {
+    fn modern_recorded_inventory_keeps_its_omitted_recording_scope() {
         let mut state = crate::rewrite::test_state();
         install(
             &mut state,
@@ -690,7 +691,7 @@ mod tests {
         assert!(state.recording_apis.is_empty());
         assert_eq!(
             crate::rewrite::action::workflow_view(&state).scope,
-            "all_configured_apis"
+            RECORDED_API_INVENTORY_SCOPE
         );
     }
 
@@ -708,7 +709,7 @@ mod tests {
         assert!(state.recording_apis.is_empty());
         assert_eq!(
             crate::rewrite::action::workflow_view(&state).scope,
-            "all_configured_apis"
+            RECORDED_API_INVENTORY_SCOPE
         );
     }
 

@@ -407,7 +407,7 @@ mod tests {
     fn resolved_project(target_dockerfile: PathBuf) -> ResolvedProjectConfig {
         ResolvedProjectConfig {
             target_dockerfile,
-            target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
+            target_startup: crate::startup::StartupConfig::default(),
             target_http_origin: "http://127.0.0.1:8081".to_string(),
             target_port: 8081,
             target_readiness_path: "/healthz".to_string(),

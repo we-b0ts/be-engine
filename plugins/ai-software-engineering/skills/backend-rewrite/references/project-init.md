@@ -13,6 +13,10 @@ Run from the target repository, or bind it with global `--target-root`:
 backend-rewrite init \
   --source-container <existing-source-container> \
   [--breeze[=<container>]] \
+  [--startup-mount /data1/weibo/confs] \
+  [--startup-env WEIBO_CONF_PATH] \
+  [--target-port-env PORT] \
+  [--replay-ca-env SSL_CERT_FILE] \
   [--http-gateway-port 17171]
 ```
 
@@ -50,10 +54,20 @@ The command atomically creates exactly these source-controlled files:
 .traffic-e2e/verification.yaml
 ```
 
+`project.yaml` uses schema version 12. To replace the complete startup
+declaration later, or to explicitly migrate a version-11 `boot_dir` project,
+run `backend-rewrite startup update --replace` with all desired `--mount`,
+`--environment`, `--target-port-env`, and `--replay-ca-env` arguments. Use
+`backend-rewrite startup refresh` when only source values changed and
+`backend-rewrite startup status` for redacted snapshot metadata. The version-11
+migration also moves the legacy engine state directory to
+`.traffic-e2e/local/runtime/` and persists `state.runtime_root`.
+
 It also idempotently adds `/.traffic-e2e/local/` to `.gitignore`. It refuses
 the whole initialization when any generated file already exists, and it does
-not start containers, record traffic, create runtime evidence, or create
-`.traffic-e2e/local/boot`.
+not start containers, record traffic, or create runtime evidence. It captures
+the declared startup inputs below `.traffic-e2e/local/startup/` from the
+configured stopped source container.
 
 ## Generate The Recording Source Adaptor
 
@@ -263,17 +277,20 @@ they do not by themselves prove background ownership, cache causality, or a
 required target implementation. Correlate them with source startup and cache
 code before recording a conclusion.
 
-Copy a source-proven authoritative local configuration root as one complete
-subtree below `.traffic-e2e/local/boot/`, preserving its supplied format and
-directory relationships. Source containers commonly keep runtime configuration
-below `/data1` or `/data0`; inspect both locations together with the proved
-startup loader and container mounts. Copy every required authoritative
-configuration subtree into `.traffic-e2e/local/boot` with its source path
-preserved, for example `/data1/authconfs` as
-`.traffic-e2e/local/boot/data1/authconfs`. Do not copy selected keys, generated
-loader or SDK snapshots, local caches, decrypted output, remote responses,
-logs, or process memory into boot inputs. Keep credentials and other sensitive
-values out of commands and summaries and never commit local boot inputs.
+Declare each source-proven authoritative local configuration file or root by
+its normalized absolute source path through repeatable `--startup-mount`
+arguments. Source containers commonly keep runtime configuration below
+`/data1` or `/data0`; inspect both locations together with the proved startup
+loader and container mounts. Initialization copies every declared path below
+`.traffic-e2e/local/startup/mounts` with its source path preserved, for example
+`/data1/authconfs` as
+`.traffic-e2e/local/startup/mounts/data1/authconfs`. Declare each required
+Docker `Config.Env` name through repeatable `--startup-env` arguments; the
+engine freezes its value without printing it. Do not copy selected keys,
+generated loader or SDK snapshots, local caches, decrypted output, remote
+responses, logs, or process memory into startup inputs. Keep credentials and
+other sensitive values out of commands and summaries and never commit the
+local startup snapshot.
 
 Write a concise, redacted summary of the configuration, Vintage,
 background-traffic, and local-cache findings to
@@ -329,7 +346,7 @@ RUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/regi
     && install --directory /out \
     && install --mode 0755 "${binary}" /out/<project>
 
-FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1@sha256:63072803f35282f2134f08779bd1652e51c4ff30ba08728716b616ef96b3dc80
+FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2
 COPY --from=builder --chown=998:998 /out/<project> /app/bin/<project>
 ENTRYPOINT ["/app/bin/<project>"]
 ```
@@ -373,21 +390,26 @@ revision.
 ### Run The Normal Target Process
 
 The image entrypoint must directly execute the current target implementation as
-one foreground process. traffic-e2e passes no application CLI arguments. The
-process must read these required environment variables:
+one foreground process. traffic-e2e passes no application CLI arguments. Each
+declared startup path is mounted read-only at the same absolute path used by
+the source. Each declared environment name receives the value frozen from the
+source container. For example:
 
 ```text
-TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config
-TRAFFIC_E2E_TARGET_PORT=<configured target.port>
+/data1/weibo/confs -> /data1/weibo/confs (read-only)
+WEIBO_CONF_PATH=<source Docker Config.Env value>
 ```
 
-The coordinator creates the ignored host boot directory when needed and mounts
-`.traffic-e2e/local/boot` read-only at `/traffic-e2e/config`. The target must use
-that exact configuration root and port rather than a repository-local default.
-Use the config root only for authoritative source-compatible runtime inputs;
-never derive inputs from recordings, reports, source-process memory, or remote
-responses. Keep credentials and generated trust below `.traffic-e2e/local/`
-and never copy them into an image layer.
+If the source application obtains its config path or listen port from a native
+environment variable, declare only that application-owned name. Use
+`target.startup.port_environment` for the variable that receives
+`target.port`. If the source uses an in-program default such as
+`/data1/weibo/confs`, declare the mount and keep the same default; the engine
+does not invent or rewrite an environment variable. Target product code must
+not depend on generic `TRAFFIC_E2E_*` variables. Never derive inputs from
+recordings, reports, source-process memory, or remote responses. Keep
+credentials and generated trust below `.traffic-e2e/local/` and never copy
+them into an image layer.
 
 The entrypoint must emit application logs to stdout/stderr, remain attached to
 the target process, and handle `SIGTERM` with bounded graceful shutdown. It must
@@ -401,10 +423,10 @@ override them.
 Initialization may provide an explicit source-controlled mock implementation
 when genuine product startup is not implemented yet. The mock is the current
 image entrypoint, not a fallback selected after a real startup failure. It must
-honor the same configuration-root and port variables, verify that the mounted
-configuration root exists and is readable, bind `0.0.0.0` on the supplied
-port, satisfy the configured readiness path/status, stay in the foreground,
-log to stdout/stderr, and exit cleanly on `SIGTERM`. It must not emulate
+honor the same declared mounts and application-owned environment, verify that
+required mounts exist and are readable, bind `0.0.0.0` on the configured port,
+satisfy the configured readiness path/status, stay in the foreground, log to
+stdout/stderr, and exit cleanly on `SIGTERM`. It must not emulate
 business responses, dependencies, Replay, or Comparison. Replace it through
 ordinary product implementation later without changing the container
 contract. A runnable mock proves only initialization and launch integration;
@@ -424,11 +446,12 @@ it must not start Breeze or declare extra Breeze mounts.
 
 For Replay only, when recorded traffic requires the target's directly emitted
 TLS clients, traffic-e2e mounts the public Replay CA at
-`/traffic-e2e/trust/replay-ca.pem` and sets
-`TRAFFIC_E2E_REPLAY_CA_CERT_PATH` to that path. The target must add this public
-certificate to the normal root set of every such TLS client, without replacing
-the normal roots, disabling certificate verification, or receiving a private
-key. If the variable is present and the certificate cannot be loaded, target
+`/traffic-e2e/trust/replay-ca.pem`. When the project declares
+`target.startup.replay_ca_environment`, traffic-e2e sets that application-owned
+variable to this path. The target must add this public certificate to the
+normal root set of every such TLS client, without replacing the normal roots,
+disabling certificate verification, or receiving a private key. If the
+declared variable is present and the certificate cannot be loaded, target
 startup must fail. If the target emits no TLS dependency traffic, no
 Replay-specific CA code is required.
 
@@ -446,14 +469,15 @@ not the target AI, performs every step below:
 
 1. Resolve the cache tag to its immutable image ID and create a run-private
    internal Docker network with no external-network route.
-2. Ensure the ignored `.traffic-e2e/local/boot` directory exists, then start
-   that image ID with `--user 998:998`, its config bind-mounted read-only at
-   `/traffic-e2e/config`, `TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config`, and
-   `TRAFFIC_E2E_TARGET_PORT=<configured target.port>`. Pass no application CLI
-   arguments. Do not mount recordings, reports, source code, a build cache, or
-   a Replay CA private key.
-3. Verify the running foreground process has UID/GID `998:998`, the config
-   mount is read-only, the configured port is listening, and the configured
+2. Verify the captured startup manifest and environment snapshot, then start
+   that image ID with `--user 998:998`, each declared source path mounted at the
+   same absolute destination read-only, each allowlisted environment value,
+   and the optional application-owned target-port variable. Pass no application
+   CLI arguments. Do not mount recordings, reports, source code, a build cache,
+   or a Replay CA private key.
+3. Verify the running foreground process has UID/GID `998:998`, every startup
+   mount is read-only, every declared environment name is present, no generic
+   `TRAFFIC_E2E_*` variable is present, the configured port is listening, and the configured
    readiness path returns the configured final status. Use an external probe;
    do not add curl or another probe tool to the target image.
 4. Read bounded `docker logs` output to confirm application output is on
@@ -468,7 +492,7 @@ not start Breeze merely to make this launch-contract preflight pass. Replay CA
 trust is not tested by a mock that emits no TLS traffic; validate it when a
 genuine target TLS client is first implemented.
 
-Fail initialization when the build, identity, required environment, mount,
+Fail initialization when the build, identity, declared environment, mount,
 foreground lifetime, readiness, logging, signal handling, clean exit, or
 cleanup contract fails. Keep preflight state below `.traffic-e2e/local/` and
 never publish it as recording, Replay, Comparison, or migration evidence.
@@ -506,7 +530,7 @@ Do not report initialization complete until all of the following are true:
   entrypoint, and contains no source, build cache, credential, generated trust,
   recording, or `.traffic-e2e/local/` content;
 - the system reports `status = "passed"` for the disposable target-container
-  preflight, including the required environment and mounts, UID/GID `998:998`,
+  preflight, including the declared environment and mounts, UID/GID `998:998`,
   configured listening port and readiness result, stdout/stderr logging,
   bounded `SIGTERM` shutdown, and complete cleanup; an explicit mock is allowed
   but is not business evidence;

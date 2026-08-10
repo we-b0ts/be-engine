@@ -5,6 +5,7 @@ use clap::CommandFactory;
 fn exposes_only_the_rewrite_coordinator_surface() {
     let command = Cli::command();
     command.clone().debug_assert();
+    assert_eq!(command.get_version(), Some(traffic_e2e::BINARY_VERSION));
     let visible = command
         .get_subcommands()
         .filter(|subcommand| !subcommand.is_hide_set())
@@ -14,6 +15,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
         visible,
         [
             "init",
+            "startup",
             "next",
             "status",
             "inventory",
@@ -149,6 +151,38 @@ fn parses_the_bounded_rewrite_surface() {
         .is_ok()
     );
     assert!(Cli::try_parse_from(["test", "init", "--source-container", "friendship"]).is_ok());
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "init",
+            "--source-container",
+            "friendship",
+            "--startup-mount",
+            "/data1/weibo/confs",
+            "--startup-env",
+            "WEIBO_CONF_PATH",
+            "--target-port-env",
+            "PORT",
+            "--replay-ca-env",
+            "SSL_CERT_FILE",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "startup",
+            "update",
+            "--replace",
+            "--mount",
+            "/data1/weibo/confs",
+            "--environment",
+            "WEIBO_CONF_PATH",
+        ])
+        .is_ok()
+    );
+    assert!(Cli::try_parse_from(["test", "startup", "refresh"]).is_ok());
+    assert!(Cli::try_parse_from(["test", "startup", "status"]).is_ok());
     assert!(
         Cli::try_parse_from([
             "test",

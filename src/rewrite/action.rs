@@ -410,7 +410,7 @@ pub(super) fn workflow_view(state: &RewriteState) -> RewriteWorkflowView {
 fn workflow_scope(state: &RewriteState) -> String {
     let scope = inventory::recording_scope(state);
     if scope.is_empty() {
-        "all_configured_apis".to_string()
+        inventory::RECORDED_API_INVENTORY_SCOPE.to_string()
     } else {
         scope.join(", ")
     }

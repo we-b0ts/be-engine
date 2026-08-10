@@ -8,17 +8,18 @@ lifecycle, HTTP requests, assertions, aggregation, progress, and publication.
 Initialize all repository configuration once from the target root:
 
 ```bash
-traffic-e2e config init --source-container <existing-source-container> [--breeze]
+traffic-e2e config init --source-container <existing-source-container> [--breeze] \
+  [--startup-mount /data1/weibo/confs] [--startup-env WEIBO_CONF_PATH]
 ```
 
 The generated Recorder HTTP gateway listens on port `17171` by default; use
 `--http-gateway-port` only when that port is unavailable.
 
-The generated version-11 configuration has separate `source`, optional
+The generated version-12 configuration has separate `source`, optional
 `breeze`, `target`, `replay`, `recording`, `delivery`, and `state` sections.
-Relevant target fields are `.traffic-e2e/Dockerfile.e2e`,
-`.traffic-e2e/local/boot`, HTTP host, port, readiness, and timeouts. Do not
-hand-write it.
+Relevant target fields are `.traffic-e2e/Dockerfile.e2e`, explicit startup
+mount paths and environment names, HTTP host, port, readiness, and timeouts.
+Do not hand-write it.
 
 Before a run, the runner requires:
 
@@ -26,8 +27,8 @@ Before a run, the runner requires:
   excludes `.git/`, `.traffic-e2e/local/`, and `target/`;
 - valid recorder and replay config;
 - ignored `.traffic-e2e/local/`, ensured by repository initialization;
-- `.traffic-e2e/local/boot/` may remain absent until
-  target startup proves an authoritative input is required;
+- a matching `.traffic-e2e/local/startup/` snapshot captured by initialization
+  or `backend-rewrite startup refresh`;
 - a feature branch distinct from the configured PR base.
 
 ## Prepare One Canonical API
@@ -72,11 +73,12 @@ Keeping one target lifetime preserves observable local-cache, connection-pool,
 startup, and warmup behavior. The target never reads a case or writes an actual
 response artifact.
 
-The terminal JSON is the engine result interface. Consume `status`, `passed`,
-`gates`, bounded `diagnosis`, and `progress`; do not open report paths or
-generated internal state during normal operation. Explicit value presence
-distinguishes JSON null, missing fields, and unavailable evidence. Report these
-facts without choosing a migration repair.
+The terminal JSON is the primary engine result interface. Consume `status`,
+`passed`, `gates`, bounded `diagnosis`, and `progress` first. Read-only runtime
+inspection is available when those APIs are insufficient, but its paths and
+layout are not stable contracts. Explicit value presence distinguishes JSON
+null, missing fields, and unavailable evidence. Report these facts without
+choosing a migration repair.
 
 ## Full Round And Recovery
 

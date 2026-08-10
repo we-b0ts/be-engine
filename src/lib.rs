@@ -2,6 +2,7 @@ mod access_policy;
 mod active_case;
 mod artifact_file;
 mod breeze;
+mod build_info;
 mod case_group;
 mod case_kind;
 mod comparison_recording;
@@ -32,6 +33,7 @@ mod replay;
 mod repository;
 mod request_headers;
 mod rewrite;
+mod startup;
 mod target_container;
 mod tcp_gateway;
 mod tls;
@@ -70,6 +72,8 @@ pub const TRAFFIC_PROCESS_UID: u32 = 998;
 pub const TRAFFIC_PROCESS_GID: u32 = 998;
 /// OCI user specification for containerized processes whose dependency traffic is intercepted.
 pub const TRAFFIC_PROCESS_USER: &str = "998:998";
+
+pub use build_info::BINARY_VERSION;
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,
@@ -200,6 +204,10 @@ pub use rewrite::{
     request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
     route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
     status_rewrite_for_api, transfer_rewrite_worker, verify_rewrite_repair,
+};
+pub use startup::{
+    StartupConfig, StartupSnapshotReport, StartupStatusReport, StartupUpdateOptions,
+    refresh_startup_snapshot, status_startup_snapshot, update_startup_snapshot,
 };
 pub use target_container::{TargetContainerChecks, TargetContainerPreflightResult, TargetImage};
 pub use tls::MitmCa;

@@ -9,7 +9,8 @@ required_environment=(
     TRAFFIC_E2E_BIN
     TRAFFIC_E2E_TARGET_ROOT
     TRAFFIC_E2E_SOURCE_CONTAINER
-    TRAFFIC_E2E_TARGET_BOOT_DIR
+    TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE
+    TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE
     TRAFFIC_E2E_TARGET_ORIGIN
     TRAFFIC_E2E_TARGET_HOST
     TRAFFIC_E2E_TARGET_PORT
@@ -219,7 +220,7 @@ else
     data_dir="$runtime_root/data"
     artifacts_dir="$runtime_root/artifacts"
 fi
-local_dir="$runtime_root/ai-forbidden/platform"
+local_dir="$runtime_root/runtime/platform"
 diagnostics_dir="$local_dir/diagnostics/${operation}-${token}"
 control_dir="$local_dir/control/${token}"
 mkdir -p "$data_dir" "$artifacts_dir" "$diagnostics_dir" "$control_dir"
@@ -251,9 +252,12 @@ stop_container() {
 }
 
 start_target() {
-    local -a mounts=(
-        --mount "type=bind,source=${TRAFFIC_E2E_TARGET_BOOT_DIR},target=/traffic-e2e/config,readonly"
-    )
+    local source target
+    local -a mounts=()
+    while IFS=$'\t' read -r source target; do
+        [[ -n "$source" && -n "$target" ]] || continue
+        mounts+=(--mount "type=bind,source=${source},target=${target},readonly")
+    done <"$TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"
     if "$breeze_enabled"; then
         mounts+=(
             --mount type=bind,source=/data1/breeze/socks,target=/data1/breeze/socks,readonly
@@ -267,8 +271,7 @@ start_target() {
         --label com.weibo.traffic-e2e.role=target \
         --label "com.weibo.traffic-e2e.operation=${operation}" \
         --label "com.weibo.traffic-e2e.run-id=${run_id}" \
-        --env TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config \
-        --env "TRAFFIC_E2E_TARGET_PORT=${TRAFFIC_E2E_TARGET_PORT}" \
+        --env-file "$TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE" \
         "${mounts[@]}" "$TRAFFIC_E2E_TARGET_IMAGE_ID" >/dev/null
     target_started=true
 }

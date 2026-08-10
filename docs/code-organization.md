@@ -32,6 +32,10 @@ is unclear.
 - `main.rs` owns the `traffic-e2e` engine CLI bootstrap only.
 - `bin/backend-rewrite/` owns the AI-facing coordinator CLI bootstrap only.
 - `lib.rs` owns application wiring, shared state, and stable exports;
+  it remains one crate façade above the 800-line review threshold because its
+  flat exports and shared application-state composition have the same crate-root
+  compatibility owner. Feature implementations remain in their owned modules;
+  split the façade only when a distinct package or composition lifecycle exists.
   `recording_runtime` owns the Recorder application's listener supervision,
   stop triggers, graceful drain, and finalization lifecycle.
 - Proxy and gateway modules own connection and request orchestration.
@@ -39,6 +43,19 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
+- `startup` owns the source-compatible target startup declaration, public
+  snapshot lifecycle, and Docker environment-file projection. Its `snapshot`
+  child owns stopped-source inspection, declared-path capture, atomic local
+  persistence, and content-integrity validation. Target container and Platform
+  runtimes consume this contract; they do not rediscover startup inputs.
+  `platform/startup.rs` owns the shell-runtime projection of that snapshot.
+- `e2e_run/startup_config.rs` owns the explicit project startup update and the
+  one-way version-11 `boot_dir` to version-12 migration. Normal project loading
+  remains strict and does not dual-read the legacy schema.
+- `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
+  by engine-managed mutable state. The directory is inspectable but not a
+  stable API; coordinator commands remain the primary interface and all state
+  mutation stays with the owning engine module.
 - `rewrite` owns migration sequencing, the single coordinator state with
   API-scoped AI work slices, the serialized recording/Replay/comparison runtime
   lease, bounded action/evidence projection, rule routing, and the whole-target

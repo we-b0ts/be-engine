@@ -203,7 +203,7 @@ fn push_candidate(
 
 fn requested_scope(requested_apis: &[String]) -> String {
     if requested_apis.is_empty() {
-        "all_configured_apis".to_string()
+        inventory::RECORDED_API_INVENTORY_SCOPE.to_string()
     } else {
         requested_apis.join(", ")
     }
@@ -226,7 +226,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_configured_scope_reuses_only_an_atomic_all_scope_recording() {
+    fn recorded_inventory_scope_reuses_only_an_atomic_unscoped_recording() {
         let target = tempfile::tempdir().unwrap();
         write_run(
             target.path(),
@@ -270,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn all_configured_scope_does_not_merge_narrow_recordings() {
+    fn recorded_inventory_scope_does_not_merge_narrow_recordings() {
         let target = tempfile::tempdir().unwrap();
         write_run(
             target.path(),

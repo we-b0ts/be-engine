@@ -7,7 +7,7 @@ use serde::Serialize;
 pub(crate) struct TargetContainerConfig {
     pub(crate) target_root: PathBuf,
     pub(crate) dockerfile: PathBuf,
-    pub(crate) boot_dir: PathBuf,
+    pub(crate) startup: crate::startup::StartupConfig,
     pub(crate) port: u16,
     pub(crate) readiness_path: String,
     pub(crate) readiness_status: u16,
@@ -23,7 +23,7 @@ impl TargetContainerConfig {
         Self {
             target_root,
             dockerfile: project.target_dockerfile.clone(),
-            boot_dir: project.target_boot_dir.clone(),
+            startup: project.target_startup.clone(),
             port: project.target_port,
             readiness_path: project.target_readiness_path.clone(),
             readiness_status: project.target_readiness_status,
@@ -57,7 +57,8 @@ pub(crate) struct TargetStartEvidence {
     pub(crate) anchor_name: String,
     pub(crate) image_id: String,
     pub(crate) user: &'static str,
-    pub(crate) config_dir: &'static str,
+    pub(crate) startup_snapshot_id: String,
+    pub(crate) startup_mounts: Vec<PathBuf>,
     pub(crate) port: u16,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) replay_ca_cert: Option<&'static str>,
@@ -75,8 +76,9 @@ pub(crate) struct TargetStopEvidence {
 pub struct TargetContainerChecks {
     pub image_contract: bool,
     pub process_identity: bool,
-    pub required_environment: bool,
-    pub config_mount_read_only: bool,
+    pub startup_snapshot: bool,
+    pub startup_environment: bool,
+    pub startup_mounts_read_only: bool,
     pub listen_all_interfaces: bool,
     pub readiness: bool,
     pub stdout_stderr_logging: bool,

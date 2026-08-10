@@ -21,6 +21,12 @@ The build produces sibling `traffic-e2e` and `backend-rewrite` executables.
 Keep them together in installed packages because detached coordinator actions
 delegate engine work to `traffic-e2e`.
 
+Both binaries report the package version, build revision, and exact pinned
+target-runtime image from `--version`. Git checkouts derive the revision
+automatically and append `-dirty` for uncommitted content. Builds without Git
+metadata should set `TRAFFIC_E2E_BUILD_REVISION` to a 1-64 character release
+revision containing only ASCII letters, digits, `.`, `_`, `+`, or `-`.
+
 ## Shared Container Images
 
 The repository owns Dockerfiles for project-independent recording and target
@@ -40,7 +46,7 @@ Published Linux/amd64 references:
 registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
 registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
 registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1@sha256:99663c03c7da6d638f9bef5d84d923840e2069e3f32067851b43ea7abf3f0004
-registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1@sha256:63072803f35282f2134f08779bd1652e51c4ff30ba08728716b616ef96b3dc80
+registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2
 ```
 
 Build the inert Linux/amd64 network-namespace anchor without network access:
@@ -140,14 +146,14 @@ docker buildx build \
   --build-arg NO_PROXY \
   --load \
   --file docker/target-runtime/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1 \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2 \
   docker/target-runtime
 ```
 
 The target runtime contains common dynamically linked Rust prerequisites and
 the normal public CA bundle, creates `trp-record` as UID/GID `998:998`, and
-defaults to that identity. It reserves `/app`, `/traffic-e2e/config`, and
-`/traffic-e2e/trust`; target images add only their release binary and explicit
+defaults to that identity. It reserves `/app` and `/traffic-e2e/trust`; target
+images add only their release binary and explicit
 foreground entrypoint. The runtime clears the Debian base command so Docker
 does not append `bash` to that entrypoint. Publish only versioned tags, verify
 the pushed manifest digest, and pin target Dockerfiles to `tag@sha256`.
@@ -754,8 +760,8 @@ granting the fixed user access to the workspace or build cache:
 
 ```bash
 traffic-e2e target exec \
-  --env-file .traffic-e2e/local/boot/.env \
-  --copy-env APP_CONFIG=.traffic-e2e/local/boot/config/application.yaml \
+  --env-file .traffic-e2e/local/target-exec/.env \
+  --copy-env APP_CONFIG=.traffic-e2e/local/target-exec/config/application.yaml \
   --copy-env REPLAY_CA=path/to/replay-ca.pem \
   --path-env CASE_DIR=path/to/readable/case-group \
   --write-dir logs \
@@ -776,9 +782,10 @@ helper clears inherited proxy and shell-hook variables, verifies the effective
 UID, and never accepts a user or UID option. Keep replay lifecycle commands
 outside the target process.
 
-`.traffic-e2e/local/boot/` is input-only transport for source-proven startup inputs.
-Its name or Git-ignore status does not authorize generating content from a
-source process, remote response, recording, log, debug output, or diagnostic.
+`.traffic-e2e/local/startup/` is the managed, input-only snapshot for
+source-proven target startup inputs. Its name or Git-ignore status does not
+authorize generating content from a remote response, recording, log, debug
+output, or diagnostic.
 
 For a case collection, start one replay session and control active case
 ownership through the CLI:
@@ -918,9 +925,8 @@ failures, not product behavior evidence.
 ## Migration E2E Runner
 
 Use the rewrite coordinator as the normal AI-facing migration command. It
-keeps internal state under `.traffic-e2e/local/ai-forbidden/`, exposes one active
-issue, and never returns raw internal report paths. Target rewrite agents must
-not read, search, or list that directory:
+keeps engine-managed state under `.traffic-e2e/local/runtime/` and exposes one
+active issue. Coordinator APIs are the primary interface:
 
 ```bash
 backend-rewrite next
@@ -947,7 +953,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v14 always returns `action.kind`, `action.summary`,
+Rewrite action schema v15 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -1019,7 +1025,7 @@ mandatory. `terminal_allowed` is false until every inventory item has both
 passing E2E and comparison evidence for the same target content fingerprint.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v14 returns `wait_required` with
+lease. When another API owns it, action schema v15 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1131,6 +1137,8 @@ coordinator session:
 ```bash
 backend-rewrite --target-root ../target init \
   --source-container <existing-source-container> [--breeze] \
+  [--startup-mount /data1/weibo/confs] \
+  [--startup-env WEIBO_CONF_PATH] \
   [--http-gateway-port 17171]
 ```
 
@@ -1142,7 +1150,7 @@ and upstream DNS `10.10.10.11:53`. Override a default only when the inspected
 application contract proves it is different. Source and Breeze containers
 need only be inspectable, not running.
 
-The command atomically generates version-11 `.traffic-e2e/project.yaml`,
+The command atomically generates version-12 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
 configuration has explicit source, optional Breeze, target, replay, recording,
 delivery, and state sections. A typical
@@ -1151,7 +1159,14 @@ target section is:
 ```yaml
 target:
   dockerfile: .traffic-e2e/Dockerfile.e2e
-  boot_dir: .traffic-e2e/local/boot
+  startup:
+    mounts:
+      - /data1/weibo/confs
+    environment_from_source:
+      - WEIBO_CONF_PATH
+    # Optional application-owned names:
+    # port_environment: PORT
+    # replay_ca_environment: SSL_CERT_FILE
   http_host: 127.0.0.1
   port: 8081
   readiness_path: /healthz
@@ -1174,39 +1189,67 @@ Managed replay reads its target response limit from
 
 Existing configuration is never overwritten. If any generated file exists,
 the whole initialization refuses without creating another file. In-place
-migration of obsolete versions is a separate future command. The initializer
+migration from version 11 is explicit through `backend-rewrite startup update
+--replace`; normal execution never dual-reads the obsolete schema. The initializer
 idempotently adds `/.traffic-e2e/local/` to the repository `.gitignore`; all
-non-versioned runtime data lives below that root. It records
-`.traffic-e2e/local/boot` but neither requires nor creates it. Do not hand-write
-generated state.
+non-versioned runtime data lives below that root. It copies every declared
+absolute path from the stopped source container into
+`.traffic-e2e/local/startup/mounts`, freezes only the named source environment
+values in mode-0600 `.traffic-e2e/local/startup/environment.json`, and writes
+matching `manifest.json`. Do not hand-write generated state.
+
+That explicit version-11 migration also moves the legacy engine-managed state
+directory to `.traffic-e2e/local/runtime/` and persists
+`state.runtime_root`. New configuration never emits the legacy name.
+
+Use the startup management API when the declaration or source inputs change:
+
+```bash
+backend-rewrite startup update --replace \
+  --mount /data1/weibo/confs \
+  --environment WEIBO_CONF_PATH
+backend-rewrite startup refresh
+backend-rewrite startup status
+```
+
+`update --replace` replaces the complete declaration and captures a matching
+snapshot. `refresh` recaptures the existing declaration. `status` returns
+bounded metadata and never returns environment values.
 
 The target repository supplies `.traffic-e2e/Dockerfile.e2e`. It is a
 BuildKit multi-stage build whose final image has a non-empty OCI entrypoint and
 defaults to `USER 998:998`. traffic-e2e builds it from the repository root,
 tags the cache as `traffic-e2e/<project>-target:cache`, validates the resulting
-immutable image ID, and runs that ID directly. A target start receives:
+immutable image ID, and runs that ID directly. A target start receives each
+declared startup path at the same absolute path, read-only. For example:
 
 ```text
-TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config
-TRAFFIC_E2E_TARGET_PORT=<configured-port>
-.traffic-e2e/local/boot -> /traffic-e2e/config (read-only)
+.traffic-e2e/local/startup/mounts/data1/weibo/confs
+  -> /data1/weibo/confs (read-only)
+WEIBO_CONF_PATH=<value captured from the source container>
 ```
 
-Before mounting, traffic-e2e creates the boot directory when absent and
-normalizes the directory itself to mode `0755`. This deliberately overrides a
-restrictive coordinator `umask` so the fixed container identity `998:998` can
-traverse the bind mount. The target AI does not create or chmod this directory.
-Individual configuration files retain their existing permissions and remain
-the target repository owner's responsibility.
+Environment names are an allowlist, not name/value assignments: the engine
+reads their values from Docker's source-container configuration and freezes
+them in the snapshot. A source default that is not present in Docker
+`Config.Env` cannot be discovered; declare its absolute path as a mount and let
+the application keep using that default. The engine does not rewrite such a
+default and does not infer startup inputs from target source code.
+
+`port_environment` and `replay_ca_environment` are optional native application
+variable names. When declared, the engine assigns the configured target port
+or the container Replay CA path at startup. The target contract contains no
+generic `TRAFFIC_E2E_CONFIG_DIR`, `TRAFFIC_E2E_TARGET_PORT`, or
+`TRAFFIC_E2E_REPLAY_CA_CERT_PATH` variables.
 
 When Breeze is configured, traffic-e2e also mounts `/data1/breeze/socks` and
 `/data1/breeze/snapshot` read-only. During Replay it mounts the public Replay
-CA at `/traffic-e2e/trust/replay-ca.pem` and sets
-`TRAFFIC_E2E_REPLAY_CA_CERT_PATH`; target TLS clients must add that certificate
-to their normal trust store without reading Replay sessions or private key
-material. The entrypoint must log to stdout/stderr, remain in the foreground,
-and stop cleanly on `SIGTERM`. traffic-e2e owns network namespaces, readiness,
-signals, and cleanup.
+CA at `/traffic-e2e/trust/replay-ca.pem`; when `replay_ca_environment` is
+declared it sets that application-owned variable to this path. Target TLS
+clients must add that certificate to their normal trust store without reading
+Replay sessions or private key material. The entrypoint must log to
+stdout/stderr, remain in the foreground, and stop cleanly on `SIGTERM`.
+traffic-e2e owns network namespaces, readiness, signals, and cleanup.
 
 Use the pinned shared Rust builder/runtime images and stable BuildKit cache
 mount IDs described by the backend-rewrite initialization contract. A source
@@ -1299,11 +1342,12 @@ not-applicable evidence.
 Normal AI operation starts with the bounded terminal result. Representative
 evidence links directly to an immutable recorded case for request, expected
 response, and dependency inspection, and the AI may inspect any other artifact
-as needed. A target rewrite agent must not read, search, or list
-`.traffic-e2e/local/ai-forbidden/**`; use coordinator output instead. Engine
-maintainers may inspect it only under this repository's `AGENTS.md`. Generated
-assertion details, aggregate reports, `.active`, and `latest` are internal
-surfaces rather than ordinary migration evidence.
+as needed. Prefer coordinator APIs over inspecting
+`.traffic-e2e/local/runtime/**`; the directory contains implementation-level
+state whose layout is not a stable interface. Treat it as read-only and never
+infer or mutate workflow state from file recency. Generated assertion details,
+aggregate reports, `.active`, and `latest` are implementation surfaces rather
+than ordinary migration evidence.
 
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current

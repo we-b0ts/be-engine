@@ -811,7 +811,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(14)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(15)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),
@@ -980,11 +980,7 @@ mod tests {
             value.pointer("/action/commands/recover/cwd"),
             Some(&serde_json::json!(target))
         );
-        assert!(
-            !value
-                .to_string()
-                .contains(".traffic-e2e/local/ai-forbidden")
-        );
+        assert!(!value.to_string().contains(".traffic-e2e/local/runtime"));
         assert!(value.pointer("/action/commands/advance").is_none());
     }
 

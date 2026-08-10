@@ -22,7 +22,7 @@ mod workflow;
 #[command(
     name = "traffic-e2e",
     author,
-    version,
+    version = traffic_e2e::BINARY_VERSION,
     about = "Record, replay, and verify traffic-based E2E contracts",
     subcommand_required = true,
     arg_required_else_help = true
@@ -120,7 +120,9 @@ mod tests {
 
     #[test]
     fn command_model_satisfies_clap_invariants() {
-        Cli::command().debug_assert();
+        let command = Cli::command();
+        command.clone().debug_assert();
+        assert_eq!(command.get_version(), Some(traffic_e2e::BINARY_VERSION));
     }
 
     #[test]

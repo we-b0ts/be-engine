@@ -11,8 +11,8 @@ use super::model::{
 };
 use super::{
     bounded_logs, build_image, create_anchor, force_remove_runtime, is_running, runtime_name,
-    start_target, stop_target, verify_config_mount, verify_listen_address,
-    verify_required_environment, verify_target_identity,
+    start_target, stop_target, verify_listen_address, verify_startup_environment,
+    verify_startup_mounts, verify_target_identity,
 };
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -60,8 +60,8 @@ async fn run_preflight_runtime(
     })
     .await?;
     verify_target_identity(target).await?;
-    verify_required_environment(target, config.port).await?;
-    verify_config_mount(target).await?;
+    verify_startup_environment(target, &config.startup, false).await?;
+    verify_startup_mounts(target, &config.startup.mounts).await?;
     wait_until_ready(config, anchor, target).await?;
     verify_listen_address(target, config.port).await?;
     let logs = bounded_logs(target).await?;
@@ -79,8 +79,9 @@ async fn run_preflight_runtime(
     Ok(TargetContainerChecks {
         image_contract: true,
         process_identity: true,
-        required_environment: true,
-        config_mount_read_only: true,
+        startup_snapshot: true,
+        startup_environment: true,
+        startup_mounts_read_only: true,
         listen_all_interfaces: true,
         readiness: true,
         stdout_stderr_logging: true,
@@ -172,7 +173,7 @@ mod tests {
         );
         let result = run_preflight(TargetContainerConfig {
             dockerfile: target_root.join(super::super::TARGET_DOCKERFILE_RELATIVE),
-            boot_dir: target_root.join(".traffic-e2e/local/boot"),
+            startup: crate::startup::StartupConfig::default(),
             target_root,
             port: 38_181,
             readiness_path: "/healthz".to_string(),

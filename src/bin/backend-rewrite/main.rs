@@ -22,12 +22,13 @@ use traffic_e2e::{
 mod dependency_rule;
 mod project_init;
 mod recorder_capture;
+mod startup;
 
 #[derive(Debug, Parser)]
 #[command(
     name = "backend-rewrite",
     author,
-    version,
+    version = traffic_e2e::BINARY_VERSION,
     about = "Coordinate backend rewrites through bounded traffic evidence",
     subcommand_required = true,
     arg_required_else_help = true
@@ -92,6 +93,8 @@ fn report_error(error: &anyhow::Error) {
 enum RewriteCommand {
     /// Initialize one target repository for a backend rewrite.
     Init(project_init::ProjectInitArgs),
+    /// Inspect or replace the frozen source-compatible target startup inputs.
+    Startup(startup::StartupArgs),
     /// Advance deterministic stages and return the only allowed next action.
     Next(NextArgs),
     /// Show bounded coordinator state without advancing it.
@@ -401,6 +404,7 @@ async fn run(cli: Cli) -> Result<()> {
     let pretty = cli.pretty;
     match cli.command {
         RewriteCommand::Init(args) => project_init::run(target_root, args, pretty).await,
+        RewriteCommand::Startup(args) => startup::run(target_root, args, pretty),
         RewriteCommand::Next(args) => {
             let recovery_root = target_root.clone();
             let mut operation = Box::pin(next_rewrite(RewriteNextOptions {

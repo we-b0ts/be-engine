@@ -70,7 +70,7 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v14 contains an `action` object with exactly `kind`, `summary`,
+Response schema v15 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read kind-specific facts only from
 `action.details`; when present, use the top-level `source_process_traffic` as
@@ -86,8 +86,10 @@ default; use global `--pretty` only for interactive human inspection.
 
 Use `backend-rewrite status [--api '<METHOD pattern>']` when an action response
 was lost or a session resumes. Never infer state from artifact recency. Never
-read, search, list, or summarize `.traffic-e2e/local/ai-forbidden/**`; report an
-insufficient public action/status/evidence surface as a coordinator API gap.
+mutate coordinator runtime files. Use action, status, and evidence APIs as the
+primary interface; report an insufficient API surface as a coordinator gap.
+Read-only runtime inspection is allowed when needed to diagnose such a gap,
+but its layout is not a stable workflow contract.
 
 At the start of a main-orchestrator session, read
 `.traffic-e2e/local/block.md` when it exists. Project initialization may create
@@ -232,8 +234,8 @@ into the pinned traffic-e2e Rust runtime, and exposes the target binary as its
 foreground OCI entrypoint.
 
 The coordinator owns build caching, the immutable image ID used across Replay
-and Comparison, the run-owned network namespace, the read-only
-`.traffic-e2e/local/boot` mount at `/traffic-e2e/config`, UID/GID `998:998`,
+and Comparison, the run-owned network namespace, source-compatible read-only
+startup mounts, allowlisted application environment, UID/GID `998:998`,
 readiness, signals, and container cleanup. For Breeze-dependent targets, the
 coordinator also owns the shared Breeze lifecycle and required Breeze mounts.
 The target image must not read cases, Replay sessions, expected responses, or
