@@ -346,7 +346,7 @@ RUN --mount=type=cache,id=traffic-e2e-cargo-registry,target=/opt/rust/cargo/regi
     && install --directory /out \
     && install --mode 0755 "${binary}" /out/<project>
 
-FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1@sha256:63072803f35282f2134f08779bd1652e51c4ff30ba08728716b616ef96b3dc80
+FROM registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2
 COPY --from=builder --chown=998:998 /out/<project> /app/bin/<project>
 ENTRYPOINT ["/app/bin/<project>"]
 ```

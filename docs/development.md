@@ -40,7 +40,7 @@ Published Linux/amd64 references:
 registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62
 registry.api.demo.test/weibo_rd_if/traffic-e2e-recorder-runtime:0.0.1-dev@sha256:c71fa374b229bc6fbf7ad34c5bb5cede1c27b2314a7b274b62ce2d44d3213107
 registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1@sha256:99663c03c7da6d638f9bef5d84d923840e2069e3f32067851b43ea7abf3f0004
-registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1@sha256:63072803f35282f2134f08779bd1652e51c4ff30ba08728716b616ef96b3dc80
+registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2
 ```
 
 Build the inert Linux/amd64 network-namespace anchor without network access:
@@ -140,14 +140,14 @@ docker buildx build \
   --build-arg NO_PROXY \
   --load \
   --file docker/target-runtime/Dockerfile \
-  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1 \
+  --tag registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2 \
   docker/target-runtime
 ```
 
 The target runtime contains common dynamically linked Rust prerequisites and
 the normal public CA bundle, creates `trp-record` as UID/GID `998:998`, and
-defaults to that identity. It reserves `/app`, `/traffic-e2e/config`, and
-`/traffic-e2e/trust`; target images add only their release binary and explicit
+defaults to that identity. It reserves `/app` and `/traffic-e2e/trust`; target
+images add only their release binary and explicit
 foreground entrypoint. The runtime clears the Debian base command so Docker
 does not append `bash` to that entrypoint. Publish only versioned tags, verify
 the pushed manifest digest, and pin target Dockerfiles to `tag@sha256`.

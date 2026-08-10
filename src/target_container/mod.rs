@@ -20,6 +20,6 @@ pub(crate) const TARGET_REPLAY_CA_PATH: &str = "/traffic-e2e/trust/replay-ca.pem
 pub(crate) const TARGET_USER: &str = TRAFFIC_PROCESS_USER;
 
 const TARGET_BUILDER_IMAGE: &str = "registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-builder:1.97.1@sha256:99663c03c7da6d638f9bef5d84d923840e2069e3f32067851b43ea7abf3f0004";
-const TARGET_RUNTIME_IMAGE: &str = "registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.1@sha256:63072803f35282f2134f08779bd1652e51c4ff30ba08728716b616ef96b3dc80";
+const TARGET_RUNTIME_IMAGE: &str = "registry.api.demo.test/weibo_rd_if/traffic-e2e-rust-runtime:0.0.2@sha256:d322b050229334c2fec00cdce366a066697a7bafaf9b6842d77793eb1e4f10d2";
 
 const NETWORK_ANCHOR_IMAGE: &str = "registry.api.demo.test/weibo_rd_if/traffic-e2e-network-anchor:0.0.1@sha256:095f39e3b242e744ec8f7d85e732bb663af8a4a02bdef0d7a216d2e66e365a62";
