@@ -8,6 +8,7 @@ use tokio::sync::{Mutex, Notify};
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RecordingCompletionReason {
     DurationElapsed,
+    InputExhausted,
     PerApiCaseLimitReached,
     ShutdownSignal,
 }

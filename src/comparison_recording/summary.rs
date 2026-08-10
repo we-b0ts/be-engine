@@ -109,6 +109,10 @@ impl ComparisonRecordingSummary {
         self.state.lock().await.errors.push(error);
     }
 
+    pub(super) async fn published(&self) -> usize {
+        self.state.lock().await.counts.published
+    }
+
     pub(super) async fn finish(&self, completion_reason: RecordingCompletionReason) -> Result<()> {
         {
             let mut state = self.state.lock().await;

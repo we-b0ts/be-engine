@@ -43,7 +43,14 @@ and `--baseline-recheck` only when the verification policy or diagnosis needs
 source-after evidence.
 With explicit API selectors, comparison recording finalizes normally when
 every selected API reaches its case limit; `--duration-seconds` remains the
-upper bound. Without selectors, it keeps the full recording window.
+upper bound. When the managed coordinator supplies a finite standard-recording
+case source, it sends one complete case at a time. After the final case is
+published, the source, candidate, and cache snapshot remain running for a
+three-second final quiet period, then the run finalizes with
+`completion_reason = input_exhausted`. The delivered input count must equal
+the published comparison case count; a mismatch finalizes with errors instead
+of silently accepting missing evidence. Without finite input or a completed
+explicit case limit, comparison keeps the full recording window.
 
 ## Verify
 

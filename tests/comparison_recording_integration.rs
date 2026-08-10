@@ -19,7 +19,8 @@ use tokio::sync::Mutex;
 use traffic_e2e::{
     AppConfig, ArtifactsConfig, ComparisonRecordingConfig, ComparisonRecordingRunOptions,
     HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig, RecordingWaitConfig, wait_for_recording_ready,
+    HttpGatewayRuleConfig, RecordingWaitConfig, notify_recording_input_complete,
+    wait_for_recording_ready,
 };
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
@@ -125,6 +126,93 @@ async fn duration_stops_cleanly_after_comparison_recording_is_ready() {
     let summary = read_json(&run_dir(&temp, run_id).join("comparison-recording-run.json"));
     assert_eq!(summary["status"], "completed");
     assert_eq!(summary["ready"], true);
+}
+
+#[tokio::test]
+async fn finite_input_completion_stops_before_duration_after_the_case_is_published() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let baseline = spawn_response_upstream("baseline", 1).await;
+    let candidate = spawn_response_upstream("candidate", 1).await;
+    let gateway = free_addr();
+    let run_id = "20260722155960";
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    let control_socket = temp.path().join("comparison.sock");
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording_with_options(
+        config,
+        ComparisonRecordingRunOptions {
+            run_id: Some(run_id.to_string()),
+            duration: Some(Duration::from_secs(5)),
+            recording_apis: Vec::new(),
+            control_socket: Some(control_socket.clone()),
+        },
+    ));
+    wait_for_recording_ready(RecordingWaitConfig {
+        control_socket_path: control_socket.clone(),
+        timeout: Duration::from_secs(1),
+    })
+    .await
+    .unwrap();
+
+    assert!(raw_get(gateway, "/api/finite").await.contains("baseline"));
+    notify_recording_input_complete(&control_socket, 1)
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), task)
+        .await
+        .expect("finite input completion should not wait for the five-second duration")
+        .unwrap()
+        .unwrap();
+
+    let summary = read_json(&run_dir(&temp, run_id).join("comparison-recording-run.json"));
+    assert_eq!(summary["status"], "completed");
+    assert_eq!(summary["completion_reason"], "input_exhausted");
+    assert_eq!(summary["counts"]["published"], 1);
+}
+
+#[tokio::test]
+async fn finite_input_completion_rejects_missing_published_cases() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let baseline = spawn_response_upstream("baseline", 1).await;
+    let candidate = spawn_response_upstream("candidate", 1).await;
+    let gateway = free_addr();
+    let run_id = "20260722160009";
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+    let control_socket = temp.path().join("comparison.sock");
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording_with_options(
+        config,
+        ComparisonRecordingRunOptions {
+            run_id: Some(run_id.to_string()),
+            duration: Some(Duration::from_secs(5)),
+            recording_apis: Vec::new(),
+            control_socket: Some(control_socket.clone()),
+        },
+    ));
+    wait_for_recording_ready(RecordingWaitConfig {
+        control_socket_path: control_socket.clone(),
+        timeout: Duration::from_secs(1),
+    })
+    .await
+    .unwrap();
+
+    assert!(raw_get(gateway, "/api/finite").await.contains("baseline"));
+    notify_recording_input_complete(&control_socket, 2)
+        .await
+        .unwrap();
+    task.await.unwrap().unwrap();
+
+    let summary = read_json(&run_dir(&temp, run_id).join("comparison-recording-run.json"));
+    assert_eq!(summary["status"], "completed_with_errors");
+    assert_eq!(summary["completion_reason"], "input_exhausted");
+    assert!(
+        summary["errors"][0]
+            .as_str()
+            .unwrap()
+            .contains("delivered 2 request template(s), but only 1")
+    );
 }
 
 #[tokio::test]

@@ -5,10 +5,13 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use traffic_e2e::{
-    ManagedRecordingInputOptions, drive_managed_recording_input, execute_rewrite_recording_worker,
+    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, drive_managed_recording_input,
+    execute_rewrite_recording_worker,
 };
 
 use super::{record, record_comparison};
+
+const MANAGED_COMPARISON_FINAL_QUIET_PERIOD: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Args)]
 pub(super) struct InternalArgs {
@@ -39,6 +42,9 @@ struct RecordingInputArgs {
     origin: String,
     #[arg(long, default_value = "30")]
     request_timeout_seconds: NonZeroU64,
+    /// Notify a managed comparison after every finite request template is consumed.
+    #[arg(long)]
+    completion_control_socket: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -58,6 +64,12 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
                 case_source: args.case_source,
                 origin: args.origin,
                 request_timeout: Duration::from_secs(args.request_timeout_seconds.get()),
+                completion: args.completion_control_socket.map(|control_socket| {
+                    ManagedRecordingInputCompletion {
+                        control_socket,
+                        quiet_period: MANAGED_COMPARISON_FINAL_QUIET_PERIOD,
+                    }
+                }),
             })
             .await?;
             super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&report)?))

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
@@ -23,6 +24,11 @@ const PROGRESS_INTERVAL: Duration = Duration::from_secs(5);
 pub struct RecordingWaitConfig {
     pub control_socket_path: PathBuf,
     pub timeout: Duration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RecordingInputCompletion {
+    pub(crate) delivered: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -203,6 +209,23 @@ pub(crate) struct RecordingControlServer {
 
 impl RecordingControlServer {
     pub(crate) async fn start(lifecycle: RecordingLifecycle, path: PathBuf) -> Result<Self> {
+        Self::start_inner(lifecycle, path, None).await
+    }
+
+    pub(crate) async fn start_for_comparison(
+        lifecycle: RecordingLifecycle,
+        path: PathBuf,
+    ) -> Result<(Self, watch::Receiver<Option<RecordingInputCompletion>>)> {
+        let (input_completion, receiver) = watch::channel(None);
+        let server = Self::start_inner(lifecycle, path, Some(input_completion)).await?;
+        Ok((server, receiver))
+    }
+
+    async fn start_inner(
+        lifecycle: RecordingLifecycle,
+        path: PathBuf,
+        input_completion: Option<watch::Sender<Option<RecordingInputCompletion>>>,
+    ) -> Result<Self> {
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await.with_context(|| {
                 format!(
@@ -230,7 +253,7 @@ impl RecordingControlServer {
             control_socket = %path.display(),
             "recording control listening"
         );
-        let task = tokio::spawn(run_server(listener, lifecycle));
+        let task = tokio::spawn(run_server(listener, lifecycle, input_completion));
         Ok(Self { path, task })
     }
 
@@ -257,9 +280,15 @@ impl RecordingControlServer {
 #[derive(Debug, Deserialize)]
 struct RecordingControlRequest {
     command: String,
+    #[serde(default)]
+    delivered: Option<usize>,
 }
 
-async fn run_server(listener: UnixListener, lifecycle: RecordingLifecycle) {
+async fn run_server(
+    listener: UnixListener,
+    lifecycle: RecordingLifecycle,
+    input_completion: Option<watch::Sender<Option<RecordingInputCompletion>>>,
+) {
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(accepted) => accepted,
@@ -268,7 +297,12 @@ async fn run_server(listener: UnixListener, lifecycle: RecordingLifecycle) {
                 return;
             }
         };
-        match tokio::time::timeout(CONTROL_IO_TIMEOUT, handle_stream(stream, &lifecycle)).await {
+        match tokio::time::timeout(
+            CONTROL_IO_TIMEOUT,
+            handle_stream(stream, &lifecycle, input_completion.as_ref()),
+        )
+        .await
+        {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
                 warn!(error = %format!("{error:#}"), "recording control request failed");
@@ -280,7 +314,11 @@ async fn run_server(listener: UnixListener, lifecycle: RecordingLifecycle) {
     }
 }
 
-async fn handle_stream(stream: UnixStream, lifecycle: &RecordingLifecycle) -> Result<()> {
+async fn handle_stream(
+    stream: UnixStream,
+    lifecycle: &RecordingLifecycle,
+    input_completion: Option<&watch::Sender<Option<RecordingInputCompletion>>>,
+) -> Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut request_bytes = Vec::new();
     read_half
@@ -296,6 +334,7 @@ async fn handle_stream(stream: UnixStream, lifecycle: &RecordingLifecycle) -> Re
         .context("failed to parse recording control request")?;
     let response = match request.command.as_str() {
         "status" => status_response(lifecycle.snapshot()),
+        "input-complete" => input_complete_response(input_completion, request.delivered),
         other => serde_json::json!({
             "ok": false,
             "error": format!("unknown recording control command {other}"),
@@ -325,6 +364,34 @@ fn status_response(status: RecordingReadiness) -> Value {
         "ok": true,
         "status": status,
     })
+}
+
+fn input_complete_response(
+    input_completion: Option<&watch::Sender<Option<RecordingInputCompletion>>>,
+    delivered: Option<usize>,
+) -> Value {
+    let Some(input_completion) = input_completion else {
+        return serde_json::json!({
+            "ok": false,
+            "error": "recording control does not accept finite input completion",
+        });
+    };
+    let Some(delivered) = delivered.filter(|value| *value > 0) else {
+        return serde_json::json!({
+            "ok": false,
+            "error": "recording input completion requires a positive delivered count",
+        });
+    };
+    if input_completion
+        .send(Some(RecordingInputCompletion { delivered }))
+        .is_err()
+    {
+        return serde_json::json!({
+            "ok": false,
+            "error": "comparison recording no longer accepts input completion",
+        });
+    }
+    serde_json::json!({ "ok": true })
 }
 
 async fn remove_stale_socket(path: &Path) -> Result<()> {
@@ -479,6 +546,29 @@ fn readiness_timeout(
 }
 
 async fn request_status(path: &Path) -> Result<RecordingReadiness> {
+    let response = request_control(path, &serde_json::json!({ "command": "status" })).await?;
+    response
+        .status
+        .context("recording control status response omitted status")
+}
+
+pub async fn notify_recording_input_complete(path: &Path, delivered: usize) -> Result<()> {
+    ensure!(
+        delivered > 0,
+        "recording input completion requires a positive delivered count"
+    );
+    request_control(
+        path,
+        &serde_json::json!({
+            "command": "input-complete",
+            "delivered": delivered,
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn request_control(path: &Path, request: &Value) -> Result<RecordingControlResponse> {
     let stream = UnixStream::connect(path).await.with_context(|| {
         format!(
             "failed to connect recording control socket {}",
@@ -486,37 +576,37 @@ async fn request_status(path: &Path) -> Result<RecordingReadiness> {
         )
     })?;
     let (read_half, mut write_half) = stream.into_split();
+    let request =
+        serde_json::to_vec(request).context("failed to serialize recording control request")?;
     write_half
-        .write_all(br#"{"command":"status"}"#)
+        .write_all(&request)
         .await
-        .context("failed to write recording control status request")?;
+        .context("failed to write recording control request")?;
     write_half
         .shutdown()
         .await
-        .context("failed to finish recording control status request")?;
+        .context("failed to finish recording control request")?;
     let mut response_bytes = Vec::new();
     read_half
         .take(CONTROL_REQUEST_LIMIT_BYTES + 1)
         .read_to_end(&mut response_bytes)
         .await
-        .context("failed to read recording control status response")?;
+        .context("failed to read recording control response")?;
     ensure!(
         response_bytes.len() <= CONTROL_REQUEST_LIMIT_BYTES as usize,
         "recording control response exceeds {CONTROL_REQUEST_LIMIT_BYTES} bytes"
     );
     let response: RecordingControlResponse = serde_json::from_slice(&response_bytes)
-        .context("failed to parse recording control status response")?;
+        .context("failed to parse recording control response")?;
     ensure!(
         response.ok,
-        "recording control status failed: {}",
+        "recording control request failed: {}",
         response
             .error
             .as_deref()
             .unwrap_or("unknown control response error")
     );
-    response
-        .status
-        .context("recording control status response omitted status")
+    Ok(response)
 }
 
 fn bound_error(error: String) -> String {
@@ -633,6 +723,50 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("listener bind failed"));
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn comparison_control_accepts_finite_input_completion() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("comparison.sock");
+        let lifecycle = RecordingLifecycle::for_comparison_gateway(true);
+        lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
+        let (server, mut completion) =
+            RecordingControlServer::start_for_comparison(lifecycle, socket.clone())
+                .await
+                .unwrap();
+
+        notify_recording_input_complete(&socket, 7).await.unwrap();
+        completion.changed().await.unwrap();
+
+        assert_eq!(
+            *completion.borrow_and_update(),
+            Some(RecordingInputCompletion { delivered: 7 })
+        );
+        server.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ordinary_recording_control_rejects_input_completion() {
+        let temp = tempfile::tempdir().unwrap();
+        let socket = temp.path().join("recording.sock");
+        let server = RecordingControlServer::start(
+            RecordingLifecycle::from_config(&test_config()),
+            socket.clone(),
+        )
+        .await
+        .unwrap();
+
+        let error = notify_recording_input_complete(&socket, 1)
+            .await
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("does not accept finite input completion")
+        );
         server.shutdown().await.unwrap();
     }
 
