@@ -109,7 +109,7 @@ if [[ "$operation" != record-comparison && "$baseline_recheck" == true ]]; then
     exit 2
 fi
 
-for command_name in docker jq curl nc timeout base64 id date find awk wc tr rm tar; do
+for command_name in docker jq curl nc timeout base64 id date find awk wc tr rm tar mktemp; do
     command -v "$command_name" >/dev/null 2>&1 || {
         printf 'error: required command not found: %s\n' "$command_name" >&2
         exit 1
@@ -232,6 +232,7 @@ source_started=false
 target_started=false
 recorder_finalized=false
 comparison_pid=""
+comparison_socket_dir=""
 input_pid=""
 runtime_uid=$(id -u)
 runtime_gid=$(id -g)
@@ -376,6 +377,10 @@ cleanup() {
     "$target_started" && stop_container "$target_name"
     "$anchor_started" && stop_container "$anchor_name"
     normalize_cache_snapshot_ownership || status=1
+    if [[ -n "$comparison_socket_dir" ]]; then
+        remove_private_runtime_dir "$comparison_socket_dir" /tmp || status=1
+        comparison_socket_dir=""
+    fi
     remove_private_runtime_dir "$control_dir" "$local_dir/control" || status=1
     exit "$status"
 }
@@ -911,11 +916,13 @@ run_standard_recording() {
 }
 
 run_comparison_recording() {
-    local comparison_control_socket="$control_dir/comparison.sock"
+    local comparison_control_socket
     [[ ! -e "$artifacts_dir/comparison-recordings/$run_id" ]] || {
         printf 'error: comparison run already exists: %s\n' "$run_id" >&2
         return 1
     }
+    comparison_socket_dir=$(mktemp -d /tmp/trp-e2e-cmp.XXXXXX)
+    comparison_control_socket="$comparison_socket_dir/control.sock"
     resolve_or_build_recording_adapter
     docker pull "$anchor_image" >/dev/null
     docker run --detach --name "$anchor_name" --platform linux/amd64 --network host \

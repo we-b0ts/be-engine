@@ -641,6 +641,15 @@ mod tests {
             "recording wait-ready --control-socket /workspace/control/cache-snapshot.sock"
         ));
         assert!(
+            comparison_runtime
+                .contains("comparison_socket_dir=$(mktemp -d /tmp/trp-e2e-cmp.XXXXXX)")
+        );
+        assert!(
+            comparison_runtime
+                .contains("comparison_control_socket=\"$comparison_socket_dir/control.sock\"")
+        );
+        assert!(!comparison_runtime.contains("$control_dir/comparison.sock"));
+        assert!(
             MANAGER
                 .contains("recording wait-ready --control-socket \"$comparison_control_socket\"")
         );
@@ -657,6 +666,7 @@ mod tests {
             &[
                 "stop_container \"$recorder_name\"",
                 "normalize_cache_snapshot_ownership",
+                "remove_private_runtime_dir \"$comparison_socket_dir\" /tmp",
                 "remove_private_runtime_dir \"$control_dir\"",
             ],
         );
