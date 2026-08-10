@@ -24,11 +24,11 @@ acceptance command unchanged to the orchestrator; never execute it as a worker.
 Standard and comparison artifacts are readable, read-only diagnostic evidence.
 Start from the representative `case_dir` returned by the coordinator and
 inspect its complete contents. Inspect other cases under
-`.traffic-e2e/local/artifacts/` when they help distinguish hypotheses. Never read,
-search, or list `.traffic-e2e/local/ai-forbidden/**`; use bounded coordinator queries
-instead. Do not edit internal state, infer the active run by recency, or use
-ad-hoc scripts to recreate a coordinator query. Never patch multiple
-speculative categories in one iteration.
+`.traffic-e2e/local/artifacts/` when they help distinguish hypotheses. Use
+bounded coordinator queries before inspecting `.traffic-e2e/local/runtime/`.
+Runtime inspection is read-only and diagnostic: do not infer the active run by
+recency, edit state, or use ad-hoc scripts to recreate a coordinator query.
+Never patch multiple speculative categories in one iteration.
 
 Evaluate gates in this order:
 

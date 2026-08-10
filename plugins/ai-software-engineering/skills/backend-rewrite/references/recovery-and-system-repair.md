@@ -53,7 +53,8 @@ the prior argv or start a second executor manually.
 blocks the requested transition and supplies the status command to poll. Only
 `recovery_required` authorizes `recover`.
 
-Internal runner paths are not stable rewrite-interface contracts. Use only
-public status/actions and immutable artifact paths explicitly exposed by the
-coordinator. Never read, search, or list
-`.traffic-e2e/local/ai-forbidden/**`.
+Internal runner paths are not stable rewrite-interface contracts. Use public
+status/actions and immutable artifact paths exposed by the coordinator as the
+primary interface. Read-only inspection of `.traffic-e2e/local/runtime/**` is
+allowed for diagnosis, but never edit it or reconstruct recovery actions from
+its layout.

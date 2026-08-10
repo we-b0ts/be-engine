@@ -46,11 +46,9 @@ RUN set -eu; \
     install --directory --owner "${TARGET_UID}" --group "${TARGET_GID}" \
         /app \
         /traffic-e2e \
-        /traffic-e2e/config \
         /traffic-e2e/trust
 
-ENV HOME=/app \
-    TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config
+ENV HOME=/app
 
 USER 998:998
 WORKDIR /app

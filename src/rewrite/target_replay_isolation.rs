@@ -70,6 +70,12 @@ struct ForbiddenMarker {
 
 const FORBIDDEN_MARKERS: &[ForbiddenMarker] = &[
     ForbiddenMarker {
+        rule: "traffic_e2e_environment",
+        marker: "traffic_e2e_",
+        reason: "production code depends on a traffic-e2e-owned environment variable",
+        required_change: "declare an application-owned startup environment name in .traffic-e2e/project.yaml",
+    },
+    ForbiddenMarker {
         rule: "replay_hostname",
         marker: ".trp.test",
         reason: "production code depends on a replay-only synthetic hostname",
@@ -567,6 +573,22 @@ mod tests {
         let value = serde_json::to_value(report).unwrap();
 
         assert_eq!(value["violations"][0]["rule"], "replay_hostname");
+    }
+
+    #[test]
+    fn rejects_any_traffic_e2e_environment_literal_in_product_code() {
+        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
+        fs::write(
+            target.path().join("src/lib.rs"),
+            "pub const CONFIG: &str = \"TRAFFIC_E2E_CONFIG_DIR\";\n",
+        )
+        .unwrap();
+
+        let report = inspect(target.path(), "integration").unwrap();
+        let value = serde_json::to_value(report).unwrap();
+
+        assert_eq!(value["violations"][0]["rule"], "traffic_e2e_environment");
+        assert_eq!(value["violations"][0]["matched"], "traffic_e2e_");
     }
 
     #[test]

@@ -7,8 +7,8 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 use traffic_e2e::{
     DEFAULT_HTTP_GATEWAY_PORT, InspectedContainer, ManagedRecordingPreflightOptions, RecordingApi,
-    RepositoryConfigInitOptions, RepositoryConfigInitResult, initialize_repository_config,
-    run_managed_recording_preflight,
+    RepositoryConfigInitOptions, RepositoryConfigInitResult, StartupConfig, StartupSnapshotReport,
+    initialize_repository_config, run_managed_recording_preflight,
 };
 
 #[derive(Debug, Args)]
@@ -39,6 +39,18 @@ pub(super) struct ProjectInitArgs {
     /// DNS server for queries not owned by the recorder.
     #[arg(long, default_value = "10.10.10.11:53")]
     upstream_dns: SocketAddr,
+    /// Source-compatible absolute file or directory to copy and mount read-only; repeat as needed.
+    #[arg(long = "startup-mount", value_name = "ABSOLUTE_PATH")]
+    startup_mounts: Vec<PathBuf>,
+    /// Application-owned environment variable whose value is captured from the source container.
+    #[arg(long = "startup-env", value_name = "NAME")]
+    startup_environment: Vec<String>,
+    /// Application-owned environment variable that receives the configured target port.
+    #[arg(long, value_name = "NAME")]
+    target_port_env: Option<String>,
+    /// Application-owned environment variable that receives the Replay CA certificate path.
+    #[arg(long, value_name = "NAME")]
+    replay_ca_env: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -78,8 +90,7 @@ struct ProjectInitReport {
     local_dir: PathBuf,
     gitignore: PathBuf,
     gitignore_updated: bool,
-    boot_dir: PathBuf,
-    boot_dir_created: bool,
+    startup: StartupSnapshotReport,
     target_dockerfile: PathBuf,
     target_image_tag: String,
     target_runtime_contract: &'static str,
@@ -149,6 +160,12 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
         readiness_path: args.readiness_path,
         readiness_status: args.readiness_status,
         upstream_dns: args.upstream_dns,
+        startup: StartupConfig {
+            mounts: args.startup_mounts,
+            environment_from_source: args.startup_environment,
+            port_environment: args.target_port_env,
+            replay_ca_environment: args.replay_ca_env,
+        },
     })?;
     super::print_json(&ProjectInitReport::from(result), pretty)
 }
@@ -178,8 +195,7 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
             local_dir: result.local_dir,
             gitignore: result.gitignore,
             gitignore_updated: result.gitignore_updated,
-            boot_dir: result.boot_dir,
-            boot_dir_created: result.boot_dir_created,
+            startup: result.startup,
             target_dockerfile: result.target_dockerfile,
             target_image_tag: result.target_image_tag,
             target_runtime_contract: result.target_runtime_contract,

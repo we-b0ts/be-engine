@@ -32,6 +32,7 @@ mod replay;
 mod repository;
 mod request_headers;
 mod rewrite;
+mod startup;
 mod target_container;
 mod tcp_gateway;
 mod tls;
@@ -200,6 +201,10 @@ pub use rewrite::{
     request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
     route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
     status_rewrite_for_api, transfer_rewrite_worker, verify_rewrite_repair,
+};
+pub use startup::{
+    StartupConfig, StartupSnapshotReport, StartupStatusReport, StartupUpdateOptions,
+    refresh_startup_snapshot, status_startup_snapshot, update_startup_snapshot,
 };
 pub use target_container::{TargetContainerChecks, TargetContainerPreflightResult, TargetImage};
 pub use tls::MitmCa;

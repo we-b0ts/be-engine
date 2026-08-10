@@ -9,8 +9,6 @@ const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
     ":(exclude).traffic-e2e/comparison-progress.yaml",
     ":(exclude).traffic-e2e/e2e-progress.yaml",
 ];
-const MAX_RUNTIME_INPUT_FILES: usize = 4_096;
-const MAX_RUNTIME_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
     let mut paths_args = vec![
@@ -36,6 +34,9 @@ pub(super) fn repository_fingerprint(target_root: &Path) -> Result<String> {
         let relative = std::str::from_utf8(relative).context("repository path is not UTF-8")?;
         hash_repository_path(target_root, relative, &mut hash)?;
     }
+    hash.update(b"startup-snapshot");
+    hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());
+    hash.update(&[0]);
     Ok(hash.finish())
 }
 
@@ -181,78 +182,9 @@ pub(super) fn source_runtime_inputs_revision(
     hash.update(&[0]);
     hash.update(container_id.as_bytes());
     hash.update(&[0]);
-    let boot = target_root.join(crate::repository::LOCAL_BOOT_ROOT);
-    let mut files = 0_usize;
-    let mut bytes = 0_u64;
-    hash_runtime_input_path(&boot, &boot, &mut hash, &mut files, &mut bytes)?;
+    hash.update(crate::startup::startup_snapshot_revision(target_root)?.as_bytes());
+    hash.update(&[0]);
     Ok(hash.finish())
-}
-
-fn hash_runtime_input_path(
-    root: &Path,
-    path: &Path,
-    hash: &mut Fnv1a,
-    files: &mut usize,
-    bytes: &mut u64,
-) -> Result<()> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound && path == root => {
-            hash.update(b"boot:absent");
-            return Ok(());
-        }
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to inspect runtime input {}", path.display()));
-        }
-    };
-    let relative = path.strip_prefix(root).unwrap_or(path);
-    hash.update(relative.as_os_str().as_encoded_bytes());
-    hash.update(&[0]);
-    if metadata.file_type().is_symlink() {
-        hash.update(b"symlink");
-        hash.update(fs::read_link(path)?.as_os_str().as_encoded_bytes());
-        hash.update(&[0]);
-        return Ok(());
-    }
-    if metadata.is_dir() {
-        hash.update(b"directory");
-        let mut entries = fs::read_dir(path)
-            .with_context(|| format!("failed to read runtime input directory {}", path.display()))?
-            .collect::<std::io::Result<Vec<_>>>()?;
-        entries.sort_by_key(std::fs::DirEntry::file_name);
-        for entry in entries {
-            hash_runtime_input_path(root, &entry.path(), hash, files, bytes)?;
-        }
-        return Ok(());
-    }
-    ensure!(
-        metadata.is_file(),
-        "runtime input is neither a file, directory, nor symlink: {}",
-        path.display()
-    );
-    *files = files.saturating_add(1);
-    *bytes = bytes.saturating_add(metadata.len());
-    ensure!(
-        *files <= MAX_RUNTIME_INPUT_FILES && *bytes <= MAX_RUNTIME_INPUT_BYTES,
-        "runtime inputs exceed the bounded fingerprint budget"
-    );
-    hash.update(b"file");
-    hash.update(&metadata.len().to_le_bytes());
-    let mut file = fs::File::open(path)
-        .with_context(|| format!("failed to read runtime input {}", path.display()))?;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .with_context(|| format!("failed to hash runtime input {}", path.display()))?;
-        if count == 0 {
-            break;
-        }
-        hash.update(&buffer[..count]);
-    }
-    hash.update(&[0]);
-    Ok(())
 }
 
 pub(super) fn id(parts: &[&str]) -> String {

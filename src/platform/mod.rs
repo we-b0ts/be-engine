@@ -18,6 +18,7 @@ mod preflight;
 mod recording_input;
 mod recovery;
 mod replay_preflight;
+mod startup;
 
 pub use preflight::{
     ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
@@ -225,7 +226,7 @@ async fn run_managed_runtime(
     let target_image = if runtime_operation
         == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
     {
-        crate::target_container::prepare_boot_dir(&config.target_boot_dir).await?;
+        crate::startup::load_startup_snapshot(&target_root, &config.target_startup)?;
         Some(
             crate::target_container::build_image(
                 &crate::target_container::TargetContainerConfig::from_project(
@@ -269,6 +270,7 @@ async fn run_managed_runtime(
     let executable = crate::engine_binary::executable()?;
     ensure_executable(&executable, "traffic-e2e binary")?;
     let assets = stage_assets(&target_root)?;
+    startup::stage_assets(&assets, &target_root, &config)?;
     let mut command = Command::new("bash");
     command
         .arg(assets.join("manage-platform.sh"))
@@ -281,7 +283,14 @@ async fn run_managed_runtime(
         .env("TRAFFIC_E2E_BIN", executable)
         .env("TRAFFIC_E2E_TARGET_ROOT", &target_root)
         .env("TRAFFIC_E2E_SOURCE_CONTAINER", &config.source_container)
-        .env("TRAFFIC_E2E_TARGET_BOOT_DIR", &config.target_boot_dir)
+        .env(
+            "TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE",
+            assets.join("target-startup-mounts.tsv"),
+        )
+        .env(
+            "TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE",
+            assets.join("target-startup.env"),
+        )
         .env("TRAFFIC_E2E_TARGET_ORIGIN", &config.target_http_origin)
         .env("TRAFFIC_E2E_TARGET_HOST", target_host)
         .env("TRAFFIC_E2E_TARGET_PORT", config.target_port.to_string())
@@ -502,7 +511,9 @@ mod tests {
         assert!(status.success());
         assert!(MANAGER.contains("start_target()"));
         assert!(MANAGER.contains("--network \"container:${anchor_name}\" --user 998:998"));
-        assert!(MANAGER.contains("TRAFFIC_E2E_CONFIG_DIR=/traffic-e2e/config"));
+        assert!(MANAGER.contains("TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"));
+        assert!(MANAGER.contains("--env-file \"$TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE\""));
+        assert!(!MANAGER.contains("TRAFFIC_E2E_CONFIG_DIR"));
         assert!(MANAGER.contains("\"$TRAFFIC_E2E_TARGET_IMAGE_ID\" >/dev/null"));
         assert!(!MANAGER.contains("TRAFFIC_E2E_PROJECT_CLI"));
         assert!(!MANAGER.contains("start --e2e"));

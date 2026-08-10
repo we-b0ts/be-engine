@@ -12,6 +12,7 @@ mod reclassify;
 mod request_view;
 mod result;
 mod runtime;
+mod startup_config;
 mod store;
 mod support;
 mod target_quality_config;
@@ -52,6 +53,7 @@ pub use result::{
     E2eRunResult, E2eValueObservation, E2eValuePresence, E2eVerificationGates,
 };
 pub(crate) use result::{response_pointer_pattern, response_pointer_scope};
+pub(crate) use startup_config::{resolve_startup_update_context, update_project_startup};
 
 #[derive(Debug, Clone)]
 pub struct E2eRunInitOptions {
@@ -59,7 +61,7 @@ pub struct E2eRunInitOptions {
     pub source_container: String,
     pub breeze_container: Option<String>,
     pub target_dockerfile: PathBuf,
-    pub target_boot_dir: PathBuf,
+    pub target_startup: crate::startup::StartupConfig,
     pub target_http_host: String,
     pub target_port: u16,
     pub target_readiness_path: String,
@@ -77,7 +79,7 @@ pub struct E2eRunInitOptions {
 #[derive(Debug, Serialize)]
 pub struct E2eRunInitResult {
     pub config: PathBuf,
-    pub ai_forbidden_root: PathBuf,
+    pub runtime_root: PathBuf,
     pub pr_base: String,
     pub recorder_feedback: bool,
     pub replaced: bool,
@@ -184,7 +186,7 @@ pub fn initialize_standard_e2e_project_with_force(
         source_container,
         breeze_container: None,
         target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
-        target_boot_dir: PathBuf::from(crate::repository::LOCAL_BOOT_ROOT),
+        target_startup: crate::startup::StartupConfig::default(),
         target_http_host,
         target_port,
         target_readiness_path: recorder.http_gateway.ready.path.clone(),

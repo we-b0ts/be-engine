@@ -980,11 +980,7 @@ mod tests {
             value.pointer("/action/commands/recover/cwd"),
             Some(&serde_json::json!(target))
         );
-        assert!(
-            !value
-                .to_string()
-                .contains(".traffic-e2e/local/ai-forbidden")
-        );
+        assert!(!value.to_string().contains(".traffic-e2e/local/runtime"));
         assert!(value.pointer("/action/commands/advance").is_none());
     }
 

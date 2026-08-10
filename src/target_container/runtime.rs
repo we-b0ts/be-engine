@@ -1,4 +1,3 @@
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -9,16 +8,12 @@ use tokio::process::Command;
 
 use super::build::validate_image_id;
 use super::model::{TargetStartEvidence, TargetStartOptions, TargetStopEvidence};
-use super::{
-    NETWORK_ANCHOR_IMAGE, TARGET_CONFIG_DIR, TARGET_CONFIG_ENV, TARGET_PORT_ENV,
-    TARGET_REPLAY_CA_ENV, TARGET_REPLAY_CA_PATH, TARGET_USER,
-};
+use super::{NETWORK_ANCHOR_IMAGE, TARGET_REPLAY_CA_PATH, TARGET_USER};
 use crate::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER};
 
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(60);
 const STOP_SECONDS: &str = "15";
 const MANAGED_LABEL: &str = "com.weibo.traffic-e2e.managed=true";
-const TARGET_BOOT_DIR_MODE: u32 = 0o755;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -119,12 +114,14 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
     validate_name(&options.container_name)?;
     validate_name(&options.network_container)?;
     validate_image_id(&options.image.id)?;
-    prepare_boot_dir(&options.config.boot_dir).await?;
+    let snapshot = crate::startup::load_startup_snapshot(
+        &options.config.target_root,
+        &options.config.startup,
+    )?;
     if options.config.breeze_enabled {
         require_breeze_mounts()?;
     }
 
-    let config_mount = bind_mount(&options.config.boot_dir, TARGET_CONFIG_DIR)?;
     let mut command = Command::new("docker");
     command
         .args([
@@ -146,14 +143,12 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
             &format!("com.weibo.traffic-e2e.operation={}", options.operation),
             "--label",
             &format!("com.weibo.traffic-e2e.run-id={}", options.run_id),
-            "--env",
-            &format!("{TARGET_CONFIG_ENV}={TARGET_CONFIG_DIR}"),
-            "--env",
-            &format!("{TARGET_PORT_ENV}={}", options.config.port),
-            "--mount",
-            &config_mount,
         ])
         .env_remove(crate::request_headers::ENCRYPTION_KEY_ENV);
+    for mount in &options.config.startup.mounts {
+        let source = crate::startup::startup_mount_source(&options.config.target_root, mount)?;
+        command.args(["--mount", &bind_mount(&source, &mount.to_string_lossy())?]);
+    }
     if options.config.breeze_enabled {
         command
             .args([
@@ -167,15 +162,39 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
     }
     if let Some(ca_cert) = &options.replay_ca_cert {
         require_regular_file(ca_cert, "Replay CA certificate")?;
-        command
-            .args(["--mount", &bind_mount(ca_cert, TARGET_REPLAY_CA_PATH)?])
-            .args([
-                "--env",
-                &format!("{TARGET_REPLAY_CA_ENV}={TARGET_REPLAY_CA_PATH}"),
-            ]);
+        command.args(["--mount", &bind_mount(ca_cert, TARGET_REPLAY_CA_PATH)?]);
+    }
+    let environment_file = crate::internal_runtime::root(&options.config.target_root)
+        .join("target-container")
+        .join(format!("{}.env", options.container_name));
+    let has_environment = crate::startup::write_docker_environment_file(
+        &environment_file,
+        &snapshot,
+        &options.config.startup,
+        options.config.port,
+        options.replay_ca_cert.is_some(),
+        TARGET_REPLAY_CA_PATH,
+    )?;
+    if has_environment {
+        command.arg("--env-file").arg(&environment_file);
     }
     command.arg(&options.image.id);
-    let output = docker_output(&mut command, "start target container").await?;
+    let output = docker_output(&mut command, "start target container").await;
+    if has_environment {
+        match tokio::fs::remove_file(&environment_file).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!(
+                        "failed to remove target environment file {}",
+                        environment_file.display()
+                    )
+                });
+            }
+        }
+    }
+    let output = output?;
     ensure!(
         output.status.success(),
         "failed to start target container: {}",
@@ -193,7 +212,8 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
         anchor_name: options.network_container,
         image_id: options.image.id.clone(),
         user: TARGET_USER,
-        config_dir: TARGET_CONFIG_DIR,
+        startup_snapshot_id: snapshot.manifest.snapshot_id,
+        startup_mounts: options.config.startup.mounts.clone(),
         port: options.config.port,
         replay_ca_cert: options
             .replay_ca_cert
@@ -224,31 +244,55 @@ pub(crate) async fn verify_target_identity(container: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn verify_config_mount(container: &str) -> Result<()> {
+pub(crate) async fn verify_startup_mounts(
+    container: &str,
+    mounts: &[std::path::PathBuf],
+) -> Result<()> {
     let inspection = inspect_container(container).await?;
     ensure!(
         inspection.state.running,
         "target container exited during startup"
     );
-    ensure!(
-        inspection
-            .mounts
-            .iter()
-            .any(|mount| mount.destination == TARGET_CONFIG_DIR && !mount.rw),
-        "target config mount is missing or writable"
-    );
+    for expected in mounts {
+        ensure!(
+            inspection
+                .mounts
+                .iter()
+                .any(|mount| { Path::new(&mount.destination) == expected && !mount.rw }),
+            "target startup mount is missing or writable: {}",
+            expected.display()
+        );
+    }
     Ok(())
 }
 
-pub(crate) async fn verify_required_environment(container: &str, port: u16) -> Result<()> {
+pub(crate) async fn verify_startup_environment(
+    container: &str,
+    config: &crate::startup::StartupConfig,
+    replay_ca: bool,
+) -> Result<()> {
     let inspection = inspect_container(container).await?;
-    for expected in [
-        format!("{TARGET_CONFIG_ENV}={TARGET_CONFIG_DIR}"),
-        format!("{TARGET_PORT_ENV}={port}"),
-    ] {
+    ensure!(
+        inspection.config.env.iter().all(|value| {
+            value
+                .split_once('=')
+                .is_none_or(|(name, _)| !name.to_ascii_uppercase().starts_with("TRAFFIC_E2E_"))
+        }),
+        "target container must not receive traffic-e2e-owned environment variables"
+    );
+    let mut expected = config.environment_from_source.clone();
+    expected.extend(config.port_environment.iter().cloned());
+    if replay_ca {
+        expected.extend(config.replay_ca_environment.iter().cloned());
+    }
+    for expected in expected {
         ensure!(
-            inspection.config.env.iter().any(|value| value == &expected),
-            "target container is missing required environment {expected}"
+            inspection.config.env.iter().any(|value| {
+                value
+                    .split_once('=')
+                    .is_some_and(|(name, _)| name == expected)
+            }),
+            "target container is missing configured startup environment {expected:?}"
         );
     }
     Ok(())
@@ -381,31 +425,6 @@ async fn inspect_container(name: &str) -> Result<ContainerInspection> {
     Ok(values.remove(0))
 }
 
-pub(crate) async fn prepare_boot_dir(path: &Path) -> Result<()> {
-    tokio::fs::create_dir_all(path)
-        .await
-        .with_context(|| format!("failed to create target boot directory {}", path.display()))?;
-    let metadata = tokio::fs::symlink_metadata(path)
-        .await
-        .with_context(|| format!("failed to inspect target boot directory {}", path.display()))?;
-    ensure!(
-        metadata.is_dir() && !metadata.file_type().is_symlink(),
-        "target boot directory must not be a symlink: {}",
-        path.display()
-    );
-    if metadata.permissions().mode() & 0o777 != TARGET_BOOT_DIR_MODE {
-        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(TARGET_BOOT_DIR_MODE))
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to make target boot directory readable {}",
-                    path.display()
-                )
-            })?;
-    }
-    Ok(())
-}
-
 fn require_breeze_mounts() -> Result<()> {
     for path in ["/data1/breeze/socks", "/data1/breeze/snapshot"] {
         let metadata = std::fs::symlink_metadata(path)
@@ -468,30 +487,6 @@ async fn docker_output(command: &mut Command, action: &str) -> Result<std::proce
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn boot_directory_is_created_with_container_readable_permissions() {
-        let root = tempfile::tempdir().unwrap();
-        let boot_dir = root.path().join(".traffic-e2e/local/boot");
-
-        prepare_boot_dir(&boot_dir).await.unwrap();
-
-        let mode = std::fs::metadata(&boot_dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, TARGET_BOOT_DIR_MODE);
-    }
-
-    #[tokio::test]
-    async fn restrictive_boot_directory_is_made_container_readable() {
-        let root = tempfile::tempdir().unwrap();
-        let boot_dir = root.path().join("boot");
-        std::fs::create_dir(&boot_dir).unwrap();
-        std::fs::set_permissions(&boot_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-
-        prepare_boot_dir(&boot_dir).await.unwrap();
-
-        let mode = std::fs::metadata(&boot_dir).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, TARGET_BOOT_DIR_MODE);
-    }
-
     #[test]
     fn runtime_names_are_docker_safe() {
         let name = runtime_name(
@@ -509,10 +504,10 @@ mod tests {
 
     #[test]
     fn bind_mounts_reject_docker_mount_delimiters() {
-        assert!(bind_mount(Path::new("/tmp/with,comma"), TARGET_CONFIG_DIR).is_err());
+        assert!(bind_mount(Path::new("/tmp/with,comma"), "/data1/weibo/confs").is_err());
         assert_eq!(
-            bind_mount(Path::new("/tmp/config"), TARGET_CONFIG_DIR).unwrap(),
-            "type=bind,source=/tmp/config,target=/traffic-e2e/config,readonly"
+            bind_mount(Path::new("/tmp/config"), "/data1/weibo/confs").unwrap(),
+            "type=bind,source=/tmp/config,target=/data1/weibo/confs,readonly"
         );
     }
 }

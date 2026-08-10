@@ -14,7 +14,6 @@ const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
 const RECORDER_CONFIG_PATH: &str = ".traffic-e2e/recorder.toml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
-const BOOT_DIR: &str = crate::repository::LOCAL_BOOT_ROOT;
 
 #[derive(Debug, Clone)]
 pub struct RepositoryConfigInitOptions {
@@ -27,6 +26,7 @@ pub struct RepositoryConfigInitOptions {
     pub readiness_path: String,
     pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
+    pub startup: crate::startup::StartupConfig,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,8 +41,7 @@ pub struct RepositoryConfigInitResult {
     pub local_dir: PathBuf,
     pub gitignore: PathBuf,
     pub gitignore_updated: bool,
-    pub boot_dir: PathBuf,
-    pub boot_dir_created: bool,
+    pub startup: crate::startup::StartupSnapshotReport,
     pub target_dockerfile: PathBuf,
     pub target_image_tag: String,
     pub target_runtime_contract: &'static str,
@@ -62,12 +61,19 @@ pub struct InspectedContainer {
 pub fn initialize_repository_config(
     options: RepositoryConfigInitOptions,
 ) -> Result<RepositoryConfigInitResult> {
-    initialize_repository_config_with(options, inspect_container)
+    initialize_repository_config_with(options, inspect_container, |target_root, source, config| {
+        crate::startup::capture_startup_snapshot(target_root, source, config)
+    })
 }
 
 fn initialize_repository_config_with(
     options: RepositoryConfigInitOptions,
     inspect: impl Fn(&str) -> Result<InspectedContainer>,
+    capture: impl Fn(
+        &Path,
+        &str,
+        &crate::startup::StartupConfig,
+    ) -> Result<crate::startup::StartupSnapshotReport>,
 ) -> Result<RepositoryConfigInitResult> {
     let target_root = std::fs::canonicalize(&options.target_root).with_context(|| {
         format!(
@@ -107,7 +113,7 @@ fn initialize_repository_config_with(
         source_container: source.name.clone(),
         breeze_container: breeze.as_ref().map(|container| container.name.clone()),
         target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
-        target_boot_dir: PathBuf::from(BOOT_DIR),
+        target_startup: options.startup.clone(),
         target_http_host: "127.0.0.1".to_string(),
         target_port: options.target_port,
         target_readiness_path: options.readiness_path,
@@ -123,6 +129,8 @@ fn initialize_repository_config_with(
     })?;
 
     let (gitignore, gitignore_updated) = ensure_local_gitignore(&target_root)?;
+    let startup = crate::startup::normalized_config(options.startup)?;
+    let startup = capture(&target_root, &options.source_container, &startup)?;
     super::edit::create_many_atomic(&[
         (generated[0].clone(), project),
         (generated[1].clone(), recorder.into_bytes()),
@@ -140,13 +148,12 @@ fn initialize_repository_config_with(
         local_dir: PathBuf::from(LOCAL_DIR),
         gitignore,
         gitignore_updated,
-        boot_dir: PathBuf::from(BOOT_DIR),
-        boot_dir_created: false,
+        startup,
         target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
         target_image_tag,
         target_runtime_contract: "traffic-e2e builds Dockerfile.e2e, runs its OCI entrypoint as \
-                                  998:998 with /traffic-e2e/config mounted read-only, and owns \
-                                  readiness, signals, network namespace, and cleanup",
+                                  998:998 with source-compatible startup inputs mounted read-only, \
+                                  and owns readiness, signals, network namespace, and cleanup",
         rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
         preflight_command: "backend-rewrite init preflight",
         record_command: "traffic-e2e record --target-root .",
@@ -275,12 +282,15 @@ mod tests {
     use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 
     #[test]
-    fn conventional_paths_are_bounded_and_boot_is_not_created() {
+    fn conventional_paths_are_bounded_and_startup_is_captured() {
         assert_eq!(LOCAL_DIR, ".traffic-e2e/local");
-        assert_eq!(BOOT_DIR, ".traffic-e2e/local/boot");
+        assert_eq!(
+            crate::repository::LOCAL_STARTUP_ROOT,
+            ".traffic-e2e/local/startup"
+        );
         assert_eq!(
             crate::internal_runtime::REPOSITORY_RELATIVE_ROOT,
-            ".traffic-e2e/local/ai-forbidden"
+            ".traffic-e2e/local/runtime"
         );
         assert_eq!(
             [
@@ -349,6 +359,18 @@ mod tests {
                 running: false,
             })
         };
+        let capture =
+            |_target_root: &Path, _source: &str, config: &crate::startup::StartupConfig| {
+                Ok(crate::startup::StartupSnapshotReport {
+                    status: "captured",
+                    snapshot_id: "snapshot-test".to_string(),
+                    root: PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT),
+                    mounts: config.mounts.clone(),
+                    environment: config.environment_from_source.clone(),
+                    source_container_id: "container-id".to_string(),
+                    source_image_id: "image-id".to_string(),
+                })
+            };
         let result = initialize_repository_config_with(
             RepositoryConfigInitOptions {
                 target_root: target.path().to_path_buf(),
@@ -360,8 +382,10 @@ mod tests {
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
+                startup: crate::startup::StartupConfig::default(),
             },
             inspect,
+            capture,
         )
         .unwrap();
 
@@ -393,7 +417,10 @@ mod tests {
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
         assert!(target.path().join(RECORDER_CONFIG_PATH).is_file());
         assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());
-        assert!(!target.path().join(BOOT_DIR).exists());
+        assert_eq!(
+            result.startup.root,
+            PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT)
+        );
         assert!(
             !target
                 .path()
@@ -401,10 +428,10 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 11"));
+        assert!(project.contains("version: 12"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
-        assert!(project.contains("ai_forbidden_root: local/ai-forbidden"));
-        assert!(project.contains("boot_dir: .traffic-e2e/local/boot"));
+        assert!(project.contains("runtime_root: local/runtime"));
+        assert!(project.contains("startup: {}"));
         assert!(project.contains("container: breeze"));
         assert!(project.contains("pr_base: dev-migration"));
         assert!(!project.contains("max_response_bytes"));
@@ -440,8 +467,10 @@ mod tests {
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
                 upstream_dns: "10.10.10.11:53".parse().unwrap(),
+                startup: crate::startup::StartupConfig::default(),
             },
             inspect,
+            capture,
         )
         .unwrap_err();
         assert!(error.to_string().contains("refusing to initialize any"));

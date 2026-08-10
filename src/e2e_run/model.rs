@@ -50,7 +50,7 @@ pub(super) struct BreezeProjectConfig {
 #[serde(deny_unknown_fields)]
 pub(super) struct TargetProjectConfig {
     pub dockerfile: PathBuf,
-    pub boot_dir: PathBuf,
+    pub startup: crate::startup::StartupConfig,
     pub http_host: String,
     pub port: u16,
     pub readiness_path: String,
@@ -106,18 +106,18 @@ pub(super) struct DeliveryProjectConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct StateProjectConfig {
-    #[serde(default = "default_ai_forbidden_root")]
-    pub ai_forbidden_root: PathBuf,
+    #[serde(default = "default_runtime_root")]
+    pub runtime_root: PathBuf,
 }
 
-fn default_ai_forbidden_root() -> PathBuf {
-    PathBuf::from(crate::internal_runtime::TRAFFIC_E2E_RELATIVE_ROOT)
+fn default_runtime_root() -> PathBuf {
+    PathBuf::from(crate::internal_runtime::PROJECT_RELATIVE_ROOT)
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_dockerfile: PathBuf,
-    pub(crate) target_boot_dir: PathBuf,
+    pub(crate) target_startup: crate::startup::StartupConfig,
     pub(crate) target_http_origin: String,
     pub(crate) target_port: u16,
     pub(crate) target_readiness_path: String,
