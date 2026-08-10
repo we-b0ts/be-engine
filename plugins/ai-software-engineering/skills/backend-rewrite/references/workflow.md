@@ -160,8 +160,10 @@ Every initialized action or status includes a bounded `api_inventory` summary:
 `awaiting_recording_refresh`, `revalidation_pending`, `current_index`, and
 `current_api`. The coordinator owns this inventory. Keep `workflow.scope`, the
 selector of the shared standard recording, separate from the selected API. An
-omitted selector produces `all_configured_apis` and remains stable as selected
-workers change.
+omitted selector produces `recorded_api_inventory`: every API that actually
+publishes a case in the selected standard recording enters the inventory, while
+an API with no observed traffic is not required and does not block completion.
+The scope remains stable as selected workers change.
 
 Every `implementation_required` action uses a worker. Inventory size controls
 only whether the orchestrator advances another pending API after dispatch or
