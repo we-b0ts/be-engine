@@ -5,8 +5,8 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::{Args, Subcommand};
 use traffic_e2e::{
-    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, drive_managed_recording_input,
-    execute_rewrite_recording_worker,
+    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, RecordingApi,
+    drive_managed_recording_input, execute_rewrite_recording_worker,
 };
 
 use super::{record, record_comparison};
@@ -38,6 +38,9 @@ enum InternalCommand {
 struct RecordingInputArgs {
     #[arg(long)]
     case_source: PathBuf,
+    /// Restrict input discovery to the corresponding recorded API directories.
+    #[arg(long = "api")]
+    recording_apis: Vec<RecordingApi>,
     #[arg(long)]
     origin: String,
     #[arg(long, default_value = "30")]
@@ -62,6 +65,7 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
         InternalCommand::RecordingInput(args) => {
             let report = drive_managed_recording_input(ManagedRecordingInputOptions {
                 case_source: args.case_source,
+                recording_apis: args.recording_apis,
                 origin: args.origin,
                 request_timeout: Duration::from_secs(args.request_timeout_seconds.get()),
                 completion: args.completion_control_socket.map(|control_socket| {

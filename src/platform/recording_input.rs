@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -7,7 +7,10 @@ use serde::Serialize;
 use tracing::{info, warn};
 
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
+use crate::gateway::http::rules::case_group_directory;
 use crate::recorded_request::RecordedHttpClient;
+use crate::recorder::sanitize_path_component;
+use crate::recording_api::RecordingApi;
 use crate::recording_control::notify_recording_input_complete;
 
 const MAX_REQUEST_FILES: usize = 1_000;
@@ -17,6 +20,7 @@ const MAX_LOGGED_ERRORS: usize = 10;
 #[derive(Debug, Clone)]
 pub struct ManagedRecordingInputOptions {
     pub case_source: PathBuf,
+    pub recording_apis: Vec<RecordingApi>,
     pub origin: String,
     pub request_timeout: Duration,
     pub completion: Option<ManagedRecordingInputCompletion>,
@@ -46,7 +50,8 @@ pub async fn drive_managed_recording_input(
             options.case_source.display()
         )
     })?;
-    let requests = discover_requests(&case_source)?;
+    let case_sources = resolve_case_sources(&case_source, &options.recording_apis)?;
+    let requests = discover_requests(&case_sources)?;
     ensure!(
         !requests.is_empty(),
         "managed recording input contains no request.json files"
@@ -140,8 +145,43 @@ pub async fn drive_managed_recording_input(
     })
 }
 
-fn discover_requests(case_source: &Path) -> Result<Vec<PathBuf>> {
-    let mut pending = vec![case_source.to_path_buf()];
+fn resolve_case_sources(
+    case_source: &Path,
+    recording_apis: &[RecordingApi],
+) -> Result<Vec<PathBuf>> {
+    if recording_apis.is_empty() {
+        return Ok(vec![case_source.to_path_buf()]);
+    }
+    recording_apis
+        .iter()
+        .map(|api| {
+            case_source
+                .join("record-api")
+                .join(sanitize_path_component(&case_group_directory(
+                    api.path_pattern(),
+                )))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|path| {
+            let metadata = std::fs::symlink_metadata(&path).with_context(|| {
+                format!(
+                    "managed recording API case directory is missing: {}",
+                    path.display()
+                )
+            })?;
+            ensure!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "managed recording API case source must be a directory without symlinks: {}",
+                path.display()
+            );
+            Ok(path)
+        })
+        .collect()
+}
+
+fn discover_requests(case_sources: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut pending = case_sources.to_vec();
     let mut requests = Vec::new();
     while let Some(directory) = pending.pop() {
         let mut entries = std::fs::read_dir(&directory)
@@ -193,9 +233,33 @@ mod tests {
             std::fs::write(case.join("expected-response.json"), b"{}").unwrap();
         }
 
-        let requests = discover_requests(root.path()).unwrap();
+        let requests = discover_requests(&[root.path().to_path_buf()]).unwrap();
         assert_eq!(requests.len(), 2);
         assert!(requests[0] < requests[1]);
+    }
+
+    #[test]
+    fn selected_recording_api_uses_only_its_case_directory() {
+        let root = tempfile::tempdir().unwrap();
+        for (directory, cases) in [("api-a", 2), ("api-b", 1)] {
+            for index in 0..cases {
+                let case = root
+                    .path()
+                    .join("record-api")
+                    .join(directory)
+                    .join(format!("case-{index}"));
+                std::fs::create_dir_all(&case).unwrap();
+                std::fs::write(case.join("request.json"), b"{}").unwrap();
+            }
+        }
+        let api = "POST /api/b".parse::<RecordingApi>().unwrap();
+
+        let sources = resolve_case_sources(root.path(), &[api]).unwrap();
+        let requests = discover_requests(&sources).unwrap();
+
+        assert_eq!(sources, [root.path().join("record-api/api-b")]);
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0].starts_with(&sources[0]));
     }
 
     #[tokio::test]
@@ -238,6 +302,7 @@ mod tests {
 
         let result = drive_managed_recording_input(ManagedRecordingInputOptions {
             case_source: root.path().to_path_buf(),
+            recording_apis: Vec::new(),
             origin,
             request_timeout: Duration::from_secs(1),
             completion: Some(ManagedRecordingInputCompletion {

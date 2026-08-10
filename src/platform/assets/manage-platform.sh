@@ -810,6 +810,10 @@ start_recording_input() {
         --origin "$TRAFFIC_E2E_RECORDING_ORIGIN")
     [[ -z "$completion_control_socket" ]] || \
         input_command+=(--completion-control-socket "$completion_control_socket")
+    if [[ -n "$completion_control_socket" ]]; then
+        local selector
+        for selector in "${api_selectors[@]}"; do input_command+=(--api "$selector"); done
+    fi
     TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 \
         "$TRAFFIC_E2E_BIN" "${input_command[@]}" &
     input_pid=$!
