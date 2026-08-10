@@ -65,7 +65,7 @@ pub(crate) fn resolve_case_group(uri: &Uri, patterns: &[String]) -> CaseGroup {
         .unwrap_or_else(|| path.to_string());
 
     CaseGroup {
-        directory: case_group_from_path(&pattern),
+        directory: case_group_directory(&pattern),
         pattern,
     }
 }
@@ -130,7 +130,7 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
     path == normalized || path.starts_with(&format!("{normalized}/"))
 }
 
-fn case_group_from_path(path: &str) -> String {
+pub(crate) fn case_group_directory(path: &str) -> String {
     let group = segments(path)
         .into_iter()
         .map(|segment| match segment {
