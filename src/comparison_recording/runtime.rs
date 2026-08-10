@@ -13,7 +13,7 @@ use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::net::TcpListener;
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::task::JoinSet;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -32,7 +32,9 @@ use crate::gateway::http::rules::{
 use crate::gateway::http::transport::{GatewayBody, build_fixed_response, simple_response};
 use crate::recording_api::{RecordingApi, validate_selection};
 use crate::recording_completion::RecordingCompletionReason;
-use crate::recording_control::{RecordingControlServer, RecordingLifecycle, RecordingListener};
+use crate::recording_control::{
+    RecordingControlServer, RecordingInputCompletion, RecordingLifecycle, RecordingListener,
+};
 use crate::request_headers::RequestHeaderCapture;
 
 #[derive(Debug, Clone, Default)]
@@ -170,9 +172,13 @@ pub async fn run_with_options(
     if runtime.ready.load(Ordering::Acquire) {
         runtime.store.summary().set_ready().await;
     }
-    let control_server = match control_socket {
-        Some(path) => Some(RecordingControlServer::start(recording_lifecycle, path).await?),
-        None => None,
+    let (control_server, input_completion) = match control_socket {
+        Some(path) => {
+            let (server, input_completion) =
+                RecordingControlServer::start_for_comparison(recording_lifecycle, path).await?;
+            (Some(server), Some(input_completion))
+        }
+        None => (None, None),
     };
     let ready_task = gateway
         .ready
@@ -183,6 +189,8 @@ pub async fn run_with_options(
     tokio::pin!(duration_wait);
     let case_limit_completion = runtime.store.wait_for_explicit_api_case_limit();
     tokio::pin!(case_limit_completion);
+    let input_completion = wait_for_input_completion(input_completion);
+    tokio::pin!(input_completion);
     info!(
         listen = %gateway.listen,
         baseline = %baseline_upstream,
@@ -205,6 +213,31 @@ pub async fn run_with_options(
             _ = &mut case_limit_completion => {
                 info!("every explicitly selected comparison API reached its case limit");
                 break RecordingCompletionReason::PerApiCaseLimitReached;
+            }
+            completion = &mut input_completion => {
+                match completion {
+                    Ok(completion) => {
+                        let published = runtime.store.summary().published().await;
+                        if completion.delivered != published {
+                            runtime.store.summary().record_error(format!(
+                                "managed comparison input delivered {} request template(s), but only {published} comparison case(s) were published",
+                                completion.delivered,
+                            )).await;
+                        }
+                        info!(
+                            delivered = completion.delivered,
+                            published,
+                            "managed comparison finite input exhausted"
+                        );
+                        break RecordingCompletionReason::InputExhausted;
+                    }
+                    Err(error) => {
+                        runtime.store.summary().record_error(format!(
+                            "comparison input completion control failed: {error:#}"
+                        )).await;
+                        break RecordingCompletionReason::ShutdownSignal;
+                    }
+                }
             }
             accepted = listener.accept() => {
                 let (stream, peer) =
@@ -288,6 +321,23 @@ async fn wait_for_duration(runtime: ComparisonRecordingRuntime, duration: Option
         "comparison recording duration started"
     );
     tokio::time::sleep(duration).await;
+}
+
+async fn wait_for_input_completion(
+    receiver: Option<watch::Receiver<Option<RecordingInputCompletion>>>,
+) -> Result<RecordingInputCompletion> {
+    let Some(mut receiver) = receiver else {
+        return std::future::pending::<Result<RecordingInputCompletion>>().await;
+    };
+    loop {
+        if let Some(completion) = *receiver.borrow_and_update() {
+            return Ok(completion);
+        }
+        receiver
+            .changed()
+            .await
+            .context("comparison recording input completion channel closed")?;
+    }
 }
 
 async fn handle_request(

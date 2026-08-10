@@ -24,7 +24,8 @@ pub use preflight::{
     ManagedRecordingPreflightResult,
 };
 pub use recording_input::{
-    ManagedRecordingInputOptions, ManagedRecordingInputResult, drive_managed_recording_input,
+    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
+    drive_managed_recording_input,
 };
 pub use recovery::{ManagedRecordingRecoveryResult, recover_managed_recording};
 pub use replay_preflight::{
@@ -643,6 +644,10 @@ mod tests {
             MANAGER
                 .contains("recording wait-ready --control-socket \"$comparison_control_socket\"")
         );
+        assert!(MANAGER.contains("start_recording_input \"$comparison_control_socket\""));
+        assert!(MANAGER.contains(
+            "input_command+=(--completion-control-socket \"$completion_control_socket\")"
+        ));
         assert!(MANAGER.contains("com.weibo.traffic-e2e.role=cache-snapshot"));
         assert!(MANAGER.contains("normalize_cache_snapshot_ownership"));
         assert!(MANAGER.contains("'chown -hR \"$1:$2\" -- /workspace/control/cache-snapshot'"));

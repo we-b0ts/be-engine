@@ -131,8 +131,8 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
 pub use platform::{
-    ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
-    ManagedRecordingOptions, ManagedRecordingPreflightOptions,
+    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
+    ManagedRecordingOperation, ManagedRecordingOptions, ManagedRecordingPreflightOptions,
     ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
     ManagedRecordingRecoveryResult, ManagedRecordingResult, ManagedReplayNetworkPreflightResult,
     ReplayDirectEgressProbeResult, ReplayNegativeProbeResult, ReplayPositiveProbeResult,
@@ -152,7 +152,8 @@ pub use recorder::{
 };
 pub use recording_api::RecordingApi;
 pub use recording_control::{
-    RecordingReadiness, RecordingWaitConfig, wait_for_recording_listeners, wait_for_recording_ready,
+    RecordingReadiness, RecordingWaitConfig, notify_recording_input_complete,
+    wait_for_recording_listeners, wait_for_recording_ready,
 };
 pub use replay::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,

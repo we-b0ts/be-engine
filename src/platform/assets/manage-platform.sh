@@ -794,15 +794,19 @@ announce_preflight_business_input() {
 }
 
 start_recording_input() {
+    local completion_control_socket="${1-}"
     [[ -n "${TRAFFIC_E2E_REQUEST_SOURCE-}" ]] || return 0
     [[ -d "$TRAFFIC_E2E_REQUEST_SOURCE" ]] || {
         printf 'error: managed recording request source is missing\n' >&2
         return 1
     }
-    TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 \
-        "$TRAFFIC_E2E_BIN" internal recording-input \
+    local -a input_command=(internal recording-input \
         --case-source "$TRAFFIC_E2E_REQUEST_SOURCE" \
-        --origin "$TRAFFIC_E2E_RECORDING_ORIGIN" &
+        --origin "$TRAFFIC_E2E_RECORDING_ORIGIN")
+    [[ -z "$completion_control_socket" ]] || \
+        input_command+=(--completion-control-socket "$completion_control_socket")
+    TRAFFIC_E2E_ENCRYPTION_KEY_B64=$encryption_key_b64 \
+        "$TRAFFIC_E2E_BIN" "${input_command[@]}" &
     input_pid=$!
 }
 
@@ -948,7 +952,7 @@ run_comparison_recording() {
     ) &
     comparison_pid=$!
     "$TRAFFIC_E2E_BIN" recording wait-ready --control-socket "$comparison_control_socket"
-    start_recording_input
+    start_recording_input "$comparison_control_socket"
     local status=0
     wait "$comparison_pid" || status=$?
     comparison_pid=""

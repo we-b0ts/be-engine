@@ -289,7 +289,14 @@ readiness probes succeed, then shutdown finalizes
 When one or more APIs are selected explicitly, reaching every selected API's
 case limit finalizes the run early and records
 `completion_reason = per_api_case_limit_reached`; the duration remains the
-upper bound. An unscoped run always observes the full duration.
+upper bound. Coordinator-managed comparison can instead reuse a finite
+standard-recording request source. It sends those requests serially and, after
+the final comparison case is published, keeps source, candidate, and the cache
+snapshot alive for a three-second final quiet period before recording
+`completion_reason = input_exhausted`. The run becomes
+`completed_with_errors` if the number of delivered templates differs from the
+number of published cases. Comparison without finite managed input continues
+to observe the full duration.
 
 `traffic-e2e config init --source-container <container> --breeze` installs the
 Breeze-aware recorder defaults together with project and verification

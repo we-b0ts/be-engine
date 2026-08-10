@@ -8,6 +8,7 @@ use tracing::{info, warn};
 
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 use crate::recorded_request::RecordedHttpClient;
+use crate::recording_control::notify_recording_input_complete;
 
 const MAX_REQUEST_FILES: usize = 1_000;
 const REQUEST_INTERVAL: Duration = Duration::from_millis(100);
@@ -18,6 +19,13 @@ pub struct ManagedRecordingInputOptions {
     pub case_source: PathBuf,
     pub origin: String,
     pub request_timeout: Duration,
+    pub completion: Option<ManagedRecordingInputCompletion>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagedRecordingInputCompletion {
+    pub control_socket: PathBuf,
+    pub quiet_period: Duration,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -26,6 +34,7 @@ pub struct ManagedRecordingInputResult {
     pub attempted: usize,
     pub succeeded: usize,
     pub failed: usize,
+    pub input_exhausted: bool,
 }
 
 pub async fn drive_managed_recording_input(
@@ -55,9 +64,33 @@ pub async fn drive_managed_recording_input(
     let mut pending = VecDeque::from(requests);
     let shutdown = super::shutdown_signal();
     tokio::pin!(shutdown);
+    let mut input_exhausted = false;
     loop {
         let Some(request_path) = pending.pop_front() else {
-            shutdown.as_mut().await?;
+            input_exhausted = true;
+            if let Some(completion) = &options.completion {
+                info!(
+                    quiet_period_ms = completion.quiet_period.as_millis(),
+                    "managed recording input exhausted; waiting before completion"
+                );
+                tokio::select! {
+                    signal = &mut shutdown => {
+                        signal?;
+                        input_exhausted = false;
+                        break;
+                    }
+                    () = tokio::time::sleep(completion.quiet_period) => {}
+                }
+                tokio::select! {
+                    signal = &mut shutdown => {
+                        signal?;
+                        input_exhausted = false;
+                    }
+                    result = notify_recording_input_complete(&completion.control_socket, succeeded) => {
+                        result?;
+                    }
+                }
+            }
             break;
         };
         attempted = attempted.saturating_add(1);
@@ -79,6 +112,9 @@ pub async fn drive_managed_recording_input(
                 }
             }
         }
+        if pending.is_empty() {
+            continue;
+        }
         tokio::select! {
             signal = &mut shutdown => {
                 signal?;
@@ -93,13 +129,14 @@ pub async fn drive_managed_recording_input(
     );
     info!(
         attempted,
-        succeeded, failed, "managed recording input stopped"
+        succeeded, failed, input_exhausted, "managed recording input stopped"
     );
     Ok(ManagedRecordingInputResult {
         request_templates,
         attempted,
         succeeded,
         failed,
+        input_exhausted,
     })
 }
 
@@ -138,7 +175,13 @@ fn discover_requests(case_source: &Path) -> Result<Vec<PathBuf>> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
     use super::*;
+    use crate::recording_control::{RecordingControlServer, RecordingLifecycle, RecordingListener};
 
     #[test]
     fn discovers_requests_in_stable_order_and_rejects_unbounded_inputs() {
@@ -153,5 +196,65 @@ mod tests {
         let requests = discover_requests(root.path()).unwrap();
         assert_eq!(requests.len(), 2);
         assert!(requests[0] < requests[1]);
+    }
+
+    #[tokio::test]
+    async fn exhausted_input_waits_for_the_final_quiet_period_then_notifies_comparison() {
+        let root = tempfile::tempdir().unwrap();
+        let case = root.path().join("case");
+        std::fs::create_dir_all(&case).unwrap();
+        std::fs::write(
+            case.join("request.json"),
+            br#"{
+                "method":"POST",
+                "uri":"/api/config",
+                "headers":{},
+                "body":{"encoding":"utf8","data":"{}","truncated":false}
+            }"#,
+        )
+        .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let upstream = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 4096];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .await
+                .unwrap();
+        });
+
+        let control_socket = root.path().join("comparison.sock");
+        let lifecycle = RecordingLifecycle::for_comparison_gateway(true);
+        lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
+        let (control, mut completion) =
+            RecordingControlServer::start_for_comparison(lifecycle, control_socket.clone())
+                .await
+                .unwrap();
+        let quiet_period = Duration::from_millis(30);
+        let started = Instant::now();
+
+        let result = drive_managed_recording_input(ManagedRecordingInputOptions {
+            case_source: root.path().to_path_buf(),
+            origin,
+            request_timeout: Duration::from_secs(1),
+            completion: Some(ManagedRecordingInputCompletion {
+                control_socket,
+                quiet_period,
+            }),
+        })
+        .await
+        .unwrap();
+
+        assert!(result.input_exhausted);
+        assert_eq!(result.request_templates, 1);
+        assert_eq!(result.succeeded, 1);
+        assert!(started.elapsed() >= quiet_period);
+        completion.changed().await.unwrap();
+        assert_eq!(completion.borrow().unwrap().delivered, 1);
+        upstream.await.unwrap();
+        control.shutdown().await.unwrap();
     }
 }
