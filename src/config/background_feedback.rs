@@ -11,6 +11,8 @@ use super::background_dependencies::{self, BackgroundDependencyRuleConfig, Redis
 use super::edit::write_atomic;
 use super::rule_document::{find_managed_block, managed_block_diff, newline, parse_and_validate};
 
+mod selector;
+
 const BEGIN_MARKER: &str = "# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES";
 const END_MARKER: &str = "# END AI-MANAGED BACKGROUND DEPENDENCIES";
 const TABLE_HEADER: &str = "[[recording.background_dependencies]]";
@@ -158,21 +160,26 @@ pub(super) fn plan_rule_config(
     let requested_name = requested.name().to_string();
     let reused = rules
         .iter()
-        .find(|rule| selector_covers(rule, &requested))
+        .find(|rule| selector::covers(rule, &requested))
         .map(|rule| rule.name().to_string());
+    let mut merged = None;
     if reused.is_none() {
-        if let Some(existing) = rules
-            .iter_mut()
-            .find(|rule| rule.name() == requested.name())
+        merged = selector::merge_compatible_redis_hash_rule(&mut rules, &requested)?;
+        if merged.is_none()
+            && let Some(existing) = rules
+                .iter_mut()
+                .find(|rule| rule.name() == requested.name())
         {
-            ensure_same_selector(existing, &requested)?;
+            selector::ensure_same(existing, &requested)?;
             *existing = requested;
-        } else {
+        } else if merged.is_none() {
             rules.push(requested);
         }
     }
     let effective_name = if let Some(name) = reused.as_ref() {
         name.clone()
+    } else if let Some(name) = merged {
+        name
     } else {
         requested_name
     };
@@ -346,186 +353,6 @@ impl HttpSelector {
             && self.port.is_none_or(|port| port == evidence.target.port)
             && evidence.method.eq_ignore_ascii_case(&self.method)
             && uri_path(&evidence.uri).starts_with(&self.path_prefix)
-    }
-}
-
-fn ensure_same_selector(
-    existing: &BackgroundDependencyRuleConfig,
-    requested: &BackgroundDependencyRuleConfig,
-) -> Result<()> {
-    let same = compatible_named_selector(existing, requested);
-    ensure!(
-        same,
-        "background dependency rule name {:?} already exists with a different selector; choose a new name instead of broadening it",
-        existing.name()
-    );
-    Ok(())
-}
-
-fn equivalent_selector(
-    existing: &BackgroundDependencyRuleConfig,
-    requested: &BackgroundDependencyRuleConfig,
-) -> bool {
-    compatible_selector(existing, requested, true)
-}
-
-fn selector_covers(
-    existing: &BackgroundDependencyRuleConfig,
-    requested: &BackgroundDependencyRuleConfig,
-) -> bool {
-    match (existing, requested) {
-        (
-            BackgroundDependencyRuleConfig::Http {
-                authorities: existing_authorities,
-                methods: existing_methods,
-                path_prefixes: existing_paths,
-                ..
-            },
-            BackgroundDependencyRuleConfig::Http {
-                authorities: requested_authorities,
-                methods: requested_methods,
-                path_prefixes: requested_paths,
-                ..
-            },
-        ) => {
-            requested_authorities.iter().all(|requested| {
-                existing_authorities.iter().any(|existing| {
-                    canonical_authority(existing).ok() == canonical_authority(requested).ok()
-                })
-            }) && requested_methods.iter().all(|requested| {
-                existing_methods
-                    .iter()
-                    .any(|existing| existing.eq_ignore_ascii_case(requested))
-            }) && requested_paths.iter().all(|requested| {
-                existing_paths
-                    .iter()
-                    .any(|existing| requested.starts_with(existing))
-            })
-        }
-        _ => equivalent_selector(existing, requested),
-    }
-}
-
-fn compatible_named_selector(
-    existing: &BackgroundDependencyRuleConfig,
-    requested: &BackgroundDependencyRuleConfig,
-) -> bool {
-    compatible_selector(existing, requested, false)
-}
-
-fn compatible_selector(
-    existing: &BackgroundDependencyRuleConfig,
-    requested: &BackgroundDependencyRuleConfig,
-    require_exact_sets: bool,
-) -> bool {
-    match (existing, requested) {
-        (
-            BackgroundDependencyRuleConfig::Http {
-                authorities: existing_authorities,
-                methods: existing_methods,
-                path_prefixes: existing_paths,
-                ..
-            },
-            BackgroundDependencyRuleConfig::Http {
-                authorities: requested_authorities,
-                methods: requested_methods,
-                path_prefixes: requested_paths,
-                ..
-            },
-        ) => {
-            (!require_exact_sets || existing_authorities.len() == requested_authorities.len())
-                && existing_authorities.iter().all(|authority| {
-                    requested_authorities.iter().any(|requested| {
-                        canonical_authority(authority).ok() == canonical_authority(requested).ok()
-                    })
-                })
-                && (!require_exact_sets || existing_methods.len() == requested_methods.len())
-                && existing_methods.iter().all(|method| {
-                    requested_methods
-                        .iter()
-                        .any(|requested| method.eq_ignore_ascii_case(requested))
-                })
-                && existing_paths == requested_paths
-        }
-        (
-            BackgroundDependencyRuleConfig::Memcached {
-                breeze_identity: existing_identity,
-                command: existing_command,
-                key_start: existing_start,
-                key_end: existing_end,
-                key_separator: existing_separator,
-                key_suffix: existing_suffix,
-                ..
-            },
-            BackgroundDependencyRuleConfig::Memcached {
-                breeze_identity: requested_identity,
-                command: requested_command,
-                key_start: requested_start,
-                key_end: requested_end,
-                key_separator: requested_separator,
-                key_suffix: requested_suffix,
-                ..
-            },
-        ) => {
-            existing_identity == requested_identity
-                && existing_command == requested_command
-                && existing_start == requested_start
-                && existing_end == requested_end
-                && existing_separator == requested_separator
-                && existing_suffix == requested_suffix
-        }
-        (
-            BackgroundDependencyRuleConfig::Redis {
-                ports: existing_ports,
-                command: existing_command,
-                keys: existing_keys,
-                key_patterns: existing_patterns,
-                key_prefix: existing_prefix,
-                key_suffix: existing_suffix,
-                fields: existing_fields,
-                ..
-            },
-            BackgroundDependencyRuleConfig::Redis {
-                ports: requested_ports,
-                command: requested_command,
-                keys: requested_keys,
-                key_patterns: requested_patterns,
-                key_prefix: requested_prefix,
-                key_suffix: requested_suffix,
-                fields: requested_fields,
-                ..
-            },
-        ) => {
-            (!require_exact_sets || existing_ports.len() == requested_ports.len())
-                && existing_ports
-                    .iter()
-                    .all(|port| requested_ports.contains(port))
-                && existing_command == requested_command
-                && existing_keys == requested_keys
-                && existing_patterns == requested_patterns
-                && existing_prefix == requested_prefix
-                && existing_suffix == requested_suffix
-                && existing_fields == requested_fields
-        }
-        (
-            BackgroundDependencyRuleConfig::Motan {
-                group: existing_group,
-                interface_name: existing_interface,
-                method_name: existing_method,
-                ..
-            },
-            BackgroundDependencyRuleConfig::Motan {
-                group: requested_group,
-                interface_name: requested_interface,
-                method_name: requested_method,
-                ..
-            },
-        ) => {
-            existing_group == requested_group
-                && existing_interface == requested_interface
-                && existing_method == requested_method
-        }
-        _ => false,
     }
 }
 

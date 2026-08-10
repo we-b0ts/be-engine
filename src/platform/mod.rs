@@ -213,6 +213,10 @@ async fn run_managed_runtime(
     );
     let recorder = crate::config::AppConfig::load_comparison_recording(recorder_config)?;
     ensure!(
+        recorder.recording.post_ready_quiet_period() >= std::time::Duration::from_secs(15),
+        "managed recording requires a post-ready quiet period of at least 15 seconds"
+    );
+    ensure!(
         recorder.http_gateway.ready.enabled,
         "managed recording requires an enabled http_gateway.ready probe"
     );
@@ -632,6 +636,13 @@ mod tests {
         assert!(MANAGER.contains("internal recorder-run --config"));
         assert!(MANAGER.contains("internal comparison-run --config"));
         assert!(MANAGER.contains("internal cache-snapshot-run"));
+        assert!(MANAGER.contains(
+            "recording wait-ready --control-socket /workspace/control/cache-snapshot.sock"
+        ));
+        assert!(
+            MANAGER
+                .contains("recording wait-ready --control-socket \"$comparison_control_socket\"")
+        );
         assert!(MANAGER.contains("com.weibo.traffic-e2e.role=cache-snapshot"));
         assert!(MANAGER.contains("normalize_cache_snapshot_ownership"));
         assert!(MANAGER.contains("'chown -hR \"$1:$2\" -- /workspace/control/cache-snapshot'"));

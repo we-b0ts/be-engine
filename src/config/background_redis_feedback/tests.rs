@@ -348,6 +348,161 @@ fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
 }
 
 #[test]
+fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("recorder.toml");
+    let replay_report = temp.path().join("replay-report.json");
+    let global = temp.path().join("global-dependencies.jsonl");
+    fs::write(
+        &config,
+        r#"[recording]
+traffic_jsonl = "full"
+
+# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
+[[recording.background_dependencies]]
+name = "abtest_bootstrap_hget_version"
+protocol = "redis"
+ports = [50600]
+command = "HGET"
+keys = ["exp:business:all"]
+key_patterns = [{ prefix = "exp:assign:collection:", suffix = "", numeric_middle = true }]
+fields = ["version"]
+source_evidence = "TrafficServiceImpl.loadAllCacheData HGET warm-up"
+
+[[recording.background_dependencies]]
+name = "abtest_bootstrap_hmget_value"
+protocol = "redis"
+ports = [50600]
+command = "HMGET"
+keys = ["exp:business:all"]
+key_patterns = [{ prefix = "exp:assign:collection:", suffix = "", numeric_middle = true }]
+fields = ["value", "compress", "hash"]
+source_evidence = "TrafficServiceImpl.loadAllCacheData HMGET warm-up"
+# END AI-MANAGED BACKGROUND DEPENDENCIES
+"#,
+    )
+    .unwrap();
+    let exchanges = [
+        ("HGET", "traffic-result", vec!["version"]),
+        ("HGET", "exp:config:collection:43", vec!["version"]),
+        ("HMGET", "traffic-result", vec!["value", "compress", "hash"]),
+        (
+            "HMGET",
+            "exp:config:collection:43",
+            vec!["value", "compress", "hash"],
+        ),
+    ]
+    .map(|(command, key, fields)| {
+        let mut args = vec![capture(key)];
+        args.extend(fields.into_iter().map(capture));
+        json!({
+            "event_type": "redis_exchange",
+            "target_host": "rs50600.eos.grid.sample.test",
+            "target_port": 50600,
+            "command": command,
+            "args": args,
+            "replay_safe": true,
+            "global_dependency_reason": "bootstrap_window",
+        })
+        .to_string()
+    })
+    .join("\n");
+    fs::write(&global, format!("{exchanges}\n")).unwrap();
+    fs::write(
+        &replay_report,
+        serde_json::to_vec_pretty(&json!({
+            "version": 6,
+            "finalized": true,
+            "global_dependencies_path": global,
+            "cases": [],
+            "redis": {
+                "unmatched": [],
+                "unsupported": [],
+                "unsafe_events": [],
+                "unused_case": [],
+            },
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let feedback = |command: &str, fields: &[&str]| RedisBackgroundDependencyFeedback {
+        config_path: config.clone(),
+        replay_report_path: replay_report.clone(),
+        name: format!("traffic-result-{}", command.to_ascii_lowercase()),
+        ports: vec![50600],
+        command: command.to_string(),
+        keys: vec!["traffic-result".to_string()],
+        key_patterns: vec![RedisKeyPatternConfig {
+            prefix: "exp:config:collection:".to_string(),
+            suffix: String::new(),
+            numeric_middle: true,
+        }],
+        key_prefix: String::new(),
+        key_suffix: String::new(),
+        initial_load_timeout_ms: None,
+        fields: fields.iter().map(|field| (*field).to_string()).collect(),
+        source_revision: REVISION.to_string(),
+        source_evidence: format!("TrafficServiceImpl scheduled {command} refresh"),
+    };
+
+    let hget = feedback("HGET", &["version"]);
+    let hget_plan = plan_redis_background_dependency(hget.clone()).unwrap();
+    assert!(hget_plan.report().changed);
+    assert!(!hget_plan.report().reused_existing);
+    assert_eq!(
+        hget_plan.report().effective_name,
+        "abtest_bootstrap_hget_version"
+    );
+    hget_plan.apply().unwrap();
+
+    let hmget = feedback("HMGET", &["value", "compress", "hash"]);
+    let hmget_plan = plan_redis_background_dependency(hmget).unwrap();
+    assert!(hmget_plan.report().changed);
+    assert!(!hmget_plan.report().reused_existing);
+    assert_eq!(
+        hmget_plan.report().effective_name,
+        "abtest_bootstrap_hmget_value"
+    );
+    hmget_plan.apply().unwrap();
+
+    let config = AppConfig::load(&config).unwrap();
+    assert_eq!(config.recording.background_dependencies.len(), 2);
+    for rule in &config.recording.background_dependencies {
+        let BackgroundDependencyRuleConfig::Redis {
+            keys,
+            key_patterns,
+            source_evidence,
+            ..
+        } = rule
+        else {
+            panic!("expected Redis background rule")
+        };
+        assert_eq!(
+            keys.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["exp:business:all", "traffic-result"]
+        );
+        assert_eq!(
+            key_patterns
+                .iter()
+                .map(|pattern| pattern.prefix.as_str())
+                .collect::<Vec<_>>(),
+            ["exp:assign:collection:", "exp:config:collection:"]
+        );
+        assert!(source_evidence.contains("loadAllCacheData"));
+        assert!(source_evidence.contains("scheduled"));
+    }
+
+    let repeated = plan_redis_background_dependency(hget).unwrap();
+    assert!(!repeated.report().changed);
+    assert!(repeated.report().reused_existing);
+    assert_eq!(
+        repeated.report().effective_name,
+        "abtest_bootstrap_hget_version"
+    );
+}
+
+#[test]
 fn scard_and_hgetall_plan_from_exact_key_unused_case_evidence() {
     for (command, key) in [
         ("SCARD", "106.2020tagid_020_007.itagv3"),

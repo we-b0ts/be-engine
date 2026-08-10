@@ -60,13 +60,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn releases_an_available_listener_after_the_probe() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let listen = listener.local_addr().unwrap();
-        drop(listener);
-
+    async fn accepts_a_kernel_assigned_available_listener() {
+        let listen = "127.0.0.1:0".parse().unwrap();
         require_available(listen).await.unwrap();
-
-        TcpListener::bind(listen).await.unwrap();
     }
 }

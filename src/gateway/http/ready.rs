@@ -8,12 +8,14 @@ use tracing::{debug, info};
 
 use crate::AppState;
 use crate::config::{HttpGatewayConfig, HttpGatewayReadyConfig};
+use crate::recorder::readiness::PostReadyWaitOutcome;
 
 use super::transport::{build_upstream_request, build_upstream_uri, send_upstream};
 
 pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()> {
     let interval = Duration::from_millis(config.ready.interval_ms.max(1));
-    let post_ready_settle = Duration::from_millis(state.config().recording.post_ready_settle_ms);
+    let post_ready_quiet = state.config().recording.post_ready_quiet_period();
+    let post_ready_max_wait = state.config().recording.post_ready_max_wait();
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     info!(
@@ -29,23 +31,29 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()
         match probe_once(&state, &config.matched_upstream, &config.ready).await {
             Ok(status) if status == config.ready.success_status => {
                 let ready_at = tokio::time::Instant::now();
-                if state.has_background_initial_loads() || !post_ready_settle.is_zero() {
+                if state.has_background_initial_loads() || !post_ready_quiet.is_zero() {
                     state.mark_recording_source_settling();
                     info!(
                         upstream = %config.matched_upstream,
                         path = %config.ready.path,
                         status,
-                        post_ready_settle_ms = post_ready_settle.as_millis(),
+                        post_ready_quiet_ms = post_ready_quiet.as_millis(),
+                        post_ready_max_wait_ms = post_ready_max_wait.as_millis(),
                         waits_for_background_initial_load = state.has_background_initial_loads(),
                         "HTTP gateway ready probe succeeded; waiting for case admission prerequisites"
                     );
                 }
-                state.wait_for_background_initial_loads().await.context(
-                    "background dependency initial-load observation failed with the source",
-                )?;
-                let settle_deadline = ready_at + post_ready_settle;
-                if tokio::time::Instant::now() < settle_deadline {
-                    tokio::time::sleep_until(settle_deadline).await;
+                let wait_outcome = state
+                    .wait_for_post_ready_admission(ready_at)
+                    .await
+                    .context(
+                        "post-ready background dependency observation failed with the source",
+                    )?;
+                if wait_outcome == PostReadyWaitOutcome::MaximumWaitElapsed {
+                    tracing::warn!(
+                        post_ready_max_wait_ms = post_ready_max_wait.as_millis(),
+                        "post-ready background dependency observation reached its hard limit; continuing recording"
+                    );
                 }
                 if !state.is_bootstrap_open() {
                     info!("HTTP gateway readiness stopped because bootstrap is already closed");
@@ -67,7 +75,8 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()
                     upstream = %config.matched_upstream,
                     path = %config.ready.path,
                     status,
-                    post_ready_settle_ms = post_ready_settle.as_millis(),
+                    post_ready_quiet_ms = post_ready_quiet.as_millis(),
+                    post_ready_max_wait_ms = post_ready_max_wait.as_millis(),
                     "HTTP gateway ready probe succeeded and case admission is enabled"
                 );
                 return Ok(());
@@ -192,7 +201,7 @@ mod tests {
         assert!(!state.is_bootstrap_open());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn delays_case_admission_after_source_readiness() {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
@@ -217,7 +226,7 @@ mod tests {
             success_status: 200,
             interval_ms: 1,
         };
-        config.recording.post_ready_settle_ms = 50;
+        config.recording.post_ready_settle_ms = 15_000;
         config.recording.output_dir = temp.path().join("recordings");
         config.tls.ca_cert_path = temp.path().join("ca.pem");
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
@@ -241,7 +250,7 @@ mod tests {
 
         assert!(state.is_bootstrap_open());
         ready_task.await.unwrap().unwrap();
-        assert!(started.elapsed() >= Duration::from_millis(50));
+        assert!(started.elapsed() >= Duration::from_secs(15));
         assert!(!state.is_bootstrap_open());
     }
 }

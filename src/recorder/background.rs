@@ -19,6 +19,8 @@ use crate::config::background_dependencies::{
 };
 use crate::dependency::DependencyExchangeOutcome;
 
+use super::readiness::{PostReadyWaitOutcome, RedisCacheActivity};
+
 const INITIAL_LOAD_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
@@ -28,6 +30,7 @@ pub(crate) struct BackgroundDependencyMatcher {
     memcached: Mutex<MemcachedRules>,
     redis_initial_load_rules: Vec<RedisInitialLoadRule>,
     initial_loads: InitialLoads,
+    redis_cache_activity: RedisCacheActivity,
 }
 
 #[derive(Debug, Default)]
@@ -179,6 +182,7 @@ impl BackgroundDependencyMatcher {
             memcached: Mutex::new(memcached),
             redis_initial_load_rules,
             initial_loads,
+            redis_cache_activity: RedisCacheActivity::default(),
         };
         matcher.refresh_pending_resources()?;
         let pending = matcher.pending_resource_summary();
@@ -291,6 +295,21 @@ impl BackgroundDependencyMatcher {
                         if ports.contains(&port)
                 )
             })
+    }
+
+    pub(crate) fn record_redis_cache_request(&self) {
+        self.redis_cache_activity.record_request();
+    }
+
+    pub(crate) async fn wait_for_redis_cache_quiet_period(
+        &self,
+        ready_at: Instant,
+        quiet_period: Duration,
+        maximum_wait: Duration,
+    ) -> PostReadyWaitOutcome {
+        self.redis_cache_activity
+            .wait_for_quiet_period(ready_at, quiet_period, maximum_wait)
+            .await
     }
 
     pub(crate) fn record_completed_match(&self, matched: &BackgroundDependencyMatch) {

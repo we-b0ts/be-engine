@@ -19,7 +19,7 @@ use tokio::sync::Mutex;
 use traffic_e2e::{
     AppConfig, ArtifactsConfig, ComparisonRecordingConfig, ComparisonRecordingRunOptions,
     HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig,
+    HttpGatewayRuleConfig, RecordingWaitConfig, wait_for_recording_ready,
 };
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
@@ -101,14 +101,25 @@ async fn duration_stops_cleanly_after_comparison_recording_is_ready() {
         interval_ms: 100,
     };
     let started = Instant::now();
+    let control_socket = temp.path().join("comparison.sock");
 
-    traffic_e2e::run_comparison_recording_with_duration(
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording_with_options(
         config,
-        Some(run_id.to_string()),
-        Some(Duration::from_millis(25)),
-    )
+        ComparisonRecordingRunOptions {
+            run_id: Some(run_id.to_string()),
+            duration: Some(Duration::from_millis(250)),
+            recording_apis: Vec::new(),
+            control_socket: Some(control_socket.clone()),
+        },
+    ));
+    let readiness = wait_for_recording_ready(RecordingWaitConfig {
+        control_socket_path: control_socket,
+        timeout: Duration::from_secs(1),
+    })
     .await
     .unwrap();
+    assert!(readiness.ready);
+    task.await.unwrap().unwrap();
 
     assert!(started.elapsed() >= Duration::from_millis(100));
     let summary = read_json(&run_dir(&temp, run_id).join("comparison-recording-run.json"));
@@ -117,7 +128,7 @@ async fn duration_stops_cleanly_after_comparison_recording_is_ready() {
 }
 
 #[tokio::test]
-async fn returns_baseline_without_waiting_for_candidate_and_records_both() {
+async fn returns_baseline_after_the_serial_comparison_case_is_complete() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
@@ -132,13 +143,14 @@ async fn returns_baseline_without_waiting_for_candidate_and_records_both() {
             run_id: Some(run_id.to_string()),
             duration: None,
             recording_apis: vec!["GET /api/users/*".parse().unwrap()],
+            control_socket: None,
         },
     ));
     wait_for_port(gateway).await;
 
     let started = Instant::now();
     assert!(raw_get(gateway, "/api/users/42").await.contains("baseline"));
-    assert!(started.elapsed() < Duration::from_millis(250));
+    assert!(started.elapsed() >= Duration::from_millis(300));
     assert!(raw_get(gateway, "/api/ignored").await.contains("fixed"));
 
     let group = run_dir(&temp, run_id).join("api/api-users-wildcard");
@@ -386,8 +398,10 @@ async fn overload_returns_fixed_response_without_single_sided_dispatch() {
     ));
     wait_for_port(gateway).await;
 
-    assert!(raw_get(gateway, "/api/one").await.contains("baseline"));
+    let first = tokio::spawn(raw_get(gateway, "/api/one"));
+    wait_for_counter(&baseline_requests, 1).await;
     assert!(raw_get(gateway, "/api/two").await.contains("fixed"));
+    assert!(first.await.unwrap().contains("baseline"));
     wait_for_counter(&candidate_requests, 1).await;
     assert_eq!(baseline_requests.load(Ordering::SeqCst), 1);
     let summary = wait_for_count(

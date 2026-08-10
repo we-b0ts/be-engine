@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -31,6 +32,7 @@ use crate::gateway::http::rules::{
 use crate::gateway::http::transport::{GatewayBody, build_fixed_response, simple_response};
 use crate::recording_api::{RecordingApi, validate_selection};
 use crate::recording_completion::RecordingCompletionReason;
+use crate::recording_control::{RecordingControlServer, RecordingLifecycle, RecordingListener};
 use crate::request_headers::RequestHeaderCapture;
 
 #[derive(Debug, Clone, Default)]
@@ -38,6 +40,7 @@ pub struct ComparisonRecordingRunOptions {
     pub run_id: Option<String>,
     pub duration: Option<Duration>,
     pub recording_apis: Vec<RecordingApi>,
+    pub control_socket: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -51,6 +54,7 @@ pub(super) struct ComparisonRecordingRuntime {
     pub(super) store: ComparisonRecordingStore,
     pub(super) ready: Arc<AtomicBool>,
     pub(super) ready_notify: Arc<Notify>,
+    pub(super) recording_lifecycle: RecordingLifecycle,
     request_header_capture: RequestHeaderCapture,
     permits: Arc<Semaphore>,
     background: BackgroundTasks,
@@ -91,6 +95,7 @@ pub async fn run_with_options(
         run_id,
         duration,
         recording_apis,
+        control_socket,
     } = options;
     ensure!(
         duration.is_none_or(|duration| !duration.is_zero()),
@@ -145,6 +150,8 @@ pub async fn run_with_options(
         .enable_http1()
         .build();
     let client = Client::builder(TokioExecutor::new()).build(https);
+    let recording_lifecycle = RecordingLifecycle::for_comparison_gateway(!gateway.ready.enabled);
+    recording_lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
     let runtime = ComparisonRecordingRuntime {
         config: Arc::new(config),
         comparison_recording: comparison_recording.clone(),
@@ -155,6 +162,7 @@ pub async fn run_with_options(
         store,
         ready: Arc::new(AtomicBool::new(!gateway.ready.enabled)),
         ready_notify: Arc::new(Notify::new()),
+        recording_lifecycle: recording_lifecycle.clone(),
         request_header_capture,
         permits: Arc::new(Semaphore::new(comparison_recording.max_in_flight)),
         background: BackgroundTasks::new(),
@@ -162,6 +170,10 @@ pub async fn run_with_options(
     if runtime.ready.load(Ordering::Acquire) {
         runtime.store.summary().set_ready().await;
     }
+    let control_server = match control_socket {
+        Some(path) => Some(RecordingControlServer::start(recording_lifecycle, path).await?),
+        None => None,
+    };
     let ready_task = gateway
         .ready
         .enabled
@@ -225,6 +237,7 @@ pub async fn run_with_options(
         }
     };
     drop(listener);
+    runtime.recording_lifecycle.mark_stopping();
     connections.abort_all();
     while connections.join_next().await.is_some() {}
     if let Some(task) = ready_task {
@@ -245,9 +258,17 @@ pub async fn run_with_options(
             ),
         ))
         .await;
-    runtime.store.fail_unfinished().await?;
-    runtime.store.summary().finish(completion_reason).await?;
-    Ok(())
+    let finalization_result = async {
+        runtime.store.fail_unfinished().await?;
+        runtime.store.summary().finish(completion_reason).await
+    }
+    .await;
+    let control_result = match control_server {
+        Some(server) => server.shutdown().await,
+        None => Ok(()),
+    };
+    finalization_result?;
+    control_result
 }
 
 async fn wait_for_duration(runtime: ComparisonRecordingRuntime, duration: Option<Duration>) {
@@ -475,7 +496,7 @@ async fn run_dual(
     pattern: String,
     request: ComparisonRecordingRequest,
     reservation: Reservation,
-    _permit: OwnedSemaphorePermit,
+    permit: OwnedSemaphorePermit,
     baseline_sender: oneshot::Sender<UpstreamCapture>,
 ) {
     let baseline = fetch_upstream(
@@ -489,7 +510,6 @@ async fn run_dual(
     )
     .await;
     update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline).await;
-    let _ = baseline_sender.send(baseline.clone());
 
     let candidate = fetch_upstream(
         &runtime,
@@ -547,7 +567,7 @@ async fn run_dual(
         group,
         pattern,
         request,
-        baseline: baseline.record,
+        baseline: baseline.record.clone(),
         candidate: candidate.record,
         baseline_recheck: baseline_recheck.map(|capture| capture.record),
     };
@@ -558,6 +578,7 @@ async fn run_dual(
             "failed to publish comparison recording case"
         );
     }
+    drop(permit);
     runtime
         .store
         .summary()
@@ -565,10 +586,10 @@ async fn run_dual(
             runtime
                 .comparison_recording
                 .max_in_flight
-                .saturating_sub(runtime.permits.available_permits())
-                .saturating_sub(1),
+                .saturating_sub(runtime.permits.available_permits()),
         )
         .await;
+    let _ = baseline_sender.send(baseline);
 }
 
 async fn fixed_response(runtime: &ComparisonRecordingRuntime) -> Response<GatewayBody> {

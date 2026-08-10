@@ -907,6 +907,7 @@ run_standard_recording() {
 }
 
 run_comparison_recording() {
+    local comparison_control_socket="$control_dir/comparison.sock"
     [[ ! -e "$artifacts_dir/comparison-recordings/$run_id" ]] || {
         printf 'error: comparison run already exists: %s\n' "$run_id" >&2
         return 1
@@ -934,7 +935,8 @@ run_comparison_recording() {
         "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
     require_container_running "$target_name" target
     require_port_open "$TRAFFIC_E2E_TARGET_HOST" "$TRAFFIC_E2E_TARGET_PORT" target
-    local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds")
+    docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
+    local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
     "$baseline_recheck" && comparison_command+=(--baseline-recheck)
     local selector
     for selector in "${api_selectors[@]}"; do comparison_command+=(--api "$selector"); done
@@ -945,6 +947,7 @@ run_comparison_recording() {
         exec "$TRAFFIC_E2E_BIN" "${comparison_command[@]}"
     ) &
     comparison_pid=$!
+    "$TRAFFIC_E2E_BIN" recording wait-ready --control-socket "$comparison_control_socket"
     start_recording_input
     local status=0
     wait "$comparison_pid" || status=$?

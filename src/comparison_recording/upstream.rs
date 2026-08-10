@@ -327,6 +327,7 @@ pub(super) async fn run_ready_probe(runtime: ComparisonRecordingRuntime) {
         if matches!(tokio::join!(baseline, candidate), (Ok(true), Ok(true))) {
             runtime.ready.store(true, Ordering::Release);
             runtime.store.summary().set_ready().await;
+            runtime.recording_lifecycle.mark_source_ready();
             runtime.ready_notify.notify_waiters();
             info!("baseline and candidate ready probes succeeded");
             return;

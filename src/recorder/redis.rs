@@ -195,6 +195,9 @@ pub(crate) async fn handle_connected(
             let cache_snapshot_rule = c2s_state
                 .matching_redis_snapshot_rule(c2s_context.target_port, &command.name, &command.args)
                 .map(ToOwned::to_owned);
+            if cache_snapshot_rule.is_some() {
+                c2s_state.record_redis_cache_request();
+            }
             let cache_snapshot_key = cache_snapshot_rule.as_ref().map(|rule| {
                 redis_snapshot_key(rule, &current_session, &command.name, &command.args)
             });

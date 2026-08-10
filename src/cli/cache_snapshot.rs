@@ -61,10 +61,13 @@ fn configure_runtime(config: &mut AppConfig, output_dir: &Path) -> BTreeSet<u16>
     // AppConfig validation requiring those to be enabled whenever
     // http_response_rewrite is enabled, so disable it here too.
     config.http_response_rewrite.enabled = false;
-    // The HTTP gateway readiness probe closes the bootstrap dependency window,
-    // so keep that probe enabled. Its listener is not part of cache snapshot
-    // interception, though, and must not claim the externally configured
-    // comparison gateway port before comparison recording starts.
+    // The candidate starts after the source and therefore provides the shared
+    // "both processes are ready" boundary for the comparison cache quiet
+    // window. Keep the probe enabled but isolate its listener from the
+    // externally configured comparison gateway port.
+    if let Some(comparison) = &config.comparison_recording {
+        config.http_gateway.matched_upstream = comparison.candidate_upstream.clone();
+    }
     config.http_gateway.listen = SocketAddr::from(([127, 0, 0, 1], 0));
     config.tcp_gateway.enabled = true;
     config.tcp_gateway.record_http = false;
@@ -109,6 +112,12 @@ mod tests {
         config.http_gateway.enabled = true;
         config.http_gateway.ready.enabled = true;
         config.http_gateway.listen = SocketAddr::from(([0, 0, 0, 0], 18_062));
+        config.comparison_recording = Some(Default::default());
+        config
+            .comparison_recording
+            .as_mut()
+            .unwrap()
+            .candidate_upstream = "http://127.0.0.1:18082".to_string();
 
         configure_runtime(&mut config, Path::new("/tmp/cache-snapshot-test"));
 
@@ -117,6 +126,10 @@ mod tests {
         assert_eq!(
             config.http_gateway.listen,
             SocketAddr::from(([127, 0, 0, 1], 0))
+        );
+        assert_eq!(
+            config.http_gateway.matched_upstream,
+            "http://127.0.0.1:18082"
         );
         assert!(config.tcp_gateway.enabled);
         assert!(!config.tcp_gateway.record_http);

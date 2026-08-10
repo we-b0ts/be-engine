@@ -115,7 +115,7 @@ impl Default for ComparisonRecordingConfig {
             candidate_upstream: "http://127.0.0.1:8082".to_string(),
             baseline_recheck: false,
             upstream_timeout_ms: 30_000,
-            max_in_flight: 256,
+            max_in_flight: 1,
             summary_flush_interval_ms: 1_000,
         }
     }
