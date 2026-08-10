@@ -28,7 +28,7 @@ mod startup;
 #[command(
     name = "backend-rewrite",
     author,
-    version,
+    version = traffic_e2e::BINARY_VERSION,
     about = "Coordinate backend rewrites through bounded traffic evidence",
     subcommand_required = true,
     arg_required_else_help = true

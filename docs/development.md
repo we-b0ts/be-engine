@@ -21,6 +21,12 @@ The build produces sibling `traffic-e2e` and `backend-rewrite` executables.
 Keep them together in installed packages because detached coordinator actions
 delegate engine work to `traffic-e2e`.
 
+Both binaries report the package version, build revision, and exact pinned
+target-runtime image from `--version`. Git checkouts derive the revision
+automatically and append `-dirty` for uncommitted content. Builds without Git
+metadata should set `TRAFFIC_E2E_BUILD_REVISION` to a 1-64 character release
+revision containing only ASCII letters, digits, `.`, `_`, `+`, or `-`.
+
 ## Shared Container Images
 
 The repository owns Dockerfiles for project-independent recording and target

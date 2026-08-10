@@ -2,6 +2,7 @@ mod access_policy;
 mod active_case;
 mod artifact_file;
 mod breeze;
+mod build_info;
 mod case_group;
 mod case_kind;
 mod comparison_recording;
@@ -71,6 +72,8 @@ pub const TRAFFIC_PROCESS_UID: u32 = 998;
 pub const TRAFFIC_PROCESS_GID: u32 = 998;
 /// OCI user specification for containerized processes whose dependency traffic is intercepted.
 pub const TRAFFIC_PROCESS_USER: &str = "998:998";
+
+pub use build_info::BINARY_VERSION;
 
 pub use case_group::{
     CaseGroupEnsureResult, CaseGroupOptions, CaseGroupStatus, PatternOutcome, PatternOutcomeStatus,

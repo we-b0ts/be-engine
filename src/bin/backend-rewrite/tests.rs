@@ -5,6 +5,7 @@ use clap::CommandFactory;
 fn exposes_only_the_rewrite_coordinator_surface() {
     let command = Cli::command();
     command.clone().debug_assert();
+    assert_eq!(command.get_version(), Some(traffic_e2e::BINARY_VERSION));
     let visible = command
         .get_subcommands()
         .filter(|subcommand| !subcommand.is_hide_set())
