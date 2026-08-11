@@ -12,7 +12,6 @@ use hyper::{HeaderMap, Method, Request, Response, StatusCode, Uri};
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use tokio::net::TcpListener;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore, oneshot, watch};
 use tokio::task::JoinSet;
 use tracing::{info, warn};
@@ -133,19 +132,21 @@ pub async fn run_with_options(
             )
         })
         .collect();
+    let gateway = config.http_gateway.clone();
+    let listener = crate::tcp_listener::bind_with_diagnostic(
+        gateway.listen,
+        format!(
+            "failed to bind comparison recording gateway {}",
+            gateway.listen
+        ),
+    )
+    .await?;
     let store = ComparisonRecordingStore::create(
         &config.comparison_recording_output_dir(),
         &run_id,
         recording_api_limits,
     )
     .await?;
-    let gateway = config.http_gateway.clone();
-    let listener = TcpListener::bind(gateway.listen).await.with_context(|| {
-        format!(
-            "failed to bind comparison recording gateway {}",
-            gateway.listen
-        )
-    })?;
     let https = HttpsConnectorBuilder::new()
         .with_webpki_roots()
         .https_or_http()

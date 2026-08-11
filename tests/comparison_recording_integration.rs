@@ -29,6 +29,33 @@ use traffic_e2e::{
 static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
+async fn occupied_gateway_fails_without_publishing_a_running_manifest() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway = occupied.local_addr().unwrap();
+    let baseline = free_addr();
+    let candidate = free_addr();
+    let run_id = "20260722155957";
+    let config = comparison_recording_config(&temp, gateway, baseline, candidate);
+
+    let error = traffic_e2e::run_comparison_recording(config, Some(run_id.to_string()))
+        .await
+        .unwrap_err();
+    let message = format!("{error:#}");
+
+    assert!(
+        message.contains(&format!(
+            "failed to bind comparison recording gateway {gateway}"
+        )),
+        "{message}"
+    );
+    assert!(message.contains("Address already in use"));
+    assert!(!run_dir(&temp, run_id).exists());
+}
+
+#[tokio::test]
 async fn decodes_gzip_response_artifacts_without_changing_the_forwarded_response() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();

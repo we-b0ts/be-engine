@@ -903,6 +903,32 @@ run_standard_recording() {
     jq -e "$manifest_filter" "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null
 }
 
+wait_for_comparison_ready() {
+    local control_socket=$1
+    local readiness_pid status
+    "$TRAFFIC_E2E_BIN" recording wait-ready --control-socket "$control_socket" &
+    readiness_pid=$!
+    while kill -0 "$comparison_pid" >/dev/null 2>&1 &&
+        kill -0 "$readiness_pid" >/dev/null 2>&1; do
+        sleep 0.1
+    done
+    if ! kill -0 "$comparison_pid" >/dev/null 2>&1; then
+        status=0
+        wait "$comparison_pid" || status=$?
+        comparison_pid=""
+        if kill -0 "$readiness_pid" >/dev/null 2>&1; then
+            kill -TERM "$readiness_pid" >/dev/null 2>&1 || true
+        fi
+        wait "$readiness_pid" >/dev/null 2>&1 || true
+        if ((status == 0)); then
+            printf 'error: comparison recording exited before readiness\n' >&2
+            return 1
+        fi
+        return "$status"
+    fi
+    wait "$readiness_pid"
+}
+
 run_comparison_recording() {
     local comparison_control_socket
     [[ ! -e "$artifacts_dir/comparison-recordings/$run_id" ]] || {
@@ -947,7 +973,7 @@ run_comparison_recording() {
         exec "$TRAFFIC_E2E_BIN" "${comparison_command[@]}"
     ) &
     comparison_pid=$!
-    "$TRAFFIC_E2E_BIN" recording wait-ready --control-socket "$comparison_control_socket"
+    wait_for_comparison_ready "$comparison_control_socket"
     start_recording_input "$comparison_control_socket"
     local status=0
     wait "$comparison_pid" || status=$?

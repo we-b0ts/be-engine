@@ -15,6 +15,8 @@ use crate::recording_api::RecordingApi;
 
 mod listen_preflight;
 #[cfg(test)]
+mod manager_tests;
+#[cfg(test)]
 mod mount_tests;
 mod preflight;
 mod recording_input;
@@ -93,6 +95,10 @@ impl ManagedRuntimeOperation {
                 .join(run_id)
                 .join("recording-run.json"),
         }
+    }
+
+    fn requires_listener_preflight(self) -> bool {
+        self != Self::Recording(ManagedRecordingOperation::RecordComparison)
     }
 }
 
@@ -301,7 +307,9 @@ async fn run_managed_runtime(
         recorder.http_gateway.ready.enabled,
         "managed recording requires an enabled http_gateway.ready probe"
     );
-    listen_preflight::require_available(recorder.http_gateway.listen).await?;
+    if runtime_operation.requires_listener_preflight() {
+        listen_preflight::require_available(recorder.http_gateway.listen).await?;
+    }
     let target_image = if runtime_operation
         == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
     {
@@ -804,10 +812,22 @@ mod tests {
                 .contains("comparison_control_socket=\"$comparison_socket_dir/control.sock\"")
         );
         assert!(!comparison_runtime.contains("$control_dir/comparison.sock"));
+        let comparison_ready = MANAGER
+            .split_once("wait_for_comparison_ready()")
+            .unwrap()
+            .1
+            .split_once("run_comparison_recording()")
+            .unwrap()
+            .0;
+        assert!(comparison_ready.contains("kill -0 \"$comparison_pid\""));
+        assert!(comparison_ready.contains("kill -0 \"$readiness_pid\""));
+        assert!(comparison_ready.contains("comparison recording exited before readiness"));
         assert!(
-            MANAGER
-                .contains("recording wait-ready --control-socket \"$comparison_control_socket\"")
+            comparison_runtime.contains("wait_for_comparison_ready \"$comparison_control_socket\"")
         );
+        assert!(!comparison_runtime.contains(
+            "\"$TRAFFIC_E2E_BIN\" recording wait-ready --control-socket \"$comparison_control_socket\""
+        ));
         assert!(MANAGER.contains("start_recording_input \"$comparison_control_socket\""));
         assert!(MANAGER.contains(
             "input_command+=(--completion-control-socket \"$completion_control_socket\")"
