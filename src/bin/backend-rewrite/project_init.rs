@@ -39,7 +39,7 @@ pub(super) struct ProjectInitArgs {
     /// DNS server for queries not owned by the recorder.
     #[arg(long, default_value = "10.10.10.11:53")]
     upstream_dns: SocketAddr,
-    /// Source-compatible absolute file or directory to copy and mount read-only; repeat as needed.
+    /// Source-compatible absolute file or directory to snapshot; exact source mounts retain rw/ro.
     #[arg(long = "startup-mount", value_name = "ABSOLUTE_PATH")]
     startup_mounts: Vec<PathBuf>,
     /// Application-owned environment variable whose value is captured from the source container.

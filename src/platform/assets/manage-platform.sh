@@ -237,7 +237,11 @@ fi
 local_dir="$runtime_root/runtime/platform"
 diagnostics_dir="$local_dir/diagnostics/${operation}-${token}"
 control_dir="$local_dir/control/${token}"
+platform_mounts_parent="$local_dir/mounts"
+platform_mounts_root="$platform_mounts_parent/${operation}-${token}"
+startup_snapshot_mounts_root="$TRAFFIC_E2E_TARGET_ROOT/.traffic-e2e/local/startup/mounts"
 mkdir -p "$data_dir" "$artifacts_dir" "$diagnostics_dir" "$control_dir"
+mkdir -p "$platform_mounts_parent"
 chmod 0700 "$diagnostics_dir" "$control_dir"
 
 anchor_started=false
@@ -251,6 +255,7 @@ comparison_socket_dir=""
 input_pid=""
 runtime_uid=$(id -u)
 runtime_gid=$(id -g)
+source "$TRAFFIC_E2E_PLATFORM_ASSETS/platform-mounts.sh"
 
 container_exists() {
     docker container inspect "$1" >/dev/null 2>&1
@@ -266,11 +271,13 @@ stop_container() {
 }
 
 start_target() {
-    local source target
+    local source target writable access
     local -a mounts=()
-    while IFS=$'\t' read -r source target; do
+    while IFS=$'\t' read -r source target writable; do
         [[ -n "$source" && -n "$target" ]] || continue
-        mounts+=(--mount "type=bind,source=${source},target=${target},readonly")
+        resolve_startup_mount_source target "$target" "$writable"
+        if [[ "$writable" == true ]]; then access=""; else access=",readonly"; fi
+        mounts+=(--mount "type=bind,source=${prepared_mount_source},target=${target}${access}")
     done <"$TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"
     if "$breeze_enabled"; then
         mounts+=(
@@ -399,6 +406,7 @@ cleanup() {
         comparison_socket_dir=""
     fi
     remove_private_runtime_dir "$control_dir" "$local_dir/control" || status=1
+    remove_platform_mounts || status=1
     exit "$status"
 }
 trap cleanup EXIT
@@ -542,21 +550,21 @@ load_runtime_spec() {
     mapfile -d '' -t entries < <(jq -j '.[0].HostConfig.Sysctls // {} | to_entries[] | (.key + "=" + .value), "\u0000"' <<<"$inspect_json")
     for entry in "${entries[@]}"; do runtime_args+=(--sysctl "$entry"); done
 
-    local source destination writable volume translated first remainder
+    local source destination writable volume
     while IFS=$'\t' read -r source destination writable volume; do
         [[ -n "$destination" ]] || continue
+        validate_container_mount_path "$destination" || {
+            printf 'error: source container has unsupported mount destination %s\n' \
+                "$destination" >&2
+            return 1
+        }
+        case "$destination" in
+            /etc/resolv.conf|/etc/hosts|/etc/hostname) continue ;;
+        esac
         if [[ -n "$volume" && "$volume" != null ]]; then source=$volume; fi
-        if [[ "$mount_mode" == recording && "$source" == /data1/* && "$source" != /data1/breeze/* ]]; then
-            remainder=${source#/data1/}
-            first=${remainder%%/*}
-            translated="/data1/${first}-recording"
-            [[ "$remainder" == "$first" ]] || translated+="/${remainder#*/}"
-            source=$translated
-            docker run --rm --platform linux/amd64 --network none --user 0:0 \
-                --entrypoint /bin/sh --volume /data1:/host-data1 \
-                "$adapter_image_id" \
-                -ec 'mkdir -p "$1"; chown -hR 998:998 -- "$1"; chmod -R u+rwX -- "$1"' \
-                sh "/host-data1/${source#/data1/}"
+        if [[ "$mount_mode" == recording ]]; then
+            resolve_recording_mount_source "$destination" "$writable" "$source"
+            source=$prepared_mount_source
         fi
         if [[ "$writable" == true ]]; then
             runtime_args+=(--volume "${source}:${destination}:rw")

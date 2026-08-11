@@ -9,11 +9,11 @@ use serde::{Deserialize, Serialize};
 
 mod snapshot;
 
-use snapshot::inspect_source;
 pub(crate) use snapshot::{
-    LoadedStartupSnapshot, capture_startup_snapshot, load_startup_snapshot, startup_mount_source,
-    startup_snapshot_revision,
+    LoadedStartupSnapshot, StartupSnapshotMount, capture_startup_snapshot, load_startup_snapshot,
+    startup_mount_source, startup_snapshot_revision,
 };
+use snapshot::{inspect_source, resolve_startup_mounts};
 
 const ENVIRONMENT_FILE_MODE: u32 = 0o600;
 const MAX_STARTUP_MOUNTS: usize = 64;
@@ -44,6 +44,7 @@ pub struct StartupSnapshotReport {
     pub snapshot_id: String,
     pub root: PathBuf,
     pub mounts: Vec<PathBuf>,
+    pub writable_mounts: Vec<PathBuf>,
     pub environment: Vec<String>,
     pub source_container_id: String,
     pub source_image_id: String,
@@ -56,6 +57,7 @@ pub struct StartupStatusReport {
     pub snapshot_id: Option<String>,
     pub root: PathBuf,
     pub mounts: Vec<PathBuf>,
+    pub writable_mounts: Vec<PathBuf>,
     pub environment: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_container_id: Option<String>,
@@ -229,8 +231,11 @@ pub fn status_startup_snapshot(target_root: &Path) -> Result<StartupStatusReport
     match load_startup_snapshot(&target_root, &project.target_startup) {
         Ok(snapshot) => {
             let current = inspect_source(&project.source_container)?;
+            let current_mounts =
+                resolve_startup_mounts(&project.target_startup.mounts, &current.mounts)?;
             let stale = current.id != snapshot.manifest.source_container_id
-                || current.image != snapshot.manifest.source_image_id;
+                || current.image != snapshot.manifest.source_image_id
+                || current_mounts != snapshot.mounts();
             Ok(StartupStatusReport {
                 status: if current.state.running {
                     "source_running"
@@ -239,9 +244,15 @@ pub fn status_startup_snapshot(target_root: &Path) -> Result<StartupStatusReport
                 } else {
                     "ready"
                 },
-                snapshot_id: Some(snapshot.manifest.snapshot_id),
+                snapshot_id: Some(snapshot.manifest.snapshot_id.clone()),
                 root,
                 mounts: project.target_startup.mounts,
+                writable_mounts: snapshot
+                    .mounts()
+                    .iter()
+                    .filter(|mount| mount.writable)
+                    .map(|mount| mount.path.clone())
+                    .collect(),
                 environment: project.target_startup.environment_from_source,
                 stale,
                 source_container_id: Some(snapshot.manifest.source_container_id),
@@ -254,6 +265,7 @@ pub fn status_startup_snapshot(target_root: &Path) -> Result<StartupStatusReport
             snapshot_id: None,
             root,
             mounts: project.target_startup.mounts,
+            writable_mounts: Vec::new(),
             environment: project.target_startup.environment_from_source,
             source_container_id: None,
             source_image_id: None,

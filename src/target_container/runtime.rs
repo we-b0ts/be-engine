@@ -8,6 +8,7 @@ use tokio::process::Command;
 
 use super::build::validate_image_id;
 use super::model::{TargetStartEvidence, TargetStartOptions, TargetStopEvidence};
+use super::startup_mounts;
 use super::{NETWORK_ANCHOR_IMAGE, TARGET_REPLAY_CA_PATH, TARGET_USER};
 use crate::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER};
 
@@ -121,6 +122,41 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
     if options.config.breeze_enabled {
         require_breeze_mounts()?;
     }
+    let replay_ca_mount = if let Some(ca_cert) = &options.replay_ca_cert {
+        require_regular_file(ca_cert, "Replay CA certificate")?;
+        Some(bind_mount(ca_cert, TARGET_REPLAY_CA_PATH, false)?)
+    } else {
+        None
+    };
+    let environment_file = crate::internal_runtime::root(&options.config.target_root)
+        .join("target-container")
+        .join(format!("{}.env", options.container_name));
+    let has_environment = crate::startup::write_docker_environment_file(
+        &environment_file,
+        &snapshot,
+        &options.config.startup,
+        options.config.port,
+        options.replay_ca_cert.is_some(),
+        TARGET_REPLAY_CA_PATH,
+    )?;
+    let prepared_mounts = match startup_mounts::prepare(
+        &options.config.target_root,
+        &options.container_name,
+        snapshot.mounts(),
+    )
+    .await
+    {
+        Ok(mounts) => mounts,
+        Err(error) => {
+            if let Err(cleanup) = remove_environment_file(&environment_file, has_environment).await
+            {
+                return Err(error.context(format!(
+                    "target environment cleanup also failed: {cleanup:#}"
+                )));
+            }
+            return Err(error);
+        }
+    };
 
     let mut command = Command::new("docker");
     command
@@ -145,9 +181,15 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
             &format!("com.weibo.traffic-e2e.run-id={}", options.run_id),
         ])
         .env_remove(crate::request_headers::ENCRYPTION_KEY_ENV);
-    for mount in &options.config.startup.mounts {
-        let source = crate::startup::startup_mount_source(&options.config.target_root, mount)?;
-        command.args(["--mount", &bind_mount(&source, &mount.to_string_lossy())?]);
+    for mount in &prepared_mounts {
+        command.args([
+            "--mount",
+            &bind_mount(
+                &mount.source,
+                &mount.target.to_string_lossy(),
+                mount.writable,
+            )?,
+        ]);
     }
     if options.config.breeze_enabled {
         command
@@ -160,46 +202,51 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
                 "type=bind,source=/data1/breeze/snapshot,target=/data1/breeze/snapshot,readonly",
             ]);
     }
-    if let Some(ca_cert) = &options.replay_ca_cert {
-        require_regular_file(ca_cert, "Replay CA certificate")?;
-        command.args(["--mount", &bind_mount(ca_cert, TARGET_REPLAY_CA_PATH)?]);
+    if let Some(replay_ca_mount) = &replay_ca_mount {
+        command.args(["--mount", replay_ca_mount]);
     }
-    let environment_file = crate::internal_runtime::root(&options.config.target_root)
-        .join("target-container")
-        .join(format!("{}.env", options.container_name));
-    let has_environment = crate::startup::write_docker_environment_file(
-        &environment_file,
-        &snapshot,
-        &options.config.startup,
-        options.config.port,
-        options.replay_ca_cert.is_some(),
-        TARGET_REPLAY_CA_PATH,
-    )?;
     if has_environment {
         command.arg("--env-file").arg(&environment_file);
     }
     command.arg(&options.image.id);
     let output = docker_output(&mut command, "start target container").await;
-    if has_environment {
-        match tokio::fs::remove_file(&environment_file).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to remove target environment file {}",
-                        environment_file.display()
-                    )
-                });
-            }
+    if let Err(error) = remove_environment_file(&environment_file, has_environment).await {
+        let runtime_cleanup = if output.as_ref().is_ok_and(|output| output.status.success()) {
+            force_remove_runtime(&options.config.target_root, &[&options.container_name]).await
+        } else {
+            startup_mounts::cleanup(&options.config.target_root, &options.container_name).await
+        };
+        if let Err(runtime_cleanup) = runtime_cleanup {
+            return Err(error.context(format!(
+                "target runtime cleanup also failed: {runtime_cleanup:#}"
+            )));
         }
+        return Err(error);
     }
-    let output = output?;
-    ensure!(
-        output.status.success(),
-        "failed to start target container: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    );
+    let output = match output {
+        Ok(output) if output.status.success() => output,
+        Ok(output) => {
+            let cleanup =
+                startup_mounts::cleanup(&options.config.target_root, &options.container_name).await;
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if let Err(cleanup) = cleanup {
+                anyhow::bail!(
+                    "failed to start target container: {message}; target startup mount cleanup also failed: {cleanup:#}"
+                );
+            }
+            anyhow::bail!("failed to start target container: {message}");
+        }
+        Err(error) => {
+            if let Err(cleanup) =
+                startup_mounts::cleanup(&options.config.target_root, &options.container_name).await
+            {
+                return Err(error.context(format!(
+                    "target startup mount cleanup also failed: {cleanup:#}"
+                )));
+            }
+            return Err(error);
+        }
+    };
     let container_id = String::from_utf8(output.stdout)
         .context("Docker returned a non-UTF-8 target container ID")?;
     ensure!(
@@ -212,8 +259,12 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
         anchor_name: options.network_container,
         image_id: options.image.id.clone(),
         user: TARGET_USER,
-        startup_snapshot_id: snapshot.manifest.snapshot_id,
-        startup_mounts: options.config.startup.mounts.clone(),
+        startup_snapshot_id: snapshot.manifest.snapshot_id.clone(),
+        startup_mounts: snapshot
+            .mounts()
+            .iter()
+            .map(|mount| mount.path.clone())
+            .collect(),
         port: options.config.port,
         replay_ca_cert: options
             .replay_ca_cert
@@ -246,7 +297,7 @@ pub(crate) async fn verify_target_identity(container: &str) -> Result<()> {
 
 pub(crate) async fn verify_startup_mounts(
     container: &str,
-    mounts: &[std::path::PathBuf],
+    mounts: &[crate::startup::StartupSnapshotMount],
 ) -> Result<()> {
     let inspection = inspect_container(container).await?;
     ensure!(
@@ -255,12 +306,12 @@ pub(crate) async fn verify_startup_mounts(
     );
     for expected in mounts {
         ensure!(
-            inspection
-                .mounts
-                .iter()
-                .any(|mount| { Path::new(&mount.destination) == expected && !mount.rw }),
-            "target startup mount is missing or writable: {}",
-            expected.display()
+            inspection.mounts.iter().any(|mount| {
+                Path::new(&mount.destination) == expected.path && mount.rw == expected.writable
+            }),
+            "target startup mount is missing or has the wrong access mode: {} expected {}",
+            expected.path.display(),
+            if expected.writable { "rw" } else { "ro" }
         );
     }
     Ok(())
@@ -340,7 +391,7 @@ pub(crate) async fn bounded_logs(container: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&logs).into_owned())
 }
 
-pub(crate) async fn stop_target(container: &str) -> Result<TargetStopEvidence> {
+pub(crate) async fn stop_target(target_root: &Path, container: &str) -> Result<TargetStopEvidence> {
     validate_name(container)?;
     let output = docker_output(
         Command::new("docker").args(["stop", "--time", STOP_SECONDS, container]),
@@ -371,6 +422,7 @@ pub(crate) async fn stop_target(container: &str) -> Result<TargetStopEvidence> {
         "failed to remove target container: {}",
         String::from_utf8_lossy(&remove.stderr).trim()
     );
+    startup_mounts::cleanup(target_root, container).await?;
     Ok(TargetStopEvidence {
         status: if inspection.state.exit_code == 0 {
             "stopped"
@@ -383,7 +435,7 @@ pub(crate) async fn stop_target(container: &str) -> Result<TargetStopEvidence> {
     })
 }
 
-pub(crate) async fn force_remove_runtime(names: &[&str]) -> Result<()> {
+pub(crate) async fn force_remove_runtime(target_root: &Path, names: &[&str]) -> Result<()> {
     for name in names {
         validate_name(name)?;
         let output = docker_output(
@@ -399,6 +451,7 @@ pub(crate) async fn force_remove_runtime(names: &[&str]) -> Result<()> {
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
+        startup_mounts::cleanup(target_root, name).await?;
     }
     Ok(())
 }
@@ -448,7 +501,23 @@ fn require_regular_file(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn bind_mount(source: &Path, target: &str) -> Result<String> {
+async fn remove_environment_file(path: &Path, created: bool) -> Result<()> {
+    if !created {
+        return Ok(());
+    }
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to remove target environment file {}",
+                path.display()
+            )
+        }),
+    }
+}
+
+fn bind_mount(source: &Path, target: &str, writable: bool) -> Result<String> {
     let source = source
         .to_str()
         .context("target container mount path is not UTF-8")?;
@@ -459,7 +528,8 @@ fn bind_mount(source: &Path, target: &str) -> Result<String> {
         "target container mount path contains an unsupported character"
     );
     Ok(format!(
-        "type=bind,source={source},target={target},readonly"
+        "type=bind,source={source},target={target}{}",
+        if writable { "" } else { ",readonly" }
     ))
 }
 
@@ -504,10 +574,14 @@ mod tests {
 
     #[test]
     fn bind_mounts_reject_docker_mount_delimiters() {
-        assert!(bind_mount(Path::new("/tmp/with,comma"), "/data1/weibo/confs").is_err());
+        assert!(bind_mount(Path::new("/tmp/with,comma"), "/data1/weibo/confs", false).is_err());
         assert_eq!(
-            bind_mount(Path::new("/tmp/config"), "/data1/weibo/confs").unwrap(),
+            bind_mount(Path::new("/tmp/config"), "/data1/weibo/confs", false).unwrap(),
             "type=bind,source=/tmp/config,target=/data1/weibo/confs,readonly"
+        );
+        assert_eq!(
+            bind_mount(Path::new("/tmp/config"), "/data1/weibo/confs", true).unwrap(),
+            "type=bind,source=/tmp/config,target=/data1/weibo/confs"
         );
     }
 }

@@ -20,8 +20,8 @@ pub(super) fn stage_assets(
         super::write_asset(&environment_path, "", 0o600)?;
     }
     let mut mounts = String::new();
-    for mount in &config.target_startup.mounts {
-        let source = crate::startup::startup_mount_source(target_root, mount)?;
+    for mount in snapshot.mounts() {
+        let source = crate::startup::startup_mount_source(target_root, &mount.path)?;
         let source = source
             .to_str()
             .context("startup mount source path is not UTF-8")?;
@@ -31,7 +31,9 @@ pub(super) fn stage_assets(
         );
         mounts.push_str(source);
         mounts.push('\t');
-        mounts.push_str(&mount.to_string_lossy());
+        mounts.push_str(&mount.path.to_string_lossy());
+        mounts.push('\t');
+        mounts.push_str(if mount.writable { "true" } else { "false" });
         mounts.push('\n');
     }
     super::write_asset(&assets.join("target-startup-mounts.tsv"), &mounts, 0o600)

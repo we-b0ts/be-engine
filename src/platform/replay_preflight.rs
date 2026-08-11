@@ -88,7 +88,7 @@ pub(super) async fn run(
     let anchor =
         crate::target_container::runtime_name(target_root, "preflight-replay", run_id, "anchor")?;
     let result = run_checks(project, &session, &anchor, run_id).await;
-    let cleanup = cleanup(&session, &control_socket, &anchor, &mut child).await;
+    let cleanup = cleanup(target_root, &session, &control_socket, &anchor, &mut child).await;
     match (result, cleanup) {
         (Ok(mut result), Ok(())) => {
             result.cleanup = true;
@@ -441,6 +441,7 @@ async fn control(session: &Path, command: &str, timeout: Option<Duration>) -> Re
 }
 
 async fn cleanup(
+    target_root: &Path,
     session: &Path,
     control_socket: &Path,
     anchor: &str,
@@ -481,7 +482,8 @@ async fn cleanup(
         }
     }
     .await;
-    let anchor_cleanup = crate::target_container::force_remove_runtime(&[anchor]).await;
+    let anchor_cleanup =
+        crate::target_container::force_remove_runtime(target_root, &[anchor]).await;
     let socket_cleanup = match tokio::fs::remove_file(control_socket).await {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),

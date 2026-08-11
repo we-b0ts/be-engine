@@ -1282,13 +1282,27 @@ BuildKit multi-stage build whose final image has a non-empty OCI entrypoint and
 defaults to `USER 998:998`. traffic-e2e builds it from the repository root,
 tags the cache as `traffic-e2e/<project>-target:cache`, validates the resulting
 immutable image ID, and runs that ID directly. A target start receives each
-declared startup path at the same absolute path, read-only. For example:
+declared startup path at the same absolute path. If the declaration exactly
+matches a Docker mount destination on the source container, the snapshot
+inherits that mount's `rw`/`ro` access; a path supplied by the source image
+defaults to read-only. Partial parent/child overlap with a source Docker mount
+is rejected, so the user must make the declaration exact. For example:
 
 ```text
 .traffic-e2e/local/startup/mounts/data1/weibo/confs
-  -> /data1/weibo/confs (read-only)
+  -> /data1/weibo/confs (source-compatible rw/ro)
 WEIBO_CONF_PATH=<value captured from the source container>
 ```
+
+Read-only startup inputs bind directly from the immutable snapshot. Writable
+startup inputs are copied into a container/run-private directory before launch,
+then mounted `rw`; the canonical snapshot is never exposed writable. Managed
+source and target containers receive separate writable copies. Other
+application Docker mounts are recreated as empty, destination-mirrored private
+directories with their original `rw`/`ro` access. Docker-managed host files
+(`/etc/hosts`, `/etc/hostname`, and `/etc/resolv.conf`) are not copied, and the
+engine-managed Breeze mounts keep their existing shared behavior. Runtime mount
+copies are removed after their owning container or managed run stops.
 
 Environment names are an allowlist, not name/value assignments: the engine
 reads their values from Docker's source-container configuration and freezes

@@ -14,6 +14,8 @@ use crate::e2e_run::resolve_project;
 use crate::recording_api::RecordingApi;
 
 mod listen_preflight;
+#[cfg(test)]
+mod mount_tests;
 mod preflight;
 mod recording_input;
 mod recovery;
@@ -35,6 +37,7 @@ pub use replay_preflight::{
     ReplayPositiveProbeResult,
 };
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
+const PLATFORM_MOUNTS: &str = include_str!("assets/platform-mounts.sh");
 const BREEZE_NO_FALLBACK: &str = include_str!("assets/brz-no-fallback.sh");
 const PREFLIGHT_BUSINESS_INPUT: &str = include_str!("assets/preflight-business-input.sh");
 const HTTPS_PROBE: &[u8] = include_bytes!("assets/HttpsProbe.class");
@@ -537,6 +540,7 @@ fn stage_assets(target_root: &Path) -> Result<PathBuf> {
     fs::create_dir_all(&root)
         .with_context(|| format!("failed to create Platform asset root {}", root.display()))?;
     write_asset(&root.join("manage-platform.sh"), MANAGER, 0o700)?;
+    write_asset(&root.join("platform-mounts.sh"), PLATFORM_MOUNTS, 0o600)?;
     write_asset(&root.join("brz-no-fallback.sh"), BREEZE_NO_FALLBACK, 0o700)?;
     write_asset(
         &root.join("preflight-business-input.sh"),
@@ -610,15 +614,18 @@ mod tests {
     fn embedded_platform_manager_is_valid_bash() {
         let temp = tempfile::tempdir().unwrap();
         let script = temp.path().join("manage-platform.sh");
+        let mounts = temp.path().join("platform-mounts.sh");
         write_asset(&script, MANAGER, 0o700).unwrap();
+        write_asset(&mounts, PLATFORM_MOUNTS, 0o600).unwrap();
 
-        let status = StdCommand::new("bash")
-            .arg("-n")
-            .arg(script)
-            .status()
-            .unwrap();
-
-        assert!(status.success());
+        for asset in [&script, &mounts] {
+            let status = StdCommand::new("bash")
+                .arg("-n")
+                .arg(asset)
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
         assert!(MANAGER.contains("start_target()"));
         assert!(MANAGER.contains("--network \"container:${anchor_name}\" --user 998:998"));
         assert!(MANAGER.contains("TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"));
@@ -792,6 +799,7 @@ mod tests {
                 "normalize_cache_snapshot_ownership",
                 "remove_private_runtime_dir \"$comparison_socket_dir\" /tmp",
                 "remove_private_runtime_dir \"$control_dir\"",
+                "remove_platform_mounts",
             ],
         );
         assert!(MANAGER.contains("record|record-comparison|preflight"));

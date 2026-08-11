@@ -28,7 +28,7 @@ struct StartupUpdateArgs {
     /// Acknowledge that the supplied mounts and environment names replace the complete declaration.
     #[arg(long)]
     replace: bool,
-    /// Source-compatible absolute file or directory to copy and mount read-only.
+    /// Source-compatible absolute file or directory to snapshot; exact source mounts retain rw/ro.
     #[arg(long = "mount", value_name = "ABSOLUTE_PATH")]
     mounts: Vec<PathBuf>,
     /// Application-owned environment variable captured from the configured source container.
