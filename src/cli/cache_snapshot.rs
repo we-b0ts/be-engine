@@ -99,7 +99,7 @@ fn configure_runtime(
     config.tcp_gateway.protocol_detection.enabled = true;
     let ports = config
         .recording
-        .background_dependencies
+        .process_owned_dependencies
         .iter()
         .flat_map(|rule| match rule {
             BackgroundDependencyRuleConfig::Redis { ports, .. } => ports.clone(),

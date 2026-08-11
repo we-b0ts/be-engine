@@ -53,7 +53,7 @@ previous/current attempt numbers, and pass status. It describes the latest
 completed attempt; a later `next` without a target change does not imply that
 another attempt ran.
 
-Applying or confirming a source-proven background dependency rule does not
+Applying or confirming a source-proven process-owned dependency rule does not
 authorize fresh traffic. The coordinator reclassifies the immutable focused
 Replay evidence and returns its next action. Follow
 [coordinator-evidence-actions.md](coordinator-evidence-actions.md) for that

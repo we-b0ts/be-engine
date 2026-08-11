@@ -9,7 +9,7 @@ pub(super) fn ensure_same(
 ) -> Result<()> {
     ensure!(
         compatible(existing, requested, false),
-        "background dependency rule name {:?} already exists with a different selector; choose a new name instead of broadening it",
+        "process-owned dependency rule name {:?} already exists with a different selector; choose a new name instead of broadening it",
         existing.name()
     );
     Ok(())
@@ -96,7 +96,7 @@ pub(super) fn merge_compatible_redis_hash_rule(
     let named = rules.iter().position(|rule| rule.name() == requested_name);
     if named.is_some_and(|index| !candidates.contains(&index)) {
         anyhow::bail!(
-            "background dependency rule name {requested_name:?} already exists with a different selector; choose a new name instead of broadening it"
+            "process-owned dependency rule name {requested_name:?} already exists with a different selector; choose a new name instead of broadening it"
         );
     }
     let selected = named.or_else(|| (candidates.len() == 1).then_some(candidates[0]));

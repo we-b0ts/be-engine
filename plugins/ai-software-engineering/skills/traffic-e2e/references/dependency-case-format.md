@@ -91,7 +91,7 @@ Summary rules:
   and the summary.
 - Dependency coverage should compare response-driving, auth/session, and
   required side-effect behavior. Exclude source-proven process-level HTTP
-  polling from case attribution with a configured background rule and a new
+  polling from case attribution with a configured process-owned rule and a new
   recording. Existing dirty case exchanges are not retroactively reclassified
   during replay.
 
@@ -130,7 +130,7 @@ behavior.
 
 `global-dependencies.jsonl` is shared run-level replay inventory. It contains
 startup/bootstrap traffic captured before case admission and traffic matched
-by an explicit background rule during bootstrap or runtime. Each record has a
+by an explicit process-owned rule during bootstrap or runtime. Each record has a
 reason, phase, and matching rule/window owner. Do not move it into a case
 directory unless packaging a standalone case bundle; Replay discovers it by
 walking upward from the case directory.
@@ -141,7 +141,7 @@ opening case admission but keeps the Global writer available for later rule
 matches; it generates the summary during final shutdown. Ready-time idle
 traffic without a rule is not replay inventory.
 
-Read [background-dependencies.md](background-dependencies.md) for the complete
+Read [process-owned-dependencies.md](process-owned-dependencies.md) for the complete
 ownership, phase, and rule contract. For semantic MySQL exchange fields,
 matching identity, replay risks, and resultset schema, read
 [mysql-case-format.md](mysql-case-format.md).

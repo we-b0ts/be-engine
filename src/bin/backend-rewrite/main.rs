@@ -107,7 +107,7 @@ enum RewriteCommand {
     Evidence(EvidenceArgs),
     /// Plan or apply one evidence-backed response rule.
     Rule(RuleArgs),
-    /// Plan or apply one source-proven background dependency rule.
+    /// Classify dependency ownership, or plan/apply one process-owned rule.
     DependencyRule(dependency_rule::DependencyRuleArgs),
     /// Plan or apply one source-proven Breeze resource capture rule.
     RecorderCapture(recorder_capture::RecorderCaptureArgs),

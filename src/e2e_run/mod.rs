@@ -367,7 +367,7 @@ pub fn resolve_single_e2e_response_rule_evidence(
         .collect::<Vec<_>>();
     ensure!(
         available.len() == 1,
-        "background dependency evidence requires exactly one finalized focused API; use the rewrite coordinator when the case source has {} candidates",
+        "process-owned dependency evidence requires exactly one finalized focused API; use the rewrite coordinator when the case source has {} candidates",
         available.len()
     );
     resolve_e2e_response_rule_evidence(context, &available[0].api)

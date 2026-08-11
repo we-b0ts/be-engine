@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use super::{BodyCapture, RecorderEvent};
 use crate::breeze;
 use crate::config::BackgroundDependencyRuleConfig;
-use crate::config::background_dependencies::{
+use crate::config::process_owned_dependencies::{
     matches_exact_redis_key, matches_memcached_key_series,
 };
 use crate::dependency::DependencyExchangeOutcome;
@@ -273,7 +273,7 @@ impl BackgroundDependencyMatcher {
             .map(|rule| rule.name.as_str())
             .or_else(|| {
                 self.rules.iter().find_map(|rule| {
-                    crate::config::background_dependencies::redis_rule_matches(
+                    crate::config::process_owned_dependencies::redis_rule_matches(
                         rule,
                         target_port,
                         command,

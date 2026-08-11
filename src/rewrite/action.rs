@@ -181,11 +181,11 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
             return RewriteAction::PlanApplyRequired {
                 summary: if plan.reused_existing {
                     format!(
-                        "confirm reused background-dependency rule {} and reclassify the current attempt",
+                        "confirm reused process-owned dependency rule {} and reclassify the current attempt",
                         plan.effective_name.as_deref().unwrap_or(&plan.name)
                     )
                 } else {
-                    "apply the unchanged pending background-dependency plan and reclassify the current attempt"
+                    "apply the unchanged pending process-owned dependency plan and reclassify the current attempt"
                         .to_string()
                 },
                 command: dependency_rule_apply_command(target_root, &plan.id),

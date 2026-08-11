@@ -8,11 +8,11 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
-use super::background_dependencies::{
-    self, BackgroundDependencyRuleConfig, matches_memcached_key_series,
-};
 use super::background_feedback::{RuleConfigPlan, plan_rule_config};
 use super::edit::write_atomic;
+use super::process_owned_dependencies::{
+    self, BackgroundDependencyRuleConfig, matches_memcached_key_series,
+};
 use crate::breeze;
 
 #[derive(Debug, Clone)]
@@ -114,9 +114,9 @@ fn plan_in(
     feedback: BreezeMemcachedBackgroundDependencyFeedback,
     socks_dir: &Path,
 ) -> Result<BreezeMemcachedBackgroundDependencyPlan> {
-    validate_single_line("background dependency rule name", &feedback.name, 128)?;
+    validate_single_line("process-owned dependency rule name", &feedback.name, 128)?;
     validate_single_line(
-        "background dependency Breeze business resource",
+        "process-owned dependency Breeze business resource",
         &feedback.breeze_resource,
         512,
     )?;
@@ -134,7 +134,7 @@ fn plan_in(
         source_revision: String::new(),
         source_evidence: feedback.source_evidence.clone(),
     };
-    background_dependencies::validate(std::slice::from_ref(&requested))?;
+    process_owned_dependencies::validate(std::slice::from_ref(&requested))?;
 
     let original_replay_report = read_file(&feedback.replay_report_path, "replay report")?;
     let evidence = parse_replay_evidence(
@@ -265,11 +265,11 @@ fn parse_replay_evidence(
         .with_context(|| format!("failed to parse replay report {}", report_path.display()))?;
     ensure!(
         report.version == 6,
-        "Memcached background dependency evidence requires replay report version 6"
+        "Memcached process-owned dependency evidence requires replay report version 6"
     );
     ensure!(
         report.finalized,
-        "background dependency evidence requires a finalized replay report"
+        "process-owned dependency evidence requires a finalized replay report"
     );
     ensure!(
         !report

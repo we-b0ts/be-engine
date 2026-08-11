@@ -11,7 +11,6 @@ pub(crate) const DEFAULT_BODY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 mod allowed_unused_http;
 mod artifacts;
-pub(crate) mod background_dependencies;
 mod background_feedback;
 mod background_memcached_feedback;
 mod background_motan_feedback;
@@ -26,6 +25,7 @@ mod http_gateway;
 mod http_response_rewrite;
 mod initialization;
 mod motan_gateway;
+pub(crate) mod process_owned_dependencies;
 mod recording;
 mod repository_initialization;
 mod repository_protocol;
@@ -36,7 +36,6 @@ pub use allowed_unused_http::{
     plan_allowed_unused_http_hosts,
 };
 pub use artifacts::ArtifactsConfig;
-pub use background_dependencies::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 pub use background_feedback::{
     BackgroundDependencyFeedback, BackgroundDependencyPlan, BackgroundDependencyReport,
     plan_background_dependency,
@@ -73,6 +72,7 @@ pub use initialization::{
     RecorderConfigInitResult, initialize_recorder_config,
 };
 pub use motan_gateway::{MotanGatewayConfig, MotanGatewayRuleConfig};
+pub use process_owned_dependencies::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     TrafficJsonlMode,
@@ -288,19 +288,24 @@ impl AppConfig {
         self.http_gateway
             .per_api_case_limits
             .validate(&self.http_gateway.rules)?;
-        if self.recording.background_dependencies.iter().any(|rule| {
-            matches!(
-                rule,
-                BackgroundDependencyRuleConfig::Memcached { .. }
-                    | BackgroundDependencyRuleConfig::Redis {
-                        initial_load_timeout_ms: Some(_),
-                        ..
-                    }
-            )
-        }) && (!self.http_gateway.enabled || !self.http_gateway.ready.enabled)
+        if self
+            .recording
+            .process_owned_dependencies
+            .iter()
+            .any(|rule| {
+                matches!(
+                    rule,
+                    BackgroundDependencyRuleConfig::Memcached { .. }
+                        | BackgroundDependencyRuleConfig::Redis {
+                            initial_load_timeout_ms: Some(_),
+                            ..
+                        }
+                )
+            })
+            && (!self.http_gateway.enabled || !self.http_gateway.ready.enabled)
         {
             bail!(
-                "background dependency initial-load observation requires an enabled HTTP gateway ready probe"
+                "process-owned dependency initial-load observation requires an enabled HTTP gateway ready probe"
             );
         }
         if self.tcp_gateway.backlog == 0 || self.tcp_gateway.backlog > i32::MAX as u32 {

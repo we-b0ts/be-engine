@@ -1,14 +1,14 @@
 # Coordinator Evidence Actions
 
 Read this guide only after the API worker is confirmed and returns source-proven
-inputs for recorder capture or a background dependency rule, or when the
+inputs for recorder capture or a process-owned dependency rule, or when the
 current action exposes one of those planners. Workers may run returned
 read-only help commands but never execute the state-mutating commands here.
 
 ## Contents
 
 - Recorder-capture planning and refresh
-- Background dependency-rule planning and reclassification
+- Process-owned dependency-rule planning and reclassification
 - Evidence gate and ownership invariants
 - Bootstrap dependency overlays
 
@@ -45,13 +45,30 @@ Do not follow capture apply with `recording request`. Continue runnable work and
 read [recording-lifecycle.md](recording-lifecycle.md) when the coordinator
 returns the consolidated refresh.
 
-## Background Dependency Rules
+## Process-Owned Dependency Rules
 
 For a dependency issue, `dirty_clusters.applicable_rule_planners` contains only
 supported protocols present in the current clusters. Use the selected dirty
-case's `representative_dependencies_command` when available. A background rule
-is process-scoped, not API-scoped; the coordinator binds a plan internally to
-the active API evidence, case source, and source revision.
+case's `representative_dependencies_command` when available. Planner exposure
+does not establish ownership. Asynchronous execution, fire-and-forget calls,
+post-response timing, scheduler names, and the 100 ms attribution window do not
+make a dependency process-owned.
+
+Every `dependency-rule plan` invocation requires exactly one ownership decision:
+
+- `--ownership request-owned`: the report sets
+  `target_implementation_required=true`, does not create a recorder rule plan,
+  preserves dirty evidence, and requires the target to implement the recorded
+  dependency call;
+- `--ownership process-owned`: the coordinator may create the process-owned
+  recorder rule preview described below;
+- `--ownership unresolved`: no recorder rule is created and source ownership
+  investigation remains required.
+
+A process-owned dependency rule is process-scoped, not API-scoped; the
+coordinator binds its plan internally to the active API evidence, case source,
+and source revision. Never use `process-owned` merely because a call runs
+asynchronously or does not affect the current response.
 
 Run only the protocol-specific planner returned by the evidence and use only
 source-proven selector inputs. Planning persists an evidence-validated preview.
@@ -67,12 +84,13 @@ returned apply action. It is a successful no-op reuse under `effective_name`
 that still refreshes current evidence, not a duplicate rule. Status
 reconstructs the same plan-ID transition.
 
-After `backend-rewrite dependency-rule apply <plan-id>`, execute only the exact
+Only a `process-owned` result returns a `plan_id`. After
+`backend-rewrite dependency-rule apply <plan-id>`, execute only the exact
 `next` returned by the report. The result includes bounded
 `evidence_reclassification` with rule coverage, remaining dirty cases, and the
 revised focused result.
 
-Applying or confirming a background dependency rule is not a fresh-recording
+Applying or confirming a process-owned dependency rule is not a fresh-recording
 condition. The coordinator keeps capture artifacts immutable, recomputes the
 effective case/global ownership view, rebuilds dependency evidence, and revises
 the same progress-ledger attempt. Clean evidence advances to comparison;
@@ -104,8 +122,8 @@ startup summary is available only from `pre_readiness_traffic`;
 `unused_global`, startup context, and case-external target activity do not fail
 the case gate.
 
-Background ownership and response causality are independent. A matching
-process-scoped rule carries no response-state classification and does not
+Process ownership and response causality are independent. A matching
+process-owned rule carries no response-state classification and does not
 implement destination state. If source and response evidence prove that the
 dependency drives state, port source-compatible initial load, refresh, cache,
 fallback, and readiness behavior. `initial_load_timeout_ms` only bounds source

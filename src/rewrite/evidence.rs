@@ -137,7 +137,7 @@ fn applicable_rule_planners(
         && facts.get("available").and_then(Value::as_bool) == Some(true)
     {
         planners.push(RewriteApplicableRulePlanner {
-            kind: "background_dependencies".to_string(),
+            kind: "dependency_ownership".to_string(),
             protocol: "redis_bootstrap".to_string(),
             evidence_id: evidence_id.to_string(),
             command: super::action::command(
@@ -167,7 +167,7 @@ fn applicable_rule_planners(
         protocols
             .into_iter()
             .map(|protocol| RewriteApplicableRulePlanner {
-                kind: "background_dependencies".to_string(),
+                kind: "dependency_ownership".to_string(),
                 protocol: protocol.to_string(),
                 evidence_id: evidence_id.to_string(),
                 command: super::action::command(
@@ -518,7 +518,7 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
                 "an unused recorded exchange does not prove that the target should reproduce it"
                     .to_string(),
             ],
-            "Execute the returned dependencies_command for the representative case, select a target detail_command when needed, then use source code to prove request ownership, startup/background ownership, and response causality."
+            "Execute the returned dependencies_command for the representative case, select a target detail_command when needed, then use source code to prove request ownership, process ownership, and response causality."
                 .to_string(),
         ),
         _ => (

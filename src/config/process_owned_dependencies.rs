@@ -172,10 +172,10 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
     for rule in rules {
         let name = rule.name();
         if name.trim().is_empty() {
-            bail!("background dependency rule name must not be empty");
+            bail!("process-owned dependency rule name must not be empty");
         }
         if !names.insert(name) {
-            bail!("duplicate background dependency rule name {name:?}");
+            bail!("duplicate process-owned dependency rule name {name:?}");
         }
         match rule {
             BackgroundDependencyRuleConfig::Http {
@@ -209,13 +209,13 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                 validate_breeze_identity(name, breeze_identity)?;
                 if command != "get" {
                     bail!(
-                        "Memcached background dependency rule {name:?} currently supports only command \"get\""
+                        "Memcached process-owned dependency rule {name:?} currently supports only command \"get\""
                     );
                 }
                 validate_key_series(name, *key_start, *key_end, key_separator, key_suffix)?;
                 if *initial_load_timeout_ms == 0 {
                     bail!(
-                        "Memcached background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
+                        "Memcached process-owned dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
                     );
                 }
                 if !source_revision.is_empty() {
@@ -245,16 +245,16 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                             || !fields.is_empty()
                         {
                             bail!(
-                                "Redis ZCOUNT background dependency rule {name:?} must use key_prefix/key_suffix without keys or initial_load_timeout_ms"
+                                "Redis ZCOUNT process-owned dependency rule {name:?} must use key_prefix/key_suffix without keys or initial_load_timeout_ms"
                             );
                         }
                         validate_single_line(
-                            "Redis background dependency key prefix",
+                            "Redis process-owned dependency key prefix",
                             key_prefix,
                             512,
                         )?;
                         validate_single_line(
-                            "Redis background dependency key suffix",
+                            "Redis process-owned dependency key suffix",
                             key_suffix,
                             512,
                         )?;
@@ -266,32 +266,32 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                             || !fields.is_empty()
                         {
                             bail!(
-                                "Redis {command} background dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
+                                "Redis {command} process-owned dependency rule {name:?} must use exact keys instead of key_prefix/key_suffix"
                             );
                         }
                         validate_exact_redis_keys(name, command, keys)?;
                         if initial_load_timeout_ms.is_none_or(|timeout| timeout == 0) {
                             bail!(
-                                "Redis {command} background dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
+                                "Redis {command} process-owned dependency rule {name:?} initial_load_timeout_ms must be greater than zero"
                             );
                         }
                     }
                     "HGET" | "HMGET" => {
                         if !key_prefix.is_empty() || !key_suffix.is_empty() {
                             bail!(
-                                "Redis {command} background dependency rule {name:?} must use keys/key_patterns instead of key_prefix/key_suffix"
+                                "Redis {command} process-owned dependency rule {name:?} must use keys/key_patterns instead of key_prefix/key_suffix"
                             );
                         }
                         if initial_load_timeout_ms.is_some() {
                             bail!(
-                                "Redis {command} background dependency rule {name:?} must not use initial_load_timeout_ms"
+                                "Redis {command} process-owned dependency rule {name:?} must not use initial_load_timeout_ms"
                             );
                         }
                         validate_redis_hash_keys(name, command, keys, key_patterns)?;
                         validate_redis_hash_fields(name, command, fields)?;
                     }
                     _ => bail!(
-                        "Redis background dependency rule {name:?} currently supports only commands \"ZCOUNT\", \"GET\", \"SCARD\", \"HGETALL\", \"HGET\", and \"HMGET\""
+                        "Redis process-owned dependency rule {name:?} currently supports only commands \"ZCOUNT\", \"GET\", \"SCARD\", \"HGETALL\", \"HGET\", and \"HMGET\""
                     ),
                 }
                 if !source_revision.is_empty() {
@@ -314,7 +314,7 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
                     && method_name == "heartbeat"
                 {
                     bail!(
-                        "Motan heartbeat is protocol-owned and cannot be configured as a background dependency rule"
+                        "Motan heartbeat is protocol-owned and cannot be configured as a process-owned dependency rule"
                     );
                 }
                 if !source_revision.is_empty() {
@@ -329,25 +329,25 @@ pub(super) fn validate(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
 }
 
 fn validate_source_revision(source_revision: &str) -> Result<()> {
-    validate_single_line("background dependency source revision", source_revision, 64)?;
+    validate_single_line(
+        "process-owned dependency source revision",
+        source_revision,
+        64,
+    )?;
     if source_revision.len() < 7
         || !source_revision
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
         bail!(
-            "background dependency source revision must be a 7-64 character lowercase hexadecimal revision"
+            "process-owned dependency source revision must be a 7-64 character lowercase hexadecimal revision"
         );
     }
     Ok(())
 }
 
-fn validate_source_evidence(source_evidence: &str) -> Result<()> {
-    validate_single_line(
-        "background dependency source evidence",
-        source_evidence,
-        1_024,
-    )
+pub(crate) fn validate_source_evidence(source_evidence: &str) -> Result<()> {
+    validate_single_line("dependency source evidence", source_evidence, 1_024)
 }
 
 fn validate_non_overlapping_rules(rules: &[BackgroundDependencyRuleConfig]) -> Result<()> {
@@ -355,7 +355,7 @@ fn validate_non_overlapping_rules(rules: &[BackgroundDependencyRuleConfig]) -> R
         for right in &rules[index + 1..] {
             if rules_overlap(left, right) {
                 bail!(
-                    "background dependency rules {:?} and {:?} have overlapping selectors",
+                    "process-owned dependency rules {:?} and {:?} have overlapping selectors",
                     left.name(),
                     right.name()
                 );
@@ -487,15 +487,17 @@ fn rules_overlap(
 
 fn validate_redis_ports(rule_name: &str, ports: &[u16]) -> Result<()> {
     if ports.is_empty() || ports.len() > 64 {
-        bail!("Redis background dependency rule {rule_name:?} must include between 1 and 64 ports");
+        bail!(
+            "Redis process-owned dependency rule {rule_name:?} must include between 1 and 64 ports"
+        );
     }
     let mut unique = HashSet::new();
     for port in ports {
         if *port == 0 {
-            bail!("Redis background dependency rule {rule_name:?} port must be nonzero");
+            bail!("Redis process-owned dependency rule {rule_name:?} port must be nonzero");
         }
         if !unique.insert(*port) {
-            bail!("Redis background dependency rule {rule_name:?} has duplicate port {port}");
+            bail!("Redis process-owned dependency rule {rule_name:?} has duplicate port {port}");
         }
     }
     Ok(())
@@ -505,19 +507,19 @@ fn validate_exact_redis_keys(rule_name: &str, command: &str, keys: &[String]) ->
     const MAX_KEYS: usize = 4_096;
     if keys.is_empty() || keys.len() > MAX_KEYS {
         bail!(
-            "Redis {command} background dependency rule {rule_name:?} must include between 1 and {MAX_KEYS} exact keys"
+            "Redis {command} process-owned dependency rule {rule_name:?} must include between 1 and {MAX_KEYS} exact keys"
         );
     }
     let mut unique = HashSet::new();
     for key in keys {
         validate_single_line(
-            &format!("Redis {command} background dependency key"),
+            &format!("Redis {command} process-owned dependency key"),
             key,
             512,
         )?;
         if !unique.insert(key) {
             bail!(
-                "Redis {command} background dependency rule {rule_name:?} has duplicate key {key:?}"
+                "Redis {command} process-owned dependency rule {rule_name:?} has duplicate key {key:?}"
             );
         }
     }
@@ -532,7 +534,7 @@ fn validate_redis_hash_keys(
 ) -> Result<()> {
     if keys.is_empty() && patterns.is_empty() {
         bail!(
-            "Redis {command} background dependency rule {rule_name:?} must include at least one exact key or key pattern"
+            "Redis {command} process-owned dependency rule {rule_name:?} must include at least one exact key or key pattern"
         );
     }
     if !keys.is_empty() {
@@ -540,26 +542,26 @@ fn validate_redis_hash_keys(
     }
     if patterns.len() > 64 {
         bail!(
-            "Redis {command} background dependency rule {rule_name:?} must include at most 64 key patterns"
+            "Redis {command} process-owned dependency rule {rule_name:?} must include at most 64 key patterns"
         );
     }
     let mut unique = HashSet::new();
     for pattern in patterns {
         validate_single_line(
-            &format!("Redis {command} background dependency key-pattern prefix"),
+            &format!("Redis {command} process-owned dependency key-pattern prefix"),
             &pattern.prefix,
             512,
         )?;
         if !pattern.suffix.is_empty() {
             validate_single_line(
-                &format!("Redis {command} background dependency key-pattern suffix"),
+                &format!("Redis {command} process-owned dependency key-pattern suffix"),
                 &pattern.suffix,
                 512,
             )?;
         }
         if !pattern.numeric_middle {
             bail!(
-                "Redis {command} background dependency rule {rule_name:?} key patterns must require a numeric middle"
+                "Redis {command} process-owned dependency rule {rule_name:?} key patterns must require a numeric middle"
             );
         }
         if !unique.insert((
@@ -568,7 +570,7 @@ fn validate_redis_hash_keys(
             pattern.numeric_middle,
         )) {
             bail!(
-                "Redis {command} background dependency rule {rule_name:?} has a duplicate key pattern"
+                "Redis {command} process-owned dependency rule {rule_name:?} has a duplicate key pattern"
             );
         }
     }
@@ -583,12 +585,12 @@ fn validate_redis_hash_fields(rule_name: &str, command: &str, fields: &[String])
     };
     if !valid_count {
         bail!(
-            "Redis {command} background dependency rule {rule_name:?} has an invalid exact field shape"
+            "Redis {command} process-owned dependency rule {rule_name:?} has an invalid exact field shape"
         );
     }
     for field in fields {
         validate_single_line(
-            &format!("Redis {command} background dependency field"),
+            &format!("Redis {command} process-owned dependency field"),
             field,
             512,
         )?;
@@ -613,13 +615,13 @@ fn validate_motan_identity(
     max_len: usize,
 ) -> Result<()> {
     validate_single_line(
-        &format!("Motan background dependency {field}"),
+        &format!("Motan process-owned dependency {field}"),
         value,
         max_len,
     )?;
     if value.contains(['*', '#']) {
         bail!(
-            "Motan background dependency rule {rule_name:?} {field} must be exact and cannot contain wildcards or '#'"
+            "Motan process-owned dependency rule {rule_name:?} {field} must be exact and cannot contain wildcards or '#'"
         );
     }
     Ok(())
@@ -627,23 +629,25 @@ fn validate_motan_identity(
 
 fn validate_breeze_identity(rule_name: &str, identity: &str) -> Result<()> {
     validate_single_line(
-        "Memcached background dependency Breeze identity",
+        "Memcached process-owned dependency Breeze identity",
         identity,
         1_024,
     )?;
     let fields = identity.split('@').collect::<Vec<_>>();
     if fields.len() != 3 || fields.iter().any(|field| field.is_empty()) {
         bail!(
-            "Memcached background dependency rule {rule_name:?} must use a stable service@socket-type@protocol Breeze identity"
+            "Memcached process-owned dependency rule {rule_name:?} must use a stable service@socket-type@protocol Breeze identity"
         );
     }
     if fields[1] != "mc" {
         bail!(
-            "Memcached background dependency rule {rule_name:?} requires a Breeze mc socket identity"
+            "Memcached process-owned dependency rule {rule_name:?} requires a Breeze mc socket identity"
         );
     }
     if fields[1].contains(':') {
-        bail!("Memcached background dependency rule {rule_name:?} must not persist a Breeze port");
+        bail!(
+            "Memcached process-owned dependency rule {rule_name:?} must not persist a Breeze port"
+        );
     }
     Ok(())
 }
@@ -658,12 +662,12 @@ fn validate_key_series(
     const MAX_KEYS: u64 = 65_536;
     if start > end {
         bail!(
-            "Memcached background dependency rule {rule_name:?} key_start must not exceed key_end"
+            "Memcached process-owned dependency rule {rule_name:?} key_start must not exceed key_end"
         );
     }
     if u128::from(end) - u128::from(start) + 1 > u128::from(MAX_KEYS) {
         bail!(
-            "Memcached background dependency rule {rule_name:?} exceeds the {MAX_KEYS} key safety limit"
+            "Memcached process-owned dependency rule {rule_name:?} exceeds the {MAX_KEYS} key safety limit"
         );
     }
     if separator.len() != 1
@@ -671,10 +675,10 @@ fn validate_key_series(
         || separator.as_bytes()[0].is_ascii_alphanumeric()
     {
         bail!(
-            "Memcached background dependency rule {rule_name:?} key_separator must be one non-alphanumeric ASCII byte"
+            "Memcached process-owned dependency rule {rule_name:?} key_separator must be one non-alphanumeric ASCII byte"
         );
     }
-    validate_single_line("Memcached background dependency key suffix", suffix, 128)?;
+    validate_single_line("Memcached process-owned dependency key suffix", suffix, 128)?;
     Ok(())
 }
 
@@ -783,19 +787,19 @@ fn decode_capture(capture: &crate::recorder::BodyCapture) -> Option<Vec<u8>> {
 fn validate_authorities(rule_name: &str, authorities: &[String]) -> Result<()> {
     if authorities.is_empty() || authorities.len() > MAX_HTTP_AUTHORITIES {
         bail!(
-            "HTTP background dependency rule {rule_name:?} must include between 1 and {MAX_HTTP_AUTHORITIES} authorities"
+            "HTTP process-owned dependency rule {rule_name:?} must include between 1 and {MAX_HTTP_AUTHORITIES} authorities"
         );
     }
     let mut unique = HashSet::new();
     for authority in authorities {
         let normalized = normalize_authority(authority).ok_or_else(|| {
             anyhow::anyhow!(
-                "HTTP background dependency rule {rule_name:?} has invalid authority {authority:?}"
+                "HTTP process-owned dependency rule {rule_name:?} has invalid authority {authority:?}"
             )
         })?;
         if !unique.insert(normalized) {
             bail!(
-                "HTTP background dependency rule {rule_name:?} has duplicate authority {authority:?}"
+                "HTTP process-owned dependency rule {rule_name:?} has duplicate authority {authority:?}"
             );
         }
     }
@@ -804,18 +808,20 @@ fn validate_authorities(rule_name: &str, authorities: &[String]) -> Result<()> {
 
 fn validate_methods(rule_name: &str, methods: &[String]) -> Result<()> {
     if methods.len() != 1 {
-        bail!("HTTP background dependency rule {rule_name:?} must include exactly one method");
+        bail!("HTTP process-owned dependency rule {rule_name:?} must include exactly one method");
     }
     let mut unique = HashSet::new();
     for method in methods {
         let parsed = method.parse::<Method>().map_err(|_| {
             anyhow::anyhow!(
-                "HTTP background dependency rule {rule_name:?} has invalid method {method:?}"
+                "HTTP process-owned dependency rule {rule_name:?} has invalid method {method:?}"
             )
         })?;
         let normalized = parsed.as_str().to_ascii_uppercase();
         if !unique.insert(normalized) {
-            bail!("HTTP background dependency rule {rule_name:?} has duplicate method {method:?}");
+            bail!(
+                "HTTP process-owned dependency rule {rule_name:?} has duplicate method {method:?}"
+            );
         }
     }
     Ok(())
@@ -824,19 +830,19 @@ fn validate_methods(rule_name: &str, methods: &[String]) -> Result<()> {
 fn validate_path_prefixes(rule_name: &str, path_prefixes: &[String]) -> Result<()> {
     if path_prefixes.is_empty() || path_prefixes.len() > MAX_HTTP_PATH_PREFIXES {
         bail!(
-            "HTTP background dependency rule {rule_name:?} must include between 1 and {MAX_HTTP_PATH_PREFIXES} path prefixes"
+            "HTTP process-owned dependency rule {rule_name:?} must include between 1 and {MAX_HTTP_PATH_PREFIXES} path prefixes"
         );
     }
     let mut unique = HashSet::new();
     for prefix in path_prefixes {
         if !prefix.starts_with('/') || prefix.contains('?') || prefix.contains('#') {
             bail!(
-                "HTTP background dependency rule {rule_name:?} has invalid path prefix {prefix:?}"
+                "HTTP process-owned dependency rule {rule_name:?} has invalid path prefix {prefix:?}"
             );
         }
         if !unique.insert(prefix) {
             bail!(
-                "HTTP background dependency rule {rule_name:?} has duplicate path prefix {prefix:?}"
+                "HTTP process-owned dependency rule {rule_name:?} has duplicate path prefix {prefix:?}"
             );
         }
     }
@@ -866,9 +872,9 @@ fn validate_single_line(label: &str, value: &str, max_len: usize) -> Result<()> 
 }
 
 #[cfg(test)]
-#[path = "background_dependencies/redis_tests.rs"]
+#[path = "process_owned_dependencies/redis_tests.rs"]
 mod redis_tests;
 
 #[cfg(test)]
-#[path = "background_dependencies/tests.rs"]
+#[path = "process_owned_dependencies/tests.rs"]
 mod tests;

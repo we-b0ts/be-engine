@@ -107,7 +107,7 @@ fn validates_zcount_redis_rule() {
         r#"
         [recording]
 
-        [[recording.background_dependencies]]
+        [[recording.process_owned_dependencies]]
         name = "interest-tag-mining-cache-refresh"
         protocol = "redis"
         ports = [20917, 20918, 20919]
@@ -123,7 +123,7 @@ fn validates_zcount_redis_rule() {
 
     let mut duplicate_port = config;
     let BackgroundDependencyRuleConfig::Redis { ports, .. } =
-        &mut duplicate_port.recording.background_dependencies[0]
+        &mut duplicate_port.recording.process_owned_dependencies[0]
     else {
         panic!("expected Redis background rule");
     };
@@ -230,7 +230,7 @@ fn matches_bootstrap_hash_reads_by_numeric_key_shape_and_exact_fields() {
 #[test]
 fn redis_get_requires_exact_keys_timeout_and_ready_probe() {
     let mut config = AppConfig::default();
-    config.recording.background_dependencies = vec![get_rule()];
+    config.recording.process_owned_dependencies = vec![get_rule()];
     let error = config.validate().unwrap_err();
     assert!(
         error
@@ -245,7 +245,7 @@ fn redis_get_requires_exact_keys_timeout_and_ready_probe() {
     let BackgroundDependencyRuleConfig::Redis {
         initial_load_timeout_ms,
         ..
-    } = &mut config.recording.background_dependencies[0]
+    } = &mut config.recording.process_owned_dependencies[0]
     else {
         panic!("expected Redis background rule");
     };

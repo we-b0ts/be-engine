@@ -229,7 +229,7 @@ response and records the request plus baseline and candidate responses under
 `comparison_recording.baseline_upstream` is explicitly set. It does not load
 response rules while recording, publish dependencies, or initialize a MITM
 CA. Managed comparison installs only the cache-port interception needed for
-configured Redis background rules; source and candidate share a new run-local
+configured Redis process-owned rules; source and candidate share a new run-local
 first-value snapshot independent of standard Replay evidence. It validates the
 verification policy and reads
 only `response_rules.comparison.source_match` to decide whether source recheck
@@ -367,7 +367,7 @@ traffic-e2e config replay plan response-rule \
 ```
 
 `compare` is file-only. Managed `record-comparison` uses the fixed traffic UID
-and cache-port-only interception when Redis background rules are configured;
+and cache-port-only interception when Redis process-owned rules are configured;
 target bridge traffic is added to that same run-local Redis snapshot by a
 source-IP-scoped `PREROUTING` rule. Comparison does not enable DNS interception,
 fake-IP routing, MITM, or dependency Replay. Standard Replay retains its
@@ -591,7 +591,7 @@ case dependencies for the fixed
 synchronous server-side after-hooks that start dependencies only after writing
 the response; set it to `0` when the target completes all relevant work before
 the response. When the interval ends, Recorder closes dependency admission so
-continuous background traffic cannot extend the case, then waits only for
+continuous case-external traffic cannot extend the case, then waits only for
 already accepted in-flight dependencies to complete. In-flight MySQL queries
 retain their original case ownership through the semantic exchange. If those
 dependencies do not complete within
@@ -1033,14 +1033,14 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v15 always returns `action.kind`, `action.summary`,
+Rewrite action schema v16 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
 After a standard recording is selected, the optional top-level
-`source_process_traffic` projection gives every action bounded bootstrap,
-background-rule, and Redis snapshot observations as triage context. It is not
-an action-specific transition fact.
+`source_process_traffic` projection gives every action bounded `bootstrap`,
+configured `process_owned`, and Redis snapshot observations as triage context.
+It is not an action-specific transition fact.
 Status does not duplicate an `active_issue` or publish an unconditional
 top-level `next`. Every returned command contains a canonical `cwd` plus exact
 argv. The argv includes the canonical absolute `--target-root`, so executing a
@@ -1105,7 +1105,7 @@ mandatory. `terminal_allowed` is false until every inventory item has both
 passing E2E and comparison evidence for the same target content fingerprint.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v15 returns `wait_required` with
+lease. When another API owns it, action schema v16 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1612,9 +1612,9 @@ Use `dependencies.jsonl` for replay-oriented semantic data. Use
 including push-metrics side effects, are recorded as semantic dependencies when
 captured by the UDP gateway. Run-level
 Global dependency files contain replay-oriented startup traffic plus explicit
-background-rule matches. Replay discovers them by walking upward from a case
+process-owned-rule matches. Replay discovers them by walking upward from a case
 directory and prefers Case before Global. Ordinary exchanges are consumed
-once. Marked Redis background snapshot seeds are reusable for identical
+once. Marked Redis process-owned snapshot seeds are reusable for identical
 logical reads.
 `pre-readiness-traffic-summary.json` is a bounded projection of only source
 `bootstrap` data interactions grouped by `host:port`. It excludes connection
@@ -1623,8 +1623,8 @@ coordinator exposes the projection through its opaque evidence-query API, so a
 target AI does not need to read this file or the Global JSONL directly.
 `source-process-traffic-summary.json` is an independently bounded writer-owned
 projection used directly by the rewrite action envelope. It separates all
-pre-readiness data interactions from configured background-rule traffic and
-retains protocol, `host:port`, operation, and count. Redis background snapshot
+pre-readiness data interactions from configured process-owned-rule traffic and
+retains protocol, `host:port`, operation, and count. Redis process-owned snapshot
 facts include successful seeds, later recorder reuses, fill failures, and the
 same counts per intercepted domain and port. Snapshot hits remain absent from
 replay dependencies; the summary counts them before that persistence filter.
@@ -1640,7 +1640,7 @@ published as successful. Case and run finalization send ordered flush commands
 through the same writer, so queued dependency reservations remain in flight
 until their records have been persisted.
 
-Redis reads matched by a background dependency rule use a bounded run-local
+Redis reads matched by a process-owned dependency rule use a bounded run-local
 first-value snapshot. Recorder owns the internal retained-response capacity;
 `cache_snapshot_max_waiters_per_entry` bounds concurrent readers waiting for
 the first response, and `cache_snapshot_fill_timeout_ms` bounds that wait.
@@ -1650,7 +1650,7 @@ current waiters but are not retained.
 Source-proven process-level HTTP polling can be classified before recording:
 
 ```toml
-[[recording.background_dependencies]]
+[[recording.process_owned_dependencies]]
 name = "config-refresh"
 protocol = "http"
 authorities = ["config.api.demo.test"]
@@ -1692,7 +1692,7 @@ Use a finalized replay report to create the AI-managed rule instead of editing
 the table directly:
 
 ```bash
-traffic-e2e config recorder apply background-dependencies \
+traffic-e2e config recorder apply process-owned-dependencies \
   --target-root . \
   --name config-refresh \
   --case-source <exact-finalized-case-source> \
@@ -1715,7 +1715,7 @@ overlapping rule.
 Source-proven process-owned Motan traffic uses one exact RPC identity:
 
 ```bash
-traffic-e2e config recorder apply background-dependencies \
+traffic-e2e config recorder apply process-owned-dependencies \
   --target-root . \
   --name kunpeng-refresh \
   --case-source <exact-finalized-case-source> \
@@ -1737,7 +1737,7 @@ A process-owned Redis scheduler using exact keys can use a command-specific
 `get`, `scard`, or `hgetall` selector:
 
 ```bash
-traffic-e2e config recorder apply background-dependencies \
+traffic-e2e config recorder apply process-owned-dependencies \
   --target-root . \
   --name startup-cache-warm \
   --case-source <exact-finalized-case-source> \
@@ -1768,7 +1768,7 @@ Breeze-backed Memcached profile or local-cache warm traffic uses a bounded
 numeric key series:
 
 ```bash
-traffic-e2e config recorder apply background-dependencies \
+traffic-e2e config recorder apply process-owned-dependencies \
   --target-root . \
   --name planet-video-cache-warm \
   --case-source <exact-finalized-case-source> \

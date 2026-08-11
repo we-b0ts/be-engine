@@ -130,7 +130,7 @@ fn plans_exact_breeze_identity_without_persisting_dynamic_port() {
     assert!(raw.contains("initial_load_timeout_ms = 30000"));
     assert!(!raw.contains("mc:9448"));
     let config = AppConfig::load(&fixture.config).unwrap();
-    assert_eq!(config.recording.background_dependencies.len(), 1);
+    assert_eq!(config.recording.process_owned_dependencies.len(), 1);
 }
 
 #[test]

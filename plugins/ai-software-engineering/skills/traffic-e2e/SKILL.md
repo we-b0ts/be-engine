@@ -41,8 +41,8 @@ Read only the reference for the active operation:
 - Record/verify comparison:
   [comparison-verification.md](references/comparison-verification.md)
 - Change response policy: [replay-policy.md](references/replay-policy.md)
-- Configure source-proven background dependency rules:
-  [background-dependencies.md](references/background-dependencies.md)
+- Configure source-proven process-owned dependency rules:
+  [process-owned-dependencies.md](references/process-owned-dependencies.md)
 - Diagnose Replay or protocol engine capability:
   [replay-lifecycle.md](references/replay-lifecycle.md) and
   [dependency-replay.md](references/dependency-replay.md)

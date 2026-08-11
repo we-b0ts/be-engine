@@ -79,7 +79,7 @@ fn response_pre_readiness_evidence_exposes_bootstrap_redis_planner() {
         .iter()
         .find(|planner| planner.protocol == "redis_bootstrap")
         .unwrap();
-    assert_eq!(planner.kind, "background_dependencies");
+    assert_eq!(planner.kind, "dependency_ownership");
     assert_eq!(planner.evidence_id, "evidence-bootstrap");
     assert!(planner.command.argv.iter().any(|arg| arg == "redis"));
 }

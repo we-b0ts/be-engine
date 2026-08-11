@@ -385,8 +385,9 @@ mod tests {
         RewriteApiProgress, RewriteApiStatus, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
     };
     use crate::rewrite::{
-        RewriteContext, RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector,
-        RewriteRecorderCapturePlanOptions, RewriteRouteOptions, RewriteRulePlanOptions,
+        RewriteContext, RewriteDependencyOwnership, RewriteDependencyRulePlanOptions,
+        RewriteDependencyRuleSelector, RewriteRecorderCapturePlanOptions, RewriteRouteOptions,
+        RewriteRulePlanOptions,
     };
     use crate::{DynamicResponseMechanism, ResponseRuleKind};
 
@@ -432,8 +433,9 @@ mod tests {
                 context(),
                 RewriteDependencyRulePlanOptions {
                     evidence_id: evidence_id.clone(),
-                    name: "cache-read".to_string(),
-                    source_evidence: "src/cache.rs:read".to_string(),
+                    ownership: RewriteDependencyOwnership::ProcessOwned,
+                    name: Some("cache-read".to_string()),
+                    source_evidence: Some("src/cache.rs:read".to_string()),
                     selector: RewriteDependencyRuleSelector::RedisGet {
                         ports: vec![6379],
                         keys: vec!["cache:key".to_string()],

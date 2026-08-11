@@ -97,7 +97,7 @@ fn plan_and_apply_add_an_idempotent_motan_rule_without_endpoint_identity() {
 
     let config = AppConfig::load(&fixture.config).unwrap();
     assert!(matches!(
-        &config.recording.background_dependencies[0],
+        &config.recording.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Motan {
             group,
             interface_name,

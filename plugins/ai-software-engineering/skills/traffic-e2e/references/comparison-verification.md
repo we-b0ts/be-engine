@@ -25,7 +25,7 @@ Comparison reads runtime inputs from the configured source container, which
 must remain present and stopped. traffic-e2e only inspects that container and
 starts the adapted, run-private source container.
 
-When the recorder config contains Redis background rules, managed comparison
+When the recorder config contains Redis process-owned rules, managed comparison
 also owns a cache-only run-local snapshot in the shared network namespace.
 Source and candidate share the first successful response for each matching
 logical Redis read. This comparison snapshot starts empty and never loads the

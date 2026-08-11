@@ -102,12 +102,12 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(applied.applied);
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES"));
+    assert!(raw.contains("# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES"));
     assert!(!raw.contains("response_role"));
     assert!(!raw.contains("source_revision"));
     assert!(raw.contains(EVIDENCE));
     let config = AppConfig::load(&fixture.config).unwrap();
-    assert_eq!(config.recording.background_dependencies.len(), 1);
+    assert_eq!(config.recording.process_owned_dependencies.len(), 1);
 
     let repeated = plan_background_dependency(fixture.feedback()).unwrap();
     assert!(!repeated.report().changed);
@@ -139,9 +139,9 @@ fn equivalent_http_selector_reuses_existing_rule_even_when_name_and_proof_change
     assert!(applied.reused_existing);
 
     let config = AppConfig::load(&fixture.config).unwrap();
-    assert_eq!(config.recording.background_dependencies.len(), 1);
+    assert_eq!(config.recording.process_owned_dependencies.len(), 1);
     assert_eq!(
-        config.recording.background_dependencies[0].name(),
+        config.recording.process_owned_dependencies[0].name(),
         "config-refresh"
     );
 }
@@ -154,15 +154,15 @@ fn covered_http_selector_reuses_a_multi_selector_system_default() {
         r#"[recording]
 traffic_jsonl = "full"
 
-# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
-[[recording.background_dependencies]]
+# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES
+[[recording.process_owned_dependencies]]
 name = "breeze_vintage"
 protocol = "http"
 authorities = ["config.api.demo.test", "static.config.api.demo.test", "register.kailash.demo.test"]
 methods = ["GET"]
 path_prefixes = ["/1/config/service", "/naming/service"]
 source_evidence = "traffic-e2e system default: Weibo Breeze Vintage background traffic"
-# END AI-MANAGED BACKGROUND DEPENDENCIES
+# END AI-MANAGED PROCESS-OWNED DEPENDENCIES
 "#,
     )
     .unwrap();
@@ -285,7 +285,7 @@ fn refuses_to_adopt_an_unmanaged_background_rule() {
         format!(
             r#"[recording]
 
-[[recording.background_dependencies]]
+[[recording.process_owned_dependencies]]
 name = "config-refresh"
 protocol = "http"
 authorities = ["config.api.demo.test"]

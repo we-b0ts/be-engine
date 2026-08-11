@@ -262,7 +262,7 @@ Cover only these source-runtime concerns:
 - each Vintage dependency and access visible from source initialization,
   refresh, fallback, logs, or observed traffic, without recording sensitive
   values;
-- startup and post-readiness background traffic, summarized by protocol,
+- startup and post-readiness process activity, summarized by protocol,
   destination domain, port, lifecycle phase, and observed access count; and
 - each local cache initialized, warmed, loaded, refreshed, or consulted by
   startup/background work, together with its proved loader dependency and
@@ -270,7 +270,7 @@ Cover only these source-runtime concerns:
 
 Distinguish at least pre-readiness, controlled-request, and post-readiness
 background observations. Counts and log frequency are triage evidence only;
-they do not by themselves prove background ownership, cache causality, or a
+they do not by themselves prove process ownership, cache causality, or a
 required target implementation. Correlate them with source startup and cache
 code before recording a conclusion.
 

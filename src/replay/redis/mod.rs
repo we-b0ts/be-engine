@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use crate::DependencyExchangeOutcome;
-use crate::config::background_dependencies::redis_rule_matches;
+use crate::config::process_owned_dependencies::redis_rule_matches;
 use crate::redis::{
     BufferedReader as RedisBufferedReader, RedisCommand, read_frame as read_redis_frame,
     redis_command,
@@ -154,7 +154,7 @@ impl RedisReplayState {
         source: ReplaySource,
         case_id: Option<&str>,
         targets: &mut BTreeMap<TargetKey, ReplayTarget>,
-        background_dependencies: &[crate::BackgroundDependencyRuleConfig],
+        process_owned_dependencies: &[crate::BackgroundDependencyRuleConfig],
     ) -> Result<()> {
         validate_recorded_exchange(
             "redis_exchange",
@@ -192,7 +192,7 @@ impl RedisReplayState {
                     "Redis cache snapshot seed must contain a successful response"
                 );
                 ensure!(
-                    background_dependencies.iter().any(|rule| {
+                    process_owned_dependencies.iter().any(|rule| {
                         rule.name() == rule_name
                             && redis_rule_matches(rule, record.target_port, &record.command, &args)
                     }),
@@ -207,7 +207,7 @@ impl RedisReplayState {
             record.global_dependency_reason.as_deref(),
         ) || (source == ReplaySource::Global
             && record.global_dependency_reason.as_deref() == Some("bootstrap_window")
-            && background_dependencies
+            && process_owned_dependencies
                 .iter()
                 .any(|rule| redis_rule_matches(rule, record.target_port, &record.command, &args)));
         self.exchanges.push(ReplayExchange {

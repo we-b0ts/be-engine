@@ -240,7 +240,7 @@ jsonl_flush_interval_ms = 1000
 # Completed events move into this bounded queue before JSONL serialization and
 # persistence so dependency writes do not delay dependency responses.
 writer_queue_capacity = 65536
-# Redis reads matched by a background dependency rule hold the first successful
+# Redis reads matched by a process-owned dependency rule hold the first successful
 # value for the rest of one recording/comparison run. Bound concurrent readers
 # and their wait here; snapshot storage capacity is an internal Recorder budget.
 cache_snapshot_max_waiters_per_entry = 1024

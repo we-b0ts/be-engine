@@ -97,6 +97,91 @@ fn pending_plan_evidence_cannot_cross_issue_boundaries() {
 }
 
 #[test]
+fn request_owned_classification_requires_target_implementation_without_a_rule_plan() {
+    let target = tempdir().unwrap();
+    let mut state = dependency_state();
+    let issue = state.active_issue.clone().unwrap();
+    let selector = serde_json::json!({
+        "protocol": "motan",
+        "group": "yf-tkv-rpc",
+        "interface_name": "com.weibo.api.mcq.rpc.KafkaService",
+        "method_name": "sender",
+    });
+
+    let report = classify_non_process_owned(
+        target.path(),
+        &mut state,
+        issue,
+        RewriteDependencyRulePlanOptions {
+            evidence_id: "evidence-dirty-clusters".to_string(),
+            ownership: RewriteDependencyOwnership::RequestOwned,
+            name: None,
+            source_evidence: Some(
+                "TrafficProcessorImpl.java:onCompletion audit sender".to_string(),
+            ),
+            selector: RewriteDependencyRuleSelector::Motan {
+                group: "yf-tkv-rpc".to_string(),
+                interface_name: "com.weibo.api.mcq.rpc.KafkaService".to_string(),
+                method_name: "sender".to_string(),
+            },
+        },
+        selector,
+    )
+    .unwrap();
+
+    assert_eq!(report.ownership, RewriteDependencyOwnership::RequestOwned);
+    assert!(!report.process_owned_rule_applicable);
+    assert!(report.target_implementation_required);
+    assert!(report.plan_id.is_none());
+    assert!(state.dependency_rule_plan.is_none());
+    let issue = state.active_issue.as_ref().unwrap();
+    assert_eq!(issue.owner, RewriteIssueOwner::TargetCode);
+    assert!(
+        issue
+            .summary
+            .contains("implement the recorded request-owned")
+    );
+    assert_eq!(
+        issue.possible_causes,
+        vec!["request_owned_dependency_not_implemented"]
+    );
+}
+
+#[test]
+fn unresolved_classification_preserves_source_investigation_without_a_rule_plan() {
+    let target = tempdir().unwrap();
+    let mut state = dependency_state();
+    let issue = state.active_issue.clone().unwrap();
+
+    let report = classify_non_process_owned(
+        target.path(),
+        &mut state,
+        issue,
+        RewriteDependencyRulePlanOptions {
+            evidence_id: "evidence-dirty-clusters".to_string(),
+            ownership: RewriteDependencyOwnership::Unresolved,
+            name: None,
+            source_evidence: None,
+            selector: RewriteDependencyRuleSelector::RedisGet {
+                ports: vec![6379],
+                keys: vec!["cache:key".to_string()],
+                initial_load_timeout_ms: 60_000,
+            },
+        },
+        serde_json::json!({"protocol": "redis_get", "ports": [6379]}),
+    )
+    .unwrap();
+
+    assert_eq!(report.ownership, RewriteDependencyOwnership::Unresolved);
+    assert!(!report.process_owned_rule_applicable);
+    assert!(!report.target_implementation_required);
+    assert!(state.dependency_rule_plan.is_none());
+    let issue = state.active_issue.as_ref().unwrap();
+    assert_eq!(issue.owner, RewriteIssueOwner::SourceInvestigation);
+    assert!(issue.summary.contains("determine whether"));
+}
+
+#[test]
 fn redis_rule_application_is_queued_for_a_fresh_snapshot_recording() {
     let target = tempdir().unwrap();
     fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();

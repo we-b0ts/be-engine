@@ -478,7 +478,7 @@ async fn spawn_replay(
             ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
             policy_path: None,
             http_ignore_query_params: Vec::new(),
-            background_dependencies: Vec::new(),
+            process_owned_dependencies: Vec::new(),
             allowed_unused_http: None,
         },
         "127.0.0.1:0".parse().unwrap(),

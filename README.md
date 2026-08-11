@@ -93,7 +93,7 @@ returned action starts a detached coordinator worker and returns immediately;
 poll `backend-rewrite status` until it reports `advance_required`, then execute
 the exact `action.commands.advance` command once.
 
-Background dependency rules are evidence-ownership rules, not fresh-capture
+Process-owned dependency rules are evidence-ownership rules, not fresh-capture
 contracts. `backend-rewrite dependency-rule apply <plan-id>` preserves the
 published cases and raw dependency JSONL, reapplies the current rules to the
 latest focused replay report, rebuilds bounded evidence, and returns `next`.
@@ -224,7 +224,7 @@ or control socket.
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are normally consumed in recorded connection
 order. Exact-key Redis `GET`, `SCARD`, and `HGETALL` exchanges and Memcached
-`get` exchanges explicitly recorded by a process-scoped background rule remain
+`get` exchanges explicitly recorded by a process-scoped process-owned rule remain
 single-use but are matched without source
 connection binding or lane blockers. The
 v5 replay report keeps complete unmatched, unsupported, unsafe, and unused

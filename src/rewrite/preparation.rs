@@ -54,13 +54,13 @@ pub(super) fn restore_legacy_background_rule_recording_request(
     let case_source = state
         .recording_input_case_source
         .clone()
-        .context("legacy background-rule recording request lost its prior case source")?;
+        .context("legacy process-owned-rule recording request lost its prior case source")?;
     let active_api = latest_focused_api(E2eRunContext {
         target_root: target_root.to_path_buf(),
         case_source: case_source.clone(),
         run_key: None,
     })?
-    .context("legacy background-rule recording request has no focused attempt to restore")?;
+    .context("legacy process-owned-rule recording request has no focused attempt to restore")?;
     state.recording_run_id = recording_run_id(&case_source)?;
     state.recording_request_reason = None;
     state.recording_input_case_source = None;
@@ -127,5 +127,5 @@ fn recording_run_id(case_source: &Path) -> Result<String> {
         .and_then(|name| name.to_str())
         .filter(|name| name.len() == 14 && name.bytes().all(|byte| byte.is_ascii_digit()))
         .map(ToOwned::to_owned)
-        .context("legacy background-rule case source has no canonical recording run id")
+        .context("legacy process-owned-rule case source has no canonical recording run id")
 }

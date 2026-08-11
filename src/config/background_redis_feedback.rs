@@ -8,12 +8,12 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 
-use super::background_dependencies::{
+use super::background_feedback::{RuleConfigPlan, plan_rule_config};
+use super::edit::write_atomic;
+use super::process_owned_dependencies::{
     self, BackgroundDependencyRuleConfig, RedisKeyPatternConfig, matches_exact_redis_key,
     matches_redis_key, matches_redis_numeric_key_pattern, redis_rule_matches,
 };
-use super::background_feedback::{RuleConfigPlan, plan_rule_config};
-use super::edit::write_atomic;
 
 #[derive(Debug, Clone)]
 pub struct RedisBackgroundDependencyFeedback {
@@ -128,7 +128,7 @@ pub fn plan_redis_background_dependency(
         source_revision: String::new(),
         source_evidence: feedback.source_evidence.clone(),
     };
-    background_dependencies::validate(std::slice::from_ref(&requested))?;
+    process_owned_dependencies::validate(std::slice::from_ref(&requested))?;
 
     let original_replay_report = read_file(&feedback.replay_report_path, "replay report")?;
     let evidence = parse_replay_evidence(
@@ -262,11 +262,11 @@ fn parse_replay_evidence(
         .with_context(|| format!("failed to parse replay report {}", report_path.display()))?;
     ensure!(
         report.version == 6,
-        "Redis background dependency evidence requires replay report version 6"
+        "Redis process-owned dependency evidence requires replay report version 6"
     );
     ensure!(
         report.finalized,
-        "background dependency evidence requires a finalized replay report"
+        "process-owned dependency evidence requires a finalized replay report"
     );
     if matches!(command.as_str(), "HGET" | "HMGET") {
         return parse_global_bootstrap_evidence(report, report_path, requested);

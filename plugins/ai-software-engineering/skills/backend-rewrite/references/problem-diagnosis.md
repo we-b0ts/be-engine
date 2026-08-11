@@ -65,7 +65,7 @@ Run only query IDs returned by `action.commands.evidence`:
   correlation does not prove response causality;
 - `pre_readiness_traffic`: bounded source data-interaction counts by endpoint
   before readiness; connection lifecycle, known ping/heartbeat, and setup
-  traffic are excluded, but frequency does not prove background ownership,
+  traffic are excluded, but frequency does not prove process ownership,
   local-cache lifecycle, or response causality;
 - `dirty_clusters`: case-scoped dirty events grouped by protocol and endpoint,
   with a stable `cluster_id`, bounded operation counts, an exact representative
@@ -258,18 +258,22 @@ Diagnose dirty dependencies only after responses pass and Replay is complete.
 Classify the representative protocol cluster by source ownership:
 
 - request-owned and required: repair target call topology or Replay support;
-- process-owned and case-independent: use a supported background recording
+- process-owned and case-independent: use a supported process-owned recording
   rule; separately repair target state behavior when source and response
   evidence prove the dependency is response-driving;
 - unresolved: retain the dirty evidence and name the missing proof.
 
-Timing overlap, high volume, scheduler names, unused exchanges, and passing
-responses do not prove background ownership. A recording-rule proposal must use
+Timing overlap, high volume, scheduler names, unused exchanges, asynchronous
+execution, and passing responses do not prove process ownership. A
+recording-rule proposal must use
 the current dirty-cluster evidence ID and one protocol-specific planner returned
 in `applicable_rule_planners`. Run its exact read-only help argv and return only
 the source-proven selector inputs to the orchestrator. Replay evidence, case
 source, and source revision come from coordinator state and are not rule
-inputs. The orchestrator owns `backend-rewrite dependency-rule plan|apply` and
+inputs. The orchestrator owns `backend-rewrite dependency-rule plan|apply`;
+every plan requires `--ownership request-owned|process-owned|unresolved`. A
+request-owned result is an explicit target implementation requirement and
+never returns an applicable process-owned rule plan. The orchestrator also owns
 the apply report's exact `next`; the coordinator then reclassifies the same
 focused replay report. Never manually rewrite replay reports, trim traffic, or
 edit immutable request/response/dependency capture files.

@@ -47,12 +47,12 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()
                     .wait_for_post_ready_admission(ready_at)
                     .await
                     .context(
-                        "post-ready background dependency observation failed with the source",
+                        "post-ready process-owned dependency observation failed with the source",
                     )?;
                 if wait_outcome == PostReadyWaitOutcome::MaximumWaitElapsed {
                     tracing::warn!(
                         post_ready_max_wait_ms = post_ready_max_wait.as_millis(),
-                        "post-ready background dependency observation reached its hard limit; continuing recording"
+                        "post-ready process-owned dependency observation reached its hard limit; continuing recording"
                     );
                 }
                 if !state.is_bootstrap_open() {
