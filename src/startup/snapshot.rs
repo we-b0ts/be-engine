@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::{StartupConfig, StartupSnapshotReport, validate_config, validate_mount_path};
 
-const SNAPSHOT_SCHEMA_VERSION: u32 = 1;
+const SNAPSHOT_SCHEMA_VERSION: u32 = 2;
 const ENVIRONMENT_FILE_MODE: u32 = 0o600;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,8 +22,15 @@ pub(crate) struct StartupManifest {
     content_revision: String,
     pub(crate) source_container_id: String,
     pub(crate) source_image_id: String,
-    mounts: Vec<PathBuf>,
+    mounts: Vec<StartupSnapshotMount>,
     environment: Vec<String>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StartupSnapshotMount {
+    pub(crate) path: PathBuf,
+    pub(crate) writable: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,7 +53,17 @@ pub(super) struct SourceInspection {
     pub(super) id: String,
     pub(super) image: String,
     pub(super) state: SourceState,
+    #[serde(default)]
+    pub(super) mounts: Vec<SourceMountInspection>,
     config: SourceConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub(super) struct SourceMountInspection {
+    destination: PathBuf,
+    #[serde(rename = "RW")]
+    writable: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +90,7 @@ pub(crate) fn capture_startup_snapshot(
         "configured source container {source_container:?} must be stopped before capturing startup inputs"
     );
     let source_environment = parse_source_environment(source.config.env.unwrap_or_default());
+    let mounts = resolve_startup_mounts(&config.mounts, &source.mounts)?;
     let values = config
         .environment_from_source
         .iter()
@@ -111,7 +129,7 @@ pub(crate) fn capture_startup_snapshot(
             content_revision,
             source_container_id: source.id.clone(),
             source_image_id: source.image.clone(),
-            mounts: config.mounts.clone(),
+            mounts: mounts.clone(),
             environment: config.environment_from_source.clone(),
         };
         let environment = StartupEnvironment {
@@ -131,6 +149,11 @@ pub(crate) fn capture_startup_snapshot(
             snapshot_id,
             root: PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT),
             mounts: config.mounts.clone(),
+            writable_mounts: mounts
+                .iter()
+                .filter(|mount| mount.writable)
+                .map(|mount| mount.path.clone())
+                .collect(),
             environment: config.environment_from_source.clone(),
             source_container_id: source.id,
             source_image_id: source.image,
@@ -275,8 +298,13 @@ pub(crate) fn load_startup_snapshot(
         "startup manifest and environment snapshot do not match"
     );
     ensure!(
-        manifest.mounts == config.mounts && manifest.environment == config.environment_from_source,
-        "startup snapshot is stale; run `backend-rewrite startup refresh`"
+        manifest
+            .mounts
+            .iter()
+            .map(|mount| &mount.path)
+            .eq(config.mounts.iter())
+            && manifest.environment == config.environment_from_source,
+        "startup snapshot is stale; initialized startup inputs require administrator repair"
     );
     ensure!(
         environment
@@ -285,8 +313,8 @@ pub(crate) fn load_startup_snapshot(
             .eq(config.environment_from_source.iter()),
         "startup environment snapshot does not match configured names"
     );
-    for mount in &config.mounts {
-        let source = startup_mount_source(target_root, mount)?;
+    for mount in &manifest.mounts {
+        let source = startup_mount_source(target_root, &mount.path)?;
         ensure!(
             source.exists(),
             "startup mount is missing: {}",
@@ -296,7 +324,7 @@ pub(crate) fn load_startup_snapshot(
     let mounts_root = target_root.join(crate::repository::LOCAL_STARTUP_MOUNTS_ROOT);
     ensure!(
         manifest.content_revision == snapshot_content_revision(&mounts_root, &environment.values)?,
-        "startup snapshot content changed; run `backend-rewrite startup refresh`"
+        "startup snapshot content changed; initialized startup inputs require administrator repair"
     );
     Ok(LoadedStartupSnapshot {
         manifest,
@@ -406,11 +434,71 @@ impl SnapshotHash {
     }
 }
 
+pub(super) fn resolve_startup_mounts(
+    configured: &[PathBuf],
+    source_mounts: &[SourceMountInspection],
+) -> Result<Vec<StartupSnapshotMount>> {
+    configured
+        .iter()
+        .map(|path| {
+            let mut writable = false;
+            let mut exact_match = false;
+            for source_mount in source_mounts {
+                validate_source_mount_destination(&source_mount.destination)?;
+                if source_mount.destination == *path {
+                    ensure!(
+                        !exact_match,
+                        "source container has duplicate mount destination {}",
+                        path.display()
+                    );
+                    exact_match = true;
+                    writable = source_mount.writable;
+                } else if source_mount.destination.starts_with(path)
+                    || path.starts_with(&source_mount.destination)
+                {
+                    anyhow::bail!(
+                        "startup path {} partially overlaps source mount destination {}; use an exact startup path or narrow the declaration",
+                        path.display(),
+                        source_mount.destination.display()
+                    );
+                }
+            }
+            Ok(StartupSnapshotMount {
+                path: path.clone(),
+                writable,
+            })
+        })
+        .collect()
+}
+
+fn validate_source_mount_destination(path: &Path) -> Result<()> {
+    ensure!(
+        path.is_absolute() && path != Path::new("/"),
+        "source mount destination must be an absolute non-root path: {}",
+        path.display()
+    );
+    ensure!(
+        path.components().all(|component| matches!(
+            component,
+            std::path::Component::RootDir | std::path::Component::Normal(_)
+        )),
+        "source mount destination must be normalized: {}",
+        path.display()
+    );
+    Ok(())
+}
+
 pub(crate) fn startup_mount_source(target_root: &Path, mount: &Path) -> Result<PathBuf> {
     validate_mount_path(mount)?;
     Ok(target_root
         .join(crate::repository::LOCAL_STARTUP_MOUNTS_ROOT)
         .join(mount.strip_prefix("/").expect("validated absolute mount")))
+}
+
+impl LoadedStartupSnapshot {
+    pub(crate) fn mounts(&self) -> &[StartupSnapshotMount] {
+        &self.manifest.mounts
+    }
 }
 
 #[cfg(test)]
@@ -430,5 +518,42 @@ mod tests {
         let third = snapshot_content_revision(root.path(), &changed_environment).unwrap();
         assert_ne!(first, second);
         assert_ne!(second, third);
+    }
+
+    #[test]
+    fn exact_source_mount_inherits_writable_mode() {
+        let configured = vec![PathBuf::from("/data1/openapi-config")];
+        let resolved = resolve_startup_mounts(
+            &configured,
+            &[SourceMountInspection {
+                destination: PathBuf::from("/data1/openapi-config"),
+                writable: true,
+            }],
+        )
+        .unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].path, configured[0]);
+        assert!(resolved[0].writable);
+    }
+
+    #[test]
+    fn image_startup_path_defaults_to_read_only() {
+        let configured = vec![PathBuf::from("/data1/confs")];
+        let resolved = resolve_startup_mounts(&configured, &[]).unwrap();
+        assert!(!resolved[0].writable);
+    }
+
+    #[test]
+    fn partial_source_mount_overlap_is_rejected() {
+        let configured = vec![PathBuf::from("/data1/app")];
+        let error = resolve_startup_mounts(
+            &configured,
+            &[SourceMountInspection {
+                destination: PathBuf::from("/data1/app/logs"),
+                writable: true,
+            }],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("partially overlaps"));
     }
 }

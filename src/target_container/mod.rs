@@ -2,6 +2,7 @@ mod build;
 mod model;
 mod preflight;
 mod runtime;
+mod startup_mounts;
 
 use crate::TRAFFIC_PROCESS_USER;
 use crate::build_info::TARGET_RUNTIME_IMAGE;

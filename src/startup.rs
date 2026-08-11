@@ -9,10 +9,9 @@ use serde::{Deserialize, Serialize};
 
 mod snapshot;
 
-use snapshot::inspect_source;
 pub(crate) use snapshot::{
-    LoadedStartupSnapshot, capture_startup_snapshot, load_startup_snapshot, startup_mount_source,
-    startup_snapshot_revision,
+    LoadedStartupSnapshot, StartupSnapshotMount, capture_startup_snapshot, load_startup_snapshot,
+    startup_mount_source, startup_snapshot_revision,
 };
 
 const ENVIRONMENT_FILE_MODE: u32 = 0o600;
@@ -32,38 +31,16 @@ pub struct StartupConfig {
     pub replay_ca_environment: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct StartupUpdateOptions {
-    pub target_root: PathBuf,
-    pub config: StartupConfig,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct StartupSnapshotReport {
     pub status: &'static str,
     pub snapshot_id: String,
     pub root: PathBuf,
     pub mounts: Vec<PathBuf>,
+    pub writable_mounts: Vec<PathBuf>,
     pub environment: Vec<String>,
     pub source_container_id: String,
     pub source_image_id: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct StartupStatusReport {
-    pub status: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub snapshot_id: Option<String>,
-    pub root: PathBuf,
-    pub mounts: Vec<PathBuf>,
-    pub environment: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_container_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_image_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_running: Option<bool>,
-    pub stale: bool,
 }
 
 pub(crate) fn normalized_config(mut config: StartupConfig) -> Result<StartupConfig> {
@@ -185,82 +162,6 @@ fn validate_environment_name(name: &str) -> Result<()> {
         "startup environment must use an application-owned name, got {name:?}"
     );
     Ok(())
-}
-
-pub fn refresh_startup_snapshot(target_root: &Path) -> Result<StartupSnapshotReport> {
-    let (target_root, project) = crate::e2e_run::resolve_project(target_root)?;
-    capture_startup_snapshot(
-        &target_root,
-        &project.source_container,
-        &project.target_startup,
-    )
-}
-
-pub fn update_startup_snapshot(options: StartupUpdateOptions) -> Result<StartupSnapshotReport> {
-    let config = normalized_config(options.config)?;
-    let (target_root, source_container, previous) =
-        crate::e2e_run::resolve_startup_update_context(&options.target_root)?;
-    let report = capture_startup_snapshot(&target_root, &source_container, &config)?;
-    if let Err(error) = crate::e2e_run::update_project_startup(&target_root, config) {
-        return match previous {
-            Some(previous) => match capture_startup_snapshot(
-                &target_root,
-                &source_container,
-                &previous,
-            ) {
-                Ok(_) => Err(error).context(
-                    "project configuration could not be updated; the previous startup snapshot was restored",
-                ),
-                Err(restore_error) => Err(anyhow::anyhow!(
-                    "project configuration could not be updated: {error:#}; restoring the previous startup snapshot also failed: {restore_error:#}"
-                )),
-            },
-            None => Err(error).context(
-                "legacy project configuration could not be migrated after capturing the startup snapshot",
-            ),
-        };
-    }
-    Ok(report)
-}
-
-pub fn status_startup_snapshot(target_root: &Path) -> Result<StartupStatusReport> {
-    let (target_root, project) = crate::e2e_run::resolve_project(target_root)?;
-    let root = PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT);
-    match load_startup_snapshot(&target_root, &project.target_startup) {
-        Ok(snapshot) => {
-            let current = inspect_source(&project.source_container)?;
-            let stale = current.id != snapshot.manifest.source_container_id
-                || current.image != snapshot.manifest.source_image_id;
-            Ok(StartupStatusReport {
-                status: if current.state.running {
-                    "source_running"
-                } else if stale {
-                    "stale"
-                } else {
-                    "ready"
-                },
-                snapshot_id: Some(snapshot.manifest.snapshot_id),
-                root,
-                mounts: project.target_startup.mounts,
-                environment: project.target_startup.environment_from_source,
-                stale,
-                source_container_id: Some(snapshot.manifest.source_container_id),
-                source_image_id: Some(snapshot.manifest.source_image_id),
-                source_running: Some(current.state.running),
-            })
-        }
-        Err(_) => Ok(StartupStatusReport {
-            status: "missing_or_stale",
-            snapshot_id: None,
-            root,
-            mounts: project.target_startup.mounts,
-            environment: project.target_startup.environment_from_source,
-            source_container_id: None,
-            source_image_id: None,
-            source_running: None,
-            stale: true,
-        }),
-    }
 }
 
 pub(crate) fn write_docker_environment_file(

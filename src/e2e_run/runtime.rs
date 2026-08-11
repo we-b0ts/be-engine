@@ -143,7 +143,7 @@ pub(super) async fn stop_target_runtime(
         .target_container_name
         .as_deref()
         .context("active E2E state has no target container name")?;
-    let evidence = crate::target_container::stop_target(container).await?;
+    let evidence = crate::target_container::stop_target(&layout.target_root, container).await?;
     store::write_json(
         &layout.active_dir.join("reports/target-stop.json"),
         &evidence,
@@ -151,7 +151,7 @@ pub(super) async fn stop_target_runtime(
     state.target_started = false;
     state.target_container_name = None;
     if let Some(anchor) = state.target_anchor_name.clone() {
-        crate::target_container::force_remove_runtime(&[&anchor]).await?;
+        crate::target_container::force_remove_runtime(&layout.target_root, &[&anchor]).await?;
         state.target_anchor_name = None;
     }
     ensure!(
@@ -358,7 +358,7 @@ fn terminate_process_group(replay: &Child, signal: libc::c_int) {
 
 pub(super) async fn best_effort_stop(
     _config: &ResolvedProjectConfig,
-    _layout: &RunLayout,
+    layout: &RunLayout,
     state: &mut ActiveRunState,
 ) {
     if state.target_started
@@ -372,7 +372,9 @@ pub(super) async fn best_effort_stop(
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
-        if let Err(error) = crate::target_container::force_remove_runtime(&names).await {
+        if let Err(error) =
+            crate::target_container::force_remove_runtime(&layout.target_root, &names).await
+        {
             state.push_error(format!("target cleanup failed: {error:#}"));
         }
         state.target_started = false;

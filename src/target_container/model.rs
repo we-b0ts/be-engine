@@ -78,7 +78,7 @@ pub struct TargetContainerChecks {
     pub process_identity: bool,
     pub startup_snapshot: bool,
     pub startup_environment: bool,
-    pub startup_mounts_read_only: bool,
+    pub startup_mount_access: bool,
     pub listen_all_interfaces: bool,
     pub readiness: bool,
     pub stdout_stderr_logging: bool,

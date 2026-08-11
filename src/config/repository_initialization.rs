@@ -116,12 +116,7 @@ fn initialize_repository_config_with(
         target_startup: options.startup.clone(),
         target_http_host: "127.0.0.1".to_string(),
         target_port: options.target_port,
-        target_readiness_path: options.readiness_path,
-        target_readiness_status: options.readiness_status,
-        target_startup_timeout_seconds: 60,
-        target_request_timeout_seconds: 30,
         replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
-        replay_startup_timeout_seconds: 60,
         pr_base: "dev-migration".to_string(),
         recorder_config: PathBuf::from(RECORDER_CONFIG_PATH),
         recording_rule: DEFAULT_RECORDING_RULE.to_string(),
@@ -152,7 +147,8 @@ fn initialize_repository_config_with(
         target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
         target_image_tag,
         target_runtime_contract: "traffic-e2e builds Dockerfile.e2e, runs its OCI entrypoint as \
-                                  998:998 with source-compatible startup inputs mounted read-only, \
+                                  998:998 with source-compatible startup inputs mounted with \
+                                  source-compatible access, \
                                   and owns readiness, signals, network namespace, and cleanup",
         rewrite_command: "backend-rewrite next --api '<METHOD path-or-pattern>'",
         preflight_command: "backend-rewrite init preflight",
@@ -366,6 +362,7 @@ mod tests {
                     snapshot_id: "snapshot-test".to_string(),
                     root: PathBuf::from(crate::repository::LOCAL_STARTUP_ROOT),
                     mounts: config.mounts.clone(),
+                    writable_mounts: Vec::new(),
                     environment: config.environment_from_source.clone(),
                     source_container_id: "container-id".to_string(),
                     source_image_id: "image-id".to_string(),

@@ -26,7 +26,8 @@ pub(crate) async fn run_preflight(
     let target = runtime_name(&config.target_root, "preflight", &run_id, "target")?;
 
     let result = run_preflight_runtime(&config, &image, &run_id, &anchor, &target).await;
-    if let Err(cleanup_error) = force_remove_runtime(&[&target, &anchor]).await {
+    if let Err(cleanup_error) = force_remove_runtime(&config.target_root, &[&target, &anchor]).await
+    {
         return match result {
             Ok(_) => Err(cleanup_error).context("target preflight cleanup failed"),
             Err(error) => Err(error.context(format!(
@@ -61,7 +62,8 @@ async fn run_preflight_runtime(
     .await?;
     verify_target_identity(target).await?;
     verify_startup_environment(target, &config.startup, false).await?;
-    verify_startup_mounts(target, &config.startup.mounts).await?;
+    let snapshot = crate::startup::load_startup_snapshot(&config.target_root, &config.startup)?;
+    verify_startup_mounts(target, snapshot.mounts()).await?;
     wait_until_ready(config, anchor, target).await?;
     verify_listen_address(target, config.port).await?;
     let logs = bounded_logs(target).await?;
@@ -69,7 +71,7 @@ async fn run_preflight_runtime(
         !logs.trim().is_empty(),
         "target emitted no stdout or stderr during preflight"
     );
-    let stop = stop_target(target).await?;
+    let stop = stop_target(&config.target_root, target).await?;
     ensure!(
         stop.exit_code == 0,
         "target exited with {} after SIGTERM",
@@ -81,7 +83,7 @@ async fn run_preflight_runtime(
         process_identity: true,
         startup_snapshot: true,
         startup_environment: true,
-        startup_mounts_read_only: true,
+        startup_mount_access: true,
         listen_all_interfaces: true,
         readiness: true,
         stdout_stderr_logging: true,

@@ -13,7 +13,6 @@ mod reclassify;
 mod request_view;
 mod result;
 mod runtime;
-mod startup_config;
 mod store;
 mod support;
 mod target_quality_config;
@@ -55,7 +54,6 @@ pub use result::{
     E2eRunResult, E2eValueObservation, E2eValuePresence, E2eVerificationGates,
 };
 pub(crate) use result::{response_pointer_pattern, response_pointer_scope};
-pub(crate) use startup_config::{resolve_startup_update_context, update_project_startup};
 
 #[derive(Debug, Clone)]
 pub struct E2eRunInitOptions {
@@ -66,12 +64,7 @@ pub struct E2eRunInitOptions {
     pub target_startup: crate::startup::StartupConfig,
     pub target_http_host: String,
     pub target_port: u16,
-    pub target_readiness_path: String,
-    pub target_readiness_status: u16,
-    pub target_startup_timeout_seconds: u64,
-    pub target_request_timeout_seconds: u64,
     pub replay_policy: PathBuf,
-    pub replay_startup_timeout_seconds: u64,
     pub pr_base: String,
     pub recorder_config: PathBuf,
     pub recording_rule: String,
@@ -191,17 +184,7 @@ pub fn initialize_standard_e2e_project_with_force(
         target_startup: crate::startup::StartupConfig::default(),
         target_http_host,
         target_port,
-        target_readiness_path: recorder.http_gateway.ready.path.clone(),
-        target_readiness_status: recorder.http_gateway.ready.success_status,
-        target_startup_timeout_seconds: model::DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS,
-        target_request_timeout_seconds: comparison
-            .upstream_timeout_ms
-            .saturating_add(999)
-            .checked_div(1_000)
-            .unwrap_or(1)
-            .max(1),
         replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
-        replay_startup_timeout_seconds: model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
         pr_base: "dev-migration".to_string(),
         recorder_config,
         recording_rule: crate::config::DEFAULT_RECORDING_RULE.to_string(),

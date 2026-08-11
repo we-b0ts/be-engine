@@ -16,7 +16,6 @@ fn exposes_only_the_rewrite_coordinator_surface() {
         [
             "init",
             "config",
-            "startup",
             "next",
             "status",
             "inventory",
@@ -169,21 +168,9 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_ok()
     );
-    assert!(
-        Cli::try_parse_from([
-            "test",
-            "startup",
-            "update",
-            "--replace",
-            "--mount",
-            "/data1/weibo/confs",
-            "--environment",
-            "WEIBO_CONF_PATH",
-        ])
-        .is_ok()
-    );
-    assert!(Cli::try_parse_from(["test", "startup", "refresh"]).is_ok());
-    assert!(Cli::try_parse_from(["test", "startup", "status"]).is_ok());
+    for command in ["update", "refresh", "status"] {
+        assert!(Cli::try_parse_from(["test", "startup", command]).is_err());
+    }
     assert!(
         Cli::try_parse_from([
             "test",

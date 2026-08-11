@@ -49,15 +49,13 @@ is unclear.
 - Recorder event, run, writer, and summary modules own capture, persistence,
   and reporting.
 - Replay modules own recorded dependency matching and replay lifecycle.
-- `startup` owns the source-compatible target startup declaration, public
-  snapshot lifecycle, and Docker environment-file projection. Its `snapshot`
-  child owns stopped-source inspection, declared-path capture, atomic local
-  persistence, and content-integrity validation. Target container and Platform
-  runtimes consume this contract; they do not rediscover startup inputs.
+- `startup` owns the source-compatible target startup declaration,
+  initialization-owned snapshot lifecycle, and Docker environment-file
+  projection. Its `snapshot` child owns stopped-source inspection,
+  declared-path capture, atomic local persistence, and content-integrity
+  validation. Target container and Platform runtimes consume this contract;
+  they do not rediscover startup inputs.
   `platform/startup.rs` owns the shell-runtime projection of that snapshot.
-- `e2e_run/startup_config.rs` owns the explicit project startup update and the
-  one-way version-11 `boot_dir` to version-12 migration. Normal project loading
-  remains strict and does not dual-read the legacy schema.
 - `e2e_run/config.rs` remains the cohesive strict project-schema lifecycle:
   initialization rendering, load/validation, and runtime path resolution must
   agree on one contract. Typed protocol mutation is kept in
