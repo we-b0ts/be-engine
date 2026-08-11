@@ -484,13 +484,20 @@ backend-rewrite config protocol enable motan \
   --target-port 8081
 ```
 
-This typed update is for an already initialized repository. It converges
-`.traffic-e2e/project.yaml` (`protocols.motan`) and the recorder file referenced
-by that project in one rollback-capable update. Repeating the same command
-returns `status: unchanged`; changing an explicit port updates only the owned
-topology keys and preserves Motan rules and recorder comments. Its result uses
-`validation_status: not_run`: configuration alone does not claim that real
-Motan traffic has been validated.
+This typed update is for an already initialized repository. It stores the
+rewritten service listener as `target.motan_port` in `.traffic-e2e/project.yaml`
+and stores the source and gateway recording ports only in the recorder file
+referenced by that project. The target port is a target runtime contract; the
+gateway port is recorder-owned and is not duplicated in project configuration.
+Repeating the same command returns `status: unchanged`; changing an explicit
+port updates only the owned keys and preserves Motan rules and recorder
+comments. Its result uses `validation_status: not_run`: configuration alone
+does not claim that real Motan traffic has been validated.
+
+`target.motan_port` does not force recording on. Set
+`motan_gateway.enabled = false` to keep the target's Motan contract while
+temporarily running HTTP-only recording. Source and gateway port consistency is
+therefore local to the recorder configuration.
 
 ```toml
 [motan_gateway]
@@ -1230,15 +1237,17 @@ target:
     # replay_ca_environment: SSL_CERT_FILE
   http_host: 127.0.0.1
   port: 8081
-  readiness_path: /healthz
-  readiness_status: 404
-  startup_timeout_seconds: 60
-  request_timeout_seconds: 30
   # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
   # quality_gates:
   #   - name: project-check
   #     argv: [make, check]
 ```
+
+Target readiness path and status come from the referenced recorder's
+`http_gateway.ready` section. Target request timeout comes from
+`comparison_recording.upstream_timeout_ms`; target startup and replay startup
+timeouts are coordinator-owned defaults. These runtime policy values are not
+duplicated in `project.yaml`.
 
 Each quality gate is an exact argv executed without a shell from the canonical
 target root. At most eight uniquely named commands may be configured, with at
@@ -1249,33 +1258,20 @@ Managed replay reads its target response limit from
 `recording.config`; `project.yaml` does not duplicate that value.
 
 Existing configuration is never overwritten. If any generated file exists,
-the whole initialization refuses without creating another file. In-place
-migration from version 11 is explicit through `backend-rewrite startup update
---replace`; normal execution never dual-reads the obsolete schema. The initializer
-idempotently adds `/.traffic-e2e/local/` to the repository `.gitignore`; all
+the whole initialization refuses without creating another file. Normal
+execution does not migrate or dual-read obsolete project schemas; migration
+and repair require administrator-owned tooling outside `backend-rewrite`. The
+initializer idempotently adds `/.traffic-e2e/local/` to the repository `.gitignore`; all
 non-versioned runtime data lives below that root. It copies every declared
 absolute path from the stopped source container into
 `.traffic-e2e/local/startup/mounts`, freezes only the named source environment
 values in mode-0600 `.traffic-e2e/local/startup/environment.json`, and writes
 matching `manifest.json`. Do not hand-write generated state.
 
-That explicit version-11 migration also moves the legacy engine-managed state
-directory to `.traffic-e2e/local/runtime/` and persists
-`state.runtime_root`. New configuration never emits the legacy name.
-
-Use the startup management API when the declaration or source inputs change:
-
-```bash
-backend-rewrite startup update --replace \
-  --mount /data1/weibo/confs \
-  --environment WEIBO_CONF_PATH
-backend-rewrite startup refresh
-backend-rewrite startup status
-```
-
-`update --replace` replaces the complete declaration and captures a matching
-snapshot. `refresh` recaptures the existing declaration. `status` returns
-bounded metadata and never returns environment values.
+Startup declarations and snapshots are initialization-owned. `backend-rewrite`
+does not expose post-initialization commands that replace, refresh, or inspect
+them. An initialized repository with missing, stale, or damaged startup inputs
+requires administrator repair rather than an AI-directed workflow mutation.
 
 The target repository supplies `.traffic-e2e/Dockerfile.e2e`. It is a
 BuildKit multi-stage build whose final image has a non-empty OCI entrypoint and

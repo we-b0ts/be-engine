@@ -207,10 +207,7 @@ pub use rewrite::{
     route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
     status_rewrite_for_api, transfer_rewrite_worker, verify_rewrite_repair,
 };
-pub use startup::{
-    StartupConfig, StartupSnapshotReport, StartupStatusReport, StartupUpdateOptions,
-    refresh_startup_snapshot, status_startup_snapshot, update_startup_snapshot,
-};
+pub use startup::{StartupConfig, StartupSnapshotReport};
 pub use target_container::{TargetContainerChecks, TargetContainerPreflightResult, TargetImage};
 pub use tls::MitmCa;
 

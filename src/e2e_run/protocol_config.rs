@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use super::config::{load_project_config, validate_project_config};
-use super::model::MotanProjectConfig;
-
 pub(crate) struct ProjectProtocolUpdate {
     pub(crate) path: PathBuf,
     pub(crate) recorder_config: PathBuf,
@@ -14,21 +12,14 @@ pub(crate) struct ProjectProtocolUpdate {
 
 pub(crate) fn render_motan_protocol_update(
     target_root: &Path,
-    source_port: u16,
-    gateway_port: u16,
     target_port: u16,
 ) -> Result<ProjectProtocolUpdate> {
     let path = target_root
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join("project.yaml");
     let mut config = load_project_config(target_root, &path)?;
-    let desired = MotanProjectConfig {
-        source_port,
-        gateway_port,
-        target_port,
-    };
-    let changed = config.protocols.motan.as_ref() != Some(&desired);
-    config.protocols.motan = Some(desired);
+    let changed = config.target.motan_port != Some(target_port);
+    config.target.motan_port = Some(target_port);
     validate_project_config(&config)?;
     let recorder_config = if config.recording.config.is_absolute() {
         config.recording.config.clone()

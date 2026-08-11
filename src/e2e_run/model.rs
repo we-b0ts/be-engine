@@ -32,29 +32,6 @@ pub(super) struct ProjectConfig {
     pub recording: RecordingProjectConfig,
     pub delivery: DeliveryProjectConfig,
     pub state: StateProjectConfig,
-    #[serde(default, skip_serializing_if = "ProtocolProjectConfig::is_empty")]
-    pub protocols: ProtocolProjectConfig,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct ProtocolProjectConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub motan: Option<MotanProjectConfig>,
-}
-
-impl ProtocolProjectConfig {
-    pub(super) fn is_empty(&self) -> bool {
-        self.motan.is_none()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct MotanProjectConfig {
-    pub source_port: u16,
-    pub gateway_port: u16,
-    pub target_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,12 +53,8 @@ pub(super) struct TargetProjectConfig {
     pub startup: crate::startup::StartupConfig,
     pub http_host: String,
     pub port: u16,
-    pub readiness_path: String,
-    pub readiness_status: u16,
-    #[serde(default = "default_target_startup_timeout_seconds")]
-    pub startup_timeout_seconds: u64,
-    #[serde(default = "default_target_request_timeout_seconds")]
-    pub request_timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motan_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_gates: Option<Vec<TargetQualityGateConfig>>,
 }
@@ -93,24 +66,10 @@ pub(crate) struct TargetQualityGateConfig {
     pub argv: Vec<String>,
 }
 
-fn default_target_startup_timeout_seconds() -> u64 {
-    DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS
-}
-
-fn default_target_request_timeout_seconds() -> u64 {
-    DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ReplayProjectConfig {
     pub policy: PathBuf,
-    #[serde(default = "default_replay_startup_timeout_seconds")]
-    pub startup_timeout_seconds: u64,
-}
-
-fn default_replay_startup_timeout_seconds() -> u64 {
-    DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

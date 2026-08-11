@@ -4,9 +4,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::model::{
-    BreezeProjectConfig, DeliveryProjectConfig, ProjectConfig, ProtocolProjectConfig,
-    RecordingProjectConfig, ReplayProjectConfig, ResolvedProjectConfig, RunLayout,
-    SourceProjectConfig, StateProjectConfig, TargetProjectConfig,
+    BreezeProjectConfig, DeliveryProjectConfig, ProjectConfig, RecordingProjectConfig,
+    ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
+    TargetProjectConfig,
 };
 use super::target_quality_config::{inferred_target_quality_gates, validate_target_quality_gates};
 use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
@@ -14,7 +14,6 @@ use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
 pub(super) const CONFIG_VERSION: u32 = 12;
-pub(super) const LEGACY_BOOT_CONFIG_VERSION: u32 = 11;
 const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -70,6 +69,10 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         recorder_config.display()
     );
     let recorder = crate::config::AppConfig::load(&recorder_config)?;
+    ensure!(
+        recorder.http_gateway.ready.enabled,
+        "managed project replay requires an enabled http_gateway.ready probe"
+    );
     let matching_rules = recorder
         .http_gateway
         .rules
@@ -130,15 +133,11 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
             startup: crate::startup::normalized_config(options.target_startup.clone())?,
             http_host: options.target_http_host.clone(),
             port: options.target_port,
-            readiness_path: options.target_readiness_path.clone(),
-            readiness_status: options.target_readiness_status,
-            startup_timeout_seconds: options.target_startup_timeout_seconds,
-            request_timeout_seconds: options.target_request_timeout_seconds,
+            motan_port: None,
             quality_gates: None,
         },
         replay: ReplayProjectConfig {
             policy: options.replay_policy.clone(),
-            startup_timeout_seconds: options.replay_startup_timeout_seconds,
         },
         recording: RecordingProjectConfig {
             config: options.recorder_config.clone(),
@@ -150,7 +149,6 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
         state: StateProjectConfig {
             runtime_root: PathBuf::from(DEFAULT_RUNTIME_ROOT),
         },
-        protocols: ProtocolProjectConfig::default(),
     };
     validate_project_config(&project_config)?;
     let mut payload = serde_yaml::to_string(&project_config)?.into_bytes();
@@ -219,25 +217,17 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     );
     let recorder_config = resolve_under(&target_root, &config.recording.config);
     let recorder = crate::config::AppConfig::load(&recorder_config)?;
-    if let Some(motan) = &config.protocols.motan {
-        ensure!(
-            recorder.motan_gateway.enabled,
-            "project protocols.motan requires motan_gateway.enabled in {}",
-            recorder_config.display()
-        );
-        ensure!(
-            recorder.motan_gateway.listen.port() == motan.gateway_port,
-            "project protocols.motan.gateway_port {} does not match recorder Motan gateway port {}",
-            motan.gateway_port,
-            recorder.motan_gateway.listen.port()
-        );
-        ensure!(
-            endpoint_port(&recorder.motan_gateway.matched_upstream) == Some(motan.source_port),
-            "project protocols.motan.source_port {} does not match recorder Motan upstream {:?}",
-            motan.source_port,
-            recorder.motan_gateway.matched_upstream
-        );
-    }
+    ensure!(
+        recorder.http_gateway.ready.enabled,
+        "managed project replay requires an enabled http_gateway.ready probe"
+    );
+    let target_request_timeout = recorder
+        .comparison_recording
+        .as_ref()
+        .map(|comparison| Duration::from_millis(comparison.upstream_timeout_ms))
+        .unwrap_or_else(|| {
+            Duration::from_secs(super::model::DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS)
+        });
     let target_max_response_bytes = recorder.recording.max_body_bytes;
     let target_quality_gates = config
         .target
@@ -253,16 +243,20 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
                 config.target.http_host, config.target.port
             ),
             target_port: config.target.port,
-            target_readiness_path: config.target.readiness_path,
-            target_readiness_status: config.target.readiness_status,
-            target_startup_timeout: Duration::from_secs(config.target.startup_timeout_seconds),
-            target_request_timeout: Duration::from_secs(config.target.request_timeout_seconds),
+            target_readiness_path: recorder.http_gateway.ready.path,
+            target_readiness_status: recorder.http_gateway.ready.success_status,
+            target_startup_timeout: Duration::from_secs(
+                super::model::DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS,
+            ),
+            target_request_timeout,
             target_quality_gates,
             target_max_response_bytes,
             source_container: config.source.container,
             breeze_container: config.breeze.map(|breeze| breeze.container),
             replay_policy: policy_path,
-            replay_startup_timeout: Duration::from_secs(config.replay.startup_timeout_seconds),
+            replay_startup_timeout: Duration::from_secs(
+                super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
+            ),
             pr_base: config.delivery.pr_base,
             recorder_config,
             recording_rule: config.recording.rule,
@@ -356,28 +350,12 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         config.target.port > 0,
         "target.port must be greater than zero"
     );
-    ensure!(
-        config.target.readiness_path.starts_with('/'),
-        "target.readiness_path must start with '/'"
-    );
-    ensure!(
-        config.target.startup_timeout_seconds > 0,
-        "target.startup_timeout_seconds must be greater than zero"
-    );
-    ensure!(
-        config.target.request_timeout_seconds > 0,
-        "target.request_timeout_seconds must be greater than zero"
-    );
     if let Some(gates) = &config.target.quality_gates {
         validate_target_quality_gates(gates)?;
     }
     ensure!(
         !config.replay.policy.as_os_str().is_empty(),
         "replay.policy must not be empty"
-    );
-    ensure!(
-        config.replay.startup_timeout_seconds > 0,
-        "replay.startup_timeout_seconds must be greater than zero"
     );
     ensure!(
         !config.delivery.pr_base.trim().is_empty(),
@@ -395,16 +373,10 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         !config.recording.rule.trim().is_empty(),
         "recording.rule must not be empty"
     );
-    if let Some(motan) = &config.protocols.motan {
+    if let Some(motan_port) = config.target.motan_port {
         ensure!(
-            motan.source_port > 0 && motan.gateway_port > 0 && motan.target_port > 0,
-            "protocols.motan ports must be greater than zero"
-        );
-        ensure!(
-            motan.source_port != motan.gateway_port
-                && motan.source_port != motan.target_port
-                && motan.gateway_port != motan.target_port,
-            "protocols.motan source_port, gateway_port, and target_port must be distinct"
+            motan_port > 0,
+            "target.motan_port must be greater than zero"
         );
     }
     Ok(())
@@ -427,10 +399,6 @@ fn resolve_under(root: &Path, path: &Path) -> PathBuf {
     } else {
         root.join(path)
     }
-}
-
-fn endpoint_port(endpoint: &str) -> Option<u16> {
-    endpoint.rsplit_once(':')?.1.parse().ok()
 }
 
 fn derive_run_key(case_source: &Path) -> Result<String> {
@@ -471,8 +439,6 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::e2e_run::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS;
-
     fn target() -> TempDir {
         let target = tempfile::tempdir().unwrap();
         let root = target.path();
@@ -504,7 +470,9 @@ mod tests {
         .unwrap();
         fs::write(
             root.join("config/recorder.toml"),
-            "[[http_gateway.rules]]\nname = \"record-api\"\nmethods = [\"GET\"]\npath_prefixes = [\"/\"]\n",
+            "[http_gateway.ready]\nenabled = true\npath = \"/healthz\"\nsuccess_status = \
+             404\n\n[[http_gateway.rules]]\nname = \"record-api\"\nmethods = \
+             [\"GET\"]\npath_prefixes = [\"/\"]\n",
         )
         .unwrap();
         assert!(
@@ -555,12 +523,7 @@ mod tests {
             target_startup: crate::startup::StartupConfig::default(),
             target_http_host: "127.0.0.1".to_string(),
             target_port: 8081,
-            target_readiness_path: "/healthz".to_string(),
-            target_readiness_status: 404,
-            target_startup_timeout_seconds: 60,
-            target_request_timeout_seconds: 30,
             replay_policy: PathBuf::from("config/replay.yaml"),
-            replay_startup_timeout_seconds: DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
             pr_base: "integration".to_string(),
             recorder_config: PathBuf::from("config/recorder.toml"),
             recording_rule: "record-api".to_string(),
@@ -588,95 +551,24 @@ mod tests {
             PathBuf::from(".traffic-e2e/Dockerfile.e2e")
         );
         assert_eq!(config.replay.policy, PathBuf::from("config/replay.yaml"));
-        assert_eq!(
-            config.replay.startup_timeout_seconds,
-            DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS
-        );
+        let raw = fs::read_to_string(&result.config).unwrap();
+        for duplicate in [
+            "readiness_path",
+            "readiness_status",
+            "startup_timeout_seconds",
+            "request_timeout_seconds",
+        ] {
+            assert!(
+                !raw.contains(duplicate),
+                "found duplicate field {duplicate}"
+            );
+        }
         assert_eq!(config.delivery.pr_base, "integration");
         assert_eq!(result.pr_base, "integration");
         assert_eq!(
             config.state.runtime_root,
             PathBuf::from(DEFAULT_RUNTIME_ROOT)
         );
-    }
-
-    #[test]
-    fn startup_update_explicitly_migrates_version_11_boot_config() {
-        let target = target();
-        initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let mut value: serde_yaml::Value = store::read_yaml(&config_path).unwrap();
-        let root = value.as_mapping_mut().unwrap();
-        root.insert(
-            serde_yaml::Value::String("version".to_string()),
-            serde_yaml::to_value(LEGACY_BOOT_CONFIG_VERSION).unwrap(),
-        );
-        let target_config = root
-            .get_mut(serde_yaml::Value::String("target".to_string()))
-            .unwrap()
-            .as_mapping_mut()
-            .unwrap();
-        target_config.remove(serde_yaml::Value::String("startup".to_string()));
-        target_config.insert(
-            serde_yaml::Value::String("boot_dir".to_string()),
-            serde_yaml::Value::String(".traffic-e2e/local/boot".to_string()),
-        );
-        let state = root
-            .get_mut(serde_yaml::Value::String("state".to_string()))
-            .unwrap()
-            .as_mapping_mut()
-            .unwrap();
-        state.remove(serde_yaml::Value::String("runtime_root".to_string()));
-        state.insert(
-            serde_yaml::Value::String("ai_forbidden_root".to_string()),
-            serde_yaml::Value::String("local/ai-forbidden".to_string()),
-        );
-        fs::remove_dir_all(
-            target
-                .path()
-                .join(crate::internal_runtime::REPOSITORY_RELATIVE_ROOT),
-        )
-        .unwrap();
-        let legacy_runtime = target.path().join(".traffic-e2e/local/ai-forbidden");
-        fs::create_dir_all(&legacy_runtime).unwrap();
-        fs::write(legacy_runtime.join("state.json"), "state").unwrap();
-        fs::write(&config_path, serde_yaml::to_string(&value).unwrap()).unwrap();
-
-        let (_, source, previous) =
-            crate::e2e_run::resolve_startup_update_context(target.path()).unwrap();
-        assert_eq!(source, "source-app");
-        assert!(previous.is_none());
-        crate::e2e_run::update_project_startup(
-            target.path(),
-            crate::startup::StartupConfig {
-                mounts: vec![PathBuf::from("/data1/weibo/confs")],
-                environment_from_source: vec!["WEIBO_CONF_PATH".to_string()],
-                ..crate::startup::StartupConfig::default()
-            },
-        )
-        .unwrap();
-
-        let config: ProjectConfig = store::read_yaml(&config_path).unwrap();
-        assert_eq!(config.version, CONFIG_VERSION);
-        assert_eq!(
-            config.target.startup.mounts,
-            [PathBuf::from("/data1/weibo/confs")]
-        );
-        assert_eq!(
-            config.target.startup.environment_from_source,
-            ["WEIBO_CONF_PATH"]
-        );
-        let migrated = fs::read_to_string(config_path).unwrap();
-        assert!(!migrated.contains("boot_dir"));
-        assert!(!migrated.contains("ai_forbidden_root"));
-        assert!(migrated.contains("runtime_root: local/runtime"));
-        assert!(
-            target
-                .path()
-                .join(".traffic-e2e/local/runtime/state.json")
-                .is_file()
-        );
-        assert!(!legacy_runtime.exists());
     }
 
     #[test]
@@ -693,6 +585,18 @@ mod tests {
         let (config, _) = resolve_layout(target.path(), &cases, None).unwrap();
 
         assert_eq!(config.target_max_response_bytes, 1234);
+    }
+
+    #[test]
+    fn target_motan_port_allows_the_recorder_gateway_to_be_disabled() {
+        let target = target();
+        initialize(options(target.path())).unwrap();
+        let config_path = target.path().join(".traffic-e2e/project.yaml");
+        let mut config: ProjectConfig = store::read_yaml(&config_path).unwrap();
+        config.target.motan_port = Some(19082);
+        store::write_yaml(&config_path, &config).unwrap();
+
+        resolve_project(target.path()).unwrap();
     }
 
     #[test]
@@ -740,8 +644,8 @@ mod tests {
         initialize(options(target.path())).unwrap();
         let config_path = target.path().join(".traffic-e2e/project.yaml");
         let yaml = fs::read_to_string(&config_path).unwrap().replacen(
-            "  request_timeout_seconds: 30",
-            "  request_timeout_seconds: 30\n  quality_gates: []",
+            "  port: 8081",
+            "  port: 8081\n  quality_gates: []",
             1,
         );
         fs::write(config_path, yaml).unwrap();
@@ -788,6 +692,7 @@ mod tests {
         )
         .unwrap();
         let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
+        let (_, resolved) = resolve_project(root).unwrap();
 
         assert_eq!(
             config.target.dockerfile,
@@ -800,8 +705,11 @@ mod tests {
         );
         assert_eq!(config.target.http_host, "127.0.0.1");
         assert_eq!(config.target.port, 8181);
-        assert_eq!(config.target.readiness_path, "/ready");
-        assert_eq!(config.target.readiness_status, 200);
+        assert_eq!(resolved.target_readiness_path, "/ready");
+        assert_eq!(resolved.target_readiness_status, 200);
+        assert_eq!(resolved.target_startup_timeout, Duration::from_secs(60));
+        assert_eq!(resolved.target_request_timeout, Duration::from_secs(30));
+        assert_eq!(resolved.replay_startup_timeout, Duration::from_secs(60));
         assert_eq!(config.delivery.pr_base, "dev-migration");
         assert_eq!(
             config.recording.config,
@@ -836,51 +744,6 @@ mod tests {
             error
                 .to_string()
                 .contains("source_container must not be empty")
-        );
-    }
-
-    #[test]
-    fn config_rejects_zero_replay_startup_timeout() {
-        let target = target();
-        initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let yaml = fs::read_to_string(&config_path).unwrap().replacen(
-            "replay:\n  policy: config/replay.yaml\n  startup_timeout_seconds: 60",
-            "replay:\n  policy: config/replay.yaml\n  startup_timeout_seconds: 0",
-            1,
-        );
-        fs::write(&config_path, yaml).unwrap();
-        let cases = target.path().join("cases/run");
-        fs::create_dir_all(&cases).unwrap();
-
-        let error = resolve_layout(target.path(), &cases, None).unwrap_err();
-
-        assert!(
-            format!("{error:#}")
-                .contains("replay.startup_timeout_seconds must be greater than zero")
-        );
-    }
-
-    #[test]
-    fn config_defaults_replay_startup_timeout_when_field_is_missing() {
-        let target = target();
-        initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let yaml = fs::read_to_string(&config_path)
-            .unwrap()
-            .lines()
-            .filter(|line| line.trim() != "startup_timeout_seconds: 60")
-            .collect::<Vec<_>>()
-            .join("\n");
-        fs::write(&config_path, format!("{yaml}\n")).unwrap();
-        let cases = target.path().join("cases/run");
-        fs::create_dir_all(&cases).unwrap();
-
-        let (config, _) = resolve_layout(target.path(), &cases, None).unwrap();
-
-        assert_eq!(
-            config.replay_startup_timeout,
-            Duration::from_secs(DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS)
         );
     }
 

@@ -128,7 +128,7 @@ resolve_recording_mount_source() {
     local startup_target
     if [[ -v 'startup_mount_sources[$destination]' ]]; then
         [[ "$writable" == "${startup_mount_writable[$destination]}" ]] || {
-            printf 'error: source mount %s is %s but the startup snapshot requires writable=%s; run `backend-rewrite startup refresh` after correcting the project configuration\n' \
+            printf 'error: source mount %s is %s but the startup snapshot requires writable=%s; initialized startup inputs require administrator repair\n' \
                 "$destination" "$writable" "${startup_mount_writable[$destination]}" >&2
             return 1
         }

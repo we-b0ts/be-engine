@@ -27,8 +27,7 @@ Before a run, the runner requires:
   excludes `.git/`, `.traffic-e2e/local/`, and `target/`;
 - valid recorder and replay config;
 - ignored `.traffic-e2e/local/`, ensured by repository initialization;
-- a matching `.traffic-e2e/local/startup/` snapshot captured by initialization
-  or `backend-rewrite startup refresh`;
+- a matching `.traffic-e2e/local/startup/` snapshot captured by initialization;
 - a feature branch distinct from the configured PR base.
 
 ## Prepare One Canonical API

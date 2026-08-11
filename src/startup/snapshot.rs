@@ -304,7 +304,7 @@ pub(crate) fn load_startup_snapshot(
             .map(|mount| &mount.path)
             .eq(config.mounts.iter())
             && manifest.environment == config.environment_from_source,
-        "startup snapshot is stale; run `backend-rewrite startup refresh`"
+        "startup snapshot is stale; initialized startup inputs require administrator repair"
     );
     ensure!(
         environment
@@ -324,7 +324,7 @@ pub(crate) fn load_startup_snapshot(
     let mounts_root = target_root.join(crate::repository::LOCAL_STARTUP_MOUNTS_ROOT);
     ensure!(
         manifest.content_revision == snapshot_content_revision(&mounts_root, &environment.values)?,
-        "startup snapshot content changed; run `backend-rewrite startup refresh`"
+        "startup snapshot content changed; initialized startup inputs require administrator repair"
     );
     Ok(LoadedStartupSnapshot {
         manifest,

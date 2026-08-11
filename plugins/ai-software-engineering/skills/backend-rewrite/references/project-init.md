@@ -54,14 +54,11 @@ The command atomically creates exactly these source-controlled files:
 .traffic-e2e/verification.yaml
 ```
 
-`project.yaml` uses schema version 12. To replace the complete startup
-declaration later, or to explicitly migrate a version-11 `boot_dir` project,
-run `backend-rewrite startup update --replace` with all desired `--mount`,
-`--environment`, `--target-port-env`, and `--replay-ca-env` arguments. Use
-`backend-rewrite startup refresh` when only source values changed and
-`backend-rewrite startup status` for redacted snapshot metadata. The version-11
-migration also moves the legacy engine state directory to
-`.traffic-e2e/local/runtime/` and persists `state.runtime_root`.
+`project.yaml` uses schema version 12. The startup declaration and matching
+snapshot are immutable initialization outputs. Normal rewrite sessions must not
+replace, refresh, or migrate them. A repository with obsolete, missing, stale,
+or damaged startup inputs requires administrator repair outside the
+`backend-rewrite` workflow.
 
 It also idempotently adds `/.traffic-e2e/local/` to `.gitignore`. It refuses
 the whole initialization when any generated file already exists, and it does

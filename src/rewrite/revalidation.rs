@@ -276,7 +276,7 @@ mod tests {
             target.path().join(".traffic-e2e/project.yaml"),
             "version: 12\n\
              source:\n  container: source\n\
-             target:\n  dockerfile: .traffic-e2e/Dockerfile.e2e\n  startup: {}\n  http_host: 127.0.0.1\n  port: 8081\n  readiness_path: /healthz\n  readiness_status: 404\n  quality_gates: []\n\
+             target:\n  dockerfile: .traffic-e2e/Dockerfile.e2e\n  startup: {}\n  http_host: 127.0.0.1\n  port: 8081\n  quality_gates: []\n\
              replay:\n  policy: .traffic-e2e/verification.yaml\n\
              recording:\n  config: .traffic-e2e/recorder.toml\n  rule: record-api\n\
              delivery:\n  pr_base: dev-migration\n\
@@ -290,7 +290,7 @@ mod tests {
         .unwrap();
         fs::write(
             target.path().join(".traffic-e2e/recorder.toml"),
-            "[[http_gateway.rules]]\nname = \"record-api\"\nmethods = [\"GET\"]\npath_prefixes = [\"/\"]\n",
+            "[http_gateway.ready]\nenabled = true\npath = \"/healthz\"\nsuccess_status = 404\n\n[[http_gateway.rules]]\nname = \"record-api\"\nmethods = [\"GET\"]\npath_prefixes = [\"/\"]\n",
         )
         .unwrap();
         fs::write(

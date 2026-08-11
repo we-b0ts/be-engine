@@ -43,12 +43,8 @@ pub fn enable_repository_motan_protocol(
         )
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
-    let project_update = crate::e2e_run::render_motan_protocol_update(
-        &target_root,
-        options.source_port,
-        options.gateway_port,
-        options.target_port,
-    )?;
+    let project_update =
+        crate::e2e_run::render_motan_protocol_update(&target_root, options.target_port)?;
     require_regular_file(&project_update.recorder_config, "recorder config")?;
     let recorder_raw = fs::read_to_string(&project_update.recorder_config).with_context(|| {
         format!(
@@ -338,8 +334,9 @@ mod tests {
             "motan-replay --input-raw :8080 --output-rpc 127.0.0.1:18081"
         );
         let project = fs::read_to_string(&first.project_config).unwrap();
-        assert!(project.contains("protocols:\n  motan:\n"));
-        assert!(project.contains("source_port: 8080"));
+        assert!(project.contains("  motan_port: 8081"));
+        assert!(!project.contains("source_port"));
+        assert!(!project.contains("gateway_port"));
         let recorder = fs::read_to_string(&first.recorder_config).unwrap();
         assert!(recorder.contains("# preserve recorder comments"));
         assert!(recorder.contains("[motan_gateway]"));
@@ -409,6 +406,11 @@ mod tests {
             root.join(".traffic-e2e/recorder.toml"),
             concat!(
                 "# preserve recorder comments\n",
+                "[http_gateway.ready]\n",
+                "enabled = true\n",
+                "path = \"/healthz\"\n",
+                "success_status = 404\n",
+                "\n",
                 "[[http_gateway.rules]]\n",
                 "name = \"record-api\"\n",
                 "methods = [\"GET\"]\n",
@@ -451,12 +453,7 @@ mod tests {
             target_startup: crate::StartupConfig::default(),
             target_http_host: "127.0.0.1".to_string(),
             target_port: 8081,
-            target_readiness_path: "/healthz".to_string(),
-            target_readiness_status: 404,
-            target_startup_timeout_seconds: 60,
-            target_request_timeout_seconds: 30,
             replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
-            replay_startup_timeout_seconds: 60,
             pr_base: "integration".to_string(),
             recorder_config: PathBuf::from(".traffic-e2e/recorder.toml"),
             recording_rule: "record-api".to_string(),
