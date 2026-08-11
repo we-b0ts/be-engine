@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
-use crate::config::background_dependencies::redis_rule_matches;
+use crate::config::process_owned_dependencies::redis_rule_matches;
 use crate::config::{AppConfig, BackgroundDependencyRuleConfig};
 use crate::recorder::background::BackgroundDependencyMatcher;
 
@@ -39,7 +39,7 @@ pub(crate) fn reclassify_background_dependencies(
     case_dirs: &BTreeMap<String, PathBuf>,
 ) -> Result<BackgroundReclassification> {
     let config = AppConfig::load(recorder_config)?;
-    let rules = &config.recording.background_dependencies;
+    let rules = &config.recording.process_owned_dependencies;
     let matcher = BackgroundDependencyMatcher::from_rules(rules)?;
     let memcached_ports = matcher.resolved_memcached_rule_ports();
     let matched = matched_recorded_exchanges(case_dirs, rules, &memcached_ports)?;
@@ -158,7 +158,7 @@ fn matching_rule<'a>(
                         .get("key")
                         .and_then(decode_capture)
                         .is_some_and(|key| {
-                            crate::config::background_dependencies::matches_memcached_key_series(
+                            crate::config::process_owned_dependencies::matches_memcached_key_series(
                                 &key,
                                 *key_start,
                                 *key_end,

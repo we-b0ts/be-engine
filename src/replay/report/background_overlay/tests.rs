@@ -83,7 +83,7 @@ fn redis_hash_key_patterns_reclassify_case_window_exchanges() {
         let fixture = Fixture::with_redis_exchange(command, "exp:matchlist:4872", fields);
         fixture.write_rules(&format!(
             r#"
-[[recording.background_dependencies]]
+[[recording.process_owned_dependencies]]
 name = "matchlist-refresh"
 protocol = "redis"
 ports = [20917]
@@ -122,7 +122,7 @@ fn redis_hash_reclassification_requires_exact_fields() {
     );
     fixture.write_rules(
         r#"
-[[recording.background_dependencies]]
+[[recording.process_owned_dependencies]]
 name = "matchlist-refresh"
 protocol = "redis"
 ports = [20917]
@@ -151,7 +151,7 @@ fn redis_hash_key_pattern_rejects_other_key_shapes() {
     let fixture = Fixture::with_redis_exchange("HGET", "unrelated:matchlist:4872", &["version"]);
     fixture.write_rules(
         r#"
-[[recording.background_dependencies]]
+[[recording.process_owned_dependencies]]
 name = "matchlist-refresh"
 protocol = "redis"
 ports = [20917]
@@ -261,7 +261,7 @@ impl Fixture {
         let rules = if matching {
             format!(
                 r#"
-[[recording.background_dependencies]]
+[[recording.process_owned_dependencies]]
 name = "tag-cardinality-warmup"
 protocol = "redis"
 ports = [20917]

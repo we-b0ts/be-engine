@@ -17,11 +17,11 @@ cargo build --bins
 
 The repository includes `.cargo/config.toml` for the configured crates.io
 mirror. Do not replace that registry configuration unless explicitly asked.
-The build produces sibling `traffic-e2e` and `backend-rewrite` executables.
-Keep them together in installed packages because detached coordinator actions
-delegate engine work to `traffic-e2e`.
+The build produces sibling `traffic-e2e`, `backend-rewrite`, and
+`backend-rewrite-admin` executables. Keep them together in installed packages
+because detached coordinator actions delegate engine work to `traffic-e2e`.
 
-Both binaries report the package version, build revision, and exact pinned
+All binaries report the package version, build revision, and exact pinned
 target-runtime image from `--version`. Git checkouts derive the revision
 automatically and append `-dirty` for uncommitted content. Builds without Git
 metadata should set `TRAFFIC_E2E_BUILD_REVISION` to a 1-64 character release
@@ -229,7 +229,7 @@ response and records the request plus baseline and candidate responses under
 `comparison_recording.baseline_upstream` is explicitly set. It does not load
 response rules while recording, publish dependencies, or initialize a MITM
 CA. Managed comparison installs only the cache-port interception needed for
-configured Redis background rules; source and candidate share a new run-local
+configured Redis process-owned rules; source and candidate share a new run-local
 first-value snapshot independent of standard Replay evidence. It validates the
 verification policy and reads
 only `response_rules.comparison.source_match` to decide whether source recheck
@@ -309,8 +309,14 @@ to observe the full duration.
 Breeze-aware recorder defaults together with project and verification
 configuration. The target repository provides no recording or comparison
 wrapper. `traffic-e2e record-comparison` owns the
-adapted source application, one Breeze shared with the candidate, the candidate's fixed
-start/stop contract, recording, signals, finalization, and cleanup. AI and
+adapted source application, optional Breeze runtime and candidate Breeze mounts,
+the candidate's fixed start/stop contract, recording, signals, finalization,
+and cleanup. The source
+keeps the host recording namespace while the candidate runs in a run-owned
+bridge namespace, so both applications use their native HTTP and Motan ports
+without a host bind conflict. The candidate's bridge IP and comparison origin
+exist only for that run and are never persisted in `project.yaml` or recording
+artifacts. AI and
 automated invocations pass an explicit duration, run ID, and API scope.
 
 Each published comparison recording case contains:
@@ -361,9 +367,12 @@ traffic-e2e config replay plan response-rule \
 ```
 
 `compare` is file-only. Managed `record-comparison` uses the fixed traffic UID
-and cache-port-only interception when Redis background rules are configured;
-it does not enable DNS interception, fake-IP routing, MITM, or dependency
-Replay.
+and cache-port-only interception when Redis process-owned rules are configured;
+target bridge traffic is added to that same run-local Redis snapshot by a
+source-IP-scoped `PREROUTING` rule. Comparison does not enable DNS interception,
+fake-IP routing, MITM, or dependency Replay. Standard Replay retains its
+host-network target and existing fixed-user DNS/fake-IP/egress interception;
+the comparison namespace does not change recorded fake IPs or replay lookup.
 
 AI must diagnose a failed comparison before changing code or policy. A stable
 source recheck plus a candidate mismatch is stronger implementation-defect
@@ -479,25 +488,26 @@ active-case and dependency-drain lifecycle:
 
 ```bash
 backend-rewrite config protocol enable motan \
-  --source-port 8080 \
-  --gateway-port 18081 \
-  --target-port 8081
+  --gateway-port 18081
 ```
 
-This typed update is for an already initialized repository. It stores the
-rewritten service listener as `target.motan_port` in `.traffic-e2e/project.yaml`
-and stores the source and gateway recording ports only in the recorder file
-referenced by that project. The target port is a target runtime contract; the
-gateway port is recorder-owned and is not duplicated in project configuration.
-Repeating the same command returns `status: unchanged`; changing an explicit
-port updates only the owned keys and preserves Motan rules and recorder
-comments. Its result uses `validation_status: not_run`: configuration alone
-does not claim that real Motan traffic has been validated.
+This typed update is for an already initialized repository. It changes only
+the recorder file referenced by the project: `motan_gateway.listen` is set from
+`--gateway-port`, while the existing `motan_gateway.matched_upstream` remains
+the sole native Motan service endpoint. Configure that recorder endpoint before
+enabling the gateway when the default is not correct. Source and target use the
+same native port because managed Comparison isolates the target network
+namespace; the gateway port must remain distinct from that native port.
+Repeating the same command returns `status: unchanged`; changing the gateway
+port updates only owned keys and preserves the native endpoint, Motan rules,
+and recorder comments. Its result uses `validation_status: not_run`:
+configuration alone does not claim that real Motan traffic has been validated.
+Set `motan_gateway.enabled = false` to keep HTTP-only recording temporarily.
 
-`target.motan_port` does not force recording on. Set
-`motan_gateway.enabled = false` to keep the target's Motan contract while
-temporarily running HTTP-only recording. Source and gateway port consistency is
-therefore local to the recorder configuration.
+Motan has no `candidate_upstream` setting. Comparison's candidate is an HTTP
+primary-request endpoint; Motan gateway traffic is recorded/replayed through
+`listen` and `matched_upstream`, and the system does not expose a second Motan
+primary-request dispatcher.
 
 ```toml
 [motan_gateway]
@@ -579,7 +589,7 @@ case dependencies for the fixed
 synchronous server-side after-hooks that start dependencies only after writing
 the response; set it to `0` when the target completes all relevant work before
 the response. When the interval ends, Recorder closes dependency admission so
-continuous background traffic cannot extend the case, then waits only for
+continuous case-external traffic cannot extend the case, then waits only for
 already accepted in-flight dependencies to complete. In-flight MySQL queries
 retain their original case ownership through the semantic exchange. If those
 dependencies do not complete within
@@ -1021,14 +1031,14 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v15 always returns `action.kind`, `action.summary`,
+Rewrite action schema v16 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
 After a standard recording is selected, the optional top-level
-`source_process_traffic` projection gives every action bounded bootstrap,
-background-rule, and Redis snapshot observations as triage context. It is not
-an action-specific transition fact.
+`source_process_traffic` projection gives every action bounded `bootstrap`,
+configured `process_owned`, and Redis snapshot observations as triage context.
+It is not an action-specific transition fact.
 Status does not duplicate an `active_issue` or publish an unconditional
 top-level `next`. Every returned command contains a canonical `cwd` plus exact
 argv. The argv includes the canonical absolute `--target-root`, so executing a
@@ -1093,7 +1103,7 @@ mandatory. `terminal_allowed` is false until every inventory item has both
 passing E2E and comparison evidence for the same target content fingerprint.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v15 returns `wait_required` with
+lease. When another API owns it, action schema v16 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1213,12 +1223,13 @@ backend-rewrite --target-root ../target init \
 From the target root, `--target-root` is unnecessary. `--breeze` uses the
 conventional existing container named `breeze`; use `--breeze=<container>` only
 for a non-standard name. Defaults are Recorder HTTP gateway port `17171`,
-source port `8080`, target port `8081`, readiness `/healthz` with status `404`,
-and upstream DNS `10.10.10.11:53`. Override a default only when the inspected
-application contract proves it is different. Source and Breeze containers
-need only be inspectable, not running.
+recorder native HTTP upstream `http://127.0.0.1:8080`, readiness `/healthz`
+with status `404`, and upstream DNS `10.10.10.11:53`. Only the gateway port is
+an initialization port argument. Change a non-standard native endpoint in
+`recorder.toml`, which is its sole configuration owner. Source and Breeze
+containers need only be inspectable, not running.
 
-The command atomically generates version-12 `.traffic-e2e/project.yaml`,
+The command atomically generates version-13 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
 configuration has explicit source, optional Breeze, target, replay, recording,
 delivery, and state sections. A typical
@@ -1235,8 +1246,6 @@ target:
     # Optional application-owned names:
     # port_environment: PORT
     # replay_ca_environment: SSL_CERT_FILE
-  http_host: 127.0.0.1
-  port: 8081
   # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
   # quality_gates:
   #   - name: project-check
@@ -1247,7 +1256,9 @@ Target readiness path and status come from the referenced recorder's
 `http_gateway.ready` section. Target request timeout comes from
 `comparison_recording.upstream_timeout_ms`; target startup and replay startup
 timeouts are coordinator-owned defaults. These runtime policy values are not
-duplicated in `project.yaml`.
+duplicated in `project.yaml`. The target's native HTTP port is the port in
+`http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
+it on the run-owned target bridge IP.
 
 Each quality gate is an exact argv executed without a shell from the canonical
 target root. At most eight uniquely named commands may be configured, with at
@@ -1260,7 +1271,18 @@ Managed replay reads its target response limit from
 Existing configuration is never overwritten. If any generated file exists,
 the whole initialization refuses without creating another file. Normal
 execution does not migrate or dual-read obsolete project schemas; migration
-and repair require administrator-owned tooling outside `backend-rewrite`. The
+and repair require administrator-owned tooling outside `backend-rewrite`. When
+an administrator intentionally changes `target.startup`, recapture the exact
+new declaration and then run preflight:
+
+```bash
+backend-rewrite-admin --target-root <target> \
+  startup recapture --confirm-replace
+backend-rewrite --target-root <target> init preflight
+```
+
+Recapture requires the configured source container to be stopped. Preflight is
+read-only validation and does not repair a stale snapshot. The
 initializer idempotently adds `/.traffic-e2e/local/` to the repository `.gitignore`; all
 non-versioned runtime data lives below that root. It copies every declared
 absolute path from the stopped source container into
@@ -1600,9 +1622,9 @@ Use `dependencies.jsonl` for replay-oriented semantic data. Use
 including push-metrics side effects, are recorded as semantic dependencies when
 captured by the UDP gateway. Run-level
 Global dependency files contain replay-oriented startup traffic plus explicit
-background-rule matches. Replay discovers them by walking upward from a case
+process-owned-rule matches. Replay discovers them by walking upward from a case
 directory and prefers Case before Global. Ordinary exchanges are consumed
-once. Marked Redis background snapshot seeds are reusable for identical
+once. Marked Redis process-owned snapshot seeds are reusable for identical
 logical reads.
 `pre-readiness-traffic-summary.json` is a bounded projection of only source
 `bootstrap` data interactions grouped by `host:port`. It excludes connection
@@ -1611,8 +1633,8 @@ coordinator exposes the projection through its opaque evidence-query API, so a
 target AI does not need to read this file or the Global JSONL directly.
 `source-process-traffic-summary.json` is an independently bounded writer-owned
 projection used directly by the rewrite action envelope. It separates all
-pre-readiness data interactions from configured background-rule traffic and
-retains protocol, `host:port`, operation, and count. Redis background snapshot
+pre-readiness data interactions from configured process-owned-rule traffic and
+retains protocol, `host:port`, operation, and count. Redis process-owned snapshot
 facts include successful seeds, later recorder reuses, fill failures, and the
 same counts per intercepted domain and port. Snapshot hits remain absent from
 replay dependencies; the summary counts them before that persistence filter.
@@ -1628,7 +1650,7 @@ published as successful. Case and run finalization send ordered flush commands
 through the same writer, so queued dependency reservations remain in flight
 until their records have been persisted.
 
-Redis reads matched by a background dependency rule use a bounded run-local
+Redis reads matched by a process-owned dependency rule use a bounded run-local
 first-value snapshot. Recorder owns the internal retained-response capacity;
 `cache_snapshot_max_waiters_per_entry` bounds concurrent readers waiting for
 the first response, and `cache_snapshot_fill_timeout_ms` bounds that wait.
@@ -1638,7 +1660,7 @@ current waiters but are not retained.
 Source-proven process-level HTTP polling can be classified before recording:
 
 ```toml
-[[recording.background_dependencies]]
+[[recording.process_owned_dependencies]]
 name = "config-refresh"
 protocol = "http"
 authorities = ["config.api.demo.test"]
@@ -1680,7 +1702,7 @@ Use a finalized replay report to create the AI-managed rule instead of editing
 the table directly:
 
 ```bash
-traffic-e2e config recorder apply background-dependencies \
+traffic-e2e config recorder apply process-owned-dependencies \
   --target-root . \
   --name config-refresh \
   --case-source <exact-finalized-case-source> \
@@ -1703,7 +1725,7 @@ overlapping rule.
 Source-proven process-owned Motan traffic uses one exact RPC identity:
 
 ```bash
-traffic-e2e config recorder apply background-dependencies \
+traffic-e2e config recorder apply process-owned-dependencies \
   --target-root . \
   --name kunpeng-refresh \
   --case-source <exact-finalized-case-source> \
@@ -1725,7 +1747,7 @@ A process-owned Redis scheduler using exact keys can use a command-specific
 `get`, `scard`, or `hgetall` selector:
 
 ```bash
-traffic-e2e config recorder apply background-dependencies \
+traffic-e2e config recorder apply process-owned-dependencies \
   --target-root . \
   --name startup-cache-warm \
   --case-source <exact-finalized-case-source> \
@@ -1756,7 +1778,7 @@ Breeze-backed Memcached profile or local-cache warm traffic uses a bounded
 numeric key series:
 
 ```bash
-traffic-e2e config recorder apply background-dependencies \
+traffic-e2e config recorder apply process-owned-dependencies \
   --target-root . \
   --name planet-video-cache-warm \
   --case-source <exact-finalized-case-source> \

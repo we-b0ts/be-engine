@@ -124,7 +124,7 @@ fn plan_and_apply_persist_ports_without_redis_domains() {
 
     let config = AppConfig::load(&fixture.config).unwrap();
     assert!(matches!(
-        &config.recording.background_dependencies[0],
+        &config.recording.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Redis { ports, .. }
             if ports == &[20917, 20918, 20919]
     ));
@@ -136,7 +136,7 @@ fn plan_and_apply_persist_ports_without_redis_domains() {
     expanded.apply().unwrap();
     let config = AppConfig::load(&fixture.config).unwrap();
     assert!(matches!(
-        &config.recording.background_dependencies[0],
+        &config.recording.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Redis { ports, .. }
             if ports == &[20917, 20918, 20919, 20920]
     ));
@@ -358,8 +358,8 @@ fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
         r#"[recording]
 traffic_jsonl = "full"
 
-# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES
-[[recording.background_dependencies]]
+# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES
+[[recording.process_owned_dependencies]]
 name = "abtest_bootstrap_hget_version"
 protocol = "redis"
 ports = [50600]
@@ -369,7 +369,7 @@ key_patterns = [{ prefix = "exp:assign:collection:", suffix = "", numeric_middle
 fields = ["version"]
 source_evidence = "TrafficServiceImpl.loadAllCacheData HGET warm-up"
 
-[[recording.background_dependencies]]
+[[recording.process_owned_dependencies]]
 name = "abtest_bootstrap_hmget_value"
 protocol = "redis"
 ports = [50600]
@@ -378,7 +378,7 @@ keys = ["exp:business:all"]
 key_patterns = [{ prefix = "exp:assign:collection:", suffix = "", numeric_middle = true }]
 fields = ["value", "compress", "hash"]
 source_evidence = "TrafficServiceImpl.loadAllCacheData HMGET warm-up"
-# END AI-MANAGED BACKGROUND DEPENDENCIES
+# END AI-MANAGED PROCESS-OWNED DEPENDENCIES
 "#,
     )
     .unwrap();
@@ -467,8 +467,8 @@ source_evidence = "TrafficServiceImpl.loadAllCacheData HMGET warm-up"
     hmget_plan.apply().unwrap();
 
     let config = AppConfig::load(&config).unwrap();
-    assert_eq!(config.recording.background_dependencies.len(), 2);
-    for rule in &config.recording.background_dependencies {
+    assert_eq!(config.recording.process_owned_dependencies.len(), 2);
+    for rule in &config.recording.process_owned_dependencies {
         let BackgroundDependencyRuleConfig::Redis {
             keys,
             key_patterns,

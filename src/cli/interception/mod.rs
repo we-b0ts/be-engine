@@ -1,4 +1,5 @@
 use std::ffi::{OsStr, OsString};
+use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -18,9 +19,18 @@ pub(super) struct CachePortGuard {
 }
 
 impl CachePortGuard {
-    pub(super) fn enable(ports: &[u16], tcp_port: u16) -> Result<Self> {
+    pub(super) fn enable(
+        ports: &[u16],
+        tcp_port: u16,
+        target_source_ip: Option<Ipv4Addr>,
+        interception_listen_ip: Option<Ipv4Addr>,
+    ) -> Result<Self> {
         require_root()?;
-        cache_ports::up(ports, tcp_port)?;
+        ensure!(
+            target_source_ip.is_some() == interception_listen_ip.is_some(),
+            "target cache interception source and listener IPs must be configured together"
+        );
+        cache_ports::up(ports, tcp_port, target_source_ip, interception_listen_ip)?;
         Ok(Self { active: true })
     }
 

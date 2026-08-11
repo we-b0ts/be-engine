@@ -16,7 +16,7 @@ use crate::{
 use super::source_process_traffic::RewriteSourceProcessTrafficView;
 
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 15;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 16;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -983,7 +983,7 @@ mod tests {
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(15)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(16)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }

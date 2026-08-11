@@ -9,20 +9,16 @@ use super::AppConfig;
 #[derive(Debug, Clone)]
 pub struct MotanProtocolConfigOptions {
     pub target_root: PathBuf,
-    pub source_port: u16,
     pub gateway_port: u16,
-    pub target_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MotanProtocolConfigResult {
     pub status: &'static str,
     pub protocol: &'static str,
-    pub project_config: PathBuf,
     pub recorder_config: PathBuf,
-    pub source_port: u16,
+    pub native_port: u16,
     pub gateway_port: u16,
-    pub target_port: u16,
     pub validation_status: &'static str,
     pub preflight_command: &'static str,
     pub motan_replay_command: String,
@@ -31,11 +27,6 @@ pub struct MotanProtocolConfigResult {
 pub fn enable_repository_motan_protocol(
     options: MotanProtocolConfigOptions,
 ) -> Result<MotanProtocolConfigResult> {
-    validate_ports(
-        options.source_port,
-        options.gateway_port,
-        options.target_port,
-    )?;
     let target_root = fs::canonicalize(&options.target_root).with_context(|| {
         format!(
             "failed to resolve target root {}",
@@ -43,23 +34,27 @@ pub fn enable_repository_motan_protocol(
         )
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
-    let project_update =
-        crate::e2e_run::render_motan_protocol_update(&target_root, options.target_port)?;
-    require_regular_file(&project_update.recorder_config, "recorder config")?;
-    let recorder_raw = fs::read_to_string(&project_update.recorder_config).with_context(|| {
+    let (_, project) = crate::e2e_run::resolve_project(&target_root)?;
+    let recorder_config = project.recorder_config;
+    require_regular_file(&recorder_config, "recorder config")?;
+    let recorder_raw = fs::read_to_string(&recorder_config).with_context(|| {
         format!(
             "failed to read recorder config {}",
-            project_update.recorder_config.display()
+            recorder_config.display()
         )
     })?;
     let current = toml::from_str::<AppConfig>(&recorder_raw)
         .context("recorder configuration is invalid before Motan update")?;
+    let native_port = endpoint_port(
+        &current.motan_gateway.matched_upstream,
+        "motan_gateway.matched_upstream",
+    )?;
+    validate_ports(native_port, options.gateway_port)?;
     let rules_declared = motan_rules_declared(&recorder_raw)?;
     let desired_listen = format!("0.0.0.0:{}", options.gateway_port);
-    let desired_upstream = format!("127.0.0.1:{}", options.source_port);
+    let desired_upstream = current.motan_gateway.matched_upstream.clone();
     let recorder_changed = !current.motan_gateway.enabled
         || current.motan_gateway.listen.to_string() != desired_listen
-        || current.motan_gateway.matched_upstream != desired_upstream
         || !rules_declared;
     let recorder_payload = if recorder_changed {
         let mut assignments = vec![
@@ -81,48 +76,48 @@ pub fn enable_repository_motan_protocol(
         .context("recorder configuration failed validation after Motan update")?;
     validate_gateway_listener(&updated, options.gateway_port)?;
 
-    let mut updates = Vec::new();
-    if project_update.changed {
-        updates.push((project_update.path.clone(), project_update.payload));
-    }
     if recorder_changed {
-        updates.push((project_update.recorder_config.clone(), recorder_payload));
-    }
-    match updates.len() {
-        0 => {}
-        1 => super::edit::write_atomic(&updates[0].0, &updates[0].1)?,
-        _ => super::edit::write_many_atomic(&updates)?,
+        super::edit::write_atomic(&recorder_config, &recorder_payload)?;
     }
 
     Ok(MotanProtocolConfigResult {
-        status: if updates.is_empty() {
-            "unchanged"
-        } else {
+        status: if recorder_changed {
             "updated"
+        } else {
+            "unchanged"
         },
         protocol: "motan",
-        project_config: project_update.path,
-        recorder_config: project_update.recorder_config,
-        source_port: options.source_port,
+        recorder_config,
+        native_port,
         gateway_port: options.gateway_port,
-        target_port: options.target_port,
         validation_status: "not_run",
         preflight_command: "backend-rewrite init preflight",
         motan_replay_command: format!(
             "motan-replay --input-raw :{} --output-rpc 127.0.0.1:{}",
-            options.source_port, options.gateway_port
+            native_port, options.gateway_port
         ),
     })
 }
 
-fn validate_ports(source_port: u16, gateway_port: u16, target_port: u16) -> Result<()> {
+fn endpoint_port(endpoint: &str, label: &str) -> Result<u16> {
+    let (_, port) = endpoint
+        .rsplit_once(':')
+        .with_context(|| format!("{label} must contain a port"))?;
+    let port = port
+        .parse::<u16>()
+        .with_context(|| format!("{label} has an invalid port"))?;
+    ensure!(port > 0, "{label} port must be greater than zero");
+    Ok(port)
+}
+
+fn validate_ports(native_port: u16, gateway_port: u16) -> Result<()> {
     ensure!(
-        source_port > 0 && gateway_port > 0 && target_port > 0,
-        "Motan source, gateway, and target ports must be greater than zero"
+        native_port > 0 && gateway_port > 0,
+        "Motan native and gateway ports must be greater than zero"
     );
     ensure!(
-        source_port != gateway_port && source_port != target_port && gateway_port != target_port,
-        "Motan source, gateway, and target ports must be distinct"
+        native_port != gateway_port,
+        "Motan gateway port must differ from the native service port"
     );
     Ok(())
 }
@@ -312,18 +307,17 @@ mod tests {
 
     #[test]
     fn rejects_ambiguous_motan_ports() {
-        assert!(validate_ports(8080, 8080, 8081).is_err());
-        assert!(validate_ports(0, 18081, 8081).is_err());
+        assert!(validate_ports(8080, 8080).is_err());
+        assert!(validate_ports(0, 18081).is_err());
+        assert!(validate_ports(8080, 18081).is_ok());
     }
 
     #[test]
-    fn converges_project_and_recorder_configuration_idempotently() {
+    fn converges_only_recorder_configuration_idempotently() {
         let target = initialized_target();
         let options = || MotanProtocolConfigOptions {
             target_root: target.path().to_path_buf(),
-            source_port: 8080,
             gateway_port: 18_081,
-            target_port: 8081,
         };
 
         let first = enable_repository_motan_protocol(options()).unwrap();
@@ -333,8 +327,10 @@ mod tests {
             first.motan_replay_command,
             "motan-replay --input-raw :8080 --output-rpc 127.0.0.1:18081"
         );
-        let project = fs::read_to_string(&first.project_config).unwrap();
-        assert!(project.contains("  motan_port: 8081"));
+        let project_path = target.path().join(".traffic-e2e/project.yaml");
+        let project_before = fs::read(&project_path).unwrap();
+        let project = String::from_utf8(project_before.clone()).unwrap();
+        assert!(!project.contains("motan_port"));
         assert!(!project.contains("source_port"));
         assert!(!project.contains("gateway_port"));
         let recorder = fs::read_to_string(&first.recorder_config).unwrap();
@@ -346,19 +342,15 @@ mod tests {
         assert_eq!(parsed.motan_gateway.listen.to_string(), "0.0.0.0:18081");
         assert_eq!(parsed.motan_gateway.matched_upstream, "127.0.0.1:8080");
 
-        let project_before = fs::read(&first.project_config).unwrap();
         let recorder_before = fs::read(&first.recorder_config).unwrap();
         let second = enable_repository_motan_protocol(options()).unwrap();
         assert_eq!(second.status, "unchanged");
-        assert_eq!(fs::read(&second.project_config).unwrap(), project_before);
+        assert_eq!(fs::read(&project_path).unwrap(), project_before);
         assert_eq!(fs::read(&second.recorder_config).unwrap(), recorder_before);
 
         let without_explicit_rules = fs::read_to_string(&second.recorder_config)
             .unwrap()
-            .replace(
-                "matched_upstream = \"127.0.0.1:8080\"\nrules = []\n",
-                "matched_upstream = \"127.0.0.1:8080\"\n",
-            );
+            .replacen("rules = []", "", 1);
         fs::write(&second.recorder_config, without_explicit_rules).unwrap();
         let repaired_rules = enable_repository_motan_protocol(options()).unwrap();
         assert_eq!(repaired_rules.status, "updated");
@@ -373,14 +365,14 @@ mod tests {
             .replace("127.0.0.1:8080", "127.0.0.1:9090");
         fs::write(&repaired_rules.recorder_config, drifted).unwrap();
         let repaired = enable_repository_motan_protocol(options()).unwrap();
-        assert_eq!(repaired.status, "updated");
-        assert_eq!(fs::read(&repaired.project_config).unwrap(), project_before);
+        assert_eq!(repaired.status, "unchanged");
+        assert_eq!(fs::read(&project_path).unwrap(), project_before);
         assert_eq!(
             AppConfig::load(repaired.recorder_config)
                 .unwrap()
                 .motan_gateway
                 .matched_upstream,
-            "127.0.0.1:8080"
+            "127.0.0.1:9090"
         );
     }
 
@@ -406,6 +398,11 @@ mod tests {
             root.join(".traffic-e2e/recorder.toml"),
             concat!(
                 "# preserve recorder comments\n",
+                "[motan_gateway]\n",
+                "enabled = false\n",
+                "listen = \"127.0.0.1:18081\"\n",
+                "matched_upstream = \"127.0.0.1:8080\"\n",
+                "\n",
                 "[http_gateway.ready]\n",
                 "enabled = true\n",
                 "path = \"/healthz\"\n",
@@ -451,8 +448,6 @@ mod tests {
             breeze_container: None,
             target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
             target_startup: crate::StartupConfig::default(),
-            target_http_host: "127.0.0.1".to_string(),
-            target_port: 8081,
             replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
             pr_base: "integration".to_string(),
             recorder_config: PathBuf::from(".traffic-e2e/recorder.toml"),

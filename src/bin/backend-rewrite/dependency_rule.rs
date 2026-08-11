@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, ensure};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    RedisKeyPatternConfig, RewriteContext, RewriteDependencyRulePlanOptions,
-    RewriteDependencyRuleSelector, apply_rewrite_dependency_rule, plan_rewrite_dependency_rule,
+    RedisKeyPatternConfig, RewriteContext, RewriteDependencyOwnership,
+    RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector, apply_rewrite_dependency_rule,
+    plan_rewrite_dependency_rule,
 };
 
 #[derive(Debug, Args)]
@@ -15,7 +16,7 @@ pub(super) struct DependencyRuleArgs {
 
 #[derive(Debug, Subcommand)]
 enum DependencyRuleCommand {
-    /// Validate current dirty-cluster evidence and preview one recorder rule.
+    /// Classify current evidence and preview a rule only when process-owned.
     Plan(DependencyRulePlanArgs),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(DependencyRuleApplyArgs),
@@ -29,13 +30,13 @@ struct DependencyRulePlanArgs {
 
 #[derive(Debug, Subcommand)]
 enum DependencyRuleProtocolArgs {
-    /// Process-owned HTTP traffic unrelated to one case.
+    /// Classify an HTTP dependency using an exact selector.
     Http(HttpDependencyRuleArgs),
-    /// Process-owned Breeze-backed Memcached get traffic.
+    /// Classify a Breeze-backed Memcached get dependency.
     Memcached(MemcachedDependencyRuleArgs),
-    /// Process-owned Motan traffic unrelated to one case.
+    /// Classify a Motan dependency using an exact selector.
     Motan(MotanDependencyRuleArgs),
-    /// Process-owned Redis traffic.
+    /// Classify a Redis dependency using a command-specific selector.
     Redis(RedisDependencyRuleArgs),
 }
 
@@ -44,12 +45,38 @@ struct DependencyRuleCommonArgs {
     /// Coordinator-issued evidence id returned by the applicable rule planner.
     #[arg(long)]
     evidence_id: String,
-    /// Stable recorder rule name.
-    #[arg(long)]
-    name: String,
-    /// Single-line source file/symbol proof of process ownership and response relationship.
-    #[arg(long)]
-    source_evidence: String,
+    /// Required ownership decision for the recorded dependency.
+    #[arg(long, value_enum)]
+    ownership: DependencyOwnershipArg,
+    /// Stable recorder rule name; required only for process-owned dependencies.
+    #[arg(long, required_if_eq("ownership", "process-owned"))]
+    name: Option<String>,
+    /// Source file/symbol proof; required for process-owned and request-owned dependencies.
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("ownership", "process-owned"),
+            ("ownership", "request-owned")
+        ])
+    )]
+    source_evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum DependencyOwnershipArg {
+    ProcessOwned,
+    RequestOwned,
+    Unresolved,
+}
+
+impl From<DependencyOwnershipArg> for RewriteDependencyOwnership {
+    fn from(value: DependencyOwnershipArg) -> Self {
+        match value {
+            DependencyOwnershipArg::ProcessOwned => Self::ProcessOwned,
+            DependencyOwnershipArg::RequestOwned => Self::RequestOwned,
+            DependencyOwnershipArg::Unresolved => Self::Unresolved,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -103,13 +130,13 @@ struct RedisDependencyRuleArgs {
 
 #[derive(Debug, Subcommand)]
 enum RedisDependencyRuleModeArgs {
-    /// Process-owned Redis ZCOUNT traffic selected by key affixes.
+    /// Redis ZCOUNT dependency selected by key affixes.
     Zcount(RedisZcountDependencyRuleArgs),
-    /// Process-owned Redis GET traffic selected by exact keys.
+    /// Redis GET dependency selected by exact keys.
     Get(RedisExactKeyDependencyRuleArgs),
-    /// Process-owned Redis SCARD traffic selected by exact keys.
+    /// Redis SCARD dependency selected by exact keys.
     Scard(RedisExactKeyDependencyRuleArgs),
-    /// Process-owned Redis HGETALL traffic selected by exact keys.
+    /// Redis HGETALL dependency selected by exact keys.
     Hgetall(RedisExactKeyDependencyRuleArgs),
     /// Bootstrap Redis HGET traffic selected by compact key shapes and an exact field.
     Hget(RedisHashReadDependencyRuleArgs),
@@ -302,8 +329,115 @@ fn dependency_rule_options(
 ) -> RewriteDependencyRulePlanOptions {
     RewriteDependencyRulePlanOptions {
         evidence_id: common.evidence_id,
+        ownership: common.ownership.into(),
         name: common.name,
         source_evidence: common.source_evidence,
         selector,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Debug, Parser)]
+    struct TestCli {
+        #[command(flatten)]
+        dependency_rule: DependencyRuleArgs,
+    }
+
+    #[test]
+    fn ownership_is_required() {
+        let error = TestCli::try_parse_from([
+            "test",
+            "plan",
+            "motan",
+            "--evidence-id",
+            "evidence-dirty-clusters",
+            "--group",
+            "yf-tkv-rpc",
+            "--interface-name",
+            "com.weibo.api.mcq.rpc.KafkaService",
+            "--method-name",
+            "sender",
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("--ownership"));
+    }
+
+    #[test]
+    fn request_owned_does_not_require_a_rule_name() {
+        let parsed = TestCli::try_parse_from([
+            "test",
+            "plan",
+            "motan",
+            "--evidence-id",
+            "evidence-dirty-clusters",
+            "--ownership",
+            "request-owned",
+            "--source-evidence",
+            "TrafficProcessorImpl.java:onCompletion audit sender",
+            "--group",
+            "yf-tkv-rpc",
+            "--interface-name",
+            "com.weibo.api.mcq.rpc.KafkaService",
+            "--method-name",
+            "sender",
+        ])
+        .unwrap();
+        let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
+            panic!("expected plan command")
+        };
+        let options: RewriteDependencyRulePlanOptions = plan.protocol.try_into().unwrap();
+
+        assert_eq!(options.ownership, RewriteDependencyOwnership::RequestOwned);
+        assert!(options.name.is_none());
+    }
+
+    #[test]
+    fn process_owned_requires_a_rule_name() {
+        let error = TestCli::try_parse_from([
+            "test",
+            "plan",
+            "motan",
+            "--evidence-id",
+            "evidence-dirty-clusters",
+            "--ownership",
+            "process-owned",
+            "--source-evidence",
+            "MapiConfigLoader.java:init scheduled refresh",
+            "--group",
+            "kunpeng-config-rpc",
+            "--interface-name",
+            "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc",
+            "--method-name",
+            "getConfigByName",
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("--name"));
+    }
+
+    #[test]
+    fn unresolved_requires_neither_rule_name_nor_source_evidence() {
+        TestCli::try_parse_from([
+            "test",
+            "plan",
+            "motan",
+            "--evidence-id",
+            "evidence-dirty-clusters",
+            "--ownership",
+            "unresolved",
+            "--group",
+            "yf-tkv-rpc",
+            "--interface-name",
+            "com.weibo.api.mcq.rpc.KafkaService",
+            "--method-name",
+            "sender",
+        ])
+        .unwrap();
     }
 }

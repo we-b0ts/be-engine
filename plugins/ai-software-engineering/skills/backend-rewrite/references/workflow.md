@@ -47,8 +47,9 @@ The stable action envelope has `kind`, `summary`, `details`, and `commands`.
 Read kind-specific facts only from `details` and execute only command roles
 present in `commands`; an empty command object never implies a fallback. Status
 does not guarantee an unconditional top-level `next` command. Treat top-level
-`source_process_traffic` only as bounded startup, background-refresh, and
-local-cache triage context, never as ownership or response-causality proof.
+`source_process_traffic` only as bounded startup, configured process-owned, and
+local-cache triage context. Its `process_owned` field reflects configured rule
+matches; neither it nor bootstrap timing proves response causality.
 
 ### `wait_required`
 
@@ -74,7 +75,7 @@ finalized run becomes `advance_required`.
 ### `plan_apply_required`
 
 Execute the exact unchanged `commands.apply` once; never rerun planning or
-reconstruct selector inputs. For recorder-capture or background-dependency
+reconstruct selector inputs. For recorder-capture or process-owned-dependency
 plans, first read
 [coordinator-evidence-actions.md](coordinator-evidence-actions.md). A response
 rule plan remains bound to its existing evidence and plan ID.
@@ -108,7 +109,7 @@ the opaque evidence queries, proves one cause, runs local tests, and returns the
 unchanged acceptance command. The main orchestrator integrates the tested
 handoff and executes acceptance only from the canonical worktree.
 
-If the worker returns source-proven recorder-capture or background-rule inputs,
+If the worker returns source-proven recorder-capture or process-owned-rule inputs,
 read
 [coordinator-evidence-actions.md](coordinator-evidence-actions.md) before the
 main orchestrator performs the coordinator-owned mutation.

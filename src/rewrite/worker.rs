@@ -385,8 +385,9 @@ mod tests {
         RewriteApiProgress, RewriteApiStatus, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
     };
     use crate::rewrite::{
-        RewriteContext, RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector,
-        RewriteRecorderCapturePlanOptions, RewriteRouteOptions, RewriteRulePlanOptions,
+        RewriteContext, RewriteDependencyOwnership, RewriteDependencyRulePlanOptions,
+        RewriteDependencyRuleSelector, RewriteRecorderCapturePlanOptions, RewriteRouteOptions,
+        RewriteRulePlanOptions,
     };
     use crate::{DynamicResponseMechanism, ResponseRuleKind};
 
@@ -432,8 +433,9 @@ mod tests {
                 context(),
                 RewriteDependencyRulePlanOptions {
                     evidence_id: evidence_id.clone(),
-                    name: "cache-read".to_string(),
-                    source_evidence: "src/cache.rs:read".to_string(),
+                    ownership: RewriteDependencyOwnership::ProcessOwned,
+                    name: Some("cache-read".to_string()),
+                    source_evidence: Some("src/cache.rs:read".to_string()),
                     selector: RewriteDependencyRuleSelector::RedisGet {
                         ports: vec![6379],
                         keys: vec!["cache:key".to_string()],
@@ -811,9 +813,9 @@ mod tests {
         fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
         fs::write(
             target.path().join(".traffic-e2e/project.yaml"),
-            "version: 12\n\
+            "version: 13\n\
              source:\n  container: source\n\
-             target:\n  dockerfile: .traffic-e2e/Dockerfile.e2e\n  startup: {}\n  http_host: 127.0.0.1\n  port: 8081\n\
+             target:\n  dockerfile: .traffic-e2e/Dockerfile.e2e\n  startup: {}\n\
              replay:\n  policy: .traffic-e2e/verification.yaml\n\
              recording:\n  config: .traffic-e2e/recorder.toml\n  rule: record-api\n\
              delivery:\n  pr_base: master\n\

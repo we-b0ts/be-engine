@@ -6,7 +6,7 @@ use super::model::RewriteState;
 use crate::recorder::load_source_process_traffic_summary;
 
 const MAX_BOOTSTRAP_OBSERVATIONS: usize = 16;
-const MAX_BACKGROUND_RULES: usize = 16;
+const MAX_PROCESS_OWNED_RULES: usize = 16;
 const MAX_RULE_OBSERVATIONS: usize = 8;
 const MAX_SNAPSHOT_ENDPOINTS: usize = 16;
 
@@ -18,7 +18,7 @@ pub struct RewriteSourceProcessTrafficView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bootstrap: Option<RewriteSourceProcessTrafficScopeView>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub background: Option<RewriteSourceProcessBackgroundView>,
+    pub process_owned: Option<RewriteSourceProcessOwnedView>,
     pub interpretation: String,
 }
 
@@ -43,20 +43,20 @@ pub struct RewriteSourceProcessObservationView {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RewriteSourceProcessBackgroundView {
+pub struct RewriteSourceProcessOwnedView {
     pub events: u64,
     pub data_interactions: u64,
     pub excluded_events: u64,
     pub unresolved_interactions: u64,
     pub rules_total: usize,
-    pub rules: Vec<RewriteSourceProcessBackgroundRuleView>,
+    pub rules: Vec<RewriteSourceProcessOwnedRuleView>,
     pub omitted_rules: usize,
     pub omitted_interactions: u64,
     pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RewriteSourceProcessBackgroundRuleView {
+pub struct RewriteSourceProcessOwnedRuleView {
     pub name: String,
     pub interactions: u64,
     pub bootstrap_interactions: u64,
@@ -121,10 +121,10 @@ pub(super) fn view(
                 .background
                 .rules
                 .iter()
-                .take(MAX_BACKGROUND_RULES)
+                .take(MAX_PROCESS_OWNED_RULES)
                 .map(|rule| {
                     let observations_total = rule.observations.len();
-                    RewriteSourceProcessBackgroundRuleView {
+                    RewriteSourceProcessOwnedRuleView {
                         name: rule.name.clone(),
                         interactions: rule.interactions,
                         bootstrap_interactions: rule.bootstrap_interactions,
@@ -172,18 +172,19 @@ pub(super) fn view(
                 available: true,
                 reason: None,
                 bootstrap: Some(bootstrap),
-                background: Some(RewriteSourceProcessBackgroundView {
+                process_owned: Some(RewriteSourceProcessOwnedView {
                     events: summary.background.events,
                     data_interactions: summary.background.data_interactions,
                     excluded_events: summary.background.excluded_events,
                     unresolved_interactions: summary.background.unresolved_interactions,
                     rules_total,
                     rules,
-                    omitted_rules: rules_total.saturating_sub(MAX_BACKGROUND_RULES),
+                    omitted_rules: rules_total.saturating_sub(MAX_PROCESS_OWNED_RULES),
                     omitted_interactions: summary.background.omitted_interactions,
-                    truncated: summary.background.truncated || rules_total > MAX_BACKGROUND_RULES,
+                    truncated: summary.background.truncated
+                        || rules_total > MAX_PROCESS_OWNED_RULES,
                 }),
-                interpretation: summary.interpretation,
+                interpretation: "bootstrap observations do not prove ownership; configured process-owned rule matches identify only declared process scope, and neither replaces request-owned target behavior or proves response causality".to_string(),
             })
         }
         Ok(None) => Some(unavailable(
@@ -211,7 +212,7 @@ fn unavailable(reason: &str) -> RewriteSourceProcessTrafficView {
         available: false,
         reason: Some(reason.to_string()),
         bootstrap: None,
-        background: None,
+        process_owned: None,
         interpretation: "source process traffic is a triage hint, not proof of business ownership or response causality".to_string(),
     }
 }

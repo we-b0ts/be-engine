@@ -16,6 +16,12 @@ use super::support::wait_for_pid_exit;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::{ReplayControlConfig, allocate_control_socket, run_replay_control};
 
+const REPLAY_TARGET_HOST_NETWORK: bool = true;
+const _: () = assert!(
+    REPLAY_TARGET_HOST_NETWORK,
+    "Replay target must retain the host namespace used by fake-IP interception"
+);
+
 pub(super) fn spawn_replay(
     config: &ResolvedProjectConfig,
     layout: &RunLayout,
@@ -112,7 +118,13 @@ pub(super) async fn start_target_with_replay_ca(
     state.target_image_id = Some(image.id.clone());
     store::write_active(layout, state)?;
 
-    crate::target_container::create_anchor(&anchor_name, true, "replay", &runtime_id).await?;
+    crate::target_container::create_anchor(
+        &anchor_name,
+        REPLAY_TARGET_HOST_NETWORK,
+        "replay",
+        &runtime_id,
+    )
+    .await?;
     let target = crate::target_container::TargetContainerConfig::from_project(
         layout.target_root.clone(),
         config,

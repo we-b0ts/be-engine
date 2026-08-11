@@ -592,7 +592,7 @@ async fn unsafe_redis_evidence_prevents_replay_startup() {
             ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
             policy_path: None,
             http_ignore_query_params: Vec::new(),
-            background_dependencies: Vec::new(),
+            process_owned_dependencies: Vec::new(),
             allowed_unused_http: None,
         },
         "127.0.0.1:0".parse().unwrap(),
@@ -616,7 +616,7 @@ async fn spawn_replay(
 async fn spawn_replay_with_background(
     case_dir: &Path,
     report_path: Option<PathBuf>,
-    background_dependencies: Vec<BackgroundDependencyRuleConfig>,
+    process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -634,7 +634,7 @@ async fn spawn_replay_with_background(
             ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
             policy_path: None,
             http_ignore_query_params: Vec::new(),
-            background_dependencies,
+            process_owned_dependencies,
             allowed_unused_http: None,
         },
         "127.0.0.1:0".parse().unwrap(),

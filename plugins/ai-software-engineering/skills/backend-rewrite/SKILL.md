@@ -70,7 +70,7 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v15 contains an `action` object with exactly `kind`, `summary`,
+Response schema v16 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read kind-specific facts only from
 `action.details`; when present, use the top-level `source_process_traffic` as
@@ -94,7 +94,7 @@ but its layout is not a stable workflow contract.
 At the start of a main-orchestrator session, read
 `.traffic-e2e/local/block.md` when it exists. Project initialization may create
 it with temporary reference evidence about source configuration, Vintage
-access, startup/background traffic, and local caches. The first rewrite session
+access, startup/process activity, and local caches. The first rewrite session
 after initialization must read that evidence completely. Remove each entry
 after the rewrite has fully understood it, implemented the required behavior,
 or proved it irrelevant; keep no resolved history and remove the file when it

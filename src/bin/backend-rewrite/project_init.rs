@@ -24,12 +24,6 @@ pub(super) struct ProjectInitArgs {
     /// HTTP gateway port that receives traffic selected for recording.
     #[arg(long, default_value_t = DEFAULT_HTTP_GATEWAY_PORT)]
     pub(super) http_gateway_port: u16,
-    /// Source HTTP port used by the managed recorder.
-    #[arg(long, default_value_t = 8080)]
-    source_http_port: u16,
-    /// Target HTTP port used for replay and comparison.
-    #[arg(long, default_value_t = 8081)]
-    target_port: u16,
     /// Readiness path shared by source recording and target startup.
     #[arg(long, default_value = "/healthz")]
     readiness_path: String,
@@ -45,7 +39,7 @@ pub(super) struct ProjectInitArgs {
     /// Application-owned environment variable whose value is captured from the source container.
     #[arg(long = "startup-env", value_name = "NAME")]
     startup_environment: Vec<String>,
-    /// Application-owned environment variable that receives the configured target port.
+    /// Application-owned environment variable that receives the recorder-owned native HTTP port.
     #[arg(long, value_name = "NAME")]
     target_port_env: Option<String>,
     /// Application-owned environment variable that receives the Replay CA certificate path.
@@ -154,8 +148,6 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
         target_root,
         source_container,
         breeze_container: args.breeze,
-        source_http_port: args.source_http_port,
-        target_port: args.target_port,
         http_gateway_port: args.http_gateway_port,
         readiness_path: args.readiness_path,
         readiness_status: args.readiness_status,

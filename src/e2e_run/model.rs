@@ -51,10 +51,6 @@ pub(super) struct BreezeProjectConfig {
 pub(super) struct TargetProjectConfig {
     pub dockerfile: PathBuf,
     pub startup: crate::startup::StartupConfig,
-    pub http_host: String,
-    pub port: u16,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub motan_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub quality_gates: Option<Vec<TargetQualityGateConfig>>,
 }

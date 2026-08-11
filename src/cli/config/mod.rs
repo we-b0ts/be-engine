@@ -40,12 +40,6 @@ struct InitArgs {
     /// Enable Breeze using the conventional `breeze` container, or provide a non-standard name.
     #[arg(long, num_args = 0..=1, default_missing_value = "breeze", value_name = "CONTAINER")]
     breeze: Option<String>,
-    /// Source HTTP port used by the managed recorder.
-    #[arg(long, default_value_t = 8080)]
-    source_http_port: u16,
-    /// Target HTTP port used for replay and comparison.
-    #[arg(long, default_value_t = 8081)]
-    target_port: u16,
     /// HTTP gateway port that receives traffic selected for recording.
     #[arg(long, default_value_t = DEFAULT_HTTP_GATEWAY_PORT)]
     http_gateway_port: u16,
@@ -64,7 +58,7 @@ struct InitArgs {
     /// Application-owned environment variable captured from the source container.
     #[arg(long = "startup-env", value_name = "NAME")]
     startup_environment: Vec<String>,
-    /// Application-owned environment variable that receives the configured target port.
+    /// Application-owned environment variable that receives the recorder-owned native HTTP port.
     #[arg(long, value_name = "NAME")]
     target_port_env: Option<String>,
     /// Application-owned environment variable that receives the Replay CA path.
@@ -79,8 +73,6 @@ pub(super) fn run(args: ConfigArgs) -> Result<()> {
                 target_root: args.target_root,
                 source_container: init.source_container,
                 breeze_container: init.breeze,
-                source_http_port: init.source_http_port,
-                target_port: init.target_port,
                 http_gateway_port: init.http_gateway_port,
                 readiness_path: init.readiness_path,
                 readiness_status: init.readiness_status,
@@ -131,12 +123,36 @@ mod tests {
             panic!("expected init command");
         };
         assert_eq!(init.breeze.as_deref(), Some("breeze"));
-        assert_eq!(init.source_http_port, 8080);
-        assert_eq!(init.target_port, 8081);
         assert_eq!(init.http_gateway_port, DEFAULT_HTTP_GATEWAY_PORT);
         assert_eq!(init.readiness_path, "/healthz");
         assert_eq!(init.readiness_status, 404);
         assert_eq!(init.upstream_dns, "10.10.10.11:53".parse().unwrap());
+    }
+
+    #[test]
+    fn init_does_not_accept_native_service_ports() {
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                "--source-http-port",
+                "8081",
+            ])
+            .is_err()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                "--target-port",
+                "8081",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

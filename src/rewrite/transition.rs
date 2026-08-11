@@ -34,7 +34,7 @@ pub(super) fn from_e2e_result(
                 .context("rewrite workflow has no focused attempt to reclassify")?;
             ensure!(
                 current.attempt == summary.attempt,
-                "focused evidence attempt changed before background-rule reclassification"
+                "focused evidence attempt changed before process-owned-rule reclassification"
             );
             *current = summary;
         }

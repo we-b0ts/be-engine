@@ -36,6 +36,7 @@ mod rewrite;
 mod startup;
 mod target_container;
 mod tcp_gateway;
+mod tcp_listener;
 mod tls;
 mod udp_gateway;
 mod verification_progress;
@@ -127,11 +128,13 @@ pub use e2e_run::{
     E2eResponseRuleEvidence, E2eRunContext, E2eRunInitOptions, E2eRunInitResult,
     E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus, E2eSourcePreReadiness,
     E2eSourcePreReadinessEndpoint, E2eSourceValueCount, E2eSourceVariation, E2eValueObservation,
-    E2eValuePresence, E2eVerificationGates, abort_e2e_run, initialize_e2e_run,
+    E2eValuePresence, E2eVerificationGates, StartupSnapshotRecaptureOptions,
+    StartupSnapshotRecaptureResult, abort_e2e_run, initialize_e2e_run,
     initialize_standard_e2e_project, initialize_standard_e2e_project_with_force, prepare_e2e_run,
     query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
-    query_e2e_source_variation, recover_e2e_run, resolve_e2e_response_rule_evidence,
-    resolve_single_e2e_response_rule_evidence, run_e2e_api, run_e2e_round, status_e2e_run,
+    query_e2e_source_variation, recapture_startup_snapshot, recover_e2e_run,
+    resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence, run_e2e_api,
+    run_e2e_round, status_e2e_run,
 };
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
@@ -179,21 +182,21 @@ pub use rewrite::{
     RewriteCaseDependenciesOptions, RewriteCaseDependenciesReport,
     RewriteCaseDependencyProtocolDetail, RewriteCaseDependencyTarget,
     RewriteCaseDependencyTargetSummary, RewriteCommandSpec, RewriteContext,
-    RewriteDependencyRulePlanOptions, RewriteDependencyRuleReport, RewriteDependencyRuleSelector,
-    RewriteEvidenceCommand, RewriteEvidenceReport, RewriteFocusedE2eExecution,
-    RewriteFocusedE2eExecutionMode, RewriteInputRequiredReason, RewriteInventoryReport,
-    RewriteIssue, RewriteIssueKind, RewriteIssueOwner, RewriteMemcachedExchangeDetail,
-    RewriteMemcachedOperationDetail, RewriteNextOptions, RewritePhase,
-    RewriteRecorderCapturePlanOptions, RewriteRecorderCaptureReport,
-    RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewriteDependencyOwnership, RewriteDependencyRulePlanOptions, RewriteDependencyRulePlanReport,
+    RewriteDependencyRuleReport, RewriteDependencyRuleSelector, RewriteEvidenceCommand,
+    RewriteEvidenceReport, RewriteFocusedE2eExecution, RewriteFocusedE2eExecutionMode,
+    RewriteInputRequiredReason, RewriteInventoryReport, RewriteIssue, RewriteIssueKind,
+    RewriteIssueOwner, RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail,
+    RewriteNextOptions, RewritePhase, RewriteRecorderCapturePlanOptions,
+    RewriteRecorderCaptureReport, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
     RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
     RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecordingStartReport,
     RewriteRecordingStartState, RewriteRecoveryReport, RewriteRedisExchangeDetail,
     RewriteRedisOperationDetail, RewriteRepairAcceptanceKind, RewriteRevalidationRequestOptions,
     RewriteRevalidationRequestReport, RewriteRouteOptions, RewriteRouteReport,
-    RewriteRulePlanOptions, RewriteRuleReport, RewriteSourceProcessBackgroundRuleView,
-    RewriteSourceProcessBackgroundView, RewriteSourceProcessObservationView,
+    RewriteRulePlanOptions, RewriteRuleReport, RewriteSourceProcessObservationView,
+    RewriteSourceProcessOwnedRuleView, RewriteSourceProcessOwnedView,
     RewriteSourceProcessRedisSnapshotEndpointView, RewriteSourceProcessRedisSnapshotView,
     RewriteSourceProcessTrafficScopeView, RewriteSourceProcessTrafficView, RewriteStatusReport,
     RewriteTargetQualityOptions, RewriteTrafficOperationKind, RewriteTrafficOperationView,
@@ -230,7 +233,7 @@ struct AppStateInner {
     active_cases: ActiveCaseRegistry,
     kubectl_proxy_manager: KubectlProxyManager,
     recording_lifecycle: RecordingLifecycle,
-    background_dependencies: BackgroundDependencyMatcher,
+    process_owned_dependencies: BackgroundDependencyMatcher,
     cache_snapshots: CacheSnapshotStore,
     preflight_probe: Option<PreflightProbeKind>,
     preflight_probe_recorded: AtomicBool,
@@ -274,13 +277,13 @@ impl AppState {
             .context("invalid recorder configuration")?;
         recording_api::validate_selection(&recording_apis, &config.http_gateway.rules)
             .context("invalid recording API selection")?;
-        let background_rules = config.recording.background_dependencies.clone();
-        let background_dependencies = tokio::task::spawn_blocking(move || {
+        let background_rules = config.recording.process_owned_dependencies.clone();
+        let process_owned_dependencies = tokio::task::spawn_blocking(move || {
             BackgroundDependencyMatcher::from_rules(&background_rules)
         })
         .await
-        .context("background dependency initializer task failed")?
-        .context("failed to initialize background dependency rules")?;
+        .context("process-owned dependency initializer task failed")?
+        .context("failed to initialize process-owned dependency rules")?;
         let cache_snapshots = CacheSnapshotStore::new(&config.recording);
         let dns_bypass_matcher = DomainMatcher::from_config(&config.dns_mock)
             .context("failed to initialize DNS bypass matcher")?;
@@ -337,7 +340,7 @@ impl AppState {
                 active_cases: ActiveCaseRegistry::new(case_matching_ready),
                 kubectl_proxy_manager: KubectlProxyManager::default(),
                 recording_lifecycle,
-                background_dependencies,
+                process_owned_dependencies,
                 cache_snapshots,
                 preflight_probe,
                 preflight_probe_recorded: AtomicBool::new(false),
@@ -545,15 +548,15 @@ impl AppState {
     }
 
     pub(crate) fn has_background_initial_loads(&self) -> bool {
-        self.inner.background_dependencies.has_initial_loads()
+        self.inner.process_owned_dependencies.has_initial_loads()
     }
 
     pub(crate) async fn wait_for_background_initial_loads(&self) -> Result<()> {
         self.inner
-            .background_dependencies
+            .process_owned_dependencies
             .ensure_resources_resolved()?;
         self.inner
-            .background_dependencies
+            .process_owned_dependencies
             .wait_for_initial_loads()
             .await;
         Ok(())
@@ -561,7 +564,7 @@ impl AppState {
 
     pub(crate) fn record_redis_cache_request(&self) {
         self.inner
-            .background_dependencies
+            .process_owned_dependencies
             .record_redis_cache_request();
     }
 
@@ -579,7 +582,7 @@ impl AppState {
         }
         Ok(self
             .inner
-            .background_dependencies
+            .process_owned_dependencies
             .wait_for_redis_cache_quiet_period(
                 ready_at,
                 self.config().recording.post_ready_quiet_period(),
@@ -684,13 +687,13 @@ impl AppState {
         args: &[Vec<u8>],
     ) -> Option<&str> {
         self.inner
-            .background_dependencies
+            .process_owned_dependencies
             .matching_redis_snapshot_rule(target_port, command, args)
     }
 
     pub(crate) fn has_redis_snapshot_port(&self, port: u16) -> bool {
         self.inner
-            .background_dependencies
+            .process_owned_dependencies
             .has_redis_snapshot_port(port)
     }
 
@@ -722,7 +725,7 @@ impl AppState {
         event: RecorderEvent,
         targets: DependencyTargets,
     ) {
-        let background_match = self.inner.background_dependencies.matching_rule(&event);
+        let background_match = self.inner.process_owned_dependencies.matching_rule(&event);
         let (probe_attribution, suppress_default_global) = self.preflight_probe_attribution(&event);
         let background_attributed =
             probe_attribution.is_none() && !suppress_default_global && background_match.is_some();
@@ -771,7 +774,7 @@ impl AppState {
             }
         } else if background_attributed && let Some(matched) = &background_match {
             self.inner
-                .background_dependencies
+                .process_owned_dependencies
                 .record_completed_match(matched);
         }
     }

@@ -33,7 +33,7 @@ struct PlanArgs {
 #[derive(Debug, Subcommand)]
 enum PlanStrategy {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostArgs),
-    BackgroundDependencies(Box<background_dependency::BackgroundDependencyArgs>),
+    ProcessOwnedDependencies(Box<background_dependency::BackgroundDependencyArgs>),
     BreezeResourceCapture(BreezeResourceCaptureArgs),
     CasePathPatterns(PatternFeedbackArgs),
 }
@@ -47,7 +47,7 @@ struct ApplyArgs {
 #[derive(Debug, Subcommand)]
 enum ApplyStrategy {
     AllowedUnusedHttpHosts(AllowedUnusedHttpHostArgs),
-    BackgroundDependencies(Box<background_dependency::BackgroundDependencyArgs>),
+    ProcessOwnedDependencies(Box<background_dependency::BackgroundDependencyArgs>),
     BreezeResourceCapture(BreezeResourceCaptureArgs),
     CasePathPatterns(ApplyPatternFeedbackArgs),
 }
@@ -137,7 +137,7 @@ fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
             let plan = plan_allowed_unused_http_hosts(allowed_unused_feedback(config, args))?;
             super::print_json(plan.report())
         }
-        PlanStrategy::BackgroundDependencies(args) => {
+        PlanStrategy::ProcessOwnedDependencies(args) => {
             background_dependency::run(target_root, config, *args, false)
         }
         PlanStrategy::BreezeResourceCapture(args) => {
@@ -159,7 +159,7 @@ fn apply(target_root: PathBuf, strategy: ApplyStrategy) -> Result<()> {
                 plan_allowed_unused_http_hosts(allowed_unused_feedback(config, args))?.apply()?;
             super::print_json(&report)
         }
-        ApplyStrategy::BackgroundDependencies(args) => {
+        ApplyStrategy::ProcessOwnedDependencies(args) => {
             background_dependency::run(target_root, config, *args, true)
         }
         ApplyStrategy::BreezeResourceCapture(args) => {

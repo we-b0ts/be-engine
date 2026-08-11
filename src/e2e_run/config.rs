@@ -13,7 +13,7 @@ use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-pub(super) const CONFIG_VERSION: u32 = 12;
+pub(super) const CONFIG_VERSION: u32 = 13;
 const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
 const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
@@ -131,9 +131,6 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
         target: TargetProjectConfig {
             dockerfile: options.target_dockerfile.clone(),
             startup: crate::startup::normalized_config(options.target_startup.clone())?,
-            http_host: options.target_http_host.clone(),
-            port: options.target_port,
-            motan_port: None,
             quality_gates: None,
         },
         replay: ReplayProjectConfig {
@@ -229,6 +226,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             Duration::from_secs(super::model::DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS)
         });
     let target_max_response_bytes = recorder.recording.max_body_bytes;
+    let target_port = recorder_target_http_port(&recorder.http_gateway.matched_upstream)?;
     let target_quality_gates = config
         .target
         .quality_gates
@@ -238,11 +236,8 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         ResolvedProjectConfig {
             target_dockerfile: resolve_under(&target_root, &config.target.dockerfile),
             target_startup: config.target.startup,
-            target_http_origin: format!(
-                "http://{}:{}",
-                config.target.http_host, config.target.port
-            ),
-            target_port: config.target.port,
+            target_http_origin: format!("http://127.0.0.1:{target_port}"),
+            target_port,
             target_readiness_path: recorder.http_gateway.ready.path,
             target_readiness_status: recorder.http_gateway.ready.success_status,
             target_startup_timeout: Duration::from_secs(
@@ -341,15 +336,6 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         "target.dockerfile must be .traffic-e2e/Dockerfile.e2e"
     );
     crate::startup::validate_config(&config.target.startup)?;
-    ensure!(
-        !config.target.http_host.trim().is_empty()
-            && !config.target.http_host.contains(['/', ':', '\r', '\n']),
-        "target.http_host must be a plain host name or IPv4 address"
-    );
-    ensure!(
-        config.target.port > 0,
-        "target.port must be greater than zero"
-    );
     if let Some(gates) = &config.target.quality_gates {
         validate_target_quality_gates(gates)?;
     }
@@ -373,13 +359,23 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         !config.recording.rule.trim().is_empty(),
         "recording.rule must not be empty"
     );
-    if let Some(motan_port) = config.target.motan_port {
-        ensure!(
-            motan_port > 0,
-            "target.motan_port must be greater than zero"
-        );
-    }
     Ok(())
+}
+
+fn recorder_target_http_port(matched_upstream: &str) -> Result<u16> {
+    let origin = url::Url::parse(matched_upstream)
+        .context("http_gateway.matched_upstream must be a valid HTTP origin")?;
+    ensure!(
+        matches!(origin.scheme(), "http" | "https"),
+        "http_gateway.matched_upstream must use HTTP or HTTPS"
+    );
+    ensure!(
+        origin.host_str().is_some(),
+        "http_gateway.matched_upstream must contain a host"
+    );
+    origin
+        .port_or_known_default()
+        .context("http_gateway.matched_upstream must contain a known port")
 }
 
 fn require_regular_file(path: &Path, label: &str) -> Result<()> {
@@ -521,8 +517,6 @@ mod tests {
             breeze_container: Some("breeze".to_string()),
             target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
             target_startup: crate::startup::StartupConfig::default(),
-            target_http_host: "127.0.0.1".to_string(),
-            target_port: 8081,
             replay_policy: PathBuf::from("config/replay.yaml"),
             pr_base: "integration".to_string(),
             recorder_config: PathBuf::from("config/recorder.toml"),
@@ -557,12 +551,15 @@ mod tests {
             "readiness_status",
             "startup_timeout_seconds",
             "request_timeout_seconds",
+            "http_host",
+            "motan_port",
         ] {
             assert!(
                 !raw.contains(duplicate),
                 "found duplicate field {duplicate}"
             );
         }
+        assert!(!raw.lines().any(|line| line.trim_start() == "port: 8081"));
         assert_eq!(config.delivery.pr_base, "integration");
         assert_eq!(result.pr_base, "integration");
         assert_eq!(
@@ -588,15 +585,21 @@ mod tests {
     }
 
     #[test]
-    fn target_motan_port_allows_the_recorder_gateway_to_be_disabled() {
+    fn managed_replay_keeps_the_native_target_http_port() {
         let target = target();
+        let recorder_path = target.path().join("config/recorder.toml");
+        let recorder = fs::read_to_string(&recorder_path).unwrap().replacen(
+            "[http_gateway.ready]",
+            "[http_gateway]\nmatched_upstream = \"http://127.0.0.1:8080\"\n\n[http_gateway.ready]",
+            1,
+        );
+        fs::write(recorder_path, recorder).unwrap();
         initialize(options(target.path())).unwrap();
-        let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let mut config: ProjectConfig = store::read_yaml(&config_path).unwrap();
-        config.target.motan_port = Some(19082);
-        store::write_yaml(&config_path, &config).unwrap();
 
-        resolve_project(target.path()).unwrap();
+        let (_, config) = resolve_project(target.path()).unwrap();
+
+        assert_eq!(config.target_http_origin, "http://127.0.0.1:8080");
+        assert_eq!(config.target_port, 8080);
     }
 
     #[test]
@@ -644,8 +647,8 @@ mod tests {
         initialize(options(target.path())).unwrap();
         let config_path = target.path().join(".traffic-e2e/project.yaml");
         let yaml = fs::read_to_string(&config_path).unwrap().replacen(
-            "  port: 8081",
-            "  port: 8081\n  quality_gates: []",
+            "  startup: {}",
+            "  startup: {}\n  quality_gates: []",
             1,
         );
         fs::write(config_path, yaml).unwrap();
@@ -678,6 +681,7 @@ mod tests {
             root.join(".traffic-e2e/recorder.toml"),
             format!(
                 "[comparison_recording]\ncandidate_upstream = \
+                 \"http://127.0.0.1:8181\"\n\n[http_gateway]\nmatched_upstream = \
                  \"http://127.0.0.1:8181\"\n\n[http_gateway.ready]\nenabled = \
                  true\npath = \"/ready\"\nsuccess_status = 200\n\n[[http_gateway.rules]]\nname = \
                  {:?}\nmethods = [\"GET\"]\npath_prefixes = [\"/\"]\n",
@@ -703,8 +707,8 @@ mod tests {
             config.replay.policy,
             PathBuf::from(".traffic-e2e/verification.yaml")
         );
-        assert_eq!(config.target.http_host, "127.0.0.1");
-        assert_eq!(config.target.port, 8181);
+        assert_eq!(resolved.target_http_origin, "http://127.0.0.1:8181");
+        assert_eq!(resolved.target_port, 8181);
         assert_eq!(resolved.target_readiness_path, "/ready");
         assert_eq!(resolved.target_readiness_status, 200);
         assert_eq!(resolved.target_startup_timeout, Duration::from_secs(60));

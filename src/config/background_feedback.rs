@@ -7,15 +7,17 @@ use anyhow::{Context, Result, ensure};
 use hyper::http::{Method, Uri, uri::Authority};
 use serde::{Deserialize, Serialize};
 
-use super::background_dependencies::{self, BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 use super::edit::write_atomic;
+use super::process_owned_dependencies::{
+    self, BackgroundDependencyRuleConfig, RedisKeyPatternConfig,
+};
 use super::rule_document::{find_managed_block, managed_block_diff, newline, parse_and_validate};
 
 mod selector;
 
-const BEGIN_MARKER: &str = "# BEGIN AI-MANAGED BACKGROUND DEPENDENCIES";
-const END_MARKER: &str = "# END AI-MANAGED BACKGROUND DEPENDENCIES";
-const TABLE_HEADER: &str = "[[recording.background_dependencies]]";
+const BEGIN_MARKER: &str = "# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES";
+const END_MARKER: &str = "# END AI-MANAGED PROCESS-OWNED DEPENDENCIES";
+const TABLE_HEADER: &str = "[[recording.process_owned_dependencies]]";
 
 #[derive(Debug, Clone)]
 pub struct BackgroundDependencyFeedback {
@@ -96,7 +98,7 @@ impl BackgroundDependencyPlan {
 pub fn plan_background_dependency(
     feedback: BackgroundDependencyFeedback,
 ) -> Result<BackgroundDependencyPlan> {
-    validate_single_line("background dependency rule name", &feedback.name, 128)?;
+    validate_single_line("process-owned dependency rule name", &feedback.name, 128)?;
 
     let authority = canonical_authority(&feedback.authority)?;
     let method = canonical_method(&feedback.method)?;
@@ -109,7 +111,7 @@ pub fn plan_background_dependency(
         source_revision: String::new(),
         source_evidence: feedback.source_evidence.clone(),
     };
-    background_dependencies::validate(std::slice::from_ref(&requested))?;
+    process_owned_dependencies::validate(std::slice::from_ref(&requested))?;
 
     let original_replay_report = read_file(&feedback.replay_report_path, "replay report")?;
     let evidence = parse_replay_evidence(
@@ -156,7 +158,7 @@ pub(super) fn plan_rule_config(
     ensure_regular_config(config_path)?;
     let original = read_file(config_path, "recorder config")?;
     let config = parse_and_validate(&original, config_path)?;
-    let mut rules = config.recording.background_dependencies.clone();
+    let mut rules = config.recording.process_owned_dependencies.clone();
     let requested_name = requested.name().to_string();
     let reused = rules
         .iter()
@@ -183,7 +185,7 @@ pub(super) fn plan_rule_config(
     } else {
         requested_name
     };
-    background_dependencies::validate(&rules)?;
+    process_owned_dependencies::validate(&rules)?;
     rules.sort_by(|left, right| left.name().cmp(right.name()));
 
     let whole_file = 0..original.len();
@@ -192,22 +194,22 @@ pub(super) fn plan_rule_config(
         &whole_file,
         BEGIN_MARKER,
         END_MARKER,
-        "background dependencies",
+        "process-owned dependencies",
     )?;
     let total_headers = table_header_count(&original);
     let block = match managed {
         Some(block) => {
             ensure!(
                 total_headers == table_header_count(&original[block.clone()])
-                    && total_headers == config.recording.background_dependencies.len(),
-                "recording.background_dependencies must be owned exclusively by its AI-managed block"
+                    && total_headers == config.recording.process_owned_dependencies.len(),
+                "recording.process_owned_dependencies must be owned exclusively by its AI-managed block"
             );
             block
         }
         None => {
             ensure!(
-                total_headers == 0 && config.recording.background_dependencies.is_empty(),
-                "existing recording.background_dependencies must be enclosed by its AI-managed block"
+                total_headers == 0 && config.recording.process_owned_dependencies.is_empty(),
+                "existing recording.process_owned_dependencies must be enclosed by its AI-managed block"
             );
             original.len()..original.len()
         }
@@ -290,7 +292,7 @@ fn parse_replay_evidence(
         .with_context(|| format!("failed to parse replay report {}", path.display()))?;
     ensure!(
         report.finalized,
-        "background dependency evidence requires a finalized replay report"
+        "process-owned dependency evidence requires a finalized replay report"
     );
     let selector = HttpSelector::new(authority, method, path_prefix)?;
     ensure!(
@@ -546,14 +548,14 @@ fn table_header_count(source: &str) -> usize {
 }
 
 fn canonical_authority(value: &str) -> Result<String> {
-    validate_single_line("background dependency authority", value, 512)?;
+    validate_single_line("process-owned dependency authority", value, 512)?;
     ensure!(
         !value.contains('*'),
-        "background dependency authority must be exact and cannot contain wildcards"
+        "process-owned dependency authority must be exact and cannot contain wildcards"
     );
     let authority = value
         .parse::<Authority>()
-        .with_context(|| format!("invalid background dependency authority {value:?}"))?;
+        .with_context(|| format!("invalid process-owned dependency authority {value:?}"))?;
     let host = authority.host().to_ascii_lowercase();
     Ok(match authority.port_u16() {
         Some(port) => format!("{host}:{port}"),
@@ -562,18 +564,18 @@ fn canonical_authority(value: &str) -> Result<String> {
 }
 
 fn canonical_method(value: &str) -> Result<String> {
-    validate_single_line("background dependency HTTP method", value, 64)?;
+    validate_single_line("process-owned dependency HTTP method", value, 64)?;
     let method = value
         .parse::<Method>()
-        .with_context(|| format!("invalid background dependency HTTP method {value:?}"))?;
+        .with_context(|| format!("invalid process-owned dependency HTTP method {value:?}"))?;
     Ok(method.as_str().to_ascii_uppercase())
 }
 
 fn canonical_path_prefix(value: &str) -> Result<String> {
-    validate_single_line("background dependency path prefix", value, 2_048)?;
+    validate_single_line("process-owned dependency path prefix", value, 2_048)?;
     ensure!(
         value.starts_with('/') && !value.contains(['?', '#']),
-        "background dependency path prefix must start with '/' and contain no query or fragment"
+        "process-owned dependency path prefix must start with '/' and contain no query or fragment"
     );
     Ok(value.to_string())
 }

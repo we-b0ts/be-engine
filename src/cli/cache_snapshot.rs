@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, ensure};
@@ -17,6 +17,12 @@ pub(super) struct CacheSnapshotRunArgs {
     #[arg(long)]
     run_id: String,
     #[arg(long)]
+    candidate_upstream: Option<String>,
+    #[arg(long)]
+    target_source_ip: Option<Ipv4Addr>,
+    #[arg(long)]
+    interception_listen_ip: Option<Ipv4Addr>,
+    #[arg(long)]
     control_socket: PathBuf,
 }
 
@@ -26,15 +32,23 @@ pub(super) async fn run(args: CacheSnapshotRunArgs) -> Result<()> {
         "cache snapshot config not found: {}",
         args.config.display()
     );
-    let mut config = AppConfig::load(&args.config)?;
-    let ports = configure_runtime(&mut config, &args.output_dir);
+    let mut config = AppConfig::load_comparison_recording_with_candidate(
+        &args.config,
+        args.candidate_upstream.as_deref(),
+    )?;
+    let ports = configure_runtime(&mut config, &args.output_dir, args.interception_listen_ip);
 
     let state =
         AppState::new_with_recording_options(config, Some(args.run_id), Vec::new(), None, None)
             .await?;
     let ports = ports.into_iter().collect::<Vec<_>>();
     let tcp_port = state.config().tcp_gateway.listen.port();
-    let mut interception = CachePortGuard::enable(&ports, tcp_port)?;
+    let mut interception = CachePortGuard::enable(
+        &ports,
+        tcp_port,
+        args.target_source_ip,
+        args.interception_listen_ip,
+    )?;
     let result = state
         .run_with_control_socket(Some(args.control_socket))
         .await;
@@ -42,7 +56,11 @@ pub(super) async fn run(args: CacheSnapshotRunArgs) -> Result<()> {
     result
 }
 
-fn configure_runtime(config: &mut AppConfig, output_dir: &Path) -> BTreeSet<u16> {
+fn configure_runtime(
+    config: &mut AppConfig,
+    output_dir: &Path,
+    interception_listen_ip: Option<Ipv4Addr>,
+) -> BTreeSet<u16> {
     config.artifacts = None;
     config.recording.output_dir = output_dir.to_path_buf();
     config.recording.traffic_jsonl = TrafficJsonlMode::Errors;
@@ -70,12 +88,18 @@ fn configure_runtime(config: &mut AppConfig, output_dir: &Path) -> BTreeSet<u16>
     }
     config.http_gateway.listen = SocketAddr::from(([127, 0, 0, 1], 0));
     config.tcp_gateway.enabled = true;
+    if let Some(interception_listen_ip) = interception_listen_ip {
+        config
+            .tcp_gateway
+            .listen
+            .set_ip(interception_listen_ip.into());
+    }
     config.tcp_gateway.record_http = false;
     config.tcp_gateway.mitm_https = false;
     config.tcp_gateway.protocol_detection.enabled = true;
     let ports = config
         .recording
-        .background_dependencies
+        .process_owned_dependencies
         .iter()
         .flat_map(|rule| match rule {
             BackgroundDependencyRuleConfig::Redis { ports, .. } => ports.clone(),
@@ -117,9 +141,13 @@ mod tests {
             .comparison_recording
             .as_mut()
             .unwrap()
-            .candidate_upstream = "http://127.0.0.1:18082".to_string();
+            .candidate_upstream = "http://172.30.0.2:18082".to_string();
 
-        configure_runtime(&mut config, Path::new("/tmp/cache-snapshot-test"));
+        configure_runtime(
+            &mut config,
+            Path::new("/tmp/cache-snapshot-test"),
+            Some(Ipv4Addr::new(172, 30, 0, 1)),
+        );
 
         assert!(config.http_gateway.enabled);
         assert!(config.http_gateway.ready.enabled);
@@ -129,8 +157,9 @@ mod tests {
         );
         assert_eq!(
             config.http_gateway.matched_upstream,
-            "http://127.0.0.1:18082"
+            "http://172.30.0.2:18082"
         );
+        assert_eq!(config.tcp_gateway.listen.ip(), Ipv4Addr::new(172, 30, 0, 1));
         assert!(config.tcp_gateway.enabled);
         assert!(!config.tcp_gateway.record_http);
     }

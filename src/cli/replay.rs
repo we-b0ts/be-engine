@@ -107,7 +107,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
         resolved.recorder_config.clone(),
         resolved.recording_rule.clone(),
     )?;
-    let background_dependencies =
+    let process_owned_dependencies =
         load_background_dependencies(resolved.recorder_config.as_deref())?;
     let mut interception = if resolved.intercept {
         Some(Guard::enable_replay(
@@ -139,7 +139,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
         ca_key_path: resolved.ca_key,
         policy_path: resolved.policy,
         http_ignore_query_params: resolved.http_ignore_query_params,
-        background_dependencies,
+        process_owned_dependencies,
         allowed_unused_http,
     });
     tokio::pin!(replay);
@@ -369,7 +369,7 @@ fn load_background_dependencies(
     recorder_config: Option<&Path>,
 ) -> Result<Vec<traffic_e2e::BackgroundDependencyRuleConfig>> {
     recorder_config
-        .map(|path| AppConfig::load(path).map(|config| config.recording.background_dependencies))
+        .map(|path| AppConfig::load(path).map(|config| config.recording.process_owned_dependencies))
         .transpose()
         .map(Option::unwrap_or_default)
 }

@@ -15,6 +15,8 @@ use crate::recording_api::RecordingApi;
 
 mod listen_preflight;
 #[cfg(test)]
+mod manager_tests;
+#[cfg(test)]
 mod mount_tests;
 mod preflight;
 mod recording_input;
@@ -37,6 +39,7 @@ pub use replay_preflight::{
     ReplayPositiveProbeResult,
 };
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
+const COMPARISON_TARGET_NETWORK: &str = include_str!("assets/comparison-target-network.sh");
 const PLATFORM_MOUNTS: &str = include_str!("assets/platform-mounts.sh");
 const BREEZE_NO_FALLBACK: &str = include_str!("assets/brz-no-fallback.sh");
 const PREFLIGHT_BUSINESS_INPUT: &str = include_str!("assets/preflight-business-input.sh");
@@ -92,6 +95,10 @@ impl ManagedRuntimeOperation {
                 .join(run_id)
                 .join("recording-run.json"),
         }
+    }
+
+    fn requires_listener_preflight(self) -> bool {
+        self != Self::Recording(ManagedRecordingOperation::RecordComparison)
     }
 }
 
@@ -263,7 +270,11 @@ async fn run_managed_runtime(
         "recorder config does not exist: {}",
         recorder_config.display()
     );
-    let recorder = crate::config::AppConfig::load_comparison_recording(recorder_config)?;
+    let managed_candidate = crate::config::managed_comparison_candidate(config.target_port);
+    let recorder = crate::config::AppConfig::load_comparison_recording_with_candidate(
+        recorder_config,
+        Some(&managed_candidate),
+    )?;
     let motan = if recorder.motan_gateway.enabled
         && runtime_operation
             != ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
@@ -296,7 +307,9 @@ async fn run_managed_runtime(
         recorder.http_gateway.ready.enabled,
         "managed recording requires an enabled http_gateway.ready probe"
     );
-    listen_preflight::require_available(recorder.http_gateway.listen).await?;
+    if runtime_operation.requires_listener_preflight() {
+        listen_preflight::require_available(recorder.http_gateway.listen).await?;
+    }
     let target_image = if runtime_operation
         == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
     {
@@ -321,8 +334,7 @@ async fn run_managed_runtime(
         .baseline_upstream(&recorder.http_gateway)
         .to_string();
     let (source_host, source_port) = http_origin_endpoint(&source_origin, "comparison source")?;
-    let (target_host, target_port) =
-        http_origin_endpoint(&config.target_http_origin, "comparison target")?;
+    let (_, target_port) = http_origin_endpoint(&config.target_http_origin, "comparison target")?;
     ensure!(
         target_port == config.target_port,
         "comparison target origin port {target_port} does not match configured target port {}",
@@ -365,8 +377,6 @@ async fn run_managed_runtime(
             "TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE",
             assets.join("target-startup.env"),
         )
-        .env("TRAFFIC_E2E_TARGET_ORIGIN", &config.target_http_origin)
-        .env("TRAFFIC_E2E_TARGET_HOST", target_host)
         .env("TRAFFIC_E2E_TARGET_PORT", config.target_port.to_string())
         .env(
             "TRAFFIC_E2E_TARGET_READY_PATH",
@@ -540,6 +550,11 @@ fn stage_assets(target_root: &Path) -> Result<PathBuf> {
     fs::create_dir_all(&root)
         .with_context(|| format!("failed to create Platform asset root {}", root.display()))?;
     write_asset(&root.join("manage-platform.sh"), MANAGER, 0o700)?;
+    write_asset(
+        &root.join("comparison-target-network.sh"),
+        COMPARISON_TARGET_NETWORK,
+        0o600,
+    )?;
     write_asset(&root.join("platform-mounts.sh"), PLATFORM_MOUNTS, 0o600)?;
     write_asset(&root.join("brz-no-fallback.sh"), BREEZE_NO_FALLBACK, 0o700)?;
     write_asset(
@@ -615,10 +630,12 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let script = temp.path().join("manage-platform.sh");
         let mounts = temp.path().join("platform-mounts.sh");
+        let target_network = temp.path().join("comparison-target-network.sh");
         write_asset(&script, MANAGER, 0o700).unwrap();
         write_asset(&mounts, PLATFORM_MOUNTS, 0o600).unwrap();
+        write_asset(&target_network, COMPARISON_TARGET_NETWORK, 0o600).unwrap();
 
-        for asset in [&script, &mounts] {
+        for asset in [&script, &mounts, &target_network] {
             let status = StdCommand::new("bash")
                 .arg("-n")
                 .arg(asset)
@@ -626,12 +643,19 @@ mod tests {
                 .unwrap();
             assert!(status.success());
         }
-        assert!(MANAGER.contains("start_target()"));
-        assert!(MANAGER.contains("--network \"container:${anchor_name}\" --user 998:998"));
-        assert!(MANAGER.contains("TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"));
-        assert!(MANAGER.contains("--env-file \"$TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE\""));
+        assert!(MANAGER.contains("comparison-target-network.sh"));
+        assert!(COMPARISON_TARGET_NETWORK.contains("start_target()"));
+        assert!(
+            COMPARISON_TARGET_NETWORK
+                .contains("--network \"container:${target_anchor_name}\" --user 998:998")
+        );
+        assert!(COMPARISON_TARGET_NETWORK.contains("TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"));
+        assert!(
+            COMPARISON_TARGET_NETWORK
+                .contains("--env-file \"$TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE\"")
+        );
         assert!(!MANAGER.contains("TRAFFIC_E2E_CONFIG_DIR"));
-        assert!(MANAGER.contains("\"$TRAFFIC_E2E_TARGET_IMAGE_ID\" >/dev/null"));
+        assert!(COMPARISON_TARGET_NETWORK.contains("\"$TRAFFIC_E2E_TARGET_IMAGE_ID\" >/dev/null"));
         assert!(!MANAGER.contains("TRAFFIC_E2E_PROJECT_CLI"));
         assert!(!MANAGER.contains("start --e2e"));
         assert!(MANAGER.contains(
@@ -727,7 +751,7 @@ mod tests {
                 "require_port_open \"$TRAFFIC_E2E_SOURCE_HOST\"",
             ],
         );
-        let target_start = MANAGER
+        let target_start = COMPARISON_TARGET_NETWORK
             .split_once("start_target()")
             .unwrap()
             .1
@@ -737,19 +761,30 @@ mod tests {
         assert_in_order(
             target_start,
             &[
-                "require_port_available \"$TRAFFIC_E2E_TARGET_HOST\"",
+                "require_port_available \"$target_network_ip\"",
                 "docker run --detach --name \"$target_name\"",
             ],
         );
         assert_in_order(
             comparison_runtime,
             &[
+                "start_comparison_target_network",
+                "start_cache_snapshot",
                 "start_target",
-                "wait_http \"$TRAFFIC_E2E_TARGET_ORIGIN\"",
+                "wait_http \"$target_origin\"",
                 "require_container_running \"$target_name\" target",
-                "require_port_open \"$TRAFFIC_E2E_TARGET_HOST\"",
+                "require_port_open \"$target_network_ip\"",
             ],
         );
+        assert!(COMPARISON_TARGET_NETWORK.contains("docker network create --driver bridge"));
+        assert!(
+            COMPARISON_TARGET_NETWORK.contains(
+                "target_origin=\"http://${target_network_ip}:${TRAFFIC_E2E_TARGET_PORT}\""
+            )
+        );
+        assert!(MANAGER.contains("--candidate-upstream \"$target_origin\""));
+        assert!(MANAGER.contains("--target-source-ip \"$target_network_ip\""));
+        assert!(MANAGER.contains("--interception-listen-ip \"$target_network_gateway\""));
         assert!(!MANAGER.contains("start_genuine_source"));
         assert!(MANAGER.contains(
             "docker run --rm --platform linux/amd64 --network none --user 0:0 --entrypoint /bin/sh"
@@ -777,10 +812,22 @@ mod tests {
                 .contains("comparison_control_socket=\"$comparison_socket_dir/control.sock\"")
         );
         assert!(!comparison_runtime.contains("$control_dir/comparison.sock"));
+        let comparison_ready = MANAGER
+            .split_once("wait_for_comparison_ready()")
+            .unwrap()
+            .1
+            .split_once("run_comparison_recording()")
+            .unwrap()
+            .0;
+        assert!(comparison_ready.contains("kill -0 \"$comparison_pid\""));
+        assert!(comparison_ready.contains("kill -0 \"$readiness_pid\""));
+        assert!(comparison_ready.contains("comparison recording exited before readiness"));
         assert!(
-            MANAGER
-                .contains("recording wait-ready --control-socket \"$comparison_control_socket\"")
+            comparison_runtime.contains("wait_for_comparison_ready \"$comparison_control_socket\"")
         );
+        assert!(!comparison_runtime.contains(
+            "\"$TRAFFIC_E2E_BIN\" recording wait-ready --control-socket \"$comparison_control_socket\""
+        ));
         assert!(MANAGER.contains("start_recording_input \"$comparison_control_socket\""));
         assert!(MANAGER.contains(
             "input_command+=(--completion-control-socket \"$completion_control_socket\")"
@@ -850,6 +897,14 @@ mod tests {
                 .mode()
                 & 0o777,
             0o700
+        );
+        assert_eq!(
+            fs::metadata(assets.join("comparison-target-network.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
         );
         assert_eq!(
             fs::metadata(assets.join("brz-no-fallback.sh"))

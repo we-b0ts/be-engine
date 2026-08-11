@@ -30,7 +30,7 @@ pub struct RecordingConfig {
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
     pub access_rules: Vec<RecordingAccessRuleConfig>,
-    pub background_dependencies: Vec<BackgroundDependencyRuleConfig>,
+    pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -199,7 +199,7 @@ impl RecordingConfig {
                 }
             }
         }
-        super::background_dependencies::validate(&self.background_dependencies)?;
+        super::process_owned_dependencies::validate(&self.process_owned_dependencies)?;
         Ok(())
     }
 
@@ -264,7 +264,7 @@ impl Default for RecordingConfig {
             ],
             access_policy: RecordingAccessPolicy::Unrestricted,
             access_rules: Vec::new(),
-            background_dependencies: Vec::new(),
+            process_owned_dependencies: Vec::new(),
         }
     }
 }

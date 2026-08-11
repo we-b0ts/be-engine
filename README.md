@@ -3,7 +3,8 @@
 Rust binaries for traffic-based E2E contracts and backend rewrite
 orchestration. `traffic-e2e` owns recording, replay, comparison, and
 diagnostics; `backend-rewrite` owns the AI-facing migration workflow and uses
-the same `traffic_e2e` crate.
+the same `traffic_e2e` crate; `backend-rewrite-admin` owns explicit
+administrator repair outside ordinary AI workflows.
 
 ## Features
 
@@ -39,9 +40,10 @@ sparse registry.
 cargo build --release --bins
 ```
 
-This produces sibling `traffic-e2e` and `backend-rewrite` executables. Keep
-them together when installing or packaging them: detached rewrite recording
-actions delegate engine work to the sibling `traffic-e2e` binary.
+This produces sibling `traffic-e2e`, `backend-rewrite`, and
+`backend-rewrite-admin` executables. Keep them together when installing or
+packaging them: detached rewrite recording actions delegate engine work to the
+sibling `traffic-e2e` binary.
 
 ## Command Model
 
@@ -93,7 +95,7 @@ returned action starts a detached coordinator worker and returns immediately;
 poll `backend-rewrite status` until it reports `advance_required`, then execute
 the exact `action.commands.advance` command once.
 
-Background dependency rules are evidence-ownership rules, not fresh-capture
+Process-owned dependency rules are evidence-ownership rules, not fresh-capture
 contracts. `backend-rewrite dependency-rule apply <plan-id>` preserves the
 published cases and raw dependency JSONL, reapplies the current rules to the
 latest focused replay report, rebuilds bounded evidence, and returns `next`.
@@ -135,7 +137,9 @@ under `traffic-e2e diagnose`. Managed recording, replay, fixed-user target
 isolation, and host interception are implemented by the same Rust binary.
 
 Comparison recording accepts only explicitly configured `GET`, `HEAD`, and
-`OPTIONS` methods and never enables isolation. It normally captures one source
+`OPTIONS` methods. Its managed runtime isolates the candidate in a run-owned
+bridge namespace, allowing source and candidate to use the same native service
+ports. It normally captures one source
 response and one candidate response. Set
 `comparison_recording.baseline_recheck = true` to additionally capture a
 source response after the candidate for source-drift diagnosis. Passing
@@ -156,7 +160,7 @@ cargo run -- --help
 cargo run -- diagnose recorder --config config/recorder.example.toml
 ```
 
-Install both binaries and run managed recording from an initialized target
+Install all binaries and run managed recording from an initialized target
 repository:
 
 ```bash
@@ -222,7 +226,7 @@ or control socket.
 Replay supports recorded HTTP/HTTPS, MySQL, Redis, and Memcached dependencies.
 Redis and Memcached exchanges are normally consumed in recorded connection
 order. Exact-key Redis `GET`, `SCARD`, and `HGETALL` exchanges and Memcached
-`get` exchanges explicitly recorded by a process-scoped background rule remain
+`get` exchanges explicitly recorded by a process-scoped process-owned rule remain
 single-use but are matched without source
 connection binding or lane blockers. The
 v5 replay report keeps complete unmatched, unsupported, unsafe, and unused

@@ -1,19 +1,19 @@
-# Background Dependency Classification
+# Process-Owned Dependency Classification
 
 Use when process-owned asynchronous traffic is mixed into case ownership.
 
 ## Ownership Model
 
-A background rule proves only that matching asynchronous work is process-scoped
+A process-owned dependency rule proves only that matching asynchronous work is process-scoped
 and case-independent. It carries no classification of whether the response
 affects business state. AI proves process ownership from source and runtime
 evidence; timing, repetition, scheduler names, shared hosts, and unused
 exchanges are not proof.
 
 Response causality remains a target concern. When source and case evidence show
-that a background dependency drives local state, the target AI must implement
+that a process-owned dependency drives local state, the target AI must implement
 the source-compatible initialization, refresh, cache, fallback, and readiness
-behavior. A background rule cannot replace or hide that implementation.
+behavior. A process-owned dependency rule cannot replace or hide that implementation.
 
 ## Replay Scope
 
@@ -41,7 +41,7 @@ Unruled ready-time idle traffic stays only in `traffic.jsonl`. Replay has no
 legacy bootstrap fallback.
 
 Finalized recordings also contain `source-process-traffic-summary.json`. It
-separates pre-readiness observations from configured background rules and
+separates pre-readiness observations from configured process-owned rules and
 reports protocol, endpoint, operation, and bounded counts. Redis snapshot
 sections additionally report seeds, reuses, fill failures, and those counts by
 intercepted domain and port. Backend-rewrite projects this summary as the
@@ -73,8 +73,8 @@ progress every 10 seconds and warns but continues case admission when the load
 remains incomplete. Replay does not wait for target-local initialization;
 repair target startup or readiness when that causes a response difference.
 
-Global exchanges explicitly emitted by any background rule use
-connection-independent replay. Ordinary background exchanges remain
+Global exchanges explicitly emitted by any process-owned rule use
+connection-independent replay. Ordinary process-owned exchanges remain
 single-use. For a configured Redis rule, Recorder instead holds the first
 successful response for each logical rule/session/command/argument tuple for
 the rest of that run. Only that first exchange is semantic Global evidence;
@@ -98,9 +98,9 @@ that boundary is a source or recording-configuration readiness error.
 For source-proven process-owned HTTP traffic, preview one exact selector:
 
 ```bash
-traffic-e2e config recorder plan background-dependencies \
+traffic-e2e config recorder plan process-owned-dependencies \
   --target-root <target> \
-  --name <stable-background-rule-name> \
+  --name <stable-process-owned-rule-name> \
   --case-source <exact-finalized-case-source> \
   --source-revision <same-source-revision> \
   --evidence '<source file/symbol and ownership explanation>' \
@@ -118,9 +118,9 @@ config and evidence before writing atomically.
 For source-proven process-owned Motan traffic:
 
 ```bash
-traffic-e2e config recorder plan background-dependencies \
+traffic-e2e config recorder plan process-owned-dependencies \
   --target-root <target> \
-  --name <stable-background-rule-name> \
+  --name <stable-process-owned-rule-name> \
   --case-source <exact-finalized-case-source> \
   --source-revision <same-source-revision> \
   --evidence '<source file/symbol and process-ownership explanation>' \
@@ -141,7 +141,7 @@ port set rather than domains. Repeat `--port` for every source-proven member of
 the logical service group:
 
 ```bash
-traffic-e2e config recorder plan background-dependencies \
+traffic-e2e config recorder plan process-owned-dependencies \
   --target-root <target> \
   --name interest-tag-mining-cache-refresh \
   --case-source <exact-finalized-case-source> \
@@ -172,7 +172,7 @@ shape. Apply uses the same arguments, then create a new standard recording.
 For process-owned Redis GET startup reads, provide every exact key:
 
 ```bash
-traffic-e2e config recorder plan background-dependencies \
+traffic-e2e config recorder plan process-owned-dependencies \
   --target-root <target> \
   --name startup-cache-warm \
   --case-source <exact-finalized-case-source> \
@@ -198,6 +198,7 @@ every observed key:
 ```bash
 backend-rewrite --target-root <target> dependency-rule plan redis hget \
   --evidence-id <pre-readiness-traffic-evidence-id> \
+  --ownership process-owned \
   --name experiment-bootstrap \
   --source-evidence '<source file/symbol and bootstrap ownership proof>' \
   --port 6379 \
@@ -223,7 +224,7 @@ Different ports, commands, or fields remain separate rules; if more than one
 existing rule is otherwise compatible, use an existing rule name to select the
 merge target.
 
-Every configured Redis background rule also participates in the shared
+Every configured Redis process-owned rule also participates in the shared
 post-ready cache quiet window, including HGET/HMGET rules without an
 initial-load completion count. Case admission waits at least 15 seconds after
 source readiness, each matching Redis request restarts that window, and the
@@ -232,7 +233,7 @@ source readiness, each matching Redis request restarts that window, and the
 For a process-owned Memcached `get` rule, preview before applying:
 
 ```bash
-traffic-e2e config recorder plan background-dependencies \
+traffic-e2e config recorder plan process-owned-dependencies \
   --target-root . \
   --name planet-video-cache-warm \
   --case-source <exact-finalized-case-source> \

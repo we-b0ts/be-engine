@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
+use serde::Serialize;
 use serde_json::Value;
 
 use super::fingerprint;
@@ -23,9 +24,35 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct RewriteDependencyRulePlanOptions {
     pub evidence_id: String,
-    pub name: String,
-    pub source_evidence: String,
+    pub ownership: RewriteDependencyOwnership,
+    pub name: Option<String>,
+    pub source_evidence: Option<String>,
     pub selector: RewriteDependencyRuleSelector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RewriteDependencyOwnership {
+    ProcessOwned,
+    RequestOwned,
+    Unresolved,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteDependencyRulePlanReport {
+    pub ownership: RewriteDependencyOwnership,
+    pub issue_id: String,
+    pub evidence_id: String,
+    pub process_owned_rule_applicable: bool,
+    pub target_implementation_required: bool,
+    pub selector: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub traffic_e2e_report: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required_change: Option<String>,
+    pub next_command: super::model::RewriteCommandSpec,
 }
 
 #[derive(Debug, Clone)]
@@ -147,10 +174,20 @@ pub(super) fn plan(
     target_root: &Path,
     state: &mut RewriteState,
     options: RewriteDependencyRulePlanOptions,
-) -> Result<RewriteDependencyRuleReport> {
-    let spec = spec_from_selector(options.selector);
+) -> Result<RewriteDependencyRulePlanReport> {
+    let spec = spec_from_selector(options.selector.clone());
     let issue = dependency_issue(state, &spec)?;
     validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id, &spec)?;
+    let selector = serde_json::to_value(&spec)?;
+    if options.ownership != RewriteDependencyOwnership::ProcessOwned {
+        return classify_non_process_owned(target_root, state, issue, options, selector);
+    }
+    let name = options
+        .name
+        .context("--name is required when --ownership process-owned")?;
+    let source_evidence = options
+        .source_evidence
+        .context("--source-evidence is required when --ownership process-owned")?;
     let spec_json = serde_json::to_string(&spec)?;
     let mut record = RewriteDependencyRulePlanRecord {
         id: format!(
@@ -159,15 +196,15 @@ pub(super) fn plan(
                 &state.workflow_id,
                 &issue.id,
                 &options.evidence_id,
-                &options.name,
+                &name,
                 &spec_json,
             ])
             .trim_start_matches("fnv1a64:")
         ),
         issue_id: issue.id.clone(),
-        evidence_id: options.evidence_id,
-        name: options.name,
-        source_evidence: options.source_evidence,
+        evidence_id: options.evidence_id.clone(),
+        name,
+        source_evidence,
         spec,
         reused_existing: false,
         effective_name: None,
@@ -185,12 +222,78 @@ pub(super) fn plan(
     state.recorder_capture_plan = None;
     state.dependency_rule_plan = Some(record.clone());
     state.bump();
-    Ok(RewriteDependencyRuleReport {
-        plan_id: record.id.clone(),
+    Ok(RewriteDependencyRulePlanReport {
+        ownership: RewriteDependencyOwnership::ProcessOwned,
         issue_id: issue.id,
-        traffic_e2e_report: report,
-        evidence_reclassification: None,
+        evidence_id: options.evidence_id,
+        process_owned_rule_applicable: true,
+        target_implementation_required: false,
+        selector,
+        plan_id: Some(record.id.clone()),
+        traffic_e2e_report: Some(report),
+        required_change: None,
         next_command: action::dependency_rule_apply_command(target_root, &record.id),
+    })
+}
+
+fn classify_non_process_owned(
+    target_root: &Path,
+    state: &mut RewriteState,
+    issue: super::model::RewriteIssue,
+    options: RewriteDependencyRulePlanOptions,
+    selector: Value,
+) -> Result<RewriteDependencyRulePlanReport> {
+    let (required_change, owner, cause) = match options.ownership {
+        RewriteDependencyOwnership::RequestOwned => {
+            let source_evidence = options
+                .source_evidence
+                .as_deref()
+                .context("--source-evidence is required when --ownership request-owned")?;
+            crate::config::process_owned_dependencies::validate_source_evidence(source_evidence)?;
+            (
+                format!(
+                    "implement the recorded request-owned dependency call in target code; selector={}; source_evidence={source_evidence}",
+                    serde_json::to_string(&selector)?
+                ),
+                super::model::RewriteIssueOwner::TargetCode,
+                "request_owned_dependency_not_implemented",
+            )
+        }
+        RewriteDependencyOwnership::Unresolved => (
+            format!(
+                "determine whether the recorded dependency is request-owned or process-owned before changing recorder classification; selector={}",
+                serde_json::to_string(&selector)?
+            ),
+            super::model::RewriteIssueOwner::SourceInvestigation,
+            "dependency_ownership_unresolved",
+        ),
+        RewriteDependencyOwnership::ProcessOwned => unreachable!("handled before classification"),
+    };
+    let active_issue = state
+        .active_issue
+        .as_mut()
+        .context("rewrite workflow has no active issue")?;
+    ensure!(
+        active_issue.id == issue.id,
+        "active rewrite issue changed while classifying dependency ownership"
+    );
+    active_issue.owner = owner;
+    active_issue.summary = required_change.clone();
+    active_issue.possible_causes = vec![cause.to_string()];
+    state.dependency_rule_plan = None;
+    state.bump();
+    Ok(RewriteDependencyRulePlanReport {
+        ownership: options.ownership,
+        issue_id: issue.id,
+        evidence_id: options.evidence_id,
+        process_owned_rule_applicable: false,
+        target_implementation_required: options.ownership
+            == RewriteDependencyOwnership::RequestOwned,
+        selector,
+        plan_id: None,
+        traffic_e2e_report: None,
+        required_change: Some(required_change),
+        next_command: action::next_command_for_api(target_root, &state.api),
     })
 }
 
@@ -226,7 +329,7 @@ fn dependency_issue(
         issue.kind == RewriteIssueKind::Dependency
             || (issue.kind == RewriteIssueKind::Response
                 && matches!(spec, RewriteDependencyRuleSpec::RedisHashRead { .. })),
-        "background dependency rules require a dependency issue; bootstrap Redis hash reads also accept a response issue"
+        "process-owned dependency rules require a dependency issue; bootstrap Redis hash reads also accept a response issue"
     );
     Ok(issue)
 }

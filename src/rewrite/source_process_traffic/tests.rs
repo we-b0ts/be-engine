@@ -55,14 +55,18 @@ fn projects_a_bounded_action_view_from_the_recording_summary() {
 
     assert!(view.available);
     assert_eq!(view.bootstrap.unwrap().data_interactions, 1);
-    let background = view.background.unwrap();
-    assert_eq!(background.rules_total, 1);
+    let process_owned = view.process_owned.unwrap();
+    assert_eq!(process_owned.rules_total, 1);
     assert_eq!(
-        background.rules[0].redis_snapshot.as_ref().unwrap().reuses,
+        process_owned.rules[0]
+            .redis_snapshot
+            .as_ref()
+            .unwrap()
+            .reuses,
         1
     );
     assert_eq!(
-        background.rules[0]
+        process_owned.rules[0]
             .redis_snapshot
             .as_ref()
             .unwrap()
@@ -73,14 +77,14 @@ fn projects_a_bounded_action_view_from_the_recording_summary() {
 
     let envelope = crate::rewrite::action::for_state(temp.path(), &state);
     let action = serde_json::to_value(envelope).unwrap();
-    assert_eq!(action["schema_version"], 15);
+    assert_eq!(action["schema_version"], 16);
     assert_eq!(action["source_process_traffic"]["available"], true);
     assert_eq!(
-        action["source_process_traffic"]["background"]["rules"][0]["redis_snapshot"]["reuses"],
+        action["source_process_traffic"]["process_owned"]["rules"][0]["redis_snapshot"]["reuses"],
         1
     );
     assert_eq!(
-        action["source_process_traffic"]["background"]["rules"][0]["redis_snapshot"]["endpoints"]
+        action["source_process_traffic"]["process_owned"]["rules"][0]["redis_snapshot"]["endpoints"]
             [0]["endpoint"],
         "redis.internal:20917"
     );

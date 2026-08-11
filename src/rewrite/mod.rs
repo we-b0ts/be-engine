@@ -40,7 +40,10 @@ pub use case_dependencies::{
     RewriteMemcachedOperationDetail, RewriteRedisExchangeDetail, RewriteRedisOperationDetail,
     query as query_rewrite_case_dependencies,
 };
-pub use dependency_rule::{RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector};
+pub use dependency_rule::{
+    RewriteDependencyOwnership, RewriteDependencyRulePlanOptions, RewriteDependencyRulePlanReport,
+    RewriteDependencyRuleSelector,
+};
 pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
     RewriteApiProgress, RewriteApiStatus, RewriteApplicableRulePlanner, RewriteCommandSpec,
@@ -555,7 +558,7 @@ pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<Rewr
 pub fn plan_rewrite_dependency_rule(
     context: RewriteContext,
     options: RewriteDependencyRulePlanOptions,
-) -> Result<RewriteDependencyRuleReport> {
+) -> Result<RewriteDependencyRulePlanReport> {
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&target_root)?;
     let _lock = store.lock()?;
@@ -811,7 +814,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(15)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(16)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),
