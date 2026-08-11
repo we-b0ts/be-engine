@@ -19,12 +19,18 @@ is unclear.
 - Supported dependency protocols are peer domains: MySQL, Redis, Memcached,
   Kafka, and Motan. Do not group protocols by a presumed business use such as
   cache or RPC.
-- Top-level `mysql`, `redis`, `memcached`, `kafka`, and `motan` modules own
-  reusable protocol parsing and encoding only. They do not own recording or
-  replay.
+- Top-level `mysql`, `redis`, `memcached`, and `kafka` modules own reusable
+  protocol parsing and encoding only. Top-level `motan` is a traffic-e2e
+  adapter over the local `../breeze/motan` `motan-protocol` and `motan-codec`
+  path dependencies; reusable Motan framing, encoding, and request-envelope
+  semantics stay in that companion repository. None of these modules owns
+  recording or replay.
 - Top-level `http` owns reusable HTTP forwarding policy. `proxy/http` and
   `gateway/http` own their respective runtimes, while `recorder/http` owns
   recorded HTTP case persistence.
+- `gateway/motan` owns primary Motan request admission, fixed-response routing,
+  matched-source forwarding, and primary-case persistence orchestration for
+  both Motan1 and Motan2.
 - `recorder/<protocol>` owns capture-time protocol adapters, while
   `replay/<protocol>` owns matching and response behavior for recorded
   evidence. Both may depend on the top-level protocol module, never the
@@ -52,6 +58,10 @@ is unclear.
 - `e2e_run/startup_config.rs` owns the explicit project startup update and the
   one-way version-11 `boot_dir` to version-12 migration. Normal project loading
   remains strict and does not dual-read the legacy schema.
+- `e2e_run/config.rs` remains the cohesive strict project-schema lifecycle:
+  initialization rendering, load/validation, and runtime path resolution must
+  agree on one contract. Typed protocol mutation is kept in
+  `e2e_run/protocol_config.rs` so it does not add another lifecycle there.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state
@@ -86,6 +96,15 @@ is unclear.
   code-organization checker. Configured repository gates extend it; an empty
   configured gate list does not disable it.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
+- `platform/mod.rs` owns one managed subprocess composition boundary: it maps
+  validated project/recorder state into the staged shell runtime and collects
+  its result. Protocol evidence validation stays in `platform/preflight.rs`,
+  and business-input presentation stays in the separately staged
+  `preflight-business-input.sh` asset.
+- `config/repository_protocol.rs` owns typed, idempotent cross-file protocol
+  convergence for initialized repositories. `e2e_run/protocol_config.rs` owns
+  the project-side protocol topology projection; Recorder TOML editing and the
+  two-file publish transaction remain under `config`.
 
 Prefer these boundaries while they remain accurate. When implementation proves
 that a current parent no longer expresses ownership, make the smallest

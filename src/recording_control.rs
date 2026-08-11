@@ -38,6 +38,7 @@ pub(crate) enum RecordingListener {
     TcpGateway,
     UdpGateway,
     HttpGateway,
+    MotanGateway,
     Mysql,
 }
 
@@ -49,6 +50,7 @@ impl RecordingListener {
             Self::TcpGateway => "tcp_gateway",
             Self::UdpGateway => "udp_gateway",
             Self::HttpGateway => "http_gateway",
+            Self::MotanGateway => "motan_gateway",
             Self::Mysql => "mysql",
         }
     }
@@ -98,6 +100,9 @@ impl RecordingLifecycle {
         }
         if config.http_gateway.enabled {
             expected.insert(RecordingListener::HttpGateway);
+        }
+        if config.motan_gateway.enabled {
+            expected.insert(RecordingListener::MotanGateway);
         }
         if config.mysql.enabled {
             expected.insert(RecordingListener::Mysql);

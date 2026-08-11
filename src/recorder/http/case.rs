@@ -2,36 +2,9 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use crate::recorder::{CaseBodyCapture, CaseContext, HeaderMapSnapshot, Recorder};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct CaseInvalidation {
-    reason: String,
-    message: String,
-    context: Option<CaseInvalidationContext>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct CaseInvalidationContext {
-    pub(crate) category: String,
-    pub(crate) elapsed_ms: u128,
-    pub(crate) recorder_phase: String,
-}
-
-impl CaseInvalidation {
-    pub(crate) fn new(reason: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            reason: reason.into(),
-            message: message.into(),
-            context: None,
-        }
-    }
-
-    pub(crate) fn with_context(mut self, context: CaseInvalidationContext) -> Self {
-        self.context = Some(context);
-        self
-    }
-}
+use crate::recorder::{
+    CaseBodyCapture, CaseContext, CaseInvalidation, HeaderMapSnapshot, Recorder,
+};
 
 #[derive(Serialize)]
 pub(crate) struct CaseRequestRecord {

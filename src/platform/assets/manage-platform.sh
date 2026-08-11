@@ -33,6 +33,7 @@ for name in "${required_environment[@]}"; do
         exit 1
     }
 done
+source "$TRAFFIC_E2E_PLATFORM_ASSETS/preflight-business-input.sh"
 
 case "$operation" in
     record|record-comparison|preflight) ;;
@@ -108,6 +109,19 @@ fi
 if [[ "$operation" != record-comparison && "$baseline_recheck" == true ]]; then
     printf 'error: baseline recheck is comparison-only\n' >&2
     exit 2
+fi
+[[ "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" == true || \
+   "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" == false ]] || {
+    printf 'error: TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED must be true or false\n' >&2
+    exit 2
+}
+if [[ "$operation" == preflight && "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" == true ]]; then
+    for name in TRAFFIC_E2E_MOTAN_SOURCE_PORT TRAFFIC_E2E_MOTAN_GATEWAY_PORT TRAFFIC_E2E_MOTAN_REPLAY_COMMAND; do
+        [[ -n "${!name-}" ]] || {
+            printf 'error: missing Motan preflight environment %s\n' "$name" >&2
+            exit 2
+        }
+    done
 fi
 
 for command_name in docker jq curl nc timeout base64 id date find awk wc tr rm tar mktemp; do
@@ -790,17 +804,6 @@ run_preflight_https_probe() {
     fi
 }
 
-announce_preflight_business_input() {
-    [[ "$operation" == preflight ]] || return 0
-    jq -cn \
-        --arg recording_origin "$TRAFFIC_E2E_RECORDING_ORIGIN" \
-        '{
-            phase: "preflight-business-input-required",
-            ready: true,
-            recording_origin: $recording_origin
-        }'
-}
-
 start_recording_input() {
     local completion_control_socket="${1-}"
     [[ -n "${TRAFFIC_E2E_REQUEST_SOURCE-}" ]] || return 0
@@ -916,7 +919,7 @@ run_standard_recording() {
     stop_recording_input
     finalize_recorder
     local manifest_filter='.status == "completed" and .failed_cases == 0 and (.errors | length == 0)'
-    if [[ "$operation" == preflight ]]; then
+    if [[ "$operation" == preflight && "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" != true ]]; then
         manifest_filter+=' and .published_cases > 0'
     fi
     jq -e "$manifest_filter" "$artifacts_dir/recordings/$run_id/recording-run.json" >/dev/null

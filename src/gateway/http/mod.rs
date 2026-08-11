@@ -20,8 +20,8 @@ use crate::http::access::classify_method;
 use crate::http::rewrite::{self, RewriteInput};
 use crate::recorder::http::case::{CaseRequestRecord, CaseResponseRecord, finalize_http_case};
 use crate::recorder::{
-    CaseContext, HeaderMapSnapshot, HttpExchangeEvent, ProxyErrorEvent, RecorderEvent,
-    capture_body, capture_case_body, redact_headers,
+    CaseContext, HeaderMapSnapshot, HttpExchangeEvent, PrimaryCaseDescriptor, ProxyErrorEvent,
+    RecorderEvent, capture_body, capture_case_body, redact_headers,
 };
 use crate::recording_control::RecordingListener;
 
@@ -223,23 +223,25 @@ async fn handle_gateway_request(
     let mut upstream_base = config.fallback_upstream.clone();
     let mut case_guard = None;
 
-    if let Some((candidate_case, case_pattern, recording_api, max_cases)) = candidate_case
-        && let Some(guard) = try_admit_case(
+    if let Some((candidate_case, case_pattern, recording_api, max_cases)) = candidate_case {
+        let descriptor = PrimaryCaseDescriptor::http(method.as_str(), &case_pattern);
+        if let Some(guard) = try_admit_case(
             &state,
             &candidate_case,
-            &case_pattern,
+            &descriptor,
             recording_api.as_deref(),
             max_cases,
             &config.matched_upstream,
             &original_uri,
         )
         .await
-    {
-        should_record = true;
-        upstream_base = config.matched_upstream.clone();
-        case = Some(candidate_case);
-        admitted_case_pattern = Some(case_pattern);
-        case_guard = Some(guard);
+        {
+            should_record = true;
+            upstream_base = config.matched_upstream.clone();
+            case = Some(candidate_case);
+            admitted_case_pattern = Some(case_pattern);
+            case_guard = Some(guard);
+        }
     }
 
     let lifecycle_state = state.clone();

@@ -171,8 +171,9 @@ Repository scripts are development checks or explicit host trust-store tools
 only.
 
 Use the `backend-rewrite` binary and its `next`, `status`, `inventory`,
-`evidence`, `rule`, `dependency-rule`, `route`, `repair`, `recording`, and
-`recover` commands for AI-facing migration orchestration. `traffic-e2e` has no
+`evidence`, `rule`, `dependency-rule`, `route`, `repair`, `recording`,
+`config`, and `recover` commands for AI-facing migration orchestration.
+`traffic-e2e` has no
 `rewrite` subcommand; `backend-rewrite` invokes the shared crate directly and
 delegates only engine-owned detached work to its sibling executable.
 
@@ -473,8 +474,68 @@ business exchanges. Framing and hop-by-hop headers such as `content-length`,
 `transfer-encoding`, and `connection` are managed by the gateway and cannot be
 configured in `headers`.
 
-The gateway also limits successfully published cases per resolved case pattern
-within one recorder run. The default is
+Motan primary-case recording uses a separate gateway with the same single
+active-case and dependency-drain lifecycle:
+
+```bash
+backend-rewrite config protocol enable motan \
+  --source-port 8080 \
+  --gateway-port 18081 \
+  --target-port 8081
+```
+
+This typed update is for an already initialized repository. It converges
+`.traffic-e2e/project.yaml` (`protocols.motan`) and the recorder file referenced
+by that project in one rollback-capable update. Repeating the same command
+returns `status: unchanged`; changing an explicit port updates only the owned
+topology keys and preserves Motan rules and recorder comments. Its result uses
+`validation_status: not_run`: configuration alone does not claim that real
+Motan traffic has been validated.
+
+```toml
+[motan_gateway]
+enabled = true
+listen = "0.0.0.0:18081"
+matched_upstream = "127.0.0.1:8002"
+max_cases_per_api = 100
+rules = []
+```
+
+An empty `rules` array accepts every identified non-heartbeat Motan API. To
+restrict recording, replace `rules = []` with one or more rule tables:
+
+```toml
+[[motan_gateway.rules]]
+name = "record-alchemy"
+apis = ["com.weibo.abtest.traffic.rpc.AlchemyRpcService#getConfig(java.lang.String)"]
+```
+
+`apis` uses the same canonical identity emitted by `motan-replay`. Add
+`groups = ["abtest"]` only when the same API must be distinguished by Motan
+service group.
+
+Run `motan-replay --input-raw :8080 --output-rpc <recorder-ip>:18081` in the
+host or network namespace that can observe the source Motan traffic. During a
+local preflight `<recorder-ip>` is `127.0.0.1`; when capture runs remotely, use
+the address of the host running preflight. The preflight prompt returns this
+command instead of fabricating RPC argument values.
+The gateway decodes Motan1 and Motan2 through local `breeze/motan` directory
+dependencies. A matched request is forwarded to `matched_upstream`, and its
+raw protocol request and response are published as one primary case.
+Heartbeats, unmatched calls, overlapping calls while another case is active,
+and calls after the per-API limit receive a protocol-valid empty success
+response without reaching the source. Motan2 one-way calls do not receive a
+response, as required by the protocol.
+
+Every published HTTP or Motan primary case contains a protocol-neutral
+`case.json` with `version`, `kind`, `api_key`, `display_name`, and an explicit
+`source_binding`. The orchestration workflow uses the common identity; only
+the source and driver adapters branch by protocol. Both kinds share a recording
+run directory and `dependencies.jsonl`. Motan API directories include a stable
+identity hash so long Java signatures remain filesystem-safe.
+
+The HTTP gateway also limits successfully published cases per resolved case
+pattern within one recorder run. The default is
 `http_gateway.per_api_case_limits.default = 100`. Static paths are counted
 independently by exact URI path; a URI matched by `case_path_patterns` is
 counted under that configured pattern. Pattern-specific limits use exact keys:
@@ -1299,7 +1360,24 @@ recording-environment preflight, and finally starts a real Replay session with
 the fixed network probe image. Recording publishes exactly one marked
 `demo.test` Global dependency; Replay must consume it through fake DNS, reject
 unrecorded `example.com`, and block direct external egress for UID `998`.
-Success returns overall `status: passed` with separate `target_container`,
+When Motan is enabled, the business-input phase also prints the exact
+`motan-replay` copy command. A successfully published Motan case reports
+`recording.motan.status: verified`. If the window observes no Motan request,
+that absence is not a failure: the result is
+`status: passed_with_deferred_validation` with
+`recording.motan.status: not_observed` and asks whether validation should be
+rerun now or deferred to the first managed recording. A malformed Motan request,
+gateway processing error, or admitted case that fails source forwarding or
+publication makes preflight fail; observed failure is never reported as a
+successful initialization.
+
+If validation is deferred, `traffic-e2e record` applies the same Motan gateway
+failure check. Its result reports `motan.status: verified` after at least one
+published Motan case or `not_observed` when that recording still contains no
+Motan request. Gateway errors and failed admitted cases make the recording
+command fail instead of silently completing.
+
+Full success returns overall `status: passed` with separate `target_container`,
 `recording`, and `replay_network` results. A failure prints bounded JSON
 containing `status: failed`, the failing stage, and a reason, exits nonzero, and
 does not advance rewrite state. Manual `docker build`/`docker run` output is
@@ -1755,10 +1833,12 @@ recorded duration, and patches both response request IDs to the live request.
 Standard Motan heartbeat exchanges stay in `dependencies-debug.jsonl` and out
 of semantic dependencies and summaries; replay may use a recorded debug
 heartbeat response as a reusable template across nodes in the same pool.
-Motan2 framing is unsupported and fails closed. Recorder deliberately does not
-deserialize arbitrary Java arguments: it preserves exact frame bytes and
-replay uses method identity plus recorded connection order. Those frames may
-contain sensitive business objects, so protect the recording directory as
+This legacy dependency path supports only the nested Motan1 framing and fails
+closed on Motan2. The primary `motan_gateway` path described above separately
+supports both Motan1 and Motan2 through `breeze/motan`. Recorder deliberately
+does not deserialize arbitrary Java arguments: it preserves exact frame bytes
+and replay uses method identity plus recorded connection order. Those frames
+may contain sensitive business objects, so protect the recording directory as
 production data.
 
 Kafka dependencies are semantic `kafka_connection`, `kafka_produce`,

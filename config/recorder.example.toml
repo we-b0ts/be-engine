@@ -39,6 +39,8 @@ bypass_domains = [
 "db-10-185-28-119.test" = ["10.185.28.119"]
 
 [tcp_gateway]
+# Dependency capture and managed HTTPS/fake-DNS preflight use this gateway;
+# primary Motan case recording uses the separate [motan_gateway] below.
 enabled = true
 listen = "127.0.0.1:15001"
 # Maximum pending connections passed to listen(2); the kernel may cap it at
@@ -196,6 +198,29 @@ case_path_patterns = [
 ]
 # END AI-MANAGED CASE PATH PATTERNS
 headers = {}
+
+[motan_gateway]
+# Point motan-replay --output-rpc at this listener. Requests admitted as a case
+# are forwarded one at a time to matched_upstream. Unmatched, busy, not-ready,
+# and over-limit calls receive a protocol-valid empty response locally.
+enabled = false
+listen = "0.0.0.0:18081"
+matched_upstream = "127.0.0.1:8002"
+connect_timeout_ms = 3000
+request_timeout_ms = 30000
+max_connections = 1024
+max_frame_bytes = 8388608
+max_cases_per_api = 100
+rules = []
+
+# Empty rules record every identified non-heartbeat Motan API. Non-empty rules
+# match canonical interface#method(parameter-desc) API identities exactly.
+# groups is an optional additional selector; an empty groups list matches every
+# group. Both Motan1 and Motan2 are decoded by the shared breeze/motan crates.
+# To restrict recording, replace `rules = []` with one or more entries below.
+# [[motan_gateway.rules]]
+# name = "record-alchemy"
+# apis = ["com.weibo.abtest.traffic.rpc.AlchemyRpcService#getConfig(java.lang.String)"]
 
 [mysql]
 # Applies to MySQL captured through dns_mock + tcp_gateway as well as the

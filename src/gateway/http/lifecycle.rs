@@ -6,7 +6,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::transport::{GatewayBody, simple_response};
-use crate::recorder::http::case::{CaseInvalidation, CaseInvalidationContext};
+use crate::recorder::{CaseInvalidation, CaseInvalidationContext};
 use crate::{ActiveCaseGuard, AppState};
 
 pub(super) async fn run_matched_request<F>(

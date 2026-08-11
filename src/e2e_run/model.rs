@@ -32,6 +32,29 @@ pub(super) struct ProjectConfig {
     pub recording: RecordingProjectConfig,
     pub delivery: DeliveryProjectConfig,
     pub state: StateProjectConfig,
+    #[serde(default, skip_serializing_if = "ProtocolProjectConfig::is_empty")]
+    pub protocols: ProtocolProjectConfig,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct ProtocolProjectConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motan: Option<MotanProjectConfig>,
+}
+
+impl ProtocolProjectConfig {
+    pub(super) fn is_empty(&self) -> bool {
+        self.motan.is_none()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MotanProjectConfig {
+    pub source_port: u16,
+    pub gateway_port: u16,
+    pub target_port: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

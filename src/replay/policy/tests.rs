@@ -75,6 +75,29 @@ rules: []
 }
 
 #[test]
+fn loads_motan_case_without_http_request_metadata() {
+    let fixture = policy_fixture(
+        r#"
+version: 1
+expected_response: assertions_only
+rules: []
+"#,
+    );
+    fs::write(
+        fixture.cases[CASE_ID].dir.join("case.json"),
+        r#"{"version":1,"kind":"motan_rpc"}"#,
+    )
+    .unwrap();
+    fs::write(
+        fixture.cases[CASE_ID].dir.join("request.json"),
+        r#"{"protocol_version":"motan2","request_id":42}"#,
+    )
+    .unwrap();
+
+    ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+}
+
+#[test]
 fn rejects_policy_without_expected_response_contract() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("replay.yaml");

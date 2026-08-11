@@ -60,9 +60,9 @@ use crate::active_case::{
 };
 use crate::dns_mock::DomainMatcher;
 use crate::http::rewrite::KubectlProxyManager;
+use crate::recorder::CaseInvalidation;
 use crate::recorder::background::BackgroundDependencyMatcher;
 use crate::recorder::cache_snapshot::{CacheSnapshotReservation, CacheSnapshotStore};
-use crate::recorder::http::case::CaseInvalidation;
 use crate::recorder::readiness::PostReadyWaitOutcome;
 use crate::recording_control::{RecordingLifecycle, RecordingListener};
 
@@ -102,18 +102,19 @@ pub use config::{
     HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig,
     HttpGatewayRuleConfig, HttpResponseRewriteConfig, HttpResponseRewritePluginConfig,
     HttpResponseRewriteRuleConfig, InspectedContainer, MotanBackgroundDependencyFeedback,
-    MotanBackgroundDependencyPlan, MotanBackgroundDependencyReport, MysqlConfig, MysqlRouteConfig,
-    RecorderConfigInitOptions, RecorderConfigInitResult, RecordingAccessPolicy,
+    MotanBackgroundDependencyPlan, MotanBackgroundDependencyReport, MotanGatewayConfig,
+    MotanGatewayRuleConfig, MotanProtocolConfigOptions, MotanProtocolConfigResult, MysqlConfig,
+    MysqlRouteConfig, RecorderConfigInitOptions, RecorderConfigInitResult, RecordingAccessPolicy,
     RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan,
     RedisBackgroundDependencyReport, RedisKeyPatternConfig, RepositoryConfigInitOptions,
     RepositoryConfigInitResult, TcpApplicationProtocol, TcpGatewayConfig,
     TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
-    UdpGatewayConfig, initialize_recorder_config, initialize_repository_config,
-    plan_allowed_unused_http_hosts, plan_background_dependency, plan_breeze_endpoint_capture,
-    plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
-    plan_case_path_pattern_feedback, plan_motan_background_dependency,
-    plan_redis_background_dependency,
+    UdpGatewayConfig, enable_repository_motan_protocol, initialize_recorder_config,
+    initialize_repository_config, plan_allowed_unused_http_hosts, plan_background_dependency,
+    plan_breeze_endpoint_capture, plan_breeze_memcached_background_dependency,
+    plan_breeze_resource_capture, plan_case_path_pattern_feedback,
+    plan_motan_background_dependency, plan_redis_background_dependency,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
@@ -135,13 +136,14 @@ pub use e2e_run::{
 pub use mysql::operation::MysqlWriteOperation;
 pub use network_probe::PreflightProbeKind;
 pub use platform::{
-    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
-    ManagedRecordingOperation, ManagedRecordingOptions, ManagedRecordingPreflightOptions,
+    ManagedMotanPreflightResult, ManagedMotanRecordingResult, ManagedRecordingInputCompletion,
+    ManagedRecordingInputOptions, ManagedRecordingInputResult, ManagedRecordingOperation,
+    ManagedRecordingOptions, ManagedRecordingPreflightOptions,
     ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
     ManagedRecordingRecoveryResult, ManagedRecordingResult, ManagedReplayNetworkPreflightResult,
-    ReplayDirectEgressProbeResult, ReplayNegativeProbeResult, ReplayPositiveProbeResult,
-    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
-    run_managed_recording_preflight,
+    MotanPreflightStatus, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
+    ReplayPositiveProbeResult, drive_managed_recording_input, recover_managed_recording,
+    run_managed_recording, run_managed_recording_preflight,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,

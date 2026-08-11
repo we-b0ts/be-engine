@@ -35,6 +35,7 @@ struct PendingRequest {
     frame: Frame,
     identity: RequestIdentity,
     group: Option<String>,
+    heartbeat: bool,
     started: Instant,
 }
 
@@ -109,6 +110,7 @@ pub(crate) async fn handle_connected(
                     frame,
                     identity: metadata.identity,
                     group: metadata.group,
+                    heartbeat: metadata.heartbeat,
                     started: Instant::now(),
                 };
                 let raw = request.frame.raw.clone();
@@ -305,7 +307,7 @@ async fn record_exchange(
         response.map_or(&[][..], |frame| frame.raw.as_ref()),
         max_frame_bytes,
     );
-    let heartbeat = request.identity.is_heartbeat();
+    let heartbeat = request.heartbeat;
     let command = request.identity.command();
     let replay_safe = !request_capture.truncated
         && !response_capture.truncated

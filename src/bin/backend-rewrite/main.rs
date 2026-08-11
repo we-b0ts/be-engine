@@ -19,6 +19,7 @@ use traffic_e2e::{
     verify_rewrite_repair,
 };
 
+mod config_protocol;
 mod dependency_rule;
 mod project_init;
 mod recorder_capture;
@@ -93,6 +94,8 @@ fn report_error(error: &anyhow::Error) {
 enum RewriteCommand {
     /// Initialize one target repository for a backend rewrite.
     Init(project_init::ProjectInitArgs),
+    /// Apply an idempotent, typed update to initialized repository configuration.
+    Config(config_protocol::ConfigArgs),
     /// Inspect or replace the frozen source-compatible target startup inputs.
     Startup(startup::StartupArgs),
     /// Advance deterministic stages and return the only allowed next action.
@@ -404,6 +407,7 @@ async fn run(cli: Cli) -> Result<()> {
     let pretty = cli.pretty;
     match cli.command {
         RewriteCommand::Init(args) => project_init::run(target_root, args, pretty).await,
+        RewriteCommand::Config(args) => config_protocol::run(target_root, args, pretty),
         RewriteCommand::Startup(args) => startup::run(target_root, args, pretty),
         RewriteCommand::Next(args) => {
             let recovery_root = target_root.clone();

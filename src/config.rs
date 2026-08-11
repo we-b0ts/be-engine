@@ -25,8 +25,10 @@ mod feedback;
 mod http_gateway;
 mod http_response_rewrite;
 mod initialization;
+mod motan_gateway;
 mod recording;
 mod repository_initialization;
+mod repository_protocol;
 mod rule_document;
 
 pub use allowed_unused_http::{
@@ -70,6 +72,7 @@ pub use initialization::{
     DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_RECORDING_RULE, RecorderConfigInitOptions,
     RecorderConfigInitResult, initialize_recorder_config,
 };
+pub use motan_gateway::{MotanGatewayConfig, MotanGatewayRuleConfig};
 pub use recording::{
     RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     TrafficJsonlMode,
@@ -77,6 +80,9 @@ pub use recording::{
 pub use repository_initialization::{
     InspectedContainer, RepositoryConfigInitOptions, RepositoryConfigInitResult,
     initialize_repository_config,
+};
+pub use repository_protocol::{
+    MotanProtocolConfigOptions, MotanProtocolConfigResult, enable_repository_motan_protocol,
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -90,6 +96,7 @@ pub struct AppConfig {
     pub http: HttpConfig,
     pub http_response_rewrite: HttpResponseRewriteConfig,
     pub http_gateway: HttpGatewayConfig,
+    pub motan_gateway: MotanGatewayConfig,
     pub mysql: MysqlConfig,
     pub recording: RecordingConfig,
     pub tls: TlsConfig,
@@ -242,6 +249,7 @@ impl AppConfig {
         self.recording.validate_body_limits()?;
         self.recording.validate_request_header_encryption()?;
         http_gateway::validate_config(&self.http_gateway)?;
+        motan_gateway::validate_config(&self.motan_gateway)?;
         let comparison_recording = self.comparison_recording.as_ref().context(
             "record-comparison command requires a [comparison_recording] configuration section",
         )?;
@@ -257,6 +265,7 @@ impl AppConfig {
         self.recording.validate()?;
         self.http_response_rewrite.validate()?;
         http_gateway::validate_config(&self.http_gateway)?;
+        motan_gateway::validate_config(&self.motan_gateway)?;
         allowed_unused_http::validate_config(&self.http_gateway)?;
         self.http_gateway
             .per_api_case_limits

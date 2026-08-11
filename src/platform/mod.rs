@@ -21,8 +21,9 @@ mod replay_preflight;
 mod startup;
 
 pub use preflight::{
-    ManagedRecordingPreflightOptions, ManagedRecordingPreflightRecordingResult,
-    ManagedRecordingPreflightResult,
+    ManagedMotanPreflightResult, ManagedMotanRecordingResult, ManagedRecordingPreflightOptions,
+    ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
+    MotanPreflightStatus,
 };
 pub use recording_input::{
     ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
@@ -35,6 +36,7 @@ pub use replay_preflight::{
 };
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
 const BREEZE_NO_FALLBACK: &str = include_str!("assets/brz-no-fallback.sh");
+const PREFLIGHT_BUSINESS_INPUT: &str = include_str!("assets/preflight-business-input.sh");
 const HTTPS_PROBE: &[u8] = include_bytes!("assets/HttpsProbe.class");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -112,6 +114,8 @@ pub struct ManagedRecordingResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub breeze_container: Option<String>,
     pub manifest: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub motan: Option<ManagedMotanRecordingResult>,
     pub managed_by: &'static str,
 }
 
@@ -121,6 +125,14 @@ struct ManagedRuntimeResult {
     source_container: String,
     breeze_container: Option<String>,
     manifest: PathBuf,
+    motan: Option<MotanRuntimeContext>,
+}
+
+#[derive(Debug, Clone)]
+struct MotanRuntimeContext {
+    source_port: u16,
+    gateway_port: u16,
+    motan_replay_command: String,
 }
 
 pub async fn run_managed_recording(
@@ -134,6 +146,11 @@ pub async fn run_managed_recording(
     let operation = options.operation;
     let result =
         run_managed_runtime(options, ManagedRuntimeOperation::Recording(operation)).await?;
+    let motan = result
+        .motan
+        .as_ref()
+        .map(|_| preflight::validate_motan_recording(&result.manifest))
+        .transpose()?;
     Ok(ManagedRecordingResult {
         operation,
         run_id: result.run_id,
@@ -141,6 +158,7 @@ pub async fn run_managed_recording(
         source_container: result.source_container,
         breeze_container: result.breeze_container,
         manifest: result.manifest,
+        motan,
         managed_by: "traffic-e2e",
     })
 }
@@ -169,7 +187,7 @@ pub async fn run_managed_recording_preflight(
         ManagedRuntimeOperation::Preflight,
     )
     .await?;
-    let evidence = preflight::validate(&runtime.manifest)?;
+    let evidence = preflight::validate(&runtime.manifest, runtime.motan.is_some())?;
     let replay_network = replay_preflight::run(
         &runtime.target_root,
         &project,
@@ -178,11 +196,39 @@ pub async fn run_managed_recording_preflight(
     )
     .await
     .context("replay_network preflight failed")?;
+    let motan = runtime.motan.as_ref().map(|motan| {
+        let status = evidence
+            .motan_status
+            .expect("enabled Motan preflight must have a status");
+        preflight::ManagedMotanPreflightResult {
+            status,
+            observed_cases: evidence.motan_cases,
+            source_port: motan.source_port,
+            gateway_port: motan.gateway_port,
+            validation_deferred: status == preflight::MotanPreflightStatus::NotObserved,
+            motan_replay_command: motan.motan_replay_command.clone(),
+            required_action: (status == preflight::MotanPreflightStatus::NotObserved).then_some(
+                "No Motan request was observed. Ask whether to rerun preflight with controlled \
+                 traffic now or defer Motan validation to the first managed recording.",
+            ),
+        }
+    });
+    let validation_deferred = motan
+        .as_ref()
+        .is_some_and(|motan| motan.validation_deferred);
     Ok(ManagedRecordingPreflightResult {
-        status: "passed",
+        status: if validation_deferred {
+            "passed_with_deferred_validation"
+        } else {
+            "passed"
+        },
         target_container,
         recording: ManagedRecordingPreflightRecordingResult {
-            status: "passed",
+            status: if validation_deferred {
+                "passed_with_deferred_validation"
+            } else {
+                "passed"
+            },
             run_id: runtime.run_id,
             target_root: runtime.target_root,
             source_container: runtime.source_container,
@@ -192,6 +238,7 @@ pub async fn run_managed_recording_preflight(
             published_cases: evidence.published_cases,
             https_interception_verified: evidence.https_interception_verified,
             global_probe_dependency_verified: evidence.global_probe_dependency_verified,
+            motan,
         },
         replay_network,
         managed_by: "traffic-e2e",
@@ -214,6 +261,30 @@ async fn run_managed_runtime(
         recorder_config.display()
     );
     let recorder = crate::config::AppConfig::load_comparison_recording(recorder_config)?;
+    let motan = if recorder.motan_gateway.enabled
+        && runtime_operation
+            != ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
+    {
+        ensure!(
+            recorder.recording.traffic_jsonl != crate::config::TrafficJsonlMode::Off,
+            "managed Motan recording requires recording.traffic_jsonl to be errors or full so \
+             gateway failures remain verifiable"
+        );
+        let source_port = endpoint_port(
+            &recorder.motan_gateway.matched_upstream,
+            "motan_gateway.matched_upstream",
+        )?;
+        let gateway_port = recorder.motan_gateway.listen.port();
+        Some(MotanRuntimeContext {
+            source_port,
+            gateway_port,
+            motan_replay_command: format!(
+                "motan-replay --input-raw :{source_port} --output-rpc 127.0.0.1:{gateway_port}"
+            ),
+        })
+    } else {
+        None
+    };
     ensure!(
         recorder.recording.post_ready_quiet_period() >= std::time::Duration::from_secs(15),
         "managed recording requires a post-ready quiet period of at least 15 seconds"
@@ -311,6 +382,11 @@ async fn run_managed_runtime(
         .env("TRAFFIC_E2E_SOURCE_PORT", source_port.to_string())
         .env("TRAFFIC_E2E_RECORDING_ORIGIN", recording_origin)
         .env(
+            "TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED",
+            (runtime_operation == ManagedRuntimeOperation::Preflight && motan.is_some())
+                .to_string(),
+        )
+        .env(
             "TRAFFIC_E2E_SOURCE_READY_PATH",
             &recorder.http_gateway.ready.path,
         )
@@ -327,6 +403,23 @@ async fn run_managed_runtime(
         .arg(&run_id)
         .arg("--brz-no-fallback")
         .arg(options.breeze_no_fallback.to_string());
+    if runtime_operation == ManagedRuntimeOperation::Preflight
+        && let Some(motan) = &motan
+    {
+        command
+            .env(
+                "TRAFFIC_E2E_MOTAN_SOURCE_PORT",
+                motan.source_port.to_string(),
+            )
+            .env(
+                "TRAFFIC_E2E_MOTAN_GATEWAY_PORT",
+                motan.gateway_port.to_string(),
+            )
+            .env(
+                "TRAFFIC_E2E_MOTAN_REPLAY_COMMAND",
+                &motan.motan_replay_command,
+            );
+    }
     if let Some(image) = target_image {
         command.env("TRAFFIC_E2E_TARGET_IMAGE_ID", image.id);
     }
@@ -372,7 +465,19 @@ async fn run_managed_runtime(
         source_container: config.source_container,
         breeze_container: config.breeze_container,
         manifest,
+        motan,
     })
+}
+
+fn endpoint_port(endpoint: &str, label: &str) -> Result<u16> {
+    let (_, port) = endpoint
+        .rsplit_once(':')
+        .with_context(|| format!("{label} must contain a port"))?;
+    let port = port
+        .parse::<u16>()
+        .with_context(|| format!("{label} has an invalid port"))?;
+    ensure!(port > 0, "{label} port must be greater than zero");
+    Ok(port)
 }
 
 async fn wait_for_managed_runtime(
@@ -433,6 +538,11 @@ fn stage_assets(target_root: &Path) -> Result<PathBuf> {
         .with_context(|| format!("failed to create Platform asset root {}", root.display()))?;
     write_asset(&root.join("manage-platform.sh"), MANAGER, 0o700)?;
     write_asset(&root.join("brz-no-fallback.sh"), BREEZE_NO_FALLBACK, 0o700)?;
+    write_asset(
+        &root.join("preflight-business-input.sh"),
+        PREFLIGHT_BUSINESS_INPUT,
+        0o600,
+    )?;
     write_binary_asset(&root.join("HttpsProbe.class"), HTTPS_PROBE, 0o644)?;
     Ok(root)
 }
@@ -702,7 +812,14 @@ mod tests {
         assert!(MANAGER.contains("java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e"));
         assert!(!MANAGER.contains("command -v javac"));
         assert!(!MANAGER.contains("getent ahostsv4 demo.test"));
-        assert!(MANAGER.contains("phase: \"preflight-business-input-required\""));
+        assert!(PREFLIGHT_BUSINESS_INPUT.contains("phase: \"preflight-business-input-required\""));
+        assert!(MANAGER.contains("TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED"));
+        assert!(PREFLIGHT_BUSINESS_INPUT.contains("TRAFFIC_E2E_MOTAN_REPLAY_COMMAND"));
+        assert!(PREFLIGHT_BUSINESS_INPUT.contains("optional_when_no_request_is_observed"));
+        assert!(
+            PREFLIGHT_BUSINESS_INPUT
+                .contains("replace 127.0.0.1 with this preflight host when capturing remotely")
+        );
         assert!(MANAGER.contains("wait_for_recorder_or_duration"));
         assert!(
             MANAGER.contains(
@@ -733,6 +850,14 @@ mod tests {
                 .mode()
                 & 0o777,
             0o700
+        );
+        assert_eq!(
+            fs::metadata(assets.join("preflight-business-input.sh"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
         );
         assert_eq!(
             fs::metadata(assets.join("HttpsProbe.class"))

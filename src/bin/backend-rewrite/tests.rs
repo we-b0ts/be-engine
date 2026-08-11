@@ -15,6 +15,7 @@ fn exposes_only_the_rewrite_coordinator_surface() {
         visible,
         [
             "init",
+            "config",
             "startup",
             "next",
             "status",
