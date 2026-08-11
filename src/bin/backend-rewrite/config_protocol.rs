@@ -42,15 +42,9 @@ enum ProtocolEnableCommand {
 
 #[derive(Debug, Args)]
 struct MotanProtocolArgs {
-    /// Port whose inbound Motan traffic motan-replay captures from the source environment.
-    #[arg(long)]
-    source_port: u16,
     /// Host port on which the managed Motan recording gateway listens.
     #[arg(long)]
     gateway_port: u16,
-    /// Port on which the rewritten target will serve Motan traffic.
-    #[arg(long)]
-    target_port: u16,
 }
 
 pub(super) fn run(target_root: PathBuf, args: ConfigArgs, pretty: bool) -> Result<()> {
@@ -60,9 +54,7 @@ pub(super) fn run(target_root: PathBuf, args: ConfigArgs, pretty: bool) -> Resul
                 ProtocolEnableCommand::Motan(args) => {
                     let result = enable_repository_motan_protocol(MotanProtocolConfigOptions {
                         target_root,
-                        source_port: args.source_port,
                         gateway_port: args.gateway_port,
-                        target_port: args.target_port,
                     })?;
                     super::print_json(&result, pretty)
                 }
@@ -85,15 +77,25 @@ mod tests {
             "protocol",
             "enable",
             "motan",
-            "--source-port",
-            "8080",
             "--gateway-port",
             "18081",
-            "--target-port",
-            "8081",
         ])
         .unwrap();
 
         assert!(matches!(cli.command, RewriteCommand::Config(_)));
+        assert!(
+            Cli::try_parse_from([
+                "backend-rewrite",
+                "config",
+                "protocol",
+                "enable",
+                "motan",
+                "--source-port",
+                "8080",
+                "--gateway-port",
+                "18081",
+            ])
+            .is_err()
+        );
     }
 }

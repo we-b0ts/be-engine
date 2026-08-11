@@ -47,7 +47,9 @@ captures only named Docker `Config.Env` values in mode-0600
 remote responses, recordings, logs, or diagnostics. A complete
 source-SDK-owned snapshot may be transported only in its native format.
 
-The configured `target.port` is the single port source for readiness, the
-replay HTTP driver, and the Platform comparison driver. It is passed to the
-target only when `target.startup.port_environment` declares the application's
-native variable name.
+The port in recorder `http_gateway.matched_upstream` is the single native HTTP
+port source for readiness, the replay HTTP driver, and the Platform comparison
+driver. Replay addresses it on loopback; Comparison preserves it on the
+run-owned target bridge IP. It is passed to the target only when
+`target.startup.port_environment` declares the application's native variable
+name.

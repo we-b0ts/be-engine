@@ -3,7 +3,8 @@
 Rust binaries for traffic-based E2E contracts and backend rewrite
 orchestration. `traffic-e2e` owns recording, replay, comparison, and
 diagnostics; `backend-rewrite` owns the AI-facing migration workflow and uses
-the same `traffic_e2e` crate.
+the same `traffic_e2e` crate; `backend-rewrite-admin` owns explicit
+administrator repair outside ordinary AI workflows.
 
 ## Features
 
@@ -39,9 +40,10 @@ sparse registry.
 cargo build --release --bins
 ```
 
-This produces sibling `traffic-e2e` and `backend-rewrite` executables. Keep
-them together when installing or packaging them: detached rewrite recording
-actions delegate engine work to the sibling `traffic-e2e` binary.
+This produces sibling `traffic-e2e`, `backend-rewrite`, and
+`backend-rewrite-admin` executables. Keep them together when installing or
+packaging them: detached rewrite recording actions delegate engine work to the
+sibling `traffic-e2e` binary.
 
 ## Command Model
 
@@ -158,7 +160,7 @@ cargo run -- --help
 cargo run -- diagnose recorder --config config/recorder.example.toml
 ```
 
-Install both binaries and run managed recording from an initialized target
+Install all binaries and run managed recording from an initialized target
 repository:
 
 ```bash

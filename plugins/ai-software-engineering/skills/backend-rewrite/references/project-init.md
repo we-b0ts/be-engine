@@ -33,18 +33,18 @@ business entrypoint or mount business data. A successful probe selects the
 fixed Java 8 truststore probe; otherwise the system-owned network probe is used.
 
 The recording port is the Recorder HTTP gateway that accepts selected source
-traffic. It is distinct from the source service port and target replay port.
+traffic. It is distinct from the native HTTP service port.
 Defaults are:
 
 - HTTP recording gateway `17171`;
-- source service `8080`;
-- target service `8081`;
+- recorder native HTTP upstream `http://127.0.0.1:8080`;
 - readiness `/healthz` with final status `404`; and
 - upstream DNS `10.10.10.11:53`.
 
-Use `--source-http-port`, `--target-port`, `--readiness-path`,
-`--readiness-status`, or `--upstream-dns` only when the inspected application
-contract proves a different value.
+Only `--http-gateway-port` is exposed for port selection during initialization.
+For a non-standard native service port, update
+`http_gateway.matched_upstream` in the generated recorder configuration; the
+target uses that same port in its isolated runtime namespace.
 
 The command atomically creates exactly these source-controlled files:
 
@@ -54,11 +54,21 @@ The command atomically creates exactly these source-controlled files:
 .traffic-e2e/verification.yaml
 ```
 
-`project.yaml` uses schema version 12. The startup declaration and matching
+`project.yaml` uses schema version 13. The startup declaration and matching
 snapshot are immutable initialization outputs. Normal rewrite sessions must not
 replace, refresh, or migrate them. A repository with obsolete, missing, stale,
-or damaged startup inputs requires administrator repair outside the
-`backend-rewrite` workflow.
+or damaged startup inputs requires the explicit administrator repair:
+
+```bash
+backend-rewrite-admin --target-root <target> \
+  startup recapture --confirm-replace
+backend-rewrite --target-root <target> init preflight
+```
+
+The admin command reads the complete startup declaration already stored in
+`project.yaml`, requires the configured source container to be stopped, and
+atomically replaces the local snapshot only after capture succeeds. Preflight
+validates the repaired contract; it never recaptures inputs itself.
 
 It also idempotently adds `/.traffic-e2e/local/` to `.gitignore`. It refuses
 the whole initialization when any generated file already exists, and it does
@@ -400,7 +410,8 @@ WEIBO_CONF_PATH=<source Docker Config.Env value>
 If the source application obtains its config path or listen port from a native
 environment variable, declare only that application-owned name. Use
 `target.startup.port_environment` for the variable that receives
-`target.port`. If the source uses an in-program default such as
+the native HTTP port resolved from recorder `http_gateway.matched_upstream`.
+If the source uses an in-program default such as
 `/data1/weibo/confs`, declare the mount and keep the same default; the engine
 does not invent or rewrite an environment variable. Target product code must
 not depend on generic `TRAFFIC_E2E_*` variables. Never derive inputs from
@@ -413,9 +424,9 @@ the target process, and handle `SIGTERM` with bounded graceful shutdown. It must
 not daemonize, write a PID file, run a build, or manage its own container.
 traffic-e2e starts the container with `--user 998:998`, verifies that identity,
 joins it to the run-owned network namespace, probes readiness from
-`target.port`, and owns stop/removal. UID, network namespace, mounts, and stop
-timeout are container-runtime inputs; the target entrypoint must not parse or
-override them.
+the recorder-owned native HTTP port, and owns stop/removal. UID, network
+namespace, mounts, and stop timeout are container-runtime inputs; the target
+entrypoint must not parse or override them.
 
 Initialization may provide an explicit source-controlled mock implementation
 when genuine product startup is not implemented yet. The mock is the current

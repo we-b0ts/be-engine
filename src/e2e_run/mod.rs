@@ -1,3 +1,4 @@
+mod admin_startup;
 mod branch;
 mod case_progress;
 mod config;
@@ -8,7 +9,6 @@ mod final_evidence;
 mod http_driver;
 mod model;
 mod progress;
-mod protocol_config;
 mod reclassify;
 mod request_view;
 mod result;
@@ -27,6 +27,10 @@ use crate::case_group::{
     load_complete_case_group_inventory,
 };
 
+pub use admin_startup::{
+    StartupSnapshotRecaptureOptions, StartupSnapshotRecaptureResult, recapture_startup_snapshot,
+};
+
 pub(crate) use config::render_project_config;
 pub(crate) use config::resolve_project;
 pub use dirty_evidence::{
@@ -43,7 +47,6 @@ pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 use model::RunStatus;
 pub(crate) use model::{ResolvedProjectConfig, TargetQualityGateConfig};
-pub(crate) use protocol_config::render_motan_protocol_update;
 pub(crate) use reclassify::{
     FocusedBackgroundReclassification, focused_background_reclassification_recovery_required,
     latest_focused_api, reclassify_focused_background_dependencies,
@@ -62,8 +65,6 @@ pub struct E2eRunInitOptions {
     pub breeze_container: Option<String>,
     pub target_dockerfile: PathBuf,
     pub target_startup: crate::startup::StartupConfig,
-    pub target_http_host: String,
-    pub target_port: u16,
     pub replay_policy: PathBuf,
     pub pr_base: String,
     pub recorder_config: PathBuf,
@@ -149,29 +150,10 @@ pub fn initialize_standard_e2e_project_with_force(
         .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
     let recorder_config = PathBuf::from(".traffic-e2e/recorder.toml");
     let recorder = crate::config::AppConfig::load(resolved_root.join(&recorder_config))?;
-    let comparison = recorder
-        .comparison_recording
-        .as_ref()
-        .context("recorder config has no comparison_recording section")?;
-    let candidate_upstream = comparison
-        .candidate_upstream
-        .parse::<hyper::Uri>()
-        .context("comparison_recording.candidate_upstream is not a valid URI")?;
     ensure!(
-        candidate_upstream.scheme_str() == Some("http"),
-        "comparison_recording.candidate_upstream must use http"
+        recorder.comparison_recording.is_some(),
+        "recorder config has no comparison_recording section"
     );
-    ensure!(
-        candidate_upstream
-            .path_and_query()
-            .is_none_or(|value| value.as_str() == "/"),
-        "comparison_recording.candidate_upstream must not contain a base path or query"
-    );
-    let target_http_host = candidate_upstream
-        .host()
-        .context("comparison_recording.candidate_upstream has no host")?
-        .to_string();
-    let target_port = candidate_upstream.port_u16().unwrap_or(80);
     ensure!(
         recorder.http_gateway.ready.enabled,
         "managed project replay requires an enabled http_gateway.ready probe"
@@ -182,8 +164,6 @@ pub fn initialize_standard_e2e_project_with_force(
         breeze_container: None,
         target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
         target_startup: crate::startup::StartupConfig::default(),
-        target_http_host,
-        target_port,
         replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
         pr_base: "dev-migration".to_string(),
         recorder_config,

@@ -17,11 +17,11 @@ cargo build --bins
 
 The repository includes `.cargo/config.toml` for the configured crates.io
 mirror. Do not replace that registry configuration unless explicitly asked.
-The build produces sibling `traffic-e2e` and `backend-rewrite` executables.
-Keep them together in installed packages because detached coordinator actions
-delegate engine work to `traffic-e2e`.
+The build produces sibling `traffic-e2e`, `backend-rewrite`, and
+`backend-rewrite-admin` executables. Keep them together in installed packages
+because detached coordinator actions delegate engine work to `traffic-e2e`.
 
-Both binaries report the package version, build revision, and exact pinned
+All binaries report the package version, build revision, and exact pinned
 target-runtime image from `--version`. Git checkouts derive the revision
 automatically and append `-dirty` for uncommitted content. Builds without Git
 metadata should set `TRAFFIC_E2E_BUILD_REVISION` to a 1-64 character release
@@ -488,28 +488,26 @@ active-case and dependency-drain lifecycle:
 
 ```bash
 backend-rewrite config protocol enable motan \
-  --source-port 8080 \
-  --gateway-port 18081 \
-  --target-port 8080
+  --gateway-port 18081
 ```
 
-This typed update is for an already initialized repository. It stores the
-rewritten service listener as `target.motan_port` in `.traffic-e2e/project.yaml`
-and stores the source and gateway recording ports only in the recorder file
-referenced by that project. The target port is a target runtime contract; the
-gateway port is recorder-owned and is not duplicated in project configuration.
-The source and target ports may be equal because managed Comparison isolates
-the target network namespace; the recorder gateway port must remain distinct
-from both native service ports.
-Repeating the same command returns `status: unchanged`; changing an explicit
-port updates only the owned keys and preserves Motan rules and recorder
-comments. Its result uses `validation_status: not_run`: configuration alone
-does not claim that real Motan traffic has been validated.
+This typed update is for an already initialized repository. It changes only
+the recorder file referenced by the project: `motan_gateway.listen` is set from
+`--gateway-port`, while the existing `motan_gateway.matched_upstream` remains
+the sole native Motan service endpoint. Configure that recorder endpoint before
+enabling the gateway when the default is not correct. Source and target use the
+same native port because managed Comparison isolates the target network
+namespace; the gateway port must remain distinct from that native port.
+Repeating the same command returns `status: unchanged`; changing the gateway
+port updates only owned keys and preserves the native endpoint, Motan rules,
+and recorder comments. Its result uses `validation_status: not_run`:
+configuration alone does not claim that real Motan traffic has been validated.
+Set `motan_gateway.enabled = false` to keep HTTP-only recording temporarily.
 
-`target.motan_port` does not force recording on. Set
-`motan_gateway.enabled = false` to keep the target's Motan contract while
-temporarily running HTTP-only recording. Source and gateway port consistency is
-therefore local to the recorder configuration.
+Motan has no `candidate_upstream` setting. Comparison's candidate is an HTTP
+primary-request endpoint; Motan gateway traffic is recorded/replayed through
+`listen` and `matched_upstream`, and the system does not expose a second Motan
+primary-request dispatcher.
 
 ```toml
 [motan_gateway]
@@ -1225,12 +1223,13 @@ backend-rewrite --target-root ../target init \
 From the target root, `--target-root` is unnecessary. `--breeze` uses the
 conventional existing container named `breeze`; use `--breeze=<container>` only
 for a non-standard name. Defaults are Recorder HTTP gateway port `17171`,
-source and target port `8080`, readiness `/healthz` with status `404`,
-and upstream DNS `10.10.10.11:53`. Override a default only when the inspected
-application contract proves it is different. Source and Breeze containers
-need only be inspectable, not running.
+recorder native HTTP upstream `http://127.0.0.1:8080`, readiness `/healthz`
+with status `404`, and upstream DNS `10.10.10.11:53`. Only the gateway port is
+an initialization port argument. Change a non-standard native endpoint in
+`recorder.toml`, which is its sole configuration owner. Source and Breeze
+containers need only be inspectable, not running.
 
-The command atomically generates version-12 `.traffic-e2e/project.yaml`,
+The command atomically generates version-13 `.traffic-e2e/project.yaml`,
 `.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
 configuration has explicit source, optional Breeze, target, replay, recording,
 delivery, and state sections. A typical
@@ -1247,8 +1246,6 @@ target:
     # Optional application-owned names:
     # port_environment: PORT
     # replay_ca_environment: SSL_CERT_FILE
-  http_host: 127.0.0.1
-  port: 8080
   # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
   # quality_gates:
   #   - name: project-check
@@ -1259,7 +1256,9 @@ Target readiness path and status come from the referenced recorder's
 `http_gateway.ready` section. Target request timeout comes from
 `comparison_recording.upstream_timeout_ms`; target startup and replay startup
 timeouts are coordinator-owned defaults. These runtime policy values are not
-duplicated in `project.yaml`.
+duplicated in `project.yaml`. The target's native HTTP port is the port in
+`http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
+it on the run-owned target bridge IP.
 
 Each quality gate is an exact argv executed without a shell from the canonical
 target root. At most eight uniquely named commands may be configured, with at
@@ -1272,7 +1271,18 @@ Managed replay reads its target response limit from
 Existing configuration is never overwritten. If any generated file exists,
 the whole initialization refuses without creating another file. Normal
 execution does not migrate or dual-read obsolete project schemas; migration
-and repair require administrator-owned tooling outside `backend-rewrite`. The
+and repair require administrator-owned tooling outside `backend-rewrite`. When
+an administrator intentionally changes `target.startup`, recapture the exact
+new declaration and then run preflight:
+
+```bash
+backend-rewrite-admin --target-root <target> \
+  startup recapture --confirm-replace
+backend-rewrite --target-root <target> init preflight
+```
+
+Recapture requires the configured source container to be stopped. Preflight is
+read-only validation and does not repair a stale snapshot. The
 initializer idempotently adds `/.traffic-e2e/local/` to the repository `.gitignore`; all
 non-versioned runtime data lives below that root. It copies every declared
 absolute path from the stopped source container into

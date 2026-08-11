@@ -3,6 +3,8 @@ root_dir = "./.traffic-e2e/local/artifacts"
 
 [comparison_recording]
 # Comparison recording reuses http_gateway.matched_upstream as the baseline.
+# candidate_upstream is specifically the HTTP primary-request candidate;
+# Motan gateway traffic has no candidate endpoint.
 # Comparison recording uses the methods declared by each HTTP gateway rule
 # without an additional read-only-method restriction.
 candidate_upstream = "http://127.0.0.1:6161"

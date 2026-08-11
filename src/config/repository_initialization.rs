@@ -14,14 +14,13 @@ const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
 const RECORDER_CONFIG_PATH: &str = ".traffic-e2e/recorder.toml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
+const DEFAULT_NATIVE_HTTP_PORT: u16 = 8080;
 
 #[derive(Debug, Clone)]
 pub struct RepositoryConfigInitOptions {
     pub target_root: PathBuf,
     pub source_container: String,
     pub breeze_container: Option<String>,
-    pub source_http_port: u16,
-    pub target_port: u16,
     pub http_gateway_port: u16,
     pub readiness_path: String,
     pub readiness_status: u16,
@@ -98,8 +97,8 @@ fn initialize_repository_config_with(
 
     let recorder_options = RecorderConfigInitOptions {
         target_root: target_root.clone(),
-        source_http_port: options.source_http_port,
-        candidate_http_port: options.target_port,
+        source_http_port: DEFAULT_NATIVE_HTTP_PORT,
+        candidate_http_port: DEFAULT_NATIVE_HTTP_PORT,
         http_gateway_port: options.http_gateway_port,
         readiness_path: options.readiness_path.clone(),
         readiness_status: options.readiness_status,
@@ -114,8 +113,6 @@ fn initialize_repository_config_with(
         breeze_container: breeze.as_ref().map(|container| container.name.clone()),
         target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
         target_startup: options.startup.clone(),
-        target_http_host: "127.0.0.1".to_string(),
-        target_port: options.target_port,
         replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
         pr_base: "dev-migration".to_string(),
         recorder_config: PathBuf::from(RECORDER_CONFIG_PATH),
@@ -373,8 +370,6 @@ mod tests {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
                 breeze_container: Some("breeze".to_string()),
-                source_http_port: 8080,
-                target_port: 8080,
                 http_gateway_port: 17_171,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
@@ -425,9 +420,11 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 12"));
+        assert!(project.contains("version: 13"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
-        assert!(project.contains("  port: 8080"));
+        assert!(!project.contains("http_host:"));
+        assert!(!project.contains("  port:"));
+        assert!(!project.contains("motan_port:"));
         assert!(project.contains("runtime_root: local/runtime"));
         assert!(project.contains("startup: {}"));
         assert!(project.contains("container: breeze"));
@@ -471,8 +468,6 @@ mod tests {
                 target_root: target.path().to_path_buf(),
                 source_container: "friendship".to_string(),
                 breeze_container: Some("breeze".to_string()),
-                source_http_port: 8080,
-                target_port: 8080,
                 http_gateway_port: 17_171,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,

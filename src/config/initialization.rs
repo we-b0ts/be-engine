@@ -296,7 +296,7 @@ forward = false
 [http_gateway]
 enabled = true
 # Set by `init --http-gateway-port`; this listener receives selected HTTP
-# recording traffic and is distinct from the source and target service ports.
+# recording traffic and is distinct from the recorder-owned native HTTP port.
 listen = "0.0.0.0:__HTTP_GATEWAY_PORT__"
 matched_upstream = "http://127.0.0.1:__SOURCE_HTTP_PORT__"
 fallback_mode = "fixed_response"

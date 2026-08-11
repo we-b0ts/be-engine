@@ -107,6 +107,19 @@ fn parses_the_bounded_rewrite_surface() {
         ])
         .is_err()
     );
+    for native_port_flag in ["--source-http-port", "--target-port"] {
+        assert!(
+            Cli::try_parse_from([
+                "test",
+                "init",
+                "--source-container",
+                "friendship",
+                native_port_flag,
+                "8081",
+            ])
+            .is_err()
+        );
+    }
     let RewriteCommand::Init(default_init) =
         Cli::try_parse_from(["test", "init", "--source-container", "friendship"])
             .unwrap()

@@ -813,9 +813,9 @@ mod tests {
         fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
         fs::write(
             target.path().join(".traffic-e2e/project.yaml"),
-            "version: 12\n\
+            "version: 13\n\
              source:\n  container: source\n\
-             target:\n  dockerfile: .traffic-e2e/Dockerfile.e2e\n  startup: {}\n  http_host: 127.0.0.1\n  port: 8081\n\
+             target:\n  dockerfile: .traffic-e2e/Dockerfile.e2e\n  startup: {}\n\
              replay:\n  policy: .traffic-e2e/verification.yaml\n\
              recording:\n  config: .traffic-e2e/recorder.toml\n  rule: record-api\n\
              delivery:\n  pr_base: master\n\

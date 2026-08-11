@@ -8,8 +8,9 @@ ownership.
 
 ## Package Shape
 
-Keep this repository as one Rust crate while the companion `traffic-e2e` and
-`backend-rewrite` binaries share the same engine and coordinator library.
+Keep this repository as one Rust crate while the companion `traffic-e2e`,
+`backend-rewrite`, and `backend-rewrite-admin` binaries share the same engine
+and coordinator library.
 Introduce a workspace only when independently versioned packages or a real
 package dependency boundary appears. Ask before creating one when the boundary
 is unclear.
@@ -37,6 +38,8 @@ is unclear.
   reverse.
 - `main.rs` owns the `traffic-e2e` engine CLI bootstrap only.
 - `bin/backend-rewrite/` owns the AI-facing coordinator CLI bootstrap only.
+- `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
+  only; administrator behavior remains in the library owner for that contract.
 - `lib.rs` owns application wiring, shared state, and stable exports;
   it remains one crate façade above the 800-line review threshold because its
   flat exports and shared application-state composition have the same crate-root
@@ -58,8 +61,9 @@ is unclear.
   `platform/startup.rs` owns the shell-runtime projection of that snapshot.
 - `e2e_run/config.rs` remains the cohesive strict project-schema lifecycle:
   initialization rendering, load/validation, and runtime path resolution must
-  agree on one contract. Typed protocol mutation is kept in
-  `e2e_run/protocol_config.rs` so it does not add another lifecycle there.
+  agree on one contract. `e2e_run/admin_startup.rs` projects the validated
+  project startup declaration into the administrator-owned snapshot recapture
+  operation without adding mutation to the ordinary coordinator CLI.
 - `internal_runtime` owns the canonical `.traffic-e2e/local/runtime` path used
   by engine-managed mutable state. The directory is inspectable but not a
   stable API; coordinator commands remain the primary interface and all state
@@ -99,10 +103,10 @@ is unclear.
   its result. Protocol evidence validation stays in `platform/preflight.rs`,
   and business-input presentation stays in the separately staged
   `preflight-business-input.sh` asset.
-- `config/repository_protocol.rs` owns typed, idempotent cross-file protocol
-  convergence for initialized repositories. `e2e_run/protocol_config.rs` owns
-  the project-side protocol topology projection; Recorder TOML editing and the
-  two-file publish transaction remain under `config`.
+- `config/repository_protocol.rs` owns typed, idempotent recorder protocol
+  convergence for initialized repositories. Native and gateway protocol
+  endpoints remain recorder-owned and this module must not project them into
+  project configuration.
 
 Prefer these boundaries while they remain accurate. When implementation proves
 that a current parent no longer expresses ownership, make the smallest
