@@ -19,6 +19,7 @@ pub(crate) mod background;
 pub(crate) mod cache_snapshot;
 mod capture;
 mod capture_health;
+pub(crate) mod case;
 mod dependencies;
 mod event;
 pub(crate) mod http;
@@ -36,6 +37,7 @@ mod writer;
 
 pub use artifact_owner::ArtifactOwner;
 pub use capture::*;
+pub(crate) use case::{CaseInvalidation, CaseInvalidationContext, PrimaryCaseDescriptor};
 pub use event::*;
 pub(crate) use summary::{
     SourceProcessTrafficObservation, load_pre_readiness_traffic_summary,

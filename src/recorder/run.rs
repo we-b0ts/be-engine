@@ -8,9 +8,8 @@ use tracing::info;
 use uuid::Uuid;
 
 use super::dependencies::ensure_case_dependency_file;
-use super::http::case::CaseInvalidationContext;
 use super::summary::{write_case_dependency_summary, write_global_dependency_summary};
-use super::{CaseContext, Recorder, sanitize_path_component};
+use super::{CaseContext, CaseInvalidationContext, Recorder, sanitize_path_component};
 use crate::recording_completion::RecordingCompletionReason;
 
 #[derive(Debug, Serialize)]

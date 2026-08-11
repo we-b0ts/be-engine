@@ -4,8 +4,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::recorder::CaseContext;
-use crate::recorder::http::case::CaseInvalidation;
+use crate::recorder::{CaseContext, CaseInvalidation};
 
 mod activity;
 

@@ -4,18 +4,25 @@ use serde::Serialize;
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::recorder::CaseContext;
+use crate::recorder::{CaseContext, PrimaryCaseDescriptor};
 use crate::{ActiveCaseActivationError, ActiveCaseGuard, ActiveCaseRejection, AppState};
 
 pub(super) async fn try_admit_case(
     state: &AppState,
     case: &CaseContext,
-    case_pattern: &str,
+    descriptor: &PrimaryCaseDescriptor,
     recording_api: Option<&str>,
     max_cases: usize,
     upstream_base: &str,
     uri: &Uri,
 ) -> Option<ActiveCaseGuard> {
+    let Some(case_pattern) = descriptor.http_path_pattern() else {
+        warn!(
+            case_id = %case.id,
+            "HTTP gateway received a non-HTTP primary case descriptor"
+        );
+        return None;
+    };
     let published_cases = match recording_api {
         Some(recording_api) => state
             .recorder()
@@ -69,6 +76,19 @@ pub(super) async fn try_admit_case(
                     error = %err,
                     case_id = %case.id,
                     "failed to persist HTTP gateway case admission"
+                );
+                discard_unadmitted_case(state, case).await;
+                return None;
+            }
+            if let Err(err) = state
+                .recorder()
+                .write_case_json(case, "case.json", descriptor)
+                .await
+            {
+                warn!(
+                    error = %err,
+                    case_id = %case.id,
+                    "failed to persist HTTP primary case descriptor"
                 );
                 discard_unadmitted_case(state, case).await;
                 return None;
@@ -170,7 +190,7 @@ mod tests {
         let guard = try_admit_case(
             &state,
             &first,
-            "/api/resource/isok",
+            &PrimaryCaseDescriptor::http("GET", "/api/resource/isok"),
             None,
             50,
             "http://127.0.0.1:7171",
@@ -189,7 +209,7 @@ mod tests {
             try_admit_case(
                 &state,
                 &second,
-                "/api/resource/isok",
+                &PrimaryCaseDescriptor::http("GET", "/api/resource/isok"),
                 None,
                 50,
                 "http://127.0.0.1:7171",
@@ -235,7 +255,7 @@ mod tests {
             try_admit_case(
                 &state_for_task,
                 &case_for_task,
-                "/api/resource/isok",
+                &PrimaryCaseDescriptor::http("GET", "/api/resource/isok"),
                 None,
                 50,
                 "http://127.0.0.1:7171",
@@ -293,7 +313,7 @@ mod tests {
             try_admit_case(
                 &state_for_task,
                 &first_for_task,
-                "/api/resource/isok",
+                &PrimaryCaseDescriptor::http("GET", "/api/resource/isok"),
                 None,
                 50,
                 "http://127.0.0.1:7171",
@@ -328,7 +348,7 @@ mod tests {
         let second_guard = try_admit_case(
             &state,
             &second,
-            "/api/resource/isok",
+            &PrimaryCaseDescriptor::http("GET", "/api/resource/isok"),
             None,
             50,
             "http://127.0.0.1:7171",

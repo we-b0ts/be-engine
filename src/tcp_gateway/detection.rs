@@ -82,19 +82,10 @@ pub(crate) fn detect_client_protocol(bytes: &[u8]) -> Detection {
 }
 
 fn detect_motan(bytes: &[u8]) -> Detection {
-    if bytes.len() < 2 {
-        return Detection::NeedMore;
-    }
-    if bytes[..2] != [0xF1, 0xF1] {
-        return Detection::NoMatch;
-    }
-    if bytes.len() < 18 {
-        return Detection::NeedMore;
-    }
-    if bytes[16..18] == [0xF0, 0xF0] {
-        Detection::Match(DetectedProtocol::Motan)
-    } else {
-        Detection::NoMatch
+    match motan_protocol::inspect_protocol_version(bytes) {
+        Ok(Some(_)) => Detection::Match(DetectedProtocol::Motan),
+        Ok(None) => Detection::NeedMore,
+        Err(_) => Detection::NoMatch,
     }
 }
 
@@ -236,6 +227,11 @@ mod tests {
         motan[16..18].copy_from_slice(&[0xF0, 0xF0]);
         assert_eq!(
             detect_client_protocol(&motan),
+            Detection::Match(DetectedProtocol::Motan)
+        );
+        let motan2 = motan_protocol::FrameBuilder::request(1).encode().unwrap();
+        assert_eq!(
+            detect_client_protocol(&motan2[..13]),
             Detection::Match(DetectedProtocol::Motan)
         );
     }

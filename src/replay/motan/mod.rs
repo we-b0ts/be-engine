@@ -342,8 +342,9 @@ pub(super) async fn handle_connection(
         if !frame.request {
             return Err(anyhow!("Motan replay client sent a response frame"));
         }
-        let identity = frame.request_identity()?;
-        if identity.is_heartbeat() {
+        let request_metadata = frame.request_metadata()?;
+        let identity = request_metadata.identity;
+        if request_metadata.heartbeat {
             let template = {
                 state
                     .lock()

@@ -17,10 +17,10 @@ use crate::replay::{
     RecordedMysqlValue, ReplayCase, ReplaySessionIdentity, TargetKey, normalize_host, normalize_sql,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct CaseIdentity {
-    method: String,
-    path: String,
+    method: Option<String>,
+    path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -76,6 +76,18 @@ struct RecordedCaseRequest {
     uri: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct RecordedCaseDescriptor {
+    kind: RecordedCaseKind,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum RecordedCaseKind {
+    Http,
+    MotanRpc,
+}
+
 impl ReplayPolicyRuntime {
     pub(in crate::replay) fn load(
         path: &Path,
@@ -92,31 +104,9 @@ impl ReplayPolicyRuntime {
                 "replay policy requires expected-response.json for assertion-only use under {}",
                 case.dir.display()
             );
-            let request: RecordedCaseRequest =
-                serde_json::from_slice(&fs::read(&request_path).with_context(|| {
-                    format!(
-                        "failed to read request metadata for replay policy {}",
-                        request_path.display()
-                    )
-                })?)
-                .with_context(|| {
-                    format!(
-                        "failed to parse request metadata for replay policy {}",
-                        request_path.display()
-                    )
-                })?;
-            let path = uri_path(&request.uri);
-            ensure!(
-                path.starts_with('/'),
-                "recorded request URI must contain an absolute path: {:?}",
-                request.uri
-            );
             case_identities.insert(
                 case.id.clone(),
-                CaseIdentity {
-                    method: request.method,
-                    path,
-                },
+                load_case_identity(&case.dir, &request_path)?,
             );
         }
         let usage = loaded
@@ -514,9 +504,58 @@ fn exact_mysql_params(
 }
 
 fn rule_matches_case(rule: &ReplayPolicyRule, case: &CaseIdentity) -> bool {
-    rule.case_selector.as_ref().is_none_or(|selector| {
-        selector.method.eq_ignore_ascii_case(&case.method)
-            && path_pattern_matches(&selector.path, &case.path)
+    let Some(selector) = rule.case_selector.as_ref() else {
+        return true;
+    };
+    let (Some(method), Some(path)) = (case.method.as_deref(), case.path.as_deref()) else {
+        return false;
+    };
+    selector.method.eq_ignore_ascii_case(method) && path_pattern_matches(&selector.path, path)
+}
+
+fn load_case_identity(case_dir: &Path, request_path: &Path) -> Result<CaseIdentity> {
+    let descriptor_path = case_dir.join("case.json");
+    if descriptor_path.is_file() {
+        let descriptor: RecordedCaseDescriptor =
+            serde_json::from_slice(&fs::read(&descriptor_path).with_context(|| {
+                format!(
+                    "failed to read primary case descriptor {}",
+                    descriptor_path.display()
+                )
+            })?)
+            .with_context(|| {
+                format!(
+                    "failed to parse primary case descriptor {}",
+                    descriptor_path.display()
+                )
+            })?;
+        if matches!(descriptor.kind, RecordedCaseKind::MotanRpc) {
+            return Ok(CaseIdentity::default());
+        }
+    }
+
+    let request: RecordedCaseRequest =
+        serde_json::from_slice(&fs::read(request_path).with_context(|| {
+            format!(
+                "failed to read request metadata for replay policy {}",
+                request_path.display()
+            )
+        })?)
+        .with_context(|| {
+            format!(
+                "failed to parse request metadata for replay policy {}",
+                request_path.display()
+            )
+        })?;
+    let path = uri_path(&request.uri);
+    ensure!(
+        path.starts_with('/'),
+        "recorded request URI must contain an absolute path: {:?}",
+        request.uri
+    );
+    Ok(CaseIdentity {
+        method: Some(request.method),
+        path: Some(path),
     })
 }
 

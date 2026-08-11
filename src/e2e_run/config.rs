@@ -4,9 +4,9 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::model::{
-    BreezeProjectConfig, DeliveryProjectConfig, ProjectConfig, RecordingProjectConfig,
-    ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
-    TargetProjectConfig,
+    BreezeProjectConfig, DeliveryProjectConfig, ProjectConfig, ProtocolProjectConfig,
+    RecordingProjectConfig, ReplayProjectConfig, ResolvedProjectConfig, RunLayout,
+    SourceProjectConfig, StateProjectConfig, TargetProjectConfig,
 };
 use super::target_quality_config::{inferred_target_quality_gates, validate_target_quality_gates};
 use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
@@ -150,6 +150,7 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
         state: StateProjectConfig {
             runtime_root: PathBuf::from(DEFAULT_RUNTIME_ROOT),
         },
+        protocols: ProtocolProjectConfig::default(),
     };
     validate_project_config(&project_config)?;
     let mut payload = serde_yaml::to_string(&project_config)?.into_bytes();
@@ -218,6 +219,25 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     );
     let recorder_config = resolve_under(&target_root, &config.recording.config);
     let recorder = crate::config::AppConfig::load(&recorder_config)?;
+    if let Some(motan) = &config.protocols.motan {
+        ensure!(
+            recorder.motan_gateway.enabled,
+            "project protocols.motan requires motan_gateway.enabled in {}",
+            recorder_config.display()
+        );
+        ensure!(
+            recorder.motan_gateway.listen.port() == motan.gateway_port,
+            "project protocols.motan.gateway_port {} does not match recorder Motan gateway port {}",
+            motan.gateway_port,
+            recorder.motan_gateway.listen.port()
+        );
+        ensure!(
+            endpoint_port(&recorder.motan_gateway.matched_upstream) == Some(motan.source_port),
+            "project protocols.motan.source_port {} does not match recorder Motan upstream {:?}",
+            motan.source_port,
+            recorder.motan_gateway.matched_upstream
+        );
+    }
     let target_max_response_bytes = recorder.recording.max_body_bytes;
     let target_quality_gates = config
         .target
@@ -375,6 +395,18 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         !config.recording.rule.trim().is_empty(),
         "recording.rule must not be empty"
     );
+    if let Some(motan) = &config.protocols.motan {
+        ensure!(
+            motan.source_port > 0 && motan.gateway_port > 0 && motan.target_port > 0,
+            "protocols.motan ports must be greater than zero"
+        );
+        ensure!(
+            motan.source_port != motan.gateway_port
+                && motan.source_port != motan.target_port
+                && motan.gateway_port != motan.target_port,
+            "protocols.motan source_port, gateway_port, and target_port must be distinct"
+        );
+    }
     Ok(())
 }
 
@@ -395,6 +427,10 @@ fn resolve_under(root: &Path, path: &Path) -> PathBuf {
     } else {
         root.join(path)
     }
+}
+
+fn endpoint_port(endpoint: &str) -> Option<u16> {
+    endpoint.rsplit_once(':')?.1.parse().ok()
 }
 
 fn derive_run_key(case_source: &Path) -> Result<String> {
