@@ -23,6 +23,9 @@ pub(super) struct RecordComparisonArgs {
     /// Runtime-only candidate origin selected by the managed comparison network.
     #[arg(long)]
     candidate_upstream: Option<String>,
+    /// Runtime-only Motan candidate endpoint selected by the managed comparison network.
+    #[arg(long)]
+    candidate_motan_upstream: Option<String>,
     /// Explicit 14-digit UTC comparison recording run identifier.
     #[arg(long, value_parser = parse_run_id)]
     run_id: Option<String>,
@@ -49,9 +52,10 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
         "comparison recording config not found: {}",
         args.config.display()
     );
-    let mut config = AppConfig::load_comparison_recording_with_candidate(
+    let mut config = AppConfig::load_comparison_recording_with_candidates(
         &args.config,
         args.candidate_upstream.as_deref(),
+        args.candidate_motan_upstream.as_deref(),
     )
     .with_context(|| {
         format!(
@@ -171,6 +175,8 @@ mod tests {
             "verification.yaml",
             "--candidate-upstream",
             "http://172.30.0.2:8080",
+            "--candidate-motan-upstream",
+            "172.30.0.2:8002",
             "--run-id",
             "20260722153045",
             "--duration-seconds",
@@ -195,6 +201,10 @@ mod tests {
         assert_eq!(
             parsed.record_comparison.candidate_upstream.as_deref(),
             Some("http://172.30.0.2:8080")
+        );
+        assert_eq!(
+            parsed.record_comparison.candidate_motan_upstream.as_deref(),
+            Some("172.30.0.2:8002")
         );
         assert_eq!(parsed.record_comparison.duration_seconds.get(), 60);
         assert_eq!(

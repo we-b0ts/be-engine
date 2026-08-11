@@ -11,6 +11,10 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use hyper::StatusCode;
+use motan_protocol::{
+    FrameBuilder, FrameDecoder, Limits, META_GROUP, META_METHOD, META_METHOD_DESC, META_PATH,
+    Metadata, ResponseStatus,
+};
 use serde_json::Value;
 use tempfile::tempdir;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -19,8 +23,8 @@ use tokio::sync::Mutex;
 use traffic_e2e::{
     AppConfig, ArtifactsConfig, ComparisonRecordingConfig, ComparisonRecordingRunOptions,
     HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig,
-    HttpGatewayRuleConfig, RecordingWaitConfig, notify_recording_input_complete,
-    wait_for_recording_ready,
+    HttpGatewayRuleConfig, MotanGatewayConfig, RecordingWaitConfig,
+    notify_recording_input_complete, wait_for_recording_ready,
 };
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
@@ -29,14 +33,73 @@ use traffic_e2e::{
 static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
 #[tokio::test]
+async fn motan_requests_are_compared_with_the_same_case_lifecycle() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let baseline = spawn_motan_upstream(b"baseline").await;
+    let candidate = spawn_motan_upstream(b"candidate").await;
+    let http_gateway = free_addr();
+    let motan_gateway = free_addr();
+    let run_id = "20260722155956";
+    let mut config = comparison_recording_config(&temp, http_gateway, free_addr(), free_addr());
+    config.motan_gateway = MotanGatewayConfig {
+        enabled: true,
+        listen: motan_gateway,
+        matched_upstream: baseline.to_string(),
+        ..Default::default()
+    };
+    config
+        .comparison_recording
+        .as_mut()
+        .unwrap()
+        .candidate_motan_upstream = Some(candidate.to_string());
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
+    wait_for_port(motan_gateway).await;
+
+    let request = motan_request(42);
+    let mut stream = TcpStream::connect(motan_gateway).await.unwrap();
+    stream.write_all(request.raw()).await.unwrap();
+    let mut decoder = FrameDecoder::new(Limits::default()).unwrap();
+    let response = loop {
+        if let Some(frame) = decoder.decode().unwrap() {
+            break frame;
+        }
+        assert!(stream.read_buf(decoder.buffer_mut()).await.unwrap() > 0);
+    };
+    assert_eq!(&response.body[..], b"baseline");
+
+    let request_path = wait_for_file_named(&run_dir(&temp, run_id), "request.json").await;
+    let case = request_path.parent().unwrap();
+    let request = read_json(&request_path);
+    assert_eq!(request["protocol"], "motan");
+    assert_eq!(request["method"], "MOTAN");
+    assert!(
+        request["api_pattern"]
+            .as_str()
+            .unwrap()
+            .starts_with("/rpc/")
+    );
+    assert_eq!(
+        recorded_body(&case.join("expected-response.json")),
+        "baseline"
+    );
+    assert_eq!(recorded_body(&case.join("response.json")), "candidate");
+    task.abort();
+}
+
+#[tokio::test]
 async fn occupied_gateway_fails_without_publishing_a_running_manifest() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();
     let temp = tempdir().unwrap();
     let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let gateway = occupied.local_addr().unwrap();
-    let baseline = free_addr();
-    let candidate = free_addr();
+    let baseline = "127.0.0.1:1".parse().unwrap();
+    let candidate = "127.0.0.1:2".parse().unwrap();
     let run_id = "20260722155957";
     let config = comparison_recording_config(&temp, gateway, baseline, candidate);
 
@@ -762,6 +825,47 @@ async fn spawn_counting_upstream(
     (address, requests)
 }
 
+fn motan_request(request_id: u64) -> motan_protocol::Frame {
+    let mut metadata = Metadata::new();
+    metadata.insert(META_GROUP, "abtest");
+    metadata.insert(META_PATH, "com.weibo.AlchemyRpcService");
+    metadata.insert(META_METHOD, "getConfig");
+    metadata.insert(META_METHOD_DESC, "java.lang.String");
+    let raw = FrameBuilder::request(request_id)
+        .metadata(metadata)
+        .body("request")
+        .encode()
+        .unwrap();
+    let motan_protocol::DecodeStatus::Complete(frame) =
+        motan_protocol::decode_frame(&raw, Limits::default()).unwrap()
+    else {
+        panic!("encoded request was incomplete")
+    };
+    frame
+}
+
+async fn spawn_motan_upstream(body: &'static [u8]) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut decoder = FrameDecoder::new(Limits::default()).unwrap();
+        let request = loop {
+            if let Some(frame) = decoder.decode().unwrap() {
+                break frame;
+            }
+            assert!(stream.read_buf(decoder.buffer_mut()).await.unwrap() > 0);
+        };
+        let response = FrameBuilder::response(request.request_id)
+            .status(ResponseStatus::Normal)
+            .body(body)
+            .encode()
+            .unwrap();
+        stream.write_all(&response).await.unwrap();
+    });
+    address
+}
+
 async fn raw_get(address: SocketAddr, path: &str) -> String {
     raw_request(
         address,
@@ -814,6 +918,26 @@ async fn wait_for_only_child(directory: &Path) -> PathBuf {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("one child did not appear under {}", directory.display());
+}
+
+async fn wait_for_file_named(directory: &Path, name: &str) -> PathBuf {
+    for _ in 0..100 {
+        let mut pending = vec![directory.to_path_buf()];
+        while let Some(current) = pending.pop() {
+            if let Ok(entries) = std::fs::read_dir(current) {
+                for entry in entries.filter_map(Result::ok) {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        pending.push(path);
+                    } else if path.file_name().is_some_and(|value| value == name) {
+                        return path;
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("{name} did not appear under {}", directory.display());
 }
 
 async fn wait_for_counter(counter: &AtomicUsize, expected: usize) {

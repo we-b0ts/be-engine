@@ -244,6 +244,14 @@ impl AppConfig {
         path: impl AsRef<Path>,
         candidate_upstream: Option<&str>,
     ) -> Result<Self> {
+        Self::load_comparison_recording_with_candidates(path, candidate_upstream, None)
+    }
+
+    pub fn load_comparison_recording_with_candidates(
+        path: impl AsRef<Path>,
+        candidate_upstream: Option<&str>,
+        candidate_motan_upstream: Option<&str>,
+    ) -> Result<Self> {
         let path = path.as_ref();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
@@ -255,6 +263,13 @@ impl AppConfig {
                 .as_mut()
                 .context("record-comparison command requires a [comparison_recording] configuration section")?
                 .candidate_upstream = candidate_upstream.to_string();
+        }
+        if let Some(candidate_motan_upstream) = candidate_motan_upstream {
+            config
+                .comparison_recording
+                .as_mut()
+                .context("record-comparison command requires a [comparison_recording] configuration section")?
+                .candidate_motan_upstream = Some(candidate_motan_upstream.to_string());
         }
         config
             .validate_comparison_recording()
@@ -271,7 +286,7 @@ impl AppConfig {
         let comparison_recording = self.comparison_recording.as_ref().context(
             "record-comparison command requires a [comparison_recording] configuration section",
         )?;
-        comparison_recording.validate(&self.http_gateway)?;
+        comparison_recording.validate(&self.http_gateway, &self.motan_gateway)?;
         self.http_gateway
             .per_api_case_limits
             .validate(&self.http_gateway.rules)

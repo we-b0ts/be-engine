@@ -15,8 +15,8 @@ use crate::recorder::{CaseContext, ProxyErrorEvent, RecorderEvent};
 use crate::recording_control::RecordingListener;
 
 mod case;
-mod rules;
-mod transport;
+pub(crate) mod rules;
+pub(crate) mod transport;
 
 pub(crate) async fn run(state: AppState) -> Result<()> {
     let config = state.config().motan_gateway.clone();
@@ -95,6 +95,11 @@ async fn handle_connection(
             transport::write_fixed_response(&mut stream, &request, limits).await?;
             continue;
         };
+        let api_pattern = format!("/rpc/{}", rules::api_directory(&matched.descriptor.api_key));
+        if !state.should_record_motan_api(&api_pattern) {
+            transport::write_fixed_response(&mut stream, &request, limits).await?;
+            continue;
+        }
         let case_context = CaseContext {
             id: Uuid::new_v4(),
             rule_name: matched.rule_name.clone(),

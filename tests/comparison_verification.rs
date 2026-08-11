@@ -68,6 +68,47 @@ response_rules:
 }
 
 #[test]
+fn verifies_motan_payloads_through_the_common_api_report() {
+    let temp = tempdir().unwrap();
+    let run = create_run(temp.path(), json!("unused"), json!("unused"));
+    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    fs::write(
+        case.join("request.json"),
+        serde_json::to_vec(&json!({
+            "protocol": "motan",
+            "method": "MOTAN",
+            "uri": "/rpc/alchemy-get-config",
+            "api_pattern": "/rpc/alchemy-get-config",
+            "api_key": "motan:abtest/com.weibo.AlchemyRpcService#getConfig(java.lang.String)"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_binary_response(&case.join("expected-response.json"), 201, b"source");
+    write_binary_response(&case.join("response.json"), 201, b"candidate");
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+
+    let report = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run.clone(),
+        policy,
+        report: run.join("comparison-report.json"),
+    })
+    .unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.cases[0].api, "MOTAN /rpc/alchemy-get-config");
+    assert_eq!(
+        report.cases[0].response.as_ref().unwrap().differences[0].kind,
+        ResponseDifferenceKind::ExactBodyMismatch
+    );
+}
+
+#[test]
 fn applies_explicit_comparison_counter_rules_by_representation_class() {
     let temp = tempdir().unwrap();
     let run = create_run(
@@ -796,6 +837,24 @@ fn write_response(path: &Path, body: serde_json::Value) {
             "body": {
                 "encoding": "base64",
                 "data": STANDARD.encode(serde_json::to_vec(&body).unwrap()),
+                "truncated": false
+            },
+            "error": null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn write_binary_response(path: &Path, status: u16, body: &[u8]) {
+    fs::write(
+        path,
+        serde_json::to_vec(&json!({
+            "version": 1,
+            "status": status,
+            "body": {
+                "encoding": "base64",
+                "data": STANDARD.encode(body),
                 "truncated": false
             },
             "error": null

@@ -24,7 +24,7 @@ use super::upstream::{
     LimitedBodyError, ResponseDisposition, UpstreamCapture, UpstreamErrorKind, collect_limited,
     downstream_response, fetch_upstream, request_body_capture, run_ready_probe,
 };
-use crate::config::{AppConfig, ComparisonRecordingConfig, HttpGatewayConfig};
+use crate::config::{AppConfig, ComparisonRecordingConfig, HttpGatewayConfig, MotanGatewayConfig};
 use crate::gateway::http::rules::{
     RuleDecision, evaluate_request, request_authority, resolve_case_group,
 };
@@ -50,6 +50,8 @@ pub(super) struct ComparisonRecordingRuntime {
     pub(super) comparison_recording: ComparisonRecordingConfig,
     pub(super) baseline_upstream: String,
     pub(super) gateway: HttpGatewayConfig,
+    pub(super) motan_gateway: MotanGatewayConfig,
+    pub(super) candidate_motan_upstream: String,
     pub(super) recording_apis: Vec<RecordingApi>,
     pub(super) client: crate::ProxyClient,
     pub(super) store: ComparisonRecordingStore,
@@ -57,7 +59,7 @@ pub(super) struct ComparisonRecordingRuntime {
     pub(super) ready_notify: Arc<Notify>,
     pub(super) recording_lifecycle: RecordingLifecycle,
     request_header_capture: RequestHeaderCapture,
-    permits: Arc<Semaphore>,
+    pub(super) permits: Arc<Semaphore>,
     background: BackgroundTasks,
 }
 
@@ -110,6 +112,10 @@ pub async fn run_with_options(
     let comparison_recording = config.comparison_recording.clone().context(
         "record-comparison command requires a [comparison_recording] configuration section",
     )?;
+    ensure!(
+        !config.motan_gateway.enabled || comparison_recording.candidate_motan_upstream.is_some(),
+        "comparison recording with motan_gateway.enabled requires comparison_recording.candidate_motan_upstream"
+    );
     let request_header_capture = RequestHeaderCapture::from_environment(
         &config.recording.encrypt_request_headers,
         &config.recording.redact_headers,
@@ -125,10 +131,14 @@ pub async fn run_with_options(
         .map(|api| {
             (
                 api.to_string(),
-                config
-                    .http_gateway
-                    .per_api_case_limits
-                    .limit_for(api.path_pattern()),
+                if api.method().as_str() == "MOTAN" {
+                    config.motan_gateway.max_cases_per_api
+                } else {
+                    config
+                        .http_gateway
+                        .per_api_case_limits
+                        .limit_for(api.path_pattern())
+                },
             )
         })
         .collect();
@@ -141,6 +151,21 @@ pub async fn run_with_options(
         ),
     )
     .await?;
+    let motan_gateway = config.motan_gateway.clone();
+    let motan_listener = if motan_gateway.enabled {
+        Some(
+            crate::tcp_listener::bind_with_diagnostic(
+                motan_gateway.listen,
+                format!(
+                    "failed to bind Motan comparison gateway {}",
+                    motan_gateway.listen
+                ),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let store = ComparisonRecordingStore::create(
         &config.comparison_recording_output_dir(),
         &run_id,
@@ -153,13 +178,23 @@ pub async fn run_with_options(
         .enable_http1()
         .build();
     let client = Client::builder(TokioExecutor::new()).build(https);
-    let recording_lifecycle = RecordingLifecycle::for_comparison_gateway(!gateway.ready.enabled);
+    let recording_lifecycle =
+        RecordingLifecycle::for_comparison_gateway(!gateway.ready.enabled, motan_gateway.enabled);
     recording_lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
+    if motan_listener.is_some() {
+        recording_lifecycle.mark_listener_ready(RecordingListener::MotanGateway);
+    }
+    let candidate_motan_upstream = comparison_recording
+        .candidate_motan_upstream
+        .clone()
+        .unwrap_or_default();
     let runtime = ComparisonRecordingRuntime {
         config: Arc::new(config),
         comparison_recording: comparison_recording.clone(),
         baseline_upstream: baseline_upstream.clone(),
         gateway: gateway.clone(),
+        motan_gateway,
+        candidate_motan_upstream,
         recording_apis,
         client,
         store,
@@ -186,6 +221,13 @@ pub async fn run_with_options(
         .enabled
         .then(|| tokio::spawn(run_ready_probe(runtime.clone())));
     let summary_task = tokio::spawn(run_summary_flush(runtime.clone()));
+    let motan_listener = async {
+        match motan_listener {
+            Some(listener) => super::motan::run_listener(listener, runtime.clone()).await,
+            None => std::future::pending::<Result<()>>().await,
+        }
+    };
+    tokio::pin!(motan_listener);
     let duration_wait = wait_for_duration(runtime.clone(), duration);
     tokio::pin!(duration_wait);
     let case_limit_completion = runtime.store.wait_for_explicit_api_case_limit();
@@ -206,6 +248,10 @@ pub async fn run_with_options(
             signal = shutdown_signal() => {
                 signal?;
                 break RecordingCompletionReason::ShutdownSignal;
+            }
+            result = &mut motan_listener => {
+                result.context("Motan comparison listener stopped")?;
+                unreachable!("Motan comparison listener returned successfully")
             }
             _ = &mut duration_wait => {
                 info!("comparison recording duration elapsed");
@@ -497,6 +543,7 @@ async fn handle_request(
         .await;
 
     let request_record = ComparisonRecordingRequest {
+        protocol: "http",
         timestamp: Utc::now(),
         client_addr,
         method: method.to_string(),
@@ -506,6 +553,9 @@ async fn handle_request(
         api_pattern: group.pattern.clone(),
         headers: protected_headers,
         body: request_body_capture(&body, false, Some(body.len())),
+        protocol_version: None,
+        request_id: None,
+        api_key: None,
     };
     let (sender, receiver) = oneshot::channel();
     let task_runtime = runtime.clone();
@@ -659,13 +709,13 @@ async fn fixed_response(runtime: &ComparisonRecordingRuntime) -> Response<Gatewa
 }
 
 #[derive(Clone, Copy)]
-enum UpstreamRole {
+pub(super) enum UpstreamRole {
     Baseline,
     Candidate,
     BaselineRecheck,
 }
 
-async fn update_upstream_counts(
+pub(super) async fn update_upstream_counts(
     runtime: &ComparisonRecordingRuntime,
     role: UpstreamRole,
     capture: &UpstreamCapture,

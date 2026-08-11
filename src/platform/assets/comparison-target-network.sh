@@ -30,6 +30,9 @@ start_comparison_target_network() {
         return 1
     }
     target_origin="http://${target_network_ip}:${TRAFFIC_E2E_TARGET_PORT}"
+    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+        target_motan_upstream="${target_network_ip}:${TRAFFIC_E2E_TARGET_MOTAN_PORT}"
+    fi
 }
 
 start_target() {
@@ -48,6 +51,9 @@ start_target() {
         )
     fi
     require_port_available "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
+    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+        require_port_available "$target_network_ip" "$TRAFFIC_E2E_TARGET_MOTAN_PORT" target-motan
+    fi
     docker run --detach --name "$target_name" --platform linux/amd64 \
         --network "container:${target_anchor_name}" --user 998:998 \
         --label com.weibo.traffic-e2e.managed=true \

@@ -16,6 +16,7 @@ pub(super) struct ComparisonRecordingBody {
 
 #[derive(Debug, Clone, Serialize)]
 pub(super) struct ComparisonRecordingRequest {
+    pub(super) protocol: &'static str,
     pub(super) timestamp: DateTime<Utc>,
     pub(super) client_addr: Option<String>,
     pub(super) method: String,
@@ -25,6 +26,12 @@ pub(super) struct ComparisonRecordingRequest {
     pub(super) api_pattern: String,
     pub(super) headers: HeaderMapSnapshot,
     pub(super) body: ComparisonRecordingBody,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) protocol_version: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) request_id: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -37,6 +44,10 @@ pub(super) struct ComparisonRecordingResponse {
     pub(super) body: Option<CaseBodyCapture>,
     pub(super) duration_ms: u128,
     pub(super) error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) protocol_version: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) rpc_status: Option<&'static str>,
 }
 
 #[derive(Debug)]

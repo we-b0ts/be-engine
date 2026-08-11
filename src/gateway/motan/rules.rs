@@ -4,13 +4,13 @@ use crate::config::MotanGatewayRuleConfig;
 use crate::recorder::PrimaryCaseDescriptor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct Match {
-    pub(super) rule_name: String,
-    pub(super) descriptor: PrimaryCaseDescriptor,
-    pub(super) directory: String,
+pub(crate) struct Match {
+    pub(crate) rule_name: String,
+    pub(crate) descriptor: PrimaryCaseDescriptor,
+    pub(crate) directory: String,
 }
 
-pub(super) fn evaluate_request(
+pub(crate) fn evaluate_request(
     rules: &[MotanGatewayRuleConfig],
     envelope: &RequestEnvelope,
 ) -> Option<Match> {
@@ -47,7 +47,7 @@ fn matches_optional(allowed: &[String], actual: Option<&str>) -> bool {
     allowed.is_empty() || actual.is_some_and(|actual| allowed.iter().any(|item| item == actual))
 }
 
-fn api_directory(api_key: &str) -> String {
+pub(crate) fn api_directory(api_key: &str) -> String {
     const MAX_PREFIX_BYTES: usize = 160;
     let sanitized = crate::recorder::sanitize_path_component(api_key);
     let mut prefix = sanitized

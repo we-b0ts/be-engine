@@ -11,6 +11,13 @@ traffic-e2e record-comparison --target-root <target> \
   --brz-no-fallback true --api '<METHOD path>'
 ```
 
+The workflow derives API selectors from the standard recording inventory and
+passes their exact canonical values back to the engine. Callers and AI agents
+must not infer or assemble selectors from protocol metadata. HTTP and Motan
+use the same repeatable `--api` input; protocol adapters own discovery,
+transport, and comparison behavior. Motan inventory entries use an opaque
+engine-generated `MOTAN /rpc/<api-id>` canonical value.
+
 traffic-e2e builds `.traffic-e2e/Dockerfile.e2e` and owns source, one shared
 Breeze, target container, their shared network namespace, readiness,
 comparison recorder, finalization, signals, and cleanup. The target receives
@@ -37,8 +44,8 @@ at a time.
 When Breeze is absent, the same command selects the configured runtime without
 starting Breeze. Comparison sends every admitted request symmetrically to
 source and candidate, using the methods declared by the selected HTTP gateway
-rule without a separate read-only-method restriction. Use repeatable `--api`,
-optional positive `--per-api-case-limit`,
+rule or the matching Motan gateway rule without a separate read-only-method
+restriction. Use repeatable `--api`, optional positive `--per-api-case-limit`,
 and `--baseline-recheck` only when the verification policy or diagnosis needs
 source-after evidence.
 With explicit API selectors, comparison recording finalizes normally when

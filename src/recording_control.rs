@@ -119,10 +119,14 @@ impl RecordingLifecycle {
         }
     }
 
-    pub(crate) fn for_comparison_gateway(source_ready: bool) -> Self {
+    pub(crate) fn for_comparison_gateway(source_ready: bool, motan_enabled: bool) -> Self {
+        let mut expected = BTreeSet::from([RecordingListener::HttpGateway]);
+        if motan_enabled {
+            expected.insert(RecordingListener::MotanGateway);
+        }
         Self {
             inner: Arc::new(Mutex::new(RecordingLifecycleState {
-                expected: BTreeSet::from([RecordingListener::HttpGateway]),
+                expected,
                 listening: BTreeSet::new(),
                 source_settling: false,
                 source_ready,
@@ -735,7 +739,7 @@ mod tests {
     async fn comparison_control_accepts_finite_input_completion() {
         let temp = tempfile::tempdir().unwrap();
         let socket = temp.path().join("comparison.sock");
-        let lifecycle = RecordingLifecycle::for_comparison_gateway(true);
+        let lifecycle = RecordingLifecycle::for_comparison_gateway(true, false);
         lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
         let (server, mut completion) =
             RecordingControlServer::start_for_comparison(lifecycle, socket.clone())

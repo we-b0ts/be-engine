@@ -113,6 +113,18 @@ fi
     printf 'error: TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED must be true or false\n' >&2
     exit 2
 }
+[[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true || \
+   "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == false ]] || {
+    printf 'error: TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED must be true or false\n' >&2
+    exit 2
+}
+if [[ "$operation" == record-comparison && \
+      "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+    [[ -n "${TRAFFIC_E2E_TARGET_MOTAN_PORT-}" ]] || {
+        printf 'error: missing comparison target Motan port\n' >&2
+        exit 2
+    }
+fi
 if [[ "$operation" == preflight && "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" == true ]]; then
     for name in TRAFFIC_E2E_MOTAN_SOURCE_PORT TRAFFIC_E2E_MOTAN_GATEWAY_PORT TRAFFIC_E2E_MOTAN_REPLAY_COMMAND; do
         [[ -n "${!name-}" ]] || {
@@ -222,6 +234,7 @@ target_network_name="${prefix}-target-network"
 target_network_ip=""
 target_network_gateway=""
 target_origin=""
+target_motan_upstream=""
 adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
 adapter_contract_revision=""
@@ -792,6 +805,9 @@ start_recording_input() {
     local -a input_command=(internal recording-input \
         --case-source "$TRAFFIC_E2E_REQUEST_SOURCE" \
         --origin "$TRAFFIC_E2E_RECORDING_ORIGIN")
+    if [[ -n "${TRAFFIC_E2E_MOTAN_RECORDING_UPSTREAM-}" ]]; then
+        input_command+=(--motan-upstream "$TRAFFIC_E2E_MOTAN_RECORDING_UPSTREAM")
+    fi
     [[ -z "$completion_control_socket" ]] || \
         input_command+=(--completion-control-socket "$completion_control_socket")
     if [[ -n "$completion_control_socket" ]]; then
@@ -961,8 +977,14 @@ run_comparison_recording() {
         "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
     require_container_running "$target_name" target
     require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
+    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+        require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_MOTAN_PORT" target-motan
+    fi
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
     local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
+    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+        comparison_command+=(--candidate-motan-upstream "$target_motan_upstream")
+    fi
     "$baseline_recheck" && comparison_command+=(--baseline-recheck)
     local selector
     for selector in "${api_selectors[@]}"; do comparison_command+=(--api "$selector"); done

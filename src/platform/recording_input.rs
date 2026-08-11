@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use serde::Serialize;
+use base64::Engine as _;
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 use tracing::{info, warn};
 
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
@@ -22,6 +25,7 @@ pub struct ManagedRecordingInputOptions {
     pub case_source: PathBuf,
     pub recording_apis: Vec<RecordingApi>,
     pub origin: String,
+    pub motan_upstream: Option<String>,
     pub request_timeout: Duration,
     pub completion: Option<ManagedRecordingInputCompletion>,
 }
@@ -104,7 +108,12 @@ pub async fn drive_managed_recording_input(
                 signal?;
                 break;
             }
-            response = client.send(&request_path) => response,
+            response = send_request(
+                &client,
+                options.motan_upstream.as_deref(),
+                &request_path,
+                options.request_timeout,
+            ) => response,
         };
         match response {
             Ok(_) => succeeded = succeeded.saturating_add(1),
@@ -143,6 +152,99 @@ pub async fn drive_managed_recording_input(
         failed,
         input_exhausted,
     })
+}
+
+#[derive(Deserialize)]
+struct RequestKind {
+    #[serde(default)]
+    protocol_version: Option<String>,
+    #[serde(default)]
+    frame: Option<RecordedFrame>,
+}
+
+#[derive(Deserialize)]
+struct RecordedFrame {
+    encoding: String,
+    data: String,
+    truncated: bool,
+}
+
+async fn send_request(
+    http: &RecordedHttpClient,
+    motan_upstream: Option<&str>,
+    request_path: &Path,
+    timeout: Duration,
+) -> Result<()> {
+    let bytes = tokio::fs::read(request_path)
+        .await
+        .with_context(|| format!("failed to read request template {}", request_path.display()))?;
+    let kind: RequestKind = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid request template {}", request_path.display()))?;
+    if kind.protocol_version.is_none() {
+        http.send(request_path).await?;
+        return Ok(());
+    }
+    let upstream = motan_upstream.context(
+        "managed recording input contains Motan requests but no Motan gateway endpoint was provided",
+    )?;
+    let frame = kind.frame.context("Motan request template has no frame")?;
+    ensure!(
+        !frame.truncated,
+        "Motan request template frame is truncated"
+    );
+    let raw = match frame.encoding.as_str() {
+        "utf8" => frame.data.into_bytes(),
+        "base64" => base64::engine::general_purpose::STANDARD
+            .decode(frame.data)
+            .context("Motan request template contains invalid base64")?,
+        encoding => anyhow::bail!("unsupported Motan request frame encoding {encoding:?}"),
+    };
+    let limits = motan_protocol::Limits::default();
+    let motan_protocol::DecodeStatus::Complete(request) =
+        motan_protocol::decode_frame(&raw, limits)?
+    else {
+        anyhow::bail!("Motan request template contains an incomplete frame");
+    };
+    ensure!(
+        request.kind == motan_protocol::MessageKind::Request,
+        "Motan request template contains a response frame"
+    );
+    let operation = async {
+        let mut stream = TcpStream::connect(upstream)
+            .await
+            .with_context(|| format!("failed to connect to Motan gateway {upstream}"))?;
+        stream
+            .write_all(&raw)
+            .await
+            .context("failed to write Motan request")?;
+        if !request.flags.oneway() {
+            let mut decoder = motan_protocol::FrameDecoder::new(limits)?;
+            loop {
+                if let Some(response) = decoder.decode()? {
+                    ensure!(
+                        response.kind == motan_protocol::MessageKind::Response,
+                        "Motan gateway returned a request frame"
+                    );
+                    ensure!(
+                        response.version == request.version,
+                        "Motan gateway response protocol version does not match the request"
+                    );
+                    ensure!(
+                        response.request_id == request.request_id,
+                        "Motan gateway response request id does not match the request"
+                    );
+                    break;
+                }
+                let read = stream.read_buf(decoder.buffer_mut()).await?;
+                ensure!(read > 0, "Motan gateway closed before returning a response");
+            }
+        }
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::time::timeout(timeout, operation)
+        .await
+        .context("managed Motan request timed out")??;
+    Ok(())
 }
 
 fn resolve_case_sources(
@@ -291,7 +393,7 @@ mod tests {
         });
 
         let control_socket = root.path().join("comparison.sock");
-        let lifecycle = RecordingLifecycle::for_comparison_gateway(true);
+        let lifecycle = RecordingLifecycle::for_comparison_gateway(true, false);
         lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
         let (control, mut completion) =
             RecordingControlServer::start_for_comparison(lifecycle, control_socket.clone())
@@ -304,6 +406,7 @@ mod tests {
             case_source: root.path().to_path_buf(),
             recording_apis: Vec::new(),
             origin,
+            motan_upstream: None,
             request_timeout: Duration::from_secs(1),
             completion: Some(ManagedRecordingInputCompletion {
                 control_socket,

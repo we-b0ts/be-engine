@@ -299,6 +299,17 @@ async fn run_managed_runtime(
     } else {
         None
     };
+    let comparison_motan_port = if recorder.motan_gateway.enabled
+        && runtime_operation
+            == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
+    {
+        Some(endpoint_port(
+            &recorder.motan_gateway.matched_upstream,
+            "motan_gateway.matched_upstream",
+        )?)
+    } else {
+        None
+    };
     ensure!(
         recorder.recording.post_ready_quiet_period() >= std::time::Duration::from_secs(15),
         "managed recording requires a post-ready quiet period of at least 15 seconds"
@@ -341,6 +352,11 @@ async fn run_managed_runtime(
         config.target_port
     );
     let recording_origin = format!("http://127.0.0.1:{}", recorder.http_gateway.listen.port());
+    let motan_recording_upstream = if recorder.motan_gateway.enabled {
+        format!("127.0.0.1:{}", recorder.motan_gateway.listen.port())
+    } else {
+        String::new()
+    };
     let request_source = options
         .request_source
         .map(fs::canonicalize)
@@ -379,6 +395,10 @@ async fn run_managed_runtime(
         )
         .env("TRAFFIC_E2E_TARGET_PORT", config.target_port.to_string())
         .env(
+            "TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED",
+            comparison_motan_port.is_some().to_string(),
+        )
+        .env(
             "TRAFFIC_E2E_TARGET_READY_PATH",
             &config.target_readiness_path,
         )
@@ -394,6 +414,10 @@ async fn run_managed_runtime(
         .env("TRAFFIC_E2E_SOURCE_HOST", source_host)
         .env("TRAFFIC_E2E_SOURCE_PORT", source_port.to_string())
         .env("TRAFFIC_E2E_RECORDING_ORIGIN", recording_origin)
+        .env(
+            "TRAFFIC_E2E_MOTAN_RECORDING_UPSTREAM",
+            motan_recording_upstream,
+        )
         .env(
             "TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED",
             (runtime_operation == ManagedRuntimeOperation::Preflight && motan.is_some())
@@ -416,6 +440,9 @@ async fn run_managed_runtime(
         .arg(&run_id)
         .arg("--brz-no-fallback")
         .arg(options.breeze_no_fallback.to_string());
+    if let Some(port) = comparison_motan_port {
+        command.env("TRAFFIC_E2E_TARGET_MOTAN_PORT", port.to_string());
+    }
     if runtime_operation == ManagedRuntimeOperation::Preflight
         && let Some(motan) = &motan
     {
@@ -482,7 +509,7 @@ async fn run_managed_runtime(
     })
 }
 
-fn endpoint_port(endpoint: &str, label: &str) -> Result<u16> {
+pub(crate) fn endpoint_port(endpoint: &str, label: &str) -> Result<u16> {
     let (_, port) = endpoint
         .rsplit_once(':')
         .with_context(|| format!("{label} must contain a port"))?;

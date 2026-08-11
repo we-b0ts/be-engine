@@ -97,7 +97,7 @@ pub(crate) fn validate_selection(
             "recording API selectors must not overlap for the same method: {api}"
         );
         ensure!(
-            api.is_covered_by(rules),
+            api.method.as_str() == "MOTAN" || api.is_covered_by(rules),
             "recording API {api:?} is outside every configured [[http_gateway.rules]] method/path scope"
         );
     }

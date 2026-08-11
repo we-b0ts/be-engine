@@ -424,6 +424,7 @@ mod tests {
             target_startup: crate::startup::StartupConfig::default(),
             target_http_origin: "http://127.0.0.1:8081".to_string(),
             target_port: 8081,
+            target_motan_upstream: None,
             target_readiness_path: "/healthz".to_string(),
             target_readiness_status: 404,
             target_startup_timeout: Duration::from_secs(1),

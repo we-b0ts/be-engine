@@ -9,6 +9,7 @@ use super::{HttpGatewayConfig, HttpGatewayFallbackMode};
 pub struct ComparisonRecordingConfig {
     pub baseline_upstream: Option<String>,
     pub candidate_upstream: String,
+    pub candidate_motan_upstream: Option<String>,
     pub baseline_recheck: bool,
     pub upstream_timeout_ms: u64,
     pub max_in_flight: usize,
@@ -16,7 +17,11 @@ pub struct ComparisonRecordingConfig {
 }
 
 impl ComparisonRecordingConfig {
-    pub(super) fn validate(&self, gateway: &HttpGatewayConfig) -> Result<()> {
+    pub(super) fn validate(
+        &self,
+        gateway: &HttpGatewayConfig,
+        motan_gateway: &super::MotanGatewayConfig,
+    ) -> Result<()> {
         ensure!(
             gateway.fallback_mode == HttpGatewayFallbackMode::FixedResponse,
             "comparison recording requires http_gateway.fallback_mode = \"fixed_response\" so rejected requests reach neither upstream"
@@ -35,6 +40,22 @@ impl ComparisonRecordingConfig {
             baseline != candidate,
             "comparison recording baseline and candidate upstreams must be different"
         );
+        if motan_gateway.enabled
+            && let Some(candidate) = self.candidate_motan_upstream.as_deref()
+        {
+            let baseline = validate_motan_upstream(
+                "motan_gateway.matched_upstream",
+                &motan_gateway.matched_upstream,
+            )?;
+            let candidate = validate_motan_upstream(
+                "comparison_recording.candidate_motan_upstream",
+                candidate,
+            )?;
+            ensure!(
+                baseline != candidate,
+                "comparison recording Motan baseline and candidate upstreams must be different"
+            );
+        }
         ensure!(
             self.upstream_timeout_ms > 0,
             "comparison_recording.upstream_timeout_ms must be greater than zero"
@@ -113,6 +134,7 @@ impl Default for ComparisonRecordingConfig {
         Self {
             baseline_upstream: None,
             candidate_upstream: "http://127.0.0.1:8082".to_string(),
+            candidate_motan_upstream: None,
             baseline_recheck: false,
             upstream_timeout_ms: 30_000,
             max_in_flight: 1,
@@ -121,10 +143,25 @@ impl Default for ComparisonRecordingConfig {
     }
 }
 
+fn validate_motan_upstream(field: &str, value: &str) -> Result<String> {
+    let authority = value
+        .parse::<hyper::http::uri::Authority>()
+        .map_err(|error| anyhow::anyhow!("invalid {field}: {error}"))?;
+    ensure!(
+        authority.port_u16().is_some(),
+        "{field} must include a port"
+    );
+    Ok(authority.as_str().to_ascii_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{AppConfig, HttpGatewayFixedResponseConfig, HttpGatewayRuleConfig};
+
+    fn validate(config: &ComparisonRecordingConfig, gateway: &HttpGatewayConfig) -> Result<()> {
+        config.validate(gateway, &crate::config::MotanGatewayConfig::default())
+    }
 
     fn gateway(methods: &[&str]) -> HttpGatewayConfig {
         HttpGatewayConfig {
@@ -146,19 +183,15 @@ mod tests {
     #[test]
     fn requires_explicit_methods_and_accepts_mutating_methods() {
         let config = ComparisonRecordingConfig::default();
-        assert!(config.validate(&gateway(&[])).is_err());
-        assert!(config.validate(&gateway(&["GET", "HEAD"])).is_ok());
-        assert!(
-            config
-                .validate(&gateway(&["POST", "PUT", "PATCH", "DELETE"]))
-                .is_ok()
-        );
+        assert!(validate(&config, &gateway(&[])).is_err());
+        assert!(validate(&config, &gateway(&["GET", "HEAD"])).is_ok());
+        assert!(validate(&config, &gateway(&["POST", "PUT", "PATCH", "DELETE"])).is_ok());
 
         let config = ComparisonRecordingConfig {
             baseline_recheck: true,
             ..Default::default()
         };
-        assert!(config.validate(&gateway(&["POST"])).is_ok());
+        assert!(validate(&config, &gateway(&["POST"])).is_ok());
     }
 
     #[test]
@@ -167,9 +200,7 @@ mod tests {
         gateway.fallback_mode = HttpGatewayFallbackMode::Upstream;
         gateway.fixed_response = None;
 
-        let error = ComparisonRecordingConfig::default()
-            .validate(&gateway)
-            .unwrap_err();
+        let error = validate(&ComparisonRecordingConfig::default(), &gateway).unwrap_err();
 
         assert!(error.to_string().contains("fixed_response"));
     }
@@ -203,7 +234,7 @@ mod tests {
                 candidate_upstream: candidate.to_string(),
                 ..Default::default()
             };
-            assert!(config.validate(&gateway(&["GET"])).is_err());
+            assert!(validate(&config, &gateway(&["GET"])).is_err());
         }
     }
 
@@ -213,7 +244,7 @@ mod tests {
             candidate_upstream: "http://127.0.0.1:8081/base".to_string(),
             ..Default::default()
         };
-        assert!(config.validate(&gateway(&["GET"])).is_err());
+        assert!(validate(&config, &gateway(&["GET"])).is_err());
     }
 
     #[test]
@@ -221,7 +252,7 @@ mod tests {
         let gateway = gateway(&["GET"]);
         let config = ComparisonRecordingConfig::default();
 
-        config.validate(&gateway).unwrap();
+        validate(&config, &gateway).unwrap();
 
         assert_eq!(config.baseline_upstream(&gateway), gateway.matched_upstream);
     }

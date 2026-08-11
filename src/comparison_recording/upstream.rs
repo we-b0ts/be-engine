@@ -207,6 +207,8 @@ fn response_record(
         body: Some(body.body),
         duration_ms: started.elapsed().as_millis(),
         error: body.error,
+        protocol_version: None,
+        rpc_status: None,
     }
 }
 
@@ -261,6 +263,8 @@ pub(super) fn failed_capture(
             body: None,
             duration_ms,
             error: Some(error),
+            protocol_version: None,
+            rpc_status: None,
         },
         downstream: None,
         error_kind: Some(kind),

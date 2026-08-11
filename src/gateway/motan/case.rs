@@ -22,6 +22,9 @@ struct MotanCaseAdmissionRecord<'a> {
 pub(super) struct MotanCaseRequestRecord {
     timestamp: DateTime<Utc>,
     client_addr: Option<String>,
+    method: &'static str,
+    uri: String,
+    api_pattern: String,
     protocol_version: &'static str,
     request_id: u64,
     api_key: String,
@@ -138,9 +141,13 @@ pub(super) fn request_record(
     matched_rule: &str,
     upstream: &str,
 ) -> MotanCaseRequestRecord {
+    let api_pattern = format!("/rpc/{}", super::rules::api_directory(&descriptor.api_key));
     MotanCaseRequestRecord {
         timestamp: Utc::now(),
         client_addr,
+        method: "MOTAN",
+        uri: api_pattern.clone(),
+        api_pattern,
         protocol_version: protocol_version(request.version),
         request_id: request.request_id,
         api_key: descriptor.api_key.clone(),
@@ -223,7 +230,9 @@ pub(super) async fn finalize_case(
             .fail_case(case, "dependency_replay_unsafe", message)
             .await;
     }
-    recorder.publish_case(case).await
+    recorder
+        .publish_case_for_api(case, Some(&format!("MOTAN {}", request.api_pattern)))
+        .await
 }
 
 fn invalid_case_reason(

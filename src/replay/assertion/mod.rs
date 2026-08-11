@@ -65,14 +65,17 @@ pub fn assert_recorded_response(
         "unsupported actual response version {}; expected 1",
         actual.version
     );
-    let expected_status = expected
-        .status
-        .context("expected response has no HTTP status")?;
-    let expected_body = expected
-        .body
-        .as_ref()
-        .context("expected response has no body")?;
-    let expected_body = decode_body(expected_body, "expected response")?;
+    let oneway = expected.response_expected == Some(false);
+    let expected_status = match expected.status.as_ref() {
+        Some(status) => status.code(),
+        None if oneway => 204,
+        None => anyhow::bail!("expected response has no status"),
+    };
+    let expected_body = match expected.body.as_ref().or(expected.frame.as_ref()) {
+        Some(body) => decode_body(body, "expected response")?,
+        None if oneway => Vec::new(),
+        None => anyhow::bail!("expected response has no body or frame"),
+    };
     let actual_body = decode_body(&actual.body, "actual response")?;
     evaluate_response(AssertionInputs {
         mode: AssertionMode::Replay,

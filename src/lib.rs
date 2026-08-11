@@ -293,10 +293,14 @@ impl AppState {
             .map(|api| {
                 (
                     api.to_string(),
-                    config
-                        .http_gateway
-                        .per_api_case_limits
-                        .limit_for(api.path_pattern()),
+                    if api.method().as_str() == "MOTAN" {
+                        config.motan_gateway.max_cases_per_api
+                    } else {
+                        config
+                            .http_gateway
+                            .per_api_case_limits
+                            .limit_for(api.path_pattern())
+                    },
                 )
             })
             .collect();
@@ -358,6 +362,14 @@ impl AppState {
 
     pub(crate) fn should_record_api(&self, method: &hyper::Method, uri: &hyper::Uri) -> bool {
         self.inner.recording_apis.is_empty() || self.recording_api_pattern(method, uri).is_some()
+    }
+
+    pub(crate) fn should_record_motan_api(&self, api_pattern: &str) -> bool {
+        let method = "MOTAN".parse().expect("MOTAN is a valid HTTP token");
+        let uri = api_pattern
+            .parse()
+            .expect("generated Motan API path is a valid URI");
+        self.should_record_api(&method, &uri)
     }
 
     pub(crate) fn recording_api_pattern(
