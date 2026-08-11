@@ -44,7 +44,7 @@ struct InitArgs {
     #[arg(long, default_value_t = 8080)]
     source_http_port: u16,
     /// Target HTTP port used for replay and comparison.
-    #[arg(long, default_value_t = 8081)]
+    #[arg(long, default_value_t = 8080)]
     target_port: u16,
     /// HTTP gateway port that receives traffic selected for recording.
     #[arg(long, default_value_t = DEFAULT_HTTP_GATEWAY_PORT)]
@@ -132,7 +132,7 @@ mod tests {
         };
         assert_eq!(init.breeze.as_deref(), Some("breeze"));
         assert_eq!(init.source_http_port, 8080);
-        assert_eq!(init.target_port, 8081);
+        assert_eq!(init.target_port, 8080);
         assert_eq!(init.http_gateway_port, DEFAULT_HTTP_GATEWAY_PORT);
         assert_eq!(init.readiness_path, "/healthz");
         assert_eq!(init.readiness_status, 404);

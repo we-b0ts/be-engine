@@ -11,8 +11,6 @@ required_environment=(
     TRAFFIC_E2E_SOURCE_CONTAINER
     TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE
     TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE
-    TRAFFIC_E2E_TARGET_ORIGIN
-    TRAFFIC_E2E_TARGET_HOST
     TRAFFIC_E2E_TARGET_PORT
     TRAFFIC_E2E_TARGET_READY_PATH
     TRAFFIC_E2E_TARGET_READY_STATUS
@@ -219,6 +217,11 @@ recorder_name="${prefix}-recorder"
 breeze_name="${prefix}-breeze"
 source_name="${prefix}-source"
 target_name="${prefix}-target"
+target_anchor_name="${prefix}-target-anchor"
+target_network_name="${prefix}-target-network"
+target_network_ip=""
+target_network_gateway=""
+target_origin=""
 adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
 adapter_contract_revision=""
@@ -249,6 +252,8 @@ recorder_started=false
 breeze_started=false
 source_started=false
 target_started=false
+target_anchor_started=false
+target_network_started=false
 recorder_finalized=false
 comparison_pid=""
 comparison_socket_dir=""
@@ -269,46 +274,7 @@ stop_container() {
     fi
     docker rm "$name" >/dev/null 2>&1 || true
 }
-
-start_target() {
-    local source target writable access
-    local -a mounts=()
-    while IFS=$'\t' read -r source target writable; do
-        [[ -n "$source" && -n "$target" ]] || continue
-        resolve_startup_mount_source target "$target" "$writable"
-        if [[ "$writable" == true ]]; then access=""; else access=",readonly"; fi
-        mounts+=(--mount "type=bind,source=${prepared_mount_source},target=${target}${access}")
-    done <"$TRAFFIC_E2E_TARGET_STARTUP_MOUNTS_FILE"
-    if "$breeze_enabled"; then
-        mounts+=(
-            --mount type=bind,source=/data1/breeze/socks,target=/data1/breeze/socks,readonly
-            --mount type=bind,source=/data1/breeze/snapshot,target=/data1/breeze/snapshot,readonly
-        )
-    fi
-    require_port_available "$TRAFFIC_E2E_TARGET_HOST" "$TRAFFIC_E2E_TARGET_PORT" target
-    docker run --detach --name "$target_name" --platform linux/amd64 \
-        --network "container:${anchor_name}" --user 998:998 \
-        --label com.weibo.traffic-e2e.managed=true \
-        --label com.weibo.traffic-e2e.role=target \
-        --label "com.weibo.traffic-e2e.operation=${operation}" \
-        --label "com.weibo.traffic-e2e.run-id=${run_id}" \
-        --env-file "$TRAFFIC_E2E_TARGET_STARTUP_ENV_FILE" \
-        "${mounts[@]}" "$TRAFFIC_E2E_TARGET_IMAGE_ID" >/dev/null
-    target_started=true
-}
-
-stop_target() {
-    local exit_code
-    "$target_started" || return 0
-    docker stop --time 15 "$target_name" >/dev/null
-    exit_code=$(docker inspect -f '{{.State.ExitCode}}' "$target_name")
-    docker rm "$target_name" >/dev/null
-    target_started=false
-    [[ "$exit_code" == 0 ]] || {
-        printf 'error: target exited with status %s after SIGTERM\n' "$exit_code" >&2
-        return 1
-    }
-}
+source "$TRAFFIC_E2E_PLATFORM_ASSETS/comparison-target-network.sh"
 
 finalize_recorder() {
     local exit_code
@@ -399,6 +365,7 @@ cleanup() {
     "$breeze_started" && stop_container "$breeze_name"
     "$recorder_started" && stop_container "$recorder_name"
     "$target_started" && stop_container "$target_name"
+    remove_comparison_target_network || status=1
     "$anchor_started" && stop_container "$anchor_name"
     normalize_cache_snapshot_ownership || status=1
     if [[ -n "$comparison_socket_dir" ]]; then
@@ -626,6 +593,9 @@ start_cache_snapshot() {
         --config /workspace/recorder.toml \
         --output-dir /workspace/control/cache-snapshot \
         --run-id "$run_id" \
+        --candidate-upstream "$target_origin" \
+        --target-source-ip "$target_network_ip" \
+        --interception-listen-ip "$target_network_gateway" \
         --control-socket "$control_socket" >/dev/null
     recorder_started=true
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e \
@@ -950,6 +920,7 @@ run_comparison_recording() {
         --label "com.weibo.traffic-e2e.run-id=${run_id}" \
         "$anchor_image" >/dev/null
     anchor_started=true
+    start_comparison_target_network
     start_cache_snapshot
     if "$breeze_enabled"; then
         normalize_breeze_directories
@@ -959,13 +930,13 @@ run_comparison_recording() {
     start_comparison_source "container:${anchor_name}"
     run_no_fallback
     start_target
-    wait_http "$TRAFFIC_E2E_TARGET_ORIGIN" "$TRAFFIC_E2E_TARGET_READY_PATH" \
+    wait_http "$target_origin" "$TRAFFIC_E2E_TARGET_READY_PATH" \
         "$TRAFFIC_E2E_TARGET_READY_STATUS" target "$target_name" \
         "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
     require_container_running "$target_name" target
-    require_port_open "$TRAFFIC_E2E_TARGET_HOST" "$TRAFFIC_E2E_TARGET_PORT" target
+    require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
-    local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
+    local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
     "$baseline_recheck" && comparison_command+=(--baseline-recheck)
     local selector
     for selector in "${api_selectors[@]}"; do comparison_command+=(--api "$selector"); done

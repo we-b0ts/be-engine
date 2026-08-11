@@ -309,8 +309,14 @@ to observe the full duration.
 Breeze-aware recorder defaults together with project and verification
 configuration. The target repository provides no recording or comparison
 wrapper. `traffic-e2e record-comparison` owns the
-adapted source application, one Breeze shared with the candidate, the candidate's fixed
-start/stop contract, recording, signals, finalization, and cleanup. AI and
+adapted source application, optional Breeze runtime and candidate Breeze mounts,
+the candidate's fixed start/stop contract, recording, signals, finalization,
+and cleanup. The source
+keeps the host recording namespace while the candidate runs in a run-owned
+bridge namespace, so both applications use their native HTTP and Motan ports
+without a host bind conflict. The candidate's bridge IP and comparison origin
+exist only for that run and are never persisted in `project.yaml` or recording
+artifacts. AI and
 automated invocations pass an explicit duration, run ID, and API scope.
 
 Each published comparison recording case contains:
@@ -362,8 +368,11 @@ traffic-e2e config replay plan response-rule \
 
 `compare` is file-only. Managed `record-comparison` uses the fixed traffic UID
 and cache-port-only interception when Redis background rules are configured;
-it does not enable DNS interception, fake-IP routing, MITM, or dependency
-Replay.
+target bridge traffic is added to that same run-local Redis snapshot by a
+source-IP-scoped `PREROUTING` rule. Comparison does not enable DNS interception,
+fake-IP routing, MITM, or dependency Replay. Standard Replay retains its
+host-network target and existing fixed-user DNS/fake-IP/egress interception;
+the comparison namespace does not change recorded fake IPs or replay lookup.
 
 AI must diagnose a failed comparison before changing code or policy. A stable
 source recheck plus a candidate mismatch is stronger implementation-defect
@@ -481,7 +490,7 @@ active-case and dependency-drain lifecycle:
 backend-rewrite config protocol enable motan \
   --source-port 8080 \
   --gateway-port 18081 \
-  --target-port 8081
+  --target-port 8080
 ```
 
 This typed update is for an already initialized repository. It stores the
@@ -489,6 +498,9 @@ rewritten service listener as `target.motan_port` in `.traffic-e2e/project.yaml`
 and stores the source and gateway recording ports only in the recorder file
 referenced by that project. The target port is a target runtime contract; the
 gateway port is recorder-owned and is not duplicated in project configuration.
+The source and target ports may be equal because managed Comparison isolates
+the target network namespace; the recorder gateway port must remain distinct
+from both native service ports.
 Repeating the same command returns `status: unchanged`; changing an explicit
 port updates only the owned keys and preserves Motan rules and recorder
 comments. Its result uses `validation_status: not_run`: configuration alone
@@ -1213,7 +1225,7 @@ backend-rewrite --target-root ../target init \
 From the target root, `--target-root` is unnecessary. `--breeze` uses the
 conventional existing container named `breeze`; use `--breeze=<container>` only
 for a non-standard name. Defaults are Recorder HTTP gateway port `17171`,
-source port `8080`, target port `8081`, readiness `/healthz` with status `404`,
+source and target port `8080`, readiness `/healthz` with status `404`,
 and upstream DNS `10.10.10.11:53`. Override a default only when the inspected
 application contract proves it is different. Source and Breeze containers
 need only be inspectable, not running.
@@ -1236,7 +1248,7 @@ target:
     # port_environment: PORT
     # replay_ca_environment: SSL_CERT_FILE
   http_host: 127.0.0.1
-  port: 8081
+  port: 8080
   # Optional override; omit to infer the standard Rust gates when Cargo.toml exists.
   # quality_gates:
   #   - name: project-check

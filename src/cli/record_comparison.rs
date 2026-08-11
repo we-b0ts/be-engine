@@ -20,6 +20,9 @@ pub(super) struct RecordComparisonArgs {
     /// Verification policy. Defaults to verification.yaml next to the recorder config.
     #[arg(long)]
     policy: Option<PathBuf>,
+    /// Runtime-only candidate origin selected by the managed comparison network.
+    #[arg(long)]
+    candidate_upstream: Option<String>,
     /// Explicit 14-digit UTC comparison recording run identifier.
     #[arg(long, value_parser = parse_run_id)]
     run_id: Option<String>,
@@ -46,7 +49,11 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
         "comparison recording config not found: {}",
         args.config.display()
     );
-    let mut config = AppConfig::load_comparison_recording(&args.config).with_context(|| {
+    let mut config = AppConfig::load_comparison_recording_with_candidate(
+        &args.config,
+        args.candidate_upstream.as_deref(),
+    )
+    .with_context(|| {
         format!(
             "failed to load comparison recording config {}",
             args.config.display()
@@ -162,6 +169,8 @@ mod tests {
             "recorder.toml",
             "--policy",
             "verification.yaml",
+            "--candidate-upstream",
+            "http://172.30.0.2:8080",
             "--run-id",
             "20260722153045",
             "--duration-seconds",
@@ -182,6 +191,10 @@ mod tests {
         assert_eq!(
             parsed.record_comparison.policy.as_deref(),
             Some(Path::new("verification.yaml"))
+        );
+        assert_eq!(
+            parsed.record_comparison.candidate_upstream.as_deref(),
+            Some("http://172.30.0.2:8080")
         );
         assert_eq!(parsed.record_comparison.duration_seconds.get(), 60);
         assert_eq!(

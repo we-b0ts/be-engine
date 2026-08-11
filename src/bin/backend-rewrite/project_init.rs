@@ -28,7 +28,7 @@ pub(super) struct ProjectInitArgs {
     #[arg(long, default_value_t = 8080)]
     source_http_port: u16,
     /// Target HTTP port used for replay and comparison.
-    #[arg(long, default_value_t = 8081)]
+    #[arg(long, default_value_t = 8080)]
     target_port: u16,
     /// Readiness path shared by source recording and target startup.
     #[arg(long, default_value = "/healthz")]

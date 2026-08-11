@@ -135,7 +135,9 @@ under `traffic-e2e diagnose`. Managed recording, replay, fixed-user target
 isolation, and host interception are implemented by the same Rust binary.
 
 Comparison recording accepts only explicitly configured `GET`, `HEAD`, and
-`OPTIONS` methods and never enables isolation. It normally captures one source
+`OPTIONS` methods. Its managed runtime isolates the candidate in a run-owned
+bridge namespace, allowing source and candidate to use the same native service
+ports. It normally captures one source
 response and one candidate response. Set
 `comparison_recording.baseline_recheck = true` to additionally capture a
 source response after the candidate for source-drift diagnosis. Passing

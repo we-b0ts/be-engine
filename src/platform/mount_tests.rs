@@ -7,9 +7,13 @@ use super::*;
 fn platform_mount_assets_expose_the_isolation_contract() {
     assert!(MANAGER.contains("source \"$TRAFFIC_E2E_PLATFORM_ASSETS/platform-mounts.sh\""));
     assert!(PLATFORM_MOUNTS.contains("prepare_writable_startup_mounts"));
-    assert!(MANAGER.contains("resolve_startup_mount_source target \"$target\" \"$writable\""));
     assert!(
-        MANAGER.contains("type=bind,source=${prepared_mount_source},target=${target}${access}")
+        COMPARISON_TARGET_NETWORK
+            .contains("resolve_startup_mount_source target \"$target\" \"$writable\"")
+    );
+    assert!(
+        COMPARISON_TARGET_NETWORK
+            .contains("type=bind,source=${prepared_mount_source},target=${target}${access}")
     );
     assert!(PLATFORM_MOUNTS.contains("partially overlaps startup mount"));
     assert!(PLATFORM_MOUNTS.contains("prepare_empty_runtime_mount source \"$destination\""));

@@ -121,8 +121,8 @@ fn validate_ports(source_port: u16, gateway_port: u16, target_port: u16) -> Resu
         "Motan source, gateway, and target ports must be greater than zero"
     );
     ensure!(
-        source_port != gateway_port && source_port != target_port && gateway_port != target_port,
-        "Motan source, gateway, and target ports must be distinct"
+        source_port != gateway_port && gateway_port != target_port,
+        "Motan gateway port must differ from source and target ports"
     );
     Ok(())
 }
@@ -314,6 +314,7 @@ mod tests {
     fn rejects_ambiguous_motan_ports() {
         assert!(validate_ports(8080, 8080, 8081).is_err());
         assert!(validate_ports(0, 18081, 8081).is_err());
+        assert!(validate_ports(8080, 18081, 8080).is_ok());
     }
 
     #[test]
@@ -323,7 +324,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             source_port: 8080,
             gateway_port: 18_081,
-            target_port: 8081,
+            target_port: 8080,
         };
 
         let first = enable_repository_motan_protocol(options()).unwrap();
@@ -334,7 +335,7 @@ mod tests {
             "motan-replay --input-raw :8080 --output-rpc 127.0.0.1:18081"
         );
         let project = fs::read_to_string(&first.project_config).unwrap();
-        assert!(project.contains("  motan_port: 8081"));
+        assert!(project.contains("  motan_port: 8080"));
         assert!(!project.contains("source_port"));
         assert!(!project.contains("gateway_port"));
         let recorder = fs::read_to_string(&first.recorder_config).unwrap();

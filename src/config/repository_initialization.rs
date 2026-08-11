@@ -374,7 +374,7 @@ mod tests {
                 source_container: "friendship".to_string(),
                 breeze_container: Some("breeze".to_string()),
                 source_http_port: 8080,
-                target_port: 8081,
+                target_port: 8080,
                 http_gateway_port: 17_171,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,
@@ -427,6 +427,7 @@ mod tests {
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
         assert!(project.contains("version: 12"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
+        assert!(project.contains("  port: 8080"));
         assert!(project.contains("runtime_root: local/runtime"));
         assert!(project.contains("startup: {}"));
         assert!(project.contains("container: breeze"));
@@ -449,6 +450,18 @@ mod tests {
         let recorder =
             crate::config::AppConfig::load(target.path().join(RECORDER_CONFIG_PATH)).unwrap();
         assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:17171");
+        assert_eq!(
+            recorder.http_gateway.matched_upstream,
+            "http://127.0.0.1:8080"
+        );
+        assert_eq!(
+            recorder
+                .comparison_recording
+                .as_ref()
+                .unwrap()
+                .candidate_upstream,
+            "http://127.0.0.1:8080"
+        );
         assert_eq!(recorder.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
         crate::replay::validate_replay_policy(&target.path().join(VERIFICATION_POLICY_PATH))
             .unwrap();
@@ -459,7 +472,7 @@ mod tests {
                 source_container: "friendship".to_string(),
                 breeze_container: Some("breeze".to_string()),
                 source_http_port: 8080,
-                target_port: 8081,
+                target_port: 8080,
                 http_gateway_port: 17_171,
                 readiness_path: "/healthz".to_string(),
                 readiness_status: 404,

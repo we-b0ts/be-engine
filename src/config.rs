@@ -85,6 +85,10 @@ pub use repository_protocol::{
     MotanProtocolConfigOptions, MotanProtocolConfigResult, enable_repository_motan_protocol,
 };
 
+pub(crate) fn managed_comparison_candidate(port: u16) -> String {
+    format!("http://comparison-target.traffic-e2e.invalid:{port}")
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppConfig {
@@ -233,11 +237,25 @@ impl AppConfig {
     }
 
     pub fn load_comparison_recording(path: impl AsRef<Path>) -> Result<Self> {
+        Self::load_comparison_recording_with_candidate(path, None)
+    }
+
+    pub fn load_comparison_recording_with_candidate(
+        path: impl AsRef<Path>,
+        candidate_upstream: Option<&str>,
+    ) -> Result<Self> {
         let path = path.as_ref();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
-        let config: Self = toml::from_str(&raw)
+        let mut config: Self = toml::from_str(&raw)
             .with_context(|| format!("failed to parse config {}", path.display()))?;
+        if let Some(candidate_upstream) = candidate_upstream {
+            config
+                .comparison_recording
+                .as_mut()
+                .context("record-comparison command requires a [comparison_recording] configuration section")?
+                .candidate_upstream = candidate_upstream.to_string();
+        }
         config
             .validate_comparison_recording()
             .with_context(|| format!("invalid comparison recording config {}", path.display()))?;

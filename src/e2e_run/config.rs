@@ -588,6 +588,19 @@ mod tests {
     }
 
     #[test]
+    fn managed_replay_keeps_the_native_target_http_port() {
+        let target = target();
+        let mut options = options(target.path());
+        options.target_port = 8080;
+        initialize(options).unwrap();
+
+        let (_, config) = resolve_project(target.path()).unwrap();
+
+        assert_eq!(config.target_http_origin, "http://127.0.0.1:8080");
+        assert_eq!(config.target_port, 8080);
+    }
+
+    #[test]
     fn target_motan_port_allows_the_recorder_gateway_to_be_disabled() {
         let target = target();
         initialize(options(target.path())).unwrap();
