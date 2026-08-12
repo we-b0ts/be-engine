@@ -22,6 +22,7 @@ fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages(
             case_id: "case-1".to_string(),
             pointer: "/items/0/value".to_string(),
             difference_kind: ResponseDifferenceKind::MissingActual,
+            unavailable_reason: None,
             expected: E2eValueObservation {
                 presence: E2eValuePresence::Present,
                 value: Some(Value::from(1)),
@@ -62,6 +63,66 @@ fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages(
     assert_eq!(
         case_response_difference_offset(&state, state.active_issue.as_ref().unwrap(), &next_page,),
         None
+    );
+}
+
+#[test]
+fn unavailable_response_evidence_omits_value_and_policy_queries() {
+    let target = tempfile::tempdir().unwrap();
+    let mut state = crate::rewrite::test_state();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-response-unavailable".to_string(),
+        kind: RewriteIssueKind::Response,
+        owner: RewriteIssueOwner::TargetCode,
+        summary: "response unavailable".to_string(),
+        pointer_pattern: Some("$response".to_string()),
+        representative: Some(E2eRepresentativeDifference {
+            case_id: "case-1".to_string(),
+            pointer: "$response".to_string(),
+            difference_kind: ResponseDifferenceKind::ResponseUnavailable,
+            unavailable_reason: Some(crate::E2eResponseUnavailableReason::TargetConnectionClosed),
+            expected: E2eValueObservation {
+                presence: E2eValuePresence::Present,
+                value: None,
+            },
+            actual: E2eValueObservation {
+                presence: E2eValuePresence::Unavailable,
+                value: None,
+            },
+        }),
+        response_diagnosis: None,
+        possible_causes: Vec::new(),
+        observed_target_fingerprint: "target".to_string(),
+        attempt: 2,
+        comparison_observation: None,
+    });
+
+    let purposes = commands(target.path(), &state)
+        .into_iter()
+        .map(|command| command.purpose)
+        .collect::<Vec<_>>();
+
+    assert!(
+        purposes
+            .iter()
+            .any(|purpose| purpose.contains("all response differences"))
+    );
+    assert!(
+        purposes
+            .iter()
+            .any(|purpose| purpose.contains("dependency cleanliness"))
+    );
+    assert!(
+        !purposes
+            .iter()
+            .any(|purpose| purpose.contains("source value"))
+    );
+    assert!(!purposes.iter().any(|purpose| purpose.contains("multisets")));
+    assert!(
+        !purposes
+            .iter()
+            .any(|purpose| purpose.contains("rule applicability"))
     );
 }
 
@@ -187,6 +248,7 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
             case_id: "case-status-mismatch".to_string(),
             pointer: "$status".to_string(),
             difference_kind: ResponseDifferenceKind::StatusMismatch,
+            unavailable_reason: None,
             expected: E2eValueObservation {
                 presence: E2eValuePresence::Present,
                 value: Some(Value::from(403)),

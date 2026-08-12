@@ -28,7 +28,7 @@ pub(super) fn from_e2e(
                 RewriteIssueKind::Response,
                 RewriteIssueOwner::TargetCode,
                 format!(
-                    "{} of {} executed cases have {} response differences across {} {}",
+                    "{} nonpassing cases among {} executed cases have {} response differences across {} {}",
                     result.diagnosis.counts.response_nonpassing,
                     result.diagnosis.counts.executed,
                     differences.total_differences,
@@ -97,6 +97,13 @@ pub(super) fn from_e2e(
 
 pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> Vec<String> {
     let causes: &[&str] = match kind {
+        Some(ResponseDifferenceKind::ResponseUnavailable) => &[
+            "target_request_handler_failure",
+            "target_response_stream_failure",
+            "dependency_failure_before_response",
+            "target_request_timeout_or_connection_close",
+            "response_assertion_evaluation_or_evidence_failure",
+        ],
         Some(ResponseDifferenceKind::StatusMismatch) => &[
             "request_authentication_or_precondition",
             "target_status_or_error_mapping",
@@ -148,5 +155,23 @@ fn kind_name(kind: RewriteIssueKind) -> &'static str {
         RewriteIssueKind::Replay => "replay",
         RewriteIssueKind::Dependency => "dependency",
         RewriteIssueKind::Comparison => "comparison",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_response_causes_point_to_request_completion_failures() {
+        let causes = response_possible_causes(Some(ResponseDifferenceKind::ResponseUnavailable));
+
+        assert!(causes.iter().any(|cause| cause.contains("request_handler")));
+        assert!(
+            causes
+                .iter()
+                .any(|cause| cause.contains("connection_close"))
+        );
+        assert!(!causes.iter().any(|cause| cause.contains("nondeterminism")));
     }
 }

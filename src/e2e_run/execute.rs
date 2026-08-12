@@ -522,6 +522,10 @@ async fn execute_case(
                 "legacy target-owned assertion has no response report"
             ))
         };
+    state.cases[case_index].response_unavailable_reason = assertion_command
+        .as_ref()
+        .err()
+        .map(super::http_driver::response_unavailable_reason);
     let mut assertion_passed = if config.runner_owned_response_assertions {
         response_assertion
             .as_ref()

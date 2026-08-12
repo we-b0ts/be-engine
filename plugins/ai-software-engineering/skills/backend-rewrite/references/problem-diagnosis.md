@@ -49,9 +49,15 @@ Run only query IDs returned by `action.commands.evidence`:
 - `case_response_differences`: for a response issue, the first evidence command
   returns one fixed-size page of every structured response difference in the
   representative case, including normalized Pointer patterns and explicit
-  expected/actual value presence. Execute its first page before changing target
-  code. When more differences are needed to distinguish a coherent cause,
-  execute only the exact `facts.next_page.command`; never construct a cursor;
+  expected/actual value presence. A case that produced no usable target
+  response assertion evidence appears as one `response_unavailable` difference
+  at `$response`, not as zero response differences. Its optional
+  `unavailable_reason` is an observed transport classification: for example,
+  `target_connection_closed` proves that the target-side HTTP connection ended
+  before a complete response, but does not by itself distinguish a panic from
+  another target abort. Execute the first page before changing target code.
+  When more differences are needed to distinguish a coherent cause, execute
+  only the exact `facts.next_page.command`; never construct a cursor;
 - `representatives`: the representative case ID, exact immutable standard or
   comparison `case_dir`, and bounded structured response or dependency
   difference; it does not prove the cause. For response, dependency, and

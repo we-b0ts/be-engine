@@ -92,7 +92,7 @@ fn plan_and_apply_add_an_idempotent_motan_rule_without_endpoint_identity() {
     assert!(raw.contains(&format!("group = \"{GROUP}\"")));
     assert!(raw.contains(&format!("interface_name = \"{INTERFACE}\"")));
     assert!(raw.contains(&format!("method_name = \"{METHOD}\"")));
-    assert!(!raw.contains("vintage-node-"));
+    assert!(!raw.contains(".trp.test"));
     assert!(!raw.contains("response_role"));
 
     let config = AppConfig::load(&fixture.config).unwrap();

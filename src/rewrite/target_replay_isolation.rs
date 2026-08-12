@@ -519,7 +519,7 @@ mod tests {
         let target = target_with_source("pub fn value() -> u8 { 1 }\n");
         fs::write(
             target.path().join("src/lib.rs"),
-            "pub const CACHE: &str = \"vintage-node-secret.trp.test:15138\";\n",
+            "pub const CACHE: &str = \"fake-node-10-2-29-229.trp.test:15138\";\n",
         )
         .unwrap();
 
@@ -530,7 +530,7 @@ mod tests {
         assert_eq!(value["violations"][0]["file"], "src/lib.rs");
         assert_eq!(value["violations"][0]["line"], 1);
         assert_eq!(value["violations"][0]["matched"], ".trp.test");
-        assert!(!value.to_string().contains("vintage-node-secret"));
+        assert!(!value.to_string().contains("fake-node-10-2-29-229"));
     }
 
     #[test]
