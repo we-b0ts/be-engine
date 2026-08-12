@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
 
@@ -12,8 +12,7 @@ use super::{action, artifacts, evidence, fingerprint, inventory, recording};
 use crate::{ManagedRecordingOperation, RecordingApi, RewriteContext};
 
 #[derive(Debug, Clone)]
-pub struct RewriteRouteOptions {
-    pub target_root: PathBuf,
+pub(super) struct SystemRepairRouteOptions {
     pub kind: String,
     pub evidence_id: String,
     pub source_ref: String,
@@ -23,7 +22,7 @@ pub struct RewriteRouteOptions {
 pub(super) fn route(
     target_root: &Path,
     state: &mut RewriteState,
-    options: RewriteRouteOptions,
+    options: SystemRepairRouteOptions,
 ) -> Result<RewriteRouteReport> {
     ensure!(
         state.phase == super::model::RewritePhase::ImplementationRequired,

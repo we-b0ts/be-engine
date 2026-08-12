@@ -801,10 +801,11 @@ For an active backend rewrite, the AI-facing coordinator accepts the
 source-visible backend endpoint instead of a Breeze resource selector:
 
 ```bash
-backend-rewrite --target-root ../target recorder-capture plan \
+backend-rewrite --target-root ../target route \
+  --cause missing-recorded-resource \
   --evidence-id <current-evidence-id> \
   --endpoint counter.example.com:9332 \
-  --source-evidence 'src/UserCounter.java:load reads the counter backend'
+  --source-ref 'src/UserCounter.java:load reads the counter backend'
 
 backend-rewrite --target-root ../target recorder-capture apply \
   <returned-plan-id>
@@ -1215,15 +1216,21 @@ return the appropriate summary command so an AI does not need to reconstruct
 argv or write an ad hoc artifact parser.
 
 Use `backend-rewrite rule plan|apply` for a source-proven response rule and
-`backend-rewrite route` for a proven Recorder/Replay capability gap, external-data
-blocker, or source change. Query IDs and evidence IDs are bound to the workflow
-revision and active issue, so stale evidence is rejected.
+`backend-rewrite route` for a source-proven missing recorded resource,
+Recorder/Replay capability gap, external-data blocker, or source change. For a
+missing dependency, use `--cause missing-recorded-resource --endpoint
+'hostname[:port]'`; the coordinator resolves the endpoint through configured
+Breeze snapshots and returns a recorder-capture plan only when the unique
+resource is currently bypassed. Query IDs and evidence IDs are bound to the
+workflow revision and active issue, so stale evidence is rejected.
 
-An accepted route snapshots a coordinator-defined system or source revision and
-returns `repair verify <repair-id>`. The caller cannot provide an acceptance
+An accepted system/source repair route snapshots a coordinator-defined revision
+and returns `repair verify <repair-id>`. The caller cannot provide an acceptance
 command, and `next` or `recording request` cannot bypass the repair. Successful
 verification decides whether to rerun the same cases or allocate fresh standard
-recording evidence.
+recording evidence. A successful `missing-recorded-resource` route instead
+returns the existing recorder-capture apply command and never enters system
+repair.
 
 Initialize a rewrite target's three generated documents once, before its first
 coordinator session:

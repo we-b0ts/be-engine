@@ -14,25 +14,28 @@ read-only help commands but never execute the state-mutating commands here.
 
 ## Recorder Capture
 
-The `representatives` evidence report may advertise a `recorder_capture`
-planner for response, dependency, or comparison issues. Planner availability
-does not prove that traffic was omitted. Use it only after the worker proves
-that source code consumes one exact response-driving endpoint absent from
-recorded dependencies and returns one source file/symbol proof.
+Use this route only after the worker proves that source code consumes one exact
+response-driving endpoint absent from recorded dependencies and returns one
+source file/symbol proof. The hostname is required; the port is optional and
+should be included when source evidence proves it.
 
 Run:
 
 ```text
-backend-rewrite recorder-capture plan \
+backend-rewrite route \
+  --cause missing-recorded-resource \
   --evidence-id <returned-evidence-id> \
   --endpoint <source-proven-hostname[:port]> \
-  --source-evidence '<single-line source file/symbol proof>'
+  --source-ref '<single-line source file/symbol proof>'
 ```
 
-The planner reverse-resolves the hostname through configured Breeze snapshots
-and accepts only one canonical resource. A source-proven port may disambiguate
-resources sharing a domain. Shared or unknown domains and IP literals are
-rejected; never supply a guessed Breeze descriptor or resource name.
+The route reverse-resolves the hostname through configured Breeze snapshots,
+accepts only one canonical resource, and verifies that the resource is not
+already captured. A source-proven port may disambiguate resources sharing a
+domain. Shared or unknown domains, already captured resources, and IP literals
+are rejected; never supply a guessed Breeze descriptor or resource name. A
+successful route returns the ordinary recorder-capture plan report and does not
+enter `system_repair_required`.
 
 Execute the exact returned apply argv. Apply is immediate, add-only, atomic,
 and stale-safe. If serialized recording, Replay, or comparison is live, inspect

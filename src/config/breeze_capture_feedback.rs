@@ -50,6 +50,7 @@ pub struct BreezeResourceCaptureReport {
     pub source_evidence: String,
     pub capture_resources_before: Vec<String>,
     pub capture_resources_after: Vec<String>,
+    pub bypassed_domains_before: Vec<String>,
     pub changed: bool,
     pub applied: bool,
     pub diff: String,
@@ -163,6 +164,13 @@ fn plan_capture(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
+    let captured_domains_before = captured_domains(&candidate.snapshot, &before)?;
+    let bypassed_domains_before = candidate
+        .resource
+        .domains
+        .difference(&captured_domains_before)
+        .cloned()
+        .collect();
     let mut after = before.clone();
     after.insert(candidate.resource.identity.clone());
     validate_existing_resources(&candidate.snapshot, &after)?;
@@ -203,11 +211,20 @@ fn plan_capture(
             source_evidence,
             capture_resources_before: before.into_iter().collect(),
             capture_resources_after: after.into_iter().collect(),
+            bypassed_domains_before,
             changed,
             applied: false,
             diff,
         },
     })
+}
+
+fn captured_domains(snapshot: &Snapshot, selectors: &BTreeSet<String>) -> Result<BTreeSet<String>> {
+    let mut domains = BTreeSet::new();
+    for selector in selectors {
+        domains.extend(snapshot.resolve(selector)?.domains.iter().cloned());
+    }
+    Ok(domains)
 }
 
 struct Candidate {

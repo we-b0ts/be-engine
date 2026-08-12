@@ -99,6 +99,23 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteRecorderCapturePlanOptions,
 ) -> Result<RewriteRecorderCaptureReport> {
+    plan_with_capture_requirement(target_root, state, options, false)
+}
+
+pub(super) fn plan_missing_recorded_resource(
+    target_root: &Path,
+    state: &mut RewriteState,
+    options: RewriteRecorderCapturePlanOptions,
+) -> Result<RewriteRecorderCaptureReport> {
+    plan_with_capture_requirement(target_root, state, options, true)
+}
+
+fn plan_with_capture_requirement(
+    target_root: &Path,
+    state: &mut RewriteState,
+    options: RewriteRecorderCapturePlanOptions,
+    require_current_bypass: bool,
+) -> Result<RewriteRecorderCaptureReport> {
     let issue = capture_issue(state)?;
     validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
     validate_single_line("source evidence", &options.source_evidence)?;
@@ -114,6 +131,14 @@ pub(super) fn plan(
         source_revision: source_revision.clone(),
         source_evidence: options.source_evidence.clone(),
     })?;
+    if require_current_bypass {
+        ensure!(
+            !traffic_plan.report().bypassed_domains_before.is_empty(),
+            "backend endpoint {:?} resolves to Breeze resource {:?}, but all of its backend domains are already captured and are not currently bypassed",
+            options.endpoint,
+            traffic_plan.report().resource_identity
+        );
+    }
     ensure!(
         fingerprint::project_config_revision(target_root)? == project_config_revision,
         "recorder config changed during capture planning; rerun plan"
