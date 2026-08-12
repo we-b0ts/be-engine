@@ -758,7 +758,7 @@ mod tests {
         );
         assert!(comparison_source.contains("\"${runtime_args[@]}\" \"$adapter_image_id\""));
         assert!(!comparison_source.contains(".[0].Config.Image"));
-        assert!(comparison_source.contains("MESH_CONNECT_HOST=breeze.recording"));
+        assert!(comparison_source.contains("MESH_CONNECT_HOST=${target_network_ip}"));
         let comparison_runtime = MANAGER
             .split_once("run_comparison_recording()")
             .unwrap()
@@ -797,6 +797,9 @@ mod tests {
             &[
                 "start_comparison_target_network",
                 "start_cache_snapshot",
+                "enable_comparison_target_loopback_ingress",
+                "start_breeze \"container:${target_anchor_name}\" \"$target_network_ip\"",
+                "start_comparison_source",
                 "start_target",
                 "wait_http \"$target_origin\"",
                 "require_container_running \"$target_name\" target",
@@ -804,6 +807,9 @@ mod tests {
             ],
         );
         assert!(COMPARISON_TARGET_NETWORK.contains("docker network create --driver bridge"));
+        assert!(COMPARISON_TARGET_NETWORK.contains("net.ipv4.conf.all.route_localnet=1"));
+        assert!(COMPARISON_TARGET_NETWORK.contains("enable_comparison_target_loopback_ingress()"));
+        assert!(COMPARISON_TARGET_NETWORK.contains("--to-destination 127.0.0.1"));
         assert!(
             COMPARISON_TARGET_NETWORK.contains(
                 "target_origin=\"http://${target_network_ip}:${TRAFFIC_E2E_TARGET_PORT}\""

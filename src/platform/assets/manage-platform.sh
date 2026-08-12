@@ -394,12 +394,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 wait_port() {
-    local port=$1
-    local label=$2
-    local owner=${3-}
+    wait_host_port 127.0.0.1 "$@"
+}
+
+wait_host_port() {
+    local host=$1
+    local port=$2
+    local label=$3
+    local owner=${4-}
     local deadline=$((SECONDS + 300))
     while ((SECONDS < deadline)); do
-        if nc -z -w 1 127.0.0.1 "$port" >/dev/null 2>&1; then
+        if nc -z -w 1 "$host" "$port" >/dev/null 2>&1; then
             return 0
         fi
         if [[ -n "$owner" ]] && ! container_is_running "$owner"; then
@@ -408,7 +413,7 @@ wait_port() {
         fi
         sleep 1
     done
-    printf 'error: timed out waiting for %s on port %s\n' "$label" "$port" >&2
+    printf 'error: timed out waiting for %s on %s:%s\n' "$label" "$host" "$port" >&2
     return 1
 }
 
@@ -579,11 +584,12 @@ normalize_breeze_directories() {
 
 start_breeze() {
     local network=$1
+    local ready_host=${2:-127.0.0.1}
     load_runtime_spec "$breeze_inspect" exact exact exact
     docker run --detach --name "$breeze_name" --network "$network" \
         "${runtime_args[@]}" "$breeze_image" "${runtime_command[@]}" >/dev/null
     breeze_started=true
-    wait_port 9984 Breeze "$breeze_name"
+    wait_host_port "$ready_host" 9984 Breeze "$breeze_name"
 }
 
 start_cache_snapshot() {
@@ -619,7 +625,7 @@ start_comparison_source() {
     local network=$1
     load_runtime_spec "$source_inspect" recording recording image
     if "$breeze_enabled"; then
-        runtime_args+=(--env MESH_CONNECT_HOST=breeze.recording)
+        runtime_args+=(--env "MESH_CONNECT_HOST=${target_network_ip}")
     fi
     require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
     docker run --detach --name "$source_name" --network "$network" \
@@ -965,9 +971,10 @@ run_comparison_recording() {
     start_comparison_target_network
     start_cache_snapshot
     if "$breeze_enabled"; then
+        enable_comparison_target_loopback_ingress
         normalize_breeze_directories
         docker pull "$breeze_image" >/dev/null
-        start_breeze "container:${anchor_name}"
+        start_breeze "container:${target_anchor_name}" "$target_network_ip"
     fi
     start_comparison_source "container:${anchor_name}"
     run_no_fallback

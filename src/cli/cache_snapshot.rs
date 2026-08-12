@@ -6,7 +6,7 @@ use anyhow::{Result, ensure};
 use clap::Args;
 use traffic_e2e::{AppConfig, AppState, BackgroundDependencyRuleConfig, TrafficJsonlMode};
 
-use super::interception::CachePortGuard;
+use super::interception::{CachePortGuard, TargetEgressGuard};
 
 #[derive(Debug, Args)]
 pub(super) struct CacheSnapshotRunArgs {
@@ -49,9 +49,11 @@ pub(super) async fn run(args: CacheSnapshotRunArgs) -> Result<()> {
         args.target_source_ip,
         args.interception_listen_ip,
     )?;
+    let mut target_egress = TargetEgressGuard::enable(args.target_source_ip)?;
     let result = state
         .run_with_control_socket(Some(args.control_socket))
         .await;
+    target_egress.disable();
     interception.disable();
     result
 }

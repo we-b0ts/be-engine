@@ -13,6 +13,7 @@ mod cache_ports;
 mod dns;
 mod egress;
 mod fake_ip;
+mod target_egress;
 
 pub(super) struct CachePortGuard {
     active: bool,
@@ -46,6 +47,37 @@ impl CachePortGuard {
 }
 
 impl Drop for CachePortGuard {
+    fn drop(&mut self) {
+        self.disable();
+    }
+}
+
+pub(super) struct TargetEgressGuard {
+    active: bool,
+}
+
+impl TargetEgressGuard {
+    pub(super) fn enable(target_source_ip: Option<Ipv4Addr>) -> Result<Self> {
+        let Some(target_source_ip) = target_source_ip else {
+            return Ok(Self { active: false });
+        };
+        require_root()?;
+        target_egress::up(target_source_ip)?;
+        Ok(Self { active: true })
+    }
+
+    pub(super) fn disable(&mut self) {
+        if std::mem::take(&mut self.active)
+            && let Err(error) = target_egress::down()
+        {
+            stderr_line(format_args!(
+                "failed to remove comparison target egress: {error:#}"
+            ));
+        }
+    }
+}
+
+impl Drop for TargetEgressGuard {
     fn drop(&mut self) {
         self.disable();
     }

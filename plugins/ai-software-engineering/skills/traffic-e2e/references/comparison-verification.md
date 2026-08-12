@@ -19,10 +19,15 @@ transport, and comparison behavior. Motan inventory entries use an opaque
 engine-generated `MOTAN /rpc/<api-id>` canonical value.
 
 traffic-e2e builds `.traffic-e2e/Dockerfile.e2e` and owns source, one shared
-Breeze, target container, their shared network namespace, readiness,
-comparison recorder, finalization, signals, and cleanup. The target receives
-the fixed config mount and port environment contract. Do not generate or
-invoke repository comparison wrappers.
+Breeze, target container, their managed network namespaces, readiness,
+comparison recorder, finalization, signals, and cleanup. The source keeps the
+host recording namespace, while Breeze and target share the run-owned target
+namespace so Breeze loopback endpoints remain valid. The adapted source uses
+the target bridge IP to reach that same Breeze through a namespace-scoped
+loopback ingress mapping. A run-scoped egress guard owns target forwarding and
+masquerade for the lifetime of the cache snapshot. The target receives the
+fixed config mount and port environment contract. Do not generate or invoke
+repository comparison wrappers.
 
 Managed comparison runs source through the same reviewed
 `.traffic-e2e/Dockerfile.recording` adaptor used by standard recording. The
@@ -33,10 +38,12 @@ must remain present and stopped. traffic-e2e only inspects that container and
 starts the adapted, run-private source container.
 
 When the recorder config contains Redis process-owned rules, managed comparison
-also owns a cache-only run-local snapshot in the shared network namespace.
-Source and candidate share the first successful response for each matching
-logical Redis read. This comparison snapshot starts empty and never loads the
-standard recording's Replay snapshot.
+also owns one cache-only run-local snapshot across both managed namespaces.
+Fixed-UID `OUTPUT` interception captures source traffic, while source-IP-scoped
+`PREROUTING` interception captures target and Breeze traffic before target
+egress masquerade. Source and candidate share the first successful response for
+each matching logical Redis read. This comparison snapshot starts empty and
+never loads the standard recording's Replay snapshot.
 Managed comparison waits for that snapshot recorder's sliding Redis quiet
 window before admitting input, then admits one complete source/candidate case
 at a time.

@@ -308,15 +308,20 @@ to observe the full duration.
 `traffic-e2e config init --source-container <container> --breeze` installs the
 Breeze-aware recorder defaults together with project and verification
 configuration. The target repository provides no recording or comparison
-wrapper. `traffic-e2e record-comparison` owns the
-adapted source application, optional Breeze runtime and candidate Breeze mounts,
-the candidate's fixed start/stop contract, recording, signals, finalization,
-and cleanup. The source
+wrapper. `traffic-e2e record-comparison` owns the adapted source application,
+optional Breeze runtime and candidate Breeze mounts, the candidate's fixed
+start/stop contract, recording, signals, finalization, and cleanup. The source
 keeps the host recording namespace while the candidate runs in a run-owned
 bridge namespace, so both applications use their native HTTP and Motan ports
-without a host bind conflict. The candidate's bridge IP and comparison origin
-exist only for that run and are never persisted in `project.yaml` or recording
-artifacts. AI and
+without a host bind conflict. The managed Breeze shares the candidate namespace
+so Breeze registry endpoints that advertise `127.0.0.1:<port>` retain their
+normal meaning. A namespace-scoped ingress mapping sends connections to the
+candidate bridge IP into that loopback, so the adapted source reaches the same
+Breeze without knowing its dynamic ports. A run-scoped forwarding and
+masquerade guard gives the candidate namespace its normal dependency network
+even on Docker hosts configured with `iptables=false`. The candidate's bridge
+IP and comparison origin exist only for that run and are never persisted in
+`project.yaml` or recording artifacts. AI and
 automated invocations pass an explicit duration, run ID, and API scope.
 
 Each published comparison recording case contains:
@@ -1376,9 +1381,10 @@ from a target-repository Dockerfile.
 The runner sends HTTP requests itself; the target image does not read cases or
 write response reports. The configured port is shared by the image
 environment, readiness, replay requests, and comparison requests. Comparison
-places source, optional Breeze, and target in one system-owned network
-namespace. Replay starts the target once for the selected cases, intercepts
-dependency traffic by fixed UID, and prevents uncontrolled external egress.
+keeps source in the host recording namespace and places optional Breeze with
+the target in one run-owned bridge namespace. Replay starts the target once for
+the selected cases, intercepts dependency traffic by fixed UID, and prevents
+uncontrolled external egress.
 
 After the initialization AI has supplied both Dockerfiles and any target mock,
 run the existing authoritative preflight:
