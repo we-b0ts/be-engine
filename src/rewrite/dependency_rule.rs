@@ -113,7 +113,7 @@ enum DependencyRulePlan {
 }
 
 struct ExactKeyRedisPlanInput<'a> {
-    config_path: PathBuf,
+    rules_path: PathBuf,
     replay_report_path: PathBuf,
     record: &'a RewriteDependencyRulePlanRecord,
     ports: &'a [u16],
@@ -303,6 +303,27 @@ pub(super) fn apply(
     plan_id: &str,
 ) -> Result<RewriteDependencyRuleReport> {
     let record = pending_plan_for_apply(state, plan_id)?;
+    if matches!(
+        &record.spec,
+        RewriteDependencyRuleSpec::Http { .. }
+            | RewriteDependencyRuleSpec::Memcached { .. }
+            | RewriteDependencyRuleSpec::Motan { .. }
+    ) {
+        crate::e2e_run::ensure_focused_background_reclassification_revisable(
+            E2eRunContext {
+                target_root: target_root.to_path_buf(),
+                case_source: state
+                    .case_source
+                    .clone()
+                    .context("rewrite workflow has no case source to reclassify")?,
+                run_key: None,
+            },
+            state
+                .group_id
+                .as_deref()
+                .context("rewrite workflow has no focused API to reclassify")?,
+        )?;
+    }
     let report = build_plan(target_root, state, &record)?.apply()?;
     state.dependency_rule_plan = None;
     state.e2e_current = false;
@@ -431,16 +452,19 @@ pub(super) fn schedule_cache_snapshot_refresh(
             .is_none(),
         "a full recording refresh has already started; wait for it to finish before applying another dependency rule"
     );
-    let config_revision = fingerprint::recorder_config_revision(target_root)?;
+    let config_revision = fingerprint::project_config_revision(target_root)?;
+    let rules_revision = fingerprint::coordinator_rules_revision(target_root)?;
     let refresh = state
         .recording_refresh
         .get_or_insert_with(|| RewriteRecordingRefreshState {
             applied: Vec::new(),
             dependency_rules: Vec::new(),
-            recorder_config_revision: config_revision.clone(),
+            project_config_revision: config_revision.clone(),
+            coordinator_rules_revision: rules_revision.clone(),
             recording_run_id: None,
         });
-    refresh.recorder_config_revision = config_revision;
+    refresh.project_config_revision = config_revision;
+    refresh.coordinator_rules_revision = rules_revision;
     if !refresh
         .dependency_rules
         .iter()
@@ -574,7 +598,9 @@ fn build_plan(
         api,
     )?
     .replay;
-    let config_path = target_root.join(".traffic-e2e/recorder.toml");
+    let rules_path = target_root
+        .join(crate::repository::TRAFFIC_E2E_ROOT)
+        .join(crate::config::COORDINATOR_RULES_FILE);
     match &record.spec {
         RewriteDependencyRuleSpec::Http {
             authority,
@@ -582,7 +608,7 @@ fn build_plan(
             path_prefix,
         } => Ok(DependencyRulePlan::Http(plan_background_dependency(
             BackgroundDependencyFeedback {
-                config_path,
+                rules_path,
                 replay_report_path,
                 name: record.name.clone(),
                 authority: authority.clone(),
@@ -603,7 +629,7 @@ fn build_plan(
         } => Ok(DependencyRulePlan::Memcached(
             plan_breeze_memcached_background_dependency(
                 BreezeMemcachedBackgroundDependencyFeedback {
-                    config_path,
+                    rules_path,
                     replay_report_path,
                     name: record.name.clone(),
                     breeze_resource: breeze_resource.clone(),
@@ -624,7 +650,7 @@ fn build_plan(
             method_name,
         } => Ok(DependencyRulePlan::Motan(plan_motan_background_dependency(
             MotanBackgroundDependencyFeedback {
-                config_path,
+                rules_path,
                 replay_report_path,
                 name: record.name.clone(),
                 group: group.clone(),
@@ -640,7 +666,7 @@ fn build_plan(
             key_suffix,
         } => Ok(DependencyRulePlan::Redis(plan_redis_background_dependency(
             RedisBackgroundDependencyFeedback {
-                config_path,
+                rules_path,
                 replay_report_path,
                 name: record.name.clone(),
                 ports: ports.clone(),
@@ -660,7 +686,7 @@ fn build_plan(
             keys,
             initial_load_timeout_ms,
         } => plan_exact_key_redis_background_dependency(ExactKeyRedisPlanInput {
-            config_path,
+            rules_path,
             replay_report_path,
             record,
             ports,
@@ -674,7 +700,7 @@ fn build_plan(
             keys,
             initial_load_timeout_ms,
         } => plan_exact_key_redis_background_dependency(ExactKeyRedisPlanInput {
-            config_path,
+            rules_path,
             replay_report_path,
             record,
             ports,
@@ -688,7 +714,7 @@ fn build_plan(
             keys,
             initial_load_timeout_ms,
         } => plan_exact_key_redis_background_dependency(ExactKeyRedisPlanInput {
-            config_path,
+            rules_path,
             replay_report_path,
             record,
             ports,
@@ -705,7 +731,7 @@ fn build_plan(
             fields,
         } => Ok(DependencyRulePlan::Redis(plan_redis_background_dependency(
             RedisBackgroundDependencyFeedback {
-                config_path,
+                rules_path,
                 replay_report_path,
                 name: record.name.clone(),
                 ports: ports.clone(),
@@ -727,7 +753,7 @@ fn plan_exact_key_redis_background_dependency(
     input: ExactKeyRedisPlanInput<'_>,
 ) -> Result<DependencyRulePlan> {
     let ExactKeyRedisPlanInput {
-        config_path,
+        rules_path,
         replay_report_path,
         record,
         ports,
@@ -738,7 +764,7 @@ fn plan_exact_key_redis_background_dependency(
     } = input;
     Ok(DependencyRulePlan::Redis(plan_redis_background_dependency(
         RedisBackgroundDependencyFeedback {
-            config_path,
+            rules_path,
             replay_report_path,
             name: record.name.clone(),
             ports: ports.to_vec(),

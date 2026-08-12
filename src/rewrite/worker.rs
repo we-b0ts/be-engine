@@ -811,25 +811,15 @@ mod tests {
     fn configured_target() -> tempfile::TempDir {
         let target = tempfile::tempdir().unwrap();
         fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
-        fs::write(
-            target.path().join(".traffic-e2e/project.yaml"),
-            "version: 13\n\
-             source:\n  container: source\n\
-             target:\n  dockerfile: .traffic-e2e/Dockerfile.e2e\n  startup: {}\n\
-             replay:\n  policy: .traffic-e2e/verification.yaml\n\
-             recording:\n  config: .traffic-e2e/recorder.toml\n  rule: record-api\n\
-             delivery:\n  pr_base: master\n\
-             state:\n  runtime_root: local/runtime\n",
-        )
-        .unwrap();
+        crate::rewrite::test_support::install_project_config(
+            target.path(),
+            "master",
+            crate::rewrite::test_support::managed_test_recorder(),
+            None,
+        );
         fs::write(
             target.path().join(".traffic-e2e/verification.yaml"),
             "version: 2\nexpected_response: assertions_only\nrules: []\n",
-        )
-        .unwrap();
-        fs::write(
-            target.path().join(".traffic-e2e/recorder.toml"),
-            "[http_gateway.ready]\nenabled = true\npath = \"/healthz\"\nsuccess_status = 404\n\n[[http_gateway.rules]]\nname = \"record-api\"\nmethods = [\"GET\"]\npath_prefixes = [\"/\"]\n",
         )
         .unwrap();
         fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();

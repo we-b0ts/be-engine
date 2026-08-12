@@ -103,27 +103,30 @@ fn matches_ports_command_and_key_shape_without_domain_identity() {
 
 #[test]
 fn validates_zcount_redis_rule() {
-    let config: AppConfig = toml::from_str(
+    let rules: super::super::CoordinatorRulesConfig = serde_yaml::from_str(
         r#"
-        [recording]
-
-        [[recording.process_owned_dependencies]]
-        name = "interest-tag-mining-cache-refresh"
-        protocol = "redis"
-        ports = [20917, 20918, 20919]
-        command = "ZCOUNT"
-        key_prefix = "1042015:"
-        key_suffix = ".wtm2"
-        source_revision = "0123456789abcdef"
-        source_evidence = "InterestTagCardServiceImpl.java:init scheduled refresh"
+        version: 1
+        process_owned_dependencies:
+        - name: interest-tag-mining-cache-refresh
+          protocol: redis
+          ports: [20917, 20918, 20919]
+          command: ZCOUNT
+          key_prefix: "1042015:"
+          key_suffix: .wtm2
+          source_revision: 0123456789abcdef
+          source_evidence: InterestTagCardServiceImpl.java:init scheduled refresh
         "#,
     )
     .unwrap();
+    let config = AppConfig {
+        process_owned_dependencies: rules.process_owned_dependencies,
+        ..Default::default()
+    };
     config.validate().unwrap();
 
     let mut duplicate_port = config;
     let BackgroundDependencyRuleConfig::Redis { ports, .. } =
-        &mut duplicate_port.recording.process_owned_dependencies[0]
+        &mut duplicate_port.process_owned_dependencies[0]
     else {
         panic!("expected Redis background rule");
     };
@@ -229,8 +232,10 @@ fn matches_bootstrap_hash_reads_by_numeric_key_shape_and_exact_fields() {
 
 #[test]
 fn redis_get_requires_exact_keys_timeout_and_ready_probe() {
-    let mut config = AppConfig::default();
-    config.recording.process_owned_dependencies = vec![get_rule()];
+    let mut config = AppConfig {
+        process_owned_dependencies: vec![get_rule()],
+        ..Default::default()
+    };
     let error = config.validate().unwrap_err();
     assert!(
         error
@@ -245,7 +250,7 @@ fn redis_get_requires_exact_keys_timeout_and_ready_probe() {
     let BackgroundDependencyRuleConfig::Redis {
         initial_load_timeout_ms,
         ..
-    } = &mut config.recording.process_owned_dependencies[0]
+    } = &mut config.process_owned_dependencies[0]
     else {
         panic!("expected Redis background rule");
     };

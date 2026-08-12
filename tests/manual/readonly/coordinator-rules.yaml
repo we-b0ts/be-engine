@@ -1,0 +1,8 @@
+# Managed by the backend-rewrite coordinator. Do not edit manually.
+version: 1
+http:
+- name: readonly-manual
+  case_path_patterns: []
+  allowed_unused_http_hosts: []
+breeze_capture: []
+process_owned_dependencies: []

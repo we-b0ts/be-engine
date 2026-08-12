@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::{AppConfig, BackgroundDependencyRuleConfig};
+use crate::config::{BackgroundDependencyRuleConfig, CoordinatorRulesConfig};
 
 const INTERFACE: &str = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc";
 const METHOD: &str = "getConfigByName";
@@ -21,9 +21,9 @@ struct Fixture {
 impl Fixture {
     fn new(report: Value) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("recorder.toml");
+        let config = temp.path().join("coordinator-rules.yaml");
         let replay_report = temp.path().join("replay-report.json");
-        fs::write(&config, "[recording]\ntraffic_jsonl = \"full\"\n").unwrap();
+        fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
         fs::write(&replay_report, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
         Self {
             _temp: temp,
@@ -34,7 +34,7 @@ impl Fixture {
 
     fn feedback(&self) -> MotanBackgroundDependencyFeedback {
         MotanBackgroundDependencyFeedback {
-            config_path: self.config.clone(),
+            rules_path: self.config.clone(),
             replay_report_path: self.replay_report.clone(),
             name: "kunpeng-refresh".to_string(),
             group: GROUP.to_string(),
@@ -88,16 +88,16 @@ fn plan_and_apply_add_an_idempotent_motan_rule_without_endpoint_identity() {
     assert!(plan.apply().unwrap().applied);
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("protocol = \"motan\""));
-    assert!(raw.contains(&format!("group = \"{GROUP}\"")));
-    assert!(raw.contains(&format!("interface_name = \"{INTERFACE}\"")));
-    assert!(raw.contains(&format!("method_name = \"{METHOD}\"")));
+    assert!(raw.contains("protocol: motan"));
+    assert!(raw.contains(&format!("group: {GROUP}")));
+    assert!(raw.contains(&format!("interface_name: {INTERFACE}")));
+    assert!(raw.contains(&format!("method_name: {METHOD}")));
     assert!(!raw.contains(".trp.test"));
     assert!(!raw.contains("response_role"));
 
-    let config = AppConfig::load(&fixture.config).unwrap();
+    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
     assert!(matches!(
-        &config.recording.process_owned_dependencies[0],
+        &config.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Motan {
             group,
             interface_name,
@@ -147,15 +147,15 @@ fn rejects_incomplete_missing_or_conflicting_evidence() {
 }
 
 #[test]
-fn apply_rejects_stale_config_or_replay_report() {
+fn apply_rejects_stale_rules_or_replay_report() {
     let fixture = Fixture::new(report_with_unused());
     let plan = plan_motan_background_dependency(fixture.feedback()).unwrap();
-    fs::write(&fixture.config, "[recording]\ntraffic_jsonl = \"off\"\n").unwrap();
+    fs::write(&fixture.config, "version: 1\n# drift\n").unwrap();
     assert!(
         plan.apply()
             .unwrap_err()
             .to_string()
-            .contains("config changed")
+            .contains("process-owned rules changed")
     );
 
     let fixture = Fixture::new(report_with_unused());

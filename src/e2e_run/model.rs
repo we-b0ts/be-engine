@@ -25,6 +25,13 @@ pub(super) const MAX_RESPONSE_DIFFERENCE_INDEX: usize = 256;
 #[serde(deny_unknown_fields)]
 pub(super) struct ProjectConfig {
     pub version: u32,
+    pub project: ProjectSettings,
+    pub recorder: crate::config::AppConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProjectSettings {
     pub source: SourceProjectConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub breeze: Option<BreezeProjectConfig>,
@@ -72,8 +79,8 @@ pub(super) struct ReplayProjectConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RecordingProjectConfig {
-    pub config: PathBuf,
     pub rule: String,
+    pub coordinator_rules: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +119,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) replay_startup_timeout: Duration,
     pub(crate) pr_base: String,
     pub(crate) recorder_config: PathBuf,
+    pub(crate) coordinator_rules: PathBuf,
     pub(crate) recording_rule: String,
     pub(crate) runner_owned_response_assertions: bool,
 }

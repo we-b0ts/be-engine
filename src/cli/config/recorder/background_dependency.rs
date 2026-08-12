@@ -117,7 +117,7 @@ struct RedisExactKeyBackgroundArgs {
 
 pub(super) fn run(
     target_root: PathBuf,
-    config_path: PathBuf,
+    rules_path: PathBuf,
     args: BackgroundDependencyArgs,
     apply: bool,
 ) -> Result<()> {
@@ -137,7 +137,7 @@ pub(super) fn run(
     match protocol {
         BackgroundProtocolArgs::Http(selector) => {
             let feedback = BackgroundDependencyFeedback {
-                config_path,
+                rules_path,
                 replay_report_path: replay_report,
                 name,
                 authority: selector.authority,
@@ -155,7 +155,7 @@ pub(super) fn run(
         }
         BackgroundProtocolArgs::Memcached(selector) => {
             let feedback = BreezeMemcachedBackgroundDependencyFeedback {
-                config_path,
+                rules_path,
                 replay_report_path: replay_report,
                 name,
                 breeze_resource: selector.breeze_resource,
@@ -177,7 +177,7 @@ pub(super) fn run(
         }
         BackgroundProtocolArgs::Motan(selector) => {
             let feedback = MotanBackgroundDependencyFeedback {
-                config_path,
+                rules_path,
                 replay_report_path: replay_report,
                 name,
                 group: selector.group,
@@ -230,7 +230,7 @@ pub(super) fn run(
                     ),
                 };
             let feedback = RedisBackgroundDependencyFeedback {
-                config_path,
+                rules_path,
                 replay_report_path: replay_report,
                 name,
                 ports,

@@ -29,13 +29,13 @@ pub fn recapture_startup_snapshot(
     })?;
     let project_config = target_root
         .join(crate::repository::TRAFFIC_E2E_ROOT)
-        .join("project.yaml");
+        .join(super::config::PROJECT_CONFIG_FILE);
     let project = load_project_config(&target_root, &project_config)?;
-    let source_container = project.source.container;
+    let source_container = project.project.source.container;
     let startup = crate::startup::capture_startup_snapshot(
         &target_root,
         &source_container,
-        &project.target.startup,
+        &project.project.target.startup,
     )?;
     Ok(StartupSnapshotRecaptureResult {
         status: "recaptured",

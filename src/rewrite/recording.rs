@@ -652,9 +652,14 @@ pub(super) fn begin_pending_capture_refresh(
         return Ok(false);
     }
     ensure!(
-        super::fingerprint::recorder_config_revision(target_root)?
-            == refresh.recorder_config_revision,
-        "recorder config changed after scheduling the recording refresh; re-plan the affected rule"
+        super::fingerprint::project_config_revision(target_root)?
+            == refresh.project_config_revision,
+        "project config changed after scheduling the recording refresh; re-plan the affected rule"
+    );
+    ensure!(
+        super::fingerprint::coordinator_rules_revision(target_root)?
+            == refresh.coordinator_rules_revision,
+        "process-owned rules changed after scheduling the recording refresh; re-plan the affected rule"
     );
     let run_id = artifacts::allocate_run_id_excluding(
         target_root,
@@ -874,7 +879,12 @@ mod tests {
     fn drained_capture_plans_start_one_all_scope_fresh_recording() {
         let target = tempfile::tempdir().unwrap();
         fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
-        fs::write(target.path().join(".traffic-e2e/recorder.toml"), "").unwrap();
+        crate::rewrite::test_support::install_project_config(
+            target.path(),
+            "master",
+            crate::config::AppConfig::default(),
+            None,
+        );
         let mut state = crate::rewrite::test_state();
         inventory::install(
             &mut state,
@@ -898,7 +908,11 @@ mod tests {
                 source_evidence: "CounterService.java:88".to_string(),
             }],
             dependency_rules: Vec::new(),
-            recorder_config_revision: super::super::fingerprint::recorder_config_revision(
+            project_config_revision: super::super::fingerprint::project_config_revision(
+                target.path(),
+            )
+            .unwrap(),
+            coordinator_rules_revision: super::super::fingerprint::coordinator_rules_revision(
                 target.path(),
             )
             .unwrap(),

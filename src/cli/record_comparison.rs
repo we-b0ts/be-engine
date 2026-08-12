@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -14,7 +15,7 @@ use traffic_e2e::{
 
 #[derive(Debug, Args)]
 pub(super) struct RecordComparisonArgs {
-    /// Recorder TOML configuration containing a [comparison_recording] section.
+    /// Recorder YAML configuration containing a comparison_recording section.
     #[arg(long)]
     config: PathBuf,
     /// Verification policy. Defaults to verification.yaml next to the recorder config.
@@ -44,6 +45,9 @@ pub(super) struct RecordComparisonArgs {
     /// Publish comparison readiness on this Unix socket for the managed runtime.
     #[arg(long)]
     control_socket: Option<PathBuf>,
+    /// Runtime-only loopback listener used by managed finite-input comparison.
+    #[arg(long)]
+    listen: Option<SocketAddr>,
 }
 
 pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
@@ -63,6 +67,7 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
             args.config.display()
         )
     })?;
+    configure_managed_listener(&mut config, args.listen)?;
     let policy_path = args
         .policy
         .unwrap_or_else(|| args.config.with_file_name("verification.yaml"));
@@ -92,6 +97,20 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
         },
     )
     .await
+}
+
+fn configure_managed_listener(config: &mut AppConfig, listen: Option<SocketAddr>) -> Result<()> {
+    let Some(listen) = listen else {
+        return Ok(());
+    };
+    ensure!(
+        listen.ip().is_loopback() && listen.port() != 0,
+        "managed comparison listen must be a loopback address with a non-zero port"
+    );
+    config.http_gateway.listen = listen;
+    config
+        .validate_comparison_recording()
+        .context("invalid managed comparison listener override")
 }
 
 #[derive(Debug)]
@@ -165,7 +184,7 @@ mod tests {
         let parsed = TestCli::try_parse_from([
             "test",
             "--config",
-            "recorder.toml",
+            "project.yaml",
             "--policy",
             "verification.yaml",
             "--candidate-upstream",
@@ -183,6 +202,8 @@ mod tests {
             "250",
             "--control-socket",
             "comparison.sock",
+            "--listen",
+            "127.0.0.1:4072",
         ])
         .unwrap();
         assert_eq!(
@@ -206,6 +227,10 @@ mod tests {
             parsed.record_comparison.control_socket.as_deref(),
             Some(Path::new("comparison.sock"))
         );
+        assert_eq!(
+            parsed.record_comparison.listen,
+            Some("127.0.0.1:4072".parse().unwrap())
+        );
         assert!(parsed.record_comparison.baseline_recheck);
         assert_eq!(
             parsed.record_comparison.apis[0].to_string(),
@@ -219,13 +244,13 @@ mod tests {
             Some(250)
         );
         assert!(
-            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--intercept",]).is_err()
+            TestCli::try_parse_from(["test", "--config", "project.yaml", "--intercept",]).is_err()
         );
         assert!(
             TestCli::try_parse_from([
                 "test",
                 "--config",
-                "recorder.toml",
+                "project.yaml",
                 "--duration-seconds",
                 "0",
             ])
@@ -235,16 +260,36 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "--config",
-                "recorder.toml",
+                "project.yaml",
                 "--per-api-case-limit",
                 "0",
             ])
             .is_err()
         );
 
-        let defaults = TestCli::try_parse_from(["test", "--config", "recorder.toml"]).unwrap();
+        let defaults = TestCli::try_parse_from(["test", "--config", "project.yaml"]).unwrap();
         assert_eq!(defaults.record_comparison.duration_seconds.get(), 60);
         assert!(defaults.record_comparison.policy.is_none());
+    }
+
+    #[test]
+    fn managed_listener_override_is_loopback_only() {
+        let load = || {
+            AppConfig::load_comparison_recording(
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("config/project.example.yaml"),
+            )
+            .unwrap()
+        };
+        let mut config = load();
+
+        configure_managed_listener(&mut config, Some("127.0.0.1:17171".parse().unwrap())).unwrap();
+        assert_eq!(config.http_gateway.listen.to_string(), "127.0.0.1:17171");
+
+        for listen in ["0.0.0.0:17171", "10.0.0.1:17171", "127.0.0.1:0"] {
+            let error =
+                configure_managed_listener(&mut load(), Some(listen.parse().unwrap())).unwrap_err();
+            assert!(error.to_string().contains("loopback"), "{error:#}");
+        }
     }
 
     #[test]
@@ -257,7 +302,7 @@ mod tests {
         )
         .unwrap();
         let mut config = AppConfig::load_comparison_recording(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("config/recorder.example.toml"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("config/project.example.yaml"),
         )
         .unwrap();
 
@@ -286,7 +331,7 @@ mod tests {
         .unwrap();
         let load_config = || {
             AppConfig::load_comparison_recording(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("config/recorder.example.toml"),
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("config/project.example.yaml"),
             )
             .unwrap()
         };

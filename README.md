@@ -148,7 +148,9 @@ the configuration. Comparison recording defaults to 60 seconds; automated
 calls pass `--duration-seconds 60` or another positive integer explicitly. An
 explicitly scoped recording may finish earlier when every selected API reaches
 its per-API case limit; an unscoped recording retains the complete window for
-low-frequency API discovery.
+low-frequency API discovery. Backend-rewrite's finite-input comparison binds
+the gateway to loopback for that run, so concurrent environment traffic cannot
+be published as managed comparison evidence.
 Offline `compare` reuses
 `.traffic-e2e/verification.yaml`; see
 [development.md](docs/development.md#running-locally).
@@ -157,7 +159,7 @@ Offline `compare` reuses
 
 ```bash
 cargo run -- --help
-cargo run -- diagnose recorder --config config/recorder.example.toml
+cargo run -- diagnose recorder --config config/project.example.yaml
 ```
 
 Install all binaries and run managed recording from an initialized target
@@ -173,7 +175,7 @@ traffic-e2e record --target-root /path/to/target \
 Automation can reserve the recording directory name with an explicit UTC run
 identifier: `traffic-e2e record --target-root ... --run-id YYYYMMDDHHMMSS`.
 Repeat `--api 'METHOD /path-or-pattern'` to restrict only that run; omission
-uses the TOML rules unchanged. A supplied selector is also the case's
+uses the YAML rules unchanged. A supplied selector is also the case's
 `api_pattern`, so wildcard traffic stays grouped under the requested API.
 Source, optional Breeze, Recorder, interception, readiness, finalization, and
 cleanup are owned by traffic-e2e. Use `diagnose recorder` only for low-level
@@ -274,41 +276,49 @@ rules, and forwards traffic:
 
 Example:
 
-```toml
-[http_gateway]
-enabled = true
-listen = "0.0.0.0:18080"
-matched_upstream = "http://127.0.0.1:8081"
-fallback_upstream = "http://10.10.20.30:8080"
-preserve_host = true
-
-[http_gateway.ready]
-enabled = true
-path = "/"
-success_status = 200
-interval_ms = 1000
-
-[[http_gateway.exclude_rules]]
-name = "exclude-health"
-methods = ["GET"]
-path_prefixes = ["/health", "/metrics"]
-
-[[http_gateway.rules]]
-name = "record-api"
-hosts = ["api.example.com"]
-methods = ["GET", "POST"]
-path_prefixes = ["/api/"]
-# BEGIN AI-MANAGED CASE PATH PATTERNS
-# source_revision = "source-git-revision"
-case_path_patterns = ["/api/users/*/xxx"]
-# END AI-MANAGED CASE PATH PATTERNS
-headers = { "x-record" = "yes" }
+```yaml
+recorder:
+  http_gateway:
+    enabled: true
+    listen: 0.0.0.0:18080
+    matched_upstream: http://127.0.0.1:8081
+    fallback_upstream: http://10.10.20.30:8080
+    preserve_host: true
+    ready:
+      enabled: true
+      path: /
+      success_status: 200
+      interval_ms: 1000
+    exclude_rules:
+      - name: exclude-health
+        methods: [GET]
+        path_prefixes: [/health, /metrics]
+    rules:
+      - name: record-api
+        hosts: [api.example.com]
+        methods: [GET, POST]
+        path_prefixes: [/api/]
+        headers: { x-record: "yes" }
 ```
 
-`[[http_gateway.exclude_rules]]` uses the same host, method, path-prefix, and
+AI/coordinator-owned values are stored only in
+`.traffic-e2e/coordinator-rules.yaml`:
+
+```yaml
+version: 1
+http:
+  - name: record-api
+    source_revision: source-git-revision
+    case_path_patterns: [/api/users/*/xxx]
+    allowed_unused_http_hosts: []
+breeze_capture: []
+process_owned_dependencies: []
+```
+
+`recorder.http_gateway.exclude_rules` uses the same host, method, path-prefix, and
 exact-header conditions as ordinary rules. Exclusions are evaluated first;
 matching traffic uses the configured fallback and does not create a case. If
-no `[[http_gateway.rules]]` entries are configured, all non-excluded gateway
+no `recorder.http_gateway.rules` entries are configured, all non-excluded gateway
 traffic is treated as matched and recorded. Within a rule, values in one list
 are alternatives while different fields must all match. `preserve_host = true`
 keeps the original `Host` header when forwarding. Recording access policy is
@@ -316,8 +326,8 @@ evaluated before both rule sets, so exclusion rules do not bypass
 `block_known_writes`.
 
 Use repeatable `record --api 'METHOD /path-or-pattern'` arguments to narrow one
-recording run without editing the TOML. Runtime selectors are intersected with
-`[[http_gateway.rules]]`; they never widen the configured recording scope.
+recording run without editing project YAML. Runtime selectors are intersected
+with `recorder.http_gateway.rules`; they never widen the configured recording scope.
 They also define the selected cases' API grouping. Omitting `--api` preserves
 the configured behavior.
 
@@ -365,10 +375,10 @@ example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
 `api-users-wildcard-xxx` when the rule has
 `case_path_patterns = ["/api/users/*/xxx"]`.
 
-For replay-time AI feedback, keep patterns inside the explicit managed block
-shown above. Use `traffic-e2e config recorder apply case-path-patterns`; the
-command plans and validates against the current evidence before updating the
-standard target config atomically. Feedback is add-only even for a
+For replay-time AI feedback, keep patterns in `coordinator-rules.yaml`. Use
+`traffic-e2e config recorder apply case-path-patterns`; the command plans and
+validates against current evidence before atomically replacing that managed
+document. Feedback is add-only even for a
 collection-wide case source; an existing pattern is never deleted merely
 because current cases omit it. Correct a specifically proven-invalid
 AI-managed pattern only through the explicit correction flags described in

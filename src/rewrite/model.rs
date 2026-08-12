@@ -314,7 +314,7 @@ pub(super) struct RewriteRecorderCapturePlanRecord {
     pub endpoint: String,
     pub source_evidence: String,
     pub source_revision: String,
-    pub recorder_config_revision: String,
+    pub project_config_revision: String,
     pub resource_identity: String,
     pub target_fingerprint: String,
 }
@@ -346,7 +346,8 @@ pub(super) struct RewriteRecordingRefreshState {
     pub applied: Vec<RewriteRecorderCaptureAppliedRecord>,
     #[serde(default)]
     pub dependency_rules: Vec<RewriteDependencyRuleAppliedRecord>,
-    pub recorder_config_revision: String,
+    pub project_config_revision: String,
+    pub coordinator_rules_revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recording_run_id: Option<String>,
 }

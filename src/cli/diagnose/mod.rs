@@ -35,7 +35,7 @@ enum DiagnoseCommand {
 
 #[derive(Debug, Args)]
 struct RecorderArgs {
-    #[arg(short, long, default_value = "config/recorder.example.toml")]
+    #[arg(short, long, default_value = "config/project.example.yaml")]
     config: PathBuf,
 }
 
@@ -225,7 +225,7 @@ async fn run_replay_command(args: ReplayArgs) -> Result<()> {
     let process_owned_dependencies = args
         .recorder_config
         .as_deref()
-        .map(|path| AppConfig::load(path).map(|config| config.recording.process_owned_dependencies))
+        .map(|path| AppConfig::load(path).map(|config| config.process_owned_dependencies))
         .transpose()?
         .unwrap_or_default();
     let allowed_unused_http = load_allowed_unused_http(args.recorder_config, args.recording_rule)?;

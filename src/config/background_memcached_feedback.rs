@@ -17,7 +17,7 @@ use crate::breeze;
 
 #[derive(Debug, Clone)]
 pub struct BreezeMemcachedBackgroundDependencyFeedback {
-    pub config_path: PathBuf,
+    pub rules_path: PathBuf,
     pub replay_report_path: PathBuf,
     pub name: String,
     pub breeze_resource: String,
@@ -33,7 +33,7 @@ pub struct BreezeMemcachedBackgroundDependencyFeedback {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BreezeMemcachedBackgroundDependencyReport {
-    pub config: PathBuf,
+    pub rules: PathBuf,
     pub replay_report: PathBuf,
     pub name: String,
     pub effective_name: String,
@@ -59,11 +59,11 @@ pub struct BreezeMemcachedBackgroundDependencyReport {
 
 #[derive(Debug)]
 pub struct BreezeMemcachedBackgroundDependencyPlan {
-    config_path: PathBuf,
+    rules_path: PathBuf,
     replay_report_path: PathBuf,
-    original_config: String,
+    original_rules: String,
     original_replay_report: String,
-    updated_config: String,
+    updated_rules: String,
     dependency_evidence: Vec<EvidenceSnapshot>,
     socks_dir: PathBuf,
     report: BreezeMemcachedBackgroundDependencyReport,
@@ -76,8 +76,8 @@ impl BreezeMemcachedBackgroundDependencyPlan {
 
     pub fn apply(self) -> Result<BreezeMemcachedBackgroundDependencyReport> {
         ensure!(
-            read_file(&self.config_path, "recorder config")? == self.original_config,
-            "recorder config changed after planning; rerun plan before applying"
+            read_file(&self.rules_path, "process-owned rules")? == self.original_rules,
+            "process-owned rules changed after planning; rerun plan before applying"
         );
         ensure!(
             read_file(&self.replay_report_path, "replay report")? == self.original_replay_report,
@@ -96,7 +96,7 @@ impl BreezeMemcachedBackgroundDependencyPlan {
             "Breeze descriptor port changed after planning; rerun plan before applying"
         );
         if self.report.changed {
-            write_atomic(&self.config_path, self.updated_config.as_bytes())?;
+            write_atomic(&self.rules_path, self.updated_rules.as_bytes())?;
         }
         let mut report = self.report;
         report.applied = true;
@@ -153,18 +153,18 @@ fn plan_in(
         diff,
         effective_name,
         reused_existing,
-    } = plan_rule_config(&feedback.config_path, requested)?;
+    } = plan_rule_config(&feedback.rules_path, requested)?;
 
     Ok(BreezeMemcachedBackgroundDependencyPlan {
-        config_path: feedback.config_path.clone(),
+        rules_path: feedback.rules_path.clone(),
         replay_report_path: feedback.replay_report_path.clone(),
-        original_config: original,
+        original_rules: original,
         original_replay_report,
-        updated_config: updated,
+        updated_rules: updated,
         dependency_evidence: evidence.files,
         socks_dir: socks_dir.to_path_buf(),
         report: BreezeMemcachedBackgroundDependencyReport {
-            config: feedback.config_path,
+            rules: feedback.rules_path,
             replay_report: feedback.replay_report_path,
             name: feedback.name,
             effective_name,

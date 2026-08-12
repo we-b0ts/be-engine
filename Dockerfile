@@ -33,11 +33,12 @@ ENV RUST_LOG=info
 RUN mkdir -p /data/config /data/recordings /data/replay /data/tls
 
 COPY --from=builder /tmp/traffic-e2e /usr/local/bin/traffic-e2e
-COPY config/recorder.example.toml /data/config/recorder.toml
+COPY config/project.example.yaml /data/config/project.yaml
+COPY config/coordinator-rules.example.yaml /data/config/coordinator-rules.example.yaml
 
 WORKDIR /data
 
 EXPOSE 17171
 
 ENTRYPOINT ["/usr/local/bin/traffic-e2e"]
-CMD ["record", "--config", "/data/config/recorder.toml", "--no-dns"]
+CMD ["record", "--config", "/data/config/project.yaml", "--no-dns"]

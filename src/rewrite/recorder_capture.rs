@@ -106,15 +106,16 @@ pub(super) fn plan(
         .source_revision
         .clone()
         .context("recorder capture planning requires a finalized source revision")?;
-    let recorder_config_revision = fingerprint::recorder_config_revision(target_root)?;
+    let project_config_revision = fingerprint::project_config_revision(target_root)?;
     let traffic_plan = plan_breeze_endpoint_capture(BreezeEndpointCaptureFeedback {
-        config_path: recorder_config(target_root),
+        project_config_path: project_config(target_root),
+        rules_path: coordinator_rules(target_root),
         endpoint: options.endpoint.clone(),
         source_revision: source_revision.clone(),
         source_evidence: options.source_evidence.clone(),
     })?;
     ensure!(
-        fingerprint::recorder_config_revision(target_root)? == recorder_config_revision,
+        fingerprint::project_config_revision(target_root)? == project_config_revision,
         "recorder config changed during capture planning; rerun plan"
     );
     let resource_identity = traffic_plan.report().resource_identity.clone();
@@ -129,7 +130,7 @@ pub(super) fn plan(
                 &options.endpoint,
                 &options.source_evidence,
                 &source_revision,
-                &recorder_config_revision,
+                &project_config_revision,
                 &resource_identity,
                 &target_fingerprint,
             ])
@@ -140,7 +141,7 @@ pub(super) fn plan(
         endpoint: options.endpoint,
         source_evidence: options.source_evidence,
         source_revision,
-        recorder_config_revision,
+        project_config_revision,
         resource_identity,
         target_fingerprint,
     };
@@ -175,7 +176,7 @@ pub(super) fn apply(
         "a full recording refresh has already started; wait for it to finish before applying another capture plan"
     );
     ensure!(
-        fingerprint::recorder_config_revision(target_root)? == record.recorder_config_revision,
+        fingerprint::project_config_revision(target_root)? == record.project_config_revision,
         "recorder config changed after capture planning; rerun plan"
     );
     ensure!(
@@ -189,17 +190,20 @@ pub(super) fn apply(
     );
     let report = plan.apply()?;
     let current_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
-    let config_revision = fingerprint::recorder_config_revision(target_root)?;
+    let config_revision = fingerprint::project_config_revision(target_root)?;
+    let rules_revision = fingerprint::coordinator_rules_revision(target_root)?;
     let api = state.api.clone();
     let refresh = state
         .recording_refresh
         .get_or_insert_with(|| RewriteRecordingRefreshState {
             applied: Vec::new(),
             dependency_rules: Vec::new(),
-            recorder_config_revision: config_revision.clone(),
+            project_config_revision: config_revision.clone(),
+            coordinator_rules_revision: rules_revision.clone(),
             recording_run_id: None,
         });
-    refresh.recorder_config_revision = config_revision;
+    refresh.project_config_revision = config_revision;
+    refresh.coordinator_rules_revision = rules_revision;
     if !refresh
         .applied
         .iter()
@@ -330,15 +334,20 @@ fn build_plan(
     record: &RewriteRecorderCapturePlanRecord,
 ) -> Result<BreezeResourceCapturePlan> {
     plan_breeze_endpoint_capture(BreezeEndpointCaptureFeedback {
-        config_path: recorder_config(target_root),
+        project_config_path: project_config(target_root),
+        rules_path: coordinator_rules(target_root),
         endpoint: record.endpoint.clone(),
         source_revision: record.source_revision.clone(),
         source_evidence: record.source_evidence.clone(),
     })
 }
 
-fn recorder_config(target_root: &Path) -> PathBuf {
-    target_root.join(".traffic-e2e/recorder.toml")
+fn project_config(target_root: &Path) -> PathBuf {
+    target_root.join(".traffic-e2e/project.yaml")
+}
+
+fn coordinator_rules(target_root: &Path) -> PathBuf {
+    target_root.join(".traffic-e2e/coordinator-rules.yaml")
 }
 
 pub(super) fn pending_plan_action(
@@ -475,7 +484,8 @@ mod tests {
                 rule_name: "snapshot-get".to_string(),
                 source_evidence: "Cache.java:42".to_string(),
             }],
-            recorder_config_revision: "fnv1a64:config".to_string(),
+            project_config_revision: "fnv1a64:config".to_string(),
+            coordinator_rules_revision: "fnv1a64:rules".to_string(),
             recording_run_id: None,
         });
         state.api_inventory.push(RewriteApiProgress {
@@ -541,14 +551,19 @@ mod tests {
             "123\ncounter\nbackends:\n- counter.example.com:9332\n",
         )
         .unwrap();
-        fs::write(
-            target.path().join(".traffic-e2e/recorder.toml"),
-            format!(
-                "[dns_mock]\nenabled = true\n\n[[dns_mock.bypass_strategies]]\nstrategy = \"breeze\"\nsnapshot_dir = \"{}\"\n",
-                snapshot.display()
-            ),
-        )
-        .unwrap();
+        let mut recorder = crate::config::AppConfig::default();
+        recorder.dns_mock.enabled = true;
+        recorder.dns_mock.bypass_strategies =
+            vec![crate::config::DnsBypassStrategyConfig::Breeze {
+                snapshot_dir: snapshot.clone(),
+                capture_resources: Vec::new(),
+            }];
+        crate::rewrite::test_support::install_project_config(
+            target.path(),
+            "master",
+            recorder,
+            None,
+        );
         fs::write(
             target.path().join("src/lib.rs"),
             "pub fn value() -> u8 { 1 }\n",
@@ -594,7 +609,7 @@ mod tests {
         let evidence_id = evidence::query(target.path(), &state, &query_id)
             .unwrap()
             .evidence_id;
-        let config = target.path().join(".traffic-e2e/recorder.toml");
+        let config = target.path().join(".traffic-e2e/coordinator-rules.yaml");
         let original = fs::read_to_string(&config).unwrap();
 
         let planned = plan(

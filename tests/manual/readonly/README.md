@@ -13,7 +13,7 @@ cargo test --test readonly_case_integration
 
 ## Local two-process topology
 
-The checked-in `config/recorder.readonly.toml` uses this topology by default:
+The checked-in `tests/manual/readonly/project.yaml` uses this topology by default:
 
 ```text
 gateway :18084 -> app mock 127.0.0.1:18085
@@ -49,7 +49,7 @@ Start the recorder in a third terminal:
 
 ```bash
 cd /home/ubuntu/workspace/traffic-e2e
-cargo run -- --config config/recorder.readonly.toml
+cargo run -- diagnose recorder --config tests/manual/readonly/project.yaml
 ```
 
 Wait for gateway readiness, then trigger the matched scenario:

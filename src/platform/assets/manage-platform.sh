@@ -603,13 +603,13 @@ start_cache_snapshot() {
         --label "com.weibo.traffic-e2e.operation=${operation}" \
         --label "com.weibo.traffic-e2e.run-id=${run_id}" \
         --volume "$TRAFFIC_E2E_BIN:/usr/local/bin/traffic-e2e:ro" \
-        --volume "$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/recorder.toml:ro" \
+        --volume "$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/project.yaml:ro" \
         --volume "$control_dir:/workspace/control" \
         --env TRAFFIC_E2E_ENCRYPTION_KEY_B64 \
         --entrypoint /usr/local/bin/traffic-e2e \
         "$recorder_image" \
         internal cache-snapshot-run \
-        --config /workspace/recorder.toml \
+        --config /workspace/project.yaml \
         --output-dir /workspace/control/cache-snapshot \
         --run-id "$run_id" \
         --candidate-upstream "$target_origin" \
@@ -859,7 +859,7 @@ run_standard_recording() {
     docker run --detach --name "$anchor_name" --platform linux/amd64 --network host \
         "$anchor_image" >/dev/null
     anchor_started=true
-    local -a recorder_command=(internal recorder-run --config /workspace/recorder.toml --control-socket "$control_socket" --artifact-owner "$artifact_owner" --dns --run-id "$run_id")
+    local -a recorder_command=(internal recorder-run --config /workspace/project.yaml --control-socket "$control_socket" --artifact-owner "$artifact_owner" --dns --run-id "$run_id")
     if [[ "$operation" == preflight ]]; then
         if "$source_uses_java"; then
             recorder_command+=(--preflight-probe java-truststore)
@@ -881,7 +881,7 @@ run_standard_recording() {
         --name "$recorder_name" --platform linux/amd64 --network "container:${anchor_name}" \
         --user 0:0 --cap-add NET_ADMIN --cap-add NET_RAW --workdir /workspace \
         --volume "$TRAFFIC_E2E_BIN:/usr/local/bin/traffic-e2e:ro" \
-        --volume "$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/recorder.toml:ro" \
+        --volume "$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/project.yaml:ro" \
         --volume "$data_dir:/workspace/.traffic-e2e/local/data" \
         --volume "$artifacts_dir:/workspace/.traffic-e2e/local/artifacts" \
         --volume "$control_dir:/workspace/control" \
@@ -989,6 +989,7 @@ run_comparison_recording() {
     fi
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
     local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
+    [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}" ]] || comparison_command+=(--listen "$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN")
     if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
         comparison_command+=(--candidate-motan-upstream "$target_motan_upstream")
     fi

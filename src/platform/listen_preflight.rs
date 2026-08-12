@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use anyhow::Result;
 
@@ -10,6 +10,13 @@ pub(super) async fn require_available(listen: SocketAddr) -> Result<()> {
     .await?;
     drop(listener);
     Ok(())
+}
+
+pub(super) fn managed_finite_comparison(
+    enabled: bool,
+    configured: SocketAddr,
+) -> Option<SocketAddr> {
+    enabled.then(|| SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), configured.port()))
 }
 
 #[cfg(test)]
@@ -35,5 +42,16 @@ mod tests {
     async fn accepts_a_kernel_assigned_available_listener() {
         let listen = "127.0.0.1:0".parse().unwrap();
         require_available(listen).await.unwrap();
+    }
+
+    #[test]
+    fn finite_comparison_reuses_the_configured_port_on_loopback_only() {
+        let configured = "0.0.0.0:4062".parse().unwrap();
+
+        assert_eq!(
+            managed_finite_comparison(true, configured),
+            Some("127.0.0.1:4062".parse().unwrap())
+        );
+        assert_eq!(managed_finite_comparison(false, configured), None);
     }
 }

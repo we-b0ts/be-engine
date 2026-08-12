@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use super::model::{
     RewritePhase, RewriteRecordingSettings, RewriteSliceState, RewriteState, STATE_VERSION,
@@ -44,4 +45,62 @@ pub(in crate::rewrite) fn test_state() -> RewriteState {
             comparison_current: false,
         },
     }
+}
+
+pub(in crate::rewrite) fn install_project_config(
+    target_root: &Path,
+    pr_base: &str,
+    recorder: crate::config::AppConfig,
+    quality_gates: Option<serde_json::Value>,
+) {
+    let mut target = serde_json::json!({
+        "dockerfile": ".traffic-e2e/Dockerfile.e2e",
+        "startup": {},
+    });
+    if let Some(quality_gates) = quality_gates {
+        target["quality_gates"] = quality_gates;
+    }
+    let document = serde_json::json!({
+        "version": 14,
+        "project": {
+            "source": { "container": "source" },
+            "target": target,
+            "replay": { "policy": ".traffic-e2e/verification.yaml" },
+            "recording": {
+                "rule": "record-api",
+                "coordinator_rules": "coordinator-rules.yaml"
+            },
+            "delivery": { "pr_base": pr_base },
+            "state": { "runtime_root": "local/runtime" }
+        },
+        "recorder": recorder,
+    });
+    let directory = target_root.join(".traffic-e2e");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("project.yaml"),
+        serde_yaml::to_string(&document).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        directory.join("coordinator-rules.yaml"),
+        crate::config::CoordinatorRulesConfig::empty()
+            .render()
+            .unwrap(),
+    )
+    .unwrap();
+}
+
+pub(in crate::rewrite) fn managed_test_recorder() -> crate::config::AppConfig {
+    let mut recorder = crate::config::AppConfig::default();
+    recorder.http_gateway.ready.enabled = true;
+    recorder.http_gateway.ready.path = "/healthz".to_string();
+    recorder.http_gateway.ready.success_status = 404;
+    recorder.http_gateway.rules = vec![crate::config::HttpGatewayRuleConfig {
+        name: Some("record-api".to_string()),
+        methods: vec!["GET".to_string()],
+        path_prefixes: vec!["/".to_string()],
+        ..Default::default()
+    }];
+    recorder
 }

@@ -1,0 +1,132 @@
+version: 14
+project:
+  source:
+    container: readonly-source
+  target:
+    dockerfile: .traffic-e2e/Dockerfile.e2e
+    startup: {}
+  replay:
+    policy: config/verification.example.yaml
+  recording:
+    rule: readonly-manual
+    coordinator_rules: coordinator-rules.yaml
+  delivery:
+    pr_base: dev-migration
+  state:
+    runtime_root: local/runtime
+recorder:
+  # Static recorder example. Project initialization embeds these settings under
+  # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed values belong
+  # exclusively in `.traffic-e2e/coordinator-rules.yaml`.
+  artifacts: null
+  comparison_recording: null
+  dns_mock:
+    enabled: false
+    listen: 127.0.0.153:4053
+    upstream_dns: 10.10.10.10:53
+    fake_cidr: 198.19.0.0/16
+    ttl_seconds: 60
+    bypass_domains: []
+    bypass_strategies: []
+    hosts: {}
+    registry_path: ./recordings/fake_dns_registry.json
+  tcp_gateway:
+    enabled: false
+    listen: 127.0.0.1:4001
+    backlog: 65535
+    record_http: true
+    mitm_https: true
+    https_ports: []
+    protocol_detection:
+      enabled: true
+      redis_port_hints:
+      - 6379
+      memcached_port_hints:
+      - 11211
+      kafka_port_hints:
+      - 9092
+      overrides: []
+  udp_gateway:
+    enabled: false
+    listen: 127.0.0.1:4002
+    forward: false
+  http:
+    enabled: true
+    listen: 127.0.0.1:18081
+  http_response_rewrite:
+    enabled: false
+    rules: []
+  http_gateway:
+    enabled: true
+    listen: 0.0.0.0:18084
+    matched_upstream: http://127.0.0.1:18085
+    fallback_upstream: http://127.0.0.1:18086
+    fallback_mode: upstream
+    preserve_host: true
+    ready:
+      enabled: true
+      path: /healthz
+      success_status: 200
+      interval_ms: 500
+    per_api_case_limits:
+      default: 100
+      overrides: {}
+    exclude_rules:
+    - name: exclude-health
+      hosts: []
+      methods:
+      - GET
+      path_prefixes:
+      - /healthz
+      headers: {}
+    rules:
+    - name: readonly-manual
+      hosts: []
+      methods:
+      - GET
+      path_prefixes:
+      - /scenario/readonly
+      headers: {}
+  motan_gateway:
+    enabled: false
+    listen: 127.0.0.1:18081
+    matched_upstream: 127.0.0.1:8002
+    connect_timeout_ms: 3000
+    request_timeout_ms: 30000
+    max_connections: 1024
+    max_frame_bytes: 8388608
+    max_cases_per_api: 100
+    rules: []
+  mysql:
+    enabled: false
+    record_raw_packets: false
+    routes: []
+    listen: 127.0.0.1:3307
+    upstream: 127.0.0.1:3306
+  recording:
+    output_dir: ./recordings/readonly-manual
+    max_body_bytes: 1048576
+    max_decoded_body_bytes: null
+    traffic_jsonl: full
+    jsonl_buffer_capacity_bytes: 262144
+    jsonl_flush_interval_ms: 1000
+    writer_queue_capacity: 65536
+    cache_snapshot_max_waiters_per_entry: 1024
+    cache_snapshot_fill_timeout_ms: 30000
+    post_ready_settle_ms: 0
+    post_ready_max_wait_ms: 180000
+    case_dependency_post_response_window_ms: 100
+    case_dependency_drain_timeout_ms: 5000
+    shutdown_case_drain_timeout_ms: 5000
+    encrypt_request_headers: []
+    redact_headers:
+    - authorization
+    - cookie
+    - set-cookie
+    - proxy-authorization
+    - proxy-authenticate
+    access_policy: block_known_writes
+    access_rules: []
+  tls:
+    ca_cert_path: ./.traffic-e2e/local/data/traffic-recorder-readonly-ca.pem
+    ca_key_path: ./.traffic-e2e/local/data/traffic-recorder-readonly-ca-key.pem

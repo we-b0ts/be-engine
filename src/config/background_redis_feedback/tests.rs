@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::{AppConfig, BackgroundDependencyRuleConfig};
+use crate::config::{BackgroundDependencyRuleConfig, CoordinatorRulesConfig};
 
 const REVISION: &str = "0123456789abcdef";
 const EVIDENCE: &str =
@@ -17,10 +17,10 @@ struct Fixture {
 impl Fixture {
     fn new(key: &str) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("recorder.toml");
+        let config = temp.path().join("coordinator-rules.yaml");
         let replay_report = temp.path().join("replay-report.json");
         let dependencies = temp.path().join("dependencies.jsonl");
-        fs::write(&config, "[recording]\ntraffic_jsonl = \"full\"\n").unwrap();
+        fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
         fs::write(
             &dependencies,
             format!(
@@ -51,7 +51,7 @@ impl Fixture {
 
     fn feedback(&self) -> RedisBackgroundDependencyFeedback {
         RedisBackgroundDependencyFeedback {
-            config_path: self.config.clone(),
+            rules_path: self.config.clone(),
             replay_report_path: self.replay_report.clone(),
             name: "interest-tag-mining-cache-refresh".to_string(),
             ports: vec![20919, 20917, 20918],
@@ -115,18 +115,17 @@ fn plan_and_apply_persist_ports_without_redis_domains() {
     assert!(plan.apply().unwrap().applied);
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("protocol = \"redis\""));
-    assert!(raw.contains("ports = [20917, 20918, 20919]"));
-    assert!(raw.contains("command = \"ZCOUNT\""));
-    assert!(raw.contains("key_prefix = \"1042015:\""));
-    assert!(raw.contains("key_suffix = \".wtm2\""));
+    assert!(raw.contains("protocol: redis"));
+    assert!(raw.contains("command: ZCOUNT"));
     assert!(!raw.contains("rs20917"));
 
-    let config = AppConfig::load(&fixture.config).unwrap();
+    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
     assert!(matches!(
-        &config.recording.process_owned_dependencies[0],
-        BackgroundDependencyRuleConfig::Redis { ports, .. }
+        &config.process_owned_dependencies[0],
+        BackgroundDependencyRuleConfig::Redis { ports, key_prefix, key_suffix, .. }
             if ports == &[20917, 20918, 20919]
+                && key_prefix == "1042015:"
+                && key_suffix == ".wtm2"
     ));
 
     let mut expanded = fixture.feedback();
@@ -134,9 +133,9 @@ fn plan_and_apply_persist_ports_without_redis_domains() {
     let expanded = plan_redis_background_dependency(expanded).unwrap();
     assert!(expanded.report().changed);
     expanded.apply().unwrap();
-    let config = AppConfig::load(&fixture.config).unwrap();
+    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
     assert!(matches!(
-        &config.recording.process_owned_dependencies[0],
+        &config.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Redis { ports, .. }
             if ports == &[20917, 20918, 20919, 20920]
     ));
@@ -199,9 +198,7 @@ fn redis_get_requires_every_exact_key_in_unused_case_evidence() {
     let fixture = Fixture::new("unrelated-case-key");
     fs::write(
         &fixture.config,
-        "[http_gateway]\nenabled = true\n\
-         [http_gateway.ready]\nenabled = true\n\
-         [recording]\ntraffic_jsonl = \"full\"\n",
+        CoordinatorRulesConfig::empty().render().unwrap(),
     )
     .unwrap();
     let keys = ["cache:init:a", "cache:init:b"];
@@ -268,20 +265,25 @@ fn redis_get_requires_every_exact_key_in_unused_case_evidence() {
     );
 
     plan.apply().unwrap();
-    let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("command = \"GET\""));
-    assert!(raw.contains("keys = [\"cache:init:a\", \"cache:init:b\"]"));
-    assert!(raw.contains("initial_load_timeout_ms = 30000"));
-    assert!(!raw.contains("response_role"));
+    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    assert!(matches!(
+        &config.process_owned_dependencies[0],
+        BackgroundDependencyRuleConfig::Redis {
+            command,
+            keys: configured,
+            initial_load_timeout_ms: Some(30_000),
+            ..
+        } if command == "GET" && configured == &keys
+    ));
 }
 
 #[test]
 fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
     let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("recorder.toml");
+    let config = temp.path().join("coordinator-rules.yaml");
     let replay_report = temp.path().join("replay-report.json");
     let global = temp.path().join("global-dependencies.jsonl");
-    fs::write(&config, "[recording]\ntraffic_jsonl = \"full\"\n").unwrap();
+    fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
     let exchanges = ["exp:matchlist:123", "traffic-result"]
         .map(|key| {
             json!({
@@ -318,7 +320,7 @@ fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
     )
     .unwrap();
     let feedback = RedisBackgroundDependencyFeedback {
-        config_path: config.clone(),
+        rules_path: config.clone(),
         replay_report_path: replay_report,
         name: "experiment-bootstrap".to_string(),
         ports: vec![6379],
@@ -341,47 +343,57 @@ fn plans_bootstrap_hget_from_global_evidence_with_compact_patterns() {
     assert_eq!(plan.report().matched_unused_exchanges, 2);
     assert!(plan.report().matched_case_ids.is_empty());
     plan.apply().unwrap();
-    let raw = fs::read_to_string(&config).unwrap();
-    assert!(raw.contains("key_patterns = [{ prefix = \"exp:matchlist:\""));
-    assert!(raw.contains("fields = [\"version\"]"));
-    AppConfig::load(&config).unwrap();
+    let config = CoordinatorRulesConfig::load(&config).unwrap();
+    assert!(matches!(
+        &config.process_owned_dependencies[0],
+        BackgroundDependencyRuleConfig::Redis {
+            key_patterns,
+            fields,
+            ..
+        } if key_patterns == &[RedisKeyPatternConfig {
+            prefix: "exp:matchlist:".to_string(),
+            suffix: String::new(),
+            numeric_middle: true,
+        }] && fields == &["version"]
+    ));
 }
 
 #[test]
 fn hash_read_plans_merge_keys_and_patterns_into_compatible_existing_rules() {
     let temp = tempfile::tempdir().unwrap();
-    let config = temp.path().join("recorder.toml");
+    let config = temp.path().join("coordinator-rules.yaml");
     let replay_report = temp.path().join("replay-report.json");
     let global = temp.path().join("global-dependencies.jsonl");
-    fs::write(
-        &config,
-        r#"[recording]
-traffic_jsonl = "full"
-
-# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES
-[[recording.process_owned_dependencies]]
-name = "abtest_bootstrap_hget_version"
-protocol = "redis"
-ports = [50600]
-command = "HGET"
-keys = ["exp:business:all"]
-key_patterns = [{ prefix = "exp:assign:collection:", suffix = "", numeric_middle = true }]
-fields = ["version"]
-source_evidence = "TrafficServiceImpl.loadAllCacheData HGET warm-up"
-
-[[recording.process_owned_dependencies]]
-name = "abtest_bootstrap_hmget_value"
-protocol = "redis"
-ports = [50600]
-command = "HMGET"
-keys = ["exp:business:all"]
-key_patterns = [{ prefix = "exp:assign:collection:", suffix = "", numeric_middle = true }]
-fields = ["value", "compress", "hash"]
-source_evidence = "TrafficServiceImpl.loadAllCacheData HMGET warm-up"
-# END AI-MANAGED PROCESS-OWNED DEPENDENCIES
-"#,
-    )
-    .unwrap();
+    let mut rules = CoordinatorRulesConfig::empty();
+    for (name, command, fields) in [
+        ("abtest_bootstrap_hget_version", "HGET", vec!["version"]),
+        (
+            "abtest_bootstrap_hmget_value",
+            "HMGET",
+            vec!["value", "compress", "hash"],
+        ),
+    ] {
+        rules
+            .process_owned_dependencies
+            .push(BackgroundDependencyRuleConfig::Redis {
+                name: name.to_string(),
+                ports: vec![50_600],
+                command: command.to_string(),
+                keys: vec!["exp:business:all".to_string()],
+                key_patterns: vec![RedisKeyPatternConfig {
+                    prefix: "exp:assign:collection:".to_string(),
+                    suffix: String::new(),
+                    numeric_middle: true,
+                }],
+                key_prefix: String::new(),
+                key_suffix: String::new(),
+                initial_load_timeout_ms: None,
+                fields: fields.into_iter().map(str::to_string).collect(),
+                source_revision: String::new(),
+                source_evidence: format!("TrafficServiceImpl.loadAllCacheData {command} warm-up"),
+            });
+    }
+    fs::write(&config, rules.render().unwrap()).unwrap();
     let exchanges = [
         ("HGET", "traffic-result", vec!["version"]),
         ("HGET", "exp:config:collection:43", vec!["version"]),
@@ -427,7 +439,7 @@ source_evidence = "TrafficServiceImpl.loadAllCacheData HMGET warm-up"
     .unwrap();
 
     let feedback = |command: &str, fields: &[&str]| RedisBackgroundDependencyFeedback {
-        config_path: config.clone(),
+        rules_path: config.clone(),
         replay_report_path: replay_report.clone(),
         name: format!("traffic-result-{}", command.to_ascii_lowercase()),
         ports: vec![50600],
@@ -466,9 +478,9 @@ source_evidence = "TrafficServiceImpl.loadAllCacheData HMGET warm-up"
     );
     hmget_plan.apply().unwrap();
 
-    let config = AppConfig::load(&config).unwrap();
-    assert_eq!(config.recording.process_owned_dependencies.len(), 2);
-    for rule in &config.recording.process_owned_dependencies {
+    let config = CoordinatorRulesConfig::load(&config).unwrap();
+    assert_eq!(config.process_owned_dependencies.len(), 2);
+    for rule in &config.process_owned_dependencies {
         let BackgroundDependencyRuleConfig::Redis {
             keys,
             key_patterns,
@@ -511,9 +523,7 @@ fn scard_and_hgetall_plan_from_exact_key_unused_case_evidence() {
         let fixture = Fixture::new("unrelated-case-key");
         fs::write(
             &fixture.config,
-            "[http_gateway]\nenabled = true\n\
-             [http_gateway.ready]\nenabled = true\n\
-             [recording]\ntraffic_jsonl = \"full\"\n",
+            CoordinatorRulesConfig::empty().render().unwrap(),
         )
         .unwrap();
         fs::write(
@@ -560,8 +570,14 @@ fn scard_and_hgetall_plan_from_exact_key_unused_case_evidence() {
         assert_eq!(plan.report().matched_unused_exchanges, 1);
         plan.apply().unwrap();
 
-        let raw = fs::read_to_string(&fixture.config).unwrap();
-        assert!(raw.contains(&format!("command = \"{command}\"")));
-        assert!(raw.contains(&format!("keys = [\"{key}\"]")));
+        let rules = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+        assert!(rules.process_owned_dependencies.iter().any(|rule| matches!(
+            rule,
+            BackgroundDependencyRuleConfig::Redis {
+                command: configured_command,
+                keys,
+                ..
+            } if configured_command == command && keys == &[key]
+        )));
     }
 }

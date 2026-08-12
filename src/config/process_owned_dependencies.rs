@@ -29,7 +29,7 @@ pub enum BackgroundDependencyRuleConfig {
         authorities: Vec<String>,
         methods: Vec<String>,
         path_prefixes: Vec<String>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         source_revision: String,
         source_evidence: String,
     },
@@ -42,7 +42,7 @@ pub enum BackgroundDependencyRuleConfig {
         key_separator: String,
         key_suffix: String,
         initial_load_timeout_ms: u64,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         source_revision: String,
         source_evidence: String,
     },
@@ -62,7 +62,7 @@ pub enum BackgroundDependencyRuleConfig {
         initial_load_timeout_ms: Option<u64>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         fields: Vec<String>,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         source_revision: String,
         source_evidence: String,
     },
@@ -71,7 +71,7 @@ pub enum BackgroundDependencyRuleConfig {
         group: String,
         interface_name: String,
         method_name: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "String::is_empty")]
         source_revision: String,
         source_evidence: String,
     },

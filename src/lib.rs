@@ -107,17 +107,16 @@ pub use config::{
     InspectedContainer, MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
     MotanBackgroundDependencyReport, MotanGatewayConfig, MotanGatewayRuleConfig,
     MotanProtocolConfigOptions, MotanProtocolConfigResult, MysqlConfig, MysqlRouteConfig,
-    RecorderConfigInitOptions, RecorderConfigInitResult, RecordingAccessPolicy,
-    RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
+    RecordingAccessPolicy, RecordingAccessRuleConfig, RecordingAccessRuleEffect, RecordingConfig,
     RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan,
     RedisBackgroundDependencyReport, RedisKeyPatternConfig, RepositoryConfigInitOptions,
     RepositoryConfigInitResult, TcpApplicationProtocol, TcpGatewayConfig,
     TcpProtocolDetectionConfig, TcpProtocolOverrideConfig, TlsConfig, TrafficJsonlMode,
-    UdpGatewayConfig, enable_repository_motan_protocol, initialize_recorder_config,
-    initialize_repository_config, plan_allowed_unused_http_hosts, plan_background_dependency,
-    plan_breeze_endpoint_capture, plan_breeze_memcached_background_dependency,
-    plan_breeze_resource_capture, plan_case_path_pattern_feedback,
-    plan_motan_background_dependency, plan_redis_background_dependency,
+    UdpGatewayConfig, enable_repository_motan_protocol, initialize_repository_config,
+    plan_allowed_unused_http_hosts, plan_background_dependency, plan_breeze_endpoint_capture,
+    plan_breeze_memcached_background_dependency, plan_breeze_resource_capture,
+    plan_case_path_pattern_feedback, plan_motan_background_dependency,
+    plan_redis_background_dependency,
 };
 pub use dependency::{DependencyExchangeOutcome, DiscoveredTcpTarget};
 pub use dns_mock::{FakeDnsEntry, FakeDnsRegistry, FakeDnsUpstreamProtocol};
@@ -131,8 +130,7 @@ pub use e2e_run::{
     E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus,
     E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint, E2eSourceValueCount, E2eSourceVariation,
     E2eValueObservation, E2eValuePresence, E2eVerificationGates, StartupSnapshotRecaptureOptions,
-    StartupSnapshotRecaptureResult, abort_e2e_run, initialize_e2e_run,
-    initialize_standard_e2e_project, initialize_standard_e2e_project_with_force, prepare_e2e_run,
+    StartupSnapshotRecaptureResult, abort_e2e_run, initialize_e2e_run, prepare_e2e_run,
     query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
     query_e2e_source_variation, recapture_startup_snapshot, recover_e2e_run,
     resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence, run_e2e_api,
@@ -279,7 +277,7 @@ impl AppState {
             .context("invalid recorder configuration")?;
         recording_api::validate_selection(&recording_apis, &config.http_gateway.rules)
             .context("invalid recording API selection")?;
-        let background_rules = config.recording.process_owned_dependencies.clone();
+        let background_rules = config.process_owned_dependencies.clone();
         let process_owned_dependencies = tokio::task::spawn_blocking(move || {
             BackgroundDependencyMatcher::from_rules(&background_rules)
         })

@@ -7,13 +7,8 @@ use serde::Serialize;
 
 use super::HttpGatewayRuleConfig;
 use super::edit::write_atomic;
-use super::rule_document::{
-    assignment_count, find_managed_block, find_rule, managed_block_diff, newline,
-    parse_and_validate, rule_range,
-};
-
-const BEGIN_MARKER: &str = "# BEGIN AI-MANAGED CASE PATH PATTERNS";
-const END_MARKER: &str = "# END AI-MANAGED CASE PATH PATTERNS";
+use super::rule_document::whole_file_diff;
+use super::{AppConfig, CoordinatorHttpRuleConfig, CoordinatorRulesConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -33,7 +28,8 @@ impl std::fmt::Display for CasePathPatternAuthority {
 
 #[derive(Debug, Clone)]
 pub struct CasePathPatternFeedback {
-    pub config_path: PathBuf,
+    pub project_config_path: PathBuf,
+    pub rules_path: PathBuf,
     pub rule_name: String,
     pub source_revision: String,
     pub case_source: String,
@@ -45,7 +41,7 @@ pub struct CasePathPatternFeedback {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CasePathPatternReport {
-    pub config: PathBuf,
+    pub rules: PathBuf,
     pub rule: String,
     pub source_revision: String,
     pub case_source: String,
@@ -66,9 +62,11 @@ pub struct CasePathPatternReport {
 
 #[derive(Debug)]
 pub struct CasePathPatternPlan {
-    config_path: PathBuf,
-    original: String,
-    updated: String,
+    project_config_path: PathBuf,
+    rules_path: PathBuf,
+    original_project_config: String,
+    original_rules: String,
+    updated_rules: String,
     report: CasePathPatternReport,
 }
 
@@ -89,19 +87,19 @@ impl CasePathPatternPlan {
             );
         }
 
-        let current = fs::read_to_string(&self.config_path).with_context(|| {
-            format!(
-                "failed to reread recorder config {}",
-                self.config_path.display()
-            )
-        })?;
+        let current_project_config = fs::read_to_string(&self.project_config_path)?;
         ensure!(
-            current == self.original,
-            "recorder config changed after planning; rerun plan before applying"
+            current_project_config == self.original_project_config,
+            "project config changed after planning; rerun plan before applying"
+        );
+        let current_rules = fs::read_to_string(&self.rules_path)?;
+        ensure!(
+            current_rules == self.original_rules,
+            "coordinator rules changed after planning; rerun plan before applying"
         );
 
         if self.report.changed {
-            write_atomic(&self.config_path, self.updated.as_bytes())?;
+            write_atomic(&self.rules_path, self.updated_rules.as_bytes())?;
         }
 
         let mut report = self.report;
@@ -115,46 +113,34 @@ pub fn plan_case_path_pattern_feedback(
 ) -> Result<CasePathPatternPlan> {
     validate_feedback_metadata(&feedback)?;
 
-    let metadata = fs::symlink_metadata(&feedback.config_path).with_context(|| {
-        format!(
-            "failed to inspect recorder config {}",
-            feedback.config_path.display()
-        )
-    })?;
-    ensure!(metadata.is_file(), "recorder config must be a regular file");
+    let original_project_config = fs::read_to_string(&feedback.project_config_path)
+        .with_context(|| format!("failed to read {}", feedback.project_config_path.display()))?;
+    let original_rules = fs::read_to_string(&feedback.rules_path)
+        .with_context(|| format!("failed to read {}", feedback.rules_path.display()))?;
+    let mut static_config = AppConfig::load_static(&feedback.project_config_path)?;
+    let matching = static_config
+        .http_gateway
+        .rules
+        .iter()
+        .filter(|rule| rule.name.as_deref() == Some(feedback.rule_name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
     ensure!(
-        !metadata.file_type().is_symlink(),
-        "refusing to replace a symlinked recorder config"
+        matching.len() == 1,
+        "expected exactly one recorder HTTP rule named {:?}, found {}",
+        feedback.rule_name,
+        matching.len()
     );
-
-    let original = fs::read_to_string(&feedback.config_path).with_context(|| {
-        format!(
-            "failed to read recorder config {}",
-            feedback.config_path.display()
-        )
-    })?;
-    let config = parse_and_validate(&original, &feedback.config_path)?;
-    let (rule_index, rule) = find_rule(&config, &feedback.rule_name)?;
-    let rule_range = rule_range(&original, rule_index, config.http_gateway.rules.len())?;
-    let block = find_managed_block(
-        &original,
-        &rule_range,
-        BEGIN_MARKER,
-        END_MARKER,
-        "case_path_patterns",
-    )?
-    .context("selected rule must contain an explicit AI-managed case_path_patterns block")?;
-    ensure!(
-        assignment_count(&original[block.clone()], "case_path_patterns") == 1,
-        "AI-managed block must contain exactly one case_path_patterns assignment"
-    );
+    let rule = &matching[0];
+    let mut rules = CoordinatorRulesConfig::parse(&original_rules, &feedback.rules_path)?;
+    let overlay = http_overlay_mut(&mut rules, &feedback.rule_name);
 
     let requested = feedback
         .patterns
         .iter()
         .map(|pattern| validate_feedback_pattern(pattern, rule))
         .collect::<Result<BTreeSet<_>>>()?;
-    let before = rule
+    let before = overlay
         .case_path_patterns
         .iter()
         .cloned()
@@ -181,11 +167,13 @@ pub fn plan_case_path_pattern_feedback(
     if requested.is_empty() && incorrect.is_empty() {
         let patterns = before.into_iter().collect::<Vec<_>>();
         return Ok(CasePathPatternPlan {
-            config_path: feedback.config_path.clone(),
-            original: original.clone(),
-            updated: original,
+            project_config_path: feedback.project_config_path,
+            rules_path: feedback.rules_path.clone(),
+            original_project_config,
+            original_rules: original_rules.clone(),
+            updated_rules: original_rules,
             report: CasePathPatternReport {
-                config: feedback.config_path,
+                rules: feedback.rules_path,
                 rule: feedback.rule_name,
                 source_revision: feedback.source_revision,
                 case_source: feedback.case_source,
@@ -209,20 +197,11 @@ pub fn plan_case_path_pattern_feedback(
         after.remove(pattern);
     }
 
-    let newline = newline(&original);
-    let old_block = &original[block.clone()];
-    let new_block = render_managed_block(
-        &after,
-        &feedback.source_revision,
-        newline,
-        old_block.ends_with('\n'),
-    );
-    let mut updated = String::with_capacity(original.len() + new_block.len());
-    updated.push_str(&original[..block.start]);
-    updated.push_str(&new_block);
-    updated.push_str(&original[block.end..]);
-    parse_and_validate(&updated, &feedback.config_path)
-        .context("generated recorder config failed validation")?;
+    overlay.case_path_patterns = after.iter().cloned().collect();
+    overlay.source_revision = feedback.source_revision.clone();
+    rules.apply_to(&mut static_config)?;
+    static_config.validate()?;
+    let updated_rules = rules.render()?;
 
     let added = after.difference(&before).cloned().collect::<Vec<_>>();
     let removed = before.difference(&after).cloned().collect::<Vec<_>>();
@@ -230,25 +209,21 @@ pub fn plan_case_path_pattern_feedback(
     let corrections_already_absent = incorrect.difference(&before).cloned().collect::<Vec<_>>();
     let patterns_before = before.into_iter().collect::<Vec<_>>();
     let patterns_after = after.into_iter().collect::<Vec<_>>();
-    let changed = updated != original;
+    let changed = updated_rules != original_rules;
     let diff = if changed {
-        managed_block_diff(
-            &feedback.config_path,
-            &original,
-            block.start,
-            old_block,
-            &new_block,
-        )
+        whole_file_diff(&feedback.rules_path, &original_rules, &updated_rules)
     } else {
         String::new()
     };
 
     Ok(CasePathPatternPlan {
-        config_path: feedback.config_path.clone(),
-        original,
-        updated,
+        project_config_path: feedback.project_config_path,
+        rules_path: feedback.rules_path.clone(),
+        original_project_config,
+        original_rules,
+        updated_rules,
         report: CasePathPatternReport {
-            config: feedback.config_path,
+            rules: feedback.rules_path,
             rule: feedback.rule_name,
             source_revision: feedback.source_revision,
             case_source: feedback.case_source,
@@ -352,36 +327,23 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
     path == normalized || path.starts_with(&format!("{normalized}/"))
 }
 
-fn render_managed_block(
-    patterns: &BTreeSet<String>,
-    source_revision: &str,
-    newline: &str,
-    trailing_newline: bool,
-) -> String {
-    let mut output = String::new();
-    let revision = toml::Value::String(source_revision.to_string()).to_string();
-    writeln_with(&mut output, BEGIN_MARKER, newline);
-    writeln_with(
-        &mut output,
-        &format!("# source_revision = {revision}"),
-        newline,
-    );
-    writeln_with(&mut output, "case_path_patterns = [", newline);
-    for pattern in patterns {
-        let quoted = toml::Value::String(pattern.clone()).to_string();
-        writeln_with(&mut output, &format!("  {quoted},"), newline);
+fn http_overlay_mut<'a>(
+    rules: &'a mut CoordinatorRulesConfig,
+    name: &str,
+) -> &'a mut CoordinatorHttpRuleConfig {
+    if let Some(index) = rules.http.iter().position(|rule| rule.name == name) {
+        return &mut rules.http[index];
     }
-    writeln_with(&mut output, "]", newline);
-    output.push_str(END_MARKER);
-    if trailing_newline {
-        output.push_str(newline);
-    }
-    output
-}
-
-fn writeln_with(output: &mut String, line: &str, newline: &str) {
-    output.push_str(line);
-    output.push_str(newline);
+    rules.http.push(CoordinatorHttpRuleConfig {
+        name: name.to_string(),
+        source_revision: String::new(),
+        case_path_patterns: Vec::new(),
+        allowed_unused_http_hosts: Vec::new(),
+    });
+    rules
+        .http
+        .last_mut()
+        .expect("just inserted coordinator rule")
 }
 
 #[cfg(test)]

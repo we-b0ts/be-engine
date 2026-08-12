@@ -267,7 +267,7 @@ pub async fn run_with_options(
                         let published = runtime.store.summary().published().await;
                         if completion.delivered != published {
                             runtime.store.summary().record_error(format!(
-                                "managed comparison input delivered {} request template(s), but only {published} comparison case(s) were published",
+                                "managed comparison input delivered {} request template(s), but {published} comparison case(s) were published",
                                 completion.delivered,
                             )).await;
                         }

@@ -104,6 +104,10 @@ is unclear.
   artifacts. Keep this product-policy gate separate from the generic
   code-organization checker. Configured repository gates extend it; an empty
   configured gate list does not disable it.
+- `config/coordinator_rules.rs` owns the canonical, whole-file YAML contract for
+  every AI/coordinator-managed rule. Static recorder fields remain embedded in
+  `.traffic-e2e/project.yaml`; planners validate both documents and atomically
+  replace only `.traffic-e2e/coordinator-rules.yaml`.
 - Config, TLS, DNS, and process lookup remain focused infrastructure concerns.
 - `platform/mod.rs` owns one managed subprocess composition boundary: it maps
   validated project/recorder state into the staged shell runtime and collects
@@ -112,8 +116,8 @@ is unclear.
   `preflight-business-input.sh` asset.
 - `config/repository_protocol.rs` owns typed, idempotent recorder protocol
   convergence for initialized repositories. Native and gateway protocol
-  endpoints remain recorder-owned and this module must not project them into
-  project configuration.
+  endpoints remain owned by the embedded `recorder` section of project YAML;
+  this module must not duplicate them in project settings.
 
 Prefer these boundaries while they remain accurate. When implementation proves
 that a current parent no longer expresses ownership, make the smallest

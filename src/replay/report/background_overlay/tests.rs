@@ -83,7 +83,7 @@ fn redis_hash_key_patterns_reclassify_case_window_exchanges() {
         let fixture = Fixture::with_redis_exchange(command, "exp:matchlist:4872", fields);
         fixture.write_rules(&format!(
             r#"
-[[recording.process_owned_dependencies]]
+[[rules]]
 name = "matchlist-refresh"
 protocol = "redis"
 ports = [20917]
@@ -122,7 +122,7 @@ fn redis_hash_reclassification_requires_exact_fields() {
     );
     fixture.write_rules(
         r#"
-[[recording.process_owned_dependencies]]
+[[rules]]
 name = "matchlist-refresh"
 protocol = "redis"
 ports = [20917]
@@ -151,7 +151,7 @@ fn redis_hash_key_pattern_rejects_other_key_shapes() {
     let fixture = Fixture::with_redis_exchange("HGET", "unrelated:matchlist:4872", &["version"]);
     fixture.write_rules(
         r#"
-[[recording.process_owned_dependencies]]
+[[rules]]
 name = "matchlist-refresh"
 protocol = "redis"
 ports = [20917]
@@ -186,7 +186,7 @@ impl Fixture {
 
     fn with_redis_exchange(command: &str, key: &str, fields: &[&str]) -> Self {
         let temp = tempdir().unwrap();
-        let config = temp.path().join("recorder.toml");
+        let config = temp.path().join("coordinator-rules.yaml");
         let report = temp.path().join("replay-report.json");
         let case_dir = temp.path().join(CASE_ID);
         fs::create_dir_all(&case_dir).unwrap();
@@ -261,7 +261,7 @@ impl Fixture {
         let rules = if matching {
             format!(
                 r#"
-[[recording.process_owned_dependencies]]
+[[rules]]
 name = "tag-cardinality-warmup"
 protocol = "redis"
 ports = [20917]
@@ -278,14 +278,15 @@ source_evidence = "fixture background warmup"
     }
 
     fn write_rules(&self, rules: &str) {
-        fs::write(
-            &self.config,
-            format!(
-                "[http_gateway]\nenabled = true\n[http_gateway.ready]\nenabled = true\n\
-                 [recording]\ntraffic_jsonl = \"full\"\n{rules}"
-            ),
-        )
-        .unwrap();
+        #[derive(serde::Deserialize)]
+        struct RuleList {
+            #[serde(default)]
+            rules: Vec<crate::config::BackgroundDependencyRuleConfig>,
+        }
+        let parsed: RuleList = toml::from_str(rules).unwrap();
+        let mut document = crate::config::CoordinatorRulesConfig::empty();
+        document.process_owned_dependencies = parsed.rules;
+        fs::write(&self.config, document.render().unwrap()).unwrap();
     }
 
     fn reclassify(&self) -> BackgroundReclassification {

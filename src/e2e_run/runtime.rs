@@ -436,7 +436,8 @@ mod tests {
             replay_policy: PathBuf::from("/target/config/replay.yaml"),
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "dev-migration".to_string(),
-            recorder_config: "recorder.toml".into(),
+            recorder_config: "project.yaml".into(),
+            coordinator_rules: "coordinator-rules.yaml".into(),
             recording_rule: "record-api".to_string(),
             runner_owned_response_assertions: true,
         }
@@ -527,7 +528,7 @@ mod tests {
         let mut config = resolved_project(PathBuf::from("/target/.traffic-e2e/Dockerfile.e2e"));
         config.replay_startup_timeout = Duration::from_secs(60);
         config.pr_base = "integration".to_string();
-        config.recorder_config = PathBuf::from("/target/config/recorder.toml");
+        config.recorder_config = PathBuf::from("/target/config/project.yaml");
         config.recording_rule = "pluto".to_string();
         config.runner_owned_response_assertions = false;
 
@@ -535,7 +536,7 @@ mod tests {
             recorder_config_args(&config),
             vec![
                 OsString::from("--recorder-config"),
-                OsString::from("/target/config/recorder.toml"),
+                OsString::from("/target/config/project.yaml"),
                 OsString::from("--recording-rule"),
                 OsString::from("pluto"),
             ]

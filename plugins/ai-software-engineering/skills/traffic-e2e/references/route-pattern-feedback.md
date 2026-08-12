@@ -67,16 +67,20 @@ Before accepting it:
 
 ## Target Config Update
 
-Keep project-specific recorder config in the target repo. Restrict edits to an
-explicit block such as:
+Keep project-specific recorder config in the target repo. Static matching rules
+live under `recorder` in `.traffic-e2e/project.yaml`; dynamic feedback lives in
+the wholly coordinator-managed `.traffic-e2e/coordinator-rules.yaml`:
 
-```toml
-# BEGIN AI-MANAGED CASE PATH PATTERNS
-# source_revision = "<revision>"
-case_path_patterns = [
-  "/api/example/*",
-]
-# END AI-MANAGED CASE PATH PATTERNS
+```yaml
+version: 1
+http:
+  - name: record-api
+    source_revision: <revision>
+    case_path_patterns:
+      - /api/example/*
+    allowed_unused_http_hosts: []
+breeze_capture: []
+process_owned_dependencies: []
 ```
 
 - Recording limits are target-owned and independent from route feedback.
@@ -84,9 +88,9 @@ case_path_patterns = [
   while exact keys under `http_gateway.per_api_case_limits.overrides` may set different
   limits. Do not add or raise these limits merely to make replay discovery
   record more cases. Pattern feedback must preserve existing limit settings.
-- Require `traffic-e2e` from `PATH`. Never edit the target TOML
-  directly and never create the config or managed markers on the target's
-  behalf. If the command is unavailable or rejects an existing managed block,
+- Require `traffic-e2e` from `PATH`. Never edit either target YAML document
+  directly and never create the coordinator rules on the target's behalf. If
+  the command is unavailable or rejects the managed document,
   report `recording_configuration/action_required` with the confirmed patterns,
   exact tool or managed-block failure, and acceptance check; stop only the
   config-update step.
@@ -130,8 +134,8 @@ traffic-e2e config recorder apply case-path-patterns \
 - Persist the JSON apply report. Record `confirmed_no_change` when it has no
   diff and `applied` only when the atomic update succeeds.
 - Never copy recorded parameter values into product config or product code.
-- The CLI must validate the complete TOML, preserve text outside the managed
-  block, and include the config diff in its report.
+- The CLI must validate the complete project and coordinator YAML documents,
+  preserve project YAML, and include the whole managed-document diff in its report.
 - Do not move or rename existing case directories; new patterns affect only
   future manual recordings.
 

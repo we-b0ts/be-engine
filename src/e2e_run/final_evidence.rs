@@ -32,7 +32,7 @@ pub(super) fn refresh_background_evidence(
         .iter()
         .map(|case| (case.case_id.clone(), case.case_dir.clone()))
         .collect::<BTreeMap<_, _>>();
-    reclassify_background_dependencies(&config.recorder_config, &state.replay_report, &case_dirs)
+    reclassify_background_dependencies(&config.coordinator_rules, &state.replay_report, &case_dirs)
 }
 
 pub(super) fn build_final_evidence_from_current_report(

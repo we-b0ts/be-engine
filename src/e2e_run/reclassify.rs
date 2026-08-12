@@ -7,7 +7,9 @@ use super::final_evidence::{
     build_final_evidence_from_current_report, refresh_background_evidence,
 };
 use super::model::{ActiveRunState, CaseStatus, RunStatus};
-use super::progress::{revise_replay_progress, update_focused_index};
+use super::progress::{
+    ensure_replay_progress_revisable, revise_replay_progress, update_focused_index,
+};
 use super::result::{E2eApiRunResult, E2eVerificationGates, api_result};
 use super::{E2eRunContext, config, store, support};
 use crate::case_group::{load_case_group_inventory, load_complete_case_group_inventory};
@@ -88,6 +90,41 @@ pub(crate) fn focused_background_reclassification_recovery_required(
             .any(|error| is_strict_dependency_finalize_error(error)))
 }
 
+pub(crate) fn ensure_focused_background_reclassification_revisable(
+    context: E2eRunContext,
+    api: &str,
+) -> Result<()> {
+    let (_, base_layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    ensure!(
+        !base_layout.active_dir.exists(),
+        "cannot reclassify dependency evidence while an E2E attempt is active"
+    );
+    let focused_root = base_layout
+        .run_root
+        .join("focused")
+        .join(support::api_directory(api));
+    ensure!(
+        !focused_root.join(".active").exists(),
+        "cannot reclassify dependency evidence while focused API {api:?} is active"
+    );
+    let state_path = focused_root.join("latest/state.yaml");
+    let state: ActiveRunState = store::read_yaml(&state_path)
+        .with_context(|| format!("no finalized focused E2E state exists for API {api:?}"))?;
+    ensure!(
+        state.status.is_terminal(),
+        "focused E2E evidence is not terminal"
+    );
+    ensure!(
+        state.case_source == base_layout.case_source,
+        "focused E2E evidence belongs to another case source"
+    );
+    ensure_replay_progress_revisable(&base_layout.progress_path, &state)
+}
+
 pub(crate) fn reclassify_focused_background_dependencies(
     context: E2eRunContext,
     api: &str,
@@ -131,6 +168,8 @@ pub(crate) fn reclassify_focused_background_dependencies(
         state.case_source == base_layout.case_source,
         "focused E2E evidence belongs to another case source"
     );
+    ensure_replay_progress_revisable(&base_layout.progress_path, &state)?;
+    let previous_state = state.clone();
 
     let reclassified = refresh_background_evidence(&config, &state)?;
     for case in &mut state.cases {
@@ -167,7 +206,7 @@ pub(crate) fn reclassify_focused_background_dependencies(
         store::load_or_create_index(&base_layout, &base_layout.run_key, &base_layout.case_source)?;
     update_focused_index(&mut index, &state, &inventory, inventory_complete);
     store::write_yaml(&base_layout.index_path, &index)?;
-    revise_replay_progress(&base_layout.progress_path, &state)?;
+    revise_replay_progress(&base_layout.progress_path, &previous_state, &state)?;
     let result = api_result(&focused_layout, &state, api, state.sequence);
     Ok(FocusedBackgroundReclassification {
         recording_reused: true,

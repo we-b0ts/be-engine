@@ -4,18 +4,18 @@ use std::process::Command;
 use std::time::Duration;
 
 use super::model::{
-    BreezeProjectConfig, DeliveryProjectConfig, ProjectConfig, RecordingProjectConfig,
-    ReplayProjectConfig, ResolvedProjectConfig, RunLayout, SourceProjectConfig, StateProjectConfig,
-    TargetProjectConfig,
+    BreezeProjectConfig, DeliveryProjectConfig, ProjectConfig, ProjectSettings,
+    RecordingProjectConfig, ReplayProjectConfig, ResolvedProjectConfig, RunLayout,
+    SourceProjectConfig, StateProjectConfig, TargetProjectConfig,
 };
 use super::target_quality_config::{inferred_target_quality_gates, validate_target_quality_gates};
-use super::{E2eRunInitOptions, E2eRunInitResult, branch, store};
+use super::{E2eRunInitOptions, E2eRunInitResult, branch};
 use crate::replay::validate_replay_policy;
 use anyhow::{Context, Result, bail, ensure};
 
-pub(super) const CONFIG_VERSION: u32 = 13;
+pub(super) const CONFIG_VERSION: u32 = 14;
 const DEFAULT_RUNTIME_ROOT: &str = crate::internal_runtime::PROJECT_RELATIVE_ROOT;
-const PROJECT_CONFIG_FILE: &str = "project.yaml";
+pub(crate) const PROJECT_CONFIG_FILE: &str = "project.yaml";
 
 pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
     let target_root = fs::canonicalize(&options.target_root).with_context(|| {
@@ -68,7 +68,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         "recorder config does not exist: {}",
         recorder_config.display()
     );
-    let recorder = crate::config::AppConfig::load(&recorder_config)?;
+    let recorder = crate::config::AppConfig::load_static(&recorder_config)?;
     ensure!(
         recorder.http_gateway.ready.enabled,
         "managed project replay requires an enabled http_gateway.ready probe"
@@ -89,26 +89,36 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     let runtime_root = traffic_e2e_dir.join(&runtime_root_setting);
     require_internal_root_ignored(&target_root, &runtime_root)?;
 
-    let payload = render_project_config(&options)?;
-    let project_config: ProjectConfig = serde_yaml::from_slice(&payload)
-        .context("generated project configuration is not valid YAML")?;
+    let payload = render_project_config(&options, recorder)?;
+    let rules_path = traffic_e2e_dir.join(crate::config::COORDINATOR_RULES_FILE);
+    let rules = crate::config::CoordinatorRulesConfig::repository_defaults_for_rule(
+        &options.recording_rule,
+    )
+    .render()?;
     if options.force {
-        store::write_yaml(&config_path, &project_config)?;
+        crate::config::edit::write_atomic(&config_path, &payload)?;
+        crate::config::edit::write_atomic(&rules_path, rules.as_bytes())?;
     } else {
-        crate::config::edit::create_atomic(&config_path, &payload)?;
+        crate::config::edit::create_many_atomic(&[
+            (config_path.clone(), payload),
+            (rules_path, rules.into_bytes()),
+        ])?;
     }
     let persisted = load_project_config(&target_root, &config_path)?;
 
     Ok(E2eRunInitResult {
         config: config_path,
         runtime_root,
-        pr_base: persisted.delivery.pr_base,
+        pr_base: persisted.project.delivery.pr_base,
         recorder_feedback: true,
         replaced,
     })
 }
 
-pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u8>> {
+pub(crate) fn render_project_config(
+    options: &E2eRunInitOptions,
+    recorder: crate::config::AppConfig,
+) -> Result<Vec<u8>> {
     ensure!(
         !options.source_container.trim().is_empty(),
         "source_container must not be empty"
@@ -121,31 +131,34 @@ pub(crate) fn render_project_config(options: &E2eRunInitOptions) -> Result<Vec<u
     }
     let project_config = ProjectConfig {
         version: CONFIG_VERSION,
-        source: SourceProjectConfig {
-            container: options.source_container.clone(),
+        project: ProjectSettings {
+            source: SourceProjectConfig {
+                container: options.source_container.clone(),
+            },
+            breeze: options
+                .breeze_container
+                .clone()
+                .map(|container| BreezeProjectConfig { container }),
+            target: TargetProjectConfig {
+                dockerfile: options.target_dockerfile.clone(),
+                startup: crate::startup::normalized_config(options.target_startup.clone())?,
+                quality_gates: None,
+            },
+            replay: ReplayProjectConfig {
+                policy: options.replay_policy.clone(),
+            },
+            recording: RecordingProjectConfig {
+                rule: options.recording_rule.clone(),
+                coordinator_rules: PathBuf::from(crate::config::COORDINATOR_RULES_FILE),
+            },
+            delivery: DeliveryProjectConfig {
+                pr_base: options.pr_base.clone(),
+            },
+            state: StateProjectConfig {
+                runtime_root: PathBuf::from(DEFAULT_RUNTIME_ROOT),
+            },
         },
-        breeze: options
-            .breeze_container
-            .clone()
-            .map(|container| BreezeProjectConfig { container }),
-        target: TargetProjectConfig {
-            dockerfile: options.target_dockerfile.clone(),
-            startup: crate::startup::normalized_config(options.target_startup.clone())?,
-            quality_gates: None,
-        },
-        replay: ReplayProjectConfig {
-            policy: options.replay_policy.clone(),
-        },
-        recording: RecordingProjectConfig {
-            config: options.recorder_config.clone(),
-            rule: options.recording_rule.clone(),
-        },
-        delivery: DeliveryProjectConfig {
-            pr_base: options.pr_base.clone(),
-        },
-        state: StateProjectConfig {
-            runtime_root: PathBuf::from(DEFAULT_RUNTIME_ROOT),
-        },
+        recorder,
     };
     validate_project_config(&project_config)?;
     let mut payload = serde_yaml::to_string(&project_config)?.into_bytes();
@@ -172,7 +185,7 @@ pub(super) fn resolve_layout(
         .with_context(|| format!("failed to resolve case source {}", case_source.display()))?;
     let config_path = traffic_e2e_dir.join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
-    let internal_root = resolve_under(&traffic_e2e_dir, &config.state.runtime_root);
+    let internal_root = resolve_under(&traffic_e2e_dir, &config.project.state.runtime_root);
     ensure!(
         internal_root.starts_with(&traffic_e2e_dir) && internal_root != traffic_e2e_dir,
         "state.runtime_root must be a child of .traffic-e2e"
@@ -206,13 +219,17 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         .join(crate::repository::TRAFFIC_E2E_ROOT)
         .join(PROJECT_CONFIG_FILE);
     let config = load_project_config(&target_root, &config_path)?;
-    let policy_path = resolve_under(&target_root, &config.replay.policy);
+    let policy_path = resolve_under(&target_root, &config.project.replay.policy);
     let policy = validate_replay_policy(&policy_path).context("invalid replay policy")?;
     ensure!(
         policy.runner_owned_response_assertions,
         "managed project replay requires verification policy version 2 with runner-owned response assertions"
     );
-    let recorder_config = resolve_under(&target_root, &config.recording.config);
+    let recorder_config = config_path.clone();
+    let coordinator_rules = crate::config::coordinator_rules::resolve_from_project_config(
+        &config_path,
+        &config.project.recording.coordinator_rules,
+    )?;
     let recorder = crate::config::AppConfig::load(&recorder_config)?;
     ensure!(
         recorder.http_gateway.ready.enabled,
@@ -239,14 +256,15 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         })
         .transpose()?;
     let target_quality_gates = config
+        .project
         .target
         .quality_gates
         .unwrap_or_else(|| inferred_target_quality_gates(&target_root));
     Ok((
         target_root.clone(),
         ResolvedProjectConfig {
-            target_dockerfile: resolve_under(&target_root, &config.target.dockerfile),
-            target_startup: config.target.startup,
+            target_dockerfile: resolve_under(&target_root, &config.project.target.dockerfile),
+            target_startup: config.project.target.startup,
             target_http_origin: format!("http://127.0.0.1:{target_port}"),
             target_port,
             target_motan_upstream,
@@ -258,15 +276,16 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_request_timeout,
             target_quality_gates,
             target_max_response_bytes,
-            source_container: config.source.container,
-            breeze_container: config.breeze.map(|breeze| breeze.container),
+            source_container: config.project.source.container,
+            breeze_container: config.project.breeze.map(|breeze| breeze.container),
             replay_policy: policy_path,
             replay_startup_timeout: Duration::from_secs(
                 super::model::DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS,
             ),
-            pr_base: config.delivery.pr_base,
+            pr_base: config.project.delivery.pr_base,
             recorder_config,
-            recording_rule: config.recording.rule,
+            coordinator_rules,
+            recording_rule: config.project.recording.rule,
             runner_owned_response_assertions: policy.runner_owned_response_assertions,
         },
     ))
@@ -305,7 +324,7 @@ pub(super) fn load_project_config(target_root: &Path, config_path: &Path) -> Res
             config_path.display()
         );
     }
-    let config: ProjectConfig = store::read_yaml(config_path).with_context(|| {
+    let config: ProjectConfig = super::store::read_yaml(config_path).with_context(|| {
         format!(
             "{} is incomplete or obsolete; in-place migration is not implemented, so preserve \
              the existing configuration and initialize a clean target repository",
@@ -319,56 +338,58 @@ pub(super) fn load_project_config(target_root: &Path, config_path: &Path) -> Res
             config_path.display()
         )
     })?;
-    branch::validate_pr_base(target_root, &config.delivery.pr_base)?;
+    branch::validate_pr_base(target_root, &config.project.delivery.pr_base)?;
     Ok(config)
 }
 
 pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
+    let project = &config.project;
     ensure!(
         config.version == CONFIG_VERSION,
         "unsupported traffic E2E config version {}; expected {CONFIG_VERSION}",
         config.version
     );
     ensure!(
-        !config.source.container.trim().is_empty(),
+        !project.source.container.trim().is_empty(),
         "source.container must not be empty"
     );
-    if let Some(breeze) = &config.breeze {
+    if let Some(breeze) = &project.breeze {
         ensure!(
             !breeze.container.trim().is_empty(),
             "breeze.container must not be empty"
         );
     }
     ensure!(
-        !config.target.dockerfile.as_os_str().is_empty(),
+        !project.target.dockerfile.as_os_str().is_empty(),
         "target.dockerfile must not be empty"
     );
     ensure!(
-        config.target.dockerfile == Path::new(".traffic-e2e/Dockerfile.e2e"),
+        project.target.dockerfile == Path::new(".traffic-e2e/Dockerfile.e2e"),
         "target.dockerfile must be .traffic-e2e/Dockerfile.e2e"
     );
-    crate::startup::validate_config(&config.target.startup)?;
-    if let Some(gates) = &config.target.quality_gates {
+    crate::startup::validate_config(&project.target.startup)?;
+    if let Some(gates) = &project.target.quality_gates {
         validate_target_quality_gates(gates)?;
     }
     ensure!(
-        !config.replay.policy.as_os_str().is_empty(),
+        !project.replay.policy.as_os_str().is_empty(),
         "replay.policy must not be empty"
     );
     ensure!(
-        !config.delivery.pr_base.trim().is_empty(),
+        !project.delivery.pr_base.trim().is_empty(),
         "delivery.pr_base must not be empty"
     );
     ensure!(
-        config.state.runtime_root == Path::new(DEFAULT_RUNTIME_ROOT),
+        project.state.runtime_root == Path::new(DEFAULT_RUNTIME_ROOT),
         "state.runtime_root must be {DEFAULT_RUNTIME_ROOT:?}"
     );
     ensure!(
-        !config.recording.config.as_os_str().is_empty(),
-        "recording.config must not be empty"
+        project.recording.coordinator_rules == Path::new(crate::config::COORDINATOR_RULES_FILE),
+        "project.recording.coordinator_rules must be {:?}",
+        crate::config::COORDINATOR_RULES_FILE
     );
     ensure!(
-        !config.recording.rule.trim().is_empty(),
+        !project.recording.rule.trim().is_empty(),
         "recording.rule must not be empty"
     );
     Ok(())
@@ -447,6 +468,22 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    fn write_input_project(root: &Path, recorder: &crate::config::AppConfig) {
+        let recorder = serde_yaml::to_string(recorder).unwrap();
+        let recorder = recorder
+            .lines()
+            .map(|line| format!("  {line}\n"))
+            .collect::<String>();
+        fs::write(
+            root.join("config/project.yaml"),
+            format!(
+                "version: 14\nproject:\n  recording:\n    coordinator_rules: coordinator-rules.yaml\nrecorder:\n{recorder}"
+            ),
+        )
+        .unwrap();
+    }
+
     fn target() -> TempDir {
         let target = tempfile::tempdir().unwrap();
         let root = target.path();
@@ -476,11 +513,20 @@ mod tests {
             "version: 2\nexpected_response: assertions_only\nrules: []\n",
         )
         .unwrap();
+        let mut recorder = crate::config::AppConfig::default();
+        recorder.http_gateway.ready.enabled = true;
+        recorder.http_gateway.ready.path = "/healthz".to_string();
+        recorder.http_gateway.ready.success_status = 404;
+        recorder.http_gateway.rules = vec![crate::config::HttpGatewayRuleConfig {
+            name: Some("record-api".to_string()),
+            methods: vec!["GET".to_string()],
+            path_prefixes: vec!["/".to_string()],
+            ..Default::default()
+        }];
+        write_input_project(root, &recorder);
         fs::write(
-            root.join("config/recorder.toml"),
-            "[http_gateway.ready]\nenabled = true\npath = \"/healthz\"\nsuccess_status = \
-             404\n\n[[http_gateway.rules]]\nname = \"record-api\"\nmethods = \
-             [\"GET\"]\npath_prefixes = [\"/\"]\n",
+            root.join("config/coordinator-rules.yaml"),
+            "version: 1\nhttp:\n- name: record-api\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();
         assert!(
@@ -531,7 +577,7 @@ mod tests {
             target_startup: crate::startup::StartupConfig::default(),
             replay_policy: PathBuf::from("config/replay.yaml"),
             pr_base: "integration".to_string(),
-            recorder_config: PathBuf::from("config/recorder.toml"),
+            recorder_config: PathBuf::from("config/project.yaml"),
             recording_rule: "record-api".to_string(),
             force: false,
         }
@@ -549,14 +595,18 @@ mod tests {
             target.path().join(".traffic-e2e/project.yaml")
         );
         assert!(!target.path().join(".traffic-e2e/e2e.yaml").exists());
-        let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
+        let config: ProjectConfig =
+            serde_yaml::from_str(&fs::read_to_string(&result.config).unwrap()).unwrap();
         assert_eq!(config.version, CONFIG_VERSION);
-        assert_eq!(config.source.container, "source-app");
+        assert_eq!(config.project.source.container, "source-app");
         assert_eq!(
-            config.target.dockerfile,
+            config.project.target.dockerfile,
             PathBuf::from(".traffic-e2e/Dockerfile.e2e")
         );
-        assert_eq!(config.replay.policy, PathBuf::from("config/replay.yaml"));
+        assert_eq!(
+            config.project.replay.policy,
+            PathBuf::from("config/replay.yaml")
+        );
         let raw = fs::read_to_string(&result.config).unwrap();
         for duplicate in [
             "readiness_path",
@@ -572,10 +622,10 @@ mod tests {
             );
         }
         assert!(!raw.lines().any(|line| line.trim_start() == "port: 8081"));
-        assert_eq!(config.delivery.pr_base, "integration");
+        assert_eq!(config.project.delivery.pr_base, "integration");
         assert_eq!(result.pr_base, "integration");
         assert_eq!(
-            config.state.runtime_root,
+            config.project.state.runtime_root,
             PathBuf::from(DEFAULT_RUNTIME_ROOT)
         );
     }
@@ -583,10 +633,10 @@ mod tests {
     #[test]
     fn managed_replay_uses_the_recorder_body_limit() {
         let target = target();
-        let recorder_path = target.path().join("config/recorder.toml");
-        let mut recorder = fs::read_to_string(&recorder_path).unwrap();
-        recorder.push_str("\n[recording]\nmax_body_bytes = 1234\n");
-        fs::write(recorder_path, recorder).unwrap();
+        let recorder_path = target.path().join("config/project.yaml");
+        let mut recorder = crate::config::AppConfig::load(&recorder_path).unwrap();
+        recorder.recording.max_body_bytes = 1234;
+        write_input_project(target.path(), &recorder);
         initialize(options(target.path())).unwrap();
         let cases = target.path().join("cases/run");
         fs::create_dir_all(&cases).unwrap();
@@ -599,13 +649,10 @@ mod tests {
     #[test]
     fn managed_replay_keeps_the_native_target_http_port() {
         let target = target();
-        let recorder_path = target.path().join("config/recorder.toml");
-        let recorder = fs::read_to_string(&recorder_path).unwrap().replacen(
-            "[http_gateway.ready]",
-            "[http_gateway]\nmatched_upstream = \"http://127.0.0.1:8080\"\n\n[http_gateway.ready]",
-            1,
-        );
-        fs::write(recorder_path, recorder).unwrap();
+        let recorder_path = target.path().join("config/project.yaml");
+        let mut recorder = crate::config::AppConfig::load(&recorder_path).unwrap();
+        recorder.http_gateway.matched_upstream = "http://127.0.0.1:8080".to_string();
+        write_input_project(target.path(), &recorder);
         initialize(options(target.path())).unwrap();
 
         let (_, config) = resolve_project(target.path()).unwrap();
@@ -658,80 +705,14 @@ mod tests {
         .unwrap();
         initialize(options(target.path())).unwrap();
         let config_path = target.path().join(".traffic-e2e/project.yaml");
-        let yaml = fs::read_to_string(&config_path).unwrap().replacen(
-            "  startup: {}",
-            "  startup: {}\n  quality_gates: []",
-            1,
-        );
-        fs::write(config_path, yaml).unwrap();
+        let mut project: ProjectConfig =
+            serde_yaml::from_str(&fs::read_to_string(&config_path).unwrap()).unwrap();
+        project.project.target.quality_gates = Some(Vec::new());
+        fs::write(config_path, serde_yaml::to_string(&project).unwrap()).unwrap();
 
         let (_, config) = resolve_project(target.path()).unwrap();
 
         assert!(config.target_quality_gates.is_empty());
-    }
-
-    #[test]
-    fn standard_initialization_uses_repository_conventions() {
-        let target = target();
-        let root = target.path();
-        assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(root)
-                .args(["branch", "dev-migration"])
-                .status()
-                .unwrap()
-                .success()
-        );
-        fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
-        fs::write(
-            root.join(".traffic-e2e/verification.yaml"),
-            "version: 2\nexpected_response: assertions_only\nrules: []\n",
-        )
-        .unwrap();
-        fs::write(
-            root.join(".traffic-e2e/recorder.toml"),
-            format!(
-                "[comparison_recording]\ncandidate_upstream = \
-                 \"http://127.0.0.1:8181\"\n\n[http_gateway]\nmatched_upstream = \
-                 \"http://127.0.0.1:8181\"\n\n[http_gateway.ready]\nenabled = \
-                 true\npath = \"/ready\"\nsuccess_status = 200\n\n[[http_gateway.rules]]\nname = \
-                 {:?}\nmethods = [\"GET\"]\npath_prefixes = [\"/\"]\n",
-                crate::config::DEFAULT_RECORDING_RULE
-            ),
-        )
-        .unwrap();
-
-        let result = crate::e2e_run::initialize_standard_e2e_project(
-            root.to_path_buf(),
-            "friendship-source".to_string(),
-        )
-        .unwrap();
-        let config: ProjectConfig = store::read_yaml(&result.config).unwrap();
-        let (_, resolved) = resolve_project(root).unwrap();
-
-        assert_eq!(
-            config.target.dockerfile,
-            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
-        );
-        assert!(root.join(&config.target.dockerfile).is_file());
-        assert_eq!(
-            config.replay.policy,
-            PathBuf::from(".traffic-e2e/verification.yaml")
-        );
-        assert_eq!(resolved.target_http_origin, "http://127.0.0.1:8181");
-        assert_eq!(resolved.target_port, 8181);
-        assert_eq!(resolved.target_readiness_path, "/ready");
-        assert_eq!(resolved.target_readiness_status, 200);
-        assert_eq!(resolved.target_startup_timeout, Duration::from_secs(60));
-        assert_eq!(resolved.target_request_timeout, Duration::from_secs(30));
-        assert_eq!(resolved.replay_startup_timeout, Duration::from_secs(60));
-        assert_eq!(config.delivery.pr_base, "dev-migration");
-        assert_eq!(
-            config.recording.config,
-            PathBuf::from(".traffic-e2e/recorder.toml")
-        );
-        assert_eq!(config.recording.rule, crate::config::DEFAULT_RECORDING_RULE);
     }
 
     #[test]
@@ -808,10 +789,7 @@ mod tests {
         initialize(options(target.path())).unwrap();
         fs::write(
             target.path().join(".traffic-e2e/project.yaml"),
-            "version: 2\n\
-             target_image: legacy\n\
-             replay_policy: config/replay.yaml\n\
-             ai_forbidden_root: .ai-forbidden\n",
+            "version: 2\ntarget_image: legacy\n",
         )
         .unwrap();
         let cases = target.path().join("cases/run");

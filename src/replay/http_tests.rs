@@ -414,7 +414,7 @@ async fn allowed_unused_http_host_is_diagnostic_but_unmatched_requests_stay_dirt
     )
     .await;
     let allowed = ReplayAllowedUnusedHttpConfig {
-        config_path: temp.path().join("recorder.toml"),
+        config_path: temp.path().join("project.yaml"),
         recording_rule: "record-api".to_string(),
         hosts: BTreeSet::from(["background.example.test".to_string()]),
     };

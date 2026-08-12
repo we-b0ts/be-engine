@@ -11,7 +11,7 @@ use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
 
 #[derive(Debug, Clone)]
 pub struct MotanBackgroundDependencyFeedback {
-    pub config_path: PathBuf,
+    pub rules_path: PathBuf,
     pub replay_report_path: PathBuf,
     pub name: String,
     pub group: String,
@@ -23,7 +23,7 @@ pub struct MotanBackgroundDependencyFeedback {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MotanBackgroundDependencyReport {
-    pub config: PathBuf,
+    pub rules: PathBuf,
     pub replay_report: PathBuf,
     pub name: String,
     pub effective_name: String,
@@ -43,11 +43,11 @@ pub struct MotanBackgroundDependencyReport {
 
 #[derive(Debug)]
 pub struct MotanBackgroundDependencyPlan {
-    config_path: PathBuf,
+    rules_path: PathBuf,
     replay_report_path: PathBuf,
-    original_config: String,
+    original_rules: String,
     original_replay_report: String,
-    updated_config: String,
+    updated_rules: String,
     report: MotanBackgroundDependencyReport,
 }
 
@@ -58,15 +58,15 @@ impl MotanBackgroundDependencyPlan {
 
     pub fn apply(self) -> Result<MotanBackgroundDependencyReport> {
         ensure!(
-            read_file(&self.config_path, "recorder config")? == self.original_config,
-            "recorder config changed after planning; rerun plan before applying"
+            read_file(&self.rules_path, "process-owned rules")? == self.original_rules,
+            "process-owned rules changed after planning; rerun plan before applying"
         );
         ensure!(
             read_file(&self.replay_report_path, "replay report")? == self.original_replay_report,
             "replay report changed after planning; rerun plan before applying"
         );
         if self.report.changed {
-            write_atomic(&self.config_path, self.updated_config.as_bytes())?;
+            write_atomic(&self.rules_path, self.updated_rules.as_bytes())?;
         }
         let mut report = self.report;
         report.applied = true;
@@ -101,16 +101,16 @@ pub fn plan_motan_background_dependency(
         diff,
         effective_name,
         reused_existing,
-    } = plan_rule_config(&feedback.config_path, requested)?;
+    } = plan_rule_config(&feedback.rules_path, requested)?;
 
     Ok(MotanBackgroundDependencyPlan {
-        config_path: feedback.config_path.clone(),
+        rules_path: feedback.rules_path.clone(),
         replay_report_path: feedback.replay_report_path.clone(),
-        original_config: original,
+        original_rules: original,
         original_replay_report,
-        updated_config: updated,
+        updated_rules: updated,
         report: MotanBackgroundDependencyReport {
-            config: feedback.config_path,
+            rules: feedback.rules_path,
             replay_report: feedback.replay_report_path,
             name: feedback.name,
             effective_name,
