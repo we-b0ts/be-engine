@@ -84,6 +84,13 @@ pub use repository_initialization::{
 pub use repository_protocol::{
     MotanProtocolConfigOptions, MotanProtocolConfigResult, enable_repository_motan_protocol,
 };
+pub const DEFAULT_DNS_MOCK_PORT: u16 = 4_053;
+pub const DEFAULT_TCP_GATEWAY_PORT: u16 = 4_001;
+pub const DEFAULT_UDP_GATEWAY_PORT: u16 = 4_002;
+
+pub const DEFAULT_DNS_MOCK_LISTEN: &str = "127.0.0.153:4053";
+pub const DEFAULT_TCP_GATEWAY_LISTEN: &str = "127.0.0.1:4001";
+pub const DEFAULT_UDP_GATEWAY_LISTEN: &str = "127.0.0.1:4002";
 
 pub(crate) fn managed_comparison_candidate(port: u16) -> String {
     format!("http://comparison-target.traffic-e2e.invalid:{port}")
@@ -381,7 +388,7 @@ impl Default for TcpGatewayConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            listen: "127.0.0.1:15001"
+            listen: DEFAULT_TCP_GATEWAY_LISTEN
                 .parse()
                 .expect("valid default TCP gateway listen address"),
             backlog: 65_535,
@@ -409,7 +416,7 @@ impl Default for UdpGatewayConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            listen: "127.0.0.1:15002"
+            listen: DEFAULT_UDP_GATEWAY_LISTEN
                 .parse()
                 .expect("valid default UDP gateway listen address"),
             forward: false,
@@ -554,6 +561,9 @@ mod tests {
         assert!(!config.http.enabled);
         assert!(!config.mysql.enabled);
         assert!(!config.mysql.record_raw_packets);
+        assert_eq!(config.dns_mock.listen.port(), DEFAULT_DNS_MOCK_PORT);
+        assert_eq!(config.tcp_gateway.listen.port(), DEFAULT_TCP_GATEWAY_PORT);
+        assert_eq!(config.udp_gateway.listen.port(), DEFAULT_UDP_GATEWAY_PORT);
         assert_eq!(config.tcp_gateway.backlog, 65_535);
         assert_eq!(
             config.http_gateway.per_api_case_limits.default,

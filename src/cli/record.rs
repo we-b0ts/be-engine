@@ -69,7 +69,11 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
     }
     config.dns_mock.fake_cidr = environment("FAKE_CIDR", &config.dns_mock.fake_cidr);
     preflight(&config)?;
-    let configured_fake_cidr = config.dns_mock.fake_cidr.clone();
+    let interception_config = (args.dns && !args.no_dns)
+        .then(|| {
+            Ok::<_, anyhow::Error>((record_dns_config(&config)?, record_fake_ip_config(&config)?))
+        })
+        .transpose()?;
     let state = AppState::new_with_recording_options(
         config,
         args.run_id,
@@ -78,14 +82,9 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
         args.preflight_probe,
     )
     .await?;
-    let mut interception = if args.dns && !args.no_dns {
-        Some(Guard::enable(
-            record_dns_config()?,
-            record_fake_ip_config(&configured_fake_cidr)?,
-        )?)
-    } else {
-        None
-    };
+    let mut interception = interception_config
+        .map(|(dns, fake_ip)| Guard::enable(dns, fake_ip))
+        .transpose()?;
     let result = state.run_with_control_socket(args.control_socket).await;
     if let Some(guard) = interception.as_mut() {
         guard.disable();
@@ -255,27 +254,28 @@ fn reject_owner_config(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-fn record_dns_config() -> Result<DnsConfig> {
+fn record_dns_config(config: &AppConfig) -> Result<DnsConfig> {
+    let configured_ip = config.dns_mock.listen.ip().to_string();
     Ok(DnsConfig {
-        dns_ip: environment("DNS_IP", "127.0.0.153"),
-        dns_port: environment("DNS_PORT", "15353")
-            .parse()
-            .context("DNS_PORT must be a valid port")?,
+        dns_ip: environment("DNS_IP", &configured_ip),
+        dns_port: environment_port("DNS_PORT", config.dns_mock.listen.port())?,
     })
 }
 
-fn record_fake_ip_config(configured_fake_cidr: &str) -> Result<FakeIpConfig> {
+fn record_fake_ip_config(config: &AppConfig) -> Result<FakeIpConfig> {
     Ok(FakeIpConfig {
-        fake_cidr: environment("FAKE_CIDR", configured_fake_cidr),
-        tcp_port: environment("GATEWAY_PORT", "15001")
-            .parse()
-            .context("GATEWAY_PORT must be a valid port")?,
-        udp_port: environment("UDP_GATEWAY_PORT", "15002")
-            .parse()
-            .context("UDP_GATEWAY_PORT must be a valid port")?,
+        fake_cidr: environment("FAKE_CIDR", &config.dns_mock.fake_cidr),
+        tcp_port: environment_port("GATEWAY_PORT", config.tcp_gateway.listen.port())?,
+        udp_port: environment_port("UDP_GATEWAY_PORT", config.udp_gateway.listen.port())?,
         tcp: true,
         udp: parse_bool_environment("ENABLE_UDP", true)?,
     })
+}
+
+fn environment_port(name: &str, default: u16) -> Result<u16> {
+    environment(name, &default.to_string())
+        .parse()
+        .with_context(|| format!("{name} must be a valid port"))
 }
 
 fn environment(name: &str, default: &str) -> String {
@@ -506,10 +506,34 @@ mod tests {
 
     #[test]
     fn interception_dns_uses_local_listener_only() {
-        let interception = record_dns_config().unwrap();
+        let interception = record_dns_config(&AppConfig::default()).unwrap();
 
         assert_eq!(interception.dns_ip, "127.0.0.153");
-        assert_eq!(interception.dns_port, 15353);
+        assert_eq!(interception.dns_port, traffic_e2e::DEFAULT_DNS_MOCK_PORT);
+    }
+
+    #[test]
+    fn interception_defaults_follow_explicit_recorder_ports() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            [dns_mock]
+            listen = "127.0.0.153:15353"
+
+            [tcp_gateway]
+            listen = "127.0.0.1:15001"
+
+            [udp_gateway]
+            listen = "127.0.0.1:15002"
+            "#,
+        )
+        .unwrap();
+
+        let dns = record_dns_config(&config).unwrap();
+        let fake_ip = record_fake_ip_config(&config).unwrap();
+
+        assert_eq!(dns.dns_port, 15_353);
+        assert_eq!(fake_ip.tcp_port, 15_001);
+        assert_eq!(fake_ip.udp_port, 15_002);
     }
 
     #[test]

@@ -7,7 +7,10 @@ use hyper::StatusCode;
 use serde::Serialize;
 
 use super::edit::create_atomic;
-use super::{AppConfig, DEFAULT_BODY_LIMIT_BYTES};
+use super::{
+    AppConfig, DEFAULT_BODY_LIMIT_BYTES, DEFAULT_DNS_MOCK_PORT, DEFAULT_TCP_GATEWAY_PORT,
+    DEFAULT_UDP_GATEWAY_PORT,
+};
 
 pub const DEFAULT_RECORDING_RULE: &str = "record-api";
 pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 17_171;
@@ -192,6 +195,15 @@ fn render_recorder_template(scope: &str, options: &RecorderConfigInitOptions) ->
             "__DEFAULT_BODY_LIMIT_BYTES__",
             &DEFAULT_BODY_LIMIT_BYTES.to_string(),
         )
+        .replace("__DNS_MOCK_PORT__", &DEFAULT_DNS_MOCK_PORT.to_string())
+        .replace(
+            "__TCP_GATEWAY_PORT__",
+            &DEFAULT_TCP_GATEWAY_PORT.to_string(),
+        )
+        .replace(
+            "__UDP_GATEWAY_PORT__",
+            &DEFAULT_UDP_GATEWAY_PORT.to_string(),
+        )
         .replace("__UPSTREAM_DNS__", &options.upstream_dns.to_string())
         .replace(
             "__SOURCE_HTTP_PORT__",
@@ -263,7 +275,7 @@ summary_flush_interval_ms = 1000
 
 [dns_mock]
 enabled = true
-listen = "127.0.0.153:15353"
+listen = "127.0.0.153:__DNS_MOCK_PORT__"
 upstream_dns = "__UPSTREAM_DNS__"
 fake_cidr = "198.19.0.0/16"
 ttl_seconds = 60
@@ -273,7 +285,7 @@ __BREEZE_DNS__
 
 [tcp_gateway]
 enabled = true
-listen = "127.0.0.1:15001"
+listen = "127.0.0.1:__TCP_GATEWAY_PORT__"
 backlog = 65535
 record_http = true
 mitm_https = true
@@ -290,7 +302,7 @@ __RESPONSE_REWRITE__
 
 [udp_gateway]
 enabled = true
-listen = "127.0.0.1:15002"
+listen = "127.0.0.1:__UDP_GATEWAY_PORT__"
 forward = false
 
 [http_gateway]
@@ -423,6 +435,9 @@ mod tests {
         assert_eq!(result.runtime, "breeze");
         assert_eq!(result.http_gateway_port, 18_181);
         assert_eq!(config.http_gateway.listen.to_string(), "0.0.0.0:18181");
+        assert_eq!(config.dns_mock.listen.port(), DEFAULT_DNS_MOCK_PORT);
+        assert_eq!(config.tcp_gateway.listen.port(), DEFAULT_TCP_GATEWAY_PORT);
+        assert_eq!(config.udp_gateway.listen.port(), DEFAULT_UDP_GATEWAY_PORT);
         assert_eq!(
             result.managed_record_command,
             "traffic-e2e record --target-root ."
@@ -494,7 +509,14 @@ mod tests {
         assert!(!raw.contains("startup-cache-warm"));
         assert!(!raw.contains("planet-video-cache-warm"));
         assert!(raw.contains("# Set by `init --http-gateway-port`"));
-        assert!(!raw.contains("__HTTP_GATEWAY_PORT__"));
+        for placeholder in [
+            "__DNS_MOCK_PORT__",
+            "__TCP_GATEWAY_PORT__",
+            "__UDP_GATEWAY_PORT__",
+            "__HTTP_GATEWAY_PORT__",
+        ] {
+            assert!(!raw.contains(placeholder));
+        }
         assert!(raw.contains("# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES"));
         assert!(!raw.contains("verified_excludes"));
         assert!(!raw.contains("allow_side_effecting_methods"));

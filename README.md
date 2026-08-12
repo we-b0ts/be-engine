@@ -181,8 +181,9 @@ Recorder development; its process-level lifecycle commands are internal.
 
 The default example listens on:
 
-- DNS mock: `127.0.0.153:15353`
-- TCP fake-IP gateway: `127.0.0.1:15001`
+- DNS mock: `127.0.0.153:4053`
+- TCP fake-IP gateway: `127.0.0.1:4001`
+- UDP fake-IP gateway: `127.0.0.1:4002`
 - HTTP gateway for tcpcopy traffic: `0.0.0.0:18084`
 - JSONL output: `./.traffic-e2e/local/artifacts/recordings/<run-id>/traffic.jsonl`
 - Generated CA: `./.traffic-e2e/local/data/traffic-recorder-ca.pem`
@@ -464,7 +465,7 @@ Example config:
 ```toml
 [dns_mock]
 enabled = true
-listen = "127.0.0.153:15353"
+listen = "127.0.0.153:4053"
 upstream_dns = "10.10.10.10:53"
 fake_cidr = "198.18.0.0/15"
 ttl_seconds = 60
@@ -484,7 +485,7 @@ bypass_domains = [
 
 [tcp_gateway]
 enabled = true
-listen = "127.0.0.1:15001"
+listen = "127.0.0.1:4001"
 # Maximum pending connections passed to listen(2); the kernel may cap it at
 # net.core.somaxconn.
 backlog = 65535
@@ -506,15 +507,15 @@ protocol = "redis" # redis | memcached | kafka | motan | raw
 ```
 
 Set up local DNS capture. This keeps the recorder on non-privileged port
-`15353`, then captures local UDP/TCP DNS traffic on port `53` and sends it to
-`127.0.0.153:15353`. Capture is limited to numeric UID `998`, independent of
+`4053`, then captures local UDP/TCP DNS traffic on port `53` and sends it to
+`127.0.0.153:4053`. Capture is limited to numeric UID `998`, independent of
 host account resolution. Run the Recorder under root or a developer account so
 its own upstream DNS queries are outside that owner scope:
 
 ```bash
 sudo traffic-e2e diagnose interception dns up \
   --dns-ip 127.0.0.153 \
-  --dns-port 15353
+  --dns-port 4053
 ```
 
 On Linux, the whole `127.0.0.0/8` block routes to loopback, so this does not
@@ -530,14 +531,14 @@ Set up fake-IP TCP capture:
 ```bash
 sudo traffic-e2e diagnose interception fake-ip up \
   --fake-cidr 198.18.0.0/15 \
-  --tcp-port 15001 \
+  --tcp-port 4001 \
   --udp false
 ```
 
 Test the DNS mock with `dig`:
 
 ```bash
-dig @127.0.0.153 -p 15353 demo.test A +short
+dig @127.0.0.153 -p 4053 demo.test A +short
 dig demo.test A +short
 ```
 
@@ -571,7 +572,7 @@ every 15 seconds, with one final flush during graceful shutdown. A forced
 process kill can lose mappings created since the previous periodic flush.
 
 Port `5353` is intentionally avoided because it is commonly used by mDNS/Avahi
-on UDP. Binding to `127.0.0.153:15353` also avoids the common systemd-resolved
+on UDP. Binding to `127.0.0.153:4053` also avoids the common systemd-resolved
 stub listeners on `127.0.0.53:53` and `127.0.0.54:53`. Interception does
 not depend on `resolvectl`; it works by adding a narrow nat chain in iptables.
 Every DNS request emitted by a process running as UID `998` is redirected to
@@ -582,11 +583,11 @@ To remove the DNS and fake-IP rules:
 ```bash
 sudo traffic-e2e diagnose interception fake-ip down \
   --fake-cidr 198.18.0.0/15 \
-  --tcp-port 15001 \
+  --tcp-port 4001 \
   --udp false
 sudo traffic-e2e diagnose interception dns down \
   --dns-ip 127.0.0.153 \
-  --dns-port 15353
+  --dns-port 4053
 sudo ./scripts/setup_system_ca.sh down
 ```
 

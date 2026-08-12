@@ -21,7 +21,7 @@ summary_flush_interval_ms = 1000
 
 [dns_mock]
 enabled = true
-listen = "127.0.0.153:15353"
+listen = "127.0.0.153:4053"
 upstream_dns = "10.10.10.10:53"
 fake_cidr = "198.19.0.0/16"
 ttl_seconds = 60
@@ -47,7 +47,7 @@ bypass_domains = [
 # Dependency capture and managed HTTPS/fake-DNS preflight use this gateway;
 # primary Motan case recording uses the separate [motan_gateway] below.
 enabled = true
-listen = "127.0.0.1:15001"
+listen = "127.0.0.1:4001"
 # Maximum pending connections passed to listen(2); the kernel may cap it at
 # net.core.somaxconn.
 backlog = 65535
@@ -121,7 +121,7 @@ plugin = { name = "pluto-eci-kubeconfig", kubectl_binary = "kubectl", proxy_list
 # Records UDP datagrams sent to fake DNS targets, such as push metrics. UDP
 # recording is side-effect capture; it does not wait for or synthesize replies.
 enabled = true
-listen = "127.0.0.1:15002"
+listen = "127.0.0.1:4002"
 # Default false keeps recording from emitting development metrics to real
 # upstream collectors.
 forward = false

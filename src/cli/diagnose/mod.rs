@@ -81,9 +81,9 @@ struct ReplayArgs {
     case: PathBuf,
     #[arg(long = "case-id")]
     case_ids: Vec<String>,
-    #[arg(long, default_value = "127.0.0.153:15353")]
+    #[arg(long, default_value = traffic_e2e::DEFAULT_DNS_MOCK_LISTEN)]
     dns_listen: SocketAddr,
-    #[arg(long, default_value = "127.0.0.1:15001")]
+    #[arg(long, default_value = traffic_e2e::DEFAULT_TCP_GATEWAY_LISTEN)]
     tcp_listen: SocketAddr,
     #[arg(long, default_value = traffic_e2e::DEFAULT_FAKE_CIDR)]
     fake_cidr: String,

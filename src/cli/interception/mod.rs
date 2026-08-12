@@ -5,7 +5,10 @@ use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
-use traffic_e2e::{DEFAULT_FAKE_CIDR, TRAFFIC_PROCESS_UID};
+use traffic_e2e::{
+    DEFAULT_DNS_MOCK_PORT, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_PORT, DEFAULT_UDP_GATEWAY_PORT,
+    TRAFFIC_PROCESS_UID,
+};
 
 use super::output::{stderr_line, stdout_line};
 
@@ -115,7 +118,7 @@ struct DnsArgs {
     action: RuleAction,
     #[arg(long, global = true, default_value = "127.0.0.153")]
     dns_ip: String,
-    #[arg(long, global = true, default_value_t = 15353)]
+    #[arg(long, global = true, default_value_t = DEFAULT_DNS_MOCK_PORT)]
     dns_port: u16,
 }
 
@@ -125,9 +128,9 @@ struct FakeIpArgs {
     action: RuleAction,
     #[arg(long, global = true, default_value = DEFAULT_FAKE_CIDR)]
     fake_cidr: String,
-    #[arg(long, global = true, default_value_t = 15001)]
+    #[arg(long, global = true, default_value_t = DEFAULT_TCP_GATEWAY_PORT)]
     tcp_port: u16,
-    #[arg(long, global = true, default_value_t = 15002)]
+    #[arg(long, global = true, default_value_t = DEFAULT_UDP_GATEWAY_PORT)]
     udp_port: u16,
     #[arg(
         long,
