@@ -369,6 +369,12 @@ async fn run_managed_runtime(
             crate::repository::LOCAL_ARTIFACTS_ROOT
         );
     }
+    let managed_comparison_listen = listen_preflight::managed_finite_comparison(
+        runtime_operation
+            == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
+            && request_source.is_some(),
+        recorder.http_gateway.listen,
+    );
     let executable = crate::engine_binary::executable()?;
     ensure_executable(&executable, "traffic-e2e binary")?;
     let assets = stage_assets(&target_root)?;
@@ -440,6 +446,9 @@ async fn run_managed_runtime(
         .arg(&run_id)
         .arg("--brz-no-fallback")
         .arg(options.breeze_no_fallback.to_string());
+    if let Some(listen) = managed_comparison_listen {
+        command.env("TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN", listen.to_string());
+    }
     if let Some(port) = comparison_motan_port {
         command.env("TRAFFIC_E2E_TARGET_MOTAN_PORT", port.to_string());
     }
@@ -816,6 +825,9 @@ mod tests {
             )
         );
         assert!(MANAGER.contains("--candidate-upstream \"$target_origin\""));
+        assert!(MANAGER.contains(
+            "[[ -z \"${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}\" ]] || comparison_command+=(--listen \"$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN\")"
+        ));
         assert!(MANAGER.contains("--target-source-ip \"$target_network_ip\""));
         assert!(MANAGER.contains("--interception-listen-ip \"$target_network_gateway\""));
         assert!(!MANAGER.contains("start_genuine_source"));

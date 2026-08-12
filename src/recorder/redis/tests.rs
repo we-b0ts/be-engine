@@ -411,7 +411,6 @@ async fn snapshot_test_state() -> (AppState, TempDir) {
     config.http_gateway.enabled = true;
     config.http_gateway.ready.enabled = true;
     config
-        .recording
         .process_owned_dependencies
         .push(BackgroundDependencyRuleConfig::Redis {
             name: "snapshot-get".to_string(),

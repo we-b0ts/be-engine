@@ -297,13 +297,16 @@ When one or more APIs are selected explicitly, reaching every selected API's
 case limit finalizes the run early and records
 `completion_reason = per_api_case_limit_reached`; the duration remains the
 upper bound. Coordinator-managed comparison can instead reuse a finite
-standard-recording request source. It sends those requests serially and, after
-the final comparison case is published, keeps source, candidate, and the cache
-snapshot alive for a three-second final quiet period before recording
-`completion_reason = input_exhausted`. The run becomes
-`completed_with_errors` if the number of delivered templates differs from the
-number of published cases. Comparison without finite managed input continues
-to observe the full duration.
+standard-recording request source. For that finite-input mode only, the HTTP
+comparison gateway reuses the configured gateway port but binds it to
+`127.0.0.1`; environment traffic sent to the host address cannot enter the
+comparison run. The input driver sends the recorded requests serially over
+that loopback listener and, after the final comparison case is published,
+keeps source, candidate, and the cache snapshot alive for a three-second final
+quiet period before recording `completion_reason = input_exhausted`. The run
+becomes `completed_with_errors` if the number of delivered templates differs
+from the number of published cases. Comparison without finite managed input
+continues to use the configured listener and observe the full duration.
 
 `traffic-e2e config init --source-container <container> --breeze` installs the
 Breeze-aware recorder defaults together with project and verification
@@ -397,7 +400,7 @@ empty string does not match a nonempty string.
 Run the service with:
 
 ```bash
-cargo run -- diagnose recorder --config config/recorder.example.toml
+cargo run -- diagnose recorder --config config/project.example.yaml
 ```
 
 Install the binary and run managed recording from an initialized target:
@@ -414,7 +417,7 @@ waits through its internal process contract:
 
 ```bash
 traffic-e2e internal recorder-run \
-  --config config/recorder.example.toml \
+  --config config/project.example.yaml \
   --control-socket /run/traffic-e2e/recording.sock
 
 traffic-e2e recording wait-listeners \
@@ -439,10 +442,10 @@ redirect by default inside its managed container. For focused low-level
 development without those rules:
 
 ```bash
-traffic-e2e diagnose recorder --config config/recorder.example.toml
+traffic-e2e diagnose recorder --config config/project.example.yaml
 ```
 
-Managed recording uses `dns_mock.upstream_dns` from the Recorder TOML for
+Managed recording uses `recorder.dns_mock.upstream_dns` from project YAML for
 fake-DNS forwarding. Local interception redirects every port-53 query emitted
 by a container process running as UID `998`; it has no destination DNS bypass.
 Recorder itself runs as root, so its upstream queries are outside the fixed
@@ -581,7 +584,7 @@ a new run with fresh counts.
 run. When present, it replaces both the configured default and every
 pattern-specific override in memory, so every resolved API or static path uses
 `N`; it is not a run-wide total when multiple APIs are recorded, and it never
-rewrites the recorder TOML.
+rewrites the project or coordinator YAML documents.
 For explicitly selected APIs, both recording modes stop admission and finalize
 normally after all selected APIs reach `N`. Standard managed recording also
 ends its outer Platform lifecycle at that point instead of waiting out the
@@ -698,7 +701,7 @@ fail the exchange rather than returning an unmodified address-bearing
 response.
 
 Enable the example `[http_response_rewrite]` configuration in
-`config/recorder.example.toml` and ensure the configured `kubectl_binary` is
+`config/project.example.yaml` and ensure the configured `kubectl_binary` is
 installed. `traffic-e2e record` checks executables required by enabled rewrite
 plugins immediately after loading the configuration, so a missing `kubectl`
 is reported before Recorder changes local interception state. The rewrite
@@ -750,9 +753,9 @@ assertion-only `expected-response.json` contract, dependency rule scoping,
 runner-owned dynamic and unordered response fields, and dirty-evidence
 behavior.
 
-Recorder-owned host exceptions for API-independent process-level tasks remain
-in the target repository's `.traffic-e2e/recorder.toml`, not
-`.traffic-e2e/verification.yaml`. Apply an add-only host after source inspection
+Coordinator-owned host exceptions for API-independent process-level tasks live
+in the target repository's `.traffic-e2e/coordinator-rules.yaml`, not
+`.traffic-e2e/project.yaml` or `.traffic-e2e/verification.yaml`. Apply an add-only host after source inspection
 proves that all traffic to that host belongs to a task that is unrelated to API
 handlers:
 
@@ -763,11 +766,10 @@ traffic-e2e config recorder apply allowed-unused-http-hosts \
   --host cs.aliyuncs.com
 ```
 
-The tool bootstraps and then owns an
-`AI-MANAGED ALLOWED UNUSED HTTP HOSTS` block inside the selected named
-`[[http_gateway.rules]]` entry. Apply replans against current evidence and is
-add-only, sorted, deduplicated, atomic, and safe against concurrent config
-changes. One host applies to every case selected by that recording rule,
+The tool updates the named HTTP entry in the wholly coordinator-managed rules
+document. Apply replans against current evidence and is add-only, sorted,
+deduplicated, atomic, and safe against concurrent changes to either config
+document. One host applies to every case selected by that recording rule,
 independent of which active API window happened to capture the process-level
 task.
 
@@ -820,7 +822,7 @@ Pass the config and rule together for direct replay:
 ```bash
 traffic-e2e replay \
   --policy ../target/.traffic-e2e/verification.yaml \
-  --recorder-config ../target/.traffic-e2e/recorder.toml \
+  --recorder-config ../target/.traffic-e2e/project.yaml \
   --recording-rule record-api \
   path/to/case-dir
 ```
@@ -937,7 +939,7 @@ traffic-e2e diagnose case-group ensure \
   --pattern '/api/users/*' \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --output ../target/.traffic-e2e/local/run-reports/<run-id>-case-groups.json \
-  --recorder-config ../target/.traffic-e2e/recorder.toml \
+  --recorder-config ../target/.traffic-e2e/project.yaml \
   --rule record-api
 ```
 
@@ -997,8 +999,8 @@ To narrow one recording invocation, repeat
 `--api 'METHOD /path-or-pattern'` on `record` or `record-comparison`. The
 selectors are run-local and intersect the configured HTTP rules. They are
 persisted in the run summary and used as the selected cases' `api_pattern`, but
-never rewrite
-`.traffic-e2e/recorder.toml`; no plan/apply workflow is needed for a temporary
+never rewrite `.traffic-e2e/project.yaml` or
+`.traffic-e2e/coordinator-rules.yaml`; no plan/apply workflow is needed for a temporary
 recording scope. Use `--per-api-case-limit N` when the same positive run-local case
 limit must apply to every selected API. Explicitly selected runs finalize when
 all selectors reach `N`; runs without selectors continue for the full duration.
@@ -1239,14 +1241,16 @@ conventional existing container named `breeze`; use `--breeze=<container>` only
 for a non-standard name. Defaults are Recorder HTTP gateway port `17171`,
 recorder native HTTP upstream `http://127.0.0.1:8080`, readiness `/healthz`
 with status `404`, and upstream DNS `10.10.10.11:53`. Only the gateway port is
-an initialization port argument. Change a non-standard native endpoint in
-`recorder.toml`, which is its sole configuration owner. Source and Breeze
+an initialization port argument. Change a non-standard native endpoint under
+`recorder` in `project.yaml`, which is its sole static configuration owner. Source and Breeze
 containers need only be inspectable, not running.
 
-The command atomically generates version-13 `.traffic-e2e/project.yaml`,
-`.traffic-e2e/recorder.toml`, and `.traffic-e2e/verification.yaml`. Project
-configuration has explicit source, optional Breeze, target, replay, recording,
-delivery, and state sections. A typical
+The command atomically generates version-14 `.traffic-e2e/project.yaml`,
+`.traffic-e2e/coordinator-rules.yaml`, and `.traffic-e2e/verification.yaml`.
+`project.yaml` combines project settings with the static recorder settings;
+`coordinator-rules.yaml` is wholly AI/coordinator managed. Project settings
+have explicit source, optional Breeze, target, replay, recording, delivery,
+and state sections. A typical
 target section is:
 
 ```yaml
@@ -1266,12 +1270,12 @@ target:
   #     argv: [make, check]
 ```
 
-Target readiness path and status come from the referenced recorder's
-`http_gateway.ready` section. Target request timeout comes from
+Target readiness path and status come from the project document's
+`recorder.http_gateway.ready` section. Target request timeout comes from
 `comparison_recording.upstream_timeout_ms`; target startup and replay startup
 timeouts are coordinator-owned defaults. These runtime policy values are not
-duplicated in `project.yaml`. The target's native HTTP port is the port in
-`http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
+duplicated in project settings. The target's native HTTP port is the port in
+`recorder.http_gateway.matched_upstream`; Replay uses it on loopback and Comparison uses
 it on the run-owned target bridge IP.
 
 Each quality gate is an exact argv executed without a shell from the canonical
@@ -1279,8 +1283,7 @@ target root. At most eight uniquely named commands may be configured, with at
 most 32 arguments each. `quality_gates: []` explicitly disables inference.
 
 Managed replay reads its target response limit from
-`recording.max_body_bytes` in the recorder configuration referenced by
-`recording.config`; `project.yaml` does not duplicate that value.
+`recorder.recording.max_body_bytes` in `project.yaml`.
 
 Existing configuration is never overwritten. If any generated file exists,
 the whole initialization refuses without creating another file. Normal

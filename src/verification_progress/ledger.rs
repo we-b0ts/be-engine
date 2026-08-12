@@ -5,10 +5,13 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::{MAX_COUNTED_RUNS, ProgressReport, VerificationStage};
+use super::{
+    CountedObservation, MAX_COUNTED_RUNS, ProgressBaseline, ProgressReport, VerificationStage,
+};
 use crate::config::edit::{create_atomic, write_atomic};
 
-const LEDGER_VERSION: u8 = 1;
+const LEDGER_VERSION: u8 = 2;
+const MIN_SUPPORTED_LEDGER_VERSION: u8 = 1;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -16,6 +19,10 @@ struct CountedRunsLedger {
     version: u8,
     stage: VerificationStage,
     counted_runs: BTreeMap<String, String>,
+    #[serde(default)]
+    counted_observations: BTreeMap<String, CountedObservation>,
+    #[serde(default)]
+    observation_baseline: Option<ProgressBaseline>,
 }
 
 #[derive(Serialize)]
@@ -23,6 +30,14 @@ struct CountedRunsLedgerRef<'a> {
     version: u8,
     stage: VerificationStage,
     counted_runs: &'a BTreeMap<String, String>,
+    counted_observations: &'a BTreeMap<String, CountedObservation>,
+    observation_baseline: &'a Option<ProgressBaseline>,
+}
+
+pub(super) struct LoadedLedger {
+    pub(super) counted_runs: BTreeMap<String, String>,
+    pub(super) counted_observations: BTreeMap<String, CountedObservation>,
+    pub(super) observation_baseline: Option<ProgressBaseline>,
 }
 
 #[derive(Serialize)]
@@ -34,6 +49,8 @@ struct ProgressReportWithLedger<'a> {
     success_streak: &'a super::SuccessStreak,
     latest_run: &'a Option<super::LatestRun>,
     counted_runs: &'a BTreeMap<String, String>,
+    counted_observations: &'a BTreeMap<String, CountedObservation>,
+    observation_baseline: &'a Option<ProgressBaseline>,
     apis: &'a BTreeMap<String, super::ProgressApi>,
 }
 
@@ -46,19 +63,22 @@ pub(super) fn recovery_payload(report: &ProgressReport) -> Result<Vec<u8>> {
         success_streak: &report.success_streak,
         latest_run: &report.latest_run,
         counted_runs: &report.counted_runs,
+        counted_observations: &report.counted_observations,
+        observation_baseline: &report.observation_baseline,
         apis: &report.apis,
     })
 }
 
-pub(super) fn load(
-    progress_path: &Path,
-    stage: VerificationStage,
-) -> Result<BTreeMap<String, String>> {
+pub(super) fn load(progress_path: &Path, stage: VerificationStage) -> Result<LoadedLedger> {
     let path = path(progress_path, stage)?;
     let metadata = match fs::symlink_metadata(&path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(BTreeMap::new());
+            return Ok(LoadedLedger {
+                counted_runs: BTreeMap::new(),
+                counted_observations: BTreeMap::new(),
+                observation_baseline: None,
+            });
         }
         Err(error) => {
             return Err(error)
@@ -75,7 +95,7 @@ pub(super) fn load(
     let ledger: CountedRunsLedger = serde_yaml::from_slice(&payload)
         .with_context(|| format!("failed to parse progress ledger {}", path.display()))?;
     ensure!(
-        ledger.version == LEDGER_VERSION,
+        (MIN_SUPPORTED_LEDGER_VERSION..=LEDGER_VERSION).contains(&ledger.version),
         "unsupported progress ledger version {} in {}",
         ledger.version,
         path.display()
@@ -92,23 +112,34 @@ pub(super) fn load(
         "{} contains more than {MAX_COUNTED_RUNS} counted runs",
         path.display()
     );
-    Ok(ledger.counted_runs)
+    ensure!(
+        ledger.counted_observations.len() <= MAX_COUNTED_RUNS,
+        "{} contains more than {MAX_COUNTED_RUNS} counted observations",
+        path.display()
+    );
+    Ok(LoadedLedger {
+        counted_runs: ledger.counted_runs,
+        counted_observations: ledger.counted_observations,
+        observation_baseline: ledger.observation_baseline,
+    })
 }
 
-pub(super) fn write(
-    progress_path: &Path,
-    stage: VerificationStage,
-    counted_runs: &BTreeMap<String, String>,
-) -> Result<()> {
+pub(super) fn write(progress_path: &Path, report: &ProgressReport) -> Result<()> {
     ensure!(
-        counted_runs.len() <= MAX_COUNTED_RUNS,
+        report.counted_runs.len() <= MAX_COUNTED_RUNS,
         "progress counted-run limit of {MAX_COUNTED_RUNS} was reached"
     );
-    let path = path(progress_path, stage)?;
+    ensure!(
+        report.counted_observations.len() <= MAX_COUNTED_RUNS,
+        "progress counted-observation limit of {MAX_COUNTED_RUNS} was reached"
+    );
+    let path = path(progress_path, report.stage)?;
     let ledger = CountedRunsLedgerRef {
         version: LEDGER_VERSION,
-        stage,
-        counted_runs,
+        stage: report.stage,
+        counted_runs: &report.counted_runs,
+        counted_observations: &report.counted_observations,
+        observation_baseline: &report.observation_baseline,
     };
     let mut payload = serde_yaml::to_string(&ledger)?.into_bytes();
     if !payload.ends_with(b"\n") {

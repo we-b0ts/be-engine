@@ -163,10 +163,22 @@ pub(super) fn traffic_e2e_revision() -> Result<String> {
     Ok(hash.finish())
 }
 
-pub(super) fn recorder_config_revision(target_root: &Path) -> Result<String> {
-    let path = target_root.join(".traffic-e2e/recorder.toml");
+pub(super) fn project_config_revision(target_root: &Path) -> Result<String> {
+    config_file_revision(target_root, ".traffic-e2e/project.yaml", "project config")
+}
+
+pub(super) fn coordinator_rules_revision(target_root: &Path) -> Result<String> {
+    config_file_revision(
+        target_root,
+        ".traffic-e2e/coordinator-rules.yaml",
+        "process-owned rules",
+    )
+}
+
+fn config_file_revision(target_root: &Path, relative: &str, label: &str) -> Result<String> {
+    let path = target_root.join(relative);
     let bytes = std::fs::read(&path)
-        .with_context(|| format!("failed to read recorder config {}", path.display()))?;
+        .with_context(|| format!("failed to read {label} {}", path.display()))?;
     let mut hash = Fnv1a::default();
     hash.update(&bytes);
     Ok(hash.finish())

@@ -7,26 +7,25 @@ use hyper::http::uri::Authority;
 use serde::Serialize;
 
 use super::edit::write_atomic;
-use super::rule_document::{
-    assignment_count, find_managed_block, find_rule, insertion_before_assignment,
-    managed_block_diff, newline, parse_and_validate, rule_range,
+use super::rule_document::whole_file_diff;
+use super::{
+    AppConfig, CoordinatorHttpRuleConfig, CoordinatorRulesConfig, HttpGatewayConfig,
+    HttpGatewayRuleConfig,
 };
-use super::{HttpGatewayConfig, HttpGatewayRuleConfig};
 
-const BEGIN_MARKER: &str = "# BEGIN AI-MANAGED ALLOWED UNUSED HTTP HOSTS";
-const END_MARKER: &str = "# END AI-MANAGED ALLOWED UNUSED HTTP HOSTS";
 const FIELD: &str = "allowed_unused_http_hosts";
 
 #[derive(Debug, Clone)]
 pub struct AllowedUnusedHttpHostFeedback {
-    pub config_path: PathBuf,
+    pub project_config_path: PathBuf,
+    pub rules_path: PathBuf,
     pub rule_name: String,
     pub hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AllowedUnusedHttpHostReport {
-    pub config: PathBuf,
+    pub rules: PathBuf,
     pub rule: String,
     pub changed: bool,
     pub applied: bool,
@@ -38,9 +37,11 @@ pub struct AllowedUnusedHttpHostReport {
 
 #[derive(Debug)]
 pub struct AllowedUnusedHttpHostPlan {
-    config_path: PathBuf,
-    original: String,
-    updated: String,
+    project_config_path: PathBuf,
+    rules_path: PathBuf,
+    original_project_config: String,
+    original_rules: String,
+    updated_rules: String,
     report: AllowedUnusedHttpHostReport,
 }
 
@@ -50,18 +51,16 @@ impl AllowedUnusedHttpHostPlan {
     }
 
     pub fn apply(self) -> Result<AllowedUnusedHttpHostReport> {
-        let current = fs::read_to_string(&self.config_path).with_context(|| {
-            format!(
-                "failed to reread recorder config {}",
-                self.config_path.display()
-            )
-        })?;
         ensure!(
-            current == self.original,
-            "recorder config changed after planning; rerun plan before applying"
+            read(&self.project_config_path, "project config")? == self.original_project_config,
+            "project config changed after planning; rerun plan before applying"
+        );
+        ensure!(
+            read(&self.rules_path, "coordinator rules")? == self.original_rules,
+            "coordinator rules changed after planning; rerun plan before applying"
         );
         if self.report.changed {
-            write_atomic(&self.config_path, self.updated.as_bytes())?;
+            write_atomic(&self.rules_path, self.updated_rules.as_bytes())?;
         }
         let mut report = self.report;
         report.applied = true;
@@ -82,90 +81,37 @@ pub fn plan_allowed_unused_http_hosts(
         .iter()
         .map(|host| normalize_host(host))
         .collect::<Result<BTreeSet<_>>>()?;
-
-    let metadata = fs::symlink_metadata(&feedback.config_path).with_context(|| {
-        format!(
-            "failed to inspect recorder config {}",
-            feedback.config_path.display()
-        )
-    })?;
-    ensure!(metadata.is_file(), "recorder config must be a regular file");
-    ensure!(
-        !metadata.file_type().is_symlink(),
-        "refusing to replace a symlinked recorder config"
-    );
-    let original = fs::read_to_string(&feedback.config_path).with_context(|| {
-        format!(
-            "failed to read recorder config {}",
-            feedback.config_path.display()
-        )
-    })?;
-    let config = parse_and_validate(&original, &feedback.config_path)?;
-    let (rule_index, rule) = find_rule(&config, &feedback.rule_name)?;
-    let rule_range = rule_range(&original, rule_index, config.http_gateway.rules.len())?;
-    let managed = find_managed_block(&original, &rule_range, BEGIN_MARKER, END_MARKER, FIELD)?;
-    let rule_source = &original[rule_range.clone()];
-    let total_assignments = assignment_count(rule_source, FIELD);
-    let block = match managed {
-        Some(block) => {
-            ensure!(
-                total_assignments == 1 && assignment_count(&original[block.clone()], FIELD) == 1,
-                "{FIELD} must be owned exclusively by its AI-managed block"
-            );
-            block
-        }
-        None => {
-            ensure!(
-                total_assignments == 0,
-                "existing {FIELD} must be enclosed by its AI-managed block"
-            );
-            let insertion = insertion_before_assignment(&original, &rule_range, "headers")
-                .unwrap_or(rule_range.end);
-            insertion..insertion
-        }
-    };
-
-    let before = rule
+    let original_project_config = read(&feedback.project_config_path, "project config")?;
+    let original_rules = read(&feedback.rules_path, "coordinator rules")?;
+    let mut rules = CoordinatorRulesConfig::parse(&original_rules, &feedback.rules_path)?;
+    let mut static_config = AppConfig::load_static(&feedback.project_config_path)?;
+    named_rule(&static_config, &feedback.rule_name)?;
+    let overlay = http_overlay_mut(&mut rules, &feedback.rule_name);
+    let before = overlay
         .allowed_unused_http_hosts
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
     let after = before.union(&requested).cloned().collect::<BTreeSet<_>>();
+    overlay.allowed_unused_http_hosts = after.iter().cloned().collect();
+    rules.apply_to(&mut static_config)?;
+    static_config.validate()?;
+    let updated_rules = rules.render()?;
+    let changed = updated_rules != original_rules;
     let added = after.difference(&before).cloned().collect::<Vec<_>>();
-    let old_block = &original[block.clone()];
-    let new_block = render_managed_block(
-        &after,
-        newline(&original),
-        old_block.is_empty() || old_block.ends_with('\n'),
-    );
-    let mut updated = String::with_capacity(original.len() + new_block.len());
-    updated.push_str(&original[..block.start]);
-    if old_block.is_empty() && block.start > 0 && !original[..block.start].ends_with(['\n', '\r']) {
-        updated.push_str(newline(&original));
-    }
-    updated.push_str(&new_block);
-    updated.push_str(&original[block.end..]);
-    parse_and_validate(&updated, &feedback.config_path)
-        .context("generated recorder config failed validation")?;
-
-    let changed = updated != original;
     let diff = if changed {
-        managed_block_diff(
-            &feedback.config_path,
-            &original,
-            block.start,
-            old_block,
-            &new_block,
-        )
+        whole_file_diff(&feedback.rules_path, &original_rules, &updated_rules)
     } else {
         String::new()
     };
     Ok(AllowedUnusedHttpHostPlan {
-        config_path: feedback.config_path.clone(),
-        original,
-        updated,
+        project_config_path: feedback.project_config_path,
+        rules_path: feedback.rules_path.clone(),
+        original_project_config,
+        original_rules,
+        updated_rules,
         report: AllowedUnusedHttpHostReport {
-            config: feedback.config_path,
+            rules: feedback.rules_path,
             rule: feedback.rule_name,
             changed,
             applied: false,
@@ -190,13 +136,47 @@ pub(super) fn validate_config(config: &HttpGatewayConfig) -> Result<()> {
     Ok(())
 }
 
+fn named_rule<'a>(config: &'a AppConfig, name: &str) -> Result<&'a HttpGatewayRuleConfig> {
+    let matches = config
+        .http_gateway
+        .rules
+        .iter()
+        .filter(|rule| rule.name.as_deref() == Some(name))
+        .collect::<Vec<_>>();
+    ensure!(
+        matches.len() == 1,
+        "expected exactly one recorder HTTP rule named {name:?}, found {}",
+        matches.len()
+    );
+    Ok(matches[0])
+}
+
+fn http_overlay_mut<'a>(
+    rules: &'a mut CoordinatorRulesConfig,
+    name: &str,
+) -> &'a mut CoordinatorHttpRuleConfig {
+    if let Some(index) = rules.http.iter().position(|rule| rule.name == name) {
+        return &mut rules.http[index];
+    }
+    rules.http.push(CoordinatorHttpRuleConfig {
+        name: name.to_string(),
+        source_revision: String::new(),
+        case_path_patterns: Vec::new(),
+        allowed_unused_http_hosts: Vec::new(),
+    });
+    rules
+        .http
+        .last_mut()
+        .expect("just inserted coordinator rule")
+}
+
 fn validate_rule(rule: &HttpGatewayRuleConfig) -> Result<()> {
     if !rule.allowed_unused_http_hosts.is_empty() {
         ensure!(
             rule.name
                 .as_ref()
                 .is_some_and(|name| !name.trim().is_empty()),
-            "{FIELD} requires a named [[http_gateway.rules]] entry"
+            "{FIELD} requires a named recorder HTTP rule"
         );
     }
     let mut unique = BTreeSet::new();
@@ -244,25 +224,14 @@ fn validate_single_line(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn render_managed_block(hosts: &BTreeSet<String>, newline: &str, trailing_newline: bool) -> String {
-    let mut output = String::new();
-    writeln_with(&mut output, BEGIN_MARKER, newline);
-    writeln_with(&mut output, &format!("{FIELD} = ["), newline);
-    for host in hosts {
-        let quoted = toml::Value::String(host.clone()).to_string();
-        writeln_with(&mut output, &format!("  {quoted},"), newline);
-    }
-    writeln_with(&mut output, "]", newline);
-    output.push_str(END_MARKER);
-    if trailing_newline {
-        output.push_str(newline);
-    }
-    output
-}
-
-fn writeln_with(output: &mut String, line: &str, newline: &str) {
-    output.push_str(line);
-    output.push_str(newline);
+fn read(path: &std::path::Path, label: &str) -> Result<String> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "{label} must be a regular file and not a symlink"
+    );
+    fs::read_to_string(path).with_context(|| format!("failed to read {label} {}", path.display()))
 }
 
 #[cfg(test)]

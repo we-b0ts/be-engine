@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::AppConfig;
+use crate::config::CoordinatorRulesConfig;
 
 const REVISION: &str = "0123456789abcdef";
 const EVIDENCE: &str = "src/config/refresh.rs:42 process-level scheduled refresh";
@@ -18,15 +18,9 @@ struct Fixture {
 impl Fixture {
     fn new(report: Value) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("recorder.toml");
+        let config = temp.path().join("coordinator-rules.yaml");
         let replay_report = temp.path().join("replay-report.json");
-        fs::write(
-            &config,
-            r#"[recording]
-traffic_jsonl = "full"
-"#,
-        )
-        .unwrap();
+        fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
         fs::write(&replay_report, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
         Self {
             _temp: temp,
@@ -37,7 +31,7 @@ traffic_jsonl = "full"
 
     fn feedback(&self) -> BackgroundDependencyFeedback {
         BackgroundDependencyFeedback {
-            config_path: self.config.clone(),
+            rules_path: self.config.clone(),
             replay_report_path: self.replay_report.clone(),
             name: "config-refresh".to_string(),
             authority: "CONFIG.API.demo.test".to_string(),
@@ -102,12 +96,14 @@ fn plan_and_apply_add_a_valid_idempotent_managed_rule() {
     assert!(applied.applied);
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES"));
+    assert!(raw.contains("Managed by the backend-rewrite coordinator"));
+    assert!(raw.contains("process_owned_dependencies:"));
+    assert!(raw.contains("protocol: http"));
     assert!(!raw.contains("response_role"));
     assert!(!raw.contains("source_revision"));
     assert!(raw.contains(EVIDENCE));
-    let config = AppConfig::load(&fixture.config).unwrap();
-    assert_eq!(config.recording.process_owned_dependencies.len(), 1);
+    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    assert_eq!(config.process_owned_dependencies.len(), 1);
 
     let repeated = plan_background_dependency(fixture.feedback()).unwrap();
     assert!(!repeated.report().changed);
@@ -138,10 +134,10 @@ fn equivalent_http_selector_reuses_existing_rule_even_when_name_and_proof_change
     assert!(applied.applied);
     assert!(applied.reused_existing);
 
-    let config = AppConfig::load(&fixture.config).unwrap();
-    assert_eq!(config.recording.process_owned_dependencies.len(), 1);
+    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    assert_eq!(config.process_owned_dependencies.len(), 1);
     assert_eq!(
-        config.recording.process_owned_dependencies[0].name(),
+        config.process_owned_dependencies[0].name(),
         "config-refresh"
     );
 }
@@ -151,19 +147,9 @@ fn covered_http_selector_reuses_a_multi_selector_system_default() {
     let fixture = Fixture::new(report_with_unused());
     fs::write(
         &fixture.config,
-        r#"[recording]
-traffic_jsonl = "full"
-
-# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES
-[[recording.process_owned_dependencies]]
-name = "breeze_vintage"
-protocol = "http"
-authorities = ["config.api.demo.test", "static.config.api.demo.test", "register.kailash.demo.test"]
-methods = ["GET"]
-path_prefixes = ["/1/config/service", "/naming/service"]
-source_evidence = "traffic-e2e system default: Weibo Breeze Vintage background traffic"
-# END AI-MANAGED PROCESS-OWNED DEPENDENCIES
-"#,
+        CoordinatorRulesConfig::repository_defaults()
+            .render()
+            .unwrap(),
     )
     .unwrap();
 
@@ -231,15 +217,15 @@ fn rejects_incomplete_or_conflicting_replay_evidence() {
 }
 
 #[test]
-fn apply_rejects_stale_config_or_replay_report() {
+fn apply_rejects_stale_rules_or_replay_report() {
     let fixture = Fixture::new(report_with_unused());
     let plan = plan_background_dependency(fixture.feedback()).unwrap();
-    fs::write(&fixture.config, "[recording]\ntraffic_jsonl = \"off\"\n").unwrap();
+    fs::write(&fixture.config, "version: 1\n# drift\n").unwrap();
     assert!(
         plan.apply()
             .unwrap_err()
             .to_string()
-            .contains("config changed")
+            .contains("process-owned rules changed")
     );
 
     let fixture = Fixture::new(report_with_unused());
@@ -278,30 +264,14 @@ fn existing_name_cannot_be_reused_for_a_different_selector() {
 }
 
 #[test]
-fn refuses_to_adopt_an_unmanaged_background_rule() {
+fn rejects_unknown_fields_in_the_coordinator_owned_file() {
     let fixture = Fixture::new(report_with_unused());
-    fs::write(
-        &fixture.config,
-        format!(
-            r#"[recording]
-
-[[recording.process_owned_dependencies]]
-name = "config-refresh"
-protocol = "http"
-authorities = ["config.api.demo.test"]
-methods = ["GET"]
-path_prefixes = ["/1/config/service"]
-source_revision = "{REVISION}"
-source_evidence = "{EVIDENCE}"
-"#
-        ),
-    )
-    .unwrap();
+    fs::write(&fixture.config, "version: 1\nowner: manual\n").unwrap();
 
     assert!(
         plan_background_dependency(fixture.feedback())
             .unwrap_err()
             .to_string()
-            .contains("AI-managed block")
+            .contains("failed to parse coordinator rules")
     );
 }

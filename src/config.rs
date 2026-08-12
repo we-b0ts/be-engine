@@ -18,12 +18,14 @@ mod background_redis_feedback;
 mod breeze_capture_feedback;
 mod case_limits;
 mod comparison_recording;
+pub(crate) mod coordinator_rules;
 mod dns;
 pub(crate) mod edit;
 mod feedback;
 mod http_gateway;
 mod http_response_rewrite;
 mod initialization;
+mod managed_fields;
 mod motan_gateway;
 pub(crate) mod process_owned_dependencies;
 mod recording;
@@ -58,6 +60,10 @@ pub use breeze_capture_feedback::{
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use comparison_recording::ComparisonRecordingConfig;
+pub use coordinator_rules::{
+    COORDINATOR_RULES_FILE, CoordinatorBreezeCaptureConfig, CoordinatorHttpRuleConfig,
+    CoordinatorRulesConfig,
+};
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
@@ -67,10 +73,7 @@ pub use http_gateway::{HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig};
 pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
-pub use initialization::{
-    DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_RECORDING_RULE, RecorderConfigInitOptions,
-    RecorderConfigInitResult, initialize_recorder_config,
-};
+pub use initialization::{DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_RECORDING_RULE};
 pub use motan_gateway::{MotanGatewayConfig, MotanGatewayRuleConfig};
 pub use process_owned_dependencies::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 pub use recording::{
@@ -111,6 +114,8 @@ pub struct AppConfig {
     pub mysql: MysqlConfig,
     pub recording: RecordingConfig,
     pub tls: TlsConfig,
+    #[serde(skip)]
+    pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -201,7 +206,9 @@ pub struct HttpGatewayRuleConfig {
     pub methods: Vec<String>,
     pub path_prefixes: Vec<String>,
     pub headers: BTreeMap<String, String>,
+    #[serde(skip)]
     pub case_path_patterns: Vec<String>,
+    #[serde(skip)]
     pub allowed_unused_http_hosts: Vec<String>,
 }
 
@@ -235,11 +242,41 @@ impl AppConfig {
         let path = path.as_ref();
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
-        let config: Self = toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config {}", path.display()))?;
+        let mut config = Self::parse_static(path, &raw)?;
+        let reference: ProjectRulesReferenceDocument =
+            serde_yaml::from_str(&raw).with_context(|| {
+                format!(
+                    "failed to parse project rule reference from {}",
+                    path.display()
+                )
+            })?;
+        let rules_path = coordinator_rules::resolve_from_project_config(
+            path,
+            &reference.project.recording.coordinator_rules,
+        )?;
+        let rules = CoordinatorRulesConfig::load(rules_path)?;
+        rules.apply_to(&mut config)?;
         config
             .validate()
             .with_context(|| format!("invalid config {}", path.display()))?;
+        Ok(config)
+    }
+
+    fn parse_static(path: &Path, raw: &str) -> Result<Self> {
+        managed_fields::reject_inline(path, raw)?;
+        let document: RecorderConfigDocument = serde_yaml::from_str(raw)
+            .with_context(|| format!("failed to parse config {}", path.display()))?;
+        Ok(document.recorder)
+    }
+
+    pub(crate) fn load_static(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref();
+        let raw = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read config {}", path.display()))?;
+        let config = Self::parse_static(path, &raw)?;
+        config
+            .validate()
+            .with_context(|| format!("invalid static config {}", path.display()))?;
         Ok(config)
     }
 
@@ -260,10 +297,7 @@ impl AppConfig {
         candidate_motan_upstream: Option<&str>,
     ) -> Result<Self> {
         let path = path.as_ref();
-        let raw = std::fs::read_to_string(path)
-            .with_context(|| format!("failed to read config {}", path.display()))?;
-        let mut config: Self = toml::from_str(&raw)
-            .with_context(|| format!("failed to parse config {}", path.display()))?;
+        let mut config = Self::load(path)?;
         if let Some(candidate_upstream) = candidate_upstream {
             config
                 .comparison_recording
@@ -303,6 +337,7 @@ impl AppConfig {
         self.validate_artifacts()?;
         self.dns_mock.validate()?;
         self.recording.validate()?;
+        process_owned_dependencies::validate(&self.process_owned_dependencies)?;
         self.http_response_rewrite.validate()?;
         http_gateway::validate_config(&self.http_gateway)?;
         motan_gateway::validate_config(&self.motan_gateway)?;
@@ -310,21 +345,16 @@ impl AppConfig {
         self.http_gateway
             .per_api_case_limits
             .validate(&self.http_gateway.rules)?;
-        if self
-            .recording
-            .process_owned_dependencies
-            .iter()
-            .any(|rule| {
-                matches!(
-                    rule,
-                    BackgroundDependencyRuleConfig::Memcached { .. }
-                        | BackgroundDependencyRuleConfig::Redis {
-                            initial_load_timeout_ms: Some(_),
-                            ..
-                        }
-                )
-            })
-            && (!self.http_gateway.enabled || !self.http_gateway.ready.enabled)
+        if self.process_owned_dependencies.iter().any(|rule| {
+            matches!(
+                rule,
+                BackgroundDependencyRuleConfig::Memcached { .. }
+                    | BackgroundDependencyRuleConfig::Redis {
+                        initial_load_timeout_ms: Some(_),
+                        ..
+                    }
+            )
+        }) && (!self.http_gateway.enabled || !self.http_gateway.ready.enabled)
         {
             bail!(
                 "process-owned dependency initial-load observation requires an enabled HTTP gateway ready probe"
@@ -371,6 +401,26 @@ impl AppConfig {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectRulesReferenceDocument {
+    project: ProjectRulesReference,
+}
+
+#[derive(Debug, Deserialize)]
+struct RecorderConfigDocument {
+    recorder: AppConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectRulesReference {
+    recording: ProjectRecordingRulesReference,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProjectRecordingRulesReference {
+    coordinator_rules: PathBuf,
 }
 
 impl Default for HttpConfig {
@@ -513,18 +563,73 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loads_example_recorder_config() {
+    fn loads_example_project_config() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
-            .join("recorder.example.toml");
+            .join("project.example.yaml");
         AppConfig::load(path).unwrap();
+    }
+
+    #[test]
+    fn loads_example_coordinator_rules() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("config")
+            .join("coordinator-rules.example.yaml");
+        CoordinatorRulesConfig::load(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_coordinator_managed_values_in_project_yaml() {
+        let directory = tempfile::tempdir().unwrap();
+        for (name, yaml, field) in [
+            (
+                "case-pattern",
+                "http_gateway:\n  rules:\n  - name: record-api\n    case_path_patterns: [/api/*]\n",
+                "case_path_patterns",
+            ),
+            (
+                "unused-host",
+                "recorder:\n  http_gateway:\n    rules:\n    - name: record-api\n      allowed_unused_http_hosts: [example.com]\n",
+                "allowed_unused_http_hosts",
+            ),
+            (
+                "breeze-capture",
+                "dns_mock:\n  bypass_strategies:\n  - strategy: breeze\n    snapshot_dir: /snapshot\n    capture_resources: [resource]\n",
+                "capture_resources",
+            ),
+            (
+                "process-owned",
+                "recording:\n  process_owned_dependencies: []\n",
+                "process_owned_dependencies",
+            ),
+        ] {
+            let path = directory.path().join(format!("{name}.yaml"));
+            std::fs::write(&path, yaml).unwrap();
+            let error = AppConfig::load(&path).unwrap_err().to_string();
+            assert!(
+                error.contains(field),
+                "unexpected error for {field}: {error}"
+            );
+            assert!(error.contains("coordinator-managed"));
+        }
+    }
+
+    #[test]
+    fn rejects_standalone_recorder_yaml() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("project.yaml");
+        std::fs::write(&path, "http:\n  enabled: false\n").unwrap();
+
+        let error = AppConfig::load(&path).unwrap_err().to_string();
+
+        assert!(error.contains("failed to parse config"), "{error}");
     }
 
     #[test]
     fn loads_example_comparison_recording_config() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
-            .join("recorder.example.toml");
+            .join("project.example.yaml");
         let mut config = AppConfig::load_comparison_recording(path).unwrap();
         assert!(
             !config
@@ -725,8 +830,6 @@ mod tests {
             hosts = ["api.example.com"]
             methods = ["GET", "POST"]
             path_prefixes = ["/api/"]
-            case_path_patterns = ["/api/users/*/xxx"]
-            allowed_unused_http_hosts = ["cs.aliyuncs.com"]
             headers = { "x-record" = "yes" }
 
             [[http_gateway.exclude_rules]]
@@ -757,13 +860,11 @@ mod tests {
             config.http_gateway.exclude_rules[0].path_prefixes,
             vec!["/health".to_string()]
         );
-        assert_eq!(
-            config.http_gateway.rules[0].case_path_patterns,
-            vec!["/api/users/*/xxx".to_string()]
-        );
-        assert_eq!(
-            config.http_gateway.rules[0].allowed_unused_http_hosts,
-            vec!["cs.aliyuncs.com".to_string()]
+        assert!(config.http_gateway.rules[0].case_path_patterns.is_empty());
+        assert!(
+            config.http_gateway.rules[0]
+                .allowed_unused_http_hosts
+                .is_empty()
         );
         assert_eq!(
             config.http_gateway.rules[0].headers["x-record"],
@@ -787,8 +888,6 @@ mod tests {
             [[dns_mock.bypass_strategies]]
             strategy = "breeze"
             snapshot_dir = "/data1/breeze/snapshot"
-            capture_resources = ["static.config+3+config+cloud+redis+user+usercounter"]
-
             [dns_mock.hosts]
             "db-10-185-28-119.test" = ["10.185.28.119"]
             "multi-db.test" = ["10.0.0.1", "10.0.0.2"]
@@ -829,9 +928,7 @@ mod tests {
             config.dns_mock.bypass_strategies,
             vec![DnsBypassStrategyConfig::Breeze {
                 snapshot_dir: PathBuf::from("/data1/breeze/snapshot"),
-                capture_resources: vec![
-                    "static.config+3+config+cloud+redis+user+usercounter".to_string()
-                ],
+                capture_resources: Vec::new(),
             }]
         );
         assert_eq!(

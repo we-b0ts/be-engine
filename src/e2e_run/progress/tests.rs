@@ -171,6 +171,41 @@ fn replay_progress_does_not_recount_an_older_focused_attempt_after_a_full_run() 
 }
 
 #[test]
+fn revises_an_older_focused_attempt_after_another_api_advances() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("replay-progress.yaml");
+    let legacy_path = directory.path().join("e2e-progress.yaml");
+    let previous = state(2, 1, 1);
+    let mut later = state(1, 0, 2);
+    later.apis[0].api_key = "GET /api/friends".to_string();
+    later.apis[0].group_id = "GET /api/friends".to_string();
+    later.apis[0].api_pattern = "/api/friends".to_string();
+
+    write_replay_progress(
+        &progress_path,
+        &legacy_path,
+        &previous,
+        ReplayRunKind::Focused,
+    )
+    .unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &later, ReplayRunKind::Focused).unwrap();
+    ensure_replay_progress_revisable(&progress_path, &previous).unwrap();
+
+    let current = state(3, 0, 1);
+    revise_replay_progress(&progress_path, &previous, &current).unwrap();
+
+    let report = load(&progress_path, VerificationStage::Replay)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.runs.passed, 2);
+    assert_eq!(
+        report.latest_run.as_ref().unwrap().scope,
+        ["GET /api/friends"]
+    );
+}
+
+#[test]
 fn migrates_legacy_e2e_progress_before_counting_the_next_attempt() {
     let directory = tempfile::tempdir().unwrap();
     let progress_path = directory.path().join("replay-progress.yaml");

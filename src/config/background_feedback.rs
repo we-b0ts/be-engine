@@ -1,27 +1,21 @@
 use std::collections::BTreeSet;
 use std::fs;
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use hyper::http::{Method, Uri, uri::Authority};
 use serde::{Deserialize, Serialize};
 
+use super::CoordinatorRulesConfig;
 use super::edit::write_atomic;
-use super::process_owned_dependencies::{
-    self, BackgroundDependencyRuleConfig, RedisKeyPatternConfig,
-};
-use super::rule_document::{find_managed_block, managed_block_diff, newline, parse_and_validate};
+use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
+use super::rule_document::whole_file_diff;
 
 mod selector;
 
-const BEGIN_MARKER: &str = "# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES";
-const END_MARKER: &str = "# END AI-MANAGED PROCESS-OWNED DEPENDENCIES";
-const TABLE_HEADER: &str = "[[recording.process_owned_dependencies]]";
-
 #[derive(Debug, Clone)]
 pub struct BackgroundDependencyFeedback {
-    pub config_path: PathBuf,
+    pub rules_path: PathBuf,
     pub replay_report_path: PathBuf,
     pub name: String,
     pub authority: String,
@@ -33,7 +27,7 @@ pub struct BackgroundDependencyFeedback {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BackgroundDependencyReport {
-    pub config: PathBuf,
+    pub rules: PathBuf,
     pub replay_report: PathBuf,
     pub name: String,
     pub effective_name: String,
@@ -53,11 +47,11 @@ pub struct BackgroundDependencyReport {
 
 #[derive(Debug)]
 pub struct BackgroundDependencyPlan {
-    config_path: PathBuf,
+    rules_path: PathBuf,
     replay_report_path: PathBuf,
-    original_config: String,
+    original_rules: String,
     original_replay_report: String,
-    updated_config: String,
+    updated_rules: String,
     report: BackgroundDependencyReport,
 }
 
@@ -76,10 +70,10 @@ impl BackgroundDependencyPlan {
     }
 
     pub fn apply(self) -> Result<BackgroundDependencyReport> {
-        let current_config = read_file(&self.config_path, "recorder config")?;
+        let current_rules = read_file(&self.rules_path, "process-owned rules")?;
         ensure!(
-            current_config == self.original_config,
-            "recorder config changed after planning; rerun plan before applying"
+            current_rules == self.original_rules,
+            "process-owned rules changed after planning; rerun plan before applying"
         );
         let current_replay_report = read_file(&self.replay_report_path, "replay report")?;
         ensure!(
@@ -87,7 +81,7 @@ impl BackgroundDependencyPlan {
             "replay report changed after planning; rerun plan before applying"
         );
         if self.report.changed {
-            write_atomic(&self.config_path, self.updated_config.as_bytes())?;
+            write_atomic(&self.rules_path, self.updated_rules.as_bytes())?;
         }
         let mut report = self.report;
         report.applied = true;
@@ -122,16 +116,16 @@ pub fn plan_background_dependency(
         &path_prefix,
     )?;
 
-    let config_plan = plan_rule_config(&feedback.config_path, requested)?;
+    let config_plan = plan_rule_config(&feedback.rules_path, requested)?;
 
     Ok(BackgroundDependencyPlan {
-        config_path: feedback.config_path.clone(),
+        rules_path: feedback.rules_path.clone(),
         replay_report_path: feedback.replay_report_path.clone(),
-        original_config: config_plan.original,
+        original_rules: config_plan.original,
         original_replay_report,
-        updated_config: config_plan.updated,
+        updated_rules: config_plan.updated,
         report: BackgroundDependencyReport {
-            config: feedback.config_path,
+            rules: feedback.rules_path,
             replay_report: feedback.replay_report_path,
             name: feedback.name,
             effective_name: config_plan.effective_name,
@@ -152,13 +146,13 @@ pub fn plan_background_dependency(
 }
 
 pub(super) fn plan_rule_config(
-    config_path: &Path,
+    rules_path: &Path,
     requested: BackgroundDependencyRuleConfig,
 ) -> Result<RuleConfigPlan> {
-    ensure_regular_config(config_path)?;
-    let original = read_file(config_path, "recorder config")?;
-    let config = parse_and_validate(&original, config_path)?;
-    let mut rules = config.recording.process_owned_dependencies.clone();
+    ensure_regular_rules_file(rules_path)?;
+    let original = read_file(rules_path, "process-owned rules")?;
+    let mut config = CoordinatorRulesConfig::parse(&original, rules_path)?;
+    let mut rules = std::mem::take(&mut config.process_owned_dependencies);
     let requested_name = requested.name().to_string();
     let reused = rules
         .iter()
@@ -188,33 +182,6 @@ pub(super) fn plan_rule_config(
     process_owned_dependencies::validate(&rules)?;
     rules.sort_by(|left, right| left.name().cmp(right.name()));
 
-    let whole_file = 0..original.len();
-    let managed = find_managed_block(
-        &original,
-        &whole_file,
-        BEGIN_MARKER,
-        END_MARKER,
-        "process-owned dependencies",
-    )?;
-    let total_headers = table_header_count(&original);
-    let block = match managed {
-        Some(block) => {
-            ensure!(
-                total_headers == table_header_count(&original[block.clone()])
-                    && total_headers == config.recording.process_owned_dependencies.len(),
-                "recording.process_owned_dependencies must be owned exclusively by its AI-managed block"
-            );
-            block
-        }
-        None => {
-            ensure!(
-                total_headers == 0 && config.recording.process_owned_dependencies.is_empty(),
-                "existing recording.process_owned_dependencies must be enclosed by its AI-managed block"
-            );
-            original.len()..original.len()
-        }
-    };
-    let old_block = &original[block.clone()];
     if reused.is_some() {
         return Ok(RuleConfigPlan {
             original: original.clone(),
@@ -225,19 +192,13 @@ pub(super) fn plan_rule_config(
             reused_existing: true,
         });
     }
-    let new_block = render_block(
-        &rules,
-        newline(&original),
-        old_block.is_empty(),
-        old_block.ends_with('\n'),
-        &original,
-    );
-    let updated = replace_range(&original, &block, &new_block);
-    parse_and_validate(&updated, config_path)
-        .context("generated recorder config failed validation")?;
+    config.process_owned_dependencies = rules;
+    let updated = config
+        .render()
+        .context("generated process-owned rules failed validation")?;
     let changed = updated != original;
     let diff = if changed {
-        managed_block_diff(config_path, &original, block.start, old_block, &new_block)
+        whole_file_diff(rules_path, &original, &updated)
     } else {
         String::new()
     };
@@ -358,195 +319,6 @@ impl HttpSelector {
     }
 }
 
-fn render_block(
-    rules: &[BackgroundDependencyRuleConfig],
-    newline: &str,
-    appending: bool,
-    old_trailing_newline: bool,
-    original: &str,
-) -> String {
-    let mut output = String::new();
-    if appending && !original.is_empty() {
-        if !original.ends_with(['\n', '\r']) {
-            output.push_str(newline);
-        }
-        output.push_str(newline);
-    }
-    push_line(&mut output, BEGIN_MARKER, newline);
-    for (index, rule) in rules.iter().enumerate() {
-        if index > 0 {
-            output.push_str(newline);
-        }
-        render_rule(&mut output, rule, newline);
-    }
-    output.push_str(END_MARKER);
-    if appending || old_trailing_newline {
-        output.push_str(newline);
-    }
-    output
-}
-
-fn render_rule(output: &mut String, rule: &BackgroundDependencyRuleConfig, newline: &str) {
-    push_line(output, TABLE_HEADER, newline);
-    match rule {
-        BackgroundDependencyRuleConfig::Http {
-            name,
-            authorities,
-            methods,
-            path_prefixes,
-            source_evidence,
-            ..
-        } => {
-            push_assignment(output, "name", name, newline);
-            push_line(output, "protocol = \"http\"", newline);
-            push_array(output, "authorities", authorities, newline);
-            push_array(output, "methods", methods, newline);
-            push_array(output, "path_prefixes", path_prefixes, newline);
-            push_assignment(output, "source_evidence", source_evidence, newline);
-        }
-        BackgroundDependencyRuleConfig::Memcached {
-            name,
-            breeze_identity,
-            command,
-            key_start,
-            key_end,
-            key_separator,
-            key_suffix,
-            initial_load_timeout_ms,
-            source_evidence,
-            ..
-        } => {
-            push_assignment(output, "name", name, newline);
-            push_line(output, "protocol = \"memcached\"", newline);
-            push_assignment(output, "breeze_identity", breeze_identity, newline);
-            push_assignment(output, "command", command, newline);
-            push_line(output, &format!("key_start = {key_start}"), newline);
-            push_line(output, &format!("key_end = {key_end}"), newline);
-            push_assignment(output, "key_separator", key_separator, newline);
-            push_assignment(output, "key_suffix", key_suffix, newline);
-            push_line(
-                output,
-                &format!("initial_load_timeout_ms = {initial_load_timeout_ms}"),
-                newline,
-            );
-            push_assignment(output, "source_evidence", source_evidence, newline);
-        }
-        BackgroundDependencyRuleConfig::Redis {
-            name,
-            ports,
-            command,
-            keys,
-            key_patterns,
-            key_prefix,
-            key_suffix,
-            initial_load_timeout_ms,
-            fields,
-            source_evidence,
-            ..
-        } => {
-            push_assignment(output, "name", name, newline);
-            push_line(output, "protocol = \"redis\"", newline);
-            push_u16_array(output, "ports", ports, newline);
-            push_assignment(output, "command", command, newline);
-            if !keys.is_empty() {
-                push_array(output, "keys", keys, newline);
-            }
-            if !key_patterns.is_empty() {
-                push_redis_key_patterns(output, key_patterns, newline);
-            }
-            if keys.is_empty() && key_patterns.is_empty() {
-                push_assignment(output, "key_prefix", key_prefix, newline);
-                push_assignment(output, "key_suffix", key_suffix, newline);
-            }
-            if let Some(timeout_ms) = initial_load_timeout_ms {
-                push_line(
-                    output,
-                    &format!("initial_load_timeout_ms = {timeout_ms}"),
-                    newline,
-                );
-            }
-            if !fields.is_empty() {
-                push_array(output, "fields", fields, newline);
-            }
-            push_assignment(output, "source_evidence", source_evidence, newline);
-        }
-        BackgroundDependencyRuleConfig::Motan {
-            name,
-            group,
-            interface_name,
-            method_name,
-            source_evidence,
-            ..
-        } => {
-            push_assignment(output, "name", name, newline);
-            push_line(output, "protocol = \"motan\"", newline);
-            push_assignment(output, "group", group, newline);
-            push_assignment(output, "interface_name", interface_name, newline);
-            push_assignment(output, "method_name", method_name, newline);
-            push_assignment(output, "source_evidence", source_evidence, newline);
-        }
-    }
-}
-
-fn push_array(output: &mut String, field: &str, values: &[String], newline: &str) {
-    let values = values
-        .iter()
-        .map(|value| toml::Value::String(value.clone()).to_string())
-        .collect::<Vec<_>>()
-        .join(", ");
-    push_line(output, &format!("{field} = [{values}]"), newline);
-}
-
-fn push_u16_array(output: &mut String, field: &str, values: &[u16], newline: &str) {
-    let values = values
-        .iter()
-        .map(u16::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    push_line(output, &format!("{field} = [{values}]"), newline);
-}
-
-fn push_redis_key_patterns(output: &mut String, patterns: &[RedisKeyPatternConfig], newline: &str) {
-    let values = patterns
-        .iter()
-        .map(|pattern| {
-            let prefix = toml::Value::String(pattern.prefix.clone());
-            let suffix = toml::Value::String(pattern.suffix.clone());
-            format!(
-                "{{ prefix = {prefix}, suffix = {suffix}, numeric_middle = {} }}",
-                pattern.numeric_middle
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    push_line(output, &format!("key_patterns = [{values}]"), newline);
-}
-
-fn push_assignment(output: &mut String, field: &str, value: &str, newline: &str) {
-    let value = toml::Value::String(value.to_string());
-    push_line(output, &format!("{field} = {value}"), newline);
-}
-
-fn push_line(output: &mut String, line: &str, newline: &str) {
-    output.push_str(line);
-    output.push_str(newline);
-}
-
-fn replace_range(original: &str, range: &Range<usize>, replacement: &str) -> String {
-    let mut updated = String::with_capacity(original.len() + replacement.len());
-    updated.push_str(&original[..range.start]);
-    updated.push_str(replacement);
-    updated.push_str(&original[range.end..]);
-    updated
-}
-
-fn table_header_count(source: &str) -> usize {
-    source
-        .lines()
-        .filter(|line| line.trim() == TABLE_HEADER)
-        .count()
-}
-
 fn canonical_authority(value: &str) -> Result<String> {
     validate_single_line("process-owned dependency authority", value, 512)?;
     ensure!(
@@ -601,13 +373,16 @@ fn validate_single_line(label: &str, value: &str, max_len: usize) -> Result<()> 
     Ok(())
 }
 
-fn ensure_regular_config(path: &Path) -> Result<()> {
+fn ensure_regular_rules_file(path: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("failed to inspect recorder config {}", path.display()))?;
-    ensure!(metadata.is_file(), "recorder config must be a regular file");
+        .with_context(|| format!("failed to inspect process-owned rules {}", path.display()))?;
+    ensure!(
+        metadata.is_file(),
+        "process-owned rules must be a regular file"
+    );
     ensure!(
         !metadata.file_type().is_symlink(),
-        "refusing to replace a symlinked recorder config"
+        "refusing to replace symlinked process-owned rules"
     );
     Ok(())
 }

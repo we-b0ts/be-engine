@@ -131,80 +131,101 @@ pub(super) fn run(target_root: PathBuf, args: RecorderArgs) -> Result<()> {
 }
 
 fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
-    let config = recorder_path(&target_root);
+    let project = project_path(&target_root);
+    let rules = coordinator_rules_path(&target_root);
     match strategy {
         PlanStrategy::AllowedUnusedHttpHosts(args) => {
-            let plan = plan_allowed_unused_http_hosts(allowed_unused_feedback(config, args))?;
+            let plan =
+                plan_allowed_unused_http_hosts(allowed_unused_feedback(project, rules, args))?;
             super::print_json(plan.report())
         }
         PlanStrategy::ProcessOwnedDependencies(args) => {
-            background_dependency::run(target_root, config, *args, false)
+            background_dependency::run(target_root, rules, *args, false)
         }
         PlanStrategy::BreezeResourceCapture(args) => {
-            let plan = plan_breeze_resource_capture(breeze_capture_feedback(config, args))?;
+            let plan = plan_breeze_resource_capture(breeze_capture_feedback(project, rules, args))?;
             super::print_json(plan.report())
         }
         PlanStrategy::CasePathPatterns(args) => {
-            let plan = plan_case_path_pattern_feedback(pattern_feedback(config, args))?;
+            let plan = plan_case_path_pattern_feedback(pattern_feedback(project, rules, args))?;
             super::print_json(plan.report())
         }
     }
 }
 
 fn apply(target_root: PathBuf, strategy: ApplyStrategy) -> Result<()> {
-    let config = recorder_path(&target_root);
+    let project = project_path(&target_root);
+    let rules = coordinator_rules_path(&target_root);
     match strategy {
         ApplyStrategy::AllowedUnusedHttpHosts(args) => {
             let report =
-                plan_allowed_unused_http_hosts(allowed_unused_feedback(config, args))?.apply()?;
+                plan_allowed_unused_http_hosts(allowed_unused_feedback(project, rules, args))?
+                    .apply()?;
             super::print_json(&report)
         }
         ApplyStrategy::ProcessOwnedDependencies(args) => {
-            background_dependency::run(target_root, config, *args, true)
+            background_dependency::run(target_root, rules, *args, true)
         }
         ApplyStrategy::BreezeResourceCapture(args) => {
             let report =
-                plan_breeze_resource_capture(breeze_capture_feedback(config, args))?.apply()?;
+                plan_breeze_resource_capture(breeze_capture_feedback(project, rules, args))?
+                    .apply()?;
             super::print_json(&report)
         }
         ApplyStrategy::CasePathPatterns(args) => {
-            let report = plan_case_path_pattern_feedback(pattern_feedback(config, args.feedback))?
-                .apply(args.allow_delete)?;
+            let report =
+                plan_case_path_pattern_feedback(pattern_feedback(project, rules, args.feedback))?
+                    .apply(args.allow_delete)?;
             super::print_json(&report)
         }
     }
 }
 
 fn breeze_capture_feedback(
-    config_path: PathBuf,
+    project_config_path: PathBuf,
+    rules_path: PathBuf,
     args: BreezeResourceCaptureArgs,
 ) -> BreezeResourceCaptureFeedback {
     BreezeResourceCaptureFeedback {
-        config_path,
+        project_config_path,
+        rules_path,
         resource: args.resource,
         source_revision: args.source_revision,
         source_evidence: args.evidence,
     }
 }
 
-fn recorder_path(target_root: &std::path::Path) -> PathBuf {
-    target_root.join(".traffic-e2e/recorder.toml")
+fn project_path(target_root: &std::path::Path) -> PathBuf {
+    target_root.join(".traffic-e2e/project.yaml")
+}
+
+fn coordinator_rules_path(target_root: &std::path::Path) -> PathBuf {
+    target_root
+        .join(".traffic-e2e")
+        .join("coordinator-rules.yaml")
 }
 
 fn allowed_unused_feedback(
-    config_path: PathBuf,
+    project_config_path: PathBuf,
+    rules_path: PathBuf,
     args: AllowedUnusedHttpHostArgs,
 ) -> AllowedUnusedHttpHostFeedback {
     AllowedUnusedHttpHostFeedback {
-        config_path,
+        project_config_path,
+        rules_path,
         rule_name: args.rule,
         hosts: args.hosts,
     }
 }
 
-fn pattern_feedback(config_path: PathBuf, args: PatternFeedbackArgs) -> CasePathPatternFeedback {
+fn pattern_feedback(
+    project_config_path: PathBuf,
+    rules_path: PathBuf,
+    args: PatternFeedbackArgs,
+) -> CasePathPatternFeedback {
     CasePathPatternFeedback {
-        config_path,
+        project_config_path,
+        rules_path,
         rule_name: args.rule,
         source_revision: args.source_revision,
         case_source: args.case_source,

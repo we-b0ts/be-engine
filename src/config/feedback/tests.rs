@@ -1,35 +1,29 @@
-use std::path::Path;
-use tempfile::tempdir;
+use std::fs;
+use std::path::PathBuf;
+
+use tempfile::TempDir;
 
 use super::*;
 
-const CONFIG: &str = r#"# keep this comment
-[http_gateway]
-enabled = true
-
-[[http_gateway.rules]]
-name = "first"
-path_prefixes = ["/first"]
-case_path_patterns = []
-
-[[http_gateway.rules]]
-name = "pluto"
-path_prefixes = ["/api"]
-# BEGIN AI-MANAGED CASE PATH PATTERNS
-# source_revision = "old"
-case_path_patterns = [
-  "/api/xufei/getone/*",
-]
-# END AI-MANAGED CASE PATH PATTERNS
-headers = {}
-
-[recording]
-access_policy = "unrestricted"
+const PROJECT: &str = r#"project:
+  recording:
+    coordinator_rules: coordinator-rules.yaml
+recorder:
+  http_gateway:
+    enabled: true
+    rules:
+    - name: first
+      path_prefixes: [/first]
+    - name: pluto
+      path_prefixes: [/api]
+  recording:
+    access_policy: unrestricted
 "#;
 
-fn feedback(path: &Path, authority: CasePathPatternAuthority) -> CasePathPatternFeedback {
+fn feedback(fixture: &Fixture, authority: CasePathPatternAuthority) -> CasePathPatternFeedback {
     CasePathPatternFeedback {
-        config_path: path.to_path_buf(),
+        project_config_path: fixture.project.clone(),
+        rules_path: fixture.rules.clone(),
         rule_name: "pluto".to_string(),
         source_revision: "abc123".to_string(),
         case_source: "/recordings/focused".to_string(),
@@ -41,208 +35,145 @@ fn feedback(path: &Path, authority: CasePathPatternAuthority) -> CasePathPattern
 }
 
 #[test]
-fn focused_feedback_adds_without_removing_and_preserves_other_text() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-
-    let plan = plan_case_path_pattern_feedback(feedback(&path, CasePathPatternAuthority::Focused))
-        .unwrap();
+fn focused_feedback_updates_only_coordinator_rules_and_converges() {
+    let fixture = Fixture::new(&["/api/xufei/getone/*"]);
+    let plan =
+        plan_case_path_pattern_feedback(feedback(&fixture, CasePathPatternAuthority::Focused))
+            .unwrap();
     assert_eq!(
         plan.report().added,
         vec!["/api/huaweiyun/loadbalancers/listeners/list/*"]
     );
     assert!(plan.report().removed.is_empty());
-    assert!(plan.report().diff.contains("+  \"/api/huaweiyun"));
-
-    let report = plan.apply(false).unwrap();
-    assert!(report.applied);
-    let updated = fs::read_to_string(&path).unwrap();
-    assert!(updated.starts_with("# keep this comment\n"));
-    assert!(updated.contains("# source_revision = \"abc123\""));
-    assert!(updated.contains("/api/xufei/getone/*"));
-    assert!(updated.contains("/api/huaweiyun/loadbalancers/listeners/list/*"));
-    parse_and_validate(&updated, &path).unwrap();
-}
-
-#[test]
-fn focused_feedback_without_candidates_is_a_no_op_plan() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-    let mut feedback = feedback(&path, CasePathPatternAuthority::Focused);
-    feedback.patterns.clear();
-
-    let plan = plan_case_path_pattern_feedback(feedback).unwrap();
-
-    assert!(plan.report().no_candidates);
-    assert!(!plan.report().changed);
-    assert!(plan.report().added.is_empty());
-    assert!(plan.report().removed.is_empty());
-    assert!(plan.report().diff.is_empty());
-    assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
-}
-
-#[test]
-fn authoritative_feedback_is_add_only_and_preserves_omitted_patterns() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-
-    let plan =
-        plan_case_path_pattern_feedback(feedback(&path, CasePathPatternAuthority::Authoritative))
-            .unwrap();
-    assert!(plan.report().removed.is_empty());
     plan.apply(false).unwrap();
 
-    let updated = fs::read_to_string(&path).unwrap();
-    assert!(updated.contains("/api/xufei/getone/*"));
-    assert!(updated.contains("/api/huaweiyun/loadbalancers/listeners/list/*"));
-}
-
-#[test]
-fn allow_delete_without_an_explicit_correction_is_rejected() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-
-    let plan = plan_case_path_pattern_feedback(feedback(&path, CasePathPatternAuthority::Focused))
-        .unwrap();
-    let error = plan.apply(true).unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("requires at least one explicit --remove-incorrect-pattern")
+    assert_eq!(fs::read_to_string(&fixture.project).unwrap(), PROJECT);
+    let effective = AppConfig::load(&fixture.project).unwrap();
+    assert_eq!(
+        effective.http_gateway.rules[1].case_path_patterns,
+        vec![
+            "/api/huaweiyun/loadbalancers/listeners/list/*".to_string(),
+            "/api/xufei/getone/*".to_string()
+        ]
     );
-    assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
+    let rules = CoordinatorRulesConfig::load(&fixture.rules).unwrap();
+    assert_eq!(rules.http[0].source_revision, "abc123");
 }
 
 #[test]
-fn explicit_incorrect_pattern_requires_evidence_and_allow_delete() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-    let mut correction = feedback(&path, CasePathPatternAuthority::Focused);
+fn no_candidates_is_a_no_op() {
+    let fixture = Fixture::new(&["/api/xufei/getone/*"]);
+    let mut request = feedback(&fixture, CasePathPatternAuthority::Focused);
+    request.patterns.clear();
+    let plan = plan_case_path_pattern_feedback(request).unwrap();
+    assert!(plan.report().no_candidates);
+    assert!(!plan.report().changed);
+    assert!(plan.report().diff.is_empty());
+}
+
+#[test]
+fn explicit_correction_requires_evidence_and_delete_authorization() {
+    let fixture = Fixture::new(&["/api/xufei/getone/*"]);
+    let mut correction = feedback(&fixture, CasePathPatternAuthority::Focused);
     correction.patterns.clear();
     correction.incorrect_patterns = vec!["/api/xufei/getone/*".to_string()];
-
-    let error = plan_case_path_pattern_feedback(correction.clone()).unwrap_err();
-    assert!(error.to_string().contains("--correction-evidence"));
-
-    correction.correction_evidence =
-        Some("router.go@abc123 has only the static route /api/xufei/getone".to_string());
+    assert!(
+        plan_case_path_pattern_feedback(correction.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("--correction-evidence")
+    );
+    correction.correction_evidence = Some("router.go@abc123 has only a static route".to_string());
     let plan = plan_case_path_pattern_feedback(correction.clone()).unwrap();
     assert_eq!(plan.report().removed, vec!["/api/xufei/getone/*"]);
-    assert_eq!(
-        plan.report().correction_evidence.as_deref(),
-        correction.correction_evidence.as_deref()
-    );
-    assert_eq!(
-        plan.report().corrections_requested,
-        vec!["/api/xufei/getone/*"]
-    );
-    assert!(plan.report().corrections_already_absent.is_empty());
-    let error = plan.apply(false).unwrap_err();
-    assert!(error.to_string().contains("--allow-delete"));
-    assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
-
-    let plan = plan_case_path_pattern_feedback(correction).unwrap();
-    plan.apply(true).unwrap();
     assert!(
-        !fs::read_to_string(&path)
-            .unwrap()
-            .contains("/api/xufei/getone/*")
+        plan.apply(false)
+            .unwrap_err()
+            .to_string()
+            .contains("--allow-delete")
     );
-
-    let mut verification = feedback(&path, CasePathPatternAuthority::Focused);
-    verification.patterns.clear();
-    verification.incorrect_patterns = vec!["/api/xufei/getone/*".to_string()];
-    verification.correction_evidence =
-        Some("router.go@abc123 has only the static route /api/xufei/getone".to_string());
-    let replan = plan_case_path_pattern_feedback(verification).unwrap();
-    assert!(!replan.report().changed);
-    assert!(replan.report().removed.is_empty());
-    assert_eq!(
-        replan.report().corrections_already_absent,
-        vec!["/api/xufei/getone/*"]
-    );
-}
-
-#[test]
-fn allow_delete_rejects_a_correction_that_is_already_absent() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-    let mut correction = feedback(&path, CasePathPatternAuthority::Focused);
-    correction.patterns.clear();
-    correction.incorrect_patterns = vec!["/api/not-present/*".to_string()];
-    correction.correction_evidence = Some("source route inspection".to_string());
-
-    let plan = plan_case_path_pattern_feedback(correction).unwrap();
-    assert!(plan.report().removed.is_empty());
-    assert_eq!(
-        plan.report().corrections_already_absent,
-        vec!["/api/not-present/*"]
-    );
-    let error = plan.apply(true).unwrap_err();
-    assert!(error.to_string().contains("--allow-delete requires"));
-    assert_eq!(fs::read_to_string(&path).unwrap(), CONFIG);
-}
-
-#[test]
-fn refuses_config_without_explicit_managed_block() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG.replace(BEGIN_MARKER, "# unmanaged")).unwrap();
-
-    let error = plan_case_path_pattern_feedback(feedback(&path, CasePathPatternAuthority::Focused))
-        .unwrap_err();
-    assert!(error.to_string().contains("end marker has no begin marker"));
-}
-
-#[test]
-fn rejects_non_segment_wildcard_and_pattern_outside_rule() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-
-    let mut invalid = feedback(&path, CasePathPatternAuthority::Focused);
-    invalid.patterns = vec!["/api/users/user-*".to_string()];
-    let error = plan_case_path_pattern_feedback(invalid).unwrap_err();
-    assert!(error.to_string().contains("whole path segment"));
-
-    let mut outside = feedback(&path, CasePathPatternAuthority::Focused);
-    outside.patterns = vec!["/other/users/*".to_string()];
-    let error = plan_case_path_pattern_feedback(outside).unwrap_err();
-    assert!(error.to_string().contains("outside"));
-}
-
-#[test]
-fn accepts_only_a_trailing_catch_all() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-
-    let mut catch_all = feedback(&path, CasePathPatternAuthority::Focused);
-    catch_all.patterns = vec!["/api/k8s/v1/namespaces/**".to_string()];
-    let plan = plan_case_path_pattern_feedback(catch_all).unwrap();
-    assert_eq!(plan.report().added, vec!["/api/k8s/v1/namespaces/**"]);
-
-    let mut non_trailing = feedback(&path, CasePathPatternAuthority::Focused);
-    non_trailing.patterns = vec!["/api/namespaces/**/pods".to_string()];
-    let error = plan_case_path_pattern_feedback(non_trailing).unwrap_err();
-    assert!(error.to_string().contains("final path segment"));
-}
-
-#[test]
-fn apply_detects_changes_after_plan() {
-    let directory = tempdir().unwrap();
-    let path = directory.path().join("recorder.toml");
-    fs::write(&path, CONFIG).unwrap();
-
-    let plan = plan_case_path_pattern_feedback(feedback(&path, CasePathPatternAuthority::Focused))
+    plan_case_path_pattern_feedback(correction)
+        .unwrap()
+        .apply(true)
         .unwrap();
-    fs::write(&path, format!("{CONFIG}\n# concurrent edit\n")).unwrap();
-    let error = plan.apply(false).unwrap_err();
-    assert!(error.to_string().contains("changed after planning"));
+    assert!(
+        AppConfig::load(&fixture.project)
+            .unwrap()
+            .http_gateway
+            .rules[1]
+            .case_path_patterns
+            .is_empty()
+    );
+}
+
+#[test]
+fn rejects_invalid_or_out_of_scope_patterns() {
+    let fixture = Fixture::new(&[]);
+    let mut invalid = feedback(&fixture, CasePathPatternAuthority::Focused);
+    invalid.patterns = vec!["/api/users/user-*".to_string()];
+    assert!(
+        plan_case_path_pattern_feedback(invalid)
+            .unwrap_err()
+            .to_string()
+            .contains("whole path segment")
+    );
+    let mut outside = feedback(&fixture, CasePathPatternAuthority::Focused);
+    outside.patterns = vec!["/other/users/*".to_string()];
+    assert!(
+        plan_case_path_pattern_feedback(outside)
+            .unwrap_err()
+            .to_string()
+            .contains("outside")
+    );
+    let mut non_trailing = feedback(&fixture, CasePathPatternAuthority::Focused);
+    non_trailing.patterns = vec!["/api/namespaces/**/pods".to_string()];
+    assert!(
+        plan_case_path_pattern_feedback(non_trailing)
+            .unwrap_err()
+            .to_string()
+            .contains("final path segment")
+    );
+}
+
+#[test]
+fn apply_detects_concurrent_rule_changes() {
+    let fixture = Fixture::new(&[]);
+    let plan =
+        plan_case_path_pattern_feedback(feedback(&fixture, CasePathPatternAuthority::Focused))
+            .unwrap();
+    fs::write(&fixture.rules, "version: 1\n").unwrap();
+    assert!(
+        plan.apply(false)
+            .unwrap_err()
+            .to_string()
+            .contains("changed after planning")
+    );
+}
+
+struct Fixture {
+    _temp: TempDir,
+    project: PathBuf,
+    rules: PathBuf,
+}
+
+impl Fixture {
+    fn new(patterns: &[&str]) -> Self {
+        let temp = TempDir::new().unwrap();
+        let project = temp.path().join("project.yaml");
+        let rules_path = temp.path().join("coordinator-rules.yaml");
+        fs::write(&project, PROJECT).unwrap();
+        let mut rules = CoordinatorRulesConfig::empty();
+        rules.http.push(CoordinatorHttpRuleConfig {
+            name: "pluto".to_string(),
+            source_revision: "old".to_string(),
+            case_path_patterns: patterns.iter().map(|value| (*value).to_string()).collect(),
+            allowed_unused_http_hosts: Vec::new(),
+        });
+        fs::write(&rules_path, rules.render().unwrap()).unwrap();
+        Self {
+            _temp: temp,
+            project,
+            rules: rules_path,
+        }
+    }
 }

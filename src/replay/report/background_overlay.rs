@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::dependency_evidence::{build_dependency_evidence, dependency_evidence_path};
 use crate::config::process_owned_dependencies::redis_rule_matches;
-use crate::config::{AppConfig, BackgroundDependencyRuleConfig};
+use crate::config::{BackgroundDependencyRuleConfig, CoordinatorRulesConfig};
 use crate::recorder::background::BackgroundDependencyMatcher;
 
 const ORIGINAL_CASE_ID: &str = "background_original_case_id";
@@ -34,12 +34,12 @@ struct ExchangeIdentity {
 }
 
 pub(crate) fn reclassify_background_dependencies(
-    recorder_config: &Path,
+    coordinator_rules: &Path,
     report_path: &Path,
     case_dirs: &BTreeMap<String, PathBuf>,
 ) -> Result<BackgroundReclassification> {
-    let config = AppConfig::load(recorder_config)?;
-    let rules = &config.recording.process_owned_dependencies;
+    let config = CoordinatorRulesConfig::load(coordinator_rules)?;
+    let rules = &config.process_owned_dependencies;
     let matcher = BackgroundDependencyMatcher::from_rules(rules)?;
     let memcached_ports = matcher.resolved_memcached_rule_ports();
     let matched = matched_recorded_exchanges(case_dirs, rules, &memcached_ports)?;

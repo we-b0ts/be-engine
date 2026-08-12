@@ -19,7 +19,7 @@ mod target_quality_config;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde::Serialize;
 
 use crate::case_group::{
@@ -48,8 +48,9 @@ pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};
 use model::RunStatus;
 pub(crate) use model::{ResolvedProjectConfig, TargetQualityGateConfig};
 pub(crate) use reclassify::{
-    FocusedBackgroundReclassification, focused_background_reclassification_recovery_required,
-    latest_focused_api, reclassify_focused_background_dependencies,
+    FocusedBackgroundReclassification, ensure_focused_background_reclassification_revisable,
+    focused_background_reclassification_recovery_required, latest_focused_api,
+    reclassify_focused_background_dependencies,
 };
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,
@@ -133,44 +134,6 @@ pub struct E2eResponseRuleEvidence {
 
 pub fn initialize_e2e_run(options: E2eRunInitOptions) -> Result<E2eRunInitResult> {
     config::initialize(options)
-}
-
-pub fn initialize_standard_e2e_project(
-    target_root: PathBuf,
-    source_container: String,
-) -> Result<E2eRunInitResult> {
-    initialize_standard_e2e_project_with_force(target_root, source_container, false)
-}
-
-pub fn initialize_standard_e2e_project_with_force(
-    target_root: PathBuf,
-    source_container: String,
-    force: bool,
-) -> Result<E2eRunInitResult> {
-    let resolved_root = std::fs::canonicalize(&target_root)
-        .with_context(|| format!("failed to resolve target root {}", target_root.display()))?;
-    let recorder_config = PathBuf::from(".traffic-e2e/recorder.toml");
-    let recorder = crate::config::AppConfig::load(resolved_root.join(&recorder_config))?;
-    ensure!(
-        recorder.comparison_recording.is_some(),
-        "recorder config has no comparison_recording section"
-    );
-    ensure!(
-        recorder.http_gateway.ready.enabled,
-        "managed project replay requires an enabled http_gateway.ready probe"
-    );
-    initialize_e2e_run(E2eRunInitOptions {
-        target_root,
-        source_container,
-        breeze_container: None,
-        target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
-        target_startup: crate::startup::StartupConfig::default(),
-        replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
-        pr_base: "dev-migration".to_string(),
-        recorder_config,
-        recording_rule: crate::config::DEFAULT_RECORDING_RULE.to_string(),
-        force,
-    })
 }
 
 pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareResult> {

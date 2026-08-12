@@ -73,8 +73,9 @@ traffic-e2e prepare \
   --source-revision '<source-revision>'
 ```
 
-The runner reads `recorder_config` and `recording_rule` from
-`.traffic-e2e/project.yaml`; they MUST appear together. Omit both only when the
+The runner reads the merged recorder section and `recording.rule` from
+`.traffic-e2e/project.yaml`; the associated AI feedback is resolved from
+`.traffic-e2e/coordinator-rules.yaml`. Omit managed feedback only when the
 managed target config is unavailable, and retain the returned
 `not_applicable_missing_managed_config` outcome. The command applies focused,
 add-only pattern feedback when both are present. This early apply does not waive

@@ -2,22 +2,18 @@ use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, ensure};
-use hyper::StatusCode;
-use serde::Serialize;
-
-use super::edit::create_atomic;
 use super::{
     AppConfig, DEFAULT_BODY_LIMIT_BYTES, DEFAULT_DNS_MOCK_PORT, DEFAULT_TCP_GATEWAY_PORT,
     DEFAULT_UDP_GATEWAY_PORT,
 };
+use anyhow::{Context, Result, ensure};
+use hyper::StatusCode;
 
 pub const DEFAULT_RECORDING_RULE: &str = "record-api";
 pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 17_171;
-const RECORDER_CONFIG_PATH: &str = ".traffic-e2e/recorder.toml";
 
 #[derive(Debug, Clone)]
-pub struct RecorderConfigInitOptions {
+pub(crate) struct RecorderConfigInitOptions {
     pub target_root: PathBuf,
     pub source_http_port: u16,
     pub candidate_http_port: u16,
@@ -26,32 +22,6 @@ pub struct RecorderConfigInitOptions {
     pub readiness_status: u16,
     pub upstream_dns: SocketAddr,
     pub breeze_enabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RecorderConfigInitResult {
-    pub config: PathBuf,
-    pub recording_rule: &'static str,
-    pub matched_upstream: String,
-    pub candidate_upstream: String,
-    pub http_gateway_port: u16,
-    pub readiness_path: String,
-    pub readiness_status: u16,
-    pub upstream_dns: SocketAddr,
-    pub runtime: &'static str,
-    pub managed_record_command: String,
-    pub managed_comparison_command: String,
-    pub target_dockerfile: PathBuf,
-    pub target_runtime_contract: &'static str,
-}
-
-pub fn initialize_recorder_config(
-    options: RecorderConfigInitOptions,
-) -> Result<RecorderConfigInitResult> {
-    let (target_root, rendered) = render_validated_recorder_config(&options)?;
-    let config_path = target_root.join(RECORDER_CONFIG_PATH);
-    create_atomic(&config_path, rendered.as_bytes())?;
-    Ok(init_result(&options, config_path))
 }
 
 pub(crate) fn render_validated_recorder_config(
@@ -108,35 +78,9 @@ pub(crate) fn render_validated_recorder_config(
         .validate_comparison_recording()
         .context("generated comparison recording config failed validation")?;
 
+    let rendered = serde_yaml::to_string(&config)
+        .context("generated recorder config failed YAML serialization")?;
     Ok((target_root, rendered))
-}
-
-fn init_result(
-    options: &RecorderConfigInitOptions,
-    config_path: PathBuf,
-) -> RecorderConfigInitResult {
-    let matched_upstream = format!("http://127.0.0.1:{}", options.source_http_port);
-    let candidate_upstream = format!("http://127.0.0.1:{}", options.candidate_http_port);
-    RecorderConfigInitResult {
-        config: config_path,
-        recording_rule: DEFAULT_RECORDING_RULE,
-        matched_upstream,
-        candidate_upstream: candidate_upstream.clone(),
-        http_gateway_port: options.http_gateway_port,
-        readiness_path: options.readiness_path.clone(),
-        readiness_status: options.readiness_status,
-        upstream_dns: options.upstream_dns,
-        runtime: if options.breeze_enabled {
-            "breeze"
-        } else {
-            "generic"
-        },
-        managed_record_command: "traffic-e2e record --target-root .".to_string(),
-        managed_comparison_command: "traffic-e2e record-comparison --target-root .".to_string(),
-        target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
-        target_runtime_contract: "traffic-e2e builds and runs the target image with the fixed \
-                                  configuration, identity, network, readiness, and cleanup contract",
-    }
 }
 
 fn validate_readiness_path(path: &str) -> Result<()> {
@@ -335,15 +279,6 @@ default = 100
 name = "record-api"
 methods = ["GET"]
 path_prefixes = ["/"]
-# BEGIN AI-MANAGED ALLOWED UNUSED HTTP HOSTS
-allowed_unused_http_hosts = [
-]
-# END AI-MANAGED ALLOWED UNUSED HTTP HOSTS
-# BEGIN AI-MANAGED CASE PATH PATTERNS
-# source_revision = ""
-case_path_patterns = [
-]
-# END AI-MANAGED CASE PATH PATTERNS
 headers = {}
 
 [mysql]
@@ -373,16 +308,6 @@ redact_headers = [
   "proxy-authenticate",
 ]
 
-# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES
-[[recording.process_owned_dependencies]]
-name = "breeze_vintage"
-protocol = "http"
-authorities = ["config.api.demo.test", "static.config.api.demo.test", "register.kailash.demo.test"]
-methods = ["GET"]
-path_prefixes = ["/1/config/service", "/naming/service"]
-source_evidence = "traffic-e2e system default: Weibo Breeze Vintage configuration and naming refresh are process-owned"
-# END AI-MANAGED PROCESS-OWNED DEPENDENCIES
-
 [tls]
 ca_cert_path = "./.traffic-e2e/local/data/traffic-recorder-ca.pem"
 ca_key_path = "./.traffic-e2e/local/data/traffic-recorder-ca-key.pem"
@@ -390,16 +315,14 @@ ca_key_path = "./.traffic-e2e/local/data/traffic-recorder-ca-key.pem"
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use tempfile::tempdir;
 
     use super::*;
 
     #[test]
-    fn initializes_complete_recorder_template_once() {
+    fn renders_complete_recorder_for_project_initialization() {
         let target = tempdir().unwrap();
-        let result = initialize_recorder_config(RecorderConfigInitOptions {
+        let (_, raw) = render_validated_recorder_config(&RecorderConfigInitOptions {
             target_root: target.path().to_path_buf(),
             source_http_port: 8080,
             candidate_http_port: 8081,
@@ -411,8 +334,8 @@ mod tests {
         })
         .unwrap();
 
-        let raw = fs::read_to_string(&result.config).unwrap();
-        let config = AppConfig::load(&result.config).unwrap();
+        let config: AppConfig = serde_yaml::from_str(&raw).unwrap();
+        config.validate().unwrap();
         assert_eq!(
             config.http_gateway.matched_upstream,
             "http://127.0.0.1:8080"
@@ -432,25 +355,10 @@ mod tests {
                 .unwrap()
                 .baseline_recheck
         );
-        assert_eq!(result.runtime, "breeze");
-        assert_eq!(result.http_gateway_port, 18_181);
         assert_eq!(config.http_gateway.listen.to_string(), "0.0.0.0:18181");
         assert_eq!(config.dns_mock.listen.port(), DEFAULT_DNS_MOCK_PORT);
         assert_eq!(config.tcp_gateway.listen.port(), DEFAULT_TCP_GATEWAY_PORT);
         assert_eq!(config.udp_gateway.listen.port(), DEFAULT_UDP_GATEWAY_PORT);
-        assert_eq!(
-            result.managed_record_command,
-            "traffic-e2e record --target-root ."
-        );
-        assert_eq!(
-            result.target_dockerfile,
-            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
-        );
-        assert!(
-            result
-                .target_runtime_contract
-                .contains("fixed configuration")
-        );
         assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
         assert_eq!(config.dns_mock.bypass_strategies.len(), 1);
         assert_eq!(config.http_response_rewrite.rules.len(), 2);
@@ -477,38 +385,13 @@ mod tests {
         assert!(config.comparison_recording.is_some());
         assert!(!raw.contains("max_request_bytes"));
         assert!(!raw.contains("max_response_bytes"));
-        assert!(!raw.contains("max_decoded_body_bytes"));
+        assert!(raw.contains("max_decoded_body_bytes: null"));
         assert!(!raw.contains("cache_snapshot_max_entries"));
         assert!(!raw.contains("cache_snapshot_max_bytes"));
-        assert_eq!(config.recording.process_owned_dependencies.len(), 1);
-        assert_eq!(
-            config.recording.process_owned_dependencies[0].name(),
-            "breeze_vintage"
-        );
-        let crate::config::BackgroundDependencyRuleConfig::Http {
-            authorities,
-            methods,
-            path_prefixes,
-            source_evidence,
-            ..
-        } = &config.recording.process_owned_dependencies[0]
-        else {
-            panic!("default Breeze Vintage background rule must use HTTP");
-        };
-        assert_eq!(
-            authorities,
-            &[
-                "config.api.demo.test",
-                "static.config.api.demo.test",
-                "register.kailash.demo.test"
-            ]
-        );
-        assert_eq!(methods, &["GET"]);
-        assert_eq!(path_prefixes, &["/1/config/service", "/naming/service"]);
-        assert!(source_evidence.starts_with("traffic-e2e system default:"));
+        assert!(config.process_owned_dependencies.is_empty());
         assert!(!raw.contains("startup-cache-warm"));
         assert!(!raw.contains("planet-video-cache-warm"));
-        assert!(raw.contains("# Set by `init --http-gateway-port`"));
+        assert!(raw.contains("http_gateway:"));
         for placeholder in [
             "__DNS_MOCK_PORT__",
             "__TCP_GATEWAY_PORT__",
@@ -517,29 +400,16 @@ mod tests {
         ] {
             assert!(!raw.contains(placeholder));
         }
-        assert!(raw.contains("# BEGIN AI-MANAGED PROCESS-OWNED DEPENDENCIES"));
+        assert!(!raw.contains("PROCESS-OWNED DEPENDENCIES"));
         assert!(!raw.contains("verified_excludes"));
         assert!(!raw.contains("allow_side_effecting_methods"));
-        assert!(raw.contains(r#""msg":"not_in_"#));
-
-        let error = initialize_recorder_config(RecorderConfigInitOptions {
-            target_root: target.path().to_path_buf(),
-            source_http_port: 8080,
-            candidate_http_port: 8081,
-            http_gateway_port: 18_181,
-            readiness_path: "/healthy".to_string(),
-            readiness_status: 404,
-            upstream_dns: "10.10.10.11:53".parse().unwrap(),
-            breeze_enabled: true,
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains("already exists"));
+        assert!(raw.contains(r#"{"code":"40401","msg":"not_in_"#));
     }
 
     #[test]
     fn rejects_ambiguous_runtime_inputs() {
         let target = tempdir().unwrap();
-        let error = initialize_recorder_config(RecorderConfigInitOptions {
+        let error = render_validated_recorder_config(&RecorderConfigInitOptions {
             target_root: target.path().to_path_buf(),
             source_http_port: 0,
             candidate_http_port: 0,
@@ -556,7 +426,7 @@ mod tests {
     #[test]
     fn accepts_native_source_and_candidate_http_port() {
         let target = tempdir().unwrap();
-        let result = initialize_recorder_config(RecorderConfigInitOptions {
+        let (_, raw) = render_validated_recorder_config(&RecorderConfigInitOptions {
             target_root: target.path().to_path_buf(),
             source_http_port: 8080,
             candidate_http_port: 8080,
@@ -568,15 +438,17 @@ mod tests {
         })
         .unwrap();
 
-        let raw = fs::read_to_string(&result.config).unwrap();
-        assert!(raw.contains("matched_upstream = \"http://127.0.0.1:8080\""));
-        assert!(raw.contains("candidate_upstream = \"http://127.0.0.1:8080\""));
-        assert!(AppConfig::load_comparison_recording(&result.config).is_err());
-        let runtime = AppConfig::load_comparison_recording_with_candidate(
-            &result.config,
-            Some("http://172.30.0.2:8080"),
-        )
-        .unwrap();
+        assert!(raw.contains("matched_upstream: http://127.0.0.1:8080"));
+        assert!(
+            raw.contains("candidate_upstream: http://comparison-target.traffic-e2e.invalid:8080")
+        );
+        let mut runtime: AppConfig = serde_yaml::from_str(&raw).unwrap();
+        runtime
+            .comparison_recording
+            .as_mut()
+            .unwrap()
+            .candidate_upstream = "http://172.30.0.2:8080".to_string();
+        runtime.validate_comparison_recording().unwrap();
         assert_eq!(
             runtime
                 .comparison_recording
@@ -590,7 +462,7 @@ mod tests {
     #[test]
     fn requires_http_gateway_port_to_be_distinct_from_upstreams() {
         let target = tempdir().unwrap();
-        let error = initialize_recorder_config(RecorderConfigInitOptions {
+        let error = render_validated_recorder_config(&RecorderConfigInitOptions {
             target_root: target.path().to_path_buf(),
             source_http_port: 8080,
             candidate_http_port: 8081,
@@ -603,40 +475,5 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("http_gateway_port must differ"));
-    }
-
-    #[test]
-    fn generic_initialization_installs_only_default_vintage_background_policy() {
-        let target = tempdir().unwrap();
-        let result = initialize_recorder_config(RecorderConfigInitOptions {
-            target_root: target.path().to_path_buf(),
-            source_http_port: 8080,
-            candidate_http_port: 8181,
-            http_gateway_port: 18_181,
-            readiness_path: "/healthz".to_string(),
-            readiness_status: 404,
-            upstream_dns: "10.10.10.11:53".parse().unwrap(),
-            breeze_enabled: false,
-        })
-        .unwrap();
-        let config = AppConfig::load(&result.config).unwrap();
-
-        assert_eq!(result.runtime, "generic");
-        assert_eq!(
-            result.managed_record_command,
-            "traffic-e2e record --target-root ."
-        );
-        assert_eq!(
-            result.target_dockerfile,
-            PathBuf::from(".traffic-e2e/Dockerfile.e2e")
-        );
-        assert!(config.recording.encrypt_request_headers.is_empty());
-        assert!(config.dns_mock.bypass_strategies.is_empty());
-        assert!(config.http_response_rewrite.rules.is_empty());
-        assert_eq!(config.recording.process_owned_dependencies.len(), 1);
-        assert_eq!(
-            config.recording.process_owned_dependencies[0].name(),
-            "breeze_vintage"
-        );
     }
 }

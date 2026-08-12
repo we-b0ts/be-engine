@@ -223,7 +223,7 @@ async fn background_http_enters_global_pool_but_not_case_dependencies() {
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
     config.recording.traffic_jsonl = TrafficJsonlMode::Full;
-    config.recording.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Http {
+    config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Http {
         name: "config-refresh".to_string(),
         authorities: vec!["config.api.demo.test".to_string()],
         methods: vec!["GET".to_string()],
@@ -282,7 +282,7 @@ async fn background_motan_enters_global_pool_but_not_case_dependencies() {
     let group = "kunpeng-config-rpc";
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
-    config.recording.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Motan {
+    config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Motan {
         name: "kunpeng-refresh".to_string(),
         group: group.to_string(),
         interface_name: interface_name.to_string(),
@@ -329,7 +329,7 @@ async fn background_redis_uses_ports_without_domain_and_stays_out_of_cases() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
-    config.recording.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
+    config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
         name: "interest-tag-mining-cache-refresh".to_string(),
         ports: vec![20917, 20918, 20919],
         command: "ZCOUNT".to_string(),
@@ -388,7 +388,7 @@ async fn redis_get_background_rule_records_without_response_role_metadata() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = AppConfig::default();
     config.recording.output_dir = temp.path().join("recordings");
-    config.recording.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
+    config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Redis {
         name: "startup-cache-warm".to_string(),
         ports: vec![20917],
         command: "GET".to_string(),

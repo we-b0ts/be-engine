@@ -26,7 +26,7 @@ pub struct DnsMockConfig {
 pub enum DnsBypassStrategyConfig {
     Breeze {
         snapshot_dir: PathBuf,
-        #[serde(default)]
+        #[serde(skip)]
         capture_resources: Vec<String>,
     },
 }

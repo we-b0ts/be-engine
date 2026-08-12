@@ -15,7 +15,7 @@ use super::interception::{DnsConfig, FakeIpConfig, Guard};
 
 #[derive(Debug, Args)]
 pub(super) struct RecordArgs {
-    /// Recorder TOML configuration.
+    /// Project YAML configuration containing the static Recorder settings.
     #[arg(long)]
     config: PathBuf,
     /// Explicit 14-digit UTC recording run identifier.
@@ -234,15 +234,24 @@ fn check_ca_files(tls: &TlsConfig) -> Result<bool> {
 fn reject_owner_config(path: &PathBuf) -> Result<()> {
     let source = std::fs::read_to_string(path)
         .with_context(|| format!("failed to read recorder config {}", path.display()))?;
-    let config: toml::Value = toml::from_str(&source)
+    let config: serde_yaml::Value = serde_yaml::from_str(&source)
         .with_context(|| format!("failed to parse recorder config {}", path.display()))?;
+    let root = config
+        .as_mapping()
+        .context("recorder config must be a YAML mapping")?;
+    let recorder = root
+        .get(serde_yaml::Value::String("recorder".to_string()))
+        .and_then(serde_yaml::Value::as_mapping)
+        .unwrap_or(root);
     let forbidden = ["owner_uid", "user", "record_user", "all_users"]
         .into_iter()
         .filter(|name| {
-            config
-                .get("local_record")
-                .and_then(toml::Value::as_table)
-                .is_some_and(|local| local.contains_key(*name))
+            recorder
+                .get(serde_yaml::Value::String("local_record".to_string()))
+                .and_then(serde_yaml::Value::as_mapping)
+                .is_some_and(|local| {
+                    local.contains_key(serde_yaml::Value::String((*name).to_string()))
+                })
         })
         .collect::<Vec<_>>();
     ensure!(
@@ -320,7 +329,7 @@ mod tests {
         let cli = TestCli::try_parse_from([
             "test",
             "--config",
-            "recorder.toml",
+            "project.yaml",
             "--run-id",
             "20260721153045",
         ])
@@ -331,7 +340,7 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "--config",
-                "recorder.toml",
+                "project.yaml",
                 "--run-id",
                 "20260230153045",
             ])
@@ -341,7 +350,7 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "--config",
-                "recorder.toml",
+                "project.yaml",
                 "--run-id",
                 "../../recording",
             ])
@@ -354,7 +363,7 @@ mod tests {
         let cli = TestCli::try_parse_from([
             "test",
             "--config",
-            "recorder.toml",
+            "project.yaml",
             "--artifact-owner",
             "1114:1115",
         ])
@@ -369,7 +378,7 @@ mod tests {
                 TestCli::try_parse_from([
                     "test",
                     "--config",
-                    "recorder.toml",
+                    "project.yaml",
                     "--artifact-owner",
                     invalid,
                 ])
@@ -384,7 +393,7 @@ mod tests {
         let cli = TestCli::try_parse_from([
             "test",
             "--config",
-            "recorder.toml",
+            "project.yaml",
             "--control-socket",
             "/run/traffic-e2e/recording.sock",
         ])
@@ -399,7 +408,7 @@ mod tests {
     #[test]
     fn accepts_a_full_traffic_jsonl_runtime_override() {
         let cli =
-            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--full-traffic-jsonl"])
+            TestCli::try_parse_from(["test", "--config", "project.yaml", "--full-traffic-jsonl"])
                 .unwrap();
 
         assert!(cli.record.full_traffic_jsonl);
@@ -410,7 +419,7 @@ mod tests {
         let cli = TestCli::try_parse_from([
             "test",
             "--config",
-            "recorder.toml",
+            "project.yaml",
             "--api",
             "GET /api/users/*",
             "--api",
@@ -430,7 +439,7 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "--config",
-                "recorder.toml",
+                "project.yaml",
                 "--api",
                 "get /api/users",
             ])
@@ -443,7 +452,7 @@ mod tests {
         let cli = TestCli::try_parse_from([
             "test",
             "--config",
-            "recorder.toml",
+            "project.yaml",
             "--per-api-case-limit",
             "250",
         ])
@@ -457,7 +466,7 @@ mod tests {
             TestCli::try_parse_from([
                 "test",
                 "--config",
-                "recorder.toml",
+                "project.yaml",
                 "--per-api-case-limit",
                 "0",
             ])
@@ -467,12 +476,12 @@ mod tests {
 
     #[test]
     fn no_dns_overrides_default_interception() {
-        let default = TestCli::try_parse_from(["test", "--config", "recorder.toml"]).unwrap();
+        let default = TestCli::try_parse_from(["test", "--config", "project.yaml"]).unwrap();
         assert!(default.record.dns);
         assert!(!default.record.no_dns);
 
         let cli =
-            TestCli::try_parse_from(["test", "--config", "recorder.toml", "--no-dns"]).unwrap();
+            TestCli::try_parse_from(["test", "--config", "project.yaml", "--no-dns"]).unwrap();
         assert!(cli.record.no_dns);
     }
 
@@ -539,8 +548,8 @@ mod tests {
     #[test]
     fn rejects_configurable_interception_owner() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("recorder.toml");
-        std::fs::write(&path, "[local_record]\nowner_uid = 1000\n").unwrap();
+        let path = directory.path().join("project.yaml");
+        std::fs::write(&path, "local_record:\n  owner_uid: 1000\n").unwrap();
 
         let error = reject_owner_config(&path).unwrap_err().to_string();
 

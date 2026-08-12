@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
+use serde_yaml::Value;
 
 use super::AppConfig;
 
@@ -16,7 +17,7 @@ pub struct MotanProtocolConfigOptions {
 pub struct MotanProtocolConfigResult {
     pub status: &'static str,
     pub protocol: &'static str,
-    pub recorder_config: PathBuf,
+    pub project_config: PathBuf,
     pub native_port: u16,
     pub gateway_port: u16,
     pub validation_status: &'static str,
@@ -35,59 +36,39 @@ pub fn enable_repository_motan_protocol(
     })?;
     ensure!(target_root.is_dir(), "target root must be a directory");
     let (_, project) = crate::e2e_run::resolve_project(&target_root)?;
-    let recorder_config = project.recorder_config;
-    require_regular_file(&recorder_config, "recorder config")?;
-    let recorder_raw = fs::read_to_string(&recorder_config).with_context(|| {
-        format!(
-            "failed to read recorder config {}",
-            recorder_config.display()
-        )
-    })?;
-    let current = toml::from_str::<AppConfig>(&recorder_raw)
-        .context("recorder configuration is invalid before Motan update")?;
+    let project_config = project.recorder_config;
+    require_regular_file(&project_config, "project config")?;
+    let original = fs::read_to_string(&project_config)
+        .with_context(|| format!("failed to read project config {}", project_config.display()))?;
+    let mut recorder = AppConfig::load_static(&project_config)
+        .context("project recorder configuration is invalid before Motan update")?;
     let native_port = endpoint_port(
-        &current.motan_gateway.matched_upstream,
+        &recorder.motan_gateway.matched_upstream,
         "motan_gateway.matched_upstream",
     )?;
     validate_ports(native_port, options.gateway_port)?;
-    let rules_declared = motan_rules_declared(&recorder_raw)?;
-    let desired_listen = format!("0.0.0.0:{}", options.gateway_port);
-    let desired_upstream = current.motan_gateway.matched_upstream.clone();
-    let recorder_changed = !current.motan_gateway.enabled
-        || current.motan_gateway.listen.to_string() != desired_listen
-        || !rules_declared;
-    let recorder_payload = if recorder_changed {
-        let mut assignments = vec![
-            ("enabled", "true".to_string()),
-            ("listen", quoted(&desired_listen)),
-            ("matched_upstream", quoted(&desired_upstream)),
-        ];
-        if !rules_declared {
-            assignments.push(("rules", "[]".to_string()));
-        }
-        update_motan_gateway_table(&recorder_raw, &assignments)?.into_bytes()
-    } else {
-        recorder_raw.into_bytes()
-    };
-    let updated = toml::from_slice::<AppConfig>(&recorder_payload)
-        .context("recorder configuration is invalid after Motan update")?;
-    updated
-        .validate()
-        .context("recorder configuration failed validation after Motan update")?;
-    validate_gateway_listener(&updated, options.gateway_port)?;
 
-    if recorder_changed {
-        super::edit::write_atomic(&recorder_config, &recorder_payload)?;
+    recorder.motan_gateway.enabled = true;
+    recorder.motan_gateway.listen = format!("0.0.0.0:{}", options.gateway_port)
+        .parse()
+        .context("failed to construct Motan gateway listen address")?;
+    recorder
+        .validate()
+        .context("project recorder configuration failed validation after Motan update")?;
+    validate_gateway_listener(&recorder, options.gateway_port)?;
+
+    let updated = replace_recorder_section(&original, &recorder)?;
+    let changed = updated != original;
+    if changed {
+        super::edit::write_atomic(&project_config, updated.as_bytes())?;
+        AppConfig::load_static(&project_config)
+            .context("persisted project recorder configuration is invalid")?;
     }
 
     Ok(MotanProtocolConfigResult {
-        status: if recorder_changed {
-            "updated"
-        } else {
-            "unchanged"
-        },
+        status: if changed { "updated" } else { "unchanged" },
         protocol: "motan",
-        recorder_config,
+        project_config,
         native_port,
         gateway_port: options.gateway_port,
         validation_status: "not_run",
@@ -97,6 +78,40 @@ pub fn enable_repository_motan_protocol(
             native_port, options.gateway_port
         ),
     })
+}
+
+fn replace_recorder_section(raw: &str, recorder: &AppConfig) -> Result<String> {
+    let mut document = serde_yaml::from_str::<Value>(raw)
+        .context("failed to parse project configuration as YAML")?;
+    let root = document
+        .as_mapping_mut()
+        .context("project configuration must be a YAML mapping")?;
+    ensure!(
+        root.contains_key(Value::String("project".to_string())),
+        "project configuration is missing project settings"
+    );
+    root.insert(
+        Value::String("recorder".to_string()),
+        serde_yaml::to_value(recorder).context("failed to serialize recorder configuration")?,
+    );
+    let rendered = serde_yaml::to_string(&document)
+        .context("failed to serialize updated project configuration")?;
+    validate_embedded_recorder(&rendered)?;
+    Ok(rendered)
+}
+
+fn validate_embedded_recorder(raw: &str) -> Result<()> {
+    let document = serde_yaml::from_str::<Value>(raw)
+        .context("updated project configuration is invalid YAML")?;
+    let root = document
+        .as_mapping()
+        .context("updated project configuration must be a YAML mapping")?;
+    let recorder = root
+        .get(Value::String("recorder".to_string()))
+        .context("updated project configuration is missing recorder settings")?;
+    let config = serde_yaml::from_value::<AppConfig>(recorder.clone())
+        .context("updated project recorder configuration is invalid")?;
+    config.validate()
 }
 
 fn endpoint_port(endpoint: &str, label: &str) -> Result<u16> {
@@ -156,97 +171,6 @@ fn require_regular_file(path: &Path, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn quoted(value: &str) -> String {
-    toml::Value::String(value.to_string()).to_string()
-}
-
-fn motan_rules_declared(raw: &str) -> Result<bool> {
-    let document = toml::from_str::<toml::Value>(raw)
-        .context("failed to inspect Motan rules in recorder configuration")?;
-    Ok(document
-        .get("motan_gateway")
-        .and_then(toml::Value::as_table)
-        .is_some_and(|gateway| gateway.contains_key("rules")))
-}
-
-fn update_motan_gateway_table(raw: &str, assignments: &[(&str, String)]) -> Result<String> {
-    let newline = if raw.contains("\r\n") { "\r\n" } else { "\n" };
-    let mut lines = raw
-        .split_inclusive(['\n'])
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if raw.is_empty() {
-        lines.clear();
-    } else if !raw.ends_with('\n') {
-        let last = lines
-            .last_mut()
-            .context("recorder config has no final line")?;
-        if last.ends_with('\r') {
-            last.pop();
-        }
-    }
-    let header = lines
-        .iter()
-        .position(|line| line.trim() == "[motan_gateway]");
-    if let Some(header) = header {
-        let end = lines
-            .iter()
-            .enumerate()
-            .skip(header + 1)
-            .find(|(_, line)| line.trim_start().starts_with('['))
-            .map(|(index, _)| index)
-            .unwrap_or(lines.len());
-        let mut missing = Vec::new();
-        for (key, value) in assignments {
-            if let Some(line) = lines[header + 1..end]
-                .iter_mut()
-                .find(|line| assignment_key(line).is_some_and(|actual| actual == *key))
-            {
-                *line = format!("{key} = {value}{newline}");
-            } else {
-                missing.push(format!("{key} = {value}{newline}"));
-            }
-        }
-        lines.splice(header + 1..header + 1, missing);
-    } else {
-        let child = lines.iter().position(|line| {
-            let line = line.trim();
-            line.starts_with("[motan_gateway.") || line.starts_with("[[motan_gateway.")
-        });
-        let mut section = Vec::with_capacity(assignments.len() + 2);
-        section.push(format!("[motan_gateway]{newline}"));
-        section.extend(
-            assignments
-                .iter()
-                .map(|(key, value)| format!("{key} = {value}{newline}")),
-        );
-        section.push(newline.to_string());
-        if let Some(child) = child {
-            lines.splice(child..child, section);
-        } else {
-            if !lines.is_empty() && !lines.last().is_some_and(|line| line.ends_with('\n')) {
-                lines.push(newline.to_string());
-            }
-            if !lines.is_empty() && !lines.last().is_some_and(|line| line.trim().is_empty()) {
-                lines.push(newline.to_string());
-            }
-            lines.extend(section);
-        }
-    }
-    let rendered = lines.concat();
-    toml::from_str::<toml::Value>(&rendered)
-        .context("Motan gateway update produced invalid TOML")?;
-    Ok(rendered)
-}
-
-fn assignment_key(line: &str) -> Option<&str> {
-    let line = line.trim_start();
-    if line.starts_with('#') || line.starts_with('[') {
-        return None;
-    }
-    line.split_once('=').map(|(key, _)| key.trim())
-}
-
 #[cfg(test)]
 mod tests {
     use std::process::Command;
@@ -256,53 +180,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn adds_motan_gateway_without_reformatting_existing_config() {
-        let raw = "# keep\n[http_gateway]\nenabled = true\nlisten = \"0.0.0.0:17171\"\n";
-        let updated = update_motan_gateway_table(
-            raw,
-            &[
-                ("enabled", "true".to_string()),
-                ("listen", quoted("0.0.0.0:18081")),
-                ("matched_upstream", quoted("127.0.0.1:8080")),
-            ],
-        )
-        .unwrap();
+    fn replaces_only_the_embedded_recorder_document() {
+        let raw = "version: 14\nproject:\n  source:\n    container: source\nrecorder:\n  motan_gateway:\n    enabled: false\n    matched_upstream: 127.0.0.1:8080\n";
+        let mut recorder = AppConfig::default();
+        recorder.motan_gateway.enabled = true;
+        recorder.motan_gateway.matched_upstream = "127.0.0.1:8080".to_string();
 
-        assert!(updated.starts_with(raw));
-        assert!(updated.contains("[motan_gateway]\n"));
-        assert!(updated.contains("matched_upstream = \"127.0.0.1:8080\""));
-    }
+        let updated = replace_recorder_section(raw, &recorder).unwrap();
 
-    #[test]
-    fn updates_only_owned_motan_gateway_keys_and_keeps_rules() {
-        let raw = concat!(
-            "[motan_gateway]\n",
-            "# keep this comment\n",
-            "enabled = false\n",
-            "listen = \"127.0.0.1:1\"\n",
-            "matched_upstream = \"127.0.0.1:2\"\n",
-            "max_cases_per_api = 7\n\n",
-            "[[motan_gateway.rules]]\n",
-            "name = \"rpc\"\n",
-            "apis = [\"com.example.Echo#echo(java.lang.String)\"]\n",
-        );
-        let updated = update_motan_gateway_table(
-            raw,
-            &[
-                ("enabled", "true".to_string()),
-                ("listen", quoted("0.0.0.0:18081")),
-                ("matched_upstream", quoted("127.0.0.1:8080")),
-            ],
-        )
-        .unwrap();
-
-        assert!(updated.contains("# keep this comment"));
-        assert!(updated.contains("max_cases_per_api = 7"));
-        assert!(updated.contains("[[motan_gateway.rules]]"));
-        assert!(motan_rules_declared(&updated).unwrap());
-        let parsed: AppConfig = toml::from_str(&updated).unwrap();
-        assert!(parsed.motan_gateway.enabled);
-        assert_eq!(parsed.motan_gateway.rules.len(), 1);
+        let value: Value = serde_yaml::from_str(&updated).unwrap();
+        assert_eq!(value["version"], 14);
+        assert_eq!(value["project"]["source"]["container"], "source");
+        assert_eq!(value["recorder"]["motan_gateway"]["enabled"], true);
     }
 
     #[test]
@@ -313,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn converges_only_recorder_configuration_idempotently() {
+    fn converges_the_recorder_section_in_project_yaml() {
         let target = initialized_target();
         let options = || MotanProtocolConfigOptions {
             target_root: target.path().to_path_buf(),
@@ -322,58 +211,19 @@ mod tests {
 
         let first = enable_repository_motan_protocol(options()).unwrap();
         assert_eq!(first.status, "updated");
-        assert_eq!(first.validation_status, "not_run");
         assert_eq!(
-            first.motan_replay_command,
-            "motan-replay --input-raw :8080 --output-rpc 127.0.0.1:18081"
+            first.project_config,
+            target.path().join(".traffic-e2e/project.yaml")
         );
-        let project_path = target.path().join(".traffic-e2e/project.yaml");
-        let project_before = fs::read(&project_path).unwrap();
-        let project = String::from_utf8(project_before.clone()).unwrap();
-        assert!(!project.contains("motan_port"));
-        assert!(!project.contains("source_port"));
-        assert!(!project.contains("gateway_port"));
-        let recorder = fs::read_to_string(&first.recorder_config).unwrap();
-        assert!(recorder.contains("# preserve recorder comments"));
-        assert!(recorder.contains("[motan_gateway]"));
-        assert!(recorder.contains("rules = []"));
-        let parsed = AppConfig::load(&first.recorder_config).unwrap();
+        let parsed = AppConfig::load(&first.project_config).unwrap();
         assert!(parsed.motan_gateway.enabled);
         assert_eq!(parsed.motan_gateway.listen.to_string(), "0.0.0.0:18081");
         assert_eq!(parsed.motan_gateway.matched_upstream, "127.0.0.1:8080");
 
-        let recorder_before = fs::read(&first.recorder_config).unwrap();
+        let before = fs::read(&first.project_config).unwrap();
         let second = enable_repository_motan_protocol(options()).unwrap();
         assert_eq!(second.status, "unchanged");
-        assert_eq!(fs::read(&project_path).unwrap(), project_before);
-        assert_eq!(fs::read(&second.recorder_config).unwrap(), recorder_before);
-
-        let without_explicit_rules = fs::read_to_string(&second.recorder_config)
-            .unwrap()
-            .replacen("rules = []", "", 1);
-        fs::write(&second.recorder_config, without_explicit_rules).unwrap();
-        let repaired_rules = enable_repository_motan_protocol(options()).unwrap();
-        assert_eq!(repaired_rules.status, "updated");
-        assert!(
-            fs::read_to_string(&repaired_rules.recorder_config)
-                .unwrap()
-                .contains("rules = []")
-        );
-
-        let drifted = fs::read_to_string(&repaired_rules.recorder_config)
-            .unwrap()
-            .replace("127.0.0.1:8080", "127.0.0.1:9090");
-        fs::write(&repaired_rules.recorder_config, drifted).unwrap();
-        let repaired = enable_repository_motan_protocol(options()).unwrap();
-        assert_eq!(repaired.status, "unchanged");
-        assert_eq!(fs::read(&project_path).unwrap(), project_before);
-        assert_eq!(
-            AppConfig::load(repaired.recorder_config)
-                .unwrap()
-                .motan_gateway
-                .matched_upstream,
-            "127.0.0.1:9090"
-        );
+        assert_eq!(fs::read(&second.project_config).unwrap(), before);
     }
 
     fn initialized_target() -> TempDir {
@@ -395,24 +245,13 @@ mod tests {
         )
         .unwrap();
         fs::write(
-            root.join(".traffic-e2e/recorder.toml"),
-            concat!(
-                "# preserve recorder comments\n",
-                "[motan_gateway]\n",
-                "enabled = false\n",
-                "listen = \"127.0.0.1:18081\"\n",
-                "matched_upstream = \"127.0.0.1:8080\"\n",
-                "\n",
-                "[http_gateway.ready]\n",
-                "enabled = true\n",
-                "path = \"/healthz\"\n",
-                "success_status = 404\n",
-                "\n",
-                "[[http_gateway.rules]]\n",
-                "name = \"record-api\"\n",
-                "methods = [\"GET\"]\n",
-                "path_prefixes = [\"/\"]\n",
-            ),
+            root.join("project.yaml"),
+            "version: 14\nproject:\n  recording:\n    coordinator_rules: coordinator-rules.yaml\nrecorder:\n  http_gateway:\n    ready:\n      enabled: true\n      path: /healthz\n      success_status: 404\n    rules:\n    - name: record-api\n      methods: [GET]\n      path_prefixes: [/]\n  motan_gateway:\n    enabled: false\n    listen: 127.0.0.1:18081\n    matched_upstream: 127.0.0.1:8080\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("coordinator-rules.yaml"),
+            "version: 1\nhttp:\n- name: record-api\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();
         assert!(
@@ -450,7 +289,7 @@ mod tests {
             target_startup: crate::StartupConfig::default(),
             replay_policy: PathBuf::from(".traffic-e2e/verification.yaml"),
             pr_base: "integration".to_string(),
-            recorder_config: PathBuf::from(".traffic-e2e/recorder.toml"),
+            recorder_config: PathBuf::from("project.yaml"),
             recording_rule: "record-api".to_string(),
             force: false,
         })

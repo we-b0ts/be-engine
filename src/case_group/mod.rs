@@ -495,8 +495,13 @@ fn apply_pattern_feedback(
             patterns_after: Vec::new(),
         });
     };
+    let rules_path = config
+        .parent()
+        .context("managed project config has no parent directory")?
+        .join(crate::config::COORDINATOR_RULES_FILE);
     let plan = plan_case_path_pattern_feedback(CasePathPatternFeedback {
-        config_path: config.to_path_buf(),
+        project_config_path: config.to_path_buf(),
+        rules_path,
         rule_name: rule.to_string(),
         source_revision: source_revision.to_string(),
         case_source: case_source.display().to_string(),
@@ -513,7 +518,7 @@ fn apply_pattern_feedback(
         } else {
             PatternOutcomeStatus::ConfirmedExisting
         },
-        config: Some(report.config),
+        config: Some(report.rules),
         rule: Some(report.rule),
         added: report.added,
         patterns_after: report.patterns_after,

@@ -115,20 +115,19 @@ fn revises_latest_focused_observation_without_counting_a_new_run() {
     report
         .apply(observation("1", &[("GET /users", 100, 100)]))
         .unwrap();
-    report
-        .apply(observation("2", &[("GET /users", 100, 98)]))
-        .unwrap();
+    let previous = observation("2", &[("GET /users", 100, 98)]);
+    report.apply(previous.clone()).unwrap();
     let mut revised = observation("2", &[("GET /users", 100, 100)]);
     revised.evidence_fingerprint = "reclassified-fingerprint-2".to_string();
 
-    assert!(report.revise_latest(revised).unwrap());
+    assert!(report.revise(previous, revised).unwrap());
 
     assert_eq!(report.totals.runs.executed, 2);
     assert_eq!(report.totals.runs.passed, 2);
     assert_eq!(report.totals.cases.executed, 200);
     assert_eq!(report.totals.cases.passed, 200);
-    assert_eq!(report.success_streak.runs, 1);
-    assert_eq!(report.success_streak.cases, 100);
+    assert_eq!(report.success_streak.runs, 2);
+    assert_eq!(report.success_streak.cases, 200);
     assert_eq!(report.apis["GET /users"].totals.runs.executed, 2);
     assert_eq!(report.apis["GET /users"].totals.runs.passed, 2);
     assert_eq!(
@@ -138,24 +137,66 @@ fn revises_latest_focused_observation_without_counting_a_new_run() {
 }
 
 #[test]
-fn refuses_to_revise_a_non_latest_progress_run() {
+fn revises_a_non_latest_progress_run_and_rebuilds_aggregates() {
+    let mut report = ProgressReport::new(VerificationStage::Replay);
+    let previous = observation("1", &[("GET /users", 1, 0)]);
+    report.apply(previous.clone()).unwrap();
+    report
+        .apply(observation("2", &[("GET /friends", 1, 1)]))
+        .unwrap();
+    let mut revised = observation("1", &[("GET /users", 1, 1)]);
+    revised.evidence_fingerprint = "reclassified-fingerprint-1".to_string();
+
+    assert!(report.revise(previous, revised).unwrap());
+    assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.runs.passed, 2);
+    assert_eq!(report.apis["GET /users"].totals.runs.passed, 1);
+    assert_eq!(report.apis["GET /users"].success_streak.runs, 1);
+    assert_eq!(report.latest_run.as_ref().unwrap().key, "2");
+}
+
+#[test]
+fn revises_a_journaled_run_after_a_legacy_progress_baseline() {
     let mut report = ProgressReport::new(VerificationStage::Replay);
     report
-        .apply(observation("1", &[("GET /users", 1, 0)]))
+        .apply(observation("legacy-1", &[("GET /users", 1, 1)]))
+        .unwrap();
+    report.counted_observations.clear();
+
+    let previous = observation("new-1", &[("GET /users", 1, 0)]);
+    report.apply(previous.clone()).unwrap();
+    report
+        .apply(observation("new-2", &[("GET /friends", 1, 1)]))
+        .unwrap();
+    let mut revised = observation("new-1", &[("GET /users", 1, 1)]);
+    revised.evidence_fingerprint = "reclassified-new-1".to_string();
+
+    assert!(report.revise(previous, revised).unwrap());
+    assert_eq!(report.totals.runs.executed, 3);
+    assert_eq!(report.totals.runs.passed, 3);
+    assert_eq!(report.latest_run.as_ref().unwrap().key, "new-2");
+}
+
+#[test]
+fn rejects_an_unjournaled_historical_revision_before_mutating_progress() {
+    let mut report = ProgressReport::new(VerificationStage::Replay);
+    report
+        .apply(observation("legacy-1", &[("GET /users", 1, 0)]))
         .unwrap();
     report
-        .apply(observation("2", &[("GET /users", 1, 0)]))
+        .apply(observation("legacy-2", &[("GET /friends", 1, 1)]))
         .unwrap();
-    let mut stale = observation("1", &[("GET /users", 1, 1)]);
-    stale.evidence_fingerprint = "reclassified-fingerprint-1".to_string();
+    report.counted_observations.clear();
+    let before = report.counted_runs.clone();
+
+    let error = report.ensure_revisable("legacy-1").unwrap_err();
 
     assert!(
-        report
-            .revise_latest(stale)
-            .unwrap_err()
+        error
             .to_string()
-            .contains("only the latest")
+            .contains("observation ledger is incomplete")
     );
+    assert_eq!(report.counted_runs, before);
 }
 
 #[test]
@@ -200,6 +241,7 @@ fn round_trips_the_same_schema_for_both_stages() {
             loaded.counted_runs.get("1").map(String::as_str),
             Some("fingerprint-1")
         );
+        assert_eq!(loaded.counted_observations.len(), 1);
     }
 }
 
@@ -254,4 +296,30 @@ fn migrates_embedded_counted_runs_to_the_artifact_ledger() {
             .unwrap()
             .contains("fingerprint-1")
     );
+}
+
+#[test]
+fn persists_a_legacy_baseline_and_revises_a_later_historical_run_after_reload() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("replay-progress.yaml");
+    let mut report = ProgressReport::new(VerificationStage::Replay);
+    report
+        .apply(observation("legacy", &[("GET /legacy", 1, 1)]))
+        .unwrap();
+    report.counted_observations.clear();
+    let previous = observation("new-1", &[("GET /users", 1, 0)]);
+    report.apply(previous.clone()).unwrap();
+    report
+        .apply(observation("new-2", &[("GET /friends", 1, 1)]))
+        .unwrap();
+    write(&path, &report).unwrap();
+
+    let mut loaded = load(&path, VerificationStage::Replay).unwrap().unwrap();
+    let mut revised = observation("new-1", &[("GET /users", 1, 1)]);
+    revised.evidence_fingerprint = "reclassified-new-1".to_string();
+
+    assert!(loaded.revise(previous, revised).unwrap());
+    assert_eq!(loaded.totals.runs.executed, 3);
+    assert_eq!(loaded.totals.runs.passed, 3);
+    assert_eq!(loaded.latest_run.as_ref().unwrap().key, "new-2");
 }

@@ -1,0 +1,164 @@
+version: 14
+project:
+  source:
+    container: source-app
+  target:
+    dockerfile: .traffic-e2e/Dockerfile.e2e
+    startup: {}
+  replay:
+    policy: config/verification.example.yaml
+  recording:
+    rule: record-api
+    coordinator_rules: coordinator-rules.example.yaml
+  delivery:
+    pr_base: dev-migration
+  state:
+    runtime_root: local/runtime
+recorder:
+  # Static recorder example. Project initialization embeds these settings under
+  # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed values belong
+  # exclusively in `.traffic-e2e/coordinator-rules.yaml`.
+  artifacts:
+    root_dir: ./.traffic-e2e/local/artifacts
+  comparison_recording:
+    baseline_upstream: null
+    candidate_upstream: http://127.0.0.1:6161
+    candidate_motan_upstream: null
+    baseline_recheck: false
+    upstream_timeout_ms: 30000
+    max_in_flight: 1
+    summary_flush_interval_ms: 1000
+  dns_mock:
+    enabled: true
+    listen: 127.0.0.153:4053
+    upstream_dns: 10.10.10.10:53
+    fake_cidr: 198.19.0.0/16
+    ttl_seconds: 60
+    bypass_domains:
+    - doh.pub
+    bypass_strategies: []
+    hosts:
+      db-10-185-28-119.test:
+      - 10.185.28.119
+    registry_path: ./.traffic-e2e/local/artifacts/fake_dns_registry.json
+  tcp_gateway:
+    enabled: true
+    listen: 127.0.0.1:4001
+    backlog: 65535
+    record_http: true
+    mitm_https: true
+    https_ports: []
+    protocol_detection:
+      enabled: true
+      redis_port_hints:
+      - 6379
+      memcached_port_hints:
+      - 11211
+      kafka_port_hints:
+      - 9092
+      overrides: []
+  udp_gateway:
+    enabled: true
+    listen: 127.0.0.1:4002
+    forward: false
+  http:
+    enabled: false
+    listen: 127.0.0.1:8080
+  http_response_rewrite:
+    enabled: false
+    rules:
+    - name: pluto-eci-kubeconfig
+      authorities:
+      - cs.aliyuncs.com
+      methods:
+      - GET
+      path: /api/v2/k8s/c142fe56e07d04a749c1630fb5f1b680b/user_config
+      status_codes:
+      - 200
+      content_types:
+      - application/json
+      plugin:
+        name: pluto-eci-kubeconfig
+        kubectl_binary: kubectl
+        proxy_listen: 127.0.0.1:8001
+  http_gateway:
+    enabled: true
+    listen: 0.0.0.0:17171
+    matched_upstream: http://127.0.0.1:7171
+    fallback_upstream: http://10.37.254.56:7171
+    fallback_mode: fixed_response
+    fixed_response:
+      status: 200
+      content_type: application/json
+      headers:
+        x-recorder-fallback: fixed
+      body: '{"code":"xxx","msg":"xxx"}'
+    preserve_host: true
+    ready:
+      enabled: true
+      path: /
+      success_status: 200
+      interval_ms: 1000
+    per_api_case_limits:
+      default: 100
+      overrides: {}
+    exclude_rules:
+    - name: exclude-health
+      hosts: []
+      methods:
+      - GET
+      path_prefixes:
+      - /health
+      - /metrics
+      headers: {}
+    rules:
+    - name: record-api
+      hosts: []
+      methods:
+      - GET
+      path_prefixes:
+      - /api
+      headers: {}
+  motan_gateway:
+    enabled: false
+    listen: 0.0.0.0:18081
+    matched_upstream: 127.0.0.1:8002
+    connect_timeout_ms: 3000
+    request_timeout_ms: 30000
+    max_connections: 1024
+    max_frame_bytes: 8388608
+    max_cases_per_api: 100
+    rules: []
+  mysql:
+    enabled: false
+    record_raw_packets: false
+    routes: []
+    listen: 127.0.0.1:3307
+    upstream: 127.0.0.1:3306
+  recording:
+    output_dir: ./recordings
+    max_body_bytes: 67108864
+    max_decoded_body_bytes: null
+    traffic_jsonl: full
+    jsonl_buffer_capacity_bytes: 262144
+    jsonl_flush_interval_ms: 1000
+    writer_queue_capacity: 65536
+    cache_snapshot_max_waiters_per_entry: 1024
+    cache_snapshot_fill_timeout_ms: 30000
+    post_ready_settle_ms: 15000
+    post_ready_max_wait_ms: 180000
+    case_dependency_post_response_window_ms: 100
+    case_dependency_drain_timeout_ms: 5000
+    shutdown_case_drain_timeout_ms: 5000
+    encrypt_request_headers: []
+    redact_headers:
+    - authorization
+    - cookie
+    - set-cookie
+    - proxy-authorization
+    - proxy-authenticate
+    access_policy: unrestricted
+    access_rules: []
+  tls:
+    ca_cert_path: ./.traffic-e2e/local/data/traffic-recorder-ca.pem
+    ca_key_path: ./.traffic-e2e/local/data/traffic-recorder-ca-key.pem

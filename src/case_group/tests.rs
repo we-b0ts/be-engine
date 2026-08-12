@@ -2,21 +2,19 @@ use tempfile::tempdir;
 
 use super::*;
 
-const CONFIG: &str = r#"[http_gateway]
-enabled = true
-
-[[http_gateway.rules]]
-name = "record-api"
-path_prefixes = ["/api"]
-# BEGIN AI-MANAGED CASE PATH PATTERNS
-# source_revision = "old"
-case_path_patterns = [
-]
-# END AI-MANAGED CASE PATH PATTERNS
-headers = {}
-
-[recording]
-access_policy = "unrestricted"
+const CONFIG: &str = r#"version: 14
+project:
+  recording:
+    coordinator_rules: coordinator-rules.yaml
+recorder:
+  http_gateway:
+    enabled: true
+    rules:
+    - name: record-api
+      path_prefixes: [/api]
+      headers: {}
+  recording:
+    access_policy: unrestricted
 "#;
 
 fn write_case(root: &Path, group: &str, case_id: &str, method: &str, uri: &str) -> PathBuf {
@@ -129,8 +127,15 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
         "/api/huaweiyun/loadbalancers/get/beta",
     );
     let output = temporary.path().join("reports/case-groups.json");
-    let config = temporary.path().join("recorder.toml");
+    let config = temporary.path().join("project.yaml");
     fs::write(&config, CONFIG).unwrap();
+    fs::write(
+        temporary.path().join("coordinator-rules.yaml"),
+        crate::config::CoordinatorRulesConfig::empty()
+            .render()
+            .unwrap(),
+    )
+    .unwrap();
     let mut first_options = options(
         &source,
         &first,
@@ -165,7 +170,7 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
         created.manifest.display().to_string()
     );
     assert!(
-        fs::read_to_string(&config)
+        fs::read_to_string(temporary.path().join("coordinator-rules.yaml"))
             .unwrap()
             .contains("/api/huaweiyun/loadbalancers/get/*")
     );

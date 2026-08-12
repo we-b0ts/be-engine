@@ -100,7 +100,6 @@ fn configure_runtime(
     config.tcp_gateway.mitm_https = false;
     config.tcp_gateway.protocol_detection.enabled = true;
     let ports = config
-        .recording
         .process_owned_dependencies
         .iter()
         .flat_map(|rule| match rule {

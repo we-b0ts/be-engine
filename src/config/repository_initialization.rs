@@ -11,7 +11,7 @@ use super::initialization::{
 use crate::e2e_run::{E2eRunInitOptions, render_project_config};
 
 const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
-const RECORDER_CONFIG_PATH: &str = ".traffic-e2e/recorder.toml";
+const COORDINATOR_RULES_PATH: &str = ".traffic-e2e/coordinator-rules.yaml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
 const DEFAULT_NATIVE_HTTP_PORT: u16 = 8080;
@@ -83,7 +83,7 @@ fn initialize_repository_config_with(
     ensure!(target_root.is_dir(), "target root must be a directory");
     let generated = [
         PROJECT_CONFIG_PATH,
-        RECORDER_CONFIG_PATH,
+        COORDINATOR_RULES_PATH,
         VERIFICATION_POLICY_PATH,
     ]
     .map(|relative| target_root.join(relative));
@@ -107,25 +107,31 @@ fn initialize_repository_config_with(
     };
     let (_, recorder) = render_validated_recorder_config(&recorder_options)?;
     let verification = crate::replay::render_validated_replay_policy()?;
-    let project = render_project_config(&E2eRunInitOptions {
-        target_root: target_root.clone(),
-        source_container: source.name.clone(),
-        breeze_container: breeze.as_ref().map(|container| container.name.clone()),
-        target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
-        target_startup: options.startup.clone(),
-        replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
-        pr_base: "dev-migration".to_string(),
-        recorder_config: PathBuf::from(RECORDER_CONFIG_PATH),
-        recording_rule: DEFAULT_RECORDING_RULE.to_string(),
-        force: false,
-    })?;
+    let recorder = serde_yaml::from_str::<super::AppConfig>(&recorder)
+        .context("generated recorder config is not valid YAML")?;
+    let project = render_project_config(
+        &E2eRunInitOptions {
+            target_root: target_root.clone(),
+            source_container: source.name.clone(),
+            breeze_container: breeze.as_ref().map(|container| container.name.clone()),
+            target_dockerfile: PathBuf::from(".traffic-e2e/Dockerfile.e2e"),
+            target_startup: options.startup.clone(),
+            replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
+            pr_base: "dev-migration".to_string(),
+            recorder_config: PathBuf::from(PROJECT_CONFIG_PATH),
+            recording_rule: DEFAULT_RECORDING_RULE.to_string(),
+            force: false,
+        },
+        recorder,
+    )?;
+    let coordinator_rules = super::CoordinatorRulesConfig::repository_defaults().render()?;
 
     let (gitignore, gitignore_updated) = ensure_local_gitignore(&target_root)?;
     let startup = crate::startup::normalized_config(options.startup)?;
     let startup = capture(&target_root, &options.source_container, &startup)?;
     super::edit::create_many_atomic(&[
         (generated[0].clone(), project),
-        (generated[1].clone(), recorder.into_bytes()),
+        (generated[1].clone(), coordinator_rules.into_bytes()),
         (generated[2].clone(), verification.into_bytes()),
     ])?;
     let target_image_tag = crate::target_container::image_tag(&target_root)?;
@@ -288,12 +294,12 @@ mod tests {
         assert_eq!(
             [
                 PROJECT_CONFIG_PATH,
-                RECORDER_CONFIG_PATH,
+                COORDINATOR_RULES_PATH,
                 VERIFICATION_POLICY_PATH
             ],
             [
                 ".traffic-e2e/project.yaml",
-                ".traffic-e2e/recorder.toml",
+                ".traffic-e2e/coordinator-rules.yaml",
                 ".traffic-e2e/verification.yaml"
             ]
         );
@@ -407,7 +413,7 @@ mod tests {
         );
         assert!(result.target_image_tag.ends_with("-target:cache"));
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
-        assert!(target.path().join(RECORDER_CONFIG_PATH).is_file());
+        assert!(target.path().join(COORDINATOR_RULES_PATH).is_file());
         assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());
         assert_eq!(
             result.startup.root,
@@ -420,13 +426,12 @@ mod tests {
                 .exists()
         );
         let project = fs::read_to_string(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
-        assert!(project.contains("version: 13"));
+        assert!(project.contains("version: 14"));
         assert!(project.contains("dockerfile: .traffic-e2e/Dockerfile.e2e"));
         assert!(!project.contains("http_host:"));
-        assert!(!project.contains("  port:"));
         assert!(!project.contains("motan_port:"));
         assert!(project.contains("runtime_root: local/runtime"));
-        assert!(project.contains("startup: {}"));
+        assert!(project.contains("startup:"));
         assert!(project.contains("container: breeze"));
         assert!(project.contains("pr_base: dev-migration"));
         assert!(!project.contains("max_response_bytes"));
@@ -445,7 +450,7 @@ mod tests {
                 .success()
         );
         let recorder =
-            crate::config::AppConfig::load(target.path().join(RECORDER_CONFIG_PATH)).unwrap();
+            crate::config::AppConfig::load(target.path().join(PROJECT_CONFIG_PATH)).unwrap();
         assert_eq!(recorder.http_gateway.listen.to_string(), "0.0.0.0:17171");
         assert_eq!(
             recorder.http_gateway.matched_upstream,
@@ -457,7 +462,7 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .candidate_upstream,
-            "http://127.0.0.1:8080"
+            "http://comparison-target.traffic-e2e.invalid:8080"
         );
         assert_eq!(recorder.recording.max_body_bytes, DEFAULT_BODY_LIMIT_BYTES);
         crate::replay::validate_replay_policy(&target.path().join(VERIFICATION_POLICY_PATH))

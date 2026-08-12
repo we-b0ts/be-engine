@@ -5,11 +5,11 @@ use std::time::Duration;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::{BackgroundDependencyRuleConfig, DEFAULT_BODY_LIMIT_BYTES};
+use super::DEFAULT_BODY_LIMIT_BYTES;
 use crate::mysql::operation::MysqlWriteOperation;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RecordingConfig {
     pub output_dir: PathBuf,
     pub max_body_bytes: usize,
@@ -30,7 +30,6 @@ pub struct RecordingConfig {
     pub redact_headers: Vec<String>,
     pub access_policy: RecordingAccessPolicy,
     pub access_rules: Vec<RecordingAccessRuleConfig>,
-    pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -199,7 +198,6 @@ impl RecordingConfig {
                 }
             }
         }
-        super::process_owned_dependencies::validate(&self.process_owned_dependencies)?;
         Ok(())
     }
 
@@ -264,7 +262,6 @@ impl Default for RecordingConfig {
             ],
             access_policy: RecordingAccessPolicy::Unrestricted,
             access_rules: Vec::new(),
-            process_owned_dependencies: Vec::new(),
         }
     }
 }

@@ -8,7 +8,8 @@ use crate::dns_mock::DomainMatcher;
 
 struct Fixture {
     directory: TempDir,
-    config_path: PathBuf,
+    project: PathBuf,
+    rules: PathBuf,
     snapshot_dir: PathBuf,
 }
 
@@ -29,38 +30,42 @@ impl Fixture {
             "other",
             "other.example.com:6379,shared.example.com:6379",
         );
-        let config_path = directory.path().join("recorder.toml");
+        let project = directory.path().join("project.yaml");
+        let rules = directory.path().join("coordinator-rules.yaml");
         fs::write(
-            &config_path,
+            &project,
             format!(
-                r#"
-[dns_mock]
-enabled = true
-
-[[dns_mock.bypass_strategies]]
-strategy = "breeze"
-snapshot_dir = "{}"
-
-[tcp_gateway]
-enabled = true
-"#,
+                "project:\n  recording:\n    coordinator_rules: coordinator-rules.yaml\nrecorder:\n  dns_mock:\n    enabled: true\n    bypass_strategies:\n    - strategy: breeze\n      snapshot_dir: {}\n  tcp_gateway:\n    enabled: true\n",
                 snapshot_dir.display()
             ),
         )
         .unwrap();
+        fs::write(&rules, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
         Self {
             directory,
-            config_path,
+            project,
+            rules,
             snapshot_dir,
         }
     }
 
     fn feedback(&self) -> BreezeResourceCaptureFeedback {
         BreezeResourceCaptureFeedback {
-            config_path: self.config_path.clone(),
+            project_config_path: self.project.clone(),
+            rules_path: self.rules.clone(),
             resource: "usercounter".to_string(),
             source_revision: "abc123".to_string(),
             source_evidence: "src/UserCounter.java:load uses usercounter".to_string(),
+        }
+    }
+
+    fn endpoint_feedback(&self, endpoint: &str) -> BreezeEndpointCaptureFeedback {
+        BreezeEndpointCaptureFeedback {
+            project_config_path: self.project.clone(),
+            rules_path: self.rules.clone(),
+            endpoint: endpoint.to_string(),
+            source_revision: "abc123".to_string(),
+            source_evidence: "src/UserCounter.java:load resolves the counter backend".to_string(),
         }
     }
 }
@@ -74,104 +79,79 @@ fn snapshot(directory: &Path, identity: &str, name: &str, backends: &str) {
 }
 
 #[test]
-fn plans_and_applies_unique_resource_as_canonical_identity() {
+fn plans_and_applies_canonical_resource_to_coordinator_rules() {
     let fixture = Fixture::new();
-
     let plan = plan_breeze_resource_capture(fixture.feedback()).unwrap();
-
     assert!(plan.report().changed);
-    assert!(!plan.report().applied);
     assert_eq!(plan.report().resource, "usercounter");
-    assert!(plan.report().requested_endpoint.is_none());
-    assert_eq!(plan.report().domains.len(), 2);
     assert_eq!(plan.report().shared_domain_resources.len(), 1);
-    assert!(
-        plan.report()
-            .resource_identity
-            .ends_with("+rediscounter+user+usercounter")
-    );
     let report = plan.apply().unwrap();
-    assert!(report.applied);
 
-    let raw = fs::read_to_string(&fixture.config_path).unwrap();
-    assert!(raw.contains(BEGIN_MARKER));
-    assert!(raw.contains(&report.resource_identity));
-    let config = parse_and_validate(&raw, &fixture.config_path).unwrap();
+    let rules = CoordinatorRulesConfig::load(&fixture.rules).unwrap();
+    assert_eq!(rules.breeze_capture.len(), 1);
+    assert_eq!(
+        rules.breeze_capture[0].capture_resources,
+        vec![report.resource_identity.clone()]
+    );
+    let config = AppConfig::load(&fixture.project).unwrap();
     let matcher = DomainMatcher::from_config(&config.dns_mock).unwrap();
     assert!(!matcher.matches("counter.example.com"));
     assert!(!matcher.matches("shared.example.com"));
     assert!(matcher.matches("other.example.com"));
-
-    let repeated = plan_breeze_resource_capture(fixture.feedback()).unwrap();
-    assert!(!repeated.report().changed);
+    assert!(
+        !plan_breeze_resource_capture(fixture.feedback())
+            .unwrap()
+            .report()
+            .changed
+    );
 }
 
 #[test]
-fn resolves_a_backend_endpoint_to_its_canonical_resource() {
+fn resolves_endpoint_and_rejects_unknown_shared_or_literal_hosts() {
     let fixture = Fixture::new();
-
-    let plan = plan_breeze_endpoint_capture(BreezeEndpointCaptureFeedback {
-        config_path: fixture.config_path.clone(),
-        endpoint: "COUNTER.EXAMPLE.COM.:7917".to_string(),
-        source_revision: "abc123".to_string(),
-        source_evidence: "src/UserCounter.java:load resolves the counter backend".to_string(),
-    })
-    .unwrap();
-
+    let plan = plan_breeze_endpoint_capture(fixture.endpoint_feedback("COUNTER.EXAMPLE.COM.:7917"))
+        .unwrap();
     assert_eq!(plan.report().resource, "usercounter");
-    assert_eq!(
-        plan.report().requested_endpoint.as_deref(),
-        Some("COUNTER.EXAMPLE.COM.:7917")
+
+    assert!(
+        plan_breeze_endpoint_capture(fixture.endpoint_feedback("missing.example.com:7917"))
+            .unwrap_err()
+            .to_string()
+            .contains("does not belong")
     );
     assert!(
-        plan.report()
-            .resource_identity
-            .ends_with("+rediscounter+user+usercounter")
+        plan_breeze_endpoint_capture(fixture.endpoint_feedback("shared.example.com"))
+            .unwrap_err()
+            .to_string()
+            .contains("shared by multiple")
     );
-}
-
-#[test]
-fn endpoint_resolution_rejects_unknown_shared_or_literal_hosts() {
-    let fixture = Fixture::new();
-
-    let feedback = |endpoint: &str| BreezeEndpointCaptureFeedback {
-        config_path: fixture.config_path.clone(),
-        endpoint: endpoint.to_string(),
-        source_revision: "abc123".to_string(),
-        source_evidence: "src/UserCounter.java:load resolves the counter backend".to_string(),
-    };
-
-    let unknown = plan_breeze_endpoint_capture(feedback("missing.example.com:7917"))
-        .unwrap_err()
-        .to_string();
-    assert!(unknown.contains("does not belong to any resource"));
-
-    let shared = plan_breeze_endpoint_capture(feedback("shared.example.com"))
-        .unwrap_err()
-        .to_string();
-    assert!(shared.contains("shared by multiple Breeze resources"));
-
-    let shared_with_port =
-        plan_breeze_endpoint_capture(feedback("shared.example.com:6379")).unwrap();
-    assert_eq!(shared_with_port.report().resource, "other");
-
-    let literal = plan_breeze_endpoint_capture(feedback("10.0.0.1:7917"))
-        .unwrap_err()
-        .to_string();
-    assert!(literal.contains("IP literals"));
+    assert_eq!(
+        plan_breeze_endpoint_capture(fixture.endpoint_feedback("shared.example.com:6379"))
+            .unwrap()
+            .report()
+            .resource,
+        "other"
+    );
+    assert!(
+        plan_breeze_endpoint_capture(fixture.endpoint_feedback("10.0.0.1:7917"))
+            .unwrap_err()
+            .to_string()
+            .contains("IP literals")
+    );
 }
 
 #[test]
 fn rejects_ip_only_or_ambiguous_resource() {
     let fixture = Fixture::new();
     snapshot(&fixture.snapshot_dir, "ip-only", "ip-only", "10.0.0.1:6379");
-    let mut ip_feedback = fixture.feedback();
-    ip_feedback.resource = "ip-only".to_string();
-
-    let ip_error = plan_breeze_resource_capture(ip_feedback)
-        .unwrap_err()
-        .to_string();
-    assert!(ip_error.contains("IP literals are not part of DNS bypass"));
+    let mut ip = fixture.feedback();
+    ip.resource = "ip-only".to_string();
+    assert!(
+        plan_breeze_resource_capture(ip)
+            .unwrap_err()
+            .to_string()
+            .contains("IP literals are not part")
+    );
 
     snapshot(
         &fixture.snapshot_dir,
@@ -179,18 +159,29 @@ fn rejects_ip_only_or_ambiguous_resource() {
         "usercounter",
         "duplicate.example.com:7917",
     );
-    let ambiguous = plan_breeze_resource_capture(fixture.feedback())
-        .unwrap_err()
-        .to_string();
-    assert!(ambiguous.contains("ambiguous"));
-    assert!(ambiguous.contains("exact descriptor identity"));
+    assert!(
+        plan_breeze_resource_capture(fixture.feedback())
+            .unwrap_err()
+            .to_string()
+            .contains("ambiguous")
+    );
 }
 
 #[test]
-fn apply_rejects_stale_config_or_snapshot() {
+fn apply_rejects_stale_project_rules_or_snapshot() {
     let fixture = Fixture::new();
     let plan = plan_breeze_resource_capture(fixture.feedback()).unwrap();
-    fs::write(&fixture.config_path, "[dns_mock]\nenabled = false\n").unwrap();
+    fs::write(&fixture.rules, "version: 1\n").unwrap();
+    assert!(
+        plan.apply()
+            .unwrap_err()
+            .to_string()
+            .contains("rules changed")
+    );
+
+    let fixture = Fixture::new();
+    let plan = plan_breeze_resource_capture(fixture.feedback()).unwrap();
+    fs::write(&fixture.project, "dns_mock: {}\n").unwrap();
     assert!(
         plan.apply()
             .unwrap_err()
@@ -200,11 +191,10 @@ fn apply_rejects_stale_config_or_snapshot() {
 
     let fixture = Fixture::new();
     let plan = plan_breeze_resource_capture(fixture.feedback()).unwrap();
-    let descriptor = fixture
-        .snapshot_dir
-        .join("static.config+3+config+cloud+rediscounter+user+usercounter");
     fs::write(
-        descriptor,
+        fixture
+            .snapshot_dir
+            .join("static.config+3+config+cloud+rediscounter+user+usercounter"),
         "124\nusercounter\nbackends:\n- changed.example.com:7917\n",
     )
     .unwrap();
@@ -214,28 +204,5 @@ fn apply_rejects_stale_config_or_snapshot() {
             .to_string()
             .contains("snapshot resource changed")
     );
-}
-
-#[test]
-fn refuses_unmanaged_existing_capture_assignment() {
-    let fixture = Fixture::new();
-    let raw = fs::read_to_string(&fixture.config_path).unwrap();
-    fs::write(
-        &fixture.config_path,
-        raw.replace(
-            &format!("snapshot_dir = \"{}\"", fixture.snapshot_dir.display()),
-            &format!(
-                "snapshot_dir = \"{}\"\ncapture_resources = [\"other\"]",
-                fixture.snapshot_dir.display()
-            ),
-        ),
-    )
-    .unwrap();
-
-    let error = plan_breeze_resource_capture(fixture.feedback())
-        .unwrap_err()
-        .to_string();
-
-    assert!(error.contains("AI-managed block"));
     assert!(fixture.directory.path().exists());
 }

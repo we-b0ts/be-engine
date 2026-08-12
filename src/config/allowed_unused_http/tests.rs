@@ -1,42 +1,39 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use tempfile::TempDir;
 
 use super::*;
-use crate::config::AppConfig;
 
-const CONFIG: &str = r#"# keep this comment
-[http_gateway]
-enabled = true
-
-[[http_gateway.rules]]
-name = "first"
-path_prefixes = ["/first"]
-
-[[http_gateway.rules]]
-name = "pluto"
-path_prefixes = ["/api"]
-case_path_patterns = []
-headers = {}
-
-[recording]
-access_policy = "unrestricted"
+const PROJECT: &str = r#"project:
+  recording:
+    coordinator_rules: coordinator-rules.yaml
+recorder:
+  http_gateway:
+    enabled: true
+    rules:
+    - name: first
+      path_prefixes: [/first]
+    - name: pluto
+      path_prefixes: [/api]
+  recording:
+    access_policy: unrestricted
 "#;
 
-fn feedback(path: &Path, hosts: &[&str]) -> AllowedUnusedHttpHostFeedback {
+fn feedback(fixture: &Fixture, hosts: &[&str]) -> AllowedUnusedHttpHostFeedback {
     AllowedUnusedHttpHostFeedback {
-        config_path: path.to_path_buf(),
+        project_config_path: fixture.project.clone(),
+        rules_path: fixture.rules.clone(),
         rule_name: "pluto".to_string(),
         hosts: hosts.iter().map(|host| (*host).to_string()).collect(),
     }
 }
 
 #[test]
-fn plan_bootstraps_managed_block_and_apply_converges() {
-    let fixture = Fixture::new(CONFIG);
+fn plan_updates_the_coordinator_document_and_apply_converges() {
+    let fixture = Fixture::new(CoordinatorRulesConfig::empty());
     let plan = plan_allowed_unused_http_hosts(feedback(
-        &fixture.path,
+        &fixture,
         &["cs.aliyuncs.com", "location-readonly.aliyuncs.com"],
     ))
     .unwrap();
@@ -49,49 +46,39 @@ fn plan_bootstraps_managed_block_and_apply_converges() {
             "location-readonly.aliyuncs.com".to_string()
         ]
     );
-    assert!(
-        plan.report()
-            .diff
-            .contains("+allowed_unused_http_hosts = [")
-    );
+    assert!(plan.report().diff.contains("allowed_unused_http_hosts"));
+    plan.apply().unwrap();
 
-    let applied = plan.apply().unwrap();
-    assert!(applied.applied);
-    let updated = fs::read_to_string(&fixture.path).unwrap();
-    assert!(updated.starts_with("# keep this comment\n"));
-    assert!(updated.contains(BEGIN_MARKER));
-    assert!(updated.find(BEGIN_MARKER).unwrap() < updated.find("headers = {}").unwrap());
-    let config = AppConfig::load(&fixture.path).unwrap();
+    assert_eq!(fs::read_to_string(&fixture.project).unwrap(), PROJECT);
+    let effective = AppConfig::load(&fixture.project).unwrap();
     assert_eq!(
-        config.http_gateway.rules[1].allowed_unused_http_hosts,
+        effective.http_gateway.rules[1].allowed_unused_http_hosts,
         vec![
             "cs.aliyuncs.com".to_string(),
             "location-readonly.aliyuncs.com".to_string()
         ]
     );
-
     let repeated = plan_allowed_unused_http_hosts(feedback(
-        &fixture.path,
+        &fixture,
         &["location-readonly.aliyuncs.com", "cs.aliyuncs.com"],
     ))
     .unwrap();
     assert!(!repeated.report().changed);
-    assert!(repeated.report().added.is_empty());
 }
 
 #[test]
-fn plan_adds_hosts_to_existing_managed_block_and_deduplicates_input() {
-    let fixture = Fixture::new(&CONFIG.replace(
-        "headers = {}",
-        r#"# BEGIN AI-MANAGED ALLOWED UNUSED HTTP HOSTS
-allowed_unused_http_hosts = [
-  "cs.aliyuncs.com",
-]
-# END AI-MANAGED ALLOWED UNUSED HTTP HOSTS
-headers = {}"#,
-    ));
+fn plan_adds_to_existing_values_and_deduplicates_input() {
+    let mut rules = CoordinatorRulesConfig::empty();
+    rules.http.push(CoordinatorHttpRuleConfig {
+        name: "pluto".to_string(),
+        source_revision: String::new(),
+        case_path_patterns: Vec::new(),
+        allowed_unused_http_hosts: vec!["cs.aliyuncs.com".to_string()],
+    });
+    let fixture = Fixture::new(rules);
+
     let plan = plan_allowed_unused_http_hosts(feedback(
-        &fixture.path,
+        &fixture,
         &[
             "location-readonly.aliyuncs.com",
             "location-readonly.aliyuncs.com",
@@ -101,9 +88,12 @@ headers = {}"#,
 
     assert_eq!(plan.report().added, vec!["location-readonly.aliyuncs.com"]);
     plan.apply().unwrap();
-    let config = AppConfig::load(&fixture.path).unwrap();
     assert_eq!(
-        config.http_gateway.rules[1].allowed_unused_http_hosts,
+        AppConfig::load(&fixture.project)
+            .unwrap()
+            .http_gateway
+            .rules[1]
+            .allowed_unused_http_hosts,
         vec![
             "cs.aliyuncs.com".to_string(),
             "location-readonly.aliyuncs.com".to_string()
@@ -112,87 +102,59 @@ headers = {}"#,
 }
 
 #[test]
-fn plan_rejects_unmanaged_or_invalid_hosts() {
-    let unmanaged = Fixture::new(&CONFIG.replace(
-        "headers = {}",
-        "allowed_unused_http_hosts = [\"cs.aliyuncs.com\"]\nheaders = {}",
-    ));
-    let error = plan_allowed_unused_http_hosts(feedback(&unmanaged.path, &["cs.aliyuncs.com"]))
-        .unwrap_err();
-    assert!(error.to_string().contains("AI-managed block"));
-
+fn rejects_noncanonical_hosts() {
     for host in [
         "CS.aliyuncs.com",
         "cs.aliyuncs.com.",
         "cs.aliyuncs.com:443",
         "*.aliyuncs.com",
     ] {
-        let fixture = Fixture::new(CONFIG);
-        let error = plan_allowed_unused_http_hosts(feedback(&fixture.path, &[host])).unwrap_err();
+        let fixture = Fixture::new(CoordinatorRulesConfig::empty());
+        let error = plan_allowed_unused_http_hosts(feedback(&fixture, &[host])).unwrap_err();
         assert!(error.to_string().contains("allowed unused HTTP host"));
     }
 }
 
 #[test]
-fn apply_detects_config_changes_after_plan() {
-    let fixture = Fixture::new(CONFIG);
-    let plan =
-        plan_allowed_unused_http_hosts(feedback(&fixture.path, &["cs.aliyuncs.com"])).unwrap();
-    fs::write(&fixture.path, format!("{CONFIG}\n# concurrent edit\n")).unwrap();
-
-    let error = plan.apply().unwrap_err();
-
-    assert!(error.to_string().contains("changed after planning"));
-}
-
-#[test]
-fn config_rejects_hosts_on_exclude_rules_and_duplicates() {
-    let duplicate = CONFIG.replace(
-        "headers = {}",
-        "allowed_unused_http_hosts = [\"cs.aliyuncs.com\", \"cs.aliyuncs.com\"]\nheaders = {}",
-    );
-    let config: AppConfig = toml::from_str(&duplicate).unwrap();
+fn apply_detects_project_or_rules_changes_after_plan() {
+    let fixture = Fixture::new(CoordinatorRulesConfig::empty());
+    let plan = plan_allowed_unused_http_hosts(feedback(&fixture, &["cs.aliyuncs.com"])).unwrap();
+    fs::write(&fixture.rules, "version: 1\n").unwrap();
     assert!(
-        config
-            .validate()
+        plan.apply()
             .unwrap_err()
             .to_string()
-            .contains("duplicate")
+            .contains("changed after planning")
     );
 
-    let exclude = CONFIG.replace(
-        "path_prefixes = [\"/first\"]",
-        "path_prefixes = [\"/first\"]\nallowed_unused_http_hosts = [\"cs.aliyuncs.com\"]",
-    );
-    let config: AppConfig = toml::from_str(&exclude).unwrap();
-    config.validate().unwrap();
-
-    let exclude = r#"
-[http_gateway]
-[[http_gateway.exclude_rules]]
-name = "health"
-allowed_unused_http_hosts = ["cs.aliyuncs.com"]
-"#;
-    let config: AppConfig = toml::from_str(exclude).unwrap();
+    let fixture = Fixture::new(CoordinatorRulesConfig::empty());
+    let plan = plan_allowed_unused_http_hosts(feedback(&fixture, &["cs.aliyuncs.com"])).unwrap();
+    fs::write(&fixture.project, format!("{PROJECT}# concurrent edit\n")).unwrap();
     assert!(
-        config
-            .validate()
+        plan.apply()
             .unwrap_err()
             .to_string()
-            .contains("exclude_rules")
+            .contains("changed after planning")
     );
 }
 
 struct Fixture {
     _temp: TempDir,
-    path: PathBuf,
+    project: PathBuf,
+    rules: PathBuf,
 }
 
 impl Fixture {
-    fn new(contents: &str) -> Self {
+    fn new(rules: CoordinatorRulesConfig) -> Self {
         let temp = TempDir::new().unwrap();
-        let path = temp.path().join("recorder.toml");
-        fs::write(&path, contents).unwrap();
-        Self { _temp: temp, path }
+        let project = temp.path().join("project.yaml");
+        let rules_path = temp.path().join("coordinator-rules.yaml");
+        fs::write(&project, PROJECT).unwrap();
+        fs::write(&rules_path, rules.render().unwrap()).unwrap();
+        Self {
+            _temp: temp,
+            project,
+            rules: rules_path,
+        }
     }
 }

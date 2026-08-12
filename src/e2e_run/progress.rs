@@ -153,11 +153,28 @@ pub(super) fn write_replay_progress(
     Ok(())
 }
 
-pub(super) fn revise_replay_progress(progress_path: &Path, state: &ActiveRunState) -> Result<()> {
+pub(super) fn ensure_replay_progress_revisable(
+    progress_path: &Path,
+    state: &ActiveRunState,
+) -> Result<()> {
+    let report = load(progress_path, VerificationStage::Replay)?
+        .context("replay progress is missing for focused evidence revision")?;
+    report.ensure_revisable_observation(&observation(state, ReplayRunKind::Focused)?)
+}
+
+pub(super) fn revise_replay_progress(
+    progress_path: &Path,
+    previous: &ActiveRunState,
+    current: &ActiveRunState,
+) -> Result<()> {
     let mut report = load(progress_path, VerificationStage::Replay)?
         .context("replay progress is missing for focused evidence revision")?;
     let requires_persistence = report.requires_persistence();
-    if report.revise_latest(observation(state, ReplayRunKind::Focused)?)? || requires_persistence {
+    if report.revise(
+        observation(previous, ReplayRunKind::Focused)?,
+        observation(current, ReplayRunKind::Focused)?,
+    )? || requires_persistence
+    {
         write(progress_path, &report)?;
     }
     Ok(())
@@ -312,6 +329,8 @@ fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
             scope: Vec::new(),
         }),
         counted_runs: BTreeMap::from([(legacy_run_key, legacy_evidence_fingerprint)]),
+        counted_observations: BTreeMap::new(),
+        observation_baseline: None,
         apis: legacy
             .apis
             .into_iter()

@@ -185,11 +185,12 @@ fn unresolved_classification_preserves_source_investigation_without_a_rule_plan(
 fn redis_rule_application_is_queued_for_a_fresh_snapshot_recording() {
     let target = tempdir().unwrap();
     fs::create_dir_all(target.path().join(".traffic-e2e")).unwrap();
-    fs::write(
-        target.path().join(".traffic-e2e/recorder.toml"),
-        "[recording]\n",
-    )
-    .unwrap();
+    crate::rewrite::test_support::install_project_config(
+        target.path(),
+        "master",
+        crate::config::AppConfig::default(),
+        None,
+    );
     let mut state = dependency_state();
     let applied = pending_cache_snapshot_refresh(&state, "dependency-plan-original")
         .unwrap()

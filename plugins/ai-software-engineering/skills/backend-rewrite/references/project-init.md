@@ -50,11 +50,14 @@ The command atomically creates exactly these source-controlled files:
 
 ```text
 .traffic-e2e/project.yaml
-.traffic-e2e/recorder.toml
+.traffic-e2e/coordinator-rules.yaml
 .traffic-e2e/verification.yaml
 ```
 
-`project.yaml` uses schema version 13. The startup declaration and matching
+`project.yaml` uses schema version 14 and combines project settings with the
+static recorder configuration. `coordinator-rules.yaml` is wholly managed by
+the coordinator and contains HTTP feedback, Breeze capture resources, and
+process-owned dependency rules. The startup declaration and matching
 snapshot are immutable initialization outputs. Normal rewrite sessions must not
 replace, refresh, or migrate them. A repository with obsolete, missing, stale,
 or damaged startup inputs requires the explicit administrator repair:

@@ -75,10 +75,10 @@ struct ReplayFileValues {
     control_socket: Option<PathBuf>,
     enable_intercept: Option<bool>,
     policy: Option<PathBuf>,
-    owner_uid: Option<toml::Value>,
-    user: Option<toml::Value>,
-    record_user: Option<toml::Value>,
-    all_users: Option<toml::Value>,
+    owner_uid: Option<serde_yaml::Value>,
+    user: Option<serde_yaml::Value>,
+    record_user: Option<serde_yaml::Value>,
+    all_users: Option<serde_yaml::Value>,
 }
 
 struct ResolvedReplay {
@@ -167,7 +167,7 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
             );
             let source = std::fs::read_to_string(&path)
                 .with_context(|| format!("failed to read replay config {}", path.display()))?;
-            let file: ReplayFile = toml::from_str(&source)
+            let file: ReplayFile = serde_yaml::from_str(&source)
                 .with_context(|| format!("failed to parse replay config {}", path.display()))?;
             reject_file_owner(&file.replay)?;
             let parent = path
@@ -396,7 +396,7 @@ fn load_background_dependencies(
     recorder_config: Option<&Path>,
 ) -> Result<Vec<traffic_e2e::BackgroundDependencyRuleConfig>> {
     recorder_config
-        .map(|path| AppConfig::load(path).map(|config| config.recording.process_owned_dependencies))
+        .map(|path| AppConfig::load(path).map(|config| config.process_owned_dependencies))
         .transpose()
         .map(Option::unwrap_or_default)
 }
@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn rejects_configurable_replay_owner() {
-        let file: ReplayFile = toml::from_str("[replay]\nowner_uid = 1000\n").unwrap();
+        let file: ReplayFile = serde_yaml::from_str("replay:\n  owner_uid: 1000\n").unwrap();
         let error = reject_file_owner(&file.replay).unwrap_err().to_string();
         assert!(error.contains("owner_uid"));
         assert!(error.contains("fixed user"));
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn replay_file_rejects_unknown_fields() {
-        assert!(toml::from_str::<ReplayFile>("[replay]\nunknown = true\n").is_err());
+        assert!(serde_yaml::from_str::<ReplayFile>("replay:\n  unknown: true\n").is_err());
     }
 
     #[test]
@@ -443,7 +443,8 @@ mod tests {
             TestCli::try_parse_from(["test", "--upstream-dns", "10.10.10.10:53", "cases"]).is_err()
         );
         assert!(
-            toml::from_str::<ReplayFile>("[replay]\nupstream_dns = \"10.10.10.10:53\"\n").is_err()
+            serde_yaml::from_str::<ReplayFile>("replay:\n  upstream_dns: 10.10.10.10:53\n")
+                .is_err()
         );
     }
 
@@ -454,10 +455,10 @@ mod tests {
         let case_dir = directory.path().join("cases");
         std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::create_dir_all(&case_dir).unwrap();
-        let config = config_dir.join("replay.toml");
+        let config = config_dir.join("replay.yaml");
         std::fs::write(
             &config,
-            "[replay]\ncase = \"../cases\"\nenable_intercept = false\n",
+            "replay:\n  case: ../cases\n  enable_intercept: false\n",
         )
         .unwrap();
 
@@ -494,19 +495,15 @@ mod tests {
     #[test]
     fn recorder_ports_remain_replay_defaults_when_explicit() {
         let directory = tempfile::tempdir().unwrap();
-        let recorder_config = directory.path().join("recorder.toml");
+        let recorder_config = directory.path().join("project.yaml");
         std::fs::write(
             &recorder_config,
-            r#"
-            [dns_mock]
-            listen = "127.0.0.153:15353"
-
-            [tcp_gateway]
-            listen = "127.0.0.1:15001"
-
-            [udp_gateway]
-            listen = "127.0.0.1:15002"
-            "#,
+            "version: 14\nproject:\n  recording:\n    coordinator_rules: coordinator-rules.yaml\nrecorder:\n  dns_mock:\n    listen: 127.0.0.153:15353\n  tcp_gateway:\n    listen: 127.0.0.1:15001\n  udp_gateway:\n    listen: 127.0.0.1:15002\n",
+        )
+        .unwrap();
+        std::fs::write(
+            directory.path().join("coordinator-rules.yaml"),
+            "version: 1\nhttp: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();
         let mut args = replay_args(Some(directory.path().to_path_buf()), None);

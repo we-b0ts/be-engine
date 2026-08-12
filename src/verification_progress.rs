@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::edit::{create_atomic, write_atomic};
 
 mod ledger;
+mod revision;
 
 pub(crate) const PROGRESS_VERSION: u8 = 2;
 const MIN_SUPPORTED_PROGRESS_VERSION: u8 = 1;
@@ -31,12 +32,16 @@ pub(crate) struct ProgressReport {
     pub(crate) latest_run: Option<LatestRun>,
     #[serde(default, skip_serializing)]
     pub(crate) counted_runs: BTreeMap<String, String>,
+    #[serde(default, skip_serializing)]
+    pub(crate) counted_observations: BTreeMap<String, CountedObservation>,
+    #[serde(default, skip_serializing)]
+    pub(crate) observation_baseline: Option<ProgressBaseline>,
     pub(crate) apis: BTreeMap<String, ProgressApi>,
     #[serde(skip)]
     pub(crate) requires_persistence: bool,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProgressTotals {
     pub(crate) runs: SuccessCounts,
@@ -44,27 +49,27 @@ pub(crate) struct ProgressTotals {
     pub(crate) apis: ApiCounts,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SuccessCounts {
     pub(crate) executed: u64,
     pub(crate) passed: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ApiCounts {
     pub(crate) total: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SuccessStreak {
     pub(crate) runs: u64,
     pub(crate) cases: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LatestRun {
     pub(crate) key: String,
@@ -76,7 +81,7 @@ pub(crate) struct LatestRun {
     pub(crate) scope: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LatestCounts {
     pub(crate) executed: u64,
@@ -84,21 +89,21 @@ pub(crate) struct LatestCounts {
     pub(crate) passed: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProgressApi {
     pub(crate) totals: ApiTotals,
     pub(crate) success_streak: SuccessStreak,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ApiTotals {
     pub(crate) runs: SuccessCounts,
     pub(crate) cases: SuccessCounts,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ProgressObservation {
     pub(crate) key: String,
     pub(crate) evidence_fingerprint: String,
@@ -106,10 +111,28 @@ pub(crate) struct ProgressObservation {
     pub(crate) apis: BTreeMap<String, ApiObservation>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ApiObservation {
     pub(crate) cases: LatestCounts,
     pub(crate) passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CountedObservation {
+    pub(crate) number: u64,
+    pub(crate) observation: ProgressObservation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProgressBaseline {
+    pub(crate) number: u64,
+    pub(crate) updated_at: String,
+    pub(crate) totals: ProgressTotals,
+    pub(crate) success_streak: SuccessStreak,
+    pub(crate) latest_run: Option<LatestRun>,
+    pub(crate) apis: BTreeMap<String, ProgressApi>,
 }
 
 impl ProgressReport {
@@ -122,6 +145,8 @@ impl ProgressReport {
             success_streak: SuccessStreak::default(),
             latest_run: None,
             counted_runs: BTreeMap::new(),
+            counted_observations: BTreeMap::new(),
+            observation_baseline: None,
             apis: BTreeMap::new(),
             requires_persistence: false,
         }
@@ -147,6 +172,29 @@ impl ProgressReport {
             "progress counted-run limit of {MAX_COUNTED_RUNS} was reached"
         );
 
+        if self.counted_observations.is_empty()
+            && !self.counted_runs.is_empty()
+            && self.observation_baseline.is_none()
+        {
+            self.observation_baseline = Some(self.current_baseline());
+        }
+        let number = self.totals.runs.executed.saturating_add(1);
+        self.apply_aggregate(&observation, number);
+        self.counted_runs.insert(
+            observation.key.clone(),
+            observation.evidence_fingerprint.clone(),
+        );
+        self.counted_observations.insert(
+            observation.key.clone(),
+            CountedObservation {
+                number,
+                observation,
+            },
+        );
+        Ok(true)
+    }
+
+    fn apply_aggregate(&mut self, observation: &ProgressObservation, number: u64) {
         let scope = observation.apis.keys().cloned().collect::<Vec<_>>();
         let same_scope = self
             .latest_run
@@ -212,15 +260,11 @@ impl ProgressReport {
             }
         }
         self.totals.apis.total = self.apis.len() as u64;
-        self.updated_at = observation.finished_at;
-        self.counted_runs.insert(
-            observation.key.clone(),
-            observation.evidence_fingerprint.clone(),
-        );
+        self.updated_at.clone_from(&observation.finished_at);
         self.latest_run = Some(LatestRun {
-            key: observation.key,
-            evidence_fingerprint: observation.evidence_fingerprint,
-            number: self.totals.runs.executed,
+            key: observation.key.clone(),
+            evidence_fingerprint: observation.evidence_fingerprint.clone(),
+            number,
             passed,
             cases,
             apis: LatestCounts {
@@ -229,88 +273,69 @@ impl ProgressReport {
             },
             scope,
         });
-        Ok(true)
     }
 
-    pub(crate) fn revise_latest(&mut self, observation: ProgressObservation) -> Result<bool> {
-        self.validate_observation(&observation)?;
-        ensure!(
-            observation.apis.len() == 1,
-            "only a focused single-API progress run can be revised"
-        );
-        let latest = self
-            .latest_run
-            .clone()
-            .context("progress has no latest run to revise")?;
-        ensure!(
-            latest.key == observation.key,
-            "only the latest progress run can be revised"
-        );
-        let (api_key, api_observation) = observation
-            .apis
-            .iter()
-            .next()
-            .expect("single-API observation is non-empty");
-        ensure!(
-            latest.scope == [api_key.clone()],
-            "latest progress scope changed before revision"
-        );
-        if latest.evidence_fingerprint == observation.evidence_fingerprint {
-            return Ok(false);
+    fn current_baseline(&self) -> ProgressBaseline {
+        ProgressBaseline {
+            number: self.totals.runs.executed,
+            updated_at: self.updated_at.clone(),
+            totals: self.totals.clone(),
+            success_streak: self.success_streak,
+            latest_run: self.latest_run.clone(),
+            apis: self.apis.clone(),
         }
+    }
 
-        revise_success_counts(&mut self.totals.cases, latest.cases, api_observation.cases);
-        self.totals.runs.passed = self
-            .totals
-            .runs
-            .passed
-            .saturating_sub(u64::from(latest.passed))
-            .saturating_add(u64::from(api_observation.passed));
-        revise_streak(
-            &mut self.success_streak,
-            latest.passed,
-            api_observation.passed,
-            latest.cases.executed,
-            api_observation.cases.executed,
+    fn validate_observation_history(&self) -> Result<()> {
+        let mut observations = self.counted_observations.values().collect::<Vec<_>>();
+        observations.sort_by_key(|counted| counted.number);
+        let baseline_number = self
+            .observation_baseline
+            .as_ref()
+            .map_or(0, |baseline| baseline.number);
+        for (index, counted) in observations.iter().enumerate() {
+            ensure!(
+                counted.number == baseline_number + index as u64 + 1,
+                "progress observation ledger has a missing or duplicate run number"
+            );
+            ensure!(
+                self.counted_runs.get(&counted.observation.key)
+                    == Some(&counted.observation.evidence_fingerprint),
+                "progress observation ledger conflicts with counted-run evidence"
+            );
+        }
+        ensure!(
+            baseline_number + observations.len() as u64 == self.totals.runs.executed,
+            "progress observation ledger does not reach the current aggregate"
         );
+        Ok(())
+    }
 
-        let api = self
-            .apis
-            .get_mut(api_key)
-            .with_context(|| format!("latest progress API {api_key:?} is missing"))?;
-        revise_success_counts(&mut api.totals.cases, latest.cases, api_observation.cases);
-        api.totals.runs.passed = api
-            .totals
-            .runs
-            .passed
-            .saturating_sub(u64::from(latest.passed))
-            .saturating_add(u64::from(api_observation.passed));
-        revise_streak(
-            &mut api.success_streak,
-            latest.passed,
-            api_observation.passed,
-            latest.cases.executed,
-            api_observation.cases.executed,
-        );
-
-        self.updated_at = observation.finished_at;
-        self.counted_runs.insert(
-            observation.key.clone(),
-            observation.evidence_fingerprint.clone(),
-        );
-        self.latest_run = Some(LatestRun {
-            key: observation.key,
-            evidence_fingerprint: observation.evidence_fingerprint,
-            number: latest.number,
-            passed: api_observation.passed,
-            cases: api_observation.cases,
-            apis: LatestCounts {
-                executed: 1,
-                passed: u64::from(api_observation.passed),
-            },
-            scope: vec![api_key.clone()],
-        });
-        Ok(true)
+    fn rebuild_aggregates(&mut self) -> Result<()> {
+        self.validate_observation_history()?;
+        let mut observations = self
+            .counted_observations
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        observations.sort_by_key(|counted| counted.number);
+        if let Some(baseline) = &self.observation_baseline {
+            self.updated_at.clone_from(&baseline.updated_at);
+            self.totals = baseline.totals.clone();
+            self.success_streak = baseline.success_streak;
+            self.latest_run.clone_from(&baseline.latest_run);
+            self.apis.clone_from(&baseline.apis);
+        } else {
+            self.updated_at.clear();
+            self.totals = ProgressTotals::default();
+            self.success_streak = SuccessStreak::default();
+            self.latest_run = None;
+            self.apis.clear();
+        }
+        for counted in &observations {
+            self.apply_aggregate(&counted.observation, counted.number);
+        }
+        Ok(())
     }
 
     fn validate_observation(&self, observation: &ProgressObservation) -> Result<()> {
@@ -351,44 +376,6 @@ impl ProgressReport {
     }
 }
 
-fn revise_success_counts(
-    totals: &mut SuccessCounts,
-    previous: LatestCounts,
-    current: LatestCounts,
-) {
-    totals.executed = totals
-        .executed
-        .saturating_sub(previous.executed)
-        .saturating_add(current.executed);
-    totals.passed = totals
-        .passed
-        .saturating_sub(previous.passed)
-        .saturating_add(current.passed);
-}
-
-fn revise_streak(
-    streak: &mut SuccessStreak,
-    previous_passed: bool,
-    current_passed: bool,
-    previous_cases: u64,
-    current_cases: u64,
-) {
-    match (previous_passed, current_passed) {
-        (true, true) => {
-            streak.cases = streak
-                .cases
-                .saturating_sub(previous_cases)
-                .saturating_add(current_cases);
-        }
-        (false, true) => {
-            streak.runs = 1;
-            streak.cases = current_cases;
-        }
-        (true, false) => *streak = SuccessStreak::default(),
-        (false, false) => {}
-    }
-}
-
 pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<ProgressReport>> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -423,8 +410,22 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
     let schema_migration = report.version != PROGRESS_VERSION;
     report.version = PROGRESS_VERSION;
     let embedded_counted_runs = !report.counted_runs.is_empty();
-    let persisted_counted_runs = ledger::load(path, stage)?;
-    merge_counted_runs(path, &mut report.counted_runs, persisted_counted_runs)?;
+    let persisted_ledger = ledger::load(path, stage)?;
+    merge_counted_runs(
+        path,
+        &mut report.counted_runs,
+        persisted_ledger.counted_runs,
+    )?;
+    merge_counted_observations(
+        path,
+        &mut report.counted_observations,
+        persisted_ledger.counted_observations,
+    )?;
+    merge_observation_baseline(
+        path,
+        &mut report.observation_baseline,
+        persisted_ledger.observation_baseline,
+    )?;
     report.requires_persistence = schema_migration || embedded_counted_runs;
     if let Some(latest) = &report.latest_run {
         match report.counted_runs.get(&latest.key) {
@@ -446,6 +447,7 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
         "{} contains more than {MAX_COUNTED_RUNS} counted runs",
         path.display()
     );
+    validate_counted_observations(path, &report)?;
     Ok(Some(report))
 }
 
@@ -458,7 +460,7 @@ pub(crate) fn write(path: &Path, report: &ProgressReport) -> Result<()> {
     );
     let recovery_payload = ledger::recovery_payload(report)?;
     write_payload(path, &recovery_payload)?;
-    ledger::write(path, report.stage, &report.counted_runs)?;
+    ledger::write(path, report)?;
     let public_payload = yaml_payload(report)?;
     write_payload(path, &public_payload)
 }
@@ -505,6 +507,79 @@ fn merge_counted_runs(
                 destination.insert(key, evidence_fingerprint);
             }
         }
+    }
+    Ok(())
+}
+
+fn merge_counted_observations(
+    progress_path: &Path,
+    destination: &mut BTreeMap<String, CountedObservation>,
+    source: BTreeMap<String, CountedObservation>,
+) -> Result<()> {
+    for (key, observation) in source {
+        match destination.get(&key) {
+            Some(embedded) => ensure!(
+                embedded == &observation,
+                "{} contains conflicting counted observation for {:?}",
+                progress_path.display(),
+                key
+            ),
+            None => {
+                destination.insert(key, observation);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_counted_observations(path: &Path, report: &ProgressReport) -> Result<()> {
+    ensure!(
+        report.counted_observations.len() <= MAX_COUNTED_RUNS,
+        "{} contains more than {MAX_COUNTED_RUNS} counted observations",
+        path.display()
+    );
+    let mut numbers = BTreeMap::new();
+    for (key, counted) in &report.counted_observations {
+        ensure!(
+            counted.observation.key == *key,
+            "{} contains a counted observation under the wrong key {:?}",
+            path.display(),
+            key
+        );
+        ensure!(
+            report.counted_runs.get(key) == Some(&counted.observation.evidence_fingerprint),
+            "{} contains conflicting evidence for counted observation {:?}",
+            path.display(),
+            key
+        );
+        ensure!(
+            numbers.insert(counted.number, key).is_none(),
+            "{} contains duplicate counted observation number {}",
+            path.display(),
+            counted.number
+        );
+    }
+    if !report.counted_observations.is_empty() || report.observation_baseline.is_some() {
+        report.validate_observation_history()?;
+    }
+    Ok(())
+}
+
+fn merge_observation_baseline(
+    progress_path: &Path,
+    destination: &mut Option<ProgressBaseline>,
+    source: Option<ProgressBaseline>,
+) -> Result<()> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    match destination {
+        Some(embedded) => ensure!(
+            embedded == &source,
+            "{} contains conflicting progress observation baselines",
+            progress_path.display()
+        ),
+        None => *destination = Some(source),
     }
     Ok(())
 }

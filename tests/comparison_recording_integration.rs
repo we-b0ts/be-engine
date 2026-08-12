@@ -301,7 +301,7 @@ async fn finite_input_completion_rejects_missing_published_cases() {
         summary["errors"][0]
             .as_str()
             .unwrap()
-            .contains("delivered 2 request template(s), but only 1")
+            .contains("delivered 2 request template(s), but 1")
     );
 }
 

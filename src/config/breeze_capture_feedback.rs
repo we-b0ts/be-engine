@@ -1,5 +1,4 @@
 use std::collections::BTreeSet;
-use std::fmt::Write as _;
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
@@ -12,20 +11,15 @@ use serde::Serialize;
 use crate::breeze::snapshot::{Snapshot, SnapshotResource};
 
 use super::edit::write_atomic;
-use super::rule_document::{
-    array_table_ranges, assignment_count, find_managed_block, managed_block_diff, newline,
-    parse_and_validate,
+use super::rule_document::whole_file_diff;
+use super::{
+    AppConfig, CoordinatorBreezeCaptureConfig, CoordinatorRulesConfig, DnsBypassStrategyConfig,
 };
-use super::{AppConfig, DnsBypassStrategyConfig};
-
-const TABLE_HEADER: &str = "[[dns_mock.bypass_strategies]]";
-const FIELD: &str = "capture_resources";
-const BEGIN_MARKER: &str = "# BEGIN AI-MANAGED BREEZE CAPTURE RESOURCES";
-const END_MARKER: &str = "# END AI-MANAGED BREEZE CAPTURE RESOURCES";
 
 #[derive(Debug, Clone)]
 pub struct BreezeResourceCaptureFeedback {
-    pub config_path: PathBuf,
+    pub project_config_path: PathBuf,
+    pub rules_path: PathBuf,
     pub resource: String,
     pub source_revision: String,
     pub source_evidence: String,
@@ -33,7 +27,8 @@ pub struct BreezeResourceCaptureFeedback {
 
 #[derive(Debug, Clone)]
 pub struct BreezeEndpointCaptureFeedback {
-    pub config_path: PathBuf,
+    pub project_config_path: PathBuf,
+    pub rules_path: PathBuf,
     pub endpoint: String,
     pub source_revision: String,
     pub source_evidence: String,
@@ -41,7 +36,7 @@ pub struct BreezeEndpointCaptureFeedback {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BreezeResourceCaptureReport {
-    pub config: PathBuf,
+    pub rules: PathBuf,
     pub snapshot_dir: PathBuf,
     pub requested_resource: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,9 +57,11 @@ pub struct BreezeResourceCaptureReport {
 
 #[derive(Debug)]
 pub struct BreezeResourceCapturePlan {
-    config_path: PathBuf,
-    original_config: String,
-    updated_config: String,
+    project_config_path: PathBuf,
+    rules_path: PathBuf,
+    original_project_config: String,
+    original_rules: String,
+    updated_rules: String,
     snapshot_dir: PathBuf,
     expected_resource: SnapshotResource,
     report: BreezeResourceCaptureReport,
@@ -76,10 +73,14 @@ impl BreezeResourceCapturePlan {
     }
 
     pub fn apply(self) -> Result<BreezeResourceCaptureReport> {
-        let current = read_config(&self.config_path)?;
+        let current = read_config(&self.project_config_path)?;
         ensure!(
-            current == self.original_config,
-            "recorder config changed after planning; rerun plan before applying"
+            current == self.original_project_config,
+            "project config changed after planning; rerun plan before applying"
+        );
+        ensure!(
+            read_config(&self.rules_path)? == self.original_rules,
+            "coordinator rules changed after planning; rerun plan before applying"
         );
         let snapshot = Snapshot::load(&self.snapshot_dir)?;
         let resource = snapshot.resolve(&self.expected_resource.identity)?;
@@ -88,7 +89,7 @@ impl BreezeResourceCapturePlan {
             "Breeze snapshot resource changed after planning; rerun plan before applying"
         );
         if self.report.changed {
-            write_atomic(&self.config_path, self.updated_config.as_bytes())?;
+            write_atomic(&self.rules_path, self.updated_rules.as_bytes())?;
         }
         let mut report = self.report;
         report.applied = true;
@@ -101,7 +102,8 @@ pub fn plan_breeze_resource_capture(
 ) -> Result<BreezeResourceCapturePlan> {
     validate_feedback(&feedback)?;
     plan_capture(
-        feedback.config_path,
+        feedback.project_config_path,
+        feedback.rules_path,
         CaptureSelector::Resource(feedback.resource),
         feedback.source_revision,
         feedback.source_evidence,
@@ -113,7 +115,8 @@ pub fn plan_breeze_endpoint_capture(
 ) -> Result<BreezeResourceCapturePlan> {
     validate_endpoint_feedback(&feedback)?;
     plan_capture(
-        feedback.config_path,
+        feedback.project_config_path,
+        feedback.rules_path,
         CaptureSelector::Endpoint(feedback.endpoint),
         feedback.source_revision,
         feedback.source_evidence,
@@ -126,14 +129,17 @@ enum CaptureSelector {
 }
 
 fn plan_capture(
-    config_path: PathBuf,
+    project_config_path: PathBuf,
+    rules_path: PathBuf,
     selector: CaptureSelector,
     source_revision: String,
     source_evidence: String,
 ) -> Result<BreezeResourceCapturePlan> {
-    ensure_regular_config(&config_path)?;
-    let original = read_config(&config_path)?;
-    let config = parse_and_validate(&original, &config_path)?;
+    ensure_regular_config(&project_config_path)?;
+    ensure_regular_config(&rules_path)?;
+    let original_project_config = read_config(&project_config_path)?;
+    let original_rules = read_config(&rules_path)?;
+    let config = AppConfig::load(&project_config_path)?;
     let (candidate, requested_resource, requested_endpoint) = match selector {
         CaptureSelector::Resource(resource) => {
             let candidate = resolve_candidate(&config, &resource)?;
@@ -152,38 +158,6 @@ fn plan_capture(
         candidate.resource.identity
     );
 
-    let ranges = array_table_ranges(&original, TABLE_HEADER);
-    ensure!(
-        ranges.len() == config.dns_mock.bypass_strategies.len(),
-        "could not associate parsed DNS bypass strategies with their source ranges"
-    );
-    let strategy_range = ranges[candidate.strategy_index].clone();
-    let strategy_source = &original[strategy_range.clone()];
-    let managed = find_managed_block(
-        &original,
-        &strategy_range,
-        BEGIN_MARKER,
-        END_MARKER,
-        "Breeze capture resources",
-    )?;
-    let total_assignments = assignment_count(strategy_source, FIELD);
-    let block = match managed {
-        Some(block) => {
-            ensure!(
-                total_assignments == 1 && assignment_count(&original[block.clone()], FIELD) == 1,
-                "{FIELD} must be owned exclusively by its AI-managed block"
-            );
-            block
-        }
-        None => {
-            ensure!(
-                total_assignments == 0,
-                "existing {FIELD} must be enclosed by its AI-managed block"
-            );
-            strategy_range.end..strategy_range.end
-        }
-    };
-
     let before = candidate
         .capture_resources
         .iter()
@@ -192,36 +166,31 @@ fn plan_capture(
     let mut after = before.clone();
     after.insert(candidate.resource.identity.clone());
     validate_existing_resources(&candidate.snapshot, &after)?;
-
-    let old_block = &original[block.clone()];
-    let new_block = render_managed_block(
-        &after,
-        newline(&original),
-        old_block.is_empty() || old_block.ends_with('\n'),
-    );
-    let mut updated = String::with_capacity(original.len() + new_block.len());
-    updated.push_str(&original[..block.start]);
-    updated.push_str(&new_block);
-    updated.push_str(&original[block.end..]);
-    parse_and_validate(&updated, &config_path)
-        .context("generated recorder config failed validation")?;
-
-    let changed = updated != original;
+    let mut rules = CoordinatorRulesConfig::parse(&original_rules, &rules_path)?;
+    let overlay = breeze_overlay_mut(&mut rules, &candidate.snapshot_dir);
+    overlay.capture_resources = after.iter().cloned().collect();
+    let mut static_config = AppConfig::load_static(&project_config_path)?;
+    rules.apply_to(&mut static_config)?;
+    static_config.validate()?;
+    let updated_rules = rules.render()?;
+    let changed = updated_rules != original_rules;
     let diff = if changed {
-        managed_block_diff(&config_path, &original, block.start, old_block, &new_block)
+        whole_file_diff(&rules_path, &original_rules, &updated_rules)
     } else {
         String::new()
     };
     let shared_domain_resources = shared_domain_resources(&candidate.snapshot, &candidate.resource);
 
     Ok(BreezeResourceCapturePlan {
-        config_path: config_path.clone(),
-        original_config: original,
-        updated_config: updated,
+        project_config_path,
+        rules_path: rules_path.clone(),
+        original_project_config,
+        original_rules,
+        updated_rules,
         snapshot_dir: candidate.snapshot_dir.clone(),
         expected_resource: candidate.resource.clone(),
         report: BreezeResourceCaptureReport {
-            config: config_path,
+            rules: rules_path,
             snapshot_dir: candidate.snapshot_dir,
             requested_resource,
             requested_endpoint,
@@ -242,7 +211,6 @@ fn plan_capture(
 }
 
 struct Candidate {
-    strategy_index: usize,
     snapshot_dir: PathBuf,
     capture_resources: Vec<String>,
     snapshot: Snapshot,
@@ -250,7 +218,6 @@ struct Candidate {
 }
 
 struct LoadedStrategy {
-    strategy_index: usize,
     snapshot_dir: PathBuf,
     capture_resources: Vec<String>,
     snapshot: Snapshot,
@@ -295,7 +262,6 @@ fn resolve_candidate(config: &AppConfig, selector: &str) -> Result<Candidate> {
     let selected = loaded.swap_remove(loaded_index);
     let resource = selected.snapshot.resources()[resource_index].clone();
     Ok(Candidate {
-        strategy_index: selected.strategy_index,
         snapshot_dir: selected.snapshot_dir,
         capture_resources: selected.capture_resources,
         snapshot: selected.snapshot,
@@ -354,7 +320,6 @@ fn resolve_endpoint_candidate(
     let selected = loaded.swap_remove(loaded_index);
     let resource = selected.snapshot.resources()[resource_index].clone();
     Ok(Candidate {
-        strategy_index: selected.strategy_index,
         snapshot_dir: selected.snapshot_dir,
         capture_resources: selected.capture_resources,
         snapshot: selected.snapshot,
@@ -367,14 +332,12 @@ fn load_strategies(config: &AppConfig) -> Result<Vec<LoadedStrategy>> {
         .dns_mock
         .bypass_strategies
         .iter()
-        .enumerate()
-        .map(|(strategy_index, strategy)| {
+        .map(|strategy| {
             let DnsBypassStrategyConfig::Breeze {
                 snapshot_dir,
                 capture_resources,
             } = strategy;
             Ok(LoadedStrategy {
-                strategy_index,
                 snapshot_dir: snapshot_dir.clone(),
                 capture_resources: capture_resources.clone(),
                 snapshot: Snapshot::load(snapshot_dir)?,
@@ -483,28 +446,25 @@ fn read_config(path: &Path) -> Result<String> {
         .with_context(|| format!("failed to read recorder config {}", path.display()))
 }
 
-fn render_managed_block(
-    resources: &BTreeSet<String>,
-    newline: &str,
-    trailing_newline: bool,
-) -> String {
-    let mut output = String::new();
-    push_line(&mut output, BEGIN_MARKER, newline);
-    push_line(&mut output, &format!("{FIELD} = ["), newline);
-    for resource in resources {
-        let quoted = toml::Value::String(resource.clone()).to_string();
-        push_line(&mut output, &format!("  {quoted},"), newline);
+fn breeze_overlay_mut<'a>(
+    rules: &'a mut CoordinatorRulesConfig,
+    snapshot_dir: &Path,
+) -> &'a mut CoordinatorBreezeCaptureConfig {
+    if let Some(index) = rules
+        .breeze_capture
+        .iter()
+        .position(|capture| capture.snapshot_dir == snapshot_dir)
+    {
+        return &mut rules.breeze_capture[index];
     }
-    push_line(&mut output, "]", newline);
-    output.push_str(END_MARKER);
-    if trailing_newline {
-        output.push_str(newline);
-    }
-    output
-}
-
-fn push_line(output: &mut String, line: &str, newline: &str) {
-    let _ = write!(output, "{line}{newline}");
+    rules.breeze_capture.push(CoordinatorBreezeCaptureConfig {
+        snapshot_dir: snapshot_dir.to_path_buf(),
+        capture_resources: Vec::new(),
+    });
+    rules
+        .breeze_capture
+        .last_mut()
+        .expect("just inserted coordinator Breeze capture")
 }
 
 #[cfg(test)]

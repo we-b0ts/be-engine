@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::AppConfig;
+use crate::config::CoordinatorRulesConfig;
 
 const REVISION: &str = "0123456789abcdef";
 const EVIDENCE: &str = "TopUserServiceImpl.java:691 scheduled local cache warm";
@@ -18,19 +18,13 @@ struct Fixture {
 impl Fixture {
     fn new(key: &str) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("recorder.toml");
+        let config = temp.path().join("coordinator-rules.yaml");
         let replay_report = temp.path().join("replay-report.json");
         let dependencies = temp.path().join("dependencies.jsonl");
         let socks = temp.path().join("socks");
         fs::create_dir(&socks).unwrap();
         fs::write(socks.join(DESCRIPTOR), "").unwrap();
-        fs::write(
-            &config,
-            "[http_gateway]\nenabled = true\n\
-             [http_gateway.ready]\nenabled = true\n\
-             [recording]\ntraffic_jsonl = \"full\"\n",
-        )
-        .unwrap();
+        fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
         fs::write(
             &dependencies,
             format!(
@@ -67,7 +61,7 @@ impl Fixture {
 
     fn feedback(&self) -> BreezeMemcachedBackgroundDependencyFeedback {
         BreezeMemcachedBackgroundDependencyFeedback {
-            config_path: self.config.clone(),
+            rules_path: self.config.clone(),
             replay_report_path: self.replay_report.clone(),
             name: "planet-video-cache-warm".to_string(),
             breeze_resource: "user-video".to_string(),
@@ -122,15 +116,15 @@ fn plans_exact_breeze_identity_without_persisting_dynamic_port() {
     plan.apply().unwrap();
 
     let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("protocol = \"memcached\""));
+    assert!(raw.contains("protocol: memcached"));
     assert!(!raw.contains("response_role"));
     assert!(!raw.contains("source_revision"));
-    assert!(raw.contains("key_start = 0"));
-    assert!(raw.contains("key_end = 4095"));
-    assert!(raw.contains("initial_load_timeout_ms = 30000"));
+    assert!(raw.contains("key_start: 0"));
+    assert!(raw.contains("key_end: 4095"));
+    assert!(raw.contains("initial_load_timeout_ms: 30000"));
     assert!(!raw.contains("mc:9448"));
-    let config = AppConfig::load(&fixture.config).unwrap();
-    assert_eq!(config.recording.process_owned_dependencies.len(), 1);
+    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    assert_eq!(config.process_owned_dependencies.len(), 1);
 }
 
 #[test]
@@ -212,8 +206,8 @@ fn accepts_u64_profile_key_from_unused_case_evidence() {
     assert_eq!(plan.report().key_start, 5_000_000_000);
     plan.apply().unwrap();
     let raw = fs::read_to_string(&fixture.config).unwrap();
-    assert!(raw.contains("key_start = 5000000000"));
-    assert!(raw.contains("key_end = 5000000000"));
+    assert!(raw.contains("key_start: 5000000000"));
+    assert!(raw.contains("key_end: 5000000000"));
 }
 
 #[test]

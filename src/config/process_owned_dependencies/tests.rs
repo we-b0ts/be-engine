@@ -113,38 +113,40 @@ fn http_rule_matches_authority_method_and_path_without_weakening_query_identity(
 
 #[test]
 fn parses_and_validates_http_background_rules() {
-    let config: AppConfig = toml::from_str(
+    let rules: super::super::CoordinatorRulesConfig = serde_yaml::from_str(
         r#"
-        [recording]
-
-        [[recording.process_owned_dependencies]]
-        name = "config-refresh"
-        protocol = "http"
-        authorities = ["config.api.demo.test"]
-        methods = ["GET"]
-        path_prefixes = ["/1/config/service"]
-        source_revision = "0123456789abcdef"
-        source_evidence = "src/config/refresh.rs:42 scheduled refresh"
+        version: 1
+        process_owned_dependencies:
+        - name: config-refresh
+          protocol: http
+          authorities: [config.api.demo.test]
+          methods: [GET]
+          path_prefixes: [/1/config/service]
+          source_revision: 0123456789abcdef
+          source_evidence: src/config/refresh.rs:42 scheduled refresh
         "#,
     )
     .unwrap();
+    let config = AppConfig {
+        process_owned_dependencies: rules.process_owned_dependencies,
+        ..Default::default()
+    };
     config.validate().unwrap();
 
     let mut duplicate = config.clone();
     duplicate
-        .recording
         .process_owned_dependencies
-        .push(duplicate.recording.process_owned_dependencies[0].clone());
+        .push(duplicate.process_owned_dependencies[0].clone());
     assert!(duplicate.validate().is_err());
 }
 
 #[test]
-fn unsupported_background_dependency_key_is_ignored() {
-    let config: AppConfig = toml::from_str(
+fn inline_process_owned_dependencies_are_rejected() {
+    let error = toml::from_str::<AppConfig>(
         r#"
         [recording]
 
-        [[recording.background_dependencies]]
+        [[recording.process_owned_dependencies]]
         name = "legacy-config-refresh"
         protocol = "http"
         authorities = ["config.api.demo.test"]
@@ -154,10 +156,8 @@ fn unsupported_background_dependency_key_is_ignored() {
         source_evidence = "src/config/refresh.rs:42 scheduled refresh"
         "#,
     )
-    .unwrap();
-
-    config.validate().unwrap();
-    assert!(config.recording.process_owned_dependencies.is_empty());
+    .unwrap_err();
+    assert!(error.to_string().contains("unknown field"));
 }
 
 #[test]
@@ -209,51 +209,48 @@ fn motan_rule_matches_exact_business_method_but_never_heartbeat() {
 
 #[test]
 fn parses_and_validates_exact_motan_background_rules() {
-    let config: AppConfig = toml::from_str(
+    let rules: super::super::CoordinatorRulesConfig = serde_yaml::from_str(
         r#"
-        [recording]
-
-        [[recording.process_owned_dependencies]]
-        name = "kunpeng-refresh"
-        protocol = "motan"
-        group = "kunpeng-config-rpc"
-        interface_name = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc"
-        method_name = "getConfigByName"
-        source_revision = "0123456789abcdef"
-        source_evidence = "MapiConfigLoader.java:init scheduled refresh"
+        version: 1
+        process_owned_dependencies:
+        - name: kunpeng-refresh
+          protocol: motan
+          group: kunpeng-config-rpc
+          interface_name: com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc
+          method_name: getConfigByName
+          source_revision: 0123456789abcdef
+          source_evidence: MapiConfigLoader.java:init scheduled refresh
         "#,
     )
     .unwrap();
+    let config = AppConfig {
+        process_owned_dependencies: rules.process_owned_dependencies,
+        ..Default::default()
+    };
     config.validate().unwrap();
 
     let mut overlapping = config.clone();
-    let mut duplicate = overlapping.recording.process_owned_dependencies[0].clone();
+    let mut duplicate = overlapping.process_owned_dependencies[0].clone();
     let BackgroundDependencyRuleConfig::Motan { name, .. } = &mut duplicate else {
         panic!("expected Motan background rule");
     };
     *name = "duplicate-kunpeng-refresh".to_string();
-    overlapping
-        .recording
-        .process_owned_dependencies
-        .push(duplicate);
+    overlapping.process_owned_dependencies.push(duplicate);
     assert!(overlapping.validate().is_err());
 
     let mut distinct_group = config.clone();
-    let mut sandbox = distinct_group.recording.process_owned_dependencies[0].clone();
+    let mut sandbox = distinct_group.process_owned_dependencies[0].clone();
     let BackgroundDependencyRuleConfig::Motan { name, group, .. } = &mut sandbox else {
         panic!("expected Motan background rule");
     };
     *name = "sandbox-kunpeng-refresh".to_string();
     *group = "kunpeng-config-rpc-sandbox".to_string();
-    distinct_group
-        .recording
-        .process_owned_dependencies
-        .push(sandbox);
+    distinct_group.process_owned_dependencies.push(sandbox);
     distinct_group.validate().unwrap();
 
     let mut invalid = config;
     let BackgroundDependencyRuleConfig::Motan { method_name, .. } =
-        &mut invalid.recording.process_owned_dependencies[0]
+        &mut invalid.process_owned_dependencies[0]
     else {
         panic!("expected Motan background rule");
     };
@@ -263,18 +260,20 @@ fn parses_and_validates_exact_motan_background_rules() {
 
 #[test]
 fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
-    let mut config = AppConfig::default();
-    config.recording.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Http {
-        name: "too-broad".to_string(),
-        authorities: vec!["config.api.demo.test".to_string()],
-        methods: Vec::new(),
-        path_prefixes: vec!["/".to_string()],
-        source_revision: "0123456789abcdef".to_string(),
-        source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
-    }];
+    let mut config = AppConfig {
+        process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
+            name: "too-broad".to_string(),
+            authorities: vec!["config.api.demo.test".to_string()],
+            methods: Vec::new(),
+            path_prefixes: vec!["/".to_string()],
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "src/config/refresh.rs:42 scheduled refresh".to_string(),
+        }],
+        ..Default::default()
+    };
     assert!(config.validate().is_err());
 
-    config.recording.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Http {
+    config.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Http {
         name: "invalid-path".to_string(),
         authorities: vec!["config.api.demo.test".to_string()],
         methods: vec!["GET".to_string()],
@@ -298,7 +297,7 @@ fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
         source_revision: "0123456789abcdef".to_string(),
         source_evidence: "traffic-e2e system default: Breeze Vintage background".to_string(),
     };
-    config.recording.process_owned_dependencies = vec![rule.clone()];
+    config.process_owned_dependencies = vec![rule.clone()];
     config.validate().unwrap();
     assert!(rule.matches(&http_event(
         "config.api.demo.test",
@@ -324,30 +323,31 @@ fn accepts_bounded_http_selector_sets_and_rejects_invalid_rules() {
     *name = "overlapping-vintage".to_string();
     *authorities = vec!["config.api.demo.test".to_string()];
     *path_prefixes = vec!["/naming/service".to_string()];
-    config
-        .recording
-        .process_owned_dependencies
-        .push(overlapping);
+    config.process_owned_dependencies.push(overlapping);
     assert!(config.validate().is_err());
 
-    let mut too_many = AppConfig::default();
-    too_many.recording.process_owned_dependencies = vec![BackgroundDependencyRuleConfig::Http {
-        name: "too-many-authorities".to_string(),
-        authorities: (0..=MAX_HTTP_AUTHORITIES)
-            .map(|index| format!("config-{index}.example.test"))
-            .collect(),
-        methods: vec!["GET".to_string()],
-        path_prefixes: vec!["/1/config/service".to_string()],
-        source_revision: "0123456789abcdef".to_string(),
-        source_evidence: "bounded selector test".to_string(),
-    }];
+    let too_many = AppConfig {
+        process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
+            name: "too-many-authorities".to_string(),
+            authorities: (0..=MAX_HTTP_AUTHORITIES)
+                .map(|index| format!("config-{index}.example.test"))
+                .collect(),
+            methods: vec!["GET".to_string()],
+            path_prefixes: vec!["/1/config/service".to_string()],
+            source_revision: "0123456789abcdef".to_string(),
+            source_evidence: "bounded selector test".to_string(),
+        }],
+        ..Default::default()
+    };
     assert!(too_many.validate().is_err());
 }
 
 #[test]
 fn memcached_initial_load_requires_ready_probe_and_positive_timeout() {
-    let mut config = AppConfig::default();
-    config.recording.process_owned_dependencies = vec![memcached_rule(30_000)];
+    let mut config = AppConfig {
+        process_owned_dependencies: vec![memcached_rule(30_000)],
+        ..Default::default()
+    };
     let error = config.validate().unwrap_err();
     assert!(
         error
@@ -359,7 +359,7 @@ fn memcached_initial_load_requires_ready_probe_and_positive_timeout() {
     config.http_gateway.ready.enabled = true;
     config.validate().unwrap();
 
-    config.recording.process_owned_dependencies = vec![memcached_rule(0)];
+    config.process_owned_dependencies = vec![memcached_rule(0)];
     let error = config.validate().unwrap_err();
     assert!(error.to_string().contains("initial_load_timeout_ms"));
 }
