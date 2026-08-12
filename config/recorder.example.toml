@@ -15,6 +15,7 @@ candidate_upstream = "http://127.0.0.1:6161"
 # source_match: before_or_after in verification.yaml enables this automatically.
 baseline_recheck = false
 upstream_timeout_ms = 30000
+# Process-wide invariant: HTTP and Motan comparison share this single slot.
 max_in_flight = 1
 summary_flush_interval_ms = 1000
 

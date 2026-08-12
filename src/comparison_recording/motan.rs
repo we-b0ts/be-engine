@@ -129,7 +129,7 @@ async fn handle_connection(
             transport::write_fixed_response(&mut stream, &request, limits).await?;
             continue;
         }
-        let Ok(permit) = runtime.permits.clone().try_acquire_owned() else {
+        let Ok(permit) = runtime.active_case_permits.clone().try_acquire_owned() else {
             runtime
                 .store
                 .summary()

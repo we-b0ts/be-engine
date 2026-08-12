@@ -454,11 +454,11 @@ dependencies are not polluted by unrelated processes. Host account resolution
 does not affect this contract. The owner scope cannot be overridden by CLI
 options, environment variables, or recorder configuration.
 
-HTTP gateway recording is intentionally conservative. Until the configured
-ready probe succeeds, matching traffic uses the configured fallback strategy
-and no case is created. After ready, only one matched case can be active at a
-time; overlapping matching requests also use fallback so dependencies are not
-shared across cases.
+Gateway recording is intentionally conservative. Until the configured ready
+probe succeeds, matching traffic uses the configured fallback strategy and no
+case is created. After ready, only one matched case can be active across the
+HTTP and Motan gateways in the process; overlapping matching requests also use
+fallback so dependencies are not shared across cases.
 
 A matched request first reserves the single case slot without accepting
 dependencies. Recorder reads the complete inbound request and persists

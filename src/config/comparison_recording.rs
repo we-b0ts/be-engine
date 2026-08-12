@@ -61,8 +61,8 @@ impl ComparisonRecordingConfig {
             "comparison_recording.upstream_timeout_ms must be greater than zero"
         );
         ensure!(
-            self.max_in_flight > 0,
-            "comparison_recording.max_in_flight must be greater than zero"
+            self.max_in_flight == 1,
+            "comparison_recording.max_in_flight must be 1 so HTTP and Motan share one process-wide active case"
         );
         ensure!(
             self.summary_flush_interval_ms > 0,
@@ -203,6 +203,18 @@ mod tests {
         let error = validate(&ComparisonRecordingConfig::default(), &gateway).unwrap_err();
 
         assert!(error.to_string().contains("fixed_response"));
+    }
+
+    #[test]
+    fn requires_one_process_wide_case_across_protocols() {
+        let config = ComparisonRecordingConfig {
+            max_in_flight: 2,
+            ..Default::default()
+        };
+
+        let error = validate(&config, &gateway(&["GET"])).unwrap_err();
+
+        assert!(error.to_string().contains("HTTP and Motan"));
     }
 
     #[test]

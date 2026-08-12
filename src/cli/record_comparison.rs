@@ -74,11 +74,6 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
     if let Some(per_api_case_limit) = args.per_api_case_limit {
         config.override_per_api_case_limit_for_run(per_api_case_limit);
     }
-    config
-        .comparison_recording
-        .as_mut()
-        .expect("comparison recording config was validated")
-        .max_in_flight = 1;
     let decision = configure_baseline_recheck(&mut config, &policy_path, args.baseline_recheck)?;
     info!(
         policy = %policy_path.display(),

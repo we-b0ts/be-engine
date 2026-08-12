@@ -37,6 +37,11 @@ duration is an upper bound: Recorder finalizes normally when every selected API
 reaches the bound. Without `--api`, Recorder observes the complete duration so
 low-frequency APIs can still be discovered.
 
+HTTP and Motan primary requests share one process-wide active-case slot. Only
+one case across both protocols may own process dependencies at a time; an
+overlapping matched request follows its gateway's configured non-admitted
+response path and does not create another case.
+
 When request-header encryption is configured,
 `TRAFFIC_E2E_ENCRYPTION_KEY_B64` must decode to exactly 32 bytes. Keep it only
 in the Recorder/record-comparison process environment; never print it, commit

@@ -594,6 +594,81 @@ async fn overload_returns_fixed_response_without_single_sided_dispatch() {
 }
 
 #[tokio::test]
+async fn http_and_motan_comparison_share_one_process_wide_case_slot() {
+    let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
+    install_crypto();
+    let temp = tempdir().unwrap();
+    let (baseline, baseline_requests) =
+        spawn_counting_upstream(StatusCode::OK, "baseline", 1, None).await;
+    let (candidate, candidate_requests) = spawn_counting_upstream(
+        StatusCode::OK,
+        "candidate",
+        1,
+        Some(Duration::from_millis(300)),
+    )
+    .await;
+    let motan_baseline = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let motan_candidate = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_gateway = free_addr();
+    let motan_gateway = free_addr();
+    let run_id = "20260722160009";
+    let mut config = comparison_recording_config(&temp, http_gateway, baseline, candidate);
+    config.motan_gateway = MotanGatewayConfig {
+        enabled: true,
+        listen: motan_gateway,
+        matched_upstream: motan_baseline.local_addr().unwrap().to_string(),
+        ..Default::default()
+    };
+    config
+        .comparison_recording
+        .as_mut()
+        .unwrap()
+        .candidate_motan_upstream = Some(motan_candidate.local_addr().unwrap().to_string());
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        config,
+        Some(run_id.to_string()),
+    ));
+    wait_for_port(http_gateway).await;
+    wait_for_port(motan_gateway).await;
+
+    let http_case = tokio::spawn(raw_get(http_gateway, "/api/one"));
+    wait_for_counter(&baseline_requests, 1).await;
+    let request = motan_request(43);
+    let mut stream = TcpStream::connect(motan_gateway).await.unwrap();
+    stream.write_all(request.raw()).await.unwrap();
+    let mut decoder = FrameDecoder::new(Limits::default()).unwrap();
+    let response = loop {
+        if let Some(frame) = decoder.decode().unwrap() {
+            break frame;
+        }
+        assert!(stream.read_buf(decoder.buffer_mut()).await.unwrap() > 0);
+    };
+
+    assert_eq!(response.request_id, 43);
+    assert!(response.body.is_empty());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), motan_baseline.accept())
+            .await
+            .is_err()
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), motan_candidate.accept())
+            .await
+            .is_err()
+    );
+    assert!(http_case.await.unwrap().contains("baseline"));
+    wait_for_counter(&candidate_requests, 1).await;
+    let summary = wait_for_count(
+        &run_dir(&temp, run_id).join("comparison-recording-run.json"),
+        "overloaded",
+        1,
+    )
+    .await;
+    assert_eq!(summary["counts"]["dual_dispatched"], 1);
+    task.abort();
+}
+
+#[tokio::test]
 async fn request_limit_rejects_before_either_upstream() {
     let _port_bind_guard = PORT_BIND_TEST_LOCK.lock().await;
     install_crypto();

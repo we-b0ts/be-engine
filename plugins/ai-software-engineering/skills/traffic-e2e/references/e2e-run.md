@@ -73,6 +73,11 @@ Keeping one target lifetime preserves observable local-cache, connection-pool,
 startup, and warmup behavior. The target never reads a case or writes an actual
 response artifact.
 
+The runner executes the selected inventory through one process-wide active
+case at a time, regardless of whether the primary request is HTTP or Motan.
+Both replay adapters read the same `active_case_id`, so process-shared
+dependencies remain attributed to that single case.
+
 The terminal JSON is the primary engine result interface. Consume `status`,
 `passed`, `gates`, bounded `diagnosis`, and `progress` first. Read-only runtime
 inspection is available when those APIs are insufficient, but its paths and

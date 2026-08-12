@@ -59,7 +59,7 @@ pub(super) struct ComparisonRecordingRuntime {
     pub(super) ready_notify: Arc<Notify>,
     pub(super) recording_lifecycle: RecordingLifecycle,
     request_header_capture: RequestHeaderCapture,
-    pub(super) permits: Arc<Semaphore>,
+    pub(super) active_case_permits: Arc<Semaphore>,
     background: BackgroundTasks,
 }
 
@@ -202,7 +202,7 @@ pub async fn run_with_options(
         ready_notify: Arc::new(Notify::new()),
         recording_lifecycle: recording_lifecycle.clone(),
         request_header_capture,
-        permits: Arc::new(Semaphore::new(comparison_recording.max_in_flight)),
+        active_case_permits: Arc::new(Semaphore::new(comparison_recording.max_in_flight)),
         background: BackgroundTasks::new(),
     };
     if runtime.ready.load(Ordering::Acquire) {
@@ -445,7 +445,7 @@ async fn handle_request(
         }
     };
     let permit = if matched.is_some() && runtime.ready.load(Ordering::Acquire) {
-        match runtime.permits.clone().try_acquire_owned() {
+        match runtime.active_case_permits.clone().try_acquire_owned() {
             Ok(permit) => Some(permit),
             Err(_) => {
                 runtime
@@ -538,7 +538,7 @@ async fn handle_request(
             runtime
                 .comparison_recording
                 .max_in_flight
-                .saturating_sub(runtime.permits.available_permits()),
+                .saturating_sub(runtime.active_case_permits.available_permits()),
         )
         .await;
 
@@ -687,7 +687,7 @@ async fn run_dual(
             runtime
                 .comparison_recording
                 .max_in_flight
-                .saturating_sub(runtime.permits.available_permits()),
+                .saturating_sub(runtime.active_case_permits.available_permits()),
         )
         .await;
     let _ = baseline_sender.send(baseline);
