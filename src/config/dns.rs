@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::DEFAULT_FAKE_CIDR;
+use super::{DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -67,7 +67,7 @@ impl Default for DnsMockConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            listen: "127.0.0.153:15353"
+            listen: DEFAULT_DNS_MOCK_LISTEN
                 .parse()
                 .expect("valid default DNS mock listen address"),
             upstream_dns: "10.10.10.10:53"

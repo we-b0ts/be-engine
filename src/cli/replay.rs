@@ -6,15 +6,13 @@ use anyhow::{Context, Result, ensure};
 use clap::{ArgAction, Args};
 use serde::Deserialize;
 use traffic_e2e::{
-    AppConfig, DEFAULT_FAKE_CIDR, ReplayAllowedUnusedHttpConfig, ReplayConfig, run_replay,
+    AppConfig, DEFAULT_DNS_MOCK_LISTEN, DEFAULT_FAKE_CIDR, DEFAULT_TCP_GATEWAY_LISTEN,
+    DEFAULT_UDP_GATEWAY_PORT, ReplayAllowedUnusedHttpConfig, ReplayConfig, run_replay,
 };
 use uuid::Uuid;
 
 use super::interception::{DnsConfig, FakeIpConfig, Guard};
 use super::signal::shutdown_signal;
-
-const DEFAULT_DNS_LISTEN: &str = "127.0.0.153:15353";
-const DEFAULT_TCP_LISTEN: &str = "127.0.0.1:15001";
 
 #[derive(Debug, Args)]
 pub(super) struct ReplayArgs {
@@ -91,6 +89,7 @@ struct ResolvedReplay {
     control_socket: PathBuf,
     dns_listen: SocketAddr,
     tcp_listen: SocketAddr,
+    udp_port: u16,
     fake_cidr: String,
     intercept: bool,
     policy: Option<PathBuf>,
@@ -118,7 +117,7 @@ pub(super) async fn run(args: ReplayArgs) -> Result<()> {
             FakeIpConfig {
                 fake_cidr: resolved.fake_cidr.clone(),
                 tcp_port: resolved.tcp_listen.port(),
-                udp_port: 15002,
+                udp_port: resolved.udp_port,
                 tcp: true,
                 udp: false,
             },
@@ -179,6 +178,25 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         }
         None => (ReplayFile::default(), cwd.clone()),
     };
+    let recorder_config = args
+        .recorder_config
+        .as_deref()
+        .map(|path| absolute_from(&cwd, path));
+    if let Some(path) = recorder_config.as_deref() {
+        ensure!(
+            path.is_file(),
+            "recorder config not found: {}",
+            path.display()
+        );
+    }
+    ensure!(
+        recorder_config.is_some() == args.recording_rule.is_some(),
+        "--recorder-config and --recording-rule must be provided together"
+    );
+    let recorder_defaults = recorder_config
+        .as_deref()
+        .map(AppConfig::load)
+        .transpose()?;
     let case = args
         .case
         .map(|path| absolute_from(&cwd, &path))
@@ -197,7 +215,12 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
     let dns_listen = args
         .dns_listen
         .or(file.replay.dns_listen)
-        .unwrap_or(DEFAULT_DNS_LISTEN.parse()?);
+        .or_else(|| {
+            recorder_defaults
+                .as_ref()
+                .map(|config| config.dns_mock.listen)
+        })
+        .unwrap_or(DEFAULT_DNS_MOCK_LISTEN.parse()?);
     let intercept = if args.no_intercept {
         false
     } else if args.intercept {
@@ -212,10 +235,25 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
     let tcp_listen = args
         .tcp_listen
         .or(file.replay.tcp_listen)
-        .unwrap_or(DEFAULT_TCP_LISTEN.parse()?);
+        .or_else(|| {
+            recorder_defaults
+                .as_ref()
+                .map(|config| config.tcp_gateway.listen)
+        })
+        .unwrap_or(DEFAULT_TCP_GATEWAY_LISTEN.parse()?);
+    let udp_port = recorder_defaults
+        .as_ref()
+        .map_or(DEFAULT_UDP_GATEWAY_PORT, |config| {
+            config.udp_gateway.listen.port()
+        });
     let fake_cidr = args
         .fake_cidr
         .or(file.replay.fake_cidr)
+        .or_else(|| {
+            recorder_defaults
+                .as_ref()
+                .map(|config| config.dns_mock.fake_cidr.clone())
+        })
         .unwrap_or_else(|| DEFAULT_FAKE_CIDR.to_string());
     let report = match args.report {
         Some(path) => absolute_from(&cwd, &path),
@@ -262,18 +300,6 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
             path.display()
         );
     }
-    let recorder_config = args.recorder_config.map(|path| absolute_from(&cwd, &path));
-    if let Some(path) = recorder_config.as_deref() {
-        ensure!(
-            path.is_file(),
-            "recorder config not found: {}",
-            path.display()
-        );
-    }
-    ensure!(
-        recorder_config.is_some() == args.recording_rule.is_some(),
-        "--recorder-config and --recording-rule must be provided together"
-    );
     Ok(ResolvedReplay {
         case,
         case_ids: args.case_ids,
@@ -282,6 +308,7 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         control_socket,
         dns_listen,
         tcp_listen,
+        udp_port,
         fake_cidr,
         intercept,
         policy,
@@ -451,6 +478,46 @@ mod tests {
         args.dns_listen = Some("[::1]:15353".parse().unwrap());
 
         assert!(resolve(args).is_ok());
+    }
+
+    #[test]
+    fn replay_uses_low_ports_without_explicit_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let resolved = resolve(replay_args(Some(directory.path().to_path_buf()), None)).unwrap();
+
+        assert_eq!(resolved.dns_listen.port(), 4_053);
+        assert_eq!(resolved.tcp_listen.port(), 4_001);
+        assert_eq!(resolved.udp_port, 4_002);
+    }
+
+    #[test]
+    fn recorder_ports_remain_replay_defaults_when_explicit() {
+        let directory = tempfile::tempdir().unwrap();
+        let recorder_config = directory.path().join("recorder.toml");
+        std::fs::write(
+            &recorder_config,
+            r#"
+            [dns_mock]
+            listen = "127.0.0.153:15353"
+
+            [tcp_gateway]
+            listen = "127.0.0.1:15001"
+
+            [udp_gateway]
+            listen = "127.0.0.1:15002"
+            "#,
+        )
+        .unwrap();
+        let mut args = replay_args(Some(directory.path().to_path_buf()), None);
+        args.recorder_config = Some(recorder_config);
+        args.recording_rule = Some("record-api".to_string());
+
+        let resolved = resolve(args).unwrap();
+
+        assert_eq!(resolved.dns_listen.port(), 15_353);
+        assert_eq!(resolved.tcp_listen.port(), 15_001);
+        assert_eq!(resolved.udp_port, 15_002);
     }
 
     fn replay_args(case: Option<PathBuf>, config: Option<PathBuf>) -> ReplayArgs {
