@@ -48,6 +48,11 @@ Managed comparison waits for that snapshot recorder's sliding Redis quiet
 window before admitting input, then admits one complete source/candidate case
 at a time.
 
+HTTP and Motan comparison listeners share that same single process-wide case
+slot. A case retains it through source, candidate, optional source recheck, and
+publication; an overlapping request on either protocol reaches neither
+upstream and receives the protocol adapter's fixed response.
+
 When Breeze is absent, the same command selects the configured runtime without
 starting Breeze. Comparison sends every admitted request symmetrically to
 source and candidate, using the methods declared by the selected HTTP gateway

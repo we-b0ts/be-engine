@@ -147,6 +147,30 @@ async fn overlapping_matched_request_uses_fixed_response_and_is_not_forwarded() 
 }
 
 #[tokio::test]
+async fn http_and_motan_share_one_process_wide_case_slot() {
+    let limits = Limits::default();
+    let (temp, state, listen, gateway) = gateway_state("127.0.0.1:9".to_string(), Vec::new()).await;
+    let http_case = CaseContext {
+        id: Uuid::new_v4(),
+        rule_name: "http-api".to_string(),
+        uri_group: Some("api/http".to_string()),
+    };
+    let http_guard = state.try_reserve_active_case(http_case).unwrap();
+    let mut client = connect_retry(listen).await;
+
+    let response = round_trip(&mut client, &motan2_request(103), limits).await;
+
+    assert_eq!(response.request_id, 103);
+    assert!(response.body.is_empty());
+    assert!(published_case_dirs(&state.recorder().run_dir).is_empty());
+
+    drop(http_guard);
+    gateway.abort();
+    drop(client);
+    drop(temp);
+}
+
+#[tokio::test]
 async fn gateway_failures_are_persisted_as_preflight_evidence() {
     let (temp, state, _listen, gateway) =
         gateway_state("127.0.0.1:9".to_string(), Vec::new()).await;
