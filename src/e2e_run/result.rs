@@ -11,6 +11,7 @@ use super::support::status_label;
 use crate::replay::{ResponseDifference, ResponseDifferenceKind};
 
 const MAX_FAILURE_CLUSTERS: usize = 20;
+pub(crate) const RESPONSE_AVAILABILITY_POINTER: &str = "$response";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -128,8 +129,21 @@ pub struct E2eRepresentativeDifference {
     pub case_id: String,
     pub pointer: String,
     pub difference_kind: ResponseDifferenceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<E2eResponseUnavailableReason>,
     pub expected: E2eValueObservation,
     pub actual: E2eValueObservation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum E2eResponseUnavailableReason {
+    TargetConnectionClosed,
+    TargetConnectionFailed,
+    TargetRequestTimedOut,
+    TargetResponseReadFailed,
+    RequestPreparationFailed,
+    HttpExecutionFailed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -164,27 +178,27 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
     let mut total_differences = 0usize;
     let mut indexed_differences = 0usize;
     for case in &state.cases {
-        let Some(assertion) = &case.response_assertion else {
-            continue;
-        };
-        total_differences = total_differences.saturating_add(assertion.difference_count);
-        let differences = indexed_response_differences(assertion);
-        indexed_differences = indexed_differences.saturating_add(differences.len());
-        for difference in differences {
-            let key = (
-                response_pointer_pattern(&difference.pointer),
-                difference.kind,
+        if let Some(assertion) = &case.response_assertion {
+            total_differences = total_differences.saturating_add(assertion.difference_count);
+            let differences = indexed_response_differences(assertion);
+            indexed_differences = indexed_differences.saturating_add(differences.len());
+            for difference in differences {
+                index_response_difference(
+                    &mut clusters,
+                    &case.case_id,
+                    &difference.pointer,
+                    difference.kind,
+                );
+            }
+        } else if case.assertion_passed == Some(false) {
+            total_differences = total_differences.saturating_add(1);
+            indexed_differences = indexed_differences.saturating_add(1);
+            index_response_difference(
+                &mut clusters,
+                &case.case_id,
+                RESPONSE_AVAILABILITY_POINTER,
+                ResponseDifferenceKind::ResponseUnavailable,
             );
-            let cluster = clusters
-                .entry(key)
-                .or_insert_with(|| FailureClusterAccumulator {
-                    affected_cases: BTreeSet::new(),
-                    occurrences: 0,
-                    representative_case_id: case.case_id.clone(),
-                    representative_pointer: difference.pointer.clone(),
-                });
-            cluster.affected_cases.insert(case.case_id.clone());
-            cluster.occurrences = cluster.occurrences.saturating_add(1);
         }
     }
     let mut failure_clusters = clusters
@@ -211,15 +225,26 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
     let omitted_failure_clusters = failure_clusters.len().saturating_sub(MAX_FAILURE_CLUSTERS);
     failure_clusters.truncate(MAX_FAILURE_CLUSTERS);
     let representative = failure_clusters.first().and_then(|cluster| {
-        state
+        let case = state
             .cases
             .iter()
-            .find(|case| case.case_id == cluster.representative_case_id)
-            .and_then(|case| case.response_assertion.as_ref())
-            .map(|assertion| E2eRepresentativeDifference {
+            .find(|case| case.case_id == cluster.representative_case_id)?;
+        if cluster.difference_kind == ResponseDifferenceKind::ResponseUnavailable {
+            Some(E2eRepresentativeDifference {
                 case_id: cluster.representative_case_id.clone(),
                 pointer: cluster.representative_pointer.clone(),
                 difference_kind: cluster.difference_kind,
+                unavailable_reason: case.response_unavailable_reason,
+                expected: observation(E2eValuePresence::Present, None),
+                actual: observation(E2eValuePresence::Unavailable, None),
+            })
+        } else {
+            let assertion = case.response_assertion.as_ref()?;
+            Some(E2eRepresentativeDifference {
+                case_id: cluster.representative_case_id.clone(),
+                pointer: cluster.representative_pointer.clone(),
+                difference_kind: cluster.difference_kind,
+                unavailable_reason: None,
                 expected: response_observation(
                     &assertion.expected_response,
                     &cluster.representative_pointer,
@@ -229,6 +254,7 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
                     &cluster.representative_pointer,
                 ),
             })
+        }
     });
     let executed = state
         .cases
@@ -275,6 +301,25 @@ struct FailureClusterAccumulator {
     occurrences: usize,
     representative_case_id: String,
     representative_pointer: String,
+}
+
+fn index_response_difference(
+    clusters: &mut BTreeMap<(String, ResponseDifferenceKind), FailureClusterAccumulator>,
+    case_id: &str,
+    pointer: &str,
+    kind: ResponseDifferenceKind,
+) {
+    let key = (response_pointer_pattern(pointer), kind);
+    let cluster = clusters
+        .entry(key)
+        .or_insert_with(|| FailureClusterAccumulator {
+            affected_cases: BTreeSet::new(),
+            occurrences: 0,
+            representative_case_id: case_id.to_string(),
+            representative_pointer: pointer.to_string(),
+        });
+    cluster.affected_cases.insert(case_id.to_string());
+    cluster.occurrences = cluster.occurrences.saturating_add(1);
 }
 
 fn indexed_response_differences(assertion: &ResponseAssertionSummary) -> &[ResponseDifference] {
@@ -360,6 +405,7 @@ pub(super) fn response_observation(path: &Path, pointer: &str) -> E2eValueObserv
 
 pub(crate) fn response_pointer_scope(pointer: &str) -> &'static str {
     match pointer {
+        RESPONSE_AVAILABILITY_POINTER => "response_availability",
         "$status" => "response_status",
         "$body" => "response_body_bytes",
         _ => "decoded_response_body_json",
@@ -471,6 +517,10 @@ mod tests {
 
     #[test]
     fn response_pointer_scopes_distinguish_status_body_and_json_values() {
+        assert_eq!(
+            response_pointer_scope(RESPONSE_AVAILABILITY_POINTER),
+            "response_availability"
+        );
         assert_eq!(response_pointer_scope("$status"), "response_status");
         assert_eq!(response_pointer_scope("$body"), "response_body_bytes");
         assert_eq!(
@@ -620,6 +670,65 @@ mod tests {
         assert_eq!(
             report.response_differences.failure_clusters[0].affected_cases,
             1
+        );
+    }
+
+    #[test]
+    fn diagnosis_counts_nonpassing_cases_without_responses_as_differences() {
+        let temp = tempfile::tempdir().unwrap();
+        let inventory = two_case_inventory();
+        let active_dir = temp.path().join("active");
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, None, &active_dir);
+        for case in &mut state.cases {
+            case.assertion_passed = Some(false);
+        }
+        state.cases[0].response_unavailable_reason =
+            Some(E2eResponseUnavailableReason::TargetConnectionClosed);
+        let layout = RunLayout {
+            target_root: temp.path().to_path_buf(),
+            run_key: "run".to_string(),
+            case_source: PathBuf::from("/cases"),
+            progress_path: temp.path().join("progress.yaml"),
+            legacy_progress_path: temp.path().join("legacy-progress.yaml"),
+            internal_root: temp.path().join("internal"),
+            current_path: temp.path().join("current"),
+            run_root: temp.path().join("run"),
+            index_path: temp.path().join("index.yaml"),
+            group_index_path: temp.path().join("group-index.yaml"),
+            active_dir,
+            latest_dir: temp.path().join("latest"),
+        };
+
+        let report = diagnosis(&layout, &state);
+
+        assert_eq!(report.response_differences.total_differences, 2);
+        assert_eq!(report.response_differences.indexed_differences, 2);
+        assert_eq!(report.response_differences.omitted_differences, 0);
+        assert_eq!(report.response_differences.failure_clusters.len(), 1);
+        let cluster = &report.response_differences.failure_clusters[0];
+        assert_eq!(cluster.pointer_pattern, RESPONSE_AVAILABILITY_POINTER);
+        assert_eq!(
+            cluster.difference_kind,
+            ResponseDifferenceKind::ResponseUnavailable
+        );
+        assert_eq!(cluster.affected_cases, 2);
+        assert_eq!(cluster.occurrences, 2);
+        let representative = report.representative.unwrap();
+        assert_eq!(representative.pointer, RESPONSE_AVAILABILITY_POINTER);
+        assert_eq!(
+            representative.unavailable_reason,
+            Some(E2eResponseUnavailableReason::TargetConnectionClosed)
+        );
+        assert_eq!(representative.expected.presence, E2eValuePresence::Present);
+        assert_eq!(representative.expected.value, None);
+        assert_eq!(
+            representative.actual.presence,
+            E2eValuePresence::Unavailable
+        );
+        assert_eq!(representative.actual.value, None);
+        assert_eq!(
+            serde_json::to_value(representative.difference_kind).unwrap(),
+            Value::String("response_unavailable".to_string())
         );
     }
 
@@ -794,6 +903,14 @@ mod tests {
     }
 
     fn one_case_inventory() -> CaseGroupInventory {
+        case_inventory(&["case-1"])
+    }
+
+    fn two_case_inventory() -> CaseGroupInventory {
+        case_inventory(&["case-1", "case-2"])
+    }
+
+    fn case_inventory(case_ids: &[&str]) -> CaseGroupInventory {
         CaseGroupInventory {
             case_source: PathBuf::from("/cases"),
             source_revision: "source".to_string(),
@@ -804,11 +921,14 @@ mod tests {
                 source_route: "/api".to_string(),
                 pattern: None,
                 case_inventory_id: "inventory".to_string(),
-                cases: vec![CanonicalCase {
-                    case_id: "case-1".to_string(),
-                    case_dir: PathBuf::from("/cases/case-1"),
-                    recorded_at: None,
-                }],
+                cases: case_ids
+                    .iter()
+                    .map(|case_id| CanonicalCase {
+                        case_id: (*case_id).to_string(),
+                        case_dir: PathBuf::from("/cases").join(case_id),
+                        recorded_at: None,
+                    })
+                    .collect(),
             }],
         }
     }

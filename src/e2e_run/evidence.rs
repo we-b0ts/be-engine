@@ -6,7 +6,9 @@ use serde_json::Value;
 
 use super::dirty_evidence::{self, E2eDirtyCounts};
 use super::result::{
-    E2eValueObservation, response_observation, response_pointer_pattern, response_pointer_scope,
+    E2eResponseUnavailableReason, E2eValueObservation, E2eValuePresence,
+    RESPONSE_AVAILABILITY_POINTER, response_observation, response_pointer_pattern,
+    response_pointer_scope,
 };
 use super::{E2eRunContext, config, model, store, support};
 use crate::replay::{ResponseAssertionCaseReport, ResponseDifferenceKind};
@@ -41,6 +43,8 @@ pub struct E2eCaseResponseDifference {
     pub pointer: String,
     pub pointer_pattern: String,
     pub difference_kind: ResponseDifferenceKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<E2eResponseUnavailableReason>,
     pub expected: E2eValueObservation,
     pub actual: E2eValueObservation,
 }
@@ -133,10 +137,13 @@ pub fn query_e2e_case_response_differences(
         .iter()
         .find(|case| case.case_id == case_id)
         .with_context(|| format!("focused E2E evidence has no case {case_id:?}"))?;
-    let assertion = case
-        .response_assertion
-        .as_ref()
-        .with_context(|| format!("case {case_id:?} has no response assertion evidence"))?;
+    let Some(assertion) = case.response_assertion.as_ref() else {
+        ensure!(
+            case.assertion_passed == Some(false),
+            "case {case_id:?} has no response assertion evidence"
+        );
+        return unavailable_response_page(case_id, case.response_unavailable_reason, offset);
+    };
     let payload = std::fs::read(&assertion.detail_report).with_context(|| {
         format!(
             "failed to read response assertion detail {}",
@@ -160,6 +167,39 @@ pub fn query_e2e_case_response_differences(
     response_difference_page(case_id, assertion, &report, offset)
 }
 
+fn unavailable_response_page(
+    case_id: &str,
+    reason: Option<E2eResponseUnavailableReason>,
+    offset: usize,
+) -> Result<E2eCaseResponseDifferences> {
+    ensure!(
+        offset == 0,
+        "response difference page is outside the current assertion detail"
+    );
+    Ok(E2eCaseResponseDifferences {
+        case_id: case_id.to_string(),
+        total_differences: 1,
+        offset,
+        returned_differences: 1,
+        omitted_differences: 0,
+        differences: vec![E2eCaseResponseDifference {
+            pointer: RESPONSE_AVAILABILITY_POINTER.to_string(),
+            pointer_pattern: RESPONSE_AVAILABILITY_POINTER.to_string(),
+            difference_kind: ResponseDifferenceKind::ResponseUnavailable,
+            unavailable_reason: reason,
+            expected: E2eValueObservation {
+                presence: E2eValuePresence::Present,
+                value: None,
+            },
+            actual: E2eValueObservation {
+                presence: E2eValuePresence::Unavailable,
+                value: None,
+            },
+        }],
+        next_offset: None,
+    })
+}
+
 fn response_difference_page(
     case_id: &str,
     assertion: &model::ResponseAssertionSummary,
@@ -179,6 +219,7 @@ fn response_difference_page(
             pointer: difference.pointer.clone(),
             pointer_pattern: response_pointer_pattern(&difference.pointer),
             difference_kind: difference.kind,
+            unavailable_reason: None,
             expected: response_observation(&assertion.expected_response, &difference.pointer),
             actual: response_observation(&assertion.actual_response, &difference.pointer),
         })
@@ -346,6 +387,34 @@ mod tests {
         assert_eq!(second.omitted_differences, 0);
         assert_eq!(second.next_offset, None);
         assert_eq!(second.differences[0].pointer, "/items/20/value");
+    }
+
+    #[test]
+    fn unavailable_response_is_exposed_as_one_difference() {
+        let page = unavailable_response_page(
+            "case-1",
+            Some(E2eResponseUnavailableReason::TargetConnectionClosed),
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(page.total_differences, 1);
+        assert_eq!(page.returned_differences, 1);
+        assert_eq!(page.omitted_differences, 0);
+        assert_eq!(page.next_offset, None);
+        let difference = &page.differences[0];
+        assert_eq!(difference.pointer, RESPONSE_AVAILABILITY_POINTER);
+        assert_eq!(
+            difference.difference_kind,
+            ResponseDifferenceKind::ResponseUnavailable
+        );
+        assert_eq!(
+            difference.unavailable_reason,
+            Some(E2eResponseUnavailableReason::TargetConnectionClosed)
+        );
+        assert_eq!(difference.expected.presence, E2eValuePresence::Present);
+        assert_eq!(difference.actual.presence, E2eValuePresence::Unavailable);
+        assert!(unavailable_response_page("case-1", None, 20).is_err());
     }
 
     fn write_response(path: &std::path::Path, body: Value) {

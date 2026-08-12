@@ -48,5 +48,18 @@ fn application_error_code(outer: &Value) -> Result<Option<String>> {
 }
 
 fn alias_for_ip(ip: Ipv4Addr) -> String {
-    format!("vintage-node-{}.trp.test", ip.to_string().replace('.', "-"))
+    format!("fake-node-{}.trp.test", ip.to_string().replace('.', "-"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aliases_identify_fake_nodes_without_claiming_vintage_ownership() {
+        assert_eq!(
+            alias_for_ip(Ipv4Addr::new(10, 2, 29, 229)),
+            "fake-node-10-2-29-229.trp.test"
+        );
+    }
 }

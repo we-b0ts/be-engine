@@ -74,6 +74,13 @@ is unclear.
   completion gate. It consumes public traffic operations and must not move
   rewrite state or completion semantics into Recorder, Replay, comparison, or
   `e2e_run`.
+- `e2e_run/result.rs` owns the one terminal E2E result contract: verification
+  gates, response-difference clustering, representative selection, and bounded
+  lifecycle diagnosis are derived together from the finalized run state. It
+  remains one cohesive module near the 1000-line hard limit so callers cannot
+  observe gate and diagnosis projections computed from different rules; move
+  tests out or extract a complete diagnostic sub-contract before adding a new
+  responsibility.
 - Within `rewrite`, `mod.rs` remains the atomic coordinator-transition facade,
   `action.rs` keeps the exhaustive action/command projection, and `recording.rs`
   keeps the managed recording request/start/worker lifecycle. `worker.rs` owns

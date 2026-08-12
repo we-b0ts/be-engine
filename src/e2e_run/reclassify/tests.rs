@@ -143,6 +143,7 @@ fn clean_state() -> ActiveRunState {
             assertion_passed: Some(true),
             replay_clean: Some(true),
             response_assertion: None,
+            response_unavailable_reason: None,
         }],
         apis: vec![ApiExecution {
             api_key: "GET /api".to_string(),

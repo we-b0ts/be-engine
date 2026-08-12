@@ -66,6 +66,7 @@ fn case(case_id: String, status: CaseStatus) -> CaseExecution {
         assertion_passed: Some(status == CaseStatus::Passed),
         replay_clean: Some(true),
         response_assertion: None,
+        response_unavailable_reason: None,
     }
 }
 

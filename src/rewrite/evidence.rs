@@ -15,8 +15,8 @@ use crate::e2e_run::response_pointer_scope;
 use crate::recorder::load_pre_readiness_traffic_summary;
 use crate::{
     E2eDirtyCluster, E2eDirtyCounts, E2eRunContext, E2eValueObservation, E2eValuePresence,
-    query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
-    query_e2e_source_variation,
+    ResponseDifferenceKind, query_e2e_case_response_differences, query_e2e_dependency_correlation,
+    query_e2e_dirty_counts, query_e2e_source_variation,
 };
 
 const QUERY_CASE_RESPONSE_DIFFERENCES: &str = "case_response_differences";
@@ -534,6 +534,9 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
 
 fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str, &'static str)> {
     let mut queries = Vec::new();
+    let response_unavailable = issue.representative.as_ref().is_some_and(|representative| {
+        representative.difference_kind == ResponseDifferenceKind::ResponseUnavailable
+    });
     if issue.kind == RewriteIssueKind::Response && issue.representative.is_some() {
         queries.push((
             QUERY_CASE_RESPONSE_DIFFERENCES,
@@ -549,24 +552,28 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         "Summarize source data interactions observed before readiness by endpoint",
     ));
     if issue.representative.is_some() {
-        queries.extend([
-            (
-                QUERY_SOURCE_VARIATION,
-                "Measure the representative source value across recorded cases",
-            ),
-            (
-                QUERY_COLLECTION_EQUIVALENCE,
-                "Check whether representative arrays are equal as multisets",
-            ),
-            (
-                QUERY_DEPENDENCY_CORRELATION,
-                "Correlate response outcomes with dependency cleanliness",
-            ),
-            (
+        if !response_unavailable {
+            queries.extend([
+                (
+                    QUERY_SOURCE_VARIATION,
+                    "Measure the representative source value across recorded cases",
+                ),
+                (
+                    QUERY_COLLECTION_EQUIVALENCE,
+                    "Check whether representative arrays are equal as multisets",
+                ),
+            ]);
+        }
+        queries.push((
+            QUERY_DEPENDENCY_CORRELATION,
+            "Correlate response outcomes with dependency cleanliness",
+        ));
+        if !response_unavailable {
+            queries.push((
                 QUERY_POLICY_APPLICABILITY,
                 "Check structural rule applicability without authorizing a rule",
-            ),
-        ]);
+            ));
+        }
     }
     if matches!(
         issue.kind,

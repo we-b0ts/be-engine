@@ -671,8 +671,10 @@ an unsafe node address still fails the exchange instead of leaking an
 unrecorded target.
 
 Each discovered original IPv4 address receives one stable
-`vintage-node-<address>.trp.test` alias. The rewritten HTTP exchange records the
-alias, original IP, fake IP, port, service, and cluster. Replay reserves the
+`fake-node-<address>.trp.test` alias. The name deliberately identifies a
+replay-only fake node without claiming that the node belongs to Vintage. The
+rewritten HTTP exchange records the alias, original IP, fake IP, port, service,
+and cluster. Replay reserves the
 same fake IP before assigning any other target, so an SDK that caches the
 recorded naming response still connects to the Motan replay endpoint. A fake-IP
 collision or an address outside the configured replay CIDR fails replay
@@ -1163,6 +1165,13 @@ grouped by normalized Pointer pattern and difference kind. Each cluster reports
 affected cases, total occurrences, and one exact representative. The first
 evidence command is `case_response_differences`; it returns at most 20 ordered
 differences from that representative case with bounded expected/actual values.
+If a selected case finishes without usable target response assertion evidence,
+the diagnosis counts one `response_unavailable` difference at `$response`; the
+evidence page reports the recorded response as present and the target response
+as unavailable. When the HTTP driver can classify the observed transport
+failure, both the representative and evidence page include an
+`unavailable_reason`, such as `target_connection_closed`,
+`target_connection_failed`, or `target_request_timed_out`.
 When more are available it returns the next opaque evidence command instead of
 an open cursor. The `representatives` result includes the representative case
 ID, its exact immutable standard or comparison `case_dir`, and a structured

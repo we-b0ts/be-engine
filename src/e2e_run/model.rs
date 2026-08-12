@@ -10,6 +10,7 @@ const MAX_STATE_ERROR_BYTES: usize = 2_048;
 const STATE_ERROR_OVERFLOW: &str =
     "additional internal errors omitted; use the bounded terminal diagnosis";
 
+use super::result::E2eResponseUnavailableReason;
 use crate::case_group::CaseGroupInventory;
 use crate::replay::ResponseDifference;
 
@@ -169,6 +170,8 @@ pub(super) struct CaseExecution {
     pub replay_clean: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_assertion: Option<ResponseAssertionSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_unavailable_reason: Option<E2eResponseUnavailableReason>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -264,6 +267,7 @@ impl ActiveRunState {
                             assertion_passed: None,
                             replay_clean: None,
                             response_assertion: None,
+                            response_unavailable_reason: None,
                         },
                     )
                 })

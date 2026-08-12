@@ -15,6 +15,7 @@ pub enum ResponseBodyMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseDifferenceKind {
+    ResponseUnavailable,
     StatusMismatch,
     ValueMismatch,
     TypeMismatch,

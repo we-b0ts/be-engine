@@ -54,7 +54,8 @@ pub(crate) use reclassify::{
 pub use result::{
     E2eApiRunResult, E2eDependencyGate, E2eDiagnosis, E2eDiagnosisCounts, E2eFailureCluster,
     E2eReplayGate, E2eRepresentativeDifference, E2eResponseDifferenceDiagnosis, E2eResponseGate,
-    E2eRunResult, E2eValueObservation, E2eValuePresence, E2eVerificationGates,
+    E2eResponseUnavailableReason, E2eRunResult, E2eValueObservation, E2eValuePresence,
+    E2eVerificationGates,
 };
 pub(crate) use result::{response_pointer_pattern, response_pointer_scope};
 

@@ -15,6 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 use super::model::ResolvedProjectConfig;
+use super::result::E2eResponseUnavailableReason;
 use super::store;
 use crate::recorded_request::{RecordedHttpClient, target_uri};
 
@@ -99,6 +100,50 @@ pub(super) async fn capture_case(
             },
         },
     )
+}
+
+pub(super) fn response_unavailable_reason(error: &anyhow::Error) -> E2eResponseUnavailableReason {
+    if error.chain().any(|cause| {
+        cause
+            .downcast_ref::<hyper::Error>()
+            .is_some_and(|error| error.is_incomplete_message() || error.is_closed())
+    }) || error
+        .chain()
+        .any(|cause| cause.to_string() == "target closed before returning a Motan response")
+    {
+        return E2eResponseUnavailableReason::TargetConnectionClosed;
+    }
+    if error.chain().any(|cause| {
+        cause
+            .downcast_ref::<hyper_util::client::legacy::Error>()
+            .is_some_and(hyper_util::client::legacy::Error::is_connect)
+    }) {
+        return E2eResponseUnavailableReason::TargetConnectionFailed;
+    }
+    if error.chain().any(|cause| {
+        cause
+            .downcast_ref::<tokio::time::error::Elapsed>()
+            .is_some()
+    }) || error
+        .chain()
+        .any(|cause| cause.to_string() == "target Motan request timed out")
+    {
+        return E2eResponseUnavailableReason::TargetRequestTimedOut;
+    }
+    if error
+        .chain()
+        .any(|cause| cause.to_string() == "failed to read recorded HTTP response body")
+    {
+        return E2eResponseUnavailableReason::TargetResponseReadFailed;
+    }
+    if error.chain().any(|cause| {
+        let message = cause.to_string();
+        message.starts_with("failed to prepare replay request")
+            || message.starts_with("invalid recorded request")
+    }) {
+        return E2eResponseUnavailableReason::RequestPreparationFailed;
+    }
+    E2eResponseUnavailableReason::HttpExecutionFailed
 }
 
 #[derive(Deserialize)]
@@ -200,6 +245,11 @@ fn client() -> HttpClient {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use tokio::io::AsyncReadExt as _;
+    use tokio::net::TcpListener;
+
     use super::*;
 
     #[test]
@@ -209,6 +259,39 @@ mod tests {
                 .unwrap()
                 .to_string(),
             "http://127.0.0.1:8081/healthz"
+        );
+    }
+
+    #[tokio::test]
+    async fn classifies_target_close_before_http_response() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+        });
+        let temp = tempfile::tempdir().unwrap();
+        let request_path = temp.path().join("request.json");
+        std::fs::write(
+            &request_path,
+            br#"{"method":"GET","uri":"/api","headers":{},"body":{"encoding":"utf8","data":"","truncated":false}}"#,
+        )
+        .unwrap();
+
+        let result =
+            RecordedHttpClient::new(format!("http://{address}"), Duration::from_secs(2), 1024)
+                .send(&request_path)
+                .await;
+        let error = match result {
+            Ok(_) => panic!("target close must fail the recorded HTTP request"),
+            Err(error) => error,
+        };
+        server.await.unwrap();
+
+        assert_eq!(
+            response_unavailable_reason(&error),
+            E2eResponseUnavailableReason::TargetConnectionClosed
         );
     }
 }
