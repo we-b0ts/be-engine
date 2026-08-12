@@ -10,7 +10,9 @@ use hyper::{Method, Request};
 use hyper_util::client::legacy::Client;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
 
 use super::model::ResolvedProjectConfig;
 use super::store;
@@ -69,6 +71,11 @@ pub(super) async fn capture_case(
     request_path: &Path,
     actual_response_path: &Path,
 ) -> Result<()> {
+    let request_bytes = tokio::fs::read(request_path).await?;
+    let kind: RequestKind = serde_json::from_slice(&request_bytes)?;
+    if kind.protocol_version.is_some() {
+        return capture_motan_case(config, kind, actual_response_path).await;
+    }
     let response = RecordedHttpClient::new(
         config.target_http_origin.clone(),
         config.target_request_timeout,
@@ -85,6 +92,97 @@ pub(super) async fn capture_case(
         &ActualResponse {
             version: 1,
             status: response.status.as_u16(),
+            body: CapturedBody {
+                encoding,
+                data,
+                truncated: false,
+            },
+        },
+    )
+}
+
+#[derive(Deserialize)]
+struct RequestKind {
+    #[serde(default)]
+    protocol_version: Option<String>,
+    #[serde(default)]
+    frame: Option<RecordedFrame>,
+}
+
+#[derive(Deserialize)]
+struct RecordedFrame {
+    encoding: String,
+    data: String,
+    truncated: bool,
+}
+
+async fn capture_motan_case(
+    config: &ResolvedProjectConfig,
+    request: RequestKind,
+    actual_response_path: &Path,
+) -> Result<()> {
+    let upstream = config
+        .target_motan_upstream
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Motan case requires a configured target Motan endpoint"))?;
+    let frame = request
+        .frame
+        .ok_or_else(|| anyhow::anyhow!("Motan request has no frame"))?;
+    if frame.truncated {
+        bail!("Motan request frame is truncated");
+    }
+    let raw = match frame.encoding.as_str() {
+        "utf8" => frame.data.into_bytes(),
+        "base64" => STANDARD.decode(frame.data)?,
+        encoding => bail!("unsupported Motan request encoding {encoding:?}"),
+    };
+    let limits = motan_protocol::Limits::default();
+    let motan_protocol::DecodeStatus::Complete(request) =
+        motan_protocol::decode_frame(&raw, limits)?
+    else {
+        bail!("Motan request frame is incomplete");
+    };
+    let operation = async {
+        let mut stream = TcpStream::connect(upstream).await?;
+        stream.write_all(&raw).await?;
+        if request.flags.oneway() {
+            return Ok((204, Vec::new()));
+        }
+        let mut decoder = motan_protocol::FrameDecoder::new(limits)?;
+        let response = loop {
+            if let Some(frame) = decoder.decode()? {
+                break frame;
+            }
+            let read = stream.read_buf(decoder.buffer_mut()).await?;
+            if read == 0 {
+                bail!("target closed before returning a Motan response");
+            }
+        };
+        if response.request_id != request.request_id || response.version != request.version {
+            bail!("target returned a mismatched Motan response frame");
+        }
+        let status = match response.response_kind() {
+            Some(motan_protocol::ResponseKind::Normal) => 200,
+            Some(motan_protocol::ResponseKind::Value) => 201,
+            Some(motan_protocol::ResponseKind::Void) => 204,
+            Some(motan_protocol::ResponseKind::Attachment) => 206,
+            Some(motan_protocol::ResponseKind::Exception) => 500,
+            Some(motan_protocol::ResponseKind::Other(_)) | None => 520,
+        };
+        Ok::<_, anyhow::Error>((status, response.raw().to_vec()))
+    };
+    let (status, body) = tokio::time::timeout(config.target_request_timeout, operation)
+        .await
+        .map_err(|_| anyhow::anyhow!("target Motan request timed out"))??;
+    let (encoding, data) = match std::str::from_utf8(&body) {
+        Ok(text) => ("utf8", text.to_owned()),
+        Err(_) => ("base64", STANDARD.encode(&body)),
+    };
+    store::write_json(
+        actual_response_path,
+        &ActualResponse {
+            version: 1,
+            status,
             body: CapturedBody {
                 encoding,
                 data,

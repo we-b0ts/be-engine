@@ -113,6 +113,18 @@ fi
     printf 'error: TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED must be true or false\n' >&2
     exit 2
 }
+[[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true || \
+   "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == false ]] || {
+    printf 'error: TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED must be true or false\n' >&2
+    exit 2
+}
+if [[ "$operation" == record-comparison && \
+      "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+    [[ -n "${TRAFFIC_E2E_TARGET_MOTAN_PORT-}" ]] || {
+        printf 'error: missing comparison target Motan port\n' >&2
+        exit 2
+    }
+fi
 if [[ "$operation" == preflight && "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" == true ]]; then
     for name in TRAFFIC_E2E_MOTAN_SOURCE_PORT TRAFFIC_E2E_MOTAN_GATEWAY_PORT TRAFFIC_E2E_MOTAN_REPLAY_COMMAND; do
         [[ -n "${!name-}" ]] || {
@@ -222,6 +234,7 @@ target_network_name="${prefix}-target-network"
 target_network_ip=""
 target_network_gateway=""
 target_origin=""
+target_motan_upstream=""
 adapter_image="traffic-e2e/${recording_image_project}-recording:cache"
 adapter_image_id=""
 adapter_contract_revision=""
@@ -381,12 +394,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 wait_port() {
-    local port=$1
-    local label=$2
-    local owner=${3-}
+    wait_host_port 127.0.0.1 "$@"
+}
+
+wait_host_port() {
+    local host=$1
+    local port=$2
+    local label=$3
+    local owner=${4-}
     local deadline=$((SECONDS + 300))
     while ((SECONDS < deadline)); do
-        if nc -z -w 1 127.0.0.1 "$port" >/dev/null 2>&1; then
+        if nc -z -w 1 "$host" "$port" >/dev/null 2>&1; then
             return 0
         fi
         if [[ -n "$owner" ]] && ! container_is_running "$owner"; then
@@ -395,7 +413,7 @@ wait_port() {
         fi
         sleep 1
     done
-    printf 'error: timed out waiting for %s on port %s\n' "$label" "$port" >&2
+    printf 'error: timed out waiting for %s on %s:%s\n' "$label" "$host" "$port" >&2
     return 1
 }
 
@@ -566,11 +584,12 @@ normalize_breeze_directories() {
 
 start_breeze() {
     local network=$1
+    local ready_host=${2:-127.0.0.1}
     load_runtime_spec "$breeze_inspect" exact exact exact
     docker run --detach --name "$breeze_name" --network "$network" \
         "${runtime_args[@]}" "$breeze_image" "${runtime_command[@]}" >/dev/null
     breeze_started=true
-    wait_port 9984 Breeze "$breeze_name"
+    wait_host_port "$ready_host" 9984 Breeze "$breeze_name"
 }
 
 start_cache_snapshot() {
@@ -606,7 +625,7 @@ start_comparison_source() {
     local network=$1
     load_runtime_spec "$source_inspect" recording recording image
     if "$breeze_enabled"; then
-        runtime_args+=(--env MESH_CONNECT_HOST=breeze.recording)
+        runtime_args+=(--env "MESH_CONNECT_HOST=${target_network_ip}")
     fi
     require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
     docker run --detach --name "$source_name" --network "$network" \
@@ -792,6 +811,9 @@ start_recording_input() {
     local -a input_command=(internal recording-input \
         --case-source "$TRAFFIC_E2E_REQUEST_SOURCE" \
         --origin "$TRAFFIC_E2E_RECORDING_ORIGIN")
+    if [[ -n "${TRAFFIC_E2E_MOTAN_RECORDING_UPSTREAM-}" ]]; then
+        input_command+=(--motan-upstream "$TRAFFIC_E2E_MOTAN_RECORDING_UPSTREAM")
+    fi
     [[ -z "$completion_control_socket" ]] || \
         input_command+=(--completion-control-socket "$completion_control_socket")
     if [[ -n "$completion_control_socket" ]]; then
@@ -949,9 +971,10 @@ run_comparison_recording() {
     start_comparison_target_network
     start_cache_snapshot
     if "$breeze_enabled"; then
+        enable_comparison_target_loopback_ingress
         normalize_breeze_directories
         docker pull "$breeze_image" >/dev/null
-        start_breeze "container:${anchor_name}"
+        start_breeze "container:${target_anchor_name}" "$target_network_ip"
     fi
     start_comparison_source "container:${anchor_name}"
     run_no_fallback
@@ -961,8 +984,14 @@ run_comparison_recording() {
         "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
     require_container_running "$target_name" target
     require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
+    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+        require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_MOTAN_PORT" target-motan
+    fi
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
     local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
+    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+        comparison_command+=(--candidate-motan-upstream "$target_motan_upstream")
+    fi
     "$baseline_recheck" && comparison_command+=(--baseline-recheck)
     local selector
     for selector in "${api_selectors[@]}"; do comparison_command+=(--api "$selector"); done

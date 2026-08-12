@@ -47,6 +47,15 @@ async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
     versions.sort();
     assert_eq!(versions, ["motan1", "motan2"]);
     for published in cases {
+        let request = read_json(published.join("request.json"));
+        assert_eq!(request["method"], "MOTAN");
+        assert_eq!(request["uri"], request["api_pattern"]);
+        assert!(
+            request["api_pattern"]
+                .as_str()
+                .unwrap()
+                .starts_with("/rpc/")
+        );
         let descriptor = read_json(published.join("case.json"));
         assert_eq!(descriptor["kind"], "motan_rpc");
         assert!(

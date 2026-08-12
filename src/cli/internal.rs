@@ -43,6 +43,8 @@ struct RecordingInputArgs {
     recording_apis: Vec<RecordingApi>,
     #[arg(long)]
     origin: String,
+    #[arg(long)]
+    motan_upstream: Option<String>,
     #[arg(long, default_value = "30")]
     request_timeout_seconds: NonZeroU64,
     /// Notify a managed comparison after every finite request template is consumed.
@@ -67,6 +69,7 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
                 case_source: args.case_source,
                 recording_apis: args.recording_apis,
                 origin: args.origin,
+                motan_upstream: args.motan_upstream,
                 request_timeout: Duration::from_secs(args.request_timeout_seconds.get()),
                 completion: args.completion_control_socket.map(|control_socket| {
                     ManagedRecordingInputCompletion {

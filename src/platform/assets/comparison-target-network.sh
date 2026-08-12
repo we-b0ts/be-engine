@@ -10,6 +10,7 @@ start_comparison_target_network() {
     target_network_started=true
     docker run --detach --name "$target_anchor_name" --platform linux/amd64 \
         --network "$target_network_name" \
+        --sysctl net.ipv4.conf.all.route_localnet=1 \
         --label com.weibo.traffic-e2e.managed=true \
         --label com.weibo.traffic-e2e.role=comparison-target-network-anchor \
         --label "com.weibo.traffic-e2e.operation=${operation}" \
@@ -30,6 +31,18 @@ start_comparison_target_network() {
         return 1
     }
     target_origin="http://${target_network_ip}:${TRAFFIC_E2E_TARGET_PORT}"
+    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+        target_motan_upstream="${target_network_ip}:${TRAFFIC_E2E_TARGET_MOTAN_PORT}"
+    fi
+}
+
+enable_comparison_target_loopback_ingress() {
+    docker run --rm --platform linux/amd64 \
+        --network "container:${target_anchor_name}" --user 0:0 \
+        --cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges \
+        --entrypoint iptables "$recorder_image" \
+        -t nat -I PREROUTING -d "${target_network_ip}/32" -p tcp \
+        -j DNAT --to-destination 127.0.0.1
 }
 
 start_target() {
@@ -48,6 +61,9 @@ start_target() {
         )
     fi
     require_port_available "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
+    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
+        require_port_available "$target_network_ip" "$TRAFFIC_E2E_TARGET_MOTAN_PORT" target-motan
+    fi
     docker run --detach --name "$target_name" --platform linux/amd64 \
         --network "container:${target_anchor_name}" --user 998:998 \
         --label com.weibo.traffic-e2e.managed=true \

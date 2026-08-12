@@ -98,6 +98,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_startup: crate::startup::StartupConfig,
     pub(crate) target_http_origin: String,
     pub(crate) target_port: u16,
+    pub(crate) target_motan_upstream: Option<String>,
     pub(crate) target_readiness_path: String,
     pub(crate) target_readiness_status: u16,
     pub(crate) target_startup_timeout: Duration,

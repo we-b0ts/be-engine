@@ -227,6 +227,17 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         });
     let target_max_response_bytes = recorder.recording.max_body_bytes;
     let target_port = recorder_target_http_port(&recorder.http_gateway.matched_upstream)?;
+    let target_motan_upstream = recorder
+        .motan_gateway
+        .enabled
+        .then(|| {
+            let port = crate::platform::endpoint_port(
+                &recorder.motan_gateway.matched_upstream,
+                "motan_gateway.matched_upstream",
+            )?;
+            Ok::<String, anyhow::Error>(format!("127.0.0.1:{port}"))
+        })
+        .transpose()?;
     let target_quality_gates = config
         .target
         .quality_gates
@@ -238,6 +249,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_startup: config.target.startup,
             target_http_origin: format!("http://127.0.0.1:{target_port}"),
             target_port,
+            target_motan_upstream,
             target_readiness_path: recorder.http_gateway.ready.path,
             target_readiness_status: recorder.http_gateway.ready.success_status,
             target_startup_timeout: Duration::from_secs(

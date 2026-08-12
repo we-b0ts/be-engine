@@ -13,8 +13,33 @@ pub(super) struct RecordedRequest {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct ExpectedResponse {
-    pub(super) status: Option<u16>,
+    pub(super) status: Option<RecordedStatus>,
     pub(super) body: Option<ResponseBody>,
+    pub(super) frame: Option<ResponseBody>,
+    pub(super) response_expected: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub(super) enum RecordedStatus {
+    Http(u16),
+    Rpc(String),
+}
+
+impl RecordedStatus {
+    pub(super) fn code(&self) -> u16 {
+        match self {
+            Self::Http(value) => *value,
+            Self::Rpc(value) => match value.as_str() {
+                "normal" => 200,
+                "value" => 201,
+                "void" => 204,
+                "attachment" => 206,
+                "exception" => 500,
+                _ => 520,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

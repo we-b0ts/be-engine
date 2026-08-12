@@ -8,7 +8,7 @@ use motan_protocol::{
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-pub(super) async fn read_frame<R>(
+pub(crate) async fn read_frame<R>(
     reader: &mut R,
     decoder: &mut FrameDecoder,
     limits: Limits,
@@ -41,7 +41,7 @@ where
     }
 }
 
-pub(super) async fn forward_request(
+pub(crate) async fn forward_request(
     request: &Frame,
     upstream: &str,
     connect_timeout: Duration,
@@ -92,7 +92,7 @@ pub(super) async fn forward_request(
     Ok(Some(response))
 }
 
-pub(super) async fn write_frame<W>(writer: &mut W, frame: &Frame) -> Result<()>
+pub(crate) async fn write_frame<W>(writer: &mut W, frame: &Frame) -> Result<()>
 where
     W: AsyncWrite + Unpin,
 {
@@ -102,7 +102,7 @@ where
         .context("failed to write Motan downstream response")
 }
 
-pub(super) async fn write_fixed_response<W>(
+pub(crate) async fn write_fixed_response<W>(
     writer: &mut W,
     request: &Frame,
     limits: Limits,
