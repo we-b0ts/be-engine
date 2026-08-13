@@ -92,6 +92,8 @@ When Breeze is enabled, also create:
 
 ```text
 .traffic-e2e/MeshConnectUtil.class
+.traffic-e2e/mesh_switch_task.sh
+.traffic-e2e/recording-entrypoint.sh
 ```
 
 Generate `Dockerfile.recording` from the inspected source image and its actual
@@ -129,6 +131,34 @@ complete patch operation. At runtime set
 `MESH_CONNECT_HOST=breeze.recording` so the patched SDK connects to the managed
 Breeze container instead of source-local loopback.
 
+Also copy the bundled
+[`mesh_switch_task.sh`](../assets/mesh_switch_task.sh) and
+[`recording-entrypoint.sh`](../assets/recording-entrypoint.sh) byte-for-byte;
+their SHA-256 values are respectively
+`6a09a15106326c737d3b23fc880bcd9c52ea0f69868759f5bf3ee7cf05cdbeda`
+and
+`0df975b51ad68357a05c8fce444d42194de0afd8eca04b7be70a06da6ab3b473`.
+The Dockerfile must install both as executable files below `/usr/local/bin`,
+fail the build unless `nc` and `getent` are available, and make
+`recording-entrypoint.sh` the explicit adaptor entrypoint in front of the
+complete inspected source entrypoint and command. Preserve every original
+argument exactly. The wrapper
+starts `mesh_switch_task.sh` once in the background, then `exec`s the source
+application as the foreground container process. The task sends the canonical
+Mesh switch commands to `127.0.0.1:880` every three seconds for the complete
+container lifetime. Connection failures never terminate it, and it continues
+sending after successful responses. It logs only when the command result state
+changes so startup failures and later recovery remain visible in container
+stdout/stderr without an unbounded three-second log stream.
+
+The managed runtime supplies `TRAFFIC_E2E_BREEZE_NO_FALLBACK=true` by default
+for Breeze-enabled source adaptors. The wrapper consumes and unsets this
+system-owned variable before executing the source application. A caller's
+explicit `--brz-no-fallback false` disables the background task without
+changing the image entrypoint. Do not invoke the task from a Docker `RUN`
+instruction, wait for port `880` before starting it, or stop it after one
+successful iteration.
+
 Do not embed a Recorder CA, private key, credential, recording, or
 machine-local container state in the image. When Java is part of the source
 runtime, retain `keytool`, `/bin/sh`, and `java` and support a runtime-mounted
@@ -157,10 +187,10 @@ context does the same. Reuse an adaptor only when its source-image and build
 contract labels match the current inputs.
 
 The Dockerfile alone owns optional assets such as `MeshConnectUtil.class`,
-including their presence and validation; the generic managed runtime must not
-name, inspect, or validate those assets. It must not synthesize another
-project-specific Dockerfile or include `.traffic-e2e/local/` in the build
-context.
+`mesh_switch_task.sh`, and `recording-entrypoint.sh`, including their presence
+and validation; the generic managed runtime must not inspect or copy those
+assets. It must not synthesize another project-specific Dockerfile or include
+`.traffic-e2e/local/` in the build context.
 
 Do not create a Breeze Dockerfile or image in the target repository. When
 Breeze is enabled, the managed runtime uses the fixed
@@ -207,7 +237,13 @@ come from the inspected source contract.
    `880` listener is reachable without root or privileged-container execution,
    Breeze is ready when enabled, the source readiness contract passes, and
    Recorder admits cases.
-5. After source readiness, send exactly one GET to `https://demo.test/`. When
+5. When Breeze is enabled, resolve `breeze.recording` explicitly inside the
+   source adaptor as UID/GID `998:998` after Recorder is ready. Require a
+   non-empty IPv4 result, then after finalization require
+   `recording-network.json` to contain the canonical `breeze.recording` DNS
+   observation. A local hosts-file result or another DNS path that Recorder did
+   not observe does not pass initialization.
+6. After source readiness, send exactly one GET to `https://demo.test/`. When
    the system detected Java, execute the bundled Java 8 class inside the source
    adaptor and require it to
    use the mounted Java truststore through `JAVA_TOOL_OPTIONS`, the same trust
@@ -216,19 +252,19 @@ come from the inspected source contract.
    anchor namespace with the public Recorder CA mounted read-only. Probe
    failure fails the phase; never fall back from the Java probe to the generic
    probe because doing so would mask a Java truststore defect.
-6. After the command reports
+7. After the command reports
    `phase = "preflight-business-input-required"`, admit the controlled request
    matching the configured HTTP gateway rule,
    using the rule's declared method without a separate read-only-method
    restriction. Finalize the disposable run and require a clean manifest with
    at least one published case and its source response.
-7. Require Recorder to publish exactly that successful `demo.test` exchange
+8. Require Recorder to publish exactly that successful `demo.test` exchange
    once in `global-dependencies.jsonl` with
    `global_dependency_reason = "preflight_probe"`, runtime phase, and
    `java_truststore` or `system_network` attribution. Do not enable full
    `traffic.jsonl`, accept an arbitrary HTTPS exchange, or synthesize Global
    evidence from another file.
-8. Start a disposable real Replay session over the recording run. In a
+9. Start a disposable real Replay session over the recording run. In a
    Replay-owned host network namespace, run the fixed network probe image as
    `998:998`: require `demo.test` to resolve to its assigned fake IP, return the
    recorded response, and consume one Global HTTP exchange; require
@@ -236,7 +272,7 @@ come from the inspected source contract.
    require a direct real-IP egress attempt to be rejected. This phase does not
    start the target or activate a business case. Stop Replay and remove the
    namespace before returning.
-9. Await the final result. Do not infer success from probe output alone. Only
+10. Await the final result. Do not infer success from probe output alone. Only
    overall `status = "passed"` with all three phase results is authoritative.
 
 Run this through the same managed recording machinery used by backend-rewrite
@@ -246,7 +282,8 @@ Keep its run identity and artifacts in a dedicated preflight area below
 `.traffic-e2e/local/preflight/<run-id>/`; never publish them as the workflow's
 standard recording, Replay, or comparison evidence. Success output reports
 `status = "passed"`, the isolated manifest, `published_cases`, exact Global
-probe verification, and the bounded Replay positive/negative/egress result.
+probe verification, Breeze DNS verification when configured, and the bounded
+Replay positive/negative/egress result.
 The command fails when no complete case is recorded, the required probe is not
 published exactly once, Replay cannot consume it, unrecorded DNS resolves, or
 external egress is available. The recording phase does not start the target;
@@ -526,9 +563,12 @@ Do not report initialization complete until all of the following are true:
   runtime secrets or generated trust material as
   `traffic-e2e/<project>-recording:cache`, bound to the configured source
   container's immutable image ID;
-- when Breeze is enabled, `.traffic-e2e/MeshConnectUtil.class` exactly matches
-  the bundled asset, and its replacement in the source Breeze SDK JAR is
-  verified byte-for-byte;
+- when Breeze is enabled, `.traffic-e2e/MeshConnectUtil.class`,
+  `.traffic-e2e/mesh_switch_task.sh`, and
+  `.traffic-e2e/recording-entrypoint.sh` exactly match the bundled assets; the
+  class replacement in the source Breeze SDK JAR is verified byte-for-byte,
+  and the adaptor entrypoint starts the permanent three-second Mesh switch loop
+  asynchronously before executing the source application;
 - the repository `.gitignore` contains the root-scoped
   `/.traffic-e2e/local/` entry;
 - `.traffic-e2e/Dockerfile.e2e` exists, uses the pinned builder and target
@@ -548,7 +588,8 @@ Do not report initialization complete until all of the following are true:
 - the disposable recording preflight passed with the adapted source process
   running as `998:998`, system-owned Java probe execution and truststore setup
   completed when applicable, exactly one `demo.test` probe published as a
-  Global dependency, and one cleanly published case;
+  Global dependency, one cleanly published case, and, when Breeze is enabled,
+  a successful `breeze.recording` lookup observed in `recording-network.json`;
 - the disposable Replay network preflight consumed that Global probe through
   its assigned fake IP, blocked DNS for unrecorded `example.com`, rejected
   direct external egress for UID `998`, and completed cleanup;
@@ -580,10 +621,12 @@ If the user confirms:
 2. Keep the initialization changes on a separate feature branch. The source
    branch must not be `dev-migration`.
 3. Commit only the three generated configuration files,
-   `Dockerfile.recording`, the Breeze-only `.traffic-e2e/MeshConnectUtil.class`
-   when applicable, `.traffic-e2e/Dockerfile.e2e`, the root `.dockerignore`, the
-   root-scoped `.gitignore` update, and any minimal target scaffold required for
-   its release build. Exclude unrelated work and all `.traffic-e2e/local/`
+   `Dockerfile.recording`, the Breeze-only `.traffic-e2e/MeshConnectUtil.class`,
+   `.traffic-e2e/mesh_switch_task.sh`, and
+   `.traffic-e2e/recording-entrypoint.sh` when applicable,
+   `.traffic-e2e/Dockerfile.e2e`, the root `.dockerignore`, the root-scoped
+   `.gitignore` update, and any minimal target scaffold required for its
+   release build. Exclude unrelated work and all `.traffic-e2e/local/`
    content.
 4. Push the necessary branches and create a PR whose target branch is
    `dev-migration`. Report the branch names and PR URL to the user.

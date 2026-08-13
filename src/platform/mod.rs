@@ -46,7 +46,6 @@ const MANAGER: &str = include_str!("assets/manage-platform.sh");
 const COMPARISON_TARGET_NETWORK: &str = include_str!("assets/comparison-target-network.sh");
 const RECORDER_RUNTIME: &str = include_str!("assets/recorder-runtime.sh");
 const PLATFORM_MOUNTS: &str = include_str!("assets/platform-mounts.sh");
-const BREEZE_NO_FALLBACK: &str = include_str!("assets/brz-no-fallback.sh");
 const PREFLIGHT_BUSINESS_INPUT: &str = include_str!("assets/preflight-business-input.sh");
 const HTTPS_PROBE: &[u8] = include_bytes!("assets/HttpsProbe.class");
 
@@ -202,7 +201,8 @@ pub async fn run_managed_recording_preflight(
         ManagedRuntimeOperation::Preflight,
     )
     .await?;
-    let evidence = preflight::validate(&runtime.manifest, runtime.motan.is_some())?;
+    let breeze_enabled = runtime.breeze_container.is_some();
+    let evidence = preflight::validate(&runtime.manifest, runtime.motan.is_some(), breeze_enabled)?;
     let replay_network = replay_preflight::run(
         &runtime.target_root,
         &project,
@@ -253,6 +253,8 @@ pub async fn run_managed_recording_preflight(
             published_cases: evidence.published_cases,
             https_interception_verified: evidence.https_interception_verified,
             global_probe_dependency_verified: evidence.global_probe_dependency_verified,
+            breeze_dns_resolution_verified: breeze_enabled
+                .then_some(evidence.breeze_dns_resolution_verified),
             motan,
         },
         replay_network,

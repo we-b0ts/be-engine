@@ -1384,10 +1384,16 @@ local alias, and labels the resulting adaptor with that ID. A missing adaptor or
 one labeled for another source image or build-contract revision triggers a
 build/refresh. The manager never starts, stops, removes, or replaces the
 configured source container.
-Optional inputs such as the Breeze-only `.traffic-e2e/MeshConnectUtil.class`
-are owned and validated by the Dockerfile; the generic manager does not inspect
-them. The manager forms a non-recursive build context from regular files at the
-top of `.traffic-e2e`, so `.traffic-e2e/local/` is never included.
+Optional inputs such as the Breeze-only `.traffic-e2e/MeshConnectUtil.class`,
+`.traffic-e2e/mesh_switch_task.sh`, and
+`.traffic-e2e/recording-entrypoint.sh` are owned and validated by the
+Dockerfile; the generic manager does not inspect them. The Breeze adaptor
+entrypoint starts the switch task once in the background and then executes the
+source application as PID 1. The task sends the canonical switch set to
+`127.0.0.1:880` every three seconds throughout the container lifetime,
+regardless of connection failures or earlier success. The manager forms a
+non-recursive build context from regular files at the top of `.traffic-e2e`, so
+`.traffic-e2e/local/` is never included.
 The adaptor image's own `USER`, working directory, entrypoint, and command are
 used at runtime; the manager does not regenerate a Dockerfile or infer launch
 from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
@@ -1417,6 +1423,10 @@ recording-environment preflight, and finally starts a real Replay session with
 the fixed network probe image. Recording publishes exactly one marked
 `demo.test` Global dependency; Replay must consume it through fake DNS, reject
 unrecorded `example.com`, and block direct external egress for UID `998`.
+For a Breeze-enabled project, recording preflight also resolves
+`breeze.recording` inside the source adaptor as UID `998` and fails unless the
+finalized `recording-network.json` proves Recorder observed that DNS query.
+Ordinary recording and comparison do not repeat this initialization gate.
 When Motan is enabled, the business-input phase also prints the exact
 `motan-replay` copy command. A successfully published Motan case reports
 `recording.motan.status: verified`. If the window observes no Motan request,

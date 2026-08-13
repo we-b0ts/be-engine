@@ -19,6 +19,16 @@ Breeze, readiness, finalization, signals, and cleanup. For Platform Java/Tomcat
 it builds its capture-only source adaptor. Do not generate or invoke repository
 recording wrappers.
 
+For a Breeze-enabled initialized project, the source adaptor entrypoint starts
+its image-owned Mesh switch task asynchronously. That task retries the source
+control port every three seconds for the complete container lifetime, including
+after successful responses. Managed recording only selects whether the task is
+enabled with `--brz-no-fallback`; it does not execute a host-side one-shot
+script or wait for a successful switch response. `init preflight`, not every
+ordinary recording, actively resolves `breeze.recording` as UID `998` and
+requires Recorder to preserve that DNS observation in
+`recording-network.json`.
+
 The managed runtime retains a target-scoped adaptor image. Every managed run
 requires the configured source container to remain present and stopped, then
 inspects its immutable image ID and runtime inputs without changing it. A

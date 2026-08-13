@@ -47,6 +47,8 @@ pub struct ManagedRecordingPreflightRecordingResult {
     pub https_interception_verified: bool,
     pub global_probe_dependency_verified: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub breeze_dns_resolution_verified: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub motan: Option<ManagedMotanPreflightResult>,
 }
 
@@ -89,6 +91,7 @@ pub(super) struct PreflightEvidence {
     pub published_cases: usize,
     pub https_interception_verified: bool,
     pub global_probe_dependency_verified: bool,
+    pub breeze_dns_resolution_verified: bool,
     pub probe_kind: PreflightProbeKind,
     pub motan_status: Option<MotanPreflightStatus>,
     pub motan_cases: usize,
@@ -133,7 +136,11 @@ struct TrafficEventProbe {
     error: String,
 }
 
-pub(super) fn validate(manifest_path: &Path, motan_enabled: bool) -> Result<PreflightEvidence> {
+pub(super) fn validate(
+    manifest_path: &Path,
+    motan_enabled: bool,
+    breeze_enabled: bool,
+) -> Result<PreflightEvidence> {
     let manifest_metadata = regular_file_metadata(manifest_path, "preflight manifest")?;
     ensure!(
         manifest_metadata.len() <= MAX_MANIFEST_BYTES,
@@ -172,6 +179,9 @@ pub(super) fn validate(manifest_path: &Path, motan_enabled: bool) -> Result<Pref
     let run_dir = manifest_path
         .parent()
         .context("preflight manifest has no recording run directory")?;
+    if breeze_enabled {
+        validate_breeze_dns_resolution(run_dir)?;
+    }
     let observation = inspect_run(run_dir)?;
     ensure!(
         observation.responses >= manifest.published_cases,
@@ -192,6 +202,7 @@ pub(super) fn validate(manifest_path: &Path, motan_enabled: bool) -> Result<Pref
         published_cases: manifest.published_cases,
         https_interception_verified: true,
         global_probe_dependency_verified: true,
+        breeze_dns_resolution_verified: breeze_enabled,
         probe_kind,
         motan_status: motan_enabled.then_some(if observation.motan_cases > 0 {
             MotanPreflightStatus::Verified
@@ -200,6 +211,20 @@ pub(super) fn validate(manifest_path: &Path, motan_enabled: bool) -> Result<Pref
         }),
         motan_cases: observation.motan_cases,
     })
+}
+
+fn validate_breeze_dns_resolution(run_dir: &Path) -> Result<()> {
+    let network_manifest = crate::recording_network::RecordingNetworkManifest::load(
+        &run_dir.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+    )?;
+    ensure!(
+        network_manifest
+            .resolved_domains
+            .iter()
+            .any(|domain| domain == "breeze.recording"),
+        "Breeze preflight did not resolve breeze.recording through Recorder DNS"
+    );
+    Ok(())
 }
 
 pub(super) fn validate_motan_recording(
@@ -474,11 +499,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            validate(&manifest, false).unwrap(),
+            validate(&manifest, false, false).unwrap(),
             PreflightEvidence {
                 published_cases: 1,
                 https_interception_verified: true,
                 global_probe_dependency_verified: true,
+                breeze_dns_resolution_verified: false,
                 probe_kind: PreflightProbeKind::JavaTruststore,
                 motan_status: None,
                 motan_cases: 0,
@@ -497,7 +523,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            validate(&manifest, false).unwrap().probe_kind,
+            validate(&manifest, false, false).unwrap().probe_kind,
             PreflightProbeKind::SystemNetwork
         );
     }
@@ -508,7 +534,7 @@ mod tests {
         let run = manifest.parent().unwrap();
         fs::write(run.join("traffic.jsonl"), probe_event("java_truststore")).unwrap();
 
-        let error = validate(&manifest, false).unwrap_err().to_string();
+        let error = validate(&manifest, false, false).unwrap_err().to_string();
         assert!(error.contains("global-dependencies.jsonl"));
     }
 
@@ -521,7 +547,7 @@ mod tests {
             probe_event("declared_language"),
         )
         .unwrap();
-        let error = validate(&manifest, false).unwrap_err().to_string();
+        let error = validate(&manifest, false, false).unwrap_err().to_string();
         assert!(error.contains("system-selected runtime attribution"));
 
         fs::write(
@@ -534,7 +560,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = validate(&manifest, false).unwrap_err().to_string();
+        let error = validate(&manifest, false, false).unwrap_err().to_string();
         assert!(error.contains("found 2"));
     }
 
@@ -548,7 +574,7 @@ mod tests {
         )
         .unwrap();
 
-        let evidence = validate(&manifest, true).unwrap();
+        let evidence = validate(&manifest, true, false).unwrap();
         assert_eq!(
             evidence.motan_status,
             Some(MotanPreflightStatus::NotObserved)
@@ -575,7 +601,7 @@ mod tests {
         )
         .unwrap();
 
-        let evidence = validate(&manifest, true).unwrap();
+        let evidence = validate(&manifest, true, false).unwrap();
         assert_eq!(evidence.published_cases, 0);
         assert_eq!(
             evidence.motan_status,
@@ -595,7 +621,7 @@ mod tests {
         )
         .unwrap();
 
-        let evidence = validate(&manifest, true).unwrap();
+        let evidence = validate(&manifest, true, false).unwrap();
         assert_eq!(evidence.motan_status, Some(MotanPreflightStatus::Verified));
         assert_eq!(evidence.motan_cases, 1);
         let recording = validate_motan_recording(&manifest).unwrap();
@@ -619,9 +645,36 @@ mod tests {
         )
         .unwrap();
 
-        let error = validate(&manifest, true).unwrap_err().to_string();
+        let error = validate(&manifest, true, false).unwrap_err().to_string();
         assert!(error.contains("Motan traffic reached"));
         assert!(error.contains("bad frame"));
         assert!(validate_motan_recording(&manifest).is_err());
+    }
+
+    #[test]
+    fn breeze_preflight_requires_recorder_observed_dns_resolution() {
+        let (_temp, manifest) = fixture();
+        let run = manifest.parent().unwrap();
+        fs::write(
+            run.join("global-dependencies.jsonl"),
+            probe_event("system_network"),
+        )
+        .unwrap();
+        fs::write(
+            run.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+            r#"{"version":1,"resolved_domains":["breeze.recording"],"accessed_endpoints":[]}"#,
+        )
+        .unwrap();
+
+        let evidence = validate(&manifest, false, true).unwrap();
+        assert!(evidence.breeze_dns_resolution_verified);
+
+        fs::write(
+            run.join(crate::recording_network::RECORDING_NETWORK_FILENAME),
+            r#"{"version":1,"resolved_domains":[],"accessed_endpoints":[]}"#,
+        )
+        .unwrap();
+        let error = validate(&manifest, false, true).unwrap_err().to_string();
+        assert!(error.contains("did not resolve breeze.recording through Recorder DNS"));
     }
 }

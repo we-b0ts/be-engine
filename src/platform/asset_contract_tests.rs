@@ -123,11 +123,13 @@ fn embedded_platform_manager_is_valid_bash() {
         .split_once("start_recording_source()")
         .unwrap()
         .1
-        .split_once("run_no_fallback()")
+        .split_once("run_preflight_https_probe()")
         .unwrap()
         .0;
     assert!(!adapted_source.contains("--user"));
     assert!(!adapted_source.contains("--privileged"));
+    assert!(adapted_source.contains("MESH_CONNECT_HOST=breeze.recording"));
+    assert!(adapted_source.contains("TRAFFIC_E2E_BREEZE_NO_FALLBACK=${brz_no_fallback}"));
     let comparison_source = MANAGER
         .split_once("start_comparison_source()")
         .unwrap()
@@ -142,6 +144,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(comparison_source.contains("\"${runtime_args[@]}\" \"$adapter_image_id\""));
     assert!(!comparison_source.contains(".[0].Config.Image"));
     assert!(comparison_source.contains("MESH_CONNECT_HOST=${target_network_ip}"));
+    assert!(comparison_source.contains("TRAFFIC_E2E_BREEZE_NO_FALLBACK=${brz_no_fallback}"));
     let comparison_runtime = MANAGER
         .split_once("run_comparison_recording()")
         .unwrap()
@@ -198,6 +201,26 @@ fn embedded_platform_manager_is_valid_bash() {
             .contains("target_origin=\"http://${target_network_ip}:${TRAFFIC_E2E_TARGET_PORT}\"")
     );
     assert!(MANAGER.contains("--candidate-upstream \"$target_origin\""));
+    assert!(!MANAGER.contains("run_no_fallback"));
+    assert!(!MANAGER.contains("brz-no-fallback.sh"));
+    assert!(MANAGER.contains("getent ahostsv4 breeze.recording"));
+    assert!(MANAGER.contains("docker exec --user 998:998 \"$source_name\""));
+    let standard_recording = MANAGER
+        .split_once("run_standard_recording()")
+        .unwrap()
+        .1
+        .split_once("wait_for_comparison_ready()")
+        .unwrap()
+        .0;
+    assert_in_order(
+        standard_recording,
+        &[
+            "start_recording_source \"$truststore\"",
+            "recording wait-ready",
+            "run_preflight_breeze_dns_probe",
+            "run_preflight_https_probe",
+        ],
+    );
     assert!(MANAGER.contains(
             "[[ -z \"${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}\" ]] || comparison_command+=(--listen \"$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN\")"
         ));
@@ -337,14 +360,7 @@ fn stages_private_executable_assets() {
             & 0o777,
         0o600
     );
-    assert_eq!(
-        fs::metadata(assets.join("brz-no-fallback.sh"))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
-        0o700
-    );
+    assert!(!assets.join("brz-no-fallback.sh").exists());
     assert_eq!(
         fs::metadata(assets.join("preflight-business-input.sh"))
             .unwrap()
