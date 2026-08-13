@@ -268,10 +268,12 @@ come from the inspected source contract.
    Replay-owned host network namespace, run the fixed network probe image as
    `998:998`: require `demo.test` to resolve to its assigned fake IP, return the
    recorded response, and consume one Global HTTP exchange; require
-   `example.com` to be absent from Replay targets and fail DNS resolution; and
-   require a direct real-IP egress attempt to be rejected. This phase does not
-   start the target or activate a business case. Stop Replay and remove the
-   namespace before returning.
+   `example.com:443` to be absent from recorded Replay targets, have its
+   connection rejected, and appear exactly once in `unrecorded_targets` with
+   the canonical unrecorded-endpoint reason; and require a direct real-IP
+   egress attempt to be rejected. This phase does not start the target or
+   activate a business case. Stop Replay and remove the namespace before
+   returning.
 10. Await the final result. Do not infer success from probe output alone. Only
     overall `status = "passed"` with all three phase results is authoritative.
 
@@ -286,8 +288,8 @@ probe verification, Breeze DNS verification when configured, and the bounded
 Replay positive/negative/egress result.
 The command fails when the target image cannot be built or violates its static
 image contract, no complete case is recorded, the required probe is not
-published exactly once, Replay cannot consume it, unrecorded DNS resolves, or
-external egress is available. No initialization phase starts the target;
+published exactly once, Replay cannot consume it, an unrecorded endpoint is
+not rejected with evidence, or external egress is available. No initialization phase starts the target;
 `replay_network` starts Replay and its probe but not the target. No phase initializes API inventory or
 advances coordinator workflow state. Do not invoke
 `backend-rewrite next` to manufacture this check. If image construction, source
@@ -592,8 +594,9 @@ Do not report initialization complete until all of the following are true:
   Global dependency, one cleanly published case, and, when Breeze is enabled,
   a successful `breeze.recording` lookup observed in `recording-network.json`;
 - the disposable Replay network preflight consumed that Global probe through
-  its assigned fake IP, blocked DNS for unrecorded `example.com`, rejected
-  direct external egress for UID `998`, and completed cleanup;
+  its assigned fake IP, rejected unrecorded `example.com:443` with canonical
+  endpoint evidence, rejected direct external egress for UID `998`, and
+  completed cleanup;
 - one disposable source-adaptor startup was analyzed for configuration and
   Vintage access, background destinations and counts, and local-cache loading
   or refresh behavior, with temporary findings summarized only in the ignored

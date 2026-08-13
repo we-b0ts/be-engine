@@ -1423,7 +1423,8 @@ the target image without starting it, starts the recording-environment
 preflight, and finally starts a real Replay session with the fixed network
 probe image. Recording publishes exactly one marked
 `demo.test` Global dependency; Replay must consume it through fake DNS, reject
-unrecorded `example.com`, and block direct external egress for UID `998`.
+unrecorded `example.com:443` with `unrecorded_targets` evidence, and block
+direct external egress for UID `998`.
 For a Breeze-enabled project, recording preflight also resolves
 `breeze.recording` inside the source adaptor as UID `998` and fails unless the
 finalized `recording-network.json` proves Recorder observed that DNS query.

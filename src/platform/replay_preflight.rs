@@ -40,7 +40,8 @@ pub struct ReplayPositiveProbeResult {
 pub struct ReplayNegativeProbeResult {
     pub authority: &'static str,
     pub absent_from_replay_targets: bool,
-    pub dns_blocked: bool,
+    pub connection_rejected: bool,
+    pub evidence_verified: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -235,11 +236,27 @@ async fn run_checks(
     )
     .await?;
     ensure!(
-        negative.status.code() == Some(6),
-        "Replay negative probe must fail DNS resolution for {} (curl exit 6), got {}: {}",
+        !negative.status.success(),
+        "Replay negative probe unexpectedly reached {}",
+        crate::network_probe::NEGATIVE_AUTHORITY
+    );
+
+    let after_negative = report(session).await?;
+    ensure_unrecorded_endpoint_evidence(
+        &after_negative,
         crate::network_probe::NEGATIVE_AUTHORITY,
-        negative.status,
-        String::from_utf8_lossy(&negative.stderr).trim()
+        443,
+    )?;
+    ensure!(
+        report_count(&after_negative, "matched_http_exchange_count")? == matched_after_positive,
+        "Replay negative probe unexpectedly matched a recorded HTTP exchange"
+    );
+    ensure!(
+        after_negative
+            .get("unmatched_http_requests")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "Replay negative probe reached the HTTP replay matcher"
     );
 
     let direct = run_probe(
@@ -265,19 +282,6 @@ async fn run_checks(
         String::from_utf8_lossy(&direct.stderr).trim()
     );
 
-    let after_negative = report(session).await?;
-    ensure!(
-        report_count(&after_negative, "matched_http_exchange_count")? == matched_after_positive,
-        "Replay negative probes unexpectedly matched a recorded HTTP exchange"
-    );
-    ensure!(
-        after_negative
-            .get("unmatched_http_requests")
-            .and_then(Value::as_array)
-            .is_some_and(Vec::is_empty),
-        "Replay negative probes reached the HTTP replay matcher"
-    );
-
     Ok(ManagedReplayNetworkPreflightResult {
         status: "passed",
         probe_image: crate::network_probe::IMAGE,
@@ -291,7 +295,8 @@ async fn run_checks(
         negative: ReplayNegativeProbeResult {
             authority: crate::network_probe::NEGATIVE_AUTHORITY,
             absent_from_replay_targets: true,
-            dns_blocked: true,
+            connection_rejected: true,
+            evidence_verified: true,
         },
         direct_egress: ReplayDirectEgressProbeResult {
             destination: "1.1.1.1:80",
@@ -376,6 +381,27 @@ fn has_replay_target(report: &Value, host: &str) -> bool {
                 .iter()
                 .any(|target| target.get("host").and_then(Value::as_str) == Some(host))
         })
+}
+
+fn ensure_unrecorded_endpoint_evidence(report: &Value, host: &str, port: u16) -> Result<()> {
+    let events = report
+        .get("unrecorded_targets")
+        .and_then(Value::as_array)
+        .context("Replay report has no unrecorded_targets")?;
+    let matching = events
+        .iter()
+        .filter(|event| {
+            event.pointer("/target/host").and_then(Value::as_str) == Some(host)
+                && event.pointer("/target/port").and_then(Value::as_u64) == Some(u64::from(port))
+                && event.get("reason").and_then(Value::as_str)
+                    == Some(crate::replay::UNRECORDED_ENDPOINT_REASON)
+        })
+        .count();
+    ensure!(
+        matching == 1,
+        "Replay negative probe expected exactly one rejected endpoint evidence for {host}:{port}, found {matching}"
+    );
+    Ok(())
 }
 
 fn ensure_global_match(report: &Value, fake_ip: Ipv4Addr) -> Result<()> {
@@ -542,5 +568,19 @@ mod tests {
             "198.19.0.3".parse::<Ipv4Addr>().unwrap()
         );
         assert!(!has_replay_target(&report, "example.com"));
+    }
+
+    #[test]
+    fn validates_unrecorded_endpoint_evidence() {
+        let report = serde_json::json!({
+            "unrecorded_targets": [{
+                "case_id": "case-a",
+                "target": {"host": "example.com", "port": 443},
+                "reason": crate::replay::UNRECORDED_ENDPOINT_REASON,
+            }]
+        });
+
+        ensure_unrecorded_endpoint_evidence(&report, "example.com", 443).unwrap();
+        assert!(ensure_unrecorded_endpoint_evidence(&report, "example.com", 80).is_err());
     }
 }

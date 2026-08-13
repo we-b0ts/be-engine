@@ -98,7 +98,7 @@ impl ReplayState {
         self.unrecorded_targets.push(super::UnrecordedTargetReport {
             case_id,
             target,
-            reason: "访问了录制时没有访问过的域名:port".to_string(),
+            reason: super::UNRECORDED_ENDPOINT_REASON.to_string(),
         });
     }
 }
@@ -203,7 +203,7 @@ mod tests {
         );
         assert_eq!(
             report.unrecorded_targets[0].reason,
-            "访问了录制时没有访问过的域名:port"
+            crate::replay::UNRECORDED_ENDPOINT_REASON
         );
     }
 

@@ -60,6 +60,7 @@ pub(crate) use report::{BackgroundReclassification, reclassify_background_depend
 use test_support::write_test_recording_network_manifest;
 
 const SO_ORIGINAL_DST: libc::c_int = 80;
+pub(crate) const UNRECORDED_ENDPOINT_REASON: &str = "访问了录制时没有访问过的域名:port";
 
 #[derive(Debug, Clone)]
 pub struct ReplayConfig {
