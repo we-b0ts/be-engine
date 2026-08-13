@@ -242,14 +242,15 @@ The target image must not read cases, Replay sessions, expected responses, or
 reports. See [project-init.md](references/project-init.md) for the exact build,
 runtime, TLS trust, logging, and isolation contract.
 
-The existing coordinator-owned `backend-rewrite init preflight` must prove both
-target `docker build`/one disposable `docker run` and the recording environment,
-then return one authoritative structured result. Do not create a second
-target-validation command or accept target-AI self-validation. An explicit
-mock entrypoint is allowed before product startup exists, but it must honor the
-final environment, mounts, UID, port/readiness, foreground lifetime, logging,
-and `SIGTERM` contract. Treat its result only as container integration evidence,
-never as migrated business behavior.
+The existing coordinator-owned `backend-rewrite init preflight` must prove the
+target Docker build and static image contract together with the recording
+environment, then return one authoritative structured result. It must not start
+the target without Replay dependencies. The first real Replay that starts the
+target proves its runtime identity, environment, mounts, readiness, listener,
+logging, and shutdown contract. Do not create a second target-validation
+command or accept target-AI self-validation. An explicit mock entrypoint is
+allowed before product startup exists, but its runtime result is container
+integration evidence, never migrated business behavior.
 
 ## Mandatory Breeze SDK Packages
 

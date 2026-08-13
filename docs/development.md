@@ -1418,9 +1418,10 @@ run the existing authoritative preflight:
 backend-rewrite init preflight
 ```
 
-It first builds and runs one disposable target container, then starts the
-recording-environment preflight, and finally starts a real Replay session with
-the fixed network probe image. Recording publishes exactly one marked
+It first validates the startup snapshot, then builds and statically inspects
+the target image without starting it, starts the recording-environment
+preflight, and finally starts a real Replay session with the fixed network
+probe image. Recording publishes exactly one marked
 `demo.test` Global dependency; Replay must consume it through fake DNS, reject
 unrecorded `example.com`, and block direct external egress for UID `998`.
 For a Breeze-enabled project, recording preflight also resolves
@@ -1444,8 +1445,12 @@ published Motan case or `not_observed` when that recording still contains no
 Motan request. Gateway errors and failed admitted cases make the recording
 command fail instead of silently completing.
 
-Full success returns overall `status: passed` with separate `target_container`,
-`recording`, and `replay_network` results. A failure prints bounded JSON
+Full success returns overall `status: passed` with separate `target_image`,
+`recording`, and `replay_network` results. Target identity, startup environment,
+mount access, listener, readiness, and stdout/stderr are validated after the
+target starts with recorded dependencies in each real Replay; the successful
+checks are written to `reports/target-runtime-checks.json`, while normal stop
+evidence proves clean shutdown and cleanup. A failure prints bounded JSON
 containing `status: failed`, the failing stage, and a reason, exits nonzero, and
 does not advance rewrite state. Manual `docker build`/`docker run` output is
 diagnostic only.

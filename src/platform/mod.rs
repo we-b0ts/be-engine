@@ -31,7 +31,7 @@ use assets::{stage_assets, write_asset};
 pub use preflight::{
     ManagedMotanPreflightResult, ManagedMotanRecordingResult, ManagedRecordingPreflightOptions,
     ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
-    MotanPreflightStatus,
+    ManagedTargetImagePreflightChecks, ManagedTargetImagePreflightResult, MotanPreflightStatus,
 };
 pub use recording_input::{
     ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ManagedRecordingInputResult,
@@ -181,11 +181,16 @@ pub async fn run_managed_recording_preflight(
     options: ManagedRecordingPreflightOptions,
 ) -> Result<ManagedRecordingPreflightResult> {
     let (target_root, project) = resolve_project(&options.target_root)?;
-    let target_container = crate::target_container::run_preflight(
-        crate::target_container::TargetContainerConfig::from_project(target_root.clone(), &project),
+    crate::startup::load_startup_snapshot(&target_root, &project.target_startup)
+        .context("target_image preflight failed")?;
+    let target_image = crate::target_container::build_image(
+        &crate::target_container::TargetContainerConfig::from_project(
+            target_root.clone(),
+            &project,
+        ),
     )
     .await
-    .context("target_container preflight failed")?;
+    .context("target_image preflight failed")?;
     let runtime = run_managed_runtime(
         ManagedRecordingOptions {
             target_root,
@@ -237,7 +242,15 @@ pub async fn run_managed_recording_preflight(
         } else {
             "passed"
         },
-        target_container,
+        target_image: ManagedTargetImagePreflightResult {
+            status: "passed",
+            image: target_image,
+            checks: ManagedTargetImagePreflightChecks {
+                build_contract: true,
+                image_contract: true,
+                startup_snapshot_contract: true,
+            },
+        },
         recording: ManagedRecordingPreflightRecordingResult {
             status: if validation_deferred {
                 "passed_with_deferred_validation"

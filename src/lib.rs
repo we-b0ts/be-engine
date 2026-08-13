@@ -146,9 +146,10 @@ pub use platform::{
     ManagedRecordingOptions, ManagedRecordingPreflightOptions,
     ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
     ManagedRecordingRecoveryResult, ManagedRecordingResult, ManagedReplayNetworkPreflightResult,
-    MotanPreflightStatus, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
-    ReplayPositiveProbeResult, drive_managed_recording_input, recover_managed_recording,
-    run_managed_recording, run_managed_recording_preflight,
+    ManagedTargetImagePreflightChecks, ManagedTargetImagePreflightResult, MotanPreflightStatus,
+    ReplayDirectEgressProbeResult, ReplayNegativeProbeResult, ReplayPositiveProbeResult,
+    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
+    run_managed_recording_preflight,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
@@ -213,7 +214,7 @@ pub use rewrite::{
     status_rewrite_for_api, transfer_rewrite_worker, verify_rewrite_repair,
 };
 pub use startup::{StartupConfig, StartupSnapshotReport};
-pub use target_container::{TargetContainerChecks, TargetContainerPreflightResult, TargetImage};
+pub use target_container::TargetImage;
 pub use tls::MitmCa;
 
 type ProxyClient = Client<HttpsConnector<HttpConnector>, http_body_util::Full<bytes::Bytes>>;

@@ -303,9 +303,11 @@ pub(crate) async fn verify_target_identity(container: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn verify_startup_mounts(
+pub(crate) async fn verify_runtime_mounts(
     container: &str,
     mounts: &[crate::startup::StartupSnapshotMount],
+    replay_ca: bool,
+    breeze_enabled: bool,
 ) -> Result<()> {
     let inspection = inspect_container(container).await?;
     ensure!(
@@ -320,6 +322,24 @@ pub(crate) async fn verify_startup_mounts(
             "target startup mount is missing or has the wrong access mode: {} expected {}",
             expected.path.display(),
             if expected.writable { "rw" } else { "ro" }
+        );
+    }
+    let managed_read_only_mounts = replay_ca
+        .then_some(TARGET_REPLAY_CA_PATH)
+        .into_iter()
+        .chain(
+            breeze_enabled
+                .then_some(["/data1/breeze/socks", "/data1/breeze/snapshot"])
+                .into_iter()
+                .flatten(),
+        );
+    for expected in managed_read_only_mounts {
+        ensure!(
+            inspection
+                .mounts
+                .iter()
+                .any(|mount| { Path::new(&mount.destination) == Path::new(expected) && !mount.rw }),
+            "target managed mount is missing or writable: {expected}"
         );
     }
     Ok(())
@@ -383,10 +403,6 @@ pub(crate) async fn verify_listen_address(container: &str, port: u16) -> Result<
         "target is not listening on 0.0.0.0:{port}"
     );
     Ok(())
-}
-
-pub(crate) async fn is_running(container: &str) -> Result<bool> {
-    Ok(inspect_container(container).await?.state.running)
 }
 
 pub(crate) async fn bounded_logs(container: &str) -> Result<String> {

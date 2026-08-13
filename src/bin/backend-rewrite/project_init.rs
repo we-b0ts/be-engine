@@ -120,13 +120,7 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
                     Ok(result) => super::print_json(&result, pretty),
                     Err(error) => {
                         let reason = bounded_failure_reason(format!("{error:#}"));
-                        let stage = if reason.contains("target_container preflight failed") {
-                            "target_container"
-                        } else if reason.contains("replay_network preflight failed") {
-                            "replay_network"
-                        } else {
-                            "recording"
-                        };
+                        let stage = preflight_failure_stage(&reason);
                         super::print_json(
                             &ProjectPreflightFailureReport {
                                 status: "failed",
@@ -177,6 +171,16 @@ fn bounded_failure_reason(mut reason: String) -> String {
     reason
 }
 
+fn preflight_failure_stage(reason: &str) -> &'static str {
+    if reason.contains("target_image preflight failed") {
+        "target_image"
+    } else if reason.contains("replay_network preflight failed") {
+        "replay_network"
+    } else {
+        "recording"
+    }
+}
+
 impl From<RepositoryConfigInitResult> for ProjectInitReport {
     fn from(result: RepositoryConfigInitResult) -> Self {
         Self {
@@ -201,5 +205,26 @@ fn parse_bool(value: &str) -> std::result::Result<bool, String> {
         "true" => Ok(true),
         "false" => Ok(false),
         _ => Err("value must be literal true or false".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preflight_failure_stage;
+
+    #[test]
+    fn classifies_preflight_failure_stages() {
+        assert_eq!(
+            preflight_failure_stage("target_image preflight failed: build failed"),
+            "target_image"
+        );
+        assert_eq!(
+            preflight_failure_stage("replay_network preflight failed: DNS leaked"),
+            "replay_network"
+        );
+        assert_eq!(
+            preflight_failure_stage("source adaptor did not become ready"),
+            "recording"
+        );
     }
 }

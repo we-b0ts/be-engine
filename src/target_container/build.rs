@@ -325,9 +325,6 @@ mod tests {
             dockerfile: Path::new("/tmp/service/.traffic-e2e/Dockerfile.e2e").to_path_buf(),
             startup: crate::startup::StartupConfig::default(),
             port: 8081,
-            readiness_path: "/healthz".to_string(),
-            readiness_status: 200,
-            startup_timeout: Duration::from_secs(60),
             breeze_enabled: false,
         };
         let dockerfile = format!(

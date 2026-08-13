@@ -210,7 +210,7 @@ backend-rewrite init preflight \
 ```
 
 Do not create another target-validation command. `backend-rewrite init
-preflight` owns three ordered phases: `target_container`, defined below,
+preflight` owns three ordered phases: `target_image`, defined below,
 `recording`, and `replay_network`. Run it from the target repository after the
 generated configuration, `Dockerfile.recording`,
 `.traffic-e2e/Dockerfile.e2e`, and `.dockerignore` exist. The recording phase
@@ -273,7 +273,7 @@ come from the inspected source contract.
    start the target or activate a business case. Stop Replay and remove the
    namespace before returning.
 10. Await the final result. Do not infer success from probe output alone. Only
-   overall `status = "passed"` with all three phase results is authoritative.
+    overall `status = "passed"` with all three phase results is authoritative.
 
 Run this through the same managed recording machinery used by backend-rewrite
 for normal source recording, including Recorder, network isolation, the source
@@ -284,16 +284,15 @@ standard recording, Replay, or comparison evidence. Success output reports
 `status = "passed"`, the isolated manifest, `published_cases`, exact Global
 probe verification, Breeze DNS verification when configured, and the bounded
 Replay positive/negative/egress result.
-The command fails when no complete case is recorded, the required probe is not
+The command fails when the target image cannot be built or violates its static
+image contract, no complete case is recorded, the required probe is not
 published exactly once, Replay cannot consume it, unrecorded DNS resolves, or
-external egress is available. The recording phase does not start the target;
-the preceding `target_container` phase starts it only for the bounded
-launch-contract check, while `replay_network` starts Replay and its probe but
-not the target. No phase initializes API inventory or
+external egress is available. No initialization phase starts the target;
+`replay_network` starts Replay and its probe but not the target. No phase initializes API inventory or
 advances coordinator workflow state. Do not invoke
 `backend-rewrite next` to manufacture this check. If image construction, source
-identity, readiness, CA truststore setup, request admission, case publication,
-finalization, or cleanup fails, initialization is incomplete.
+identity, source readiness, CA truststore setup, request admission, case
+publication, finalization, or cleanup fails, initialization is incomplete.
 
 ## Analyze Source Startup Reference Evidence
 
@@ -368,9 +367,10 @@ traffic-e2e. traffic-e2e owns `docker build`, `docker run`, readiness,
 `docker stop`, and `docker rm`.
 
 The target AI owns only the source-controlled Dockerfile, `.dockerignore`, and
-target or mock implementation. It invokes `backend-rewrite init preflight` and
-consumes its bounded result; direct Docker commands, AI narration, and
-self-reported checks are never initialization evidence.
+target or mock implementation. It invokes `backend-rewrite init preflight` for
+the build and static image contract, then consumes coordinator-owned Replay
+results for the runtime contract; direct Docker commands, AI narration, and
+self-reported checks are never evidence.
 
 ### Build One Reproducible Target Image
 
@@ -477,8 +477,8 @@ satisfy the configured readiness path/status, stay in the foreground, log to
 stdout/stderr, and exit cleanly on `SIGTERM`. It must not emulate
 business responses, dependencies, Replay, or Comparison. Replace it through
 ordinary product implementation later without changing the container
-contract. A runnable mock proves only initialization and launch integration;
-it is never API compatibility or workflow-completion evidence.
+contract. A mock that passes a real Replay proves only launch integration; it
+is never API compatibility or workflow-completion evidence.
 
 Replay and Comparison deliberately use different network policies around the
 same immutable target image. Replay permits only coordinator-managed Replay
@@ -507,51 +507,53 @@ Target code and configuration must never read cases, expected responses,
 dependency recordings, Replay sessions, reports, coordinator state, or request
 header encryption keys.
 
-### Target-Container Phase Of The Initialization Preflight
+### Target-Image Phase Of The Initialization Preflight
 
 As the first phase of the existing `backend-rewrite init preflight`,
-traffic-e2e builds `traffic-e2e/<project>-target:cache` and runs one disposable
-target-container check. Do not accept a successful image build as proof that
-its entrypoint can run. This is not a separate user-facing command. The system,
-not the target AI, performs every step below:
+traffic-e2e builds `traffic-e2e/<project>-target:cache` without starting its
+entrypoint. The system, not the target AI, performs every step below:
 
-1. Resolve the cache tag to its immutable image ID and create a run-private
-   internal Docker network with no external-network route.
-2. Verify the captured startup manifest and environment snapshot, then start
-   that image ID with `--user 998:998`, each declared source path mounted at the
-   same absolute destination read-only, each allowlisted environment value,
-   and the optional application-owned target-port variable. Pass no application
-   CLI arguments. Do not mount recordings, reports, source code, a build cache,
-   or a Replay CA private key.
-3. Verify the running foreground process has UID/GID `998:998`, every startup
-   mount is read-only, every declared environment name is present, no generic
-   `TRAFFIC_E2E_*` variable is present, the configured port is listening, and the configured
-   readiness path returns the configured final status. Use an external probe;
-   do not add curl or another probe tool to the target image.
-4. Read bounded `docker logs` output to confirm application output is on
-   stdout/stderr, send `SIGTERM` through the normal container stop operation,
-   require a clean exit within a bounded initialization timeout, and remove the
-   container and private network.
+1. Validate the immutable startup snapshot, pinned multi-stage Dockerfile,
+   required BuildKit caches, and root `.dockerignore` exclusions.
+2. Build the image from the target repository root, resolve the cache tag to
+   the exact immutable image ID produced by that build, and inspect that image.
+3. Require `linux/amd64`, default `USER 998:998`, a non-empty OCI entrypoint,
+   no default command arguments, and no persisted proxy or traffic-e2e secret
+   environment variables.
 
-When Breeze is configured, additionally provide the same managed
-`/data1/breeze/socks` and `/data1/breeze/snapshot` mounts that later runs use;
-the target or mock may ignore them until it owns a genuine Breeze client. Do
-not start Breeze merely to make this launch-contract preflight pass. Replay CA
-trust is not tested by a mock that emits no TLS traffic; validate it when a
-genuine target TLS client is first implemented.
+Fail initialization when the build or static image contract fails. The command
+returns one bounded structured result containing overall `status`, separate
+`target_image`, `recording`, and `replay_network` phase results, the immutable
+target image ID, named static checks, and one failure stage/reason when
+applicable. It starts `recording` only after `target_image` passes. Only overall
+system-reported `status = "passed"` is authoritative.
 
-Fail initialization when the build, identity, declared environment, mount,
-foreground lifetime, readiness, logging, signal handling, clean exit, or
-cleanup contract fails. Keep preflight state below `.traffic-e2e/local/` and
-never publish it as recording, Replay, Comparison, or migration evidence.
-The command returns one bounded structured result containing overall `status`,
-separate `target_container` and `recording` phase results, the immutable target
-`image_id`, each named target check, cleanup status, and one failure
-stage/reason when applicable. It starts `recording` only after
-`target_container` passes. Only overall system-reported `status = "passed"` is
-authoritative. The target AI may repair the named source-controlled cause and
-invoke the same command again; it must not substitute manual Docker output or
-its own conclusion.
+### Target Runtime Checks During Replay
+
+Do not start the target in a dependency-free initialization namespace. A
+completed implementation may require Vintage or another dynamic startup
+dependency, so that launch would be neither stable nor representative. Every
+real Replay starts the immutable target image only after Replay dependencies
+are ready, then the coordinator verifies:
+
+1. PID 1 runs as UID/GID `998:998`; declared startup environment is present;
+   generic `TRAFFIC_E2E_*` environment is absent; and `MESH_CONNECT_HOST` is
+   present for Breeze-enabled targets.
+2. Declared startup mounts, the public Replay CA, and managed Breeze mounts
+   when enabled are present with the required access mode.
+3. The configured readiness path reaches its final status and the target is
+   listening on `0.0.0.0` at the configured port.
+4. Bounded stdout/stderr output is available. At the end of Replay, normal
+   `SIGTERM` shutdown exits cleanly and the target container and namespace are
+   removed.
+
+The run stores the successful launch checks in
+`reports/target-runtime-checks.json`; target start, bounded logs, runtime state,
+and stop evidence remain in the same Replay report directory. A failed runtime
+check fails that Replay and is returned through the normal implementation
+repair path. The target AI may repair the named source-controlled cause and
+rerun the coordinator-issued Replay command; it must not substitute manual
+Docker output or its own conclusion.
 
 ## Initialization Completion
 
@@ -580,11 +582,10 @@ Do not report initialization complete until all of the following are true:
 - the built target image defaults to `998:998`, contains its executable OCI
   entrypoint, and contains no source, build cache, credential, generated trust,
   recording, or `.traffic-e2e/local/` content;
-- the system reports `status = "passed"` for the disposable target-container
-  preflight, including the declared environment and mounts, UID/GID `998:998`,
-  configured listening port and readiness result, stdout/stderr logging,
-  bounded `SIGTERM` shutdown, and complete cleanup; an explicit mock is allowed
-  but is not business evidence;
+- the system reports `target_image.status = "passed"` for the startup snapshot,
+  target build, and static image contract, including the immutable image ID,
+  `linux/amd64`, default UID/GID `998:998`, OCI entrypoint, and environment
+  constraints;
 - the disposable recording preflight passed with the adapted source process
   running as `998:998`, system-owned Java probe execution and truststore setup
   completed when applicable, exactly one `demo.test` probe published as a
@@ -601,9 +602,10 @@ Do not report initialization complete until all of the following are true:
   recordings, or `.traffic-e2e/local/` content.
 
 Initialization ends after these repository requirements are delivered. It
-leaves no target running and does not start Replay, compare, or invoke or
-advance the `backend-rewrite next` workflow. Its disposable source recording
-and target-container run exist only to validate the initialized environments.
+does not start the target, compare, or invoke or advance the `backend-rewrite
+next` workflow. Its disposable source recording and Replay network probe exist
+only to validate the initialized recording environment. The first real Replay
+that starts a target validates the runtime launch contract.
 
 ## Optional Initialization PR
 

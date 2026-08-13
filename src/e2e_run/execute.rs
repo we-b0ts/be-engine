@@ -17,7 +17,7 @@ use super::result::{E2eApiRunResult, E2eRunResult, api_result, run_result};
 use super::runtime::{
     best_effort_stop, build_target_image, control, finalize_replay, replay_ca_cert_path,
     spawn_replay, start_target_with_replay_ca, stop_replay_process, stop_target_runtime,
-    wait_for_replay, wait_for_replay_ready,
+    verify_target_runtime_contract, wait_for_replay, wait_for_replay_ready,
 };
 use super::store;
 use super::support::{allocate_replay_report, api_directory, process_exists};
@@ -412,6 +412,9 @@ async fn run_active_with_replay(
 
     start_target_with_replay_ca(config, layout, state, target_image, &replay_ca_cert_path).await?;
     super::http_driver::wait_until_ready(config).await?;
+    verify_target_runtime_contract(config, layout, state)
+        .await
+        .context("target Replay runtime contract failed")?;
 
     let total_cases = state.cases.len();
     case_progress::log_start(total_cases);

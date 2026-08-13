@@ -27,10 +27,24 @@ pub struct ManagedRecordingPreflightOptions {
 #[derive(Debug, Clone, Serialize)]
 pub struct ManagedRecordingPreflightResult {
     pub status: &'static str,
-    pub target_container: crate::TargetContainerPreflightResult,
+    pub target_image: ManagedTargetImagePreflightResult,
     pub recording: ManagedRecordingPreflightRecordingResult,
     pub replay_network: super::ManagedReplayNetworkPreflightResult,
     pub managed_by: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagedTargetImagePreflightResult {
+    pub status: &'static str,
+    pub image: crate::TargetImage,
+    pub checks: ManagedTargetImagePreflightChecks,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManagedTargetImagePreflightChecks {
+    pub build_contract: bool,
+    pub image_contract: bool,
+    pub startup_snapshot_contract: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -462,6 +476,30 @@ fn regular_file_metadata(path: &Path, label: &str) -> Result<fs::Metadata> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_image_preflight_reports_only_static_checks() {
+        let result = ManagedTargetImagePreflightResult {
+            status: "passed",
+            image: crate::TargetImage {
+                tag: "traffic-e2e/example-target:cache".to_string(),
+                id: format!("sha256:{}", "a".repeat(64)),
+            },
+            checks: ManagedTargetImagePreflightChecks {
+                build_contract: true,
+                image_contract: true,
+                startup_snapshot_contract: true,
+            },
+        };
+
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["status"], "passed");
+        assert_eq!(value["checks"]["build_contract"], true);
+        assert_eq!(value["checks"]["image_contract"], true);
+        assert_eq!(value["checks"]["startup_snapshot_contract"], true);
+        assert!(value["checks"].get("readiness").is_none());
+        assert!(value["checks"].get("process_identity").is_none());
+    }
 
     fn fixture() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
