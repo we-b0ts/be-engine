@@ -61,7 +61,7 @@ async fn run_preflight_runtime(
     })
     .await?;
     verify_target_identity(target).await?;
-    verify_startup_environment(target, &config.startup, false).await?;
+    verify_startup_environment(target, &config.startup, false, config.breeze_enabled).await?;
     let snapshot = crate::startup::load_startup_snapshot(&config.target_root, &config.startup)?;
     verify_startup_mounts(target, snapshot.mounts()).await?;
     wait_until_ready(config, anchor, target).await?;

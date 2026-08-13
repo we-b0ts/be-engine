@@ -1339,9 +1339,9 @@ directories with their original `rw`/`ro` access. Docker-managed host files
 engine-managed Breeze mounts keep their existing shared behavior. Runtime mount
 copies are removed after their owning container or managed run stops.
 
-Environment names are an allowlist, not name/value assignments: the engine
-reads their values from Docker's source-container configuration and freezes
-them in the snapshot. A source default that is not present in Docker
+Source-derived environment names are an allowlist, not name/value assignments:
+the engine reads their values from Docker's source-container configuration and
+freezes them in the snapshot. A source default that is not present in Docker
 `Config.Env` cannot be discovered; declare its absolute path as a mount and let
 the application keep using that default. The engine does not rewrite such a
 default and does not infer startup inputs from target source code.
@@ -1353,13 +1353,17 @@ generic `TRAFFIC_E2E_CONFIG_DIR`, `TRAFFIC_E2E_TARGET_PORT`, or
 `TRAFFIC_E2E_REPLAY_CA_CERT_PATH` variables.
 
 When Breeze is configured, traffic-e2e also mounts `/data1/breeze/socks` and
-`/data1/breeze/snapshot` read-only. During Replay it mounts the public Replay
-CA at `/traffic-e2e/trust/replay-ca.pem`; when `replay_ca_environment` is
-declared it sets that application-owned variable to this path. Target TLS
-clients must add that certificate to their normal trust store without reading
-Replay sessions or private key material. The entrypoint must log to
-stdout/stderr, remain in the foreground, and stop cleanly on `SIGTERM`.
-traffic-e2e owns network namespaces, readiness, signals, and cleanup.
+`/data1/breeze/snapshot` read-only and injects
+`MESH_CONNECT_HOST=breeze.recording` into the target without requiring a
+startup declaration. This engine-managed address keeps target Breeze clients
+on the same managed connection path as the adapted recording source. During
+Replay traffic-e2e mounts the public Replay CA at
+`/traffic-e2e/trust/replay-ca.pem`; when `replay_ca_environment` is declared it
+sets that application-owned variable to this path. Target TLS clients must add
+that certificate to their normal trust store without reading Replay sessions
+or private key material. The entrypoint must log to stdout/stderr, remain in
+the foreground, and stop cleanly on `SIGTERM`. traffic-e2e owns network
+namespaces, readiness, signals, and cleanup.
 
 Use the pinned shared Rust builder/runtime images and stable BuildKit cache
 mount IDs described by the backend-rewrite initialization contract. A source

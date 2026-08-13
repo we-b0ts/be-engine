@@ -153,9 +153,10 @@ pub(super) async fn stop_target_runtime(
 ) -> Result<()> {
     let container = state
         .target_container_name
-        .as_deref()
+        .clone()
         .context("active E2E state has no target container name")?;
-    let evidence = crate::target_container::stop_target(&layout.target_root, container).await?;
+    capture_target_diagnostics(layout, state).await;
+    let evidence = crate::target_container::stop_target(&layout.target_root, &container).await?;
     store::write_json(
         &layout.active_dir.join("reports/target-stop.json"),
         &evidence,
@@ -377,6 +378,7 @@ pub(super) async fn best_effort_stop(
         || state.target_container_name.is_some()
         || state.target_anchor_name.is_some()
     {
+        capture_target_diagnostics(layout, state).await;
         let names = [
             state.target_container_name.as_deref(),
             state.target_anchor_name.as_deref(),
@@ -409,6 +411,18 @@ pub(super) async fn best_effort_stop(
         }
     }
     state.replay_pid = None;
+}
+
+async fn capture_target_diagnostics(layout: &RunLayout, state: &mut ActiveRunState) {
+    let Some(container) = state.target_container_name.as_deref() else {
+        return;
+    };
+    if let Err(error) =
+        crate::target_container::capture_diagnostics(container, &layout.active_dir.join("reports"))
+            .await
+    {
+        state.push_error(format!("target diagnostics capture failed: {error:#}"));
+    }
 }
 
 #[cfg(test)]

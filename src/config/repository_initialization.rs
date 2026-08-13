@@ -435,6 +435,7 @@ mod tests {
         assert!(project.contains("container: breeze"));
         assert!(project.contains("pr_base: dev-migration"));
         assert!(!project.contains("max_response_bytes"));
+        assert!(!project.contains("protocol_detection:"));
         assert!(
             !Command::new("git")
                 .arg("-C")

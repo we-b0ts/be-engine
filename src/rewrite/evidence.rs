@@ -16,7 +16,7 @@ use crate::recorder::load_pre_readiness_traffic_summary;
 use crate::{
     E2eDirtyCluster, E2eDirtyCounts, E2eRunContext, E2eValueObservation, E2eValuePresence,
     ResponseDifferenceKind, query_e2e_case_response_differences, query_e2e_dependency_correlation,
-    query_e2e_dirty_counts, query_e2e_source_variation,
+    query_e2e_dirty_counts, query_e2e_source_variation, query_e2e_target_runtime_diagnostics,
 };
 
 const QUERY_CASE_RESPONSE_DIFFERENCES: &str = "case_response_differences";
@@ -28,6 +28,7 @@ const QUERY_PRE_READINESS_TRAFFIC: &str = "pre_readiness_traffic";
 const QUERY_DIRTY_CLUSTERS: &str = "dirty_clusters";
 const QUERY_POLICY_APPLICABILITY: &str = "policy_applicability";
 const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
+const QUERY_TARGET_RUNTIME_DIAGNOSTICS: &str = "target_runtime_diagnostics";
 
 pub(super) fn commands(target_root: &Path, state: &RewriteState) -> Vec<RewriteEvidenceCommand> {
     let Some(issue) = &state.active_issue else {
@@ -326,6 +327,27 @@ fn facts(
             "If two repairs do not improve the active cluster, produce a bounded structural replan instead of adding another field patch."
                 .to_string(),
         )),
+        QUERY_TARGET_RUNTIME_DIAGNOSTICS => {
+            let diagnostics = query_e2e_target_runtime_diagnostics(
+                e2e_context(target_root, state)?,
+                group_id(state)?,
+            )?;
+            anyhow::ensure!(
+                diagnostics.attempt == issue.attempt,
+                "target runtime diagnostics belong to attempt {}, not active issue attempt {}",
+                diagnostics.attempt,
+                issue.attempt
+            );
+            Ok((
+                serde_json::to_value(diagnostics)?,
+                vec![
+                    "container output proves only what the target process emitted".to_string(),
+                    "an empty log does not prove that startup succeeded or failed".to_string(),
+                ],
+                "Use target stdout, stderr, and runtime state to identify the first concrete startup or readiness failure."
+                    .to_string(),
+            ))
+        }
         _ => anyhow::bail!("unsupported rewrite evidence query {kind:?}"),
     }
 }
@@ -534,6 +556,12 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
 
 fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str, &'static str)> {
     let mut queries = Vec::new();
+    if issue.kind == RewriteIssueKind::TargetRuntime {
+        queries.push((
+            QUERY_TARGET_RUNTIME_DIAGNOSTICS,
+            "Inspect bounded target stdout, stderr, and container state from the failed attempt",
+        ));
+    }
     let response_unavailable = issue.representative.as_ref().is_some_and(|representative| {
         representative.difference_kind == ResponseDifferenceKind::ResponseUnavailable
     });

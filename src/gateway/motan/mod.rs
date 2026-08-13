@@ -19,10 +19,15 @@ pub(crate) mod rules;
 pub(crate) mod transport;
 
 pub(crate) async fn run(state: AppState) -> Result<()> {
-    let config = state.config().motan_gateway.clone();
-    let listener = TcpListener::bind(config.listen)
+    let listen = state.config().motan_gateway.listen;
+    let listener = TcpListener::bind(listen)
         .await
-        .with_context(|| format!("failed to bind Motan gateway {}", config.listen))?;
+        .with_context(|| format!("failed to bind Motan gateway {listen}"))?;
+    run_with_listener(state, listener).await
+}
+
+async fn run_with_listener(state: AppState, listener: TcpListener) -> Result<()> {
+    let config = state.config().motan_gateway.clone();
     state.mark_recording_listener_ready(RecordingListener::MotanGateway);
     info!(
         listen = %config.listen,

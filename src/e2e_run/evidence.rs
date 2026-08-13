@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use crate::replay::{ResponseAssertionCaseReport, ResponseDifferenceKind};
 
 const MAX_DISTINCT_SOURCE_VALUES: usize = 8;
 const RESPONSE_DIFFERENCE_PAGE_SIZE: usize = 20;
+const MAX_TARGET_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2eSourceValueCount {
@@ -59,6 +61,83 @@ pub struct E2eCaseResponseDifferences {
     pub differences: Vec<E2eCaseResponseDifference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_offset: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct E2eTargetLog {
+    pub path: PathBuf,
+    pub available: bool,
+    pub bytes: usize,
+    pub omitted_bytes: usize,
+    pub tail: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct E2eTargetRuntimeDiagnostics {
+    pub attempt: u64,
+    pub stdout: E2eTargetLog,
+    pub stderr: E2eTargetLog,
+    pub state_path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<Value>,
+}
+
+pub fn query_e2e_target_runtime_diagnostics(
+    context: E2eRunContext,
+    api: &str,
+) -> Result<E2eTargetRuntimeDiagnostics> {
+    let (state, latest_dir) = finalized_focused_evidence(context, api)?;
+    let reports = latest_dir.join("reports");
+    let state_path = reports.join("target-state.json");
+    let runtime_state = match std::fs::read(&state_path) {
+        Ok(payload) => Some(
+            serde_json::from_slice(&payload).context("invalid target runtime state evidence")?,
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to read target runtime state {}",
+                    state_path.display()
+                )
+            });
+        }
+    };
+    Ok(E2eTargetRuntimeDiagnostics {
+        attempt: state.sequence,
+        stdout: read_target_log(reports.join("target.stdout.log"))?,
+        stderr: read_target_log(reports.join("target.stderr.log"))?,
+        state_path,
+        state: runtime_state,
+    })
+}
+
+fn read_target_log(path: PathBuf) -> Result<E2eTargetLog> {
+    let payload = match std::fs::read(&path) {
+        Ok(payload) => payload,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(E2eTargetLog {
+                path,
+                available: false,
+                bytes: 0,
+                omitted_bytes: 0,
+                tail: String::new(),
+            });
+        }
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read target log {}", path.display()));
+        }
+    };
+    let bytes = payload.len();
+    let omitted_bytes = bytes.saturating_sub(MAX_TARGET_DIAGNOSTIC_BYTES);
+    Ok(E2eTargetLog {
+        path,
+        available: true,
+        bytes,
+        omitted_bytes,
+        tail: String::from_utf8_lossy(&payload[omitted_bytes..]).into_owned(),
+    })
 }
 
 pub fn query_e2e_source_variation(
@@ -256,6 +335,13 @@ pub fn query_e2e_dirty_counts(context: E2eRunContext, api: &str) -> Result<E2eDi
 }
 
 fn finalized_focused_state(context: E2eRunContext, api: &str) -> Result<model::ActiveRunState> {
+    finalized_focused_evidence(context, api).map(|(state, _)| state)
+}
+
+fn finalized_focused_evidence(
+    context: E2eRunContext,
+    api: &str,
+) -> Result<(model::ActiveRunState, PathBuf)> {
     let (_, layout) = config::resolve_layout(
         &context.target_root,
         &context.case_source,
@@ -283,7 +369,7 @@ fn finalized_focused_state(context: E2eRunContext, api: &str) -> Result<model::A
         state.apis.iter().any(|candidate| candidate.group_id == api),
         "focused E2E evidence belongs to another API"
     );
-    Ok(state)
+    Ok((state, focused_root.join("latest")))
 }
 
 #[cfg(test)]
@@ -307,6 +393,23 @@ mod tests {
             serde_json::to_string(&missing).unwrap(),
             serde_json::to_string(&json_null).unwrap()
         );
+    }
+
+    #[test]
+    fn target_log_projection_is_bounded_to_the_latest_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("target.stderr.log");
+        let mut payload = vec![b'a'; MAX_TARGET_DIAGNOSTIC_BYTES];
+        payload.extend_from_slice(b"latest failure\n");
+        std::fs::write(&path, &payload).unwrap();
+
+        let log = read_target_log(path.clone()).unwrap();
+
+        assert!(log.available);
+        assert_eq!(log.path, path);
+        assert_eq!(log.bytes, payload.len());
+        assert_eq!(log.omitted_bytes, b"latest failure\n".len());
+        assert!(log.tail.ends_with("latest failure\n"));
     }
 
     #[test]

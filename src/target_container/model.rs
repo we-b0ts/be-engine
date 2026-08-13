@@ -73,6 +73,13 @@ pub(crate) struct TargetStopEvidence {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct TargetRuntimeState {
+    pub(crate) running: bool,
+    pub(crate) exit_code: i64,
+    pub(crate) oom_killed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TargetContainerChecks {
     pub image_contract: bool,
     pub process_identity: bool,
