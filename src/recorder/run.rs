@@ -273,6 +273,7 @@ impl Recorder {
             state.finished = true;
             state.failed_cases > 0
         };
+        self.write_network_manifest().await?;
         self.write_run_report(status).await?;
         self.flush_traffic().await?;
         if let Some(owner) = self.artifact_owner {

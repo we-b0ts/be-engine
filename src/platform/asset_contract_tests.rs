@@ -278,6 +278,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains("manifest_filter+=' and .published_cases > 0'"));
     assert!(MANAGER.contains("run_preflight_https_probe"));
     assert!(!MANAGER.contains("recorder_command+=(--full-traffic-jsonl)"));
+    assert!(MANAGER.contains("recorder_command+=(--breeze)"));
     assert!(MANAGER.contains("recorder_command+=(--preflight-probe java-truststore)"));
     assert!(MANAGER.contains("recorder_command+=(--preflight-probe system-network)"));
     assert!(MANAGER.contains("detect_source_java_runtime"));

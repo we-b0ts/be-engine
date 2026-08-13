@@ -143,6 +143,30 @@ fn unscoped_target_activity_is_counted_but_does_not_mark_cases_dirty() {
 }
 
 #[test]
+fn unrecorded_endpoint_is_counted_and_marks_replay_dirty() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("recording");
+    let mut report = report_value_v6(
+        &source.join("api"),
+        &[("case-a", "ended")],
+        "00000000-0000-4000-8000-000000000085",
+        true,
+    );
+    report["unrecorded_targets"] = json!([{
+        "case_id": "case-a",
+        "target": {"host":"breeze.recording","port":9301},
+        "reason":"访问了录制时没有访问过的域名:port"
+    }]);
+    write_report(&source, "api", report);
+
+    let aggregate = aggregate_replay_reports(&source).unwrap();
+
+    assert!(aggregate.is_complete());
+    assert!(aggregate.is_dirty());
+    assert_eq!(aggregate.counts.events.network.unrecorded_targets, 1);
+}
+
+#[test]
 fn aggregates_motan_counts_and_marks_unused_case_dirty() {
     let temp = TempDir::new().unwrap();
     let source = temp.path().join("recording");

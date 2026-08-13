@@ -76,6 +76,12 @@ async fn handle_datagram(
     let fake_addr = datagram.original_dst.unwrap_or(listen_addr);
     let client_addr = Some(datagram.peer.to_string());
     let target = target_from_fake_addr(state, fake_addr).await;
+    if let Some(target) = &target {
+        state
+            .recorder()
+            .observe_accessed_endpoint(&target.entry.domain, fake_addr.port())
+            .await?;
+    }
     let payload = &datagram.payload;
     let upstream_addr = target
         .as_ref()

@@ -135,6 +135,10 @@ async fn handle_connection(
             return Err(anyhow!(error));
         }
     };
+    state
+        .recorder()
+        .observe_accessed_endpoint(&entry.domain, fake_addr.port())
+        .await?;
 
     if state.dns_bypass_matcher().matches(&entry.domain) {
         return proxy_raw_tcp(

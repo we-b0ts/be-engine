@@ -902,6 +902,9 @@ immediate snapshot. Version six keeps exact success counters while retaining
 at most `success_detail_limit` successful event details per category. Dirty
 event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
+The report's `unrecorded_targets` field contains exact rejected `host:port`
+targets. Any such event is dirty, is counted under aggregate `network` events,
+and is clustered as `network/unrecorded_endpoint` in dependency evidence.
 
 For a collection, multi-case selection, or multiple sessions, generate one
 deterministic coverage and dependency summary from the recording source root.
@@ -1604,6 +1607,7 @@ published inside that run:
 ```text
 <run-id>/traffic.jsonl
 <run-id>/recording-run.json
+<run-id>/recording-network.json
 <run-id>/errors.jsonl
 <run-id>/global-dependencies.jsonl
 <run-id>/global-dependencies-summary.json
@@ -1623,6 +1627,15 @@ Every newly published case contains `dependencies.jsonl` and
 dependencies. For a zero-dependency case, `dependencies.jsonl` is empty and
 the summary has `total_events: 0`. This distinguishes a confirmed empty
 dependency contract from missing capture evidence.
+
+Every finalized run also contains `recording-network.json`. It stores the
+deduplicated DNS names resolved by the source and the exact `host:port`
+endpoints actually reached through the TCP or UDP gateway. Replay requires
+this run-level manifest and does not derive a compatibility allowlist from
+semantic dependency files. A recording without the manifest must be recorded
+again. During Replay, an endpoint outside the manifest is rejected before
+protocol handling and reported as `访问了录制时没有访问过的域名:port` in the
+Replay report and bounded dependency evidence.
 
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`

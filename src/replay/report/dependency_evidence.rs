@@ -135,6 +135,13 @@ const HTTP_EVENTS: &[EventArray] = &[
     },
 ];
 
+const NETWORK_EVENTS: &[EventArray] = &[EventArray {
+    protocol: "network",
+    field: "unrecorded_targets",
+    reason: "unrecorded_endpoint",
+    direction: DifferenceDirection::TargetOnly,
+}];
+
 const COMMAND_EVENTS: &[EventArray] = &[
     EventArray {
         protocol: "",
@@ -196,8 +203,9 @@ pub(crate) fn read_dependency_evidence(report_path: &Path) -> Result<ReplayDepen
 
 pub(super) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvidence {
     let mut builders = BTreeMap::<ClusterKey, ClusterBuilder>::new();
-    collect_arrays(report, MYSQL_EVENTS.iter().copied(), &mut builders);
-    collect_arrays(report, HTTP_EVENTS.iter().copied(), &mut builders);
+    collect_arrays(report, NETWORK_EVENTS.iter().copied(), true, &mut builders);
+    collect_arrays(report, MYSQL_EVENTS.iter().copied(), false, &mut builders);
+    collect_arrays(report, HTTP_EVENTS.iter().copied(), false, &mut builders);
     for protocol in ["redis", "memcached", "kafka", "motan"] {
         let Some(protocol_report) = report.get(protocol) else {
             continue;
@@ -205,7 +213,7 @@ pub(super) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
         let arrays = COMMAND_EVENTS
             .iter()
             .map(|event| EventArray { protocol, ..*event });
-        collect_arrays(protocol_report, arrays, &mut builders);
+        collect_arrays(protocol_report, arrays, false, &mut builders);
     }
 
     let mut case_event_counts = BTreeMap::<String, BTreeMap<String, usize>>::new();
@@ -241,7 +249,11 @@ pub(super) fn build_dependency_evidence(report: &Value) -> ReplayDependencyEvide
 }
 
 pub(super) fn report_has_case_dirty_events(report: &Value) -> bool {
-    arrays_have_case_event(report, MYSQL_EVENTS)
+    report
+        .get("unrecorded_targets")
+        .and_then(Value::as_array)
+        .is_some_and(|targets| !targets.is_empty())
+        || arrays_have_case_event(report, MYSQL_EVENTS)
         || arrays_have_case_event(report, HTTP_EVENTS)
         || ["redis", "memcached", "kafka", "motan"]
             .into_iter()
@@ -265,6 +277,7 @@ fn arrays_have_case_event(report: &Value, arrays: &[EventArray]) -> bool {
 fn collect_arrays(
     report: &Value,
     arrays: impl IntoIterator<Item = EventArray>,
+    include_unscoped: bool,
     builders: &mut BTreeMap<ClusterKey, ClusterBuilder>,
 ) {
     for array in arrays {
@@ -272,13 +285,13 @@ fn collect_arrays(
             continue;
         };
         for event in events {
-            let Some(case_id) = event
+            let case_id = event
                 .get("case_id")
                 .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-            else {
+                .map(ToOwned::to_owned);
+            if case_id.is_none() && !include_unscoped {
                 continue;
-            };
+            }
             let endpoint = dependency_endpoint(event.get("target"));
             let key = ClusterKey {
                 protocol: array.protocol.to_string(),
@@ -293,17 +306,21 @@ fn collect_arrays(
                 representative: None,
             });
             builder.count += 1;
-            builder.case_ids.insert(case_id.clone());
+            if let Some(case_id) = &case_id {
+                builder.case_ids.insert(case_id.clone());
+            }
             *builder
                 .operations
                 .entry(operation_label(event))
                 .or_default() += 1;
-            builder
-                .representative
-                .get_or_insert(ReplayDependencyRepresentative {
-                    case_id,
-                    difference: difference(array.direction, signature(event)),
-                });
+            if let Some(case_id) = case_id {
+                builder
+                    .representative
+                    .get_or_insert(ReplayDependencyRepresentative {
+                        case_id,
+                        difference: difference(array.direction, signature(event)),
+                    });
+            }
         }
     }
 }
@@ -490,6 +507,30 @@ mod tests {
 
         assert!(!report_has_case_dirty_events(&report));
         assert!(build_dependency_evidence(&report).clusters.is_empty());
+    }
+
+    #[test]
+    fn unscoped_unrecorded_endpoint_remains_bounded_run_evidence() {
+        let report = json!({
+            "unrecorded_targets": [
+                {"target":{"host":"BREEZE.RECORDING","port":9301},"reason":"访问了录制时没有访问过的域名:port"}
+            ]
+        });
+
+        let evidence = build_dependency_evidence(&report);
+
+        assert!(report_has_case_dirty_events(&report));
+        assert_eq!(
+            evidence.case_event_counts["network"]["unrecorded_endpoint"],
+            1
+        );
+        assert_eq!(evidence.clusters.len(), 1);
+        assert_eq!(evidence.clusters[0].case_count, 0);
+        assert!(evidence.clusters[0].representative.is_none());
+        assert_eq!(
+            evidence.clusters[0].endpoint.as_ref().unwrap().host,
+            "breeze.recording"
+        );
     }
 
     #[test]

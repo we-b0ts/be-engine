@@ -89,12 +89,18 @@ pub struct ReplayAggregateCounts {
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ReplayEventCounts {
+    pub network: NetworkEventCounts,
     pub mysql: MysqlEventCounts,
     pub http: HttpEventCounts,
     pub redis: CommandProtocolCounts,
     pub memcached: CommandProtocolCounts,
     pub kafka: CommandProtocolCounts,
     pub motan: CommandProtocolCounts,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct NetworkEventCounts {
+    pub unrecorded_targets: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -601,6 +607,7 @@ fn merge_statuses(target: &mut BTreeMap<String, usize>, source: &BTreeMap<String
 
 impl ReplayEventCounts {
     fn add(&mut self, other: &Self) {
+        self.network.unrecorded_targets += other.network.unrecorded_targets;
         self.mysql.add(&other.mysql);
         self.http.add(&other.http);
         self.redis.add(&other.redis);

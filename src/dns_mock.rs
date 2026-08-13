@@ -70,6 +70,10 @@ async fn handle_query(
 ) -> Result<()> {
     let config = state.config().dns_mock.clone();
     let question = parse_question(&query)?;
+    state
+        .recorder()
+        .observe_resolved_domain(&question.domain)
+        .await?;
     let response = if question.qtype == 1 && question.qclass == 1 {
         if let Some(entry) = state
             .dns_registry()

@@ -180,9 +180,7 @@ fn render_yaml_scalar(value: &str) -> Result<String> {
 const PLATFORM_BREEZE_DNS_YAML: &str = r#"  bypass_strategies:
   - strategy: breeze
     snapshot_dir: /data1/breeze/snapshot
-  hosts:
-    breeze.recording:
-    - 127.0.0.1
+  hosts: {}
 "#;
 
 const PLATFORM_RESPONSE_REWRITE_YAML: &str = r#"http_response_rewrite:
@@ -362,6 +360,7 @@ mod tests {
         assert_eq!(config.udp_gateway.listen.port(), DEFAULT_UDP_GATEWAY_PORT);
         assert_eq!(config.recording.encrypt_request_headers, ["authorization"]);
         assert_eq!(config.dns_mock.bypass_strategies.len(), 1);
+        assert!(config.dns_mock.hosts.is_empty());
         assert_eq!(config.http_response_rewrite.rules.len(), 2);
         assert_eq!(config.http_gateway.rules[0].methods, ["GET"]);
         assert_eq!(

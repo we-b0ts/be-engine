@@ -14,12 +14,7 @@ pub(super) async fn handle_dns_query(
 ) -> Result<()> {
     let question = parse_dns_question(&query)?;
     let fake_ip = if question.qtype == 1 && question.qclass == 1 {
-        let state = state.lock().await;
-        state
-            .targets
-            .iter()
-            .find(|target| normalize_host(&target.host) == question.domain)
-            .map(|target| target.fake_ip)
+        Some(state.lock().await.fake_ip_for_dns(&question.domain)?)
     } else {
         None
     };

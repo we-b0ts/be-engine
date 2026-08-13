@@ -799,6 +799,9 @@ run_standard_recording() {
         "$anchor_image" >/dev/null
     anchor_started=true
     local -a recorder_command=(internal recorder-run --config /workspace/project.yaml --control-socket "$control_socket" --artifact-owner "$artifact_owner" --dns --run-id "$run_id")
+    if "$breeze_enabled"; then
+        recorder_command+=(--breeze)
+    fi
     if [[ "$operation" == preflight ]]; then
         if "$source_uses_java"; then
             recorder_command+=(--preflight-probe java-truststore)

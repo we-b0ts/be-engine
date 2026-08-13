@@ -27,6 +27,7 @@ mod recorder;
 mod recording_api;
 mod recording_completion;
 mod recording_control;
+mod recording_network;
 mod recording_runtime;
 mod redis;
 mod replay;

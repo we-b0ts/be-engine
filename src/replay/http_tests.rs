@@ -470,6 +470,7 @@ async fn spawn_http_replay_with_policy(
     Arc<ReplayRuntime>,
     tokio::task::JoinHandle<()>,
 ) {
+    super::super::write_test_recording_network_manifest(case_dir);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let runtime = Arc::new(
