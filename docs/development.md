@@ -1541,7 +1541,24 @@ The committed progress file contains aggregate and latest-run evidence; its
 per-run idempotency ledger is stored in the ignored
 `.traffic-e2e/local/artifacts/progress/replay-counted-runs.yaml` sidecar. Comparison
 progress uses the sibling `comparison-counted-runs.yaml` sidecar. Focused
-evidence never replaces the global full-round `latest`.
+evidence never replaces the global full-round `latest`. The local ledger is the
+runtime authority: if the public snapshot is reset or removed, the runner
+rebuilds it from the baseline and ordered observations. If the local ledger is
+missing, a valid public snapshot initializes its aggregate, API totals,
+streaks, and latest run as the new local baseline.
+
+When the rewrite coordinator accepts a newly finalized standard recording, it
+starts a new verification progress epoch. Replay and comparison progress begin
+empty for that recording; the preceding public progress and private ledgers are
+retained under `.traffic-e2e/local/artifacts/progress/history/` for diagnosis
+but are not loaded into the new epoch.
+
+Intermediate attempts do not require Git commits for progress. After every API
+is verified, the rewrite coordinator synchronizes the final public Replay and
+comparison snapshots and returns
+`input_required/verification_progress_commit_required` until both files are
+committed. A reset at that gate is reconstructed from the local ledger and
+cannot make terminal completion available.
 
 After every published case is prepared exactly once and every focused group
 passes, the grouped result is sufficient unless behavior-affecting code changed

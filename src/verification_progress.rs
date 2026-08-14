@@ -7,8 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::edit::{create_atomic, write_atomic};
 
+mod epoch;
 mod ledger;
 mod revision;
+
+pub(crate) use epoch::begin as begin_epoch;
 
 pub(crate) const PROGRESS_VERSION: u8 = 2;
 const MIN_SUPPORTED_PROGRESS_VERSION: u8 = 1;
@@ -287,6 +290,19 @@ impl ProgressReport {
     }
 
     fn validate_observation_history(&self) -> Result<()> {
+        self.validate_observation_ledger()?;
+        let baseline_number = self
+            .observation_baseline
+            .as_ref()
+            .map_or(0, |baseline| baseline.number);
+        ensure!(
+            baseline_number + self.counted_observations.len() as u64 == self.totals.runs.executed,
+            "progress observation ledger does not reach the current aggregate"
+        );
+        Ok(())
+    }
+
+    fn validate_observation_ledger(&self) -> Result<()> {
         let mut observations = self.counted_observations.values().collect::<Vec<_>>();
         observations.sort_by_key(|counted| counted.number);
         let baseline_number = self
@@ -304,15 +320,11 @@ impl ProgressReport {
                 "progress observation ledger conflicts with counted-run evidence"
             );
         }
-        ensure!(
-            baseline_number + observations.len() as u64 == self.totals.runs.executed,
-            "progress observation ledger does not reach the current aggregate"
-        );
         Ok(())
     }
 
     fn rebuild_aggregates(&mut self) -> Result<()> {
-        self.validate_observation_history()?;
+        self.validate_observation_ledger()?;
         let mut observations = self
             .counted_observations
             .values()
@@ -377,23 +389,39 @@ impl ProgressReport {
 }
 
 pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<ProgressReport>> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+    let public_report = match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            ensure!(
+                metadata.is_file() && !metadata.file_type().is_symlink(),
+                "progress must be a regular file and not a symlink: {}",
+                path.display()
+            );
+            let payload = fs::read(path)
+                .with_context(|| format!("failed to read progress {}", path.display()))?;
+            let report: ProgressReport = serde_yaml::from_slice(&payload)
+                .with_context(|| format!("failed to parse progress {}", path.display()))?;
+            Some(report)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("failed to inspect progress {}", path.display()));
         }
     };
+    let persisted_ledger = ledger::load(path, stage)?;
+    if public_report.is_none() && !persisted_ledger.exists {
+        return Ok(None);
+    }
     ensure!(
-        metadata.is_file() && !metadata.file_type().is_symlink(),
-        "progress must be a regular file and not a symlink: {}",
+        public_report.is_some()
+            || persisted_ledger.observation_baseline.is_some()
+            || !persisted_ledger.counted_observations.is_empty()
+            || persisted_ledger.counted_runs.is_empty(),
+        "public progress {} is missing and its local ledger has no aggregate baseline",
         path.display()
     );
-    let payload =
-        fs::read(path).with_context(|| format!("failed to read progress {}", path.display()))?;
-    let mut report: ProgressReport = serde_yaml::from_slice(&payload)
-        .with_context(|| format!("failed to parse progress {}", path.display()))?;
+    let public_missing = public_report.is_none();
+    let mut report = public_report.unwrap_or_else(|| ProgressReport::new(stage));
     ensure!(
         (MIN_SUPPORTED_PROGRESS_VERSION..=PROGRESS_VERSION).contains(&report.version),
         "unsupported {:?} progress version {}",
@@ -410,7 +438,6 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
     let schema_migration = report.version != PROGRESS_VERSION;
     report.version = PROGRESS_VERSION;
     let embedded_counted_runs = !report.counted_runs.is_empty();
-    let persisted_ledger = ledger::load(path, stage)?;
     merge_counted_runs(
         path,
         &mut report.counted_runs,
@@ -426,7 +453,15 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
         &mut report.observation_baseline,
         persisted_ledger.observation_baseline,
     )?;
-    report.requires_persistence = schema_migration || embedded_counted_runs;
+    report.requires_persistence = public_missing || schema_migration || embedded_counted_runs;
+    if report.observation_baseline.is_some() || !report.counted_observations.is_empty() {
+        let public_aggregate = report.current_baseline();
+        report.rebuild_aggregates()?;
+        report.requires_persistence |= report.current_baseline() != public_aggregate;
+    } else if report.totals.runs.executed > 0 {
+        report.observation_baseline = Some(report.current_baseline());
+        report.requires_persistence = true;
+    }
     if let Some(latest) = &report.latest_run {
         match report.counted_runs.get(&latest.key) {
             Some(evidence_fingerprint) => ensure!(
@@ -463,6 +498,17 @@ pub(crate) fn write(path: &Path, report: &ProgressReport) -> Result<()> {
     ledger::write(path, report)?;
     let public_payload = yaml_payload(report)?;
     write_payload(path, &public_payload)
+}
+
+pub(crate) fn synchronize(path: &Path, stage: VerificationStage) -> Result<bool> {
+    let Some(report) = load(path, stage)? else {
+        return Ok(false);
+    };
+    if !report.requires_persistence() {
+        return Ok(false);
+    }
+    write(path, &report)?;
+    Ok(true)
 }
 
 fn yaml_payload(value: &impl Serialize) -> Result<Vec<u8>> {

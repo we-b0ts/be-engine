@@ -41,8 +41,8 @@ is unclear.
 - `bin/backend-rewrite-admin/` owns explicit administrator repair CLI bootstrap
   only; administrator behavior remains in the library owner for that contract.
 - `lib.rs` owns application wiring, shared state, and stable exports;
-  it remains one crate façade above the 800-line review threshold because its
-  flat exports and shared application-state composition have the same crate-root
+  it remains one large crate façade within the hard limit because its flat
+  exports and shared application-state composition have the same crate-root
   compatibility owner. Feature implementations remain in their owned modules;
   split the façade only when a distinct package or composition lifecycle exists.
   `recording_runtime` owns the Recorder application's listener supervision,
@@ -93,7 +93,7 @@ is unclear.
   bounded activation and parking, deferred revalidation, and summary/detail
   views. `revalidation.rs` owns the coordinator's explicit early-validation
   request boundary and projection for deferred API status.
-  Together, these files are intentionally cohesive near the review threshold;
+  Together, these files are intentionally cohesive near the 1000-line hard limit;
   status projection and the traffic lease are separate modules, and further
   splitting should follow a real responsibility boundary rather than divide
   one transaction, action contract, or inventory transition.

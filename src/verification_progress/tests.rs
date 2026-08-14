@@ -26,6 +26,89 @@ fn observation(key: &str, apis: &[(&str, u64, u64)]) -> ProgressObservation {
 }
 
 #[test]
+fn authoritative_ledger_rebuilds_a_reset_public_snapshot() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("replay-progress.yaml");
+    let mut report = ProgressReport::new(VerificationStage::Replay);
+    report
+        .apply(observation("1", &[("GET /users", 10, 10)]))
+        .unwrap();
+    write(&path, &report).unwrap();
+    let reset_snapshot = fs::read(&path).unwrap();
+
+    report
+        .apply(observation("2", &[("GET /users", 10, 9)]))
+        .unwrap();
+    write(&path, &report).unwrap();
+    write_payload(&path, &reset_snapshot).unwrap();
+
+    let rebuilt = load(&path, VerificationStage::Replay).unwrap().unwrap();
+    assert_eq!(rebuilt.totals.runs.executed, 2);
+    assert_eq!(rebuilt.totals.cases.executed, 20);
+    assert_eq!(rebuilt.latest_run.as_ref().unwrap().key, "2");
+    assert!(rebuilt.requires_persistence());
+    assert!(synchronize(&path, VerificationStage::Replay).unwrap());
+    assert!(
+        !load(&path, VerificationStage::Replay)
+            .unwrap()
+            .unwrap()
+            .requires_persistence()
+    );
+}
+
+#[test]
+fn public_snapshot_initializes_a_missing_local_ledger_baseline() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("comparison-progress.yaml");
+    let mut report = ProgressReport::new(VerificationStage::Comparison);
+    report
+        .apply(observation("1", &[("POST /orders", 8, 8)]))
+        .unwrap();
+    write(&path, &report).unwrap();
+    fs::remove_file(ledger::path(&path, VerificationStage::Comparison).unwrap()).unwrap();
+
+    let imported = load(&path, VerificationStage::Comparison).unwrap().unwrap();
+    let baseline = imported.observation_baseline.as_ref().unwrap();
+    assert_eq!(baseline.number, 1);
+    assert_eq!(baseline.totals.runs.executed, 1);
+    assert_eq!(baseline.totals.runs.passed, 1);
+    assert_eq!(baseline.totals.cases.executed, 8);
+    assert_eq!(baseline.success_streak.runs, 1);
+    assert_eq!(baseline.latest_run.as_ref().unwrap().key, "1");
+    assert_eq!(baseline.apis["POST /orders"].totals.runs.executed, 1);
+    assert_eq!(baseline.apis["POST /orders"].success_streak.cases, 8);
+    assert!(imported.requires_persistence());
+    assert!(synchronize(&path, VerificationStage::Comparison).unwrap());
+    assert!(
+        ledger::path(&path, VerificationStage::Comparison)
+            .unwrap()
+            .is_file()
+    );
+}
+
+#[test]
+fn local_ledger_recreates_a_missing_public_snapshot() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("replay-progress.yaml");
+    let mut report = ProgressReport::new(VerificationStage::Replay);
+    report
+        .apply(observation("1", &[("GET /users", 4, 4)]))
+        .unwrap();
+    report
+        .apply(observation("2", &[("GET /users", 4, 4)]))
+        .unwrap();
+    write(&path, &report).unwrap();
+    fs::remove_file(&path).unwrap();
+
+    let rebuilt = load(&path, VerificationStage::Replay).unwrap().unwrap();
+    assert_eq!(rebuilt.totals.runs.executed, 2);
+    assert_eq!(rebuilt.success_streak.runs, 2);
+    assert!(rebuilt.requires_persistence());
+    assert!(synchronize(&path, VerificationStage::Replay).unwrap());
+    assert!(path.is_file());
+}
+
+#[test]
 fn tracks_totals_and_resets_global_and_api_streaks_on_failure() {
     let mut report = ProgressReport::new(VerificationStage::Comparison);
     report

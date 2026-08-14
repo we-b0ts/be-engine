@@ -9,6 +9,7 @@ mod inventory;
 mod issue;
 mod model;
 mod preparation;
+mod progress_publication;
 mod recorder_capture;
 mod recording;
 mod recording_action;
@@ -214,6 +215,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 if migrated || invalidated || active_comparison_stale {
                     store.save(&state)?;
                 }
+                progress_publication::synchronize_if_complete(&target_root, &state)?;
                 let scoped = inventory::scoped(&state, options.api.as_ref())?;
                 return action::for_status(&target_root, &scoped);
             }
@@ -367,6 +369,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 }
             };
             state.recording_rejection = None;
+            crate::verification_progress::begin_epoch(&target_root, &state.recording_run_id)?;
             inventory::install(&mut state, apis)?;
             state.recording_refresh = None;
             if inventory::current_requires_source_route(&state) {
@@ -457,11 +460,15 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             )?;
             compare_and_transition(&target_root, &mut state)?;
             store.save(&state)?;
+            progress_publication::synchronize_if_complete(&target_root, &state)?;
             Ok(action::for_state(&target_root, &state))
         }
         RewritePhase::AwaitingRecordingRefresh
         | RewritePhase::SystemRepairRequired
-        | RewritePhase::SliceComplete => Ok(action::for_state(&target_root, &state)),
+        | RewritePhase::SliceComplete => {
+            progress_publication::synchronize_if_complete(&target_root, &state)?;
+            Ok(action::for_state(&target_root, &state))
+        }
     }
 }
 
@@ -799,7 +806,7 @@ mod tests {
         let state = test_state();
         let target = Path::new("/target");
         let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(16)));
+        assert_eq!(value.get("schema_version"), Some(&serde_json::json!(17)));
         assert!(value.get("latest_focused_e2e").is_none());
         assert_eq!(
             value.pointer("/action/commands/execute/cwd"),

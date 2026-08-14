@@ -10,7 +10,8 @@ use super::model::{
     RewritePhase, RewriteRecordingInputMode, RewriteState, RewriteWorkflowView,
 };
 use super::{
-    inventory, recorder_capture, recording, recording_action, repair, target_quality, worker,
+    inventory, progress_publication, recorder_capture, recording, recording_action, repair,
+    target_quality, worker,
 };
 
 pub(super) fn for_state(target_root: &Path, state: &RewriteState) -> RewriteActionEnvelope {
@@ -134,16 +135,35 @@ pub(super) fn envelope(
         api_inventory: Some(inventory::view(state)),
         latest_focused_e2e: latest_focused_e2e(state),
         source_process_traffic: super::source_process_traffic::view(target_root, state),
-        terminal_allowed: state.phase == RewritePhase::SliceComplete
-            && state
-                .api_inventory
-                .iter()
-                .all(|item| item.status == super::model::RewriteApiStatus::Complete),
+        terminal_allowed: progress_publication::state(target_root, state)
+            == Some(progress_publication::PublicationState::Published),
         action,
     }
 }
 
 fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
+    match progress_publication::state(target_root, state) {
+        Some(progress_publication::PublicationState::SynchronizationRequired) => {
+            return advance_required(
+                target_root,
+                Some(&state.api),
+                "synchronize the final verification progress snapshot from the runner-owned ledger"
+                    .to_string(),
+            );
+        }
+        Some(progress_publication::PublicationState::CommitRequired) => {
+            return RewriteAction::InputRequired {
+                reason: RewriteInputRequiredReason::VerificationProgressCommitRequired,
+                summary: "commit the coordinator-generated final verification progress snapshot"
+                    .to_string(),
+                required: progress_publication::public_paths()
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            };
+        }
+        Some(progress_publication::PublicationState::Published) | None => {}
+    }
     if state.phase == RewritePhase::SystemRepairRequired
         && state
             .route
