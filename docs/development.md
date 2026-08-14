@@ -1543,6 +1543,12 @@ per-run idempotency ledger is stored in the ignored
 progress uses the sibling `comparison-counted-runs.yaml` sidecar. Focused
 evidence never replaces the global full-round `latest`.
 
+When the rewrite coordinator accepts a newly finalized standard recording, it
+starts a new verification progress epoch. Replay and comparison progress begin
+empty for that recording; the preceding public progress and private ledgers are
+retained under `.traffic-e2e/local/artifacts/progress/history/` for diagnosis
+but are not loaded into the new epoch.
+
 After every published case is prepared exactly once and every focused group
 passes, the grouped result is sufficient unless behavior-affecting code changed
 after an earlier group pass. In that case, run the complete regression round:

@@ -367,6 +367,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 }
             };
             state.recording_rejection = None;
+            crate::verification_progress::begin_epoch(&target_root, &state.recording_run_id)?;
             inventory::install(&mut state, apis)?;
             state.recording_refresh = None;
             if inventory::current_requires_source_route(&state) {
