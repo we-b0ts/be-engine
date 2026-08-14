@@ -205,6 +205,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(!MANAGER.contains("brz-no-fallback.sh"));
     assert!(MANAGER.contains("getent ahostsv4 breeze.recording"));
     assert!(MANAGER.contains("docker exec --user 998:998 \"$source_name\""));
+    assert!(!MANAGER.contains("wait_port 880 source"));
     let standard_recording = MANAGER
         .split_once("run_standard_recording()")
         .unwrap()
@@ -312,6 +313,7 @@ fn embedded_platform_manager_is_valid_bash() {
         "$TRAFFIC_E2E_PLATFORM_ASSETS/HttpsProbe.class:/traffic-e2e/HttpsProbe.class:ro"
     ));
     assert!(MANAGER.contains("java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e"));
+    assert!(MANAGER.contains("timeout --foreground 10 docker exec \"$source_name\""));
     assert!(!MANAGER.contains("command -v javac"));
     assert!(!MANAGER.contains("getent ahostsv4 demo.test"));
     assert!(PREFLIGHT_BUSINESS_INPUT.contains("phase: \"preflight-business-input-required\""));

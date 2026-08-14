@@ -1428,6 +1428,14 @@ direct external egress for UID `998`.
 For a Breeze-enabled project, recording preflight also resolves
 `breeze.recording` inside the source adaptor as UID `998` and fails unless the
 finalized `recording-network.json` proves Recorder observed that DNS query.
+The source launch does not separately wait for its source-local port `880`;
+the adaptor switch task keeps retrying that endpoint every three seconds while
+the configured HTTP Gateway readiness contract remains authoritative. When a
+selected case reaches its limit before the system HTTPS probe finishes,
+`--preflight-probe` keeps Recorder available for a fixed 15-second grace period
+without waiting for a probe-recorded condition. The Java probe command has a
+10-second execution bound. The ordinary duration timer starts only after the
+probe returns, so duration shutdown does not add another grace period.
 Ordinary recording and comparison do not repeat this initialization gate.
 When Motan is enabled, the business-input phase also prints the exact
 `motan-replay` copy command. A successfully published Motan case reports

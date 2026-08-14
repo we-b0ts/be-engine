@@ -387,6 +387,19 @@ async fn proxy_raw_tcp(
             )
             .await
         }
+        DetectedProtocol::Tls
+            if state.config().tcp_gateway.record_http
+                && state.config().tcp_gateway.mitm_https
+                && (state.config().tcp_gateway.https_ports.is_empty()
+                    || state
+                        .config()
+                        .tcp_gateway
+                        .https_ports
+                        .contains(&fake_addr.port())) =>
+        {
+            drop(upstream);
+            serve_https_mitm_connection(client, fake_addr, entry, client_addr, state).await
+        }
         DetectedProtocol::Tls => Err(anyhow!(
             "TLS-looking connection was not eligible for HTTPS MITM on port {}",
             fake_addr.port()

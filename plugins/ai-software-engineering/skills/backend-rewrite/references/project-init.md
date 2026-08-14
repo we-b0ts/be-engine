@@ -233,10 +233,10 @@ come from the inspected source contract.
 3. Start the source adaptor with runtime inputs inspected from the configured,
    stopped source container and the explicit adaptor entrypoint. Mount the
    generated truststore read-only only when the system detected Java.
-4. Verify the source entrypoint runs as UID/GID `998:998`, its port
-   `880` listener is reachable without root or privileged-container execution,
-   Breeze is ready when enabled, the source readiness contract passes, and
-   Recorder admits cases.
+4. Verify the source entrypoint runs as UID/GID `998:998`, Breeze is ready when
+   enabled, the configured source readiness contract passes, and Recorder
+   admits cases. Do not separately wait for port `880`; the Breeze switch task
+   owns its bounded three-second retry loop for that source-local endpoint.
 5. When Breeze is enabled, resolve `breeze.recording` explicitly inside the
    source adaptor as UID/GID `998:998` after Recorder is ready. Require a
    non-empty IPv4 result, then after finalization require
@@ -264,6 +264,11 @@ come from the inspected source contract.
    `java_truststore` or `system_network` attribution. Do not enable full
    `traffic.jsonl`, accept an arbitrary HTTPS exchange, or synthesize Global
    evidence from another file.
+   If the selected business case reaches its limit while this probe is still
+   starting, `--preflight-probe` keeps Recorder listeners available for one
+   fixed 15-second grace period before case-limit shutdown. This grace does not
+   wait for probe evidence and the Java probe command itself is bounded to 10
+   seconds, so a broken source container cannot hold shutdown indefinitely.
 9. Start a disposable real Replay session over the recording run. In a
    Replay-owned host network namespace, run the fixed network probe image as
    `998:998`: require `demo.test` to resolve to its assigned fake IP, return the

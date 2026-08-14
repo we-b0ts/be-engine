@@ -701,7 +701,6 @@ start_recording_source() {
     docker run --detach --name "$source_name" --network "container:${anchor_name}" \
         "${runtime_args[@]}" "$adapter_image_id" >/dev/null
     source_started=true
-    wait_port 880 source "$source_name"
     docker exec "$source_name" /bin/sh -ec '
         test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998
         test "$(awk "/^Gid:/{print \$2}" /proc/1/status)" = 998
@@ -714,7 +713,7 @@ start_recording_source() {
 run_preflight_https_probe() {
     [[ "$operation" == preflight ]] || return 0
     if "$source_uses_java"; then
-        docker exec "$source_name" /bin/sh -ec '
+        timeout --foreground 10 docker exec "$source_name" /bin/sh -ec '
             command -v java >/dev/null
             java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e \
                 HttpsProbe https://demo.test/
