@@ -99,6 +99,12 @@ When a selected dynamic API pattern lacks a proven source registration route,
 provide only the requested `--source-route` through the returned command. Do
 not infer additional input or change the shared recording scope.
 
+When `details.reason=verification_progress_commit_required`, every API is
+verified but terminal delivery is still forbidden. Commit exactly the listed
+coordinator-generated public progress snapshots without editing or resetting
+them, then execute `backend-rewrite next` again. Intermediate failed or passing
+attempts do not require progress commits.
+
 ### `implementation_required`
 
 Stop before evidence, artifact, source, or target analysis. Follow
@@ -181,8 +187,8 @@ Continue other runnable work only through current coordinator-issued commands.
 API-scoped `complete` means only that API has current passing focused E2E and
 comparison evidence. Finish repository-wide verification and delivery only
 when `terminal_allowed=true` proves every API is complete for the same target
-content fingerprint. Use `backend-rewrite inventory` when delivery needs the
-full per-API list.
+content fingerprint and the final public progress snapshots are committed. Use
+`backend-rewrite inventory` when delivery needs the full per-API list.
 
 ## API Inventory And Serialized Traffic
 

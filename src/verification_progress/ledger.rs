@@ -35,6 +35,7 @@ struct CountedRunsLedgerRef<'a> {
 }
 
 pub(super) struct LoadedLedger {
+    pub(super) exists: bool,
     pub(super) counted_runs: BTreeMap<String, String>,
     pub(super) counted_observations: BTreeMap<String, CountedObservation>,
     pub(super) observation_baseline: Option<ProgressBaseline>,
@@ -75,6 +76,7 @@ pub(super) fn load(progress_path: &Path, stage: VerificationStage) -> Result<Loa
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(LoadedLedger {
+                exists: false,
                 counted_runs: BTreeMap::new(),
                 counted_observations: BTreeMap::new(),
                 observation_baseline: None,
@@ -118,6 +120,7 @@ pub(super) fn load(progress_path: &Path, stage: VerificationStage) -> Result<Loa
         path.display()
     );
     Ok(LoadedLedger {
+        exists: true,
         counted_runs: ledger.counted_runs,
         counted_observations: ledger.counted_observations,
         observation_baseline: ledger.observation_baseline,

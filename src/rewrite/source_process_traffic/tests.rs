@@ -77,7 +77,7 @@ fn projects_a_bounded_action_view_from_the_recording_summary() {
 
     let envelope = crate::rewrite::action::for_state(temp.path(), &state);
     let action = serde_json::to_value(envelope).unwrap();
-    assert_eq!(action["schema_version"], 16);
+    assert_eq!(action["schema_version"], 17);
     assert_eq!(action["source_process_traffic"]["available"], true);
     assert_eq!(
         action["source_process_traffic"]["process_owned"]["rules"][0]["redis_snapshot"]["reuses"],

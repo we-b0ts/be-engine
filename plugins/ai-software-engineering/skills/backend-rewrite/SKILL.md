@@ -222,10 +222,16 @@ is not successful completion and must never be reported as
 ## Evidence And Repository Contract
 
 `.traffic-e2e/local/artifacts/` is readable, read-only evidence. Preserve
-coordinator-generated `replay-progress.yaml` and `comparison-progress.yaml` and
-commit their verified changes with the target change. Do not hand-edit them,
-replace coordinator aggregation with bulk scripts, make target code consume
-recorded results, or modify source business behavior to manufacture evidence.
+coordinator-generated `replay-progress.yaml` and `comparison-progress.yaml`.
+Their ignored local ledgers are runner-owned authority; the public files are
+Git snapshots that the coordinator can reconstruct after a reset. Do not
+hand-edit them, replace coordinator aggregation with bulk scripts, make target
+code consume recorded results, or modify source business behavior to
+manufacture evidence. Intermediate attempts do not require progress commits.
+When the complete workflow returns
+`input_required/verification_progress_commit_required`, commit exactly the
+listed final public snapshots and call `next` again; only the resulting
+`terminal_allowed=true` authorizes delivery.
 
 The initialized target repository provides ordinary product implementation,
 source-compatible configuration, and `.traffic-e2e/Dockerfile.e2e`. That
