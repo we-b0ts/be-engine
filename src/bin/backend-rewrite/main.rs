@@ -361,8 +361,11 @@ struct TargetQualityRunArgs {
     /// API acceptance whose integrated target revision issued this gate.
     #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
     api: RecordingApi,
-    /// Confirm one source-proven sample.test or demo.test occurrence; repeat per location.
-    #[arg(long, value_name = "FILE:LINE:COLUMN")]
+    /// Confirm one production-source-proven domain occurrence; repeat per target location.
+    #[arg(
+        long,
+        value_name = "TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN"
+    )]
     hardcode_ai_verified: Vec<String>,
 }
 
