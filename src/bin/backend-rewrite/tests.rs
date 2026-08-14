@@ -319,7 +319,7 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from([
             "test",
             "route",
-            "--kind",
+            "--cause",
             "replay-capability-gap",
             "--evidence-id",
             "evidence-1",
@@ -334,7 +334,7 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from([
             "test",
             "route",
-            "--kind",
+            "--cause",
             "replay-capability-gap",
             "--evidence-id",
             "evidence-1",
@@ -344,6 +344,34 @@ fn parses_the_bounded_rewrite_surface() {
             "support source-equivalent request matching",
             "--acceptance-command",
             "backend-rewrite next",
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "route",
+            "--cause",
+            "missing-recorded-resource",
+            "--evidence-id",
+            "evidence-1",
+            "--source-ref",
+            "src/client.rs:42",
+            "--endpoint",
+            "cache.example.com",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "route",
+            "--cause",
+            "missing-recorded-resource",
+            "--evidence-id",
+            "evidence-1",
+            "--source-ref",
+            "src/client.rs:42",
         ])
         .is_err()
     );

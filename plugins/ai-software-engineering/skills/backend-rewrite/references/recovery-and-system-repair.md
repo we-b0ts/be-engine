@@ -6,10 +6,13 @@ state-mutating command in this guide.
 
 ## System Repair
 
-`system_repair_required` exists only after `backend-rewrite route` accepts
-current evidence, a source reference, and the required system change. The route
-captures a coordinator-defined system/source revision and returns an opaque
-repair ID; never supply an invented acceptance command.
+`system_repair_required` exists only after `backend-rewrite route` accepts a
+cause that requires a system/source change, together with current evidence, a
+source reference, and the required change. The route captures a
+coordinator-defined system/source revision and returns an opaque repair ID;
+never supply an invented acceptance command. `missing-recorded-resource` is a
+validated route cause but resolves to a recorder-capture plan and never enters
+this phase.
 
 Apply the required repair and execute the exact
 `action.commands.acceptance`. New repairs use
@@ -23,10 +26,10 @@ Successful verification chooses the next transition. Replay and external-input
 repairs reuse the same cases; Recorder or source-baseline repairs allocate
 fresh standard traffic. The AI never chooses between those transitions.
 
-Use `recorder_capability_gap` only when the recorder lacks a required mechanism
-and the supported recorder-capture planner cannot express it. A configured
-Breeze resource bypassed during recording is an API-scoped recorder-capture
-refresh, not system repair. Follow
+Use `recorder-capability-gap` only when the recorder lacks a required mechanism.
+A configured Breeze resource bypassed during recording is reported as
+`missing-recorded-resource` and becomes an API-scoped recorder-capture refresh,
+not system repair. Follow
 [coordinator-evidence-actions.md](coordinator-evidence-actions.md) when that
 planner is available.
 

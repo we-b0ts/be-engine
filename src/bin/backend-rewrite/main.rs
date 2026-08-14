@@ -9,14 +9,14 @@ use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
     DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteCaseDependenciesOptions,
     RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
-    RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions, RewriteRouteOptions,
-    RewriteRulePlanOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
-    RewriteWorkerTransferOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
-    next_rewrite, plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence,
-    recover_rewrite, request_rewrite_recording, request_rewrite_revalidation,
-    resume_rewrite_replay_planning, route_rewrite, run_rewrite_target_quality,
-    start_rewrite_recording, status_rewrite, status_rewrite_for_api, transfer_rewrite_worker,
-    verify_rewrite_repair,
+    RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions, RewriteRouteCause,
+    RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
+    RewriteWorkerConfirmOptions, RewriteWorkerTransferOptions, apply_rewrite_rule,
+    confirm_rewrite_worker, inventory_rewrite, next_rewrite, plan_rewrite_rule,
+    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
+    request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
+    route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
+    status_rewrite_for_api, transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -227,14 +227,35 @@ enum DynamicMechanismArg {
 
 #[derive(Debug, Args)]
 struct RouteArgs {
+    /// Source-backed reason for leaving target implementation work.
     #[arg(long, value_enum)]
-    kind: RouteKindArg,
+    cause: RouteCauseArg,
+    /// Coordinator-issued evidence id for the active issue.
     #[arg(long)]
     evidence_id: String,
+    /// One-line source file/symbol proof for the reported cause.
     #[arg(long)]
     source_ref: String,
-    #[arg(long)]
-    required_change: String,
+    /// Missing dependency hostname with an optional port; required only for a missing recorded resource.
+    #[arg(
+        long,
+        value_name = "HOSTNAME[:PORT]",
+        required_if_eq("cause", "missing-recorded-resource"),
+        conflicts_with = "required_change"
+    )]
+    endpoint: Option<String>,
+    /// Exact required non-target change; required for causes that enter system repair.
+    #[arg(
+        long,
+        required_if_eq_any([
+            ("cause", "recorder-capability-gap"),
+            ("cause", "replay-capability-gap"),
+            ("cause", "external-data-blocker"),
+            ("cause", "source-change")
+        ]),
+        conflicts_with = "endpoint"
+    )]
+    required_change: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -392,7 +413,8 @@ enum RecordingReasonArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum RouteKindArg {
+enum RouteCauseArg {
+    MissingRecordedResource,
     RecorderCapabilityGap,
     ReplayCapabilityGap,
     ExternalDataBlocker,
@@ -479,16 +501,20 @@ async fn run(cli: Cli) -> Result<()> {
         },
         RewriteCommand::DependencyRule(args) => dependency_rule::run(target_root, args, pretty),
         RewriteCommand::RecorderCapture(args) => recorder_capture::run(target_root, args, pretty),
-        RewriteCommand::Route(args) => print_json(
-            &route_rewrite(RewriteRouteOptions {
-                target_root,
-                kind: args.kind.as_str().to_string(),
-                evidence_id: args.evidence_id,
-                source_ref: args.source_ref,
-                required_change: args.required_change,
-            })?,
-            pretty,
-        ),
+        RewriteCommand::Route(args) => {
+            let cause = args
+                .cause
+                .into_rewrite_cause(args.endpoint, args.required_change)?;
+            print_json(
+                &route_rewrite(RewriteRouteOptions {
+                    target_root,
+                    cause,
+                    evidence_id: args.evidence_id,
+                    source_ref: args.source_ref,
+                })?,
+                pretty,
+            )
+        }
         RewriteCommand::Repair(args) => match args.command {
             RepairCommand::Verify(args) => print_json(
                 &verify_rewrite_repair(RewriteContext { target_root }, &args.repair_id)?,
@@ -590,13 +616,29 @@ impl From<DynamicMechanismArg> for DynamicResponseMechanism {
     }
 }
 
-impl RouteKindArg {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::RecorderCapabilityGap => "recorder_capability_gap",
-            Self::ReplayCapabilityGap => "replay_capability_gap",
-            Self::ExternalDataBlocker => "external_data_blocker",
-            Self::SourceChange => "source_change",
+impl RouteCauseArg {
+    fn into_rewrite_cause(
+        self,
+        endpoint: Option<String>,
+        required_change: Option<String>,
+    ) -> Result<RewriteRouteCause> {
+        match (self, endpoint, required_change) {
+            (Self::MissingRecordedResource, Some(endpoint), None) => {
+                Ok(RewriteRouteCause::MissingRecordedResource { endpoint })
+            }
+            (Self::RecorderCapabilityGap, None, Some(required_change)) => {
+                Ok(RewriteRouteCause::RecorderCapabilityGap { required_change })
+            }
+            (Self::ReplayCapabilityGap, None, Some(required_change)) => {
+                Ok(RewriteRouteCause::ReplayCapabilityGap { required_change })
+            }
+            (Self::ExternalDataBlocker, None, Some(required_change)) => {
+                Ok(RewriteRouteCause::ExternalDataBlocker { required_change })
+            }
+            (Self::SourceChange, None, Some(required_change)) => {
+                Ok(RewriteRouteCause::SourceChange { required_change })
+            }
+            _ => bail!("route cause arguments are incomplete or mutually exclusive"),
         }
     }
 }

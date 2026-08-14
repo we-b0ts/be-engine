@@ -17,6 +17,7 @@ mod recording_input;
 mod recovery;
 mod repair;
 mod revalidation;
+mod route;
 mod rule;
 mod source_process_traffic;
 mod status;
@@ -67,11 +68,12 @@ pub use recording::{
     RewriteRecordingRequestOptions, execute_rewrite_recording_worker, request_rewrite_recording,
     start_rewrite_recording,
 };
-pub use repair::{RewriteRouteOptions, resume_rewrite_replay_planning};
+pub use repair::resume_rewrite_replay_planning;
 pub use revalidation::{
     RewriteRevalidationRequestOptions, RewriteRevalidationRequestReport,
     request as request_rewrite_revalidation,
 };
+pub use route::{RewriteRouteCause, RewriteRouteOptions, RewriteRouteOutcome};
 pub use rule::RewriteRulePlanOptions;
 pub use source_process_traffic::*;
 pub use status::{inventory_rewrite, status_rewrite, status_rewrite_for_api};
@@ -635,24 +637,7 @@ pub fn apply_rewrite_dependency_rule(
     Ok(report)
 }
 
-pub fn route_rewrite(options: RewriteRouteOptions) -> Result<RewriteRouteReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
-    let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
-    let mut state = store
-        .load()?
-        .context("rewrite workflow has not been initialized")?;
-    let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
-        .context("route evidence is stale or belongs to no concurrent API work item")?;
-    worker::ensure_api_confirmed(&state, &api, "routing the issue")?;
-    if state.api != api {
-        let requested_api = api.parse::<RecordingApi>()?;
-        inventory::activate_requested(&mut state, Some(&requested_api))?;
-    }
-    let report = repair::route(&target_root, &mut state, options)?;
-    store.save(&state)?;
-    Ok(report)
-}
+pub use route::route as route_rewrite;
 
 pub fn verify_rewrite_repair(
     context: RewriteContext,

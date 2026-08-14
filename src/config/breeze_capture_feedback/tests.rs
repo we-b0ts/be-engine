@@ -84,6 +84,10 @@ fn plans_and_applies_canonical_resource_to_coordinator_rules() {
     let plan = plan_breeze_resource_capture(fixture.feedback()).unwrap();
     assert!(plan.report().changed);
     assert_eq!(plan.report().resource, "usercounter");
+    assert_eq!(
+        plan.report().bypassed_domains_before,
+        ["counter.example.com", "shared.example.com"]
+    );
     assert_eq!(plan.report().shared_domain_resources.len(), 1);
     let report = plan.apply().unwrap();
 
@@ -98,12 +102,9 @@ fn plans_and_applies_canonical_resource_to_coordinator_rules() {
     assert!(!matcher.matches("counter.example.com"));
     assert!(!matcher.matches("shared.example.com"));
     assert!(matcher.matches("other.example.com"));
-    assert!(
-        !plan_breeze_resource_capture(fixture.feedback())
-            .unwrap()
-            .report()
-            .changed
-    );
+    let reused = plan_breeze_resource_capture(fixture.feedback()).unwrap();
+    assert!(!reused.report().changed);
+    assert!(reused.report().bypassed_domains_before.is_empty());
 }
 
 #[test]

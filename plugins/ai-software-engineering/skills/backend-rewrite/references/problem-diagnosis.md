@@ -174,21 +174,21 @@ Prove the hypothesis in this order:
    evidence that is actually present.
 
 When those checks prove that the source consumes an exact response-driving
-endpoint that is absent from recorded dependencies, and the `representatives`
-report advertises `applicable_rule_planners.kind=recorder_capture`, return its
-`evidence_id`, the endpoint, and one single-line source file/symbol proof to the
-orchestrator. The worker may execute the planner's returned read-only help argv
-but never runs `recorder-capture plan|apply` itself and never guesses a Breeze
-resource or descriptor.
+endpoint that is absent from recorded dependencies, return the evidence ID, the
+`hostname[:port]`, and one single-line source file/symbol proof to the
+orchestrator. The hostname is required and the port is optional; include a
+source-proven port when available. Never guess a Breeze resource or descriptor.
 
-The orchestrator owns plan and apply. A plan that resolves the endpoint to one
-configured bypassed Breeze resource makes this an API-scoped capture refresh:
-apply immediately, park that API as `awaiting_recording_refresh`, continue other
-runnable APIs, and let the coordinator schedule one consolidated full-scope
-recording after they drain. This is not `recorder_capability_gap`, system repair,
-or a blocker. If the planner cannot resolve the endpoint, retain the exact
-source/recording proof and planner error; do not invent configuration. Use a
-Recorder capability route only when the required capture mechanism itself is
+The orchestrator reports those facts through `backend-rewrite route --cause
+missing-recorded-resource`. The coordinator resolves the endpoint through the
+configured Breeze snapshots and verifies that the unique resource is currently
+bypassed. A successful route returns an API-scoped recorder-capture plan instead
+of entering system repair: apply its exact next command, park that API as
+`awaiting_recording_refresh`, continue other runnable APIs, and let the
+coordinator schedule one consolidated full-scope recording after they drain. If
+the endpoint is unknown, ambiguous, or already captured, retain the exact
+source/recording proof and returned error and continue diagnosis. Use
+`recorder-capability-gap` only when the required capture mechanism itself is
 unsupported.
 
 ## Local Cache And Runtime State
@@ -311,9 +311,10 @@ Route the proven cause to exactly one action:
   to the orchestrator;
 - supported nondeterminism/order/counter: return source proof and proposed rule
   inputs; the orchestrator owns `backend-rewrite rule plan|apply` and rerun;
-- source-proven omitted dependency with an advertised `recorder_capture`
-  planner: return the evidence ID, endpoint, and source proof; the orchestrator
-  owns immediate plan/apply and the coordinator-owned recording refresh;
+- source-proven omitted dependency: return the evidence ID,
+  `hostname[:port]`, and source proof; the orchestrator reports
+  `--cause missing-recorded-resource`, then owns the returned capture apply and
+  coordinator-owned recording refresh;
 - true Recorder/Replay capability gap, where the supported planners and engine
   cannot express the required mechanism: return exact route evidence and the
   required system change; the orchestrator owns `backend-rewrite route` and the

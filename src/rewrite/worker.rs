@@ -386,8 +386,8 @@ mod tests {
     };
     use crate::rewrite::{
         RewriteContext, RewriteDependencyOwnership, RewriteDependencyRulePlanOptions,
-        RewriteDependencyRuleSelector, RewriteRecorderCapturePlanOptions, RewriteRouteOptions,
-        RewriteRulePlanOptions,
+        RewriteDependencyRuleSelector, RewriteRecorderCapturePlanOptions, RewriteRouteCause,
+        RewriteRouteOptions, RewriteRulePlanOptions,
     };
     use crate::{DynamicResponseMechanism, ResponseRuleKind};
 
@@ -461,10 +461,11 @@ mod tests {
         assert_confirmation_error(
             super::super::route_rewrite(RewriteRouteOptions {
                 target_root: target.path().to_path_buf(),
-                kind: "source_change".to_string(),
+                cause: RewriteRouteCause::SourceChange {
+                    required_change: "refresh the source baseline".to_string(),
+                },
                 evidence_id,
                 source_ref: "SourceService.java:read".to_string(),
-                required_change: "refresh the source baseline".to_string(),
             })
             .unwrap_err(),
             "routing the issue",
