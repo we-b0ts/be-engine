@@ -32,7 +32,7 @@ async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
     assert_eq!(motan2.kind, MessageKind::Response);
     assert_eq!(motan2.request_id, 91);
 
-    source.await.unwrap();
+    await_source(source).await;
     let cases = published_case_dirs(&state.recorder().run_dir);
     assert_eq!(cases.len(), 2);
     let mut versions = cases
@@ -68,8 +68,8 @@ async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
         assert!(published.join("dependencies.jsonl").is_file());
     }
 
-    gateway.abort();
     drop(client);
+    stop_gateway(gateway).await;
     drop(temp);
 }
 
@@ -96,8 +96,8 @@ async fn unmatched_motan1_and_motan2_requests_receive_fixed_responses_without_ca
     assert!(motan2.body.is_empty());
     assert!(published_case_dirs(&state.recorder().run_dir).is_empty());
 
-    gateway.abort();
     drop(client);
+    stop_gateway(gateway).await;
     drop(temp);
 }
 
@@ -138,11 +138,11 @@ async fn overlapping_matched_request_uses_fixed_response_and_is_not_forwarded() 
 
     release.send(()).unwrap();
     assert_eq!(first.await.unwrap().request_id, 101);
-    source.await.unwrap();
+    await_source(source).await;
     assert_eq!(published_case_dirs(&state.recorder().run_dir).len(), 1);
 
-    gateway.abort();
     drop(overlapping_client);
+    stop_gateway(gateway).await;
     drop(temp);
 }
 
@@ -165,8 +165,8 @@ async fn http_and_motan_share_one_process_wide_case_slot() {
     assert!(published_case_dirs(&state.recorder().run_dir).is_empty());
 
     drop(http_guard);
-    gateway.abort();
     drop(client);
+    stop_gateway(gateway).await;
     drop(temp);
 }
 
@@ -188,7 +188,7 @@ async fn gateway_failures_are_persisted_as_preflight_evidence() {
     assert!(traffic.contains(r#""protocol":"motan_gateway""#));
     assert!(traffic.contains("bad Motan frame"));
 
-    gateway.abort();
+    stop_gateway(gateway).await;
     drop(temp);
 }
 
@@ -202,7 +202,8 @@ async fn gateway_state(
     tokio::task::JoinHandle<Result<()>>,
 ) {
     let temp = tempfile::tempdir().unwrap();
-    let listen = unused_address().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listen = listener.local_addr().unwrap();
     let mut config = crate::AppConfig::default();
     config.mysql.enabled = false;
     config.motan_gateway.enabled = true;
@@ -217,7 +218,7 @@ async fn gateway_state(
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     let state = AppState::new(config).await.unwrap();
     let gateway_state = state.clone();
-    let gateway = tokio::spawn(async move { run(gateway_state).await });
+    let gateway = tokio::spawn(async move { run_with_listener(gateway_state, listener).await });
     (temp, state, listen, gateway)
 }
 
@@ -277,11 +278,6 @@ fn motan2_request(request_id: u64) -> Vec<u8> {
         .to_vec()
 }
 
-async fn unused_address() -> std::net::SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    listener.local_addr().unwrap()
-}
-
 async fn connect_retry(address: std::net::SocketAddr) -> TcpStream {
     for _ in 0..100 {
         match TcpStream::connect(address).await {
@@ -290,6 +286,21 @@ async fn connect_retry(address: std::net::SocketAddr) -> TcpStream {
         }
     }
     panic!("Motan gateway {address} did not start");
+}
+
+async fn await_source(source: tokio::task::JoinHandle<()>) {
+    tokio::time::timeout(Duration::from_secs(2), source)
+        .await
+        .expect("Motan test upstream did not finish")
+        .expect("Motan test upstream task failed");
+}
+
+async fn stop_gateway(gateway: tokio::task::JoinHandle<Result<()>>) {
+    gateway.abort();
+    let error = gateway
+        .await
+        .expect_err("Motan test gateway exited before cancellation");
+    assert!(error.is_cancelled());
 }
 
 fn published_case_dirs(run_dir: &Path) -> Vec<PathBuf> {

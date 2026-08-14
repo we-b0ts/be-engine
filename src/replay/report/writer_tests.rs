@@ -13,6 +13,7 @@ async fn coalesces_bursts_into_one_periodic_snapshot() {
     tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
         .await
         .unwrap();
+    write_test_recording_network_manifest(&case_dir);
     let report_path = temp.path().join("replay-report.json");
     let runtime = Arc::new(
         ReplayRuntime::load(
@@ -64,6 +65,7 @@ async fn high_volume_successes_keep_report_bounded_and_exactly_counted() {
     tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
         .await
         .unwrap();
+    write_test_recording_network_manifest(&case_dir);
     let report_path = temp.path().join("replay-report.json");
     let runtime = ReplayRuntime::load(
         ReplayConfig {
@@ -128,6 +130,7 @@ async fn final_report_publishes_bounded_case_dependency_evidence() {
     tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
         .await
         .unwrap();
+    write_test_recording_network_manifest(&case_dir);
     let report_path = temp.path().join("replay-report.json");
     let runtime = ReplayRuntime::load(
         ReplayConfig {
@@ -152,6 +155,9 @@ async fn final_report_publishes_bounded_case_dependency_evidence() {
     .await
     .unwrap();
     let report = json!({
+        "unrecorded_targets": [
+            {"case_id":"case-a","target":{"host":"breeze.recording","port":9301},"reason":"访问了录制时没有访问过的域名:port"}
+        ],
         "unmatched_http_requests": [
             {"case_id":null,"target":{"host":"startup.internal","port":80},"method":"GET","uri":"/warmup"},
             {"case_id":"case-a","target":{"host":"api.internal","port":80},"method":"GET","uri":"/missing"}
@@ -171,7 +177,11 @@ async fn final_report_publishes_bounded_case_dependency_evidence() {
         .unwrap();
 
     let evidence = read_dependency_evidence(&report_path).unwrap();
-    assert_eq!(evidence.clusters.len(), 2);
+    assert_eq!(evidence.clusters.len(), 3);
+    assert_eq!(
+        evidence.case_event_counts["network"]["unrecorded_endpoint"],
+        1
+    );
     assert_eq!(evidence.case_event_counts["http"]["unmatched_target"], 1);
     assert_eq!(
         evidence.case_event_counts["memcached"]["unused_recorded"],
@@ -182,4 +192,11 @@ async fn final_report_publishes_bounded_case_dependency_evidence() {
             .unwrap()
             .contains("startup.internal")
     );
+    let network = evidence
+        .clusters
+        .iter()
+        .find(|cluster| cluster.protocol == "network")
+        .unwrap();
+    assert_eq!(network.endpoint.as_ref().unwrap().host, "breeze.recording");
+    assert_eq!(network.endpoint.as_ref().unwrap().port, 9301);
 }

@@ -489,6 +489,7 @@ mod tests {
         )
         .await
         .unwrap();
+        write_test_recording_network_manifest(&case_dir);
         let dns_socket = UdpSocket::bind("127.0.0.1:0").await.unwrap();
         let dns_addr = dns_socket.local_addr().unwrap();
         let runtime = ReplayRuntime::load(
@@ -815,6 +816,7 @@ mod tests {
         case_dir: &Path,
         report_path: Option<PathBuf>,
     ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        write_test_recording_network_manifest(case_dir);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let runtime = ReplayRuntime::load(
@@ -872,6 +874,7 @@ mod tests {
         control_socket_path: PathBuf,
         selected_case_ids: Vec<String>,
     ) -> (SocketAddr, Vec<tokio::task::JoinHandle<()>>) {
+        write_test_recording_network_manifest(case_dir);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let runtime = Arc::new(

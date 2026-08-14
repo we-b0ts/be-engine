@@ -40,8 +40,9 @@ pub use dirty_evidence::{
 };
 pub use evidence::{
     E2eCaseResponseDifference, E2eCaseResponseDifferences, E2eDependencyCorrelation,
-    E2eSourceValueCount, E2eSourceVariation, query_e2e_case_response_differences,
-    query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
+    E2eSourceValueCount, E2eSourceVariation, E2eTargetLog, E2eTargetRuntimeDiagnostics,
+    query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
+    query_e2e_source_variation, query_e2e_target_runtime_diagnostics,
 };
 pub(crate) use execute::recover_focused_e2e_api;
 pub use execute::{abort_e2e_run, recover_e2e_run, run_e2e_api, run_e2e_round};

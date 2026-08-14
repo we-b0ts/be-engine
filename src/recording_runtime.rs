@@ -1,9 +1,13 @@
 use std::path::PathBuf;
+use std::pin::Pin;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::task::JoinSet;
+use tokio::time::Sleep;
 use tracing::{info, warn};
 
+use crate::network_probe::{CASE_LIMIT_SHUTDOWN_GRACE, PreflightProbeKind};
 use crate::recording_completion::RecordingCompletionReason;
 use crate::recording_control::RecordingControlServer;
 use crate::{AppState, dns_mock, gateway, proxy, recorder, tcp_gateway, udp_gateway};
@@ -98,6 +102,7 @@ impl AppState {
         tokio::pin!(shutdown);
         let case_limit_completion = self.recorder().wait_for_explicit_api_case_limit();
         tokio::pin!(case_limit_completion);
+        let mut case_limit_grace = None;
         let run_result = loop {
             tokio::select! {
                 result = &mut shutdown => {
@@ -110,13 +115,33 @@ impl AppState {
                     self.quiesce_recording("shutdown_signal").await;
                     break Ok(());
                 }
-                _ = &mut case_limit_completion => {
+                _ = &mut case_limit_completion, if case_limit_grace.is_none() => {
+                    if let Some((probe_kind, grace)) =
+                        preflight_case_limit_shutdown_grace(self.inner.preflight_probe)
+                    {
+                        info!(
+                            probe_kind = probe_kind.matched_by(),
+                            grace_ms = grace.as_millis(),
+                            "preflight case limit reached; keeping Recorder available for the fixed probe grace period"
+                        );
+                        case_limit_grace = Some(Box::pin(tokio::time::sleep(grace)));
+                        continue;
+                    }
                     self.recorder()
                         .set_completion_reason(
                             RecordingCompletionReason::PerApiCaseLimitReached,
                         )
                         .await;
                     self.quiesce_recording("per_api_case_limit_reached").await;
+                    break Ok(());
+                }
+                _ = wait_for_optional_sleep(&mut case_limit_grace) => {
+                    self.recorder()
+                        .set_completion_reason(
+                            RecordingCompletionReason::PerApiCaseLimitReached,
+                        )
+                        .await;
+                    self.quiesce_recording("preflight_case_limit_grace_elapsed").await;
                     break Ok(());
                 }
                 joined = tasks.join_next(), if !tasks.is_empty() => {
@@ -190,6 +215,19 @@ impl AppState {
     }
 }
 
+fn preflight_case_limit_shutdown_grace(
+    preflight_probe: Option<PreflightProbeKind>,
+) -> Option<(PreflightProbeKind, Duration)> {
+    preflight_probe.map(|kind| (kind, CASE_LIMIT_SHUTDOWN_GRACE))
+}
+
+async fn wait_for_optional_sleep(sleep: &mut Option<Pin<Box<Sleep>>>) {
+    match sleep {
+        Some(sleep) => sleep.await,
+        None => std::future::pending().await,
+    }
+}
+
 async fn shutdown_signal() -> Result<()> {
     #[cfg(unix)]
     {
@@ -205,4 +243,18 @@ async fn shutdown_signal() -> Result<()> {
     #[cfg(not(unix))]
     tokio::signal::ctrl_c().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preflight_probe_adds_a_fixed_case_limit_shutdown_grace() {
+        assert_eq!(
+            preflight_case_limit_shutdown_grace(Some(PreflightProbeKind::JavaTruststore)),
+            Some((PreflightProbeKind::JavaTruststore, Duration::from_secs(15)))
+        );
+        assert_eq!(preflight_case_limit_shutdown_grace(None), None);
+    }
 }

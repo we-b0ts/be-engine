@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use super::{
-    BREEZE_NO_FALLBACK, COMPARISON_TARGET_NETWORK, HTTPS_PROBE, MANAGER, PLATFORM_MOUNTS,
-    PREFLIGHT_BUSINESS_INPUT, RECORDER_RUNTIME,
+    COMPARISON_TARGET_NETWORK, HTTPS_PROBE, MANAGER, PLATFORM_MOUNTS, PREFLIGHT_BUSINESS_INPUT,
+    RECORDER_RUNTIME,
 };
 
 pub(super) fn stage_assets(target_root: &Path) -> Result<PathBuf> {
@@ -24,7 +24,6 @@ pub(super) fn stage_assets(target_root: &Path) -> Result<PathBuf> {
     )?;
     write_asset(&root.join("recorder-runtime.sh"), RECORDER_RUNTIME, 0o600)?;
     write_asset(&root.join("platform-mounts.sh"), PLATFORM_MOUNTS, 0o600)?;
-    write_asset(&root.join("brz-no-fallback.sh"), BREEZE_NO_FALLBACK, 0o700)?;
     write_asset(
         &root.join("preflight-business-input.sh"),
         PREFLIGHT_BUSINESS_INPUT,

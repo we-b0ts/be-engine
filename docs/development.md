@@ -902,6 +902,9 @@ immediate snapshot. Version six keeps exact success counters while retaining
 at most `success_detail_limit` successful event details per category. Dirty
 event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
+The report's `unrecorded_targets` field contains exact rejected `host:port`
+targets. Any such event is dirty, is counted under aggregate `network` events,
+and is clustered as `network/unrecorded_endpoint` in dependency evidence.
 
 For a collection, multi-case selection, or multiple sessions, generate one
 deterministic coverage and dependency summary from the recording source root.
@@ -1339,9 +1342,9 @@ directories with their original `rw`/`ro` access. Docker-managed host files
 engine-managed Breeze mounts keep their existing shared behavior. Runtime mount
 copies are removed after their owning container or managed run stops.
 
-Environment names are an allowlist, not name/value assignments: the engine
-reads their values from Docker's source-container configuration and freezes
-them in the snapshot. A source default that is not present in Docker
+Source-derived environment names are an allowlist, not name/value assignments:
+the engine reads their values from Docker's source-container configuration and
+freezes them in the snapshot. A source default that is not present in Docker
 `Config.Env` cannot be discovered; declare its absolute path as a mount and let
 the application keep using that default. The engine does not rewrite such a
 default and does not infer startup inputs from target source code.
@@ -1353,13 +1356,17 @@ generic `TRAFFIC_E2E_CONFIG_DIR`, `TRAFFIC_E2E_TARGET_PORT`, or
 `TRAFFIC_E2E_REPLAY_CA_CERT_PATH` variables.
 
 When Breeze is configured, traffic-e2e also mounts `/data1/breeze/socks` and
-`/data1/breeze/snapshot` read-only. During Replay it mounts the public Replay
-CA at `/traffic-e2e/trust/replay-ca.pem`; when `replay_ca_environment` is
-declared it sets that application-owned variable to this path. Target TLS
-clients must add that certificate to their normal trust store without reading
-Replay sessions or private key material. The entrypoint must log to
-stdout/stderr, remain in the foreground, and stop cleanly on `SIGTERM`.
-traffic-e2e owns network namespaces, readiness, signals, and cleanup.
+`/data1/breeze/snapshot` read-only and injects
+`MESH_CONNECT_HOST=breeze.recording` into the target without requiring a
+startup declaration. This engine-managed address keeps target Breeze clients
+on the same managed connection path as the adapted recording source. During
+Replay traffic-e2e mounts the public Replay CA at
+`/traffic-e2e/trust/replay-ca.pem`; when `replay_ca_environment` is declared it
+sets that application-owned variable to this path. Target TLS clients must add
+that certificate to their normal trust store without reading Replay sessions
+or private key material. The entrypoint must log to stdout/stderr, remain in
+the foreground, and stop cleanly on `SIGTERM`. traffic-e2e owns network
+namespaces, readiness, signals, and cleanup.
 
 Use the pinned shared Rust builder/runtime images and stable BuildKit cache
 mount IDs described by the backend-rewrite initialization contract. A source
@@ -1377,10 +1384,16 @@ local alias, and labels the resulting adaptor with that ID. A missing adaptor or
 one labeled for another source image or build-contract revision triggers a
 build/refresh. The manager never starts, stops, removes, or replaces the
 configured source container.
-Optional inputs such as the Breeze-only `.traffic-e2e/MeshConnectUtil.class`
-are owned and validated by the Dockerfile; the generic manager does not inspect
-them. The manager forms a non-recursive build context from regular files at the
-top of `.traffic-e2e`, so `.traffic-e2e/local/` is never included.
+Optional inputs such as the Breeze-only `.traffic-e2e/MeshConnectUtil.class`,
+`.traffic-e2e/mesh_switch_task.sh`, and
+`.traffic-e2e/recording-entrypoint.sh` are owned and validated by the
+Dockerfile; the generic manager does not inspect them. The Breeze adaptor
+entrypoint starts the switch task once in the background and then executes the
+source application as PID 1. The task sends the canonical switch set to
+`127.0.0.1:880` every three seconds throughout the container lifetime,
+regardless of connection failures or earlier success. The manager forms a
+non-recursive build context from regular files at the top of `.traffic-e2e`, so
+`.traffic-e2e/local/` is never included.
 The adaptor image's own `USER`, working directory, entrypoint, and command are
 used at runtime; the manager does not regenerate a Dockerfile or infer launch
 from `RUN_COMMAND`. Cleanup removes run-private containers but retains the
@@ -1405,11 +1418,25 @@ run the existing authoritative preflight:
 backend-rewrite init preflight
 ```
 
-It first builds and runs one disposable target container, then starts the
-recording-environment preflight, and finally starts a real Replay session with
-the fixed network probe image. Recording publishes exactly one marked
+It first validates the startup snapshot, then builds and statically inspects
+the target image without starting it, starts the recording-environment
+preflight, and finally starts a real Replay session with the fixed network
+probe image. Recording publishes exactly one marked
 `demo.test` Global dependency; Replay must consume it through fake DNS, reject
-unrecorded `example.com`, and block direct external egress for UID `998`.
+unrecorded `example.com:443` with `unrecorded_targets` evidence, and block
+direct external egress for UID `998`.
+For a Breeze-enabled project, recording preflight also resolves
+`breeze.recording` inside the source adaptor as UID `998` and fails unless the
+finalized `recording-network.json` proves Recorder observed that DNS query.
+The source launch does not separately wait for its source-local port `880`;
+the adaptor switch task keeps retrying that endpoint every three seconds while
+the configured HTTP Gateway readiness contract remains authoritative. When a
+selected case reaches its limit before the system HTTPS probe finishes,
+`--preflight-probe` keeps Recorder available for a fixed 15-second grace period
+without waiting for a probe-recorded condition. The Java probe command has a
+10-second execution bound. The ordinary duration timer starts only after the
+probe returns, so duration shutdown does not add another grace period.
+Ordinary recording and comparison do not repeat this initialization gate.
 When Motan is enabled, the business-input phase also prints the exact
 `motan-replay` copy command. A successfully published Motan case reports
 `recording.motan.status: verified`. If the window observes no Motan request,
@@ -1427,8 +1454,12 @@ published Motan case or `not_observed` when that recording still contains no
 Motan request. Gateway errors and failed admitted cases make the recording
 command fail instead of silently completing.
 
-Full success returns overall `status: passed` with separate `target_container`,
-`recording`, and `replay_network` results. A failure prints bounded JSON
+Full success returns overall `status: passed` with separate `target_image`,
+`recording`, and `replay_network` results. Target identity, startup environment,
+mount access, listener, readiness, and stdout/stderr are validated after the
+target starts with recorded dependencies in each real Replay; the successful
+checks are written to `reports/target-runtime-checks.json`, while normal stop
+evidence proves clean shutdown and cleanup. A failure prints bounded JSON
 containing `status: failed`, the failing stage, and a reason, exits nonzero, and
 does not advance rewrite state. Manual `docker build`/`docker run` output is
 diagnostic only.
@@ -1600,6 +1631,7 @@ published inside that run:
 ```text
 <run-id>/traffic.jsonl
 <run-id>/recording-run.json
+<run-id>/recording-network.json
 <run-id>/errors.jsonl
 <run-id>/global-dependencies.jsonl
 <run-id>/global-dependencies-summary.json
@@ -1619,6 +1651,15 @@ Every newly published case contains `dependencies.jsonl` and
 dependencies. For a zero-dependency case, `dependencies.jsonl` is empty and
 the summary has `total_events: 0`. This distinguishes a confirmed empty
 dependency contract from missing capture evidence.
+
+Every finalized run also contains `recording-network.json`. It stores the
+deduplicated DNS names resolved by the source and the exact `host:port`
+endpoints actually reached through the TCP or UDP gateway. Replay requires
+this run-level manifest and does not derive a compatibility allowlist from
+semantic dependency files. A recording without the manifest must be recorded
+again. During Replay, an endpoint outside the manifest is rejected before
+protocol handling and reported as `访问了录制时没有访问过的域名:port` in the
+Replay report and bounded dependency evidence.
 
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`

@@ -40,9 +40,12 @@ mod memcached;
 mod model;
 mod motan;
 mod mysql;
+mod network_access;
 mod policy;
 mod redis;
 pub(crate) mod report;
+#[cfg(test)]
+mod test_support;
 
 use control::*;
 use dependencies::*;
@@ -53,8 +56,11 @@ use mysql::*;
 use policy::*;
 use report::*;
 pub(crate) use report::{BackgroundReclassification, reclassify_background_dependencies};
+#[cfg(test)]
+use test_support::write_test_recording_network_manifest;
 
 const SO_ORIGINAL_DST: libc::c_int = 80;
+pub(crate) const UNRECORDED_ENDPOINT_REASON: &str = "访问了录制时没有访问过的域名:port";
 
 #[derive(Debug, Clone)]
 pub struct ReplayConfig {
@@ -285,7 +291,10 @@ impl ReplayRuntime {
             }
         }
 
+        let recording_network_path =
+            network_access::apply_recorded_endpoint_allowlist(&root_dir, &mut targets)?;
         let targets = assign_fake_ips(targets, fake_cidr)?;
+        let occupied_fake_ips = targets.iter().map(|target| target.fake_ip).collect();
         if let Some(case_id) = &active_case_id
             && let Some(case) = cases.get_mut(case_id)
         {
@@ -347,6 +356,13 @@ impl ReplayRuntime {
             replay_policy,
             http_ignore_query_params,
             allowed_unused_http: config.allowed_unused_http,
+            recording_network_path: Some(recording_network_path),
+            fake_cidr,
+            unrecorded_domain_ips: BTreeMap::new(),
+            unrecorded_ip_domains: BTreeMap::new(),
+            occupied_fake_ips,
+            next_unrecorded_fake_offset: 1,
+            unrecorded_targets: Vec::new(),
         };
         let report_writer = ReplayReportWriter::new(config.report_path.clone());
         Ok(Self {
@@ -466,6 +482,13 @@ struct ReplayState {
     replay_policy: Option<ReplayPolicyRuntime>,
     http_ignore_query_params: Vec<String>,
     allowed_unused_http: Option<ReplayAllowedUnusedHttpConfig>,
+    recording_network_path: Option<PathBuf>,
+    fake_cidr: Ipv4Cidr,
+    unrecorded_domain_ips: BTreeMap<String, Ipv4Addr>,
+    unrecorded_ip_domains: BTreeMap<Ipv4Addr, String>,
+    occupied_fake_ips: BTreeSet<Ipv4Addr>,
+    next_unrecorded_fake_offset: u32,
+    unrecorded_targets: Vec<UnrecordedTargetReport>,
 }
 
 impl ReplayState {
@@ -496,7 +519,12 @@ impl ReplayState {
                 .global_path
                 .as_ref()
                 .map(|path| path.display().to_string()),
+            recording_network_path: self
+                .recording_network_path
+                .as_ref()
+                .map(|path| path.display().to_string()),
             targets: self.targets.clone(),
+            unrecorded_targets: self.unrecorded_targets.clone(),
             success_detail_limit: SUCCESS_DETAIL_LIMIT,
             connections: self.mysql.events.connections,
             connection_events: self.mysql.events.connection_events.clone(),
@@ -555,7 +583,21 @@ async fn handle_gateway_connection(
     report_writer: ReplayReportWriter,
     ca: Arc<MitmCa>,
 ) -> Result<()> {
-    let target = replay_target_for_stream(&stream, &state).await;
+    let target = match replay_destination_for_stream(&stream, &state).await {
+        ReplayDestination::Recorded(target) => Some(target),
+        ReplayDestination::Unrecorded(target) => {
+            let mut replay = state.lock().await;
+            replay.record_unrecorded_target(target.clone());
+            drop(replay);
+            report_writer.flush(state.clone()).await?;
+            return Err(anyhow!(
+                "target accessed dependency endpoint {}:{} that was not accessed during recording",
+                target.host,
+                target.port
+            ));
+        }
+        ReplayDestination::Unknown => None,
+    };
     match target.as_ref().map(|target| target.protocol) {
         Some(ReplayProtocol::Auto) => {
             let target = target.context("auto replay connection has no target")?;
@@ -627,6 +669,7 @@ async fn handle_gateway_connection(
         }
         None => {
             let registered_targets = state.lock().await.targets.len();
+            #[cfg(test)]
             if registered_targets == 0 {
                 return mysql::handle_connection(stream, peer_addr, None, state, report_writer)
                     .await;
@@ -642,16 +685,49 @@ async fn handle_gateway_connection(
     }
 }
 
-async fn replay_target_for_stream(
-    stream: &TcpStream,
-    state: &Arc<Mutex<ReplayState>>,
-) -> Option<ReplayTarget> {
-    let original = original_dst(stream).ok();
-    let state = state.lock().await;
-    replay_target_for_original(original, &state.targets)
+enum ReplayDestination {
+    Recorded(ReplayTarget),
+    Unrecorded(TargetKey),
+    Unknown,
 }
 
+async fn replay_destination_for_stream(
+    stream: &TcpStream,
+    state: &Arc<Mutex<ReplayState>>,
+) -> ReplayDestination {
+    let original = original_dst(stream).ok();
+    let state = state.lock().await;
+    if let Some(target) = exact_replay_target_for_original(original, &state.targets) {
+        return ReplayDestination::Recorded(target);
+    }
+    if let Some(SocketAddr::V4(addr)) = original
+        && let Some(target) = state.unrecorded_target_for(*addr.ip(), addr.port())
+    {
+        return ReplayDestination::Unrecorded(target);
+    }
+    #[cfg(test)]
+    if state.targets.len() == 1 {
+        return ReplayDestination::Recorded(state.targets[0].clone());
+    }
+    ReplayDestination::Unknown
+}
+
+#[cfg(test)]
 fn replay_target_for_original(
+    original: Option<SocketAddr>,
+    targets: &[ReplayTarget],
+) -> Option<ReplayTarget> {
+    if let Some(target) = exact_replay_target_for_original(original, targets) {
+        return Some(target);
+    }
+    if targets.len() == 1 {
+        let target = &targets[0];
+        return Some(target.clone());
+    }
+    None
+}
+
+fn exact_replay_target_for_original(
     original: Option<SocketAddr>,
     targets: &[ReplayTarget],
 ) -> Option<ReplayTarget> {
@@ -664,10 +740,6 @@ fn replay_target_for_original(
         {
             return Some(target.clone());
         }
-    }
-    if targets.len() == 1 {
-        let target = &targets[0];
-        return Some(target.clone());
     }
     None
 }

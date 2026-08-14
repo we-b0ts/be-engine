@@ -92,6 +92,8 @@ When Breeze is enabled, also create:
 
 ```text
 .traffic-e2e/MeshConnectUtil.class
+.traffic-e2e/mesh_switch_task.sh
+.traffic-e2e/recording-entrypoint.sh
 ```
 
 Generate `Dockerfile.recording` from the inspected source image and its actual
@@ -129,6 +131,34 @@ complete patch operation. At runtime set
 `MESH_CONNECT_HOST=breeze.recording` so the patched SDK connects to the managed
 Breeze container instead of source-local loopback.
 
+Also copy the bundled
+[`mesh_switch_task.sh`](../assets/mesh_switch_task.sh) and
+[`recording-entrypoint.sh`](../assets/recording-entrypoint.sh) byte-for-byte;
+their SHA-256 values are respectively
+`6a09a15106326c737d3b23fc880bcd9c52ea0f69868759f5bf3ee7cf05cdbeda`
+and
+`0df975b51ad68357a05c8fce444d42194de0afd8eca04b7be70a06da6ab3b473`.
+The Dockerfile must install both as executable files below `/usr/local/bin`,
+fail the build unless `nc` and `getent` are available, and make
+`recording-entrypoint.sh` the explicit adaptor entrypoint in front of the
+complete inspected source entrypoint and command. Preserve every original
+argument exactly. The wrapper
+starts `mesh_switch_task.sh` once in the background, then `exec`s the source
+application as the foreground container process. The task sends the canonical
+Mesh switch commands to `127.0.0.1:880` every three seconds for the complete
+container lifetime. Connection failures never terminate it, and it continues
+sending after successful responses. It logs only when the command result state
+changes so startup failures and later recovery remain visible in container
+stdout/stderr without an unbounded three-second log stream.
+
+The managed runtime supplies `TRAFFIC_E2E_BREEZE_NO_FALLBACK=true` by default
+for Breeze-enabled source adaptors. The wrapper consumes and unsets this
+system-owned variable before executing the source application. A caller's
+explicit `--brz-no-fallback false` disables the background task without
+changing the image entrypoint. Do not invoke the task from a Docker `RUN`
+instruction, wait for port `880` before starting it, or stop it after one
+successful iteration.
+
 Do not embed a Recorder CA, private key, credential, recording, or
 machine-local container state in the image. When Java is part of the source
 runtime, retain `keytool`, `/bin/sh`, and `java` and support a runtime-mounted
@@ -157,10 +187,10 @@ context does the same. Reuse an adaptor only when its source-image and build
 contract labels match the current inputs.
 
 The Dockerfile alone owns optional assets such as `MeshConnectUtil.class`,
-including their presence and validation; the generic managed runtime must not
-name, inspect, or validate those assets. It must not synthesize another
-project-specific Dockerfile or include `.traffic-e2e/local/` in the build
-context.
+`mesh_switch_task.sh`, and `recording-entrypoint.sh`, including their presence
+and validation; the generic managed runtime must not inspect or copy those
+assets. It must not synthesize another project-specific Dockerfile or include
+`.traffic-e2e/local/` in the build context.
 
 Do not create a Breeze Dockerfile or image in the target repository. When
 Breeze is enabled, the managed runtime uses the fixed
@@ -180,7 +210,7 @@ backend-rewrite init preflight \
 ```
 
 Do not create another target-validation command. `backend-rewrite init
-preflight` owns three ordered phases: `target_container`, defined below,
+preflight` owns three ordered phases: `target_image`, defined below,
 `recording`, and `replay_network`. Run it from the target repository after the
 generated configuration, `Dockerfile.recording`,
 `.traffic-e2e/Dockerfile.e2e`, and `.dockerignore` exist. The recording phase
@@ -203,11 +233,17 @@ come from the inspected source contract.
 3. Start the source adaptor with runtime inputs inspected from the configured,
    stopped source container and the explicit adaptor entrypoint. Mount the
    generated truststore read-only only when the system detected Java.
-4. Verify the source entrypoint runs as UID/GID `998:998`, its port
-   `880` listener is reachable without root or privileged-container execution,
-   Breeze is ready when enabled, the source readiness contract passes, and
-   Recorder admits cases.
-5. After source readiness, send exactly one GET to `https://demo.test/`. When
+4. Verify the source entrypoint runs as UID/GID `998:998`, Breeze is ready when
+   enabled, the configured source readiness contract passes, and Recorder
+   admits cases. Do not separately wait for port `880`; the Breeze switch task
+   owns its bounded three-second retry loop for that source-local endpoint.
+5. When Breeze is enabled, resolve `breeze.recording` explicitly inside the
+   source adaptor as UID/GID `998:998` after Recorder is ready. Require a
+   non-empty IPv4 result, then after finalization require
+   `recording-network.json` to contain the canonical `breeze.recording` DNS
+   observation. A local hosts-file result or another DNS path that Recorder did
+   not observe does not pass initialization.
+6. After source readiness, send exactly one GET to `https://demo.test/`. When
    the system detected Java, execute the bundled Java 8 class inside the source
    adaptor and require it to
    use the mounted Java truststore through `JAVA_TOOL_OPTIONS`, the same trust
@@ -216,28 +252,35 @@ come from the inspected source contract.
    anchor namespace with the public Recorder CA mounted read-only. Probe
    failure fails the phase; never fall back from the Java probe to the generic
    probe because doing so would mask a Java truststore defect.
-6. After the command reports
+7. After the command reports
    `phase = "preflight-business-input-required"`, admit the controlled request
    matching the configured HTTP gateway rule,
    using the rule's declared method without a separate read-only-method
    restriction. Finalize the disposable run and require a clean manifest with
    at least one published case and its source response.
-7. Require Recorder to publish exactly that successful `demo.test` exchange
+8. Require Recorder to publish exactly that successful `demo.test` exchange
    once in `global-dependencies.jsonl` with
    `global_dependency_reason = "preflight_probe"`, runtime phase, and
    `java_truststore` or `system_network` attribution. Do not enable full
    `traffic.jsonl`, accept an arbitrary HTTPS exchange, or synthesize Global
    evidence from another file.
-8. Start a disposable real Replay session over the recording run. In a
+   If the selected business case reaches its limit while this probe is still
+   starting, `--preflight-probe` keeps Recorder listeners available for one
+   fixed 15-second grace period before case-limit shutdown. This grace does not
+   wait for probe evidence and the Java probe command itself is bounded to 10
+   seconds, so a broken source container cannot hold shutdown indefinitely.
+9. Start a disposable real Replay session over the recording run. In a
    Replay-owned host network namespace, run the fixed network probe image as
    `998:998`: require `demo.test` to resolve to its assigned fake IP, return the
    recorded response, and consume one Global HTTP exchange; require
-   `example.com` to be absent from Replay targets and fail DNS resolution; and
-   require a direct real-IP egress attempt to be rejected. This phase does not
-   start the target or activate a business case. Stop Replay and remove the
-   namespace before returning.
-9. Await the final result. Do not infer success from probe output alone. Only
-   overall `status = "passed"` with all three phase results is authoritative.
+   `example.com:443` to be absent from recorded Replay targets, have its
+   connection rejected, and appear exactly once in `unrecorded_targets` with
+   the canonical unrecorded-endpoint reason; and require a direct real-IP
+   egress attempt to be rejected. This phase does not start the target or
+   activate a business case. Stop Replay and remove the namespace before
+   returning.
+10. Await the final result. Do not infer success from probe output alone. Only
+    overall `status = "passed"` with all three phase results is authoritative.
 
 Run this through the same managed recording machinery used by backend-rewrite
 for normal source recording, including Recorder, network isolation, the source
@@ -246,17 +289,17 @@ Keep its run identity and artifacts in a dedicated preflight area below
 `.traffic-e2e/local/preflight/<run-id>/`; never publish them as the workflow's
 standard recording, Replay, or comparison evidence. Success output reports
 `status = "passed"`, the isolated manifest, `published_cases`, exact Global
-probe verification, and the bounded Replay positive/negative/egress result.
-The command fails when no complete case is recorded, the required probe is not
-published exactly once, Replay cannot consume it, unrecorded DNS resolves, or
-external egress is available. The recording phase does not start the target;
-the preceding `target_container` phase starts it only for the bounded
-launch-contract check, while `replay_network` starts Replay and its probe but
-not the target. No phase initializes API inventory or
+probe verification, Breeze DNS verification when configured, and the bounded
+Replay positive/negative/egress result.
+The command fails when the target image cannot be built or violates its static
+image contract, no complete case is recorded, the required probe is not
+published exactly once, Replay cannot consume it, an unrecorded endpoint is
+not rejected with evidence, or external egress is available. No initialization phase starts the target;
+`replay_network` starts Replay and its probe but not the target. No phase initializes API inventory or
 advances coordinator workflow state. Do not invoke
 `backend-rewrite next` to manufacture this check. If image construction, source
-identity, readiness, CA truststore setup, request admission, case publication,
-finalization, or cleanup fails, initialization is incomplete.
+identity, source readiness, CA truststore setup, request admission, case
+publication, finalization, or cleanup fails, initialization is incomplete.
 
 ## Analyze Source Startup Reference Evidence
 
@@ -331,9 +374,10 @@ traffic-e2e. traffic-e2e owns `docker build`, `docker run`, readiness,
 `docker stop`, and `docker rm`.
 
 The target AI owns only the source-controlled Dockerfile, `.dockerignore`, and
-target or mock implementation. It invokes `backend-rewrite init preflight` and
-consumes its bounded result; direct Docker commands, AI narration, and
-self-reported checks are never initialization evidence.
+target or mock implementation. It invokes `backend-rewrite init preflight` for
+the build and static image contract, then consumes coordinator-owned Replay
+results for the runtime contract; direct Docker commands, AI narration, and
+self-reported checks are never evidence.
 
 ### Build One Reproducible Target Image
 
@@ -440,8 +484,8 @@ satisfy the configured readiness path/status, stay in the foreground, log to
 stdout/stderr, and exit cleanly on `SIGTERM`. It must not emulate
 business responses, dependencies, Replay, or Comparison. Replace it through
 ordinary product implementation later without changing the container
-contract. A runnable mock proves only initialization and launch integration;
-it is never API compatibility or workflow-completion evidence.
+contract. A mock that passes a real Replay proves only launch integration; it
+is never API compatibility or workflow-completion evidence.
 
 Replay and Comparison deliberately use different network policies around the
 same immutable target image. Replay permits only coordinator-managed Replay
@@ -470,51 +514,53 @@ Target code and configuration must never read cases, expected responses,
 dependency recordings, Replay sessions, reports, coordinator state, or request
 header encryption keys.
 
-### Target-Container Phase Of The Initialization Preflight
+### Target-Image Phase Of The Initialization Preflight
 
 As the first phase of the existing `backend-rewrite init preflight`,
-traffic-e2e builds `traffic-e2e/<project>-target:cache` and runs one disposable
-target-container check. Do not accept a successful image build as proof that
-its entrypoint can run. This is not a separate user-facing command. The system,
-not the target AI, performs every step below:
+traffic-e2e builds `traffic-e2e/<project>-target:cache` without starting its
+entrypoint. The system, not the target AI, performs every step below:
 
-1. Resolve the cache tag to its immutable image ID and create a run-private
-   internal Docker network with no external-network route.
-2. Verify the captured startup manifest and environment snapshot, then start
-   that image ID with `--user 998:998`, each declared source path mounted at the
-   same absolute destination read-only, each allowlisted environment value,
-   and the optional application-owned target-port variable. Pass no application
-   CLI arguments. Do not mount recordings, reports, source code, a build cache,
-   or a Replay CA private key.
-3. Verify the running foreground process has UID/GID `998:998`, every startup
-   mount is read-only, every declared environment name is present, no generic
-   `TRAFFIC_E2E_*` variable is present, the configured port is listening, and the configured
-   readiness path returns the configured final status. Use an external probe;
-   do not add curl or another probe tool to the target image.
-4. Read bounded `docker logs` output to confirm application output is on
-   stdout/stderr, send `SIGTERM` through the normal container stop operation,
-   require a clean exit within a bounded initialization timeout, and remove the
-   container and private network.
+1. Validate the immutable startup snapshot, pinned multi-stage Dockerfile,
+   required BuildKit caches, and root `.dockerignore` exclusions.
+2. Build the image from the target repository root, resolve the cache tag to
+   the exact immutable image ID produced by that build, and inspect that image.
+3. Require `linux/amd64`, default `USER 998:998`, a non-empty OCI entrypoint,
+   no default command arguments, and no persisted proxy or traffic-e2e secret
+   environment variables.
 
-When Breeze is configured, additionally provide the same managed
-`/data1/breeze/socks` and `/data1/breeze/snapshot` mounts that later runs use;
-the target or mock may ignore them until it owns a genuine Breeze client. Do
-not start Breeze merely to make this launch-contract preflight pass. Replay CA
-trust is not tested by a mock that emits no TLS traffic; validate it when a
-genuine target TLS client is first implemented.
+Fail initialization when the build or static image contract fails. The command
+returns one bounded structured result containing overall `status`, separate
+`target_image`, `recording`, and `replay_network` phase results, the immutable
+target image ID, named static checks, and one failure stage/reason when
+applicable. It starts `recording` only after `target_image` passes. Only overall
+system-reported `status = "passed"` is authoritative.
 
-Fail initialization when the build, identity, declared environment, mount,
-foreground lifetime, readiness, logging, signal handling, clean exit, or
-cleanup contract fails. Keep preflight state below `.traffic-e2e/local/` and
-never publish it as recording, Replay, Comparison, or migration evidence.
-The command returns one bounded structured result containing overall `status`,
-separate `target_container` and `recording` phase results, the immutable target
-`image_id`, each named target check, cleanup status, and one failure
-stage/reason when applicable. It starts `recording` only after
-`target_container` passes. Only overall system-reported `status = "passed"` is
-authoritative. The target AI may repair the named source-controlled cause and
-invoke the same command again; it must not substitute manual Docker output or
-its own conclusion.
+### Target Runtime Checks During Replay
+
+Do not start the target in a dependency-free initialization namespace. A
+completed implementation may require Vintage or another dynamic startup
+dependency, so that launch would be neither stable nor representative. Every
+real Replay starts the immutable target image only after Replay dependencies
+are ready, then the coordinator verifies:
+
+1. PID 1 runs as UID/GID `998:998`; declared startup environment is present;
+   generic `TRAFFIC_E2E_*` environment is absent; and `MESH_CONNECT_HOST` is
+   present for Breeze-enabled targets.
+2. Declared startup mounts, the public Replay CA, and managed Breeze mounts
+   when enabled are present with the required access mode.
+3. The configured readiness path reaches its final status and the target is
+   listening on `0.0.0.0` at the configured port.
+4. Bounded stdout/stderr output is available. At the end of Replay, normal
+   `SIGTERM` shutdown exits cleanly and the target container and namespace are
+   removed.
+
+The run stores the successful launch checks in
+`reports/target-runtime-checks.json`; target start, bounded logs, runtime state,
+and stop evidence remain in the same Replay report directory. A failed runtime
+check fails that Replay and is returned through the normal implementation
+repair path. The target AI may repair the named source-controlled cause and
+rerun the coordinator-issued Replay command; it must not substitute manual
+Docker output or its own conclusion.
 
 ## Initialization Completion
 
@@ -526,9 +572,12 @@ Do not report initialization complete until all of the following are true:
   runtime secrets or generated trust material as
   `traffic-e2e/<project>-recording:cache`, bound to the configured source
   container's immutable image ID;
-- when Breeze is enabled, `.traffic-e2e/MeshConnectUtil.class` exactly matches
-  the bundled asset, and its replacement in the source Breeze SDK JAR is
-  verified byte-for-byte;
+- when Breeze is enabled, `.traffic-e2e/MeshConnectUtil.class`,
+  `.traffic-e2e/mesh_switch_task.sh`, and
+  `.traffic-e2e/recording-entrypoint.sh` exactly match the bundled assets; the
+  class replacement in the source Breeze SDK JAR is verified byte-for-byte,
+  and the adaptor entrypoint starts the permanent three-second Mesh switch loop
+  asynchronously before executing the source application;
 - the repository `.gitignore` contains the root-scoped
   `/.traffic-e2e/local/` entry;
 - `.traffic-e2e/Dockerfile.e2e` exists, uses the pinned builder and target
@@ -540,18 +589,19 @@ Do not report initialization complete until all of the following are true:
 - the built target image defaults to `998:998`, contains its executable OCI
   entrypoint, and contains no source, build cache, credential, generated trust,
   recording, or `.traffic-e2e/local/` content;
-- the system reports `status = "passed"` for the disposable target-container
-  preflight, including the declared environment and mounts, UID/GID `998:998`,
-  configured listening port and readiness result, stdout/stderr logging,
-  bounded `SIGTERM` shutdown, and complete cleanup; an explicit mock is allowed
-  but is not business evidence;
+- the system reports `target_image.status = "passed"` for the startup snapshot,
+  target build, and static image contract, including the immutable image ID,
+  `linux/amd64`, default UID/GID `998:998`, OCI entrypoint, and environment
+  constraints;
 - the disposable recording preflight passed with the adapted source process
   running as `998:998`, system-owned Java probe execution and truststore setup
   completed when applicable, exactly one `demo.test` probe published as a
-  Global dependency, and one cleanly published case;
+  Global dependency, one cleanly published case, and, when Breeze is enabled,
+  a successful `breeze.recording` lookup observed in `recording-network.json`;
 - the disposable Replay network preflight consumed that Global probe through
-  its assigned fake IP, blocked DNS for unrecorded `example.com`, rejected
-  direct external egress for UID `998`, and completed cleanup;
+  its assigned fake IP, rejected unrecorded `example.com:443` with canonical
+  endpoint evidence, rejected direct external egress for UID `998`, and
+  completed cleanup;
 - one disposable source-adaptor startup was analyzed for configuration and
   Vintage access, background destinations and counts, and local-cache loading
   or refresh behavior, with temporary findings summarized only in the ignored
@@ -560,9 +610,10 @@ Do not report initialization complete until all of the following are true:
   recordings, or `.traffic-e2e/local/` content.
 
 Initialization ends after these repository requirements are delivered. It
-leaves no target running and does not start Replay, compare, or invoke or
-advance the `backend-rewrite next` workflow. Its disposable source recording
-and target-container run exist only to validate the initialized environments.
+does not start the target, compare, or invoke or advance the `backend-rewrite
+next` workflow. Its disposable source recording and Replay network probe exist
+only to validate the initialized recording environment. The first real Replay
+that starts a target validates the runtime launch contract.
 
 ## Optional Initialization PR
 
@@ -580,10 +631,12 @@ If the user confirms:
 2. Keep the initialization changes on a separate feature branch. The source
    branch must not be `dev-migration`.
 3. Commit only the three generated configuration files,
-   `Dockerfile.recording`, the Breeze-only `.traffic-e2e/MeshConnectUtil.class`
-   when applicable, `.traffic-e2e/Dockerfile.e2e`, the root `.dockerignore`, the
-   root-scoped `.gitignore` update, and any minimal target scaffold required for
-   its release build. Exclude unrelated work and all `.traffic-e2e/local/`
+   `Dockerfile.recording`, the Breeze-only `.traffic-e2e/MeshConnectUtil.class`,
+   `.traffic-e2e/mesh_switch_task.sh`, and
+   `.traffic-e2e/recording-entrypoint.sh` when applicable,
+   `.traffic-e2e/Dockerfile.e2e`, the root `.dockerignore`, the root-scoped
+   `.gitignore` update, and any minimal target scaffold required for its
+   release build. Exclude unrelated work and all `.traffic-e2e/local/`
    content.
 4. Push the necessary branches and create a PR whose target branch is
    `dev-migration`. Report the branch names and PR URL to the user.

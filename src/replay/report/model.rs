@@ -18,7 +18,10 @@ pub(in crate::replay) struct ReplayReport {
     pub(in crate::replay) selected_case_ids: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::replay) global_dependencies_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) recording_network_path: Option<String>,
     pub(in crate::replay) targets: Vec<ReplayTarget>,
+    pub(in crate::replay) unrecorded_targets: Vec<UnrecordedTargetReport>,
     pub(in crate::replay) success_detail_limit: usize,
     pub(in crate::replay) connections: usize,
     pub(in crate::replay) connection_events: Vec<ConnectionReport>,
@@ -60,9 +63,11 @@ impl ReplayReport {
     }
 
     pub(in crate::replay) fn is_dirty(&self) -> bool {
-        self.unmatched_queries
-            .iter()
-            .any(|query| query.case_id.is_some())
+        !self.unrecorded_targets.is_empty()
+            || self
+                .unmatched_queries
+                .iter()
+                .any(|query| query.case_id.is_some())
             || self
                 .unsupported_commands
                 .iter()
@@ -88,9 +93,13 @@ impl ReplayReport {
     }
 
     pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {
-        self.unmatched_queries
+        self.unrecorded_targets
             .iter()
-            .any(|query| query.case_id.as_deref() == Some(case_id))
+            .any(|target| target.case_id.as_deref() == Some(case_id))
+            || self
+                .unmatched_queries
+                .iter()
+                .any(|query| query.case_id.as_deref() == Some(case_id))
             || self
                 .unsupported_commands
                 .iter()
@@ -116,6 +125,14 @@ impl ReplayReport {
             || self.protocols.kafka.case_is_dirty(case_id)
             || self.protocols.motan.case_is_dirty(case_id)
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(in crate::replay) struct UnrecordedTargetReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::replay) case_id: Option<String>,
+    pub(in crate::replay) target: TargetKey,
+    pub(in crate::replay) reason: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

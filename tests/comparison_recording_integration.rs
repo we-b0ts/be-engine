@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::io::{Read as _, Write as _};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -28,9 +29,12 @@ use traffic_e2e::{
 };
 
 // Config accepts concrete listen addresses, so free_addr() releases its socket
-// before the runtime binds it. Keep these integration tests exclusive to close
-// that port-reuse race while preserving parallelism in the rest of the suite.
+// before the runtime binds it. Keep these integration tests exclusive and
+// never recycle an allocated port within this process; otherwise consecutive
+// HTTP and Motan allocations can resolve to the same just-released port.
 static PORT_BIND_TEST_LOCK: Mutex<()> = Mutex::const_new(());
+static ALLOCATED_TEST_PORTS: LazyLock<StdMutex<HashSet<u16>>> =
+    LazyLock::new(|| StdMutex::new(HashSet::new()));
 
 #[tokio::test]
 async fn motan_requests_are_compared_with_the_same_case_lifecycle() {
@@ -962,10 +966,15 @@ async fn raw_request_bytes(address: SocketAddr, request: &[u8]) -> Vec<u8> {
 }
 
 fn free_addr() -> SocketAddr {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
+    loop {
+        let address = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        if ALLOCATED_TEST_PORTS.lock().unwrap().insert(address.port()) {
+            return address;
+        }
+    }
 }
 
 async fn wait_for_port(address: SocketAddr) {

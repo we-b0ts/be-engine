@@ -27,6 +27,7 @@ mod recorder;
 mod recording_api;
 mod recording_completion;
 mod recording_control;
+mod recording_network;
 mod recording_runtime;
 mod redis;
 mod replay;
@@ -129,10 +130,11 @@ pub use e2e_run::{
     E2eResponseRuleEvidence, E2eResponseUnavailableReason, E2eRunContext, E2eRunInitOptions,
     E2eRunInitResult, E2eRunPrepareOptions, E2eRunPrepareResult, E2eRunResult, E2eRunStatus,
     E2eSourcePreReadiness, E2eSourcePreReadinessEndpoint, E2eSourceValueCount, E2eSourceVariation,
-    E2eValueObservation, E2eValuePresence, E2eVerificationGates, StartupSnapshotRecaptureOptions,
-    StartupSnapshotRecaptureResult, abort_e2e_run, initialize_e2e_run, prepare_e2e_run,
-    query_e2e_case_response_differences, query_e2e_dependency_correlation, query_e2e_dirty_counts,
-    query_e2e_source_variation, recapture_startup_snapshot, recover_e2e_run,
+    E2eTargetLog, E2eTargetRuntimeDiagnostics, E2eValueObservation, E2eValuePresence,
+    E2eVerificationGates, StartupSnapshotRecaptureOptions, StartupSnapshotRecaptureResult,
+    abort_e2e_run, initialize_e2e_run, prepare_e2e_run, query_e2e_case_response_differences,
+    query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
+    query_e2e_target_runtime_diagnostics, recapture_startup_snapshot, recover_e2e_run,
     resolve_e2e_response_rule_evidence, resolve_single_e2e_response_rule_evidence, run_e2e_api,
     run_e2e_round, status_e2e_run,
 };
@@ -144,9 +146,10 @@ pub use platform::{
     ManagedRecordingOptions, ManagedRecordingPreflightOptions,
     ManagedRecordingPreflightRecordingResult, ManagedRecordingPreflightResult,
     ManagedRecordingRecoveryResult, ManagedRecordingResult, ManagedReplayNetworkPreflightResult,
-    MotanPreflightStatus, ReplayDirectEgressProbeResult, ReplayNegativeProbeResult,
-    ReplayPositiveProbeResult, drive_managed_recording_input, recover_managed_recording,
-    run_managed_recording, run_managed_recording_preflight,
+    ManagedTargetImagePreflightChecks, ManagedTargetImagePreflightResult, MotanPreflightStatus,
+    ReplayDirectEgressProbeResult, ReplayNegativeProbeResult, ReplayPositiveProbeResult,
+    drive_managed_recording_input, recover_managed_recording, run_managed_recording,
+    run_managed_recording_preflight,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
@@ -211,7 +214,7 @@ pub use rewrite::{
     status_rewrite_for_api, transfer_rewrite_worker, verify_rewrite_repair,
 };
 pub use startup::{StartupConfig, StartupSnapshotReport};
-pub use target_container::{TargetContainerChecks, TargetContainerPreflightResult, TargetImage};
+pub use target_container::TargetImage;
 pub use tls::MitmCa;
 
 type ProxyClient = Client<HttpsConnector<HttpConnector>, http_body_util::Full<bytes::Bytes>>;

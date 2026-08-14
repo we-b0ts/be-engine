@@ -16,6 +16,7 @@ Canonical published case layout:
 ```text
 recordings/<run-id>/traffic.jsonl
 recordings/<run-id>/recording-run.json
+recordings/<run-id>/recording-network.json
 recordings/<run-id>/errors.jsonl
 recordings/<run-id>/global-dependencies.jsonl
 recordings/<run-id>/global-dependencies-summary.json
@@ -33,6 +34,13 @@ Each recorder process creates one `YYYYMMDDHHMMSS` run directory. Do not scan
 may contain `.partial`, `.truncated`, and `recording-error.json` files. They are
 evidence for recorder configuration or recorder implementation fixes, not E2E
 replay fixtures.
+
+`recording-network.json` is the required Replay network boundary. It contains
+the deduplicated DNS names resolved during recording and the exact `host:port`
+endpoints actually accessed through the recording gateways. Replay rejects an
+endpoint not present in this manifest and reports
+`访问了录制时没有访问过的域名:port`. Do not reconstruct this allowlist from
+`dependencies.jsonl`; re-record runs created before this artifact existed.
 
 `uri-group` is usually built from the full request URI path joined by hyphens,
 for example `/api/users/list` becomes `api-users-list`. When the recorder rule
@@ -56,13 +64,14 @@ rewrite recorded files during replay work.
 
 Load order:
 
-1. `request.json`
-2. `expected-response.json`
-3. `dependencies.jsonl`
-4. `dependencies-summary.json` when present
-5. run-level `global-dependencies.jsonl` when present
-6. run-level `global-dependencies-summary.json` when present
-7. `dependencies-debug.jsonl` only for missing semantic data, parse warnings, or
+1. run-level `recording-network.json`
+2. `request.json`
+3. `expected-response.json`
+4. `dependencies.jsonl`
+5. `dependencies-summary.json` when present
+6. run-level `global-dependencies.jsonl` when present
+7. run-level `global-dependencies-summary.json` when present
+8. `dependencies-debug.jsonl` only for missing semantic data, parse warnings, or
    protocol debugging
 
 If canonical `request.json` or `expected-response.json` is missing and only

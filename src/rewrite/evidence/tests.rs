@@ -8,6 +8,31 @@ use crate::{
 };
 
 #[test]
+fn target_runtime_evidence_starts_with_container_diagnostics() {
+    let target = tempfile::tempdir().unwrap();
+    let mut state = crate::rewrite::test_state();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-target-runtime".to_string(),
+        kind: RewriteIssueKind::TargetRuntime,
+        owner: RewriteIssueOwner::TargetRuntime,
+        summary: "target did not become ready".to_string(),
+        pointer_pattern: None,
+        representative: None,
+        response_diagnosis: None,
+        possible_causes: Vec::new(),
+        observed_target_fingerprint: "target".to_string(),
+        attempt: 2,
+        comparison_observation: None,
+    });
+
+    let commands = commands(target.path(), &state);
+
+    assert!(commands[0].query_id.ends_with("target-runtime-diagnostics"));
+    assert!(commands[0].purpose.contains("target stdout"));
+}
+
+#[test]
 fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages() {
     let target = tempfile::tempdir().unwrap();
     let mut state = crate::rewrite::test_state();

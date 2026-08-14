@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use clap::ValueEnum;
 use serde::Serialize;
 
@@ -8,6 +10,7 @@ pub(crate) const NEGATIVE_URL: &str = "https://example.com/";
 pub(crate) const NEGATIVE_AUTHORITY: &str = "example.com";
 pub(crate) const SYSTEM_USER_AGENT: &str = "traffic-e2e-system-network-preflight";
 pub(crate) const JAVA_USER_AGENT: &str = "traffic-e2e-java-truststore-preflight";
+pub(crate) const CASE_LIMIT_SHUTDOWN_GRACE: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]

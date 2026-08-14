@@ -14,6 +14,9 @@ pub(super) fn read(report: &Value, path: &Path) -> Result<ReplayEventCounts> {
         );
     }
     Ok(ReplayEventCounts {
+        network: super::NetworkEventCounts {
+            unrecorded_targets: optional_len(report, "unrecorded_targets", path)?,
+        },
         mysql: MysqlEventCounts {
             connections: required_usize(report, "connections", path)?,
             builtin_queries: success_count(

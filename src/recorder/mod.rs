@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::config::{RecordingAccessPolicy, RecordingConfig, TrafficJsonlMode};
 use crate::recording_completion::ExplicitApiCaseLimits;
+use crate::recording_network::RecordedEndpoint;
 use crate::request_headers::RequestHeaderCapture;
 
 mod artifact_owner;
@@ -28,6 +29,7 @@ pub(crate) mod kafka;
 pub(crate) mod memcached;
 pub(crate) mod motan;
 pub(crate) mod mysql;
+mod network;
 pub(crate) mod readiness;
 pub(crate) mod redis;
 mod run;
@@ -64,6 +66,7 @@ pub struct Recorder {
     pub(crate) run_state: Arc<Mutex<RecorderRunState>>,
     pub(crate) dependency_write_lock: Arc<Mutex<()>>,
     pub(crate) finalized_cases: Arc<Mutex<HashSet<Uuid>>>,
+    network_observations: Arc<Mutex<NetworkObservations>>,
     pub(crate) access_policy: RecordingAccessPolicy,
     explicit_api_case_limits: ExplicitApiCaseLimits,
     request_header_capture: RequestHeaderCapture,
@@ -205,6 +208,7 @@ impl Recorder {
             })),
             dependency_write_lock: Arc::new(Mutex::new(())),
             finalized_cases,
+            network_observations: Arc::new(Mutex::new(NetworkObservations::default())),
             access_policy,
             explicit_api_case_limits: ExplicitApiCaseLimits::new(recording_api_limits),
             request_header_capture,
@@ -268,6 +272,12 @@ impl Recorder {
             .await
             .with_context(|| format!("failed to write case recording file {}", path.display()))
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct NetworkObservations {
+    resolved_domains: BTreeSet<String>,
+    accessed_endpoints: BTreeSet<RecordedEndpoint>,
 }
 
 pub(crate) struct GlobalDependencyAttribution {

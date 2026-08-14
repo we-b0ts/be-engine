@@ -7,7 +7,9 @@ use serde::Deserialize;
 use tokio::process::Command;
 
 use super::build::validate_image_id;
-use super::model::{TargetStartEvidence, TargetStartOptions, TargetStopEvidence};
+use super::model::{
+    TargetRuntimeState, TargetStartEvidence, TargetStartOptions, TargetStopEvidence,
+};
 use super::startup_mounts;
 use super::{NETWORK_ANCHOR_IMAGE, TARGET_REPLAY_CA_PATH, TARGET_USER};
 use crate::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER};
@@ -15,6 +17,9 @@ use crate::{TRAFFIC_PROCESS_GID, TRAFFIC_PROCESS_UID, TRAFFIC_PROCESS_USER};
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(60);
 const STOP_SECONDS: &str = "15";
 const MANAGED_LABEL: &str = "com.weibo.traffic-e2e.managed=true";
+const BREEZE_CONNECT_HOST_ENVIRONMENT: &str = "MESH_CONNECT_HOST=breeze.recording";
+const TARGET_LOG_TAIL_LINES: &str = "2000";
+const MAX_TARGET_LOG_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -208,6 +213,9 @@ pub(crate) async fn start_target(options: TargetStartOptions<'_>) -> Result<Targ
     if has_environment {
         command.arg("--env-file").arg(&environment_file);
     }
+    if let Some(environment) = breeze_connect_host_environment(options.config.breeze_enabled) {
+        command.args(["--env", environment]);
+    }
     command.arg(&options.image.id);
     let output = docker_output(&mut command, "start target container").await;
     if let Err(error) = remove_environment_file(&environment_file, has_environment).await {
@@ -295,9 +303,11 @@ pub(crate) async fn verify_target_identity(container: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn verify_startup_mounts(
+pub(crate) async fn verify_runtime_mounts(
     container: &str,
     mounts: &[crate::startup::StartupSnapshotMount],
+    replay_ca: bool,
+    breeze_enabled: bool,
 ) -> Result<()> {
     let inspection = inspect_container(container).await?;
     ensure!(
@@ -314,6 +324,24 @@ pub(crate) async fn verify_startup_mounts(
             if expected.writable { "rw" } else { "ro" }
         );
     }
+    let managed_read_only_mounts = replay_ca
+        .then_some(TARGET_REPLAY_CA_PATH)
+        .into_iter()
+        .chain(
+            breeze_enabled
+                .then_some(["/data1/breeze/socks", "/data1/breeze/snapshot"])
+                .into_iter()
+                .flatten(),
+        );
+    for expected in managed_read_only_mounts {
+        ensure!(
+            inspection
+                .mounts
+                .iter()
+                .any(|mount| { Path::new(&mount.destination) == Path::new(expected) && !mount.rw }),
+            "target managed mount is missing or writable: {expected}"
+        );
+    }
     Ok(())
 }
 
@@ -321,6 +349,7 @@ pub(crate) async fn verify_startup_environment(
     container: &str,
     config: &crate::startup::StartupConfig,
     replay_ca: bool,
+    breeze_enabled: bool,
 ) -> Result<()> {
     let inspection = inspect_container(container).await?;
     ensure!(
@@ -346,7 +375,17 @@ pub(crate) async fn verify_startup_environment(
             "target container is missing configured startup environment {expected:?}"
         );
     }
+    if let Some(expected) = breeze_connect_host_environment(breeze_enabled) {
+        ensure!(
+            inspection.config.env.iter().any(|value| value == expected),
+            "Breeze-enabled target container is missing managed environment {expected:?}"
+        );
+    }
     Ok(())
+}
+
+fn breeze_connect_host_environment(enabled: bool) -> Option<&'static str> {
+    enabled.then_some(BREEZE_CONNECT_HOST_ENVIRONMENT)
 }
 
 pub(crate) async fn verify_listen_address(container: &str, port: u16) -> Result<()> {
@@ -364,10 +403,6 @@ pub(crate) async fn verify_listen_address(container: &str, port: u16) -> Result<
         "target is not listening on 0.0.0.0:{port}"
     );
     Ok(())
-}
-
-pub(crate) async fn is_running(container: &str) -> Result<bool> {
-    Ok(inspect_container(container).await?.state.running)
 }
 
 pub(crate) async fn bounded_logs(container: &str) -> Result<String> {
@@ -389,6 +424,64 @@ pub(crate) async fn bounded_logs(container: &str) -> Result<String> {
         logs.truncate(MAX_LOG_BYTES);
     }
     Ok(String::from_utf8_lossy(&logs).into_owned())
+}
+
+pub(crate) async fn capture_diagnostics(container: &str, reports_dir: &Path) -> Result<()> {
+    validate_name(container)?;
+    let output = docker_output(
+        Command::new("docker").args([
+            "logs",
+            "--timestamps",
+            "--tail",
+            TARGET_LOG_TAIL_LINES,
+            container,
+        ]),
+        "read target logs",
+    )
+    .await?;
+    ensure!(
+        output.status.success(),
+        "failed to read target logs: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    tokio::fs::write(
+        reports_dir.join("target.stdout.log"),
+        bounded_log(output.stdout),
+    )
+    .await
+    .context("failed to persist target stdout")?;
+    tokio::fs::write(
+        reports_dir.join("target.stderr.log"),
+        bounded_log(output.stderr),
+    )
+    .await
+    .context("failed to persist target stderr")?;
+
+    let inspection = inspect_container(container).await?;
+    let state = TargetRuntimeState {
+        running: inspection.state.running,
+        exit_code: inspection.state.exit_code,
+        oom_killed: inspection.state.oom_killed,
+    };
+    let mut payload =
+        serde_json::to_vec_pretty(&state).context("failed to serialize target runtime state")?;
+    payload.push(b'\n');
+    tokio::fs::write(reports_dir.join("target-state.json"), payload)
+        .await
+        .context("failed to persist target runtime state")?;
+    Ok(())
+}
+
+fn bounded_log(log: Vec<u8>) -> Vec<u8> {
+    if log.len() <= MAX_TARGET_LOG_BYTES {
+        return log;
+    }
+    let omitted = log.len() - MAX_TARGET_LOG_BYTES;
+    let marker = format!("[traffic-e2e omitted {omitted} earlier log bytes]\n");
+    let mut bounded = Vec::with_capacity(marker.len() + MAX_TARGET_LOG_BYTES);
+    bounded.extend_from_slice(marker.as_bytes());
+    bounded.extend_from_slice(&log[omitted..]);
+    bounded
 }
 
 pub(crate) async fn stop_target(target_root: &Path, container: &str) -> Result<TargetStopEvidence> {
@@ -554,34 +647,4 @@ async fn docker_output(command: &mut Command, action: &str) -> Result<std::proce
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn runtime_names_are_docker_safe() {
-        let name = runtime_name(
-            Path::new("/tmp/service graph"),
-            "record-comparison",
-            "20260806000000",
-            "target",
-        )
-        .unwrap();
-        assert_eq!(
-            name,
-            "traffic-e2e-service-graph-record-comparison-20260806000000-target"
-        );
-    }
-
-    #[test]
-    fn bind_mounts_reject_docker_mount_delimiters() {
-        assert!(bind_mount(Path::new("/tmp/with,comma"), "/data1/weibo/confs", false).is_err());
-        assert_eq!(
-            bind_mount(Path::new("/tmp/config"), "/data1/weibo/confs", false).unwrap(),
-            "type=bind,source=/tmp/config,target=/data1/weibo/confs,readonly"
-        );
-        assert_eq!(
-            bind_mount(Path::new("/tmp/config"), "/data1/weibo/confs", true).unwrap(),
-            "type=bind,source=/tmp/config,target=/data1/weibo/confs"
-        );
-    }
-}
+mod tests;

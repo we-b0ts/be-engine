@@ -564,7 +564,10 @@ start_comparison_source() {
     local network=$1
     load_runtime_spec "$source_inspect" recording recording image
     if "$breeze_enabled"; then
-        runtime_args+=(--env "MESH_CONNECT_HOST=${target_network_ip}")
+        runtime_args+=(
+            --env "MESH_CONNECT_HOST=${target_network_ip}"
+            --env "TRAFFIC_E2E_BREEZE_NO_FALLBACK=${brz_no_fallback}"
+        )
     fi
     require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
     docker run --detach --name "$source_name" --network "$network" \
@@ -690,12 +693,14 @@ start_recording_source() {
         fi
     fi
     if "$breeze_enabled"; then
-        runtime_args+=(--env MESH_CONNECT_HOST=breeze.recording)
+        runtime_args+=(
+            --env MESH_CONNECT_HOST=breeze.recording
+            --env "TRAFFIC_E2E_BREEZE_NO_FALLBACK=${brz_no_fallback}"
+        )
     fi
     docker run --detach --name "$source_name" --network "container:${anchor_name}" \
         "${runtime_args[@]}" "$adapter_image_id" >/dev/null
     source_started=true
-    wait_port 880 source "$source_name"
     docker exec "$source_name" /bin/sh -ec '
         test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998
         test "$(awk "/^Gid:/{print \$2}" /proc/1/status)" = 998
@@ -705,17 +710,10 @@ start_recording_source() {
     }
 }
 
-run_no_fallback() {
-    "$breeze_enabled" || return 0
-    "$brz_no_fallback" || return 0
-    env -u TRAFFIC_E2E_ENCRYPTION_KEY_B64 -u BASH_ENV \
-        "$TRAFFIC_E2E_PLATFORM_ASSETS/brz-no-fallback.sh"
-}
-
 run_preflight_https_probe() {
     [[ "$operation" == preflight ]] || return 0
     if "$source_uses_java"; then
-        docker exec "$source_name" /bin/sh -ec '
+        timeout --foreground 10 docker exec "$source_name" /bin/sh -ec '
             command -v java >/dev/null
             java -Djava.net.preferIPv4Stack=true -cp /traffic-e2e \
                 HttpsProbe https://demo.test/
@@ -738,6 +736,20 @@ run_preflight_https_probe() {
                 return 1
             }
     fi
+}
+
+run_preflight_breeze_dns_probe() {
+    [[ "$operation" == preflight ]] || return 0
+    "$breeze_enabled" || return 0
+    docker exec --user 998:998 "$source_name" /bin/sh -ec '
+        command -v getent >/dev/null
+        address=$(getent ahostsv4 breeze.recording | awk "NR == 1 { print \$1 }")
+        test -n "$address"
+        printf "Breeze DNS preflight resolved breeze.recording to %s\n" "$address" >&2
+    ' || {
+        printf 'error: Breeze preflight could not resolve breeze.recording as UID 998\n' >&2
+        return 1
+    }
 }
 
 start_recording_input() {
@@ -799,6 +811,9 @@ run_standard_recording() {
         "$anchor_image" >/dev/null
     anchor_started=true
     local -a recorder_command=(internal recorder-run --config /workspace/project.yaml --control-socket "$control_socket" --artifact-owner "$artifact_owner" --dns --run-id "$run_id")
+    if "$breeze_enabled"; then
+        recorder_command+=(--breeze)
+    fi
     if [[ "$operation" == preflight ]]; then
         if "$source_uses_java"; then
             recorder_command+=(--preflight-probe java-truststore)
@@ -849,8 +864,8 @@ run_standard_recording() {
         start_breeze "container:${anchor_name}"
     fi
     start_recording_source "$truststore"
-    run_no_fallback
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket "$control_socket"
+    run_preflight_breeze_dns_probe
     run_preflight_https_probe
     announce_preflight_business_input
     start_recording_input
@@ -916,7 +931,6 @@ run_comparison_recording() {
         start_breeze "container:${target_anchor_name}" "$target_network_ip"
     fi
     start_comparison_source "container:${anchor_name}"
-    run_no_fallback
     start_target
     wait_http "$target_origin" "$TRAFFIC_E2E_TARGET_READY_PATH" \
         "$TRAFFIC_E2E_TARGET_READY_STATUS" target "$target_name" \

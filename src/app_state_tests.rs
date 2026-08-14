@@ -2,9 +2,7 @@ use chrono::Utc;
 
 use super::*;
 
-#[tokio::test]
-async fn explicit_api_case_limit_stops_and_finalizes_the_recorder_runtime() {
-    let temp = tempfile::tempdir().unwrap();
+fn case_limit_test_config(temp: &tempfile::TempDir) -> AppConfig {
     let mut config = AppConfig::default();
     config.http.enabled = false;
     config.dns_mock.enabled = false;
@@ -17,6 +15,13 @@ async fn explicit_api_case_limit_stops_and_finalizes_the_recorder_runtime() {
     config.tls.ca_cert_path = temp.path().join("ca.pem");
     config.tls.ca_key_path = temp.path().join("ca-key.pem");
     config.dns_mock.registry_path = temp.path().join("fake-dns.json");
+    config
+}
+
+#[tokio::test]
+async fn explicit_api_case_limit_stops_and_finalizes_the_recorder_runtime() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = case_limit_test_config(&temp);
     let api = "GET /api/users/*".parse::<RecordingApi>().unwrap();
     let state = AppState::new_with_recording_apis(config, None, vec![api])
         .await
@@ -50,6 +55,45 @@ async fn explicit_api_case_limit_stops_and_finalizes_the_recorder_runtime() {
     assert_eq!(report["status"], "completed");
     assert_eq!(report["published_cases"], 1);
     assert_eq!(report["completion_reason"], "per_api_case_limit_reached");
+}
+
+#[tokio::test(start_paused = true)]
+async fn preflight_case_limit_keeps_the_runtime_alive_for_the_fixed_grace() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = case_limit_test_config(&temp);
+    let api = "GET /api/users/*".parse::<RecordingApi>().unwrap();
+    let state = AppState::new_with_recording_options(
+        config,
+        None,
+        vec![api],
+        None,
+        Some(PreflightProbeKind::JavaTruststore),
+    )
+    .await
+    .unwrap();
+    let runtime = tokio::spawn(state.clone().run());
+
+    state
+        .recorder()
+        .publish_case_for_api(
+            &CaseContext {
+                id: Uuid::new_v4(),
+                rule_name: "record-api".to_string(),
+                uri_group: Some("api-users-wildcard".to_string()),
+            },
+            Some("GET /api/users/*"),
+        )
+        .await
+        .unwrap();
+    tokio::task::yield_now().await;
+    assert!(!runtime.is_finished());
+
+    tokio::time::advance(std::time::Duration::from_secs(14)).await;
+    tokio::task::yield_now().await;
+    assert!(!runtime.is_finished());
+
+    tokio::time::advance(std::time::Duration::from_secs(1)).await;
+    runtime.await.unwrap().unwrap();
 }
 
 fn http_dependency(authority: &str, uri: &str) -> RecorderEvent {

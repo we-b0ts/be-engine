@@ -153,7 +153,11 @@ fn enrich_cluster(
     pre_readiness_counts: &BTreeMap<String, usize>,
 ) -> Result<E2eDirtyCluster> {
     let endpoint = cluster.endpoint.map(endpoint_from_replay);
-    let scope = "case";
+    let scope = if cluster.case_count == 0 {
+        "run"
+    } else {
+        "case"
+    };
     let cluster_id =
         stable_cluster_id(&cluster.protocol, endpoint.as_ref(), scope, &cluster.reason);
     let source_pre_readiness_interactions = endpoint
@@ -297,5 +301,29 @@ mod tests {
         assert_eq!(representative.case_id, "case-a");
         assert_eq!(representative.case_dir, PathBuf::from("/recording/case-a"));
         assert_eq!(representative.difference.kind, "unused_recorded");
+    }
+
+    #[test]
+    fn unscoped_network_cluster_is_run_scoped_without_a_representative() {
+        let cluster = ReplayDependencyCluster {
+            protocol: "network".to_string(),
+            endpoint: Some(ReplayDependencyEndpoint {
+                host: "breeze.recording".to_string(),
+                port: 9301,
+            }),
+            reason: "unrecorded_endpoint".to_string(),
+            count: 1,
+            case_count: 0,
+            case_ids: Vec::new(),
+            omitted_case_ids: 0,
+            operations: BTreeMap::from([("unknown".to_string(), 1)]),
+            omitted_operations: 0,
+            representative: None,
+        };
+
+        let cluster = enrich_cluster(cluster, &BTreeMap::new(), &BTreeMap::new()).unwrap();
+
+        assert_eq!(cluster.scope, "run");
+        assert!(cluster.representative.is_none());
     }
 }

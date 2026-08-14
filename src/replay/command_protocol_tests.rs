@@ -577,6 +577,7 @@ async fn unsafe_redis_evidence_prevents_replay_startup() {
     )
     .await
     .unwrap();
+    super::write_test_recording_network_manifest(&case_dir);
 
     let result = ReplayRuntime::load(
         MysqlReplayConfig {
@@ -618,6 +619,7 @@ async fn spawn_replay_with_background(
     report_path: Option<PathBuf>,
     process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    super::write_test_recording_network_manifest(case_dir);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let runtime = ReplayRuntime::load(

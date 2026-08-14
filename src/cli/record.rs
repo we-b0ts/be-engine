@@ -1,5 +1,6 @@
 use std::ffi::OsStr;
 use std::fs;
+use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
@@ -39,6 +40,9 @@ pub(super) struct RecordArgs {
     /// Attribute one exact successful system probe as a runtime Global dependency.
     #[arg(long, value_enum, hide = true)]
     preflight_probe: Option<PreflightProbeKind>,
+    /// Inject the managed Breeze recording endpoint into this Recorder run.
+    #[arg(long, hide = true)]
+    breeze: bool,
     /// Enable fixed-user local DNS and fake-IP interception.
     #[arg(long, default_value_t = true, action = ArgAction::SetTrue, overrides_with = "no_dns")]
     dns: bool,
@@ -61,6 +65,9 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
         );
     }
     let mut config = AppConfig::load(&args.config)?;
+    if args.breeze {
+        inject_managed_breeze_host(&mut config);
+    }
     if let Some(per_api_case_limit) = args.per_api_case_limit {
         config.override_per_api_case_limit_for_run(per_api_case_limit);
     }
@@ -90,6 +97,13 @@ pub(super) async fn run(args: RecordArgs) -> Result<()> {
         guard.disable();
     }
     result
+}
+
+fn inject_managed_breeze_host(config: &mut AppConfig) {
+    config
+        .dns_mock
+        .hosts
+        .insert("breeze.recording".to_string(), vec![Ipv4Addr::LOCALHOST]);
 }
 
 fn parse_run_id(value: &str) -> std::result::Result<String, String> {
@@ -412,6 +426,20 @@ mod tests {
                 .unwrap();
 
         assert!(cli.record.full_traffic_jsonl);
+    }
+
+    #[test]
+    fn managed_breeze_is_a_hidden_runtime_override() {
+        let cli =
+            TestCli::try_parse_from(["test", "--config", "project.yaml", "--breeze"]).unwrap();
+        assert!(cli.record.breeze);
+
+        let mut config = AppConfig::default();
+        inject_managed_breeze_host(&mut config);
+        assert_eq!(
+            config.dns_mock.hosts.get("breeze.recording"),
+            Some(&vec![Ipv4Addr::LOCALHOST])
+        );
     }
 
     #[test]

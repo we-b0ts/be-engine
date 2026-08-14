@@ -127,10 +127,11 @@ pub struct TcpGatewayConfig {
     pub record_http: bool,
     pub mitm_https: bool,
     pub https_ports: Vec<u16>,
+    #[serde(skip_serializing_if = "TcpProtocolDetectionConfig::is_default")]
     pub protocol_detection: TcpProtocolDetectionConfig,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct TcpProtocolDetectionConfig {
     pub enabled: bool,
@@ -140,7 +141,7 @@ pub struct TcpProtocolDetectionConfig {
     pub overrides: Vec<TcpProtocolOverrideConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct TcpProtocolOverrideConfig {
     pub host: String,
     pub port: u16,
@@ -459,6 +460,12 @@ impl Default for TcpProtocolDetectionConfig {
             kafka_port_hints: vec![9092],
             overrides: Vec::new(),
         }
+    }
+}
+
+impl TcpProtocolDetectionConfig {
+    fn is_default(&self) -> bool {
+        self == &Self::default()
     }
 }
 
@@ -794,6 +801,9 @@ mod tests {
             config.tcp_gateway.protocol_detection.overrides[0].protocol,
             TcpApplicationProtocol::Redis
         );
+        let rendered = serde_yaml::to_string(&config).unwrap();
+        assert!(rendered.contains("protocol_detection:"));
+        assert!(rendered.contains("host: cache.internal"));
     }
 
     #[test]

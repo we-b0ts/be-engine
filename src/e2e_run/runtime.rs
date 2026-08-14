@@ -6,6 +6,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
+use serde::Serialize;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio::process::{Child, Command};
 use uuid::Uuid;
@@ -21,6 +22,18 @@ const _: () = assert!(
     REPLAY_TARGET_HOST_NETWORK,
     "Replay target must retain the host namespace used by fake-IP interception"
 );
+
+#[derive(Debug, Serialize)]
+struct TargetRuntimeChecks {
+    status: &'static str,
+    process_identity: bool,
+    startup_snapshot: bool,
+    startup_environment: bool,
+    runtime_mount_access: bool,
+    listen_all_interfaces: bool,
+    readiness: bool,
+    stdout_stderr_logging: bool,
+}
 
 pub(super) fn spawn_replay(
     config: &ResolvedProjectConfig,
@@ -147,15 +160,67 @@ pub(super) async fn start_target_with_replay_ca(
     Ok(())
 }
 
+pub(super) async fn verify_target_runtime_contract(
+    config: &ResolvedProjectConfig,
+    layout: &RunLayout,
+    state: &ActiveRunState,
+) -> Result<()> {
+    let container = state
+        .target_container_name
+        .as_deref()
+        .context("active E2E state has no target container name")?;
+    let target = crate::target_container::TargetContainerConfig::from_project(
+        layout.target_root.clone(),
+        config,
+    );
+    crate::target_container::verify_target_identity(container).await?;
+    crate::target_container::verify_startup_environment(
+        container,
+        &target.startup,
+        true,
+        target.breeze_enabled,
+    )
+    .await?;
+    let snapshot = crate::startup::load_startup_snapshot(&layout.target_root, &target.startup)?;
+    crate::target_container::verify_runtime_mounts(
+        container,
+        snapshot.mounts(),
+        true,
+        target.breeze_enabled,
+    )
+    .await?;
+    crate::target_container::verify_listen_address(container, target.port).await?;
+    let logs = crate::target_container::bounded_logs(container).await?;
+    ensure!(
+        !logs.trim().is_empty(),
+        "target emitted no stdout or stderr after reaching Replay readiness"
+    );
+    store::write_json(
+        &layout.active_dir.join("reports/target-runtime-checks.json"),
+        &TargetRuntimeChecks {
+            status: "passed",
+            process_identity: true,
+            startup_snapshot: true,
+            startup_environment: true,
+            runtime_mount_access: true,
+            listen_all_interfaces: true,
+            readiness: true,
+            stdout_stderr_logging: true,
+        },
+    )?;
+    Ok(())
+}
+
 pub(super) async fn stop_target_runtime(
     layout: &RunLayout,
     state: &mut ActiveRunState,
 ) -> Result<()> {
     let container = state
         .target_container_name
-        .as_deref()
+        .clone()
         .context("active E2E state has no target container name")?;
-    let evidence = crate::target_container::stop_target(&layout.target_root, container).await?;
+    capture_target_diagnostics(layout, state).await;
+    let evidence = crate::target_container::stop_target(&layout.target_root, &container).await?;
     store::write_json(
         &layout.active_dir.join("reports/target-stop.json"),
         &evidence,
@@ -377,6 +442,7 @@ pub(super) async fn best_effort_stop(
         || state.target_container_name.is_some()
         || state.target_anchor_name.is_some()
     {
+        capture_target_diagnostics(layout, state).await;
         let names = [
             state.target_container_name.as_deref(),
             state.target_anchor_name.as_deref(),
@@ -409,6 +475,18 @@ pub(super) async fn best_effort_stop(
         }
     }
     state.replay_pid = None;
+}
+
+async fn capture_target_diagnostics(layout: &RunLayout, state: &mut ActiveRunState) {
+    let Some(container) = state.target_container_name.as_deref() else {
+        return;
+    };
+    if let Err(error) =
+        crate::target_container::capture_diagnostics(container, &layout.active_dir.join("reports"))
+            .await
+    {
+        state.push_error(format!("target diagnostics capture failed: {error:#}"));
+    }
 }
 
 #[cfg(test)]
