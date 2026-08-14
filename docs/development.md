@@ -903,9 +903,12 @@ immediate snapshot. Version six keeps exact success counters while retaining
 at most `success_detail_limit` successful event details per category. Dirty
 event details remain complete, and unused MySQL entries reference bounded SQL
 previews plus fingerprints instead of copying arbitrarily large SQL strings.
-The report's `unrecorded_targets` field contains exact rejected `host:port`
-targets. Any such event is dirty, is counted under aggregate `network` events,
-and is clustered as `network/unrecorded_endpoint` in dependency evidence.
+The report's `unrecorded_targets` field contains exact `host:port` targets to
+which the target sent payload even though they were not accessed during
+recording. DNS lookup and TCP connection establishment alone do not add an
+event. Any reported payload attempt is dirty, is counted under aggregate
+`network` events, and is clustered as `network/unrecorded_endpoint` in
+dependency evidence.
 
 For a collection, multi-case selection, or multiple sessions, generate one
 deterministic coverage and dependency summary from the recording source root.
@@ -1391,14 +1394,17 @@ local alias, and labels the resulting adaptor with that ID. A missing adaptor or
 one labeled for another source image or build-contract revision triggers a
 build/refresh. The manager never starts, stops, removes, or replaces the
 configured source container.
-Optional inputs such as the Breeze-only `.traffic-e2e/MeshConnectUtil.class`,
-`.traffic-e2e/mesh_switch_task.sh`, and
-`.traffic-e2e/recording-entrypoint.sh` are owned and validated by the
-Dockerfile; the generic manager does not inspect them. The Breeze adaptor
-entrypoint starts the switch task once in the background and then executes the
-source application as PID 1. The task sends the canonical switch set to
-`127.0.0.1:880` every three seconds throughout the container lifetime,
-regardless of connection failures or earlier success. The manager forms a
+The Breeze-only `.traffic-e2e/MeshConnectUtil.class` and
+`.traffic-e2e/CommonSwitcher.class` inputs are owned and validated by the
+Dockerfile; the generic manager does not inspect them. The SDK patch interprets
+the manager-injected non-blank
+`MESH_CONNECT_HOST` as an explicit TCP selection and ignores
+`mesh.unix.domain.socket.enable` for that managed run. It preserves every
+source Mesh selection switch, but disables automatic degrade and
+exception-to-TCP fallback after Mesh is selected. Mesh initialization failure
+retains the SDK's original behavior and is left to managed Breeze readiness and
+source startup diagnostics. The adaptor preserves the inspected source
+entrypoint and does not send commands to port `880`. The manager forms a
 non-recursive build context from regular files at the top of `.traffic-e2e`, so
 `.traffic-e2e/local/` is never included.
 The adaptor image's own `USER`, working directory, entrypoint, and command are
@@ -1409,6 +1415,18 @@ source-container runtime inputs, and fixed `998:998` source identity as standard
 recording, so cache-only interception observes both source and target traffic.
 Breeze itself always uses the centrally managed pinned image and is not built
 from a target-repository Dockerfile.
+
+Before focused Replay, the built-in target `replay-isolation` quality gate
+examines only Rust lines added relative to `delivery.pr_base`, including
+staged, unstaged, untracked, test, comment, and documentation lines. It does not
+parse Rust syntax. New `.trp.test` occurrences are always rejected. New
+case-insensitive `sample.test` or `demo.test` occurrences require an exact
+`--hardcode-ai-verified FILE:LINE:COLUMN` argument and a matching commit trailer
+that identifies the source repository revision and source file line where the
+same hardcode was verified. The target occurrence must already be committed at
+that exact position. See the backend-rewrite workflow reference for the
+canonical trailer format. Unchanged legacy occurrences are outside this
+added-line gate.
 
 The runner sends HTTP requests itself; the target image does not read cases or
 write response reports. The configured port is shared by the image
@@ -1430,14 +1448,14 @@ the target image without starting it, starts the recording-environment
 preflight, and finally starts a real Replay session with the fixed network
 probe image. Recording publishes exactly one marked
 `demo.test` Global dependency; Replay must consume it through fake DNS, reject
-unrecorded `example.com:443` with `unrecorded_targets` evidence, and block
-direct external egress for UID `998`.
+payload sent to unrecorded `example.com:443` with `unrecorded_targets`
+evidence, and block direct external egress for UID `998`.
 For a Breeze-enabled project, recording preflight also resolves
 `breeze.recording` inside the source adaptor as UID `998` and fails unless the
 finalized `recording-network.json` proves Recorder observed that DNS query.
-The source launch does not separately wait for its source-local port `880`;
-the adaptor switch task keeps retrying that endpoint every three seconds while
-the configured HTTP Gateway readiness contract remains authoritative. When a
+Source-local port `880` is not a preflight dependency and receives no managed
+switch commands; the configured HTTP Gateway readiness contract remains
+authoritative. When a
 selected case reaches its limit before the system HTTPS probe finishes,
 `--preflight-probe` keeps Recorder available for a fixed 15-second grace period
 without waiting for a probe-recorded condition. The Java probe command has a
@@ -1664,9 +1682,10 @@ deduplicated DNS names resolved by the source and the exact `host:port`
 endpoints actually reached through the TCP or UDP gateway. Replay requires
 this run-level manifest and does not derive a compatibility allowlist from
 semantic dependency files. A recording without the manifest must be recorded
-again. During Replay, an endpoint outside the manifest is rejected before
-protocol handling and reported as `访问了录制时没有访问过的域名:port` in the
-Replay report and bounded dependency evidence.
+again. During Replay, an endpoint outside the manifest may resolve and accept a
+TCP connection. If the target sends payload on that connection, Replay closes
+it before protocol handling and reports `访问了录制时没有访问过的域名:port` in
+the Replay report and bounded dependency evidence.
 
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`

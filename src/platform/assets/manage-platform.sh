@@ -48,7 +48,6 @@ unset TRAFFIC_E2E_ENCRYPTION_KEY_B64
 run_id=""
 duration_seconds=""
 baseline_recheck=false
-brz_no_fallback=""
 per_api_case_limit=""
 api_selectors=()
 while (($# > 0)); do
@@ -67,11 +66,6 @@ while (($# > 0)); do
             "$baseline_recheck" && exit 2
             baseline_recheck=true
             shift
-            ;;
-        --brz-no-fallback)
-            [[ -z "$brz_no_fallback" && $# -ge 2 ]] || exit 2
-            brz_no_fallback=$2
-            shift 2
             ;;
         --api)
             (($# >= 2)) || exit 2
@@ -92,10 +86,6 @@ done
 
 [[ "$duration_seconds" =~ ^[1-9][0-9]*$ ]] || {
     printf 'error: duration must be a positive integer\n' >&2
-    exit 2
-}
-[[ "$brz_no_fallback" == true || "$brz_no_fallback" == false ]] || {
-    printf 'error: brz-no-fallback must be true or false\n' >&2
     exit 2
 }
 if [[ -z "$run_id" ]]; then
@@ -566,7 +556,6 @@ start_comparison_source() {
     if "$breeze_enabled"; then
         runtime_args+=(
             --env "MESH_CONNECT_HOST=${target_network_ip}"
-            --env "TRAFFIC_E2E_BREEZE_NO_FALLBACK=${brz_no_fallback}"
         )
     fi
     require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
@@ -695,7 +684,6 @@ start_recording_source() {
     if "$breeze_enabled"; then
         runtime_args+=(
             --env MESH_CONNECT_HOST=breeze.recording
-            --env "TRAFFIC_E2E_BREEZE_NO_FALLBACK=${brz_no_fallback}"
         )
     fi
     docker run --detach --name "$source_name" --network "container:${anchor_name}" \

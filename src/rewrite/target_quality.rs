@@ -20,6 +20,7 @@ pub struct RewriteTargetQualityOptions {
     pub target_root: std::path::PathBuf,
     pub gate_id: String,
     pub api: RecordingApi,
+    pub hardcode_ai_verified: Vec<String>,
 }
 
 pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope> {
@@ -59,7 +60,11 @@ pub fn run(options: RewriteTargetQualityOptions) -> Result<RewriteActionEnvelope
         scoped.api
     );
 
-    let replay_isolation = replay_isolation::inspect(&target_root, &project.pr_base)?;
+    let replay_isolation = replay_isolation::inspect(
+        &target_root,
+        &project.pr_base,
+        &options.hardcode_ai_verified,
+    )?;
     ensure!(
         replay_isolation.passed(),
         "target replay isolation gate failed:\n{}",
@@ -365,6 +370,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             gate_id,
             api,
+            hardcode_ai_verified: Vec::new(),
         })
         .unwrap_err();
 
@@ -451,6 +457,7 @@ mod tests {
             target_root: target.path().to_path_buf(),
             gate_id,
             api,
+            hardcode_ai_verified: Vec::new(),
         })
         .unwrap();
         let value = serde_json::to_value(result).unwrap();

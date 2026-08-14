@@ -58,14 +58,6 @@ pub(super) struct ProjectPreflightArgs {
     /// Keep the disposable recording window open for at most this many seconds.
     #[arg(long, default_value = "60")]
     duration_seconds: NonZeroU64,
-    /// Apply the fixed Platform Mesh no-fallback commands after source readiness.
-    #[arg(
-        long,
-        default_value = "true",
-        action = clap::ArgAction::Set,
-        value_parser = parse_bool
-    )]
-    brz_no_fallback: bool,
     /// Record only this API; repeat for multiple METHOD/path selectors.
     #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
     apis: Vec<RecordingApi>,
@@ -111,7 +103,6 @@ pub(super) async fn run(target_root: PathBuf, args: ProjectInitArgs, pretty: boo
                 let result = run_managed_recording_preflight(ManagedRecordingPreflightOptions {
                     target_root,
                     duration_seconds: args.duration_seconds,
-                    breeze_no_fallback: args.brz_no_fallback,
                     apis: args.apis,
                     per_api_case_limit: Some(args.per_api_case_limit),
                 })
@@ -197,14 +188,6 @@ impl From<RepositoryConfigInitResult> for ProjectInitReport {
             target_runtime_contract: result.target_runtime_contract,
             preflight_command: result.preflight_command,
         }
-    }
-}
-
-fn parse_bool(value: &str) -> std::result::Result<bool, String> {
-    match value {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err("value must be literal true or false".to_string()),
     }
 }
 

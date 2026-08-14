@@ -3,12 +3,18 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
+use tokio::net::TcpStream;
 
 use super::{
     ReplayProtocol, ReplayState, ReplayTarget, TargetKey, find_upward, normalize_host,
     register_replay_target,
 };
 use crate::recording_network::{RECORDING_NETWORK_FILENAME, RecordingNetworkManifest};
+
+pub(super) async fn wait_for_unrecorded_payload(stream: &TcpStream) -> Result<bool> {
+    let mut first_byte = [0_u8; 1];
+    Ok(stream.peek(&mut first_byte).await? > 0)
+}
 
 pub(super) fn apply_recorded_endpoint_allowlist(
     root_dir: &Path,
@@ -153,7 +159,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unknown_domain_gets_quarantine_ip_and_dirty_endpoint_evidence() {
+    async fn unknown_domain_dns_gets_quarantine_ip_without_dirty_evidence() {
         let temp = tempfile::tempdir().unwrap();
         let case_dir = temp.path().join("case-a");
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -193,22 +199,14 @@ mod tests {
         let target = state.unrecorded_target_for(fake_ip, 9301).unwrap();
         assert_eq!(target.host, "new.example.test");
         assert_eq!(target.port, 9301);
-        state.record_unrecorded_target(target);
 
         let report = state.snapshot_report();
-        assert!(report.is_dirty());
-        assert_eq!(
-            report.unrecorded_targets[0].case_id.as_deref(),
-            Some("case-a")
-        );
-        assert_eq!(
-            report.unrecorded_targets[0].reason,
-            crate::replay::UNRECORDED_ENDPOINT_REASON
-        );
+        assert!(!report.is_dirty());
+        assert!(report.unrecorded_targets.is_empty());
     }
 
     #[tokio::test]
-    async fn recorded_domain_on_an_unrecorded_port_is_rejected() {
+    async fn recorded_domain_payload_on_an_unrecorded_port_is_reported_once() {
         let temp = tempfile::tempdir().unwrap();
         let case_dir = temp.path().join("case-a");
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -251,5 +249,31 @@ mod tests {
         state.record_unrecorded_target(target.clone());
         state.record_unrecorded_target(target);
         assert_eq!(state.snapshot_report().unrecorded_targets.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn unrecorded_connection_without_payload_is_not_an_exchange() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        drop(client);
+
+        assert!(!wait_for_unrecorded_payload(&server).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn first_payload_byte_marks_an_unrecorded_exchange() {
+        use tokio::io::AsyncWriteExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (server, _) = listener.accept().await.unwrap();
+        client.write_all(b"x").await.unwrap();
+
+        assert!(wait_for_unrecorded_payload(&server).await.unwrap());
     }
 }

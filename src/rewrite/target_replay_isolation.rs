@@ -1,30 +1,20 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use anyhow::{Context, Result};
-use proc_macro2::TokenTree;
+use anyhow::{Context, Result, ensure};
 use serde::Serialize;
-use syn::visit::{self, Visit};
-use syn::{Attribute, Item, Lit, LitByteStr, LitStr, Meta};
 
 pub(super) const GATE_NAME: &str = "replay-isolation";
-pub(super) const GATE_VERSION: &str = "replay-isolation-v2";
+pub(super) const GATE_VERSION: &str = "replay-isolation-v3";
 
 const MAX_REPORTED_VIOLATIONS: usize = 64;
-const IGNORED_DIRECTORIES: &[&str] = &[
-    ".git",
-    ".traffic-e2e",
-    "benches",
-    "examples",
-    "fixtures",
-    "node_modules",
-    "target",
-    "testdata",
-    "tests",
-    "vendor",
-];
+const SOURCE_EVIDENCE_TRAILER: &str = "Hardcode-Source-Evidence:";
+const IGNORED_DIRECTORIES: &[&str] = &[".git", ".traffic-e2e", "node_modules", "target", "vendor"];
+const NON_PRODUCTION_DIRECTORIES: &[&str] =
+    &["benches", "examples", "fixtures", "testdata", "tests"];
 
 #[derive(Debug, Serialize)]
 pub(super) struct ReplayIsolationReport {
@@ -32,6 +22,7 @@ pub(super) struct ReplayIsolationReport {
     gate: &'static str,
     status: ReplayIsolationStatus,
     scanned_files: usize,
+    scanned_added_lines: usize,
     violations: Vec<ReplayIsolationViolation>,
     omitted_violations: usize,
 }
@@ -68,105 +59,191 @@ struct ForbiddenMarker {
     required_change: &'static str,
 }
 
-const FORBIDDEN_MARKERS: &[ForbiddenMarker] = &[
+const ALL_RUST_FORBIDDEN_MARKERS: &[ForbiddenMarker] = &[ForbiddenMarker {
+    rule: "replay_hostname",
+    marker: ".trp.test",
+    reason: "code depends on a replay-only synthetic hostname",
+    required_change: "obtain the dependency address through genuine runtime configuration or source-compatible discovery",
+}];
+
+const PRODUCTION_FORBIDDEN_MARKERS: &[ForbiddenMarker] = &[
     ForbiddenMarker {
         rule: "traffic_e2e_environment",
         marker: "traffic_e2e_",
-        reason: "production code depends on a traffic-e2e-owned environment variable",
+        reason: "code depends on a traffic-e2e-owned environment variable",
         required_change: "declare an application-owned startup environment name in .traffic-e2e/project.yaml",
-    },
-    ForbiddenMarker {
-        rule: "replay_hostname",
-        marker: ".trp.test",
-        reason: "production code depends on a replay-only synthetic hostname",
-        required_change: "obtain the dependency address through genuine runtime configuration or source-compatible discovery",
     },
     ForbiddenMarker {
         rule: "fake_ip_range",
         marker: "198.18.",
-        reason: "production code depends on the replay fake-IP range",
+        reason: "code depends on the replay fake-IP range",
         required_change: "remove the replay address and use the dependency address supplied by the real runtime contract",
     },
     ForbiddenMarker {
         rule: "fake_ip_range",
         marker: "198.19.",
-        reason: "production code depends on the replay fake-IP range",
+        reason: "code depends on the replay fake-IP range",
         required_change: "remove the replay address and use the dependency address supplied by the real runtime contract",
     },
     ForbiddenMarker {
         rule: "local_runtime_path",
         marker: ".traffic-e2e/local",
-        reason: "production code reads traffic-e2e private runtime state",
+        reason: "code reads traffic-e2e private runtime state",
         required_change: "remove the private runtime-state dependency and use an application-owned input contract",
     },
     ForbiddenMarker {
         rule: "recording_artifact",
         marker: "expected-response.json",
-        reason: "production code consumes a replay or recording artifact",
+        reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
     },
     ForbiddenMarker {
         rule: "recording_artifact",
         marker: "expected-response-after.json",
-        reason: "production code consumes a replay or recording artifact",
+        reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
     },
     ForbiddenMarker {
         rule: "recording_artifact",
         marker: "dependencies.jsonl",
-        reason: "production code consumes a replay or recording artifact",
+        reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
     },
     ForbiddenMarker {
         rule: "recording_artifact",
         marker: "dependencies-debug.jsonl",
-        reason: "production code consumes a replay or recording artifact",
+        reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
     },
     ForbiddenMarker {
         rule: "recording_artifact",
         marker: "assertions.json",
-        reason: "production code consumes a replay or recording artifact",
+        reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
     },
     ForbiddenMarker {
         rule: "recording_artifact",
         marker: "fake_dns_registry.json",
-        reason: "production code consumes a replay or recording artifact",
+        reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
     },
     ForbiddenMarker {
         rule: "recording_artifact",
         marker: "replay-progress.yaml",
-        reason: "production code consumes a replay or recording artifact",
+        reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
     },
     ForbiddenMarker {
         rule: "recording_artifact",
         marker: "comparison-progress.yaml",
-        reason: "production code consumes a replay or recording artifact",
+        reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
     },
 ];
 
-pub(super) fn inspect(target_root: &Path, pr_base: &str) -> Result<ReplayIsolationReport> {
-    let source_files = changed_production_rust_files(target_root, pr_base)?;
-    let mut violations = Vec::new();
-    for source_file in &source_files {
-        let source = fs::read_to_string(source_file)
-            .with_context(|| format!("failed to read production Rust source {source_file:?}"))?;
-        let syntax = syn::parse_file(&source)
-            .with_context(|| format!("failed to parse production Rust source {source_file:?}"))?;
-        let relative = source_file
-            .strip_prefix(target_root)
-            .unwrap_or(source_file)
-            .to_path_buf();
-        let mut visitor = ReplayIsolationVisitor {
-            file: relative,
-            violations: &mut violations,
-        };
-        visitor.visit_file(&syntax);
+const SOURCE_HARDCODE_MARKERS: &[ForbiddenMarker] = &[
+    ForbiddenMarker {
+        rule: "source_hardcoded_domain",
+        marker: "sample.test",
+        reason: "new code hardcodes a source-sensitive public domain without source-code proof",
+        required_change: "prove the same value is hardcoded in the source repository, add a Hardcode-Source-Evidence commit trailer, and rerun with --hardcode-ai-verified FILE:LINE:COLUMN",
+    },
+    ForbiddenMarker {
+        rule: "source_hardcoded_domain",
+        marker: "demo.test",
+        reason: "new code hardcodes a source-sensitive public domain without source-code proof",
+        required_change: "prove the same value is hardcoded in the source repository, add a Hardcode-Source-Evidence commit trailer, and rerun with --hardcode-ai-verified FILE:LINE:COLUMN",
+    },
+];
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+struct SourceLocation {
+    file: PathBuf,
+    line: usize,
+    column: usize,
+}
+
+impl fmt::Display for SourceLocation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}:{}:{}",
+            self.file.display(),
+            self.line,
+            self.column
+        )
     }
+}
+
+struct AddedLine {
+    file: PathBuf,
+    line: usize,
+    text: String,
+}
+
+struct AddedRustLines {
+    merge_base: String,
+    scanned_files: usize,
+    lines: Vec<AddedLine>,
+}
+
+pub(super) fn inspect(
+    target_root: &Path,
+    pr_base: &str,
+    hardcode_ai_verified: &[String],
+) -> Result<ReplayIsolationReport> {
+    let added = added_rust_lines(target_root, pr_base)?;
+    let approvals = parse_approvals(hardcode_ai_verified)?;
+    let mut violations = Vec::new();
+    let mut hardcode_matches = BTreeSet::new();
+
+    for added_line in &added.lines {
+        let lower = added_line.text.to_ascii_lowercase();
+        for marker in ALL_RUST_FORBIDDEN_MARKERS {
+            for byte_offset in marker_offsets(&lower, marker.marker) {
+                violations.push(violation(added_line, marker, byte_offset));
+            }
+        }
+        if is_production_rust_path(&added_line.file) {
+            for marker in PRODUCTION_FORBIDDEN_MARKERS {
+                for byte_offset in marker_offsets(&lower, marker.marker) {
+                    violations.push(violation(added_line, marker, byte_offset));
+                }
+            }
+        }
+        for marker in SOURCE_HARDCODE_MARKERS {
+            for byte_offset in marker_offsets(&lower, marker.marker) {
+                let location = location(added_line, byte_offset);
+                hardcode_matches.insert(location.clone());
+                if !approvals.contains(&location) {
+                    violations.push(violation(added_line, marker, byte_offset));
+                }
+            }
+        }
+    }
+
+    for approval in &approvals {
+        ensure!(
+            hardcode_matches.contains(approval),
+            "--hardcode-ai-verified {approval} does not match a newly added sample.test or demo.test occurrence"
+        );
+    }
+    if !approvals.is_empty() {
+        for approval in &approvals {
+            ensure!(
+                committed_hardcode_exists(target_root, approval)?,
+                "--hardcode-ai-verified {approval} must refer to a committed occurrence; commit the target line and its Hardcode-Source-Evidence trailer first"
+            );
+        }
+        let evidenced = source_evidence_locations(target_root, &added.merge_base)?;
+        for approval in &approvals {
+            ensure!(
+                evidenced.contains(approval),
+                "--hardcode-ai-verified {approval} requires commit trailer `Hardcode-Source-Evidence: {approval} <= SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE`"
+            );
+        }
+    }
+
     violations.sort();
     let omitted_violations = violations.len().saturating_sub(MAX_REPORTED_VIOLATIONS);
     violations.truncate(MAX_REPORTED_VIOLATIONS);
@@ -176,18 +253,162 @@ pub(super) fn inspect(target_root: &Path, pr_base: &str) -> Result<ReplayIsolati
         ReplayIsolationStatus::Failed
     };
     Ok(ReplayIsolationReport {
-        schema_version: 1,
+        schema_version: 2,
         gate: GATE_NAME,
         status,
-        scanned_files: source_files.len(),
+        scanned_files: added.scanned_files,
+        scanned_added_lines: added.lines.len(),
         violations,
         omitted_violations,
     })
 }
 
-fn changed_production_rust_files(target_root: &Path, pr_base: &str) -> Result<Vec<PathBuf>> {
+fn violation(
+    added_line: &AddedLine,
+    marker: &ForbiddenMarker,
+    byte_offset: usize,
+) -> ReplayIsolationViolation {
+    ReplayIsolationViolation {
+        file: added_line.file.clone(),
+        line: added_line.line,
+        column: column_at(&added_line.text, byte_offset),
+        rule: marker.rule,
+        matched: marker.marker,
+        reason: marker.reason,
+        required_change: marker.required_change,
+    }
+}
+
+fn location(added_line: &AddedLine, byte_offset: usize) -> SourceLocation {
+    SourceLocation {
+        file: added_line.file.clone(),
+        line: added_line.line,
+        column: column_at(&added_line.text, byte_offset),
+    }
+}
+
+fn column_at(value: &str, byte_offset: usize) -> usize {
+    value[..byte_offset].chars().count() + 1
+}
+
+fn marker_offsets(value: &str, marker: &str) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    let mut searched = 0;
+    while let Some(relative) = value[searched..].find(marker) {
+        let offset = searched + relative;
+        offsets.push(offset);
+        searched = offset + marker.len();
+    }
+    offsets
+}
+
+fn parse_approvals(raw: &[String]) -> Result<BTreeSet<SourceLocation>> {
+    let mut approvals = BTreeSet::new();
+    for raw_location in raw {
+        let location = parse_location(raw_location)
+            .with_context(|| format!("invalid --hardcode-ai-verified {raw_location:?}"))?;
+        ensure!(
+            approvals.insert(location),
+            "duplicate --hardcode-ai-verified {raw_location:?}"
+        );
+    }
+    Ok(approvals)
+}
+
+fn parse_location(raw: &str) -> Result<SourceLocation> {
+    let (file_and_line, column) = raw.rsplit_once(':').context("expected FILE:LINE:COLUMN")?;
+    let (file, line) = file_and_line
+        .rsplit_once(':')
+        .context("expected FILE:LINE:COLUMN")?;
+    let file = PathBuf::from(file);
+    ensure!(
+        is_safe_relative_rust_path(&file),
+        "file must be a relative Rust source path"
+    );
+    let line = line.parse::<usize>().context("line is not a number")?;
+    let column = column.parse::<usize>().context("column is not a number")?;
+    ensure!(line > 0, "line must be positive");
+    ensure!(column > 0, "column must be positive");
+    Ok(SourceLocation { file, line, column })
+}
+
+fn source_evidence_locations(
+    target_root: &Path,
+    merge_base: &str,
+) -> Result<BTreeSet<SourceLocation>> {
+    let range = format!("{merge_base}..HEAD");
+    let messages = git_text(target_root, &["log", "--format=%B%x00", &range])?;
+    let mut locations = BTreeSet::new();
+    for message in messages.split('\0') {
+        for line in message.lines() {
+            let Some(trailer) = line.trim().strip_prefix(SOURCE_EVIDENCE_TRAILER) else {
+                continue;
+            };
+            let (target, source) = trailer
+                .trim()
+                .split_once(" <= ")
+                .context("Hardcode-Source-Evidence must use `TARGET_FILE:LINE:COLUMN <= SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE`")?;
+            let target = parse_location(target.trim())
+                .context("invalid target location in Hardcode-Source-Evidence")?;
+            validate_source_evidence(source.trim())?;
+            locations.insert(target);
+        }
+    }
+    Ok(locations)
+}
+
+fn validate_source_evidence(value: &str) -> Result<()> {
+    let (repository, revision_and_source) = value
+        .rsplit_once('@')
+        .context("source evidence is missing SOURCE_REPOSITORY@SOURCE_REVISION")?;
+    let (revision, source_location) = revision_and_source
+        .split_once(':')
+        .context("source evidence is missing :SOURCE_FILE:LINE")?;
+    let (source_file, source_line) = source_location
+        .rsplit_once(':')
+        .context("source evidence is missing SOURCE_FILE:LINE")?;
+    ensure!(!repository.trim().is_empty(), "source repository is empty");
+    ensure!(
+        (7..=64).contains(&revision.len()) && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "source revision must be a 7-64 digit hexadecimal commit ID"
+    );
+    ensure!(!source_file.trim().is_empty(), "source file is empty");
+    ensure!(
+        source_line.parse::<usize>().is_ok_and(|line| line > 0),
+        "source line must be positive"
+    );
+    Ok(())
+}
+
+fn committed_hardcode_exists(target_root: &Path, location: &SourceLocation) -> Result<bool> {
+    let object = format!("HEAD:{}", location.file.display());
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .args(["show", &object])
+        .output()
+        .with_context(|| format!("failed to read committed target source {:?}", location.file))?;
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let source = String::from_utf8(output.stdout)
+        .with_context(|| format!("committed target source {:?} is not UTF-8", location.file))?;
+    let Some(line) = source.lines().nth(location.line - 1) else {
+        return Ok(false);
+    };
+    let lower = line.to_ascii_lowercase();
+    Ok(SOURCE_HARDCODE_MARKERS.iter().any(|marker| {
+        marker_offsets(&lower, marker.marker)
+            .into_iter()
+            .any(|offset| column_at(line, offset) == location.column)
+    }))
+}
+
+fn added_rust_lines(target_root: &Path, pr_base: &str) -> Result<AddedRustLines> {
     let base_ref = resolve_pr_base(target_root, pr_base)?;
-    let merge_base = git_text(target_root, &["merge-base", "HEAD", &base_ref])?;
+    let merge_base = git_text(target_root, &["merge-base", "HEAD", &base_ref])?
+        .trim()
+        .to_string();
     let mut files = BTreeSet::new();
     collect_changed_paths(
         target_root,
@@ -199,7 +420,7 @@ fn changed_production_rust_files(target_root: &Path, pr_base: &str) -> Result<Ve
                 "--name-only",
                 "-z",
                 "--diff-filter=ACMRT",
-                merge_base.trim(),
+                &merge_base,
                 "--",
             ],
         )?,
@@ -213,7 +434,224 @@ fn changed_production_rust_files(target_root: &Path, pr_base: &str) -> Result<Ve
         )?,
         &mut files,
     )?;
-    Ok(files.into_iter().collect())
+    let renamed_from = renamed_paths(target_root, &merge_base)?;
+
+    let mut lines = Vec::new();
+    for relative in &files {
+        if is_tracked(target_root, relative)? {
+            lines.extend(tracked_added_lines(
+                target_root,
+                &merge_base,
+                relative,
+                renamed_from.get(relative).map(PathBuf::as_path),
+            )?);
+        } else {
+            lines.extend(untracked_added_lines(target_root, relative)?);
+        }
+    }
+    Ok(AddedRustLines {
+        merge_base,
+        scanned_files: files.len(),
+        lines,
+    })
+}
+
+fn renamed_paths(target_root: &Path, merge_base: &str) -> Result<BTreeMap<PathBuf, PathBuf>> {
+    let raw = git_bytes(
+        target_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--diff-filter=R",
+            merge_base,
+            "--",
+        ],
+    )?;
+    let fields = raw
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>();
+    ensure!(
+        fields.len() % 3 == 0,
+        "Git returned an incomplete rename record"
+    );
+    let mut renames = BTreeMap::new();
+    for record in fields.chunks_exact(3) {
+        let status = std::str::from_utf8(record[0]).context("Git rename status is not UTF-8")?;
+        ensure!(
+            status.starts_with('R'),
+            "unexpected Git rename status {status:?}"
+        );
+        let previous = PathBuf::from(
+            std::str::from_utf8(record[1]).context("previous Git path is not UTF-8")?,
+        );
+        let current =
+            PathBuf::from(std::str::from_utf8(record[2]).context("current Git path is not UTF-8")?);
+        renames.insert(current, previous);
+    }
+    Ok(renames)
+}
+
+fn collect_changed_paths(
+    target_root: &Path,
+    raw: &[u8],
+    files: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    for raw_path in raw.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
+        let relative =
+            std::str::from_utf8(raw_path).context("changed repository path is not UTF-8")?;
+        let relative = PathBuf::from(relative);
+        if !is_scanned_rust_path(&relative) {
+            continue;
+        }
+        let path = target_root.join(&relative);
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to inspect changed source {path:?}"));
+            }
+        };
+        if metadata.is_file() && !metadata.file_type().is_symlink() {
+            files.insert(relative);
+        }
+    }
+    Ok(())
+}
+
+fn is_scanned_rust_path(path: &Path) -> bool {
+    is_safe_relative_rust_path(path)
+        && !path.components().any(|component| {
+            let Component::Normal(component) = component else {
+                return true;
+            };
+            IGNORED_DIRECTORIES.contains(&component.to_string_lossy().as_ref())
+        })
+}
+
+fn is_production_rust_path(path: &Path) -> bool {
+    path.components().any(
+        |component| matches!(component, Component::Normal(value) if value == "src"),
+    ) && !path.components().any(|component| {
+        matches!(component, Component::Normal(value) if NON_PRODUCTION_DIRECTORIES.contains(&value.to_string_lossy().as_ref()))
+    })
+}
+
+fn is_safe_relative_rust_path(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension == "rs")
+        && !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+}
+
+fn is_tracked(target_root: &Path, relative: &Path) -> Result<bool> {
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .args(["ls-files", "--error-unmatch", "--"])
+        .arg(relative)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .with_context(|| format!("failed to inspect Git tracking state for {relative:?}"))?;
+    Ok(status.success())
+}
+
+fn tracked_added_lines(
+    target_root: &Path,
+    merge_base: &str,
+    relative: &Path,
+    previous: Option<&Path>,
+) -> Result<Vec<AddedLine>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(target_root)
+        .args([
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            "--unified=0",
+            "--find-renames",
+            merge_base,
+            "--",
+        ])
+        .args(previous)
+        .arg(relative)
+        .output()
+        .with_context(|| format!("failed to inspect added lines for {relative:?}"))?;
+    ensure!(
+        output.status.success(),
+        "Git failed while inspecting added lines for {relative:?}: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    parse_added_lines(relative, &output.stdout)
+}
+
+fn parse_added_lines(relative: &Path, diff: &[u8]) -> Result<Vec<AddedLine>> {
+    let mut lines = Vec::new();
+    let mut new_line = None;
+    for raw_line in diff.split(|byte| *byte == b'\n') {
+        if raw_line.starts_with(b"@@ ") {
+            new_line = Some(parse_new_hunk_start(raw_line)?);
+            continue;
+        }
+        let Some(line_number) = new_line else {
+            continue;
+        };
+        match raw_line.first().copied() {
+            Some(b'+') => {
+                let text = std::str::from_utf8(&raw_line[1..])
+                    .with_context(|| {
+                        format!("added Rust source line in {relative:?} is not UTF-8")
+                    })?
+                    .trim_end_matches('\r')
+                    .to_string();
+                lines.push(AddedLine {
+                    file: relative.to_path_buf(),
+                    line: line_number,
+                    text,
+                });
+                new_line = Some(line_number + 1);
+            }
+            Some(b'-') | Some(b'\\') => {}
+            Some(b' ') => new_line = Some(line_number + 1),
+            _ => new_line = None,
+        }
+    }
+    Ok(lines)
+}
+
+fn parse_new_hunk_start(raw_header: &[u8]) -> Result<usize> {
+    let header = std::str::from_utf8(raw_header).context("Git diff hunk header is not UTF-8")?;
+    let range = header
+        .split_ascii_whitespace()
+        .find_map(|part| part.strip_prefix('+'))
+        .context("Git diff hunk header has no new-file range")?;
+    range
+        .split(',')
+        .next()
+        .context("Git diff hunk header has an empty new-file range")?
+        .parse::<usize>()
+        .context("Git diff hunk header has an invalid new-file line")
+}
+
+fn untracked_added_lines(target_root: &Path, relative: &Path) -> Result<Vec<AddedLine>> {
+    let source = fs::read_to_string(target_root.join(relative))
+        .with_context(|| format!("failed to read untracked Rust source {relative:?}"))?;
+    Ok(source
+        .lines()
+        .enumerate()
+        .map(|(index, text)| AddedLine {
+            file: relative.to_path_buf(),
+            line: index + 1,
+            text: text.to_string(),
+        })
+        .collect())
 }
 
 fn resolve_pr_base(target_root: &Path, pr_base: &str) -> Result<String> {
@@ -239,54 +677,6 @@ fn resolve_pr_base(target_root: &Path, pr_base: &str) -> Result<String> {
     )
 }
 
-fn collect_changed_paths(
-    target_root: &Path,
-    raw: &[u8],
-    files: &mut BTreeSet<PathBuf>,
-) -> Result<()> {
-    for raw_path in raw.split(|byte| *byte == 0).filter(|path| !path.is_empty()) {
-        let relative =
-            std::str::from_utf8(raw_path).context("changed repository path is not UTF-8")?;
-        let relative = Path::new(relative);
-        if !is_production_rust_path(relative) {
-            continue;
-        }
-        let path = target_root.join(relative);
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("failed to inspect changed source {path:?}"));
-            }
-        };
-        if !metadata.is_file() || metadata.file_type().is_symlink() {
-            continue;
-        }
-        files.insert(path);
-    }
-    Ok(())
-}
-
-fn is_production_rust_path(path: &Path) -> bool {
-    if path.extension().is_none_or(|extension| extension != "rs") {
-        return false;
-    }
-    for component in path.components() {
-        let std::path::Component::Normal(component) = component else {
-            return false;
-        };
-        let component = component.to_string_lossy();
-        if IGNORED_DIRECTORIES.contains(&component.as_ref()) {
-            return false;
-        }
-        if component == "src" {
-            return true;
-        }
-    }
-    false
-}
-
 fn git_text(target_root: &Path, args: &[&str]) -> Result<String> {
     let raw = git_bytes(target_root, args)?;
     String::from_utf8(raw).context("Git output is not UTF-8")
@@ -299,7 +689,7 @@ fn git_bytes(target_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
         .args(args)
         .output()
         .context("failed to inspect changed target files with Git")?;
-    anyhow::ensure!(
+    ensure!(
         output.status.success(),
         "Git command failed while inspecting changed target files: {}",
         String::from_utf8_lossy(&output.stderr).trim()
@@ -307,399 +697,6 @@ fn git_bytes(target_root: &Path, args: &[&str]) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
-struct ReplayIsolationVisitor<'a> {
-    file: PathBuf,
-    violations: &'a mut Vec<ReplayIsolationViolation>,
-}
-
-impl ReplayIsolationVisitor<'_> {
-    fn inspect_text(&mut self, value: &str, line: usize, column: usize) {
-        let lower = value.to_ascii_lowercase();
-        for forbidden in FORBIDDEN_MARKERS {
-            if lower.contains(forbidden.marker) {
-                self.violations.push(ReplayIsolationViolation {
-                    file: self.file.clone(),
-                    line,
-                    column,
-                    rule: forbidden.rule,
-                    matched: forbidden.marker,
-                    reason: forbidden.reason,
-                    required_change: forbidden.required_change,
-                });
-            }
-        }
-    }
-
-    fn inspect_lit_str(&mut self, literal: &LitStr) {
-        let start = literal.span().start();
-        self.inspect_text(&literal.value(), start.line, start.column + 1);
-    }
-
-    fn inspect_lit_byte_str(&mut self, literal: &LitByteStr) {
-        let Ok(value) = String::from_utf8(literal.value()) else {
-            return;
-        };
-        let start = literal.span().start();
-        self.inspect_text(&value, start.line, start.column + 1);
-    }
-
-    fn inspect_token_tree(&mut self, token: &TokenTree) {
-        match token {
-            TokenTree::Group(group) => {
-                for nested in group.stream() {
-                    self.inspect_token_tree(&nested);
-                }
-            }
-            TokenTree::Literal(literal) => {
-                let Ok(parsed) = syn::parse_str::<Lit>(&literal.to_string()) else {
-                    return;
-                };
-                let start = literal.span().start();
-                match parsed {
-                    Lit::Str(value) => {
-                        self.inspect_text(&value.value(), start.line, start.column + 1)
-                    }
-                    Lit::ByteStr(value) => {
-                        if let Ok(value) = String::from_utf8(value.value()) {
-                            self.inspect_text(&value, start.line, start.column + 1);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            TokenTree::Ident(_) | TokenTree::Punct(_) => {}
-        }
-    }
-}
-
-impl<'ast> Visit<'ast> for ReplayIsolationVisitor<'_> {
-    fn visit_attribute(&mut self, attribute: &'ast Attribute) {
-        if attribute.path().is_ident("doc") {
-            return;
-        }
-        match &attribute.meta {
-            Meta::Path(_) => {}
-            Meta::List(list) => {
-                for token in list.tokens.clone() {
-                    self.inspect_token_tree(&token);
-                }
-            }
-            Meta::NameValue(name_value) => self.visit_expr(&name_value.value),
-        }
-    }
-
-    fn visit_item(&mut self, item: &'ast Item) {
-        if item_attributes(item).is_some_and(test_only) {
-            return;
-        }
-        visit::visit_item(self, item);
-    }
-
-    fn visit_impl_item(&mut self, item: &'ast syn::ImplItem) {
-        if impl_item_attributes(item).is_some_and(test_only) {
-            return;
-        }
-        visit::visit_impl_item(self, item);
-    }
-
-    fn visit_trait_item(&mut self, item: &'ast syn::TraitItem) {
-        if trait_item_attributes(item).is_some_and(test_only) {
-            return;
-        }
-        visit::visit_trait_item(self, item);
-    }
-
-    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
-        if foreign_item_attributes(item).is_some_and(test_only) {
-            return;
-        }
-        visit::visit_foreign_item(self, item);
-    }
-
-    fn visit_lit_str(&mut self, literal: &'ast LitStr) {
-        self.inspect_lit_str(literal);
-    }
-
-    fn visit_lit_byte_str(&mut self, literal: &'ast LitByteStr) {
-        self.inspect_lit_byte_str(literal);
-    }
-
-    fn visit_macro(&mut self, expression: &'ast syn::Macro) {
-        for token in expression.tokens.clone() {
-            self.inspect_token_tree(&token);
-        }
-    }
-}
-
-fn item_attributes(item: &Item) -> Option<&[Attribute]> {
-    match item {
-        Item::Const(item) => Some(&item.attrs),
-        Item::Enum(item) => Some(&item.attrs),
-        Item::ExternCrate(item) => Some(&item.attrs),
-        Item::Fn(item) => Some(&item.attrs),
-        Item::ForeignMod(item) => Some(&item.attrs),
-        Item::Impl(item) => Some(&item.attrs),
-        Item::Macro(item) => Some(&item.attrs),
-        Item::Mod(item) => Some(&item.attrs),
-        Item::Static(item) => Some(&item.attrs),
-        Item::Struct(item) => Some(&item.attrs),
-        Item::Trait(item) => Some(&item.attrs),
-        Item::TraitAlias(item) => Some(&item.attrs),
-        Item::Type(item) => Some(&item.attrs),
-        Item::Union(item) => Some(&item.attrs),
-        Item::Use(item) => Some(&item.attrs),
-        Item::Verbatim(_) => None,
-        _ => None,
-    }
-}
-
-fn impl_item_attributes(item: &syn::ImplItem) -> Option<&[Attribute]> {
-    match item {
-        syn::ImplItem::Const(item) => Some(&item.attrs),
-        syn::ImplItem::Fn(item) => Some(&item.attrs),
-        syn::ImplItem::Macro(item) => Some(&item.attrs),
-        syn::ImplItem::Type(item) => Some(&item.attrs),
-        syn::ImplItem::Verbatim(_) => None,
-        _ => None,
-    }
-}
-
-fn trait_item_attributes(item: &syn::TraitItem) -> Option<&[Attribute]> {
-    match item {
-        syn::TraitItem::Const(item) => Some(&item.attrs),
-        syn::TraitItem::Fn(item) => Some(&item.attrs),
-        syn::TraitItem::Macro(item) => Some(&item.attrs),
-        syn::TraitItem::Type(item) => Some(&item.attrs),
-        syn::TraitItem::Verbatim(_) => None,
-        _ => None,
-    }
-}
-
-fn foreign_item_attributes(item: &syn::ForeignItem) -> Option<&[Attribute]> {
-    match item {
-        syn::ForeignItem::Fn(item) => Some(&item.attrs),
-        syn::ForeignItem::Macro(item) => Some(&item.attrs),
-        syn::ForeignItem::Static(item) => Some(&item.attrs),
-        syn::ForeignItem::Type(item) => Some(&item.attrs),
-        syn::ForeignItem::Verbatim(_) => None,
-        _ => None,
-    }
-}
-
-fn test_only(attributes: &[Attribute]) -> bool {
-    attributes.iter().any(|attribute| {
-        attribute
-            .path()
-            .segments
-            .last()
-            .is_some_and(|segment| segment.ident == "test")
-            || (attribute.path().is_ident("cfg") && meta_requires_test(&attribute.meta))
-    })
-}
-
-fn meta_requires_test(meta: &Meta) -> bool {
-    match meta {
-        Meta::Path(path) => path.is_ident("test"),
-        Meta::List(list) if list.path.is_ident("cfg") || list.path.is_ident("all") => list
-            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
-            .is_ok_and(|nested| nested.iter().any(meta_requires_test)),
-        Meta::List(list) if list.path.is_ident("any") => list
-            .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
-            .is_ok_and(|nested| !nested.is_empty() && nested.iter().all(meta_requires_test)),
-        Meta::List(_) | Meta::NameValue(_) => false,
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reports_replay_literals_without_echoing_the_complete_value() {
-        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "pub const CACHE: &str = \"fake-node-10-2-29-229.trp.test:15138\";\n",
-        )
-        .unwrap();
-
-        let report = inspect(target.path(), "integration").unwrap();
-        let value = serde_json::to_value(report).unwrap();
-
-        assert_eq!(value["status"], "failed");
-        assert_eq!(value["violations"][0]["file"], "src/lib.rs");
-        assert_eq!(value["violations"][0]["line"], 1);
-        assert_eq!(value["violations"][0]["matched"], ".trp.test");
-        assert!(!value.to_string().contains("fake-node-10-2-29-229"));
-    }
-
-    #[test]
-    fn ignores_comments_docs_test_modules_and_non_production_trees() {
-        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
-        fs::create_dir_all(target.path().join("tests")).unwrap();
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "// cache.trp.test\n\
-             /// docs mention dependencies.jsonl\n\
-             pub fn value() -> &'static str { \"normal.example\" }\n\
-             #[cfg(test)]\n\
-             mod tests { const CACHE: &str = \"cache.trp.test\"; }\n\
-             struct Client;\n\
-             impl Client { #[cfg(test)] fn replay() { let _ = \"198.18.1.2\"; } }\n",
-        )
-        .unwrap();
-        fs::write(
-            target.path().join("tests/integration.rs"),
-            "const CACHE: &str = \"cache.trp.test\";\n",
-        )
-        .unwrap();
-
-        let report = inspect(target.path(), "integration").unwrap();
-
-        assert!(report.passed());
-        assert_eq!(report.scanned_files, 1);
-    }
-
-    #[test]
-    fn checks_literals_in_production_attributes() {
-        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "#[link(name = \"cache.trp.test\")] extern \"C\" {}\n",
-        )
-        .unwrap();
-
-        let report = inspect(target.path(), "integration").unwrap();
-        let value = serde_json::to_value(report).unwrap();
-
-        assert_eq!(value["violations"][0]["rule"], "replay_hostname");
-    }
-
-    #[test]
-    fn rejects_any_traffic_e2e_environment_literal_in_product_code() {
-        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
-        fs::write(
-            target.path().join("src/lib.rs"),
-            "pub const CONFIG: &str = \"TRAFFIC_E2E_CONFIG_DIR\";\n",
-        )
-        .unwrap();
-
-        let report = inspect(target.path(), "integration").unwrap();
-        let value = serde_json::to_value(report).unwrap();
-
-        assert_eq!(value["violations"][0]["rule"], "traffic_e2e_environment");
-        assert_eq!(value["violations"][0]["matched"], "traffic_e2e_");
-    }
-
-    #[test]
-    fn scans_nested_production_sources_and_macro_literals() {
-        let target = target_with_source("pub fn value() -> u8 { 1 }\n");
-        fs::create_dir_all(target.path().join("crates/client/src")).unwrap();
-        fs::create_dir_all(target.path().join("apps/worker/src")).unwrap();
-        fs::write(
-            target.path().join("crates/client/src/lib.rs"),
-            "const FAKE: &str = concat!(\"198.18.\", \"1.2\");\n",
-        )
-        .unwrap();
-        fs::write(
-            target.path().join("apps/worker/src/main.rs"),
-            "const DATA: &[u8] = b\"dependencies.jsonl\";\n",
-        )
-        .unwrap();
-
-        let report = inspect(target.path(), "integration").unwrap();
-        let value = serde_json::to_value(report).unwrap();
-
-        assert_eq!(value["scanned_files"], 2);
-        assert_eq!(value["violations"].as_array().unwrap().len(), 2);
-        assert_eq!(value["violations"][0]["rule"], "recording_artifact");
-        assert_eq!(value["violations"][1]["rule"], "fake_ip_range");
-    }
-
-    #[test]
-    fn ignores_replay_literals_unchanged_from_the_pr_base() {
-        let target = target_with_source(
-            "pub const LEGACY: &str = \"vintage-node-legacy.trp.test:15138\";\n",
-        );
-        fs::write(
-            target.path().join("src/new.rs"),
-            "pub fn value() -> u8 { 2 }\n",
-        )
-        .unwrap();
-
-        let report = inspect(target.path(), "integration").unwrap();
-
-        assert!(report.passed());
-        assert_eq!(report.scanned_files, 1);
-    }
-
-    #[test]
-    fn compares_an_independent_worktree_with_the_shared_pr_base() {
-        let root = tempfile::tempdir().unwrap();
-        let primary = root.path().join("primary");
-        let worker = root.path().join("worker");
-        initialize_base(&primary, "pub fn value() -> u8 { 1 }\n");
-        git(
-            &primary,
-            &[
-                "worktree",
-                "add",
-                "-q",
-                "-b",
-                "feature",
-                worker.to_str().unwrap(),
-                "integration",
-            ],
-        );
-        fs::write(
-            worker.join("src/lib.rs"),
-            "pub const CACHE: &str = \"cache.trp.test\";\n",
-        )
-        .unwrap();
-
-        let report = inspect(&worker, "integration").unwrap();
-
-        assert!(!report.passed());
-        assert_eq!(report.scanned_files, 1);
-    }
-
-    fn target_with_source(source: &str) -> tempfile::TempDir {
-        let target = tempfile::tempdir().unwrap();
-        initialize_base(target.path(), source);
-        git(target.path(), &["switch", "-q", "-c", "feature"]);
-        target
-    }
-
-    fn initialize_base(target: &Path, source: &str) {
-        fs::create_dir_all(target.join("src")).unwrap();
-        fs::write(target.join("src/lib.rs"), source).unwrap();
-        git(target, &["init", "-q", "-b", "integration"]);
-        git(target, &["add", "."]);
-        git(
-            target,
-            &[
-                "-c",
-                "user.name=Traffic E2E Test",
-                "-c",
-                "user.email=test@example.com",
-                "commit",
-                "-q",
-                "-m",
-                "baseline",
-            ],
-        );
-    }
-
-    fn git(target: &Path, args: &[&str]) {
-        assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(target)
-                .args(args)
-                .status()
-                .unwrap()
-                .success(),
-            "git command failed: {args:?}"
-        );
-    }
-}
+#[path = "target_replay_isolation_tests.rs"]
+mod tests;

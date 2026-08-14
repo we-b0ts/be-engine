@@ -586,12 +586,15 @@ async fn handle_gateway_connection(
     let target = match replay_destination_for_stream(&stream, &state).await {
         ReplayDestination::Recorded(target) => Some(target),
         ReplayDestination::Unrecorded(target) => {
+            if !network_access::wait_for_unrecorded_payload(&stream).await? {
+                return Ok(());
+            }
             let mut replay = state.lock().await;
             replay.record_unrecorded_target(target.clone());
             drop(replay);
             report_writer.flush(state.clone()).await?;
             return Err(anyhow!(
-                "target accessed dependency endpoint {}:{} that was not accessed during recording",
+                "target exchanged data with dependency endpoint {}:{} that was not accessed during recording",
                 target.host,
                 target.port
             ));

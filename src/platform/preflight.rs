@@ -19,7 +19,6 @@ const MAX_MOTAN_FAILURE_BYTES: usize = 512;
 pub struct ManagedRecordingPreflightOptions {
     pub target_root: PathBuf,
     pub duration_seconds: NonZeroU64,
-    pub breeze_no_fallback: bool,
     pub apis: Vec<RecordingApi>,
     pub per_api_case_limit: Option<NonZeroUsize>,
 }

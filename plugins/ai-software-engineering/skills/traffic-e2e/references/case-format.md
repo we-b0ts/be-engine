@@ -37,10 +37,14 @@ replay fixtures.
 
 `recording-network.json` is the required Replay network boundary. It contains
 the deduplicated DNS names resolved during recording and the exact `host:port`
-endpoints actually accessed through the recording gateways. Replay rejects an
-endpoint not present in this manifest and reports
-`访问了录制时没有访问过的域名:port`. Do not reconstruct this allowlist from
-`dependencies.jsonl`; re-record runs created before this artifact existed.
+endpoints actually accessed through the recording gateways. During Replay, an
+unrecorded domain may resolve to a quarantine fake IP and the target may open a
+TCP connection to it. DNS resolution and connection establishment alone are
+not dirty. If the target sends payload bytes to an endpoint absent from this
+manifest, Replay closes the connection and reports
+`访问了录制时没有访问过的域名:port` in evidence. Do not reconstruct this
+allowlist from `dependencies.jsonl`; re-record runs created before this artifact
+existed.
 
 `uri-group` is usually built from the full request URI path joined by hyphens,
 for example `/api/users/list` becomes `api-users-list`. When the recorder rule

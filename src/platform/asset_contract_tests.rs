@@ -129,7 +129,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(!adapted_source.contains("--user"));
     assert!(!adapted_source.contains("--privileged"));
     assert!(adapted_source.contains("MESH_CONNECT_HOST=breeze.recording"));
-    assert!(adapted_source.contains("TRAFFIC_E2E_BREEZE_NO_FALLBACK=${brz_no_fallback}"));
+    assert!(!adapted_source.contains("TRAFFIC_E2E_BREEZE_NO_FALLBACK"));
     let comparison_source = MANAGER
         .split_once("start_comparison_source()")
         .unwrap()
@@ -144,7 +144,7 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(comparison_source.contains("\"${runtime_args[@]}\" \"$adapter_image_id\""));
     assert!(!comparison_source.contains(".[0].Config.Image"));
     assert!(comparison_source.contains("MESH_CONNECT_HOST=${target_network_ip}"));
-    assert!(comparison_source.contains("TRAFFIC_E2E_BREEZE_NO_FALLBACK=${brz_no_fallback}"));
+    assert!(!comparison_source.contains("TRAFFIC_E2E_BREEZE_NO_FALLBACK"));
     let comparison_runtime = MANAGER
         .split_once("run_comparison_recording()")
         .unwrap()
@@ -383,6 +383,56 @@ fn stages_private_executable_assets() {
     assert_eq!(u16::from_be_bytes([HTTPS_PROBE[6], HTTPS_PROBE[7]]), 52);
     assert!(!assets.join("MeshConnectUtil.java").exists());
     assert!(!assets.join("apply-breeze-sdk-patch").exists());
+}
+
+#[test]
+fn managed_mesh_connect_host_forces_the_recordable_tcp_path() {
+    const SOURCE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/plugins/ai-software-engineering/skills/backend-rewrite/assets-src/",
+        "com/weibo/api/datamesh/common/utils/MeshConnectUtil.java"
+    ));
+    const CLASS: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/plugins/ai-software-engineering/skills/backend-rewrite/assets/MeshConnectUtil.class"
+    ));
+
+    assert!(SOURCE.contains("System.getenv(MESH_CONNECT_HOST_ENV)"));
+    assert!(SOURCE.contains("isUnixDomainSocketOpen = false;"));
+    assert!(SOURCE.contains("SocketFileUtil.tryConnectTcpSocket(meshConnectHost, socketPort)"));
+    assert_eq!(&CLASS[..4], b"\xca\xfe\xba\xbe");
+    assert_eq!(u16::from_be_bytes([CLASS[6], CLASS[7]]), 52);
+    assert!(
+        CLASS
+            .windows(b"MESH_CONNECT_HOST".len())
+            .any(|window| window == b"MESH_CONNECT_HOST")
+    );
+}
+
+#[test]
+fn managed_breeze_sdk_disables_tcp_fallback_without_forcing_mesh_selection() {
+    const PATCH: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/plugins/ai-software-engineering/skills/backend-rewrite/assets-src/",
+        "breeze-sdk-core-0.1.90-recording.patch"
+    ));
+    const COMMON_SWITCHER: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/plugins/ai-software-engineering/skills/backend-rewrite/assets/CommonSwitcher.class"
+    ));
+    assert!(PATCH.contains("public static boolean isExceptionToTcp"));
+    assert!(PATCH.contains("public static void autoDegrade"));
+    assert!(!PATCH.contains("JedisMSServerProxy"));
+    assert_eq!(&COMMON_SWITCHER[..4], b"\xca\xfe\xba\xbe");
+    assert_eq!(
+        u16::from_be_bytes([COMMON_SWITCHER[6], COMMON_SWITCHER[7]]),
+        52
+    );
+    assert!(
+        COMMON_SWITCHER
+            .windows(b"MESH_CONNECT_HOST".len())
+            .any(|window| { window == b"MESH_CONNECT_HOST" })
+    );
 }
 
 #[test]

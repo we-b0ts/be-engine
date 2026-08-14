@@ -116,21 +116,51 @@ main orchestrator performs the coordinator-owned mutation.
 
 ### `target_quality_required`
 
-Execute only `action.commands.execute` in its absolute canonical `cwd`. Never
-run this gate in a worker worktree. A successful run records the integrated
+Execute only `action.commands.execute` in its absolute canonical `cwd`. The
+only permitted command extension is one or more exact
+`--hardcode-ai-verified` arguments after this built-in gate reports the matching
+locations and the required source evidence has been committed. Never run this
+gate in a worker worktree. A successful run records the integrated
 target fingerprint and returns `advance_required`; execute that action to start
 focused Replay. A later integration or quality-gate configuration change
 creates a new fingerprint and another quality action. On failure, fix the
 integrated target and recover the same action with scoped `status`.
 
 The gate list always starts with the built-in `replay-isolation` scan. Relative
-to the configured `pr_base`, it checks every added or modified production Rust
-file in the integrated worktree, including staged, unstaged, and untracked
-files. It excludes comments, documentation, and test-only code, and rejects
-direct dependencies on replay-only hostnames, fake-IP ranges, private runtime
-paths, and recording artifacts. Repository quality-gate configuration may add
-commands but cannot disable this scan; an explicit empty gate list still leaves
-`replay-isolation` active.
+to the configured `pr_base`, it checks only added lines in changed or untracked
+Rust files in the integrated worktree, including staged and unstaged changes.
+It scans text directly without parsing Rust syntax. Added comments,
+documentation, macros, invalid intermediate Rust, and test code are therefore
+visible to the gate; an unchanged legacy occurrence in a modified file is not.
+
+Every added Rust line, including files below `tests/`, is rejected when it
+contains the replay-only `.trp.test` suffix. Other replay-private environment,
+fake-IP, runtime-path, and recording-artifact markers remain restricted to
+production paths. Every added Rust line is also checked case-insensitively for
+`sample.test` and `demo.test`. Those public domains are allowed only when the
+main orchestrator proves that the same value is hardcoded in source code and
+records one commit trailer per target occurrence:
+
+```text
+Hardcode-Source-Evidence: TARGET_FILE:LINE:COLUMN <= SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE
+```
+
+`SOURCE_REVISION` must be the 7-64 hexadecimal commit ID inspected by the AI;
+traffic, recordings, logs, runtime configuration, and container state are not
+source-code proof. After committing the trailer, rerun the unchanged quality
+command with one repeatable exact-position argument per occurrence:
+
+```text
+--hardcode-ai-verified TARGET_FILE:LINE:COLUMN
+```
+
+The target occurrence itself must be committed at that exact position; an
+uncommitted line cannot reuse evidence from another commit. Missing, duplicate,
+stale, or unrelated positions fail closed. This approval applies only to the
+two source-sensitive public-domain rules and never exempts
+`.trp.test` or another replay-private marker. Repository quality-gate
+configuration may add commands but cannot disable this scan; an explicit empty
+gate list still leaves `replay-isolation` active.
 
 ### `system_repair_required` and `recovery_required`
 

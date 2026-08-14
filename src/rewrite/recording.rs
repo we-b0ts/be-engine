@@ -483,7 +483,6 @@ async fn execute_rewrite_recording_locked(
         run_id: Some(run_id.clone()),
         duration_seconds: state.recording_settings.duration_seconds,
         baseline_recheck: comparison,
-        breeze_no_fallback: true,
         apis,
         per_api_case_limit: Some(state.recording_settings.per_api_case_limit),
         request_source,

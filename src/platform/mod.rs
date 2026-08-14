@@ -113,7 +113,6 @@ pub struct ManagedRecordingOptions {
     pub run_id: Option<String>,
     pub duration_seconds: NonZeroU64,
     pub baseline_recheck: bool,
-    pub breeze_no_fallback: bool,
     pub apis: Vec<RecordingApi>,
     pub per_api_case_limit: Option<NonZeroUsize>,
     pub request_source: Option<PathBuf>,
@@ -198,7 +197,6 @@ pub async fn run_managed_recording_preflight(
             run_id: None,
             duration_seconds: options.duration_seconds,
             baseline_recheck: false,
-            breeze_no_fallback: options.breeze_no_fallback,
             apis: options.apis,
             per_api_case_limit: options.per_api_case_limit,
             request_source: None,
@@ -470,9 +468,7 @@ async fn run_managed_runtime(
         .arg("--duration-seconds")
         .arg(options.duration_seconds.to_string())
         .arg("--run-id")
-        .arg(&run_id)
-        .arg("--brz-no-fallback")
-        .arg(options.breeze_no_fallback.to_string());
+        .arg(&run_id);
     if let Some(listen) = managed_comparison_listen {
         command.env("TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN", listen.to_string());
     }

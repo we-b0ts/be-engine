@@ -18,14 +18,6 @@ pub(super) struct RecordArgs {
     /// Stop cleanly after readiness has held for this many seconds.
     #[arg(long, default_value = "60")]
     duration_seconds: NonZeroU64,
-    /// Apply the fixed Platform Mesh no-fallback commands after source readiness.
-    #[arg(
-        long,
-        default_value = "true",
-        action = clap::ArgAction::Set,
-        value_parser = parse_bool
-    )]
-    brz_no_fallback: bool,
     /// Record only this API; repeat for multiple METHOD/path selectors.
     #[arg(long = "api", value_name = "METHOD PATH_OR_PATTERN")]
     apis: Vec<RecordingApi>,
@@ -74,7 +66,6 @@ fn options(
         run_id: args.run_id,
         duration_seconds: args.duration_seconds,
         baseline_recheck,
-        breeze_no_fallback: args.brz_no_fallback,
         apis: args.apis,
         per_api_case_limit: args.per_api_case_limit,
         request_source: None,
@@ -89,14 +80,6 @@ fn parse_run_id(value: &str) -> std::result::Result<String, String> {
         Ok(value.to_string())
     } else {
         Err("run ID must contain exactly 14 ASCII digits (YYYYMMDDHHMMSS)".to_string())
-    }
-}
-
-fn parse_bool(value: &str) -> std::result::Result<bool, String> {
-    match value {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err("value must be literal true or false".to_string()),
     }
 }
 
@@ -130,19 +113,12 @@ mod tests {
         .unwrap();
         assert_eq!(record.record.duration_seconds.get(), 60);
 
-        let comparison = ComparisonCli::try_parse_from([
-            "test",
-            "--baseline-recheck",
-            "--brz-no-fallback",
-            "false",
-        ])
-        .unwrap();
+        let comparison = ComparisonCli::try_parse_from(["test", "--baseline-recheck"]).unwrap();
         assert!(comparison.comparison.baseline_recheck);
     }
 
     #[test]
-    fn rejects_invalid_boolean_and_zero_duration() {
-        assert!(RecordCli::try_parse_from(["test", "--brz-no-fallback", "yes"]).is_err());
+    fn rejects_zero_duration() {
         assert!(RecordCli::try_parse_from(["test", "--duration-seconds", "0"]).is_err());
     }
 }
