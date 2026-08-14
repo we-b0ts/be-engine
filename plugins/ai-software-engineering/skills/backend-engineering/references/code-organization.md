@@ -86,17 +86,15 @@ on an unrelated large module.
 
 ## Code-Size Gates
 
-Apply these backstops to product source files and logical modules:
+Apply this hard backstop to product source files and logical modules:
 
-- over 600 lines: review for mixed responsibilities;
-- over 800 lines: split or document the single cohesive responsibility;
 - over 1000 lines: hard stop until the touched responsibility is extracted,
   unless the user explicitly forbids that refactor for the current task.
 
-Line count is a signal, not an architecture. A smaller incoherent file still
-requires repair, while an evidenced cohesive file between 800 and 1000 lines
-may remain. Do not maintain static hotspot lists; inspect the current working
-tree.
+The checker emits no line-count warning at or below 1000 lines. Line count is a
+hard backstop, not an architecture: a smaller incoherent file still requires
+repair, while an evidenced cohesive file within the limit may remain. Do not
+maintain static hotspot lists; inspect the current working tree.
 
 Invoke the bundled [check-code-organization](../scripts/check-code-organization)
 with the target repository as the working directory. It checks conventional
