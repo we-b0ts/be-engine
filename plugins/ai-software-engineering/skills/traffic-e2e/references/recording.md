@@ -9,7 +9,7 @@ finalized manifest returned by the command; never select a run by recency.
 ```bash
 traffic-e2e record --target-root <target> \
   --run-id <YYYYMMDDHHMMSS> --duration-seconds 60 \
-  --brz-no-fallback true --api '<METHOD path>'
+  --api '<METHOD path>'
 ```
 
 Project config supplies the stopped source container used as the authoritative
@@ -19,15 +19,17 @@ Breeze, readiness, finalization, signals, and cleanup. For Platform Java/Tomcat
 it builds its capture-only source adaptor. Do not generate or invoke repository
 recording wrappers.
 
-For a Breeze-enabled initialized project, the source adaptor entrypoint starts
-its image-owned Mesh switch task asynchronously. That task retries the source
-control port every three seconds for the complete container lifetime, including
-after successful responses. Managed recording only selects whether the task is
-enabled with `--brz-no-fallback`; it does not execute a host-side one-shot
-script or wait for a successful switch response. `init preflight`, not every
-ordinary recording, actively resolves `breeze.recording` as UID `998` and
-requires Recorder to preserve that DNS observation in
-`recording-network.json`.
+For a Breeze-enabled initialized project, the source adaptor preserves the
+source entrypoint and all source Mesh routing switches. It does not force
+`mesh.switcher`, pool initialization, or any namespace/method selection. Its
+Breeze SDK patch disables automatic degrade and exception fallback to the
+source TCP client only when the system-owned `MESH_CONNECT_HOST` is non-blank.
+The same variable selects the recordable Breeze TCP connection path and takes
+precedence over `mesh.unix.domain.socket.enable`; Recorder cannot observe Unix
+domain socket dependency traffic. `init
+preflight`, not every ordinary recording, actively resolves
+`breeze.recording` as UID `998` and requires Recorder to preserve that DNS
+observation in `recording-network.json`.
 
 The managed runtime retains a target-scoped adaptor image. Every managed run
 requires the configured source container to remain present and stopped, then

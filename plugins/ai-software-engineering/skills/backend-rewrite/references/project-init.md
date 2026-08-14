@@ -92,15 +92,14 @@ When Breeze is enabled, also create:
 
 ```text
 .traffic-e2e/MeshConnectUtil.class
-.traffic-e2e/mesh_switch_task.sh
-.traffic-e2e/recording-entrypoint.sh
+.traffic-e2e/CommonSwitcher.class
 ```
 
 Generate `Dockerfile.recording` from the inspected source image and its actual
-application launch contract. Preserve the proved application command and
-working directory behind an explicit adaptor entrypoint; never assume the
-source image entrypoint interprets `RUN_COMMAND` or another conventional
-environment variable. The resulting source application process must run as
+application launch contract. Preserve the proved application entrypoint,
+command, arguments, and working directory directly; never assume the source
+image entrypoint interprets `RUN_COMMAND` or another conventional environment
+variable. The resulting source application process must run as
 `trp-record` with numeric UID/GID `998:998`. Fail initialization on an
 incompatible identity collision or when the real application command cannot be
 determined. Declare `ARG SOURCE_IMAGE` before `FROM` and use
@@ -116,48 +115,37 @@ enters secure loader mode, so add its resolved `libjli.so` directory to the
 system dynamic loader configuration and run `ldconfig` during the image build.
 Fail the build unless `getcap` confirms the expected capability.
 
-When Breeze is enabled, copy the bundled
-[`MeshConnectUtil.class`](../assets/MeshConnectUtil.class) byte-for-byte to
-`.traffic-e2e/MeshConnectUtil.class`; its SHA-256 is
-`5539b2940b2ab7ffdc02b9aec58565ed034fa29ae5043aa741e8857ee42ae58f`.
+When Breeze is enabled, copy the bundled Java 8 classes byte-for-byte:
+
+- [`MeshConnectUtil.class`](../assets/MeshConnectUtil.class), SHA-256
+  `5088b125c7eacc637240241c8a5f5dc7816b08328e3aa5f9f234b248ffc0be63`;
+- [`CommonSwitcher.class`](../assets/CommonSwitcher.class), SHA-256
+  `9f9df4dbf45122e558293a93379742f50db8e629d1459dfc8cad0b801ede707e`.
+
 In `Dockerfile.recording`, require exactly one `breeze-sdk-core-*.jar` below
-`/data1`, replace
-`com/weibo/api/datamesh/common/utils/MeshConnectUtil.class` in that JAR with
-the bundled Java 8 class, extract it again, and compare it byte-for-byte with
-the input asset. Do not compile a per-project Java source file or silently
-choose among multiple Breeze SDK JARs. Do not generate, copy, or execute
-`apply-breeze-sdk-patch`; replacing and verifying the bundled class is the
-complete patch operation. At runtime set
+`/data1`. Replace the corresponding classes at
+`com/weibo/api/datamesh/common/utils/MeshConnectUtil.class` and
+`com/weibo/api/datamesh/common/switcher/CommonSwitcher.class`.
+Extract both again and compare them byte-for-byte with the input assets.
+Do not compile per-project Java source or silently choose among multiple
+Breeze SDK JARs. At runtime set
 `MESH_CONNECT_HOST=breeze.recording` so the patched SDK connects to the managed
-Breeze container instead of source-local loopback.
+Breeze container instead of source-local loopback. A non-blank
+`MESH_CONNECT_HOST` is also the explicit managed-recording TCP selection: the
+patched helper must ignore `mesh.unix.domain.socket.enable` in that mode.
+Without this precedence, source traffic can disappear into an unobservable
+Unix domain socket while Replay correctly expects the target's TCP
+`breeze.recording:<resource-port>` dependency.
 
-Also copy the bundled
-[`mesh_switch_task.sh`](../assets/mesh_switch_task.sh) and
-[`recording-entrypoint.sh`](../assets/recording-entrypoint.sh) byte-for-byte;
-their SHA-256 values are respectively
-`6a09a15106326c737d3b23fc880bcd9c52ea0f69868759f5bf3ee7cf05cdbeda`
-and
-`0df975b51ad68357a05c8fce444d42194de0afd8eca04b7be70a06da6ab3b473`.
-The Dockerfile must install both as executable files below `/usr/local/bin`,
-fail the build unless `nc` and `getent` are available, and make
-`recording-entrypoint.sh` the explicit adaptor entrypoint in front of the
-complete inspected source entrypoint and command. Preserve every original
-argument exactly. The wrapper
-starts `mesh_switch_task.sh` once in the background, then `exec`s the source
-application as the foreground container process. The task sends the canonical
-Mesh switch commands to `127.0.0.1:880` every three seconds for the complete
-container lifetime. Connection failures never terminate it, and it continues
-sending after successful responses. It logs only when the command result state
-changes so startup failures and later recovery remain visible in container
-stdout/stderr without an unbounded three-second log stream.
-
-The managed runtime supplies `TRAFFIC_E2E_BREEZE_NO_FALLBACK=true` by default
-for Breeze-enabled source adaptors. The wrapper consumes and unsets this
-system-owned variable before executing the source application. A caller's
-explicit `--brz-no-fallback false` disables the background task without
-changing the image entrypoint. Do not invoke the task from a Docker `RUN`
-instruction, wait for port `880` before starting it, or stop it after one
-successful iteration.
+The SDK patch is intentionally narrower than a switch task. It preserves the
+source values of `mesh.switcher`, pool, resource, namespace, and method
+switches. When those values select Mesh under managed recording, it disables
+automatic degrade and exception fallback to the source TCP client. A selected
+but uninitialized Mesh client retains the SDK's original behavior; startup and
+preflight diagnostics are responsible for detecting unavailable Breeze. When
+source switches select TCP, source behavior remains TCP. Preserve the inspected
+source entrypoint and command exactly; do not add a wrapper, invoke the source
+control port, or inject a fallback-control environment variable.
 
 Do not embed a Recorder CA, private key, credential, recording, or
 machine-local container state in the image. When Java is part of the source
@@ -186,11 +174,10 @@ build/refresh from the same Dockerfile. A changed top-level adaptor build
 context does the same. Reuse an adaptor only when its source-image and build
 contract labels match the current inputs.
 
-The Dockerfile alone owns optional assets such as `MeshConnectUtil.class`,
-`mesh_switch_task.sh`, and `recording-entrypoint.sh`, including their presence
-and validation; the generic managed runtime must not inspect or copy those
-assets. It must not synthesize another project-specific Dockerfile or include
-`.traffic-e2e/local/` in the build context.
+The Dockerfile alone owns optional Breeze class assets, including their
+presence and byte-for-byte validation; the generic managed runtime must not
+inspect or copy those assets. It must not synthesize another project-specific
+Dockerfile or include `.traffic-e2e/local/` in the build context.
 
 Do not create a Breeze Dockerfile or image in the target repository. When
 Breeze is enabled, the managed runtime uses the fixed
@@ -231,12 +218,11 @@ come from the inspected source contract.
 2. When Breeze is enabled, start the fixed Breeze image with the inspected
    Breeze runtime arguments.
 3. Start the source adaptor with runtime inputs inspected from the configured,
-   stopped source container and the explicit adaptor entrypoint. Mount the
+   stopped source container and its preserved entrypoint. Mount the
    generated truststore read-only only when the system detected Java.
 4. Verify the source entrypoint runs as UID/GID `998:998`, Breeze is ready when
    enabled, the configured source readiness contract passes, and Recorder
-   admits cases. Do not separately wait for port `880`; the Breeze switch task
-   owns its bounded three-second retry loop for that source-local endpoint.
+   admits cases. Do not wait for or send commands to source port `880`.
 5. When Breeze is enabled, resolve `breeze.recording` explicitly inside the
    source adaptor as UID/GID `998:998` after Recorder is ready. Require a
    non-empty IPv4 result, then after finalization require
@@ -572,12 +558,10 @@ Do not report initialization complete until all of the following are true:
   runtime secrets or generated trust material as
   `traffic-e2e/<project>-recording:cache`, bound to the configured source
   container's immutable image ID;
-- when Breeze is enabled, `.traffic-e2e/MeshConnectUtil.class`,
-  `.traffic-e2e/mesh_switch_task.sh`, and
-  `.traffic-e2e/recording-entrypoint.sh` exactly match the bundled assets; the
-  class replacement in the source Breeze SDK JAR is verified byte-for-byte,
-  and the adaptor entrypoint starts the permanent three-second Mesh switch loop
-  asynchronously before executing the source application;
+- when Breeze is enabled, `.traffic-e2e/MeshConnectUtil.class`
+  and `.traffic-e2e/CommonSwitcher.class` exactly match the bundled assets; both
+  replacements in the source Breeze SDK JAR are verified byte-for-byte,
+  and the inspected source entrypoint and command remain unchanged;
 - the repository `.gitignore` contains the root-scoped
   `/.traffic-e2e/local/` entry;
 - `.traffic-e2e/Dockerfile.e2e` exists, uses the pinned builder and target
@@ -599,8 +583,8 @@ Do not report initialization complete until all of the following are true:
   Global dependency, one cleanly published case, and, when Breeze is enabled,
   a successful `breeze.recording` lookup observed in `recording-network.json`;
 - the disposable Replay network preflight consumed that Global probe through
-  its assigned fake IP, rejected unrecorded `example.com:443` with canonical
-  endpoint evidence, rejected direct external egress for UID `998`, and
+  its assigned fake IP, rejected payload sent to unrecorded `example.com:443`
+  with canonical endpoint evidence, rejected direct external egress for UID `998`, and
   completed cleanup;
 - one disposable source-adaptor startup was analyzed for configuration and
   Vintage access, background destinations and counts, and local-cache loading
@@ -632,8 +616,7 @@ If the user confirms:
    branch must not be `dev-migration`.
 3. Commit only the three generated configuration files,
    `Dockerfile.recording`, the Breeze-only `.traffic-e2e/MeshConnectUtil.class`,
-   `.traffic-e2e/mesh_switch_task.sh`, and
-   `.traffic-e2e/recording-entrypoint.sh` when applicable,
+   and `.traffic-e2e/CommonSwitcher.class` when applicable,
    `.traffic-e2e/Dockerfile.e2e`, the root `.dockerignore`, the root-scoped
    `.gitignore` update, and any minimal target scaffold required for its
    release build. Exclude unrelated work and all `.traffic-e2e/local/`

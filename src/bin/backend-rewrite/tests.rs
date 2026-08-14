@@ -258,6 +258,10 @@ fn parses_the_bounded_rewrite_surface() {
             "target-quality-fnv1a64-0123456789abcdef",
             "--api",
             "GET /api/widgets/*",
+            "--hardcode-ai-verified",
+            "src/client.rs:42:18",
+            "--hardcode-ai-verified",
+            "src/other.rs:7:9",
         ])
         .is_ok()
     );

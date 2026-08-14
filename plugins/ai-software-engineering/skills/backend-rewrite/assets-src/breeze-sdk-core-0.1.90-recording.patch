@@ -1,0 +1,78 @@
+diff --git a/breeze-sdk-core/src/main/java/com/weibo/api/datamesh/common/switcher/CommonSwitcher.java b/breeze-sdk-core/src/main/java/com/weibo/api/datamesh/common/switcher/CommonSwitcher.java
+--- a/breeze-sdk-core/src/main/java/com/weibo/api/datamesh/common/switcher/CommonSwitcher.java
++++ b/breeze-sdk-core/src/main/java/com/weibo/api/datamesh/common/switcher/CommonSwitcher.java
+@@ -19,5 +19,11 @@
+ import java.util.concurrent.ConcurrentHashMap;
+-
+-public class CommonSwitcher {
+-
++
++public class CommonSwitcher {
++
++    private static final String MESH_CONNECT_HOST_ENV = "MESH_CONNECT_HOST";
++
++    private static boolean isManagedRecording() {
++        return StringUtils.isNotBlank(System.getenv(MESH_CONNECT_HOST_ENV));
++    }
++
+     public enum MeshSwitcher {
+@@ -281,4 +287,7 @@
+     }
+-
+-    public static boolean isExceptionToTcp(ResourceTypeEnum resourceType) {
++
++    public static boolean isExceptionToTcp(ResourceTypeEnum resourceType) {
++        if (isManagedRecording()) {
++            return false;
++        }
+         boolean isExceptionToTcp = false;
+@@ -365,4 +374,7 @@
+     }
+-
+-    public static void autoDegrade(String namespace, int degradeCount, StringBuilder builder, ResourceTypeEnum resourceType){
++
++    public static void autoDegrade(String namespace, int degradeCount, StringBuilder builder, ResourceTypeEnum resourceType){
++        if (isManagedRecording()) {
++            return;
++        }
+         try {
+diff --git a/breeze-sdk-core/src/main/java/com/weibo/api/datamesh/common/utils/MeshConnectUtil.java b/breeze-sdk-core/src/main/java/com/weibo/api/datamesh/common/utils/MeshConnectUtil.java
+--- a/breeze-sdk-core/src/main/java/com/weibo/api/datamesh/common/utils/MeshConnectUtil.java
++++ b/breeze-sdk-core/src/main/java/com/weibo/api/datamesh/common/utils/MeshConnectUtil.java
+@@ -10,5 +10,7 @@
+ import java.net.SocketAddress;
+-
+-public class MeshConnectUtil {
+-
++
++public class MeshConnectUtil {
++
++    private static final String MESH_CONNECT_HOST_ENV = "MESH_CONNECT_HOST";
++
+     public static SocketAddress getMeshConnectAddress(ResourceTypeEnum resourceTypeEnum, String registry, String group, String namespace) throws Exception {
+@@ -28,4 +30,11 @@
+             ApiLogger.warn("mesh get config from vintage error, config key = " + MeshConstant.UNIX_DOMAIN_SOCKET_ENABLE_CONFIG_NAME + ", value = " + unixDomainSocketConfig, e);
+-        }
+-
++        }
++        String meshConnectHost = System.getenv(MESH_CONNECT_HOST_ENV);
++        if (StringUtils.isNotBlank(meshConnectHost)) {
++            meshConnectHost = meshConnectHost.trim();
++            isUnixDomainSocketOpen = false;
++        } else {
++            meshConnectHost = MeshConstant.LOCALHOST;
++        }
++
+         SocketAddress socketAddress = null;
+@@ -50,7 +59,7 @@
+                 String socketPort = SocketFileUtil.initSockFile(registry, group, namespace, topic, resourceTypeEnum, false);
+-
++
+                 //等待端口监听
+-                SocketFileUtil.tryConnectTcpSocket(MeshConstant.LOCALHOST, socketPort);
+-
++                SocketFileUtil.tryConnectTcpSocket(meshConnectHost, socketPort);
++
+-                socketAddress = new InetSocketAddress(MeshConstant.LOCALHOST, Integer.parseInt(socketPort));
++                socketAddress = new InetSocketAddress(meshConnectHost, Integer.parseInt(socketPort));
+             }

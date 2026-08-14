@@ -8,7 +8,7 @@ scope.
 ```bash
 traffic-e2e record-comparison --target-root <target> \
   --run-id <YYYYMMDDHHMMSS> --duration-seconds 60 \
-  --brz-no-fallback true --api '<METHOD path>'
+  --api '<METHOD path>'
 ```
 
 The workflow derives API selectors from the standard recording inventory and
