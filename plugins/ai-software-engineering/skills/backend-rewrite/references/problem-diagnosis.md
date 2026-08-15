@@ -80,7 +80,10 @@ Run only query IDs returned by `action.commands.evidence`:
   case-external target activity, and does not prove request or process
   ownership. For a dependency issue it also returns
   `applicable_rule_planners` only for supported protocols present in those
-  clusters. It also returns the selected case's exact
+  clusters. Whenever a supported dependency-value rule exists for a protocol
+  present in the clusters, it separately returns `protocol_rules` with a short
+  applicability hint and an exact read-only help command. Rule availability
+  does not prove applicability. It also returns the selected case's exact
   `representative_dependencies_command` when available;
 - `policy_applicability`: structural rule eligibility; eligibility does not
   authorize a rule;
@@ -91,6 +94,24 @@ Use the smallest query set that can distinguish the current hypotheses. Then
 inspect the representative case and trace the corresponding source and target
 path. Read other artifact cases only when the representative is insufficient.
 Do not run every query merely because it is available.
+
+### Supported Protocol Rules
+
+Use this table only to discover a rule worth investigating. A listed rule does
+not prove that the observed difference is safe to ignore.
+
+| Problem stage | Protocol | Rule | Repairs |
+| --- | --- | --- | --- |
+| `dirty_clusters` during a response, Replay, or dependency issue | Memcached | `protobuf-timestamp` | A `SET` value mismatch where source proves that one selected top-level protobuf varint field is current Unix seconds; all other protobuf fields must remain equal, and each timestamp must be within the engine-owned fixed five-second window around its own `SET`. |
+
+Run the exact `help` command returned with the rule before planning it. Add a
+row only when the corresponding evidence hint, help command, planner, and
+runtime behavior are all implemented.
+
+Memcached `SET` exptime is not a protocol rule. Replay already keeps `0` and
+relative expirations exact and compares absolute expirations by the remaining
+TTL at each `SET`, with a fixed five-second tolerance. Do not plan a rule for an
+exptime-only mismatch.
 
 For dependency topology, execute the representative result's
 `dependencies_command`, or the dirty-cluster result's
@@ -264,7 +285,10 @@ a Replay capability gap or supply an arbitrary acceptance command.
 
 ## Dirty Dependency Issues
 
-Diagnose dirty dependencies only after responses pass and Replay is complete.
+Inspect dirty dependencies whenever the coordinator returns `dirty_clusters`,
+including while the active issue is a response mismatch. Response equality is
+not a prerequisite for discovering a dependency-value rule. Continue to use
+the gate order above when deciding which failure owns the next repair.
 Classify the representative protocol cluster by source ownership:
 
 - request-owned and required: repair target call topology or Replay support;
@@ -287,6 +311,14 @@ never returns an applicable process-owned rule plan. The orchestrator also owns
 the apply report's exact `next`; the coordinator then reclassifies the same
 focused replay report. Never manually rewrite replay reports, trim traffic, or
 edit immutable request/response/dependency capture files.
+
+For dependency value mismatches, inspect each entry returned in
+`protocol_rules`. Run its exact `help` command, then verify the described value
+mechanism in source and in the representative dependency details before
+planning it. In the currently supported Memcached case,
+`protobuf-timestamp` applies only to a `SET` value whose selected top-level
+protobuf varint field is source-proven current Unix seconds. The hint is a
+discovery mechanism, not authorization to apply the rule.
 
 ## Comparison Issues
 

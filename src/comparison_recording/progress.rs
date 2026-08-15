@@ -39,6 +39,8 @@ fn observation(report: &ComparisonVerificationReport) -> Result<ProgressObservat
         key: report.recording_summary_fingerprint.clone(),
         evidence_fingerprint: fingerprint(&serde_json::to_vec(&evidence)?),
         finished_at: chrono::Utc::now().to_rfc3339(),
+        passed: Some(report.passed),
+        success_streak: None,
         apis: report
             .apis
             .iter()
@@ -53,6 +55,7 @@ fn observation(report: &ComparisonVerificationReport) -> Result<ProgressObservat
                                 .context("comparison API passed count exceeds u64")?,
                         },
                         passed: result.passed,
+                        success_streak: None,
                     },
                 ))
             })

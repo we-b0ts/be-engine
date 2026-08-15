@@ -238,7 +238,19 @@ pub struct RewriteRulePlanRecord {
     pub source_example: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_example: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memcached_timestamp: Option<RewriteMemcachedTimestampRuleSpec>,
     pub evidence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewriteMemcachedTimestampRuleSpec {
+    pub rule_id: String,
+    pub port: u16,
+    pub key_prefix: String,
+    pub key_suffix: String,
+    pub field_number: u32,
+    pub source_evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -692,14 +704,6 @@ pub struct RewriteEvidenceCommand {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RewriteApplicableRulePlanner {
-    pub kind: String,
-    pub protocol: String,
-    pub evidence_id: String,
-    pub command: RewriteCommandSpec,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct RewriteActionEnvelope {
     pub schema_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -788,19 +792,6 @@ pub struct RewriteRecordingStartReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_on: Option<RewriteTrafficOperationView>,
     pub status: RewriteCommandSpec,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RewriteEvidenceReport {
-    pub schema_version: u32,
-    pub evidence_id: String,
-    pub issue_id: String,
-    pub query: String,
-    pub facts: Value,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub applicable_rule_planners: Vec<RewriteApplicableRulePlanner>,
-    pub does_not_prove: Vec<String>,
-    pub next_step: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

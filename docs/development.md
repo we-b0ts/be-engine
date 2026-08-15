@@ -1192,7 +1192,7 @@ files under `.traffic-e2e/local/artifacts/`, starting with the representative ca
 efficiency. Artifacts remain read-only, and coordinator results remain
 authoritative for the active run and legal transitions.
 
-For a dependency issue, `representatives` and `dirty_clusters` read a bounded
+For a response, Replay, or dependency issue, `dirty_clusters` reads a bounded
 Replay dependency sidecar instead of the complete Replay report. The sidecar
 contains only case-scoped unmatched, unsupported, unsafe, and unused-case
 events, grouped by protocol and `host:port`, with bounded operation counts and
@@ -1202,6 +1202,21 @@ interactions recorded before readiness are returned only by the separate
 `pre_readiness_traffic` query. They do not affect the case gate.
 `unused_global` events and target activity outside an active case remain
 aggregate diagnostics and do not make a case dirty.
+
+When a dirty cluster uses a protocol with supported dependency-value rules,
+the evidence report includes `protocol_rules`. Each entry contains an English
+applicability hint and an exact read-only `help` command. This list is separate
+from `applicable_rule_planners`, which describes dependency ownership rules;
+neither list proves that a rule applies. Memcached currently exposes
+`protobuf-timestamp`, whose help command is:
+
+```bash
+backend-rewrite --target-root ../target rule memcached protobuf-timestamp --help
+```
+
+The rule planner requires current dirty-cluster evidence and source proof for
+the selected protobuf field. It owns the fixed five-second timestamp window;
+the caller supplies neither an offset nor a tolerance.
 
 Dependency evidence can be projected without parsing the JSONL directly:
 
@@ -1535,15 +1550,21 @@ than ordinary migration evidence.
 
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
-logical run, while each finalized attempt is counted once in
-`replay-progress.yaml`. Reprocessing the same published attempt is idempotent.
+logical recording run. `replay-progress.yaml` measures recording coverage and
+stability: one `recording_run_id` contributes at most one run and one current
+contribution for each selected case, regardless of how many Replay attempts
+were required. A retry revises that recording run's passed counts and streak
+state; only a new recording run can increase executed totals or extend a
+success streak. Reprocessing the same published attempt is idempotent.
 The committed progress file contains aggregate and latest-run evidence; its
-per-run idempotency ledger is stored in the ignored
+logical-run idempotency ledger is stored in the ignored
 `.traffic-e2e/local/artifacts/progress/replay-counted-runs.yaml` sidecar. Comparison
 progress uses the sibling `comparison-counted-runs.yaml` sidecar. Focused
 evidence never replaces the global full-round `latest`. The local ledger is the
 runtime authority: if the public snapshot is reset or removed, the runner
-rebuilds it from the baseline and ordered observations. If the local ledger is
+rebuilds it from the baseline and ordered logical-run observations. Legacy
+attempt-counted observations for the current recording are collapsed on the
+next publication. If the local ledger is
 missing, a valid public snapshot initializes its aggregate, API totals,
 streaks, and latest run as the new local baseline.
 

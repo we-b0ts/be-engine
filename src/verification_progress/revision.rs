@@ -1,8 +1,80 @@
 use anyhow::{Context, Result, ensure};
 
-use super::{LatestCounts, ProgressObservation, ProgressReport, SuccessCounts, SuccessStreak};
+use super::{
+    CountedObservation, LatestCounts, ProgressObservation, ProgressReport, SuccessCounts,
+    SuccessStreak, observation_passed,
+};
 
 impl ProgressReport {
+    pub(crate) fn upsert_logical_run(
+        &mut self,
+        mut current: ProgressObservation,
+        legacy_key_prefix: &str,
+    ) -> Result<bool> {
+        self.validate_observation(&current)?;
+
+        if let Some(previous) = self
+            .counted_observations
+            .get(&current.key)
+            .map(|counted| counted.observation.clone())
+        {
+            if previous.evidence_fingerprint == current.evidence_fingerprint {
+                return Ok(false);
+            }
+            populate_revised_streaks(self, &previous, &mut current);
+            let counted = self
+                .counted_observations
+                .get_mut(&current.key)
+                .expect("logical run observation disappeared during replacement");
+            counted.observation = current.clone();
+            self.counted_runs
+                .insert(current.key.clone(), current.evidence_fingerprint.clone());
+            self.rebuild_aggregates()?;
+            return Ok(true);
+        }
+
+        let legacy_keys = self
+            .counted_observations
+            .iter()
+            .filter(|(key, _)| key.starts_with(legacy_key_prefix))
+            .map(|(key, counted)| (key.clone(), counted.number))
+            .collect::<Vec<_>>();
+        if legacy_keys.is_empty() {
+            return self.apply(current);
+        }
+
+        let first_legacy_number = legacy_keys
+            .iter()
+            .map(|(_, number)| *number)
+            .min()
+            .expect("non-empty legacy observation set has a first number");
+        ensure!(
+            self.counted_observations
+                .values()
+                .all(|counted| counted.number < first_legacy_number
+                    || counted.observation.key.starts_with(legacy_key_prefix)),
+            "legacy replay attempts for logical run {:?} are not the latest progress entries",
+            current.key
+        );
+        populate_collapsed_streaks(self, &legacy_keys, &mut current);
+
+        self.counted_observations
+            .retain(|key, _| !key.starts_with(legacy_key_prefix));
+        self.counted_runs
+            .retain(|key, _| !key.starts_with(legacy_key_prefix));
+        self.counted_runs
+            .insert(current.key.clone(), current.evidence_fingerprint.clone());
+        self.counted_observations.insert(
+            current.key.clone(),
+            CountedObservation {
+                number: first_legacy_number,
+                observation: current,
+            },
+        );
+        self.rebuild_aggregates()?;
+        Ok(true)
+    }
+
     pub(crate) fn ensure_revisable(&self, key: &str) -> Result<()> {
         ensure!(
             self.counted_runs.contains_key(key),
@@ -34,7 +106,7 @@ impl ProgressReport {
         self.ensure_revisable(&observation.key)?;
         if let Some(counted) = self.counted_observations.get(&observation.key) {
             ensure!(
-                counted.observation == *observation,
+                same_source_observation(&counted.observation, observation),
                 "progress run {:?} observation changed before revision",
                 observation.key
             );
@@ -97,7 +169,7 @@ impl ProgressReport {
                 .get_mut(&current.key)
                 .expect("complete observation history contains every counted run");
             ensure!(
-                counted.observation == previous,
+                same_source_observation(&counted.observation, &previous),
                 "progress run {:?} observation changed before revision",
                 current.key
             );
@@ -198,6 +270,126 @@ impl ProgressReport {
         });
         Ok(true)
     }
+}
+
+fn same_source_observation(
+    persisted: &ProgressObservation,
+    supplied: &ProgressObservation,
+) -> bool {
+    persisted.key == supplied.key
+        && persisted.evidence_fingerprint == supplied.evidence_fingerprint
+        && persisted.finished_at == supplied.finished_at
+        && persisted.passed == supplied.passed
+        && persisted.apis.len() == supplied.apis.len()
+        && persisted.apis.iter().all(|(api, persisted)| {
+            supplied.apis.get(api).is_some_and(|supplied| {
+                persisted.cases == supplied.cases && persisted.passed == supplied.passed
+            })
+        })
+}
+
+fn populate_revised_streaks(
+    report: &ProgressReport,
+    previous: &ProgressObservation,
+    current: &mut ProgressObservation,
+) {
+    let mut streak = report.success_streak;
+    revise_streak(
+        &mut streak,
+        observation_passed(previous),
+        observation_passed(current),
+        observation_cases(previous),
+        observation_cases(current),
+    );
+    current.success_streak = Some(streak);
+    for (api, result) in &mut current.apis {
+        let mut streak = report
+            .apis
+            .get(api)
+            .map_or(SuccessStreak::default(), |progress| progress.success_streak);
+        if let Some(previous) = previous.apis.get(api) {
+            revise_streak(
+                &mut streak,
+                previous.passed,
+                result.passed,
+                previous.cases.executed,
+                result.cases.executed,
+            );
+        } else if result.passed {
+            streak.runs = streak.runs.saturating_add(1);
+            streak.cases = streak.cases.saturating_add(result.cases.executed);
+        } else {
+            streak = SuccessStreak::default();
+        }
+        result.success_streak = Some(streak);
+    }
+}
+
+fn populate_collapsed_streaks(
+    report: &ProgressReport,
+    legacy_keys: &[(String, u64)],
+    current: &mut ProgressObservation,
+) {
+    let baseline = report.observation_baseline.as_ref();
+    let scope = current.apis.keys().cloned().collect::<Vec<_>>();
+    let prior_streak = baseline
+        .filter(|value| {
+            value
+                .latest_run
+                .as_ref()
+                .is_some_and(|latest| latest.scope == scope)
+        })
+        .map_or(SuccessStreak::default(), |value| value.success_streak);
+    let legacy_failed = legacy_keys.iter().any(|(key, _)| {
+        report
+            .counted_observations
+            .get(key)
+            .is_some_and(|counted| !observation_passed(&counted.observation))
+    });
+    current.success_streak = Some(if observation_passed(current) {
+        let mut streak = if legacy_failed {
+            SuccessStreak::default()
+        } else {
+            prior_streak
+        };
+        streak.runs = streak.runs.saturating_add(1);
+        streak.cases = streak.cases.saturating_add(observation_cases(current));
+        streak
+    } else {
+        SuccessStreak::default()
+    });
+
+    for (api, result) in &mut current.apis {
+        let legacy_api_failed = legacy_keys.iter().any(|(key, _)| {
+            report
+                .counted_observations
+                .get(key)
+                .and_then(|counted| counted.observation.apis.get(api))
+                .is_some_and(|previous| !previous.passed)
+        });
+        result.success_streak = Some(if result.passed {
+            let mut streak = if legacy_api_failed {
+                SuccessStreak::default()
+            } else {
+                baseline
+                    .and_then(|value| value.apis.get(api))
+                    .map_or(SuccessStreak::default(), |progress| progress.success_streak)
+            };
+            streak.runs = streak.runs.saturating_add(1);
+            streak.cases = streak.cases.saturating_add(result.cases.executed);
+            streak
+        } else {
+            SuccessStreak::default()
+        });
+    }
+}
+
+fn observation_cases(observation: &ProgressObservation) -> u64 {
+    observation
+        .apis
+        .values()
+        .map(|result| result.cases.executed)
+        .sum()
 }
 
 fn revise_success_counts(

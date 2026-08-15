@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use chrono::Utc;
 use serde_json::Value;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -311,6 +312,109 @@ async fn replays_memcached_binary_with_live_opaque() {
 }
 
 #[tokio::test]
+async fn replays_memcached_set_with_a_case_relative_protobuf_timestamp() {
+    let temp = tempfile::tempdir().unwrap();
+    let case_dir = temp.path().join("case");
+    tokio::fs::create_dir_all(&case_dir).await.unwrap();
+    tokio::fs::write(
+        case_dir.join("request.json"),
+        r#"{"method":"GET","uri":"/api/config"}"#,
+    )
+    .await
+    .unwrap();
+    tokio::fs::write(case_dir.join("expected-response.json"), b"{}")
+        .await
+        .unwrap();
+
+    let recorded_at = Utc::now();
+    let recorded_value = protobuf_value(recorded_at.timestamp() as u64 - 3, b"stable");
+    let extras = [0_u8; 8];
+    let mut recorded_response = vec![0_u8; 24];
+    recorded_response[0] = 0x81;
+    recorded_response[1] = 0x01;
+    let dependency = serde_json::json!({
+        "event_type": "memcached_exchange",
+        "connection_id": Uuid::new_v4(),
+        "sequence": 1,
+        "timestamp": recorded_at,
+        "target_host": "cache.internal",
+        "target_port": 11211,
+        "wire_protocol": "binary",
+        "command": "set",
+        "opcode": 1,
+        "key": capture_json(b"u42"),
+        "args": [],
+        "value": capture_json(&recorded_value),
+        "extras": capture_json(&extras),
+        "cas": null,
+        "quiet": false,
+        "noreply": false,
+        "response_status": "0",
+        "response_frames": [capture_json(&recorded_response)],
+        "no_response": false,
+        "replay_safe": true
+    });
+    tokio::fs::write(
+        case_dir.join("dependencies.jsonl"),
+        serde_json::to_string(&dependency).unwrap(),
+    )
+    .await
+    .unwrap();
+    let policy_path = temp.path().join("verification.yaml");
+    tokio::fs::write(
+        &policy_path,
+        r#"
+version: 1
+expected_response: assertions_only
+rules:
+  - id: user-info-loading-time
+    protocol: memcached
+    memcached:
+      resource:
+        kind: cache_service
+        port: 11211
+      command: set
+      key:
+        prefix: u
+        suffix: ''
+      protobuf:
+        timestamp_fields:
+          50:
+            mechanism: unix_seconds
+            source_evidence: UserInfoServiceBase.java:438 current time
+"#,
+    )
+    .await
+    .unwrap();
+
+    let report_path = temp.path().join("report.json");
+    let (addr, task) =
+        spawn_replay_with_policy(&case_dir, Some(report_path.clone()), policy_path).await;
+    let mut client = TcpStream::connect(addr).await.unwrap();
+    let actual_value = protobuf_value(Utc::now().timestamp() as u64 + 3, b"stable");
+    client
+        .write_all(&binary_set_request(42, b"u42", &actual_value))
+        .await
+        .unwrap();
+    let mut response = vec![0_u8; 24];
+    client.read_exact(&mut response).await.unwrap();
+    assert_eq!(u32::from_be_bytes(response[12..16].try_into().unwrap()), 42);
+    assert_eq!(u16::from_be_bytes(response[6..8].try_into().unwrap()), 0);
+
+    let report = wait_for_matched_count(&report_path, "memcached", 1).await;
+    let rule = &report["replay_policy"]["rules"][0];
+    assert_eq!(rule["matches"], 1);
+    assert_eq!(rule["time_validations"], 1);
+    assert!(
+        report["replay_policy"]["unused_applicable_rule_ids"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    task.abort();
+}
+
+#[tokio::test]
 async fn background_memcached_gets_are_connection_independent() {
     let temp = tempfile::tempdir().unwrap();
     let case_dir = temp.path().join("case");
@@ -611,12 +715,29 @@ async fn spawn_replay(
     case_dir: &Path,
     report_path: Option<PathBuf>,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
-    spawn_replay_with_background(case_dir, report_path, Vec::new()).await
+    spawn_replay_configured(case_dir, report_path, None, Vec::new()).await
 }
 
 async fn spawn_replay_with_background(
     case_dir: &Path,
     report_path: Option<PathBuf>,
+    process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_replay_configured(case_dir, report_path, None, process_owned_dependencies).await
+}
+
+async fn spawn_replay_with_policy(
+    case_dir: &Path,
+    report_path: Option<PathBuf>,
+    policy_path: PathBuf,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_replay_configured(case_dir, report_path, Some(policy_path), Vec::new()).await
+}
+
+async fn spawn_replay_configured(
+    case_dir: &Path,
+    report_path: Option<PathBuf>,
+    policy_path: Option<PathBuf>,
     process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     super::write_test_recording_network_manifest(case_dir);
@@ -634,7 +755,7 @@ async fn spawn_replay_with_background(
             control_socket_path: None,
             ca_cert_path: Some(case_dir.join(".replay/ca.pem")),
             ca_key_path: Some(case_dir.join(".replay/ca-key.pem")),
-            policy_path: None,
+            policy_path,
             http_ignore_query_params: Vec::new(),
             process_owned_dependencies,
             allowed_unused_http: None,
@@ -719,6 +840,38 @@ fn binary_get_request_for(opaque: u32, key: &[u8]) -> Vec<u8> {
     request[12..16].copy_from_slice(&opaque.to_be_bytes());
     request.extend_from_slice(key);
     request
+}
+
+fn binary_set_request(opaque: u32, key: &[u8], value: &[u8]) -> Vec<u8> {
+    let extras = [0_u8; 8];
+    let body_len = extras.len() + key.len() + value.len();
+    let mut request = vec![0_u8; 24];
+    request[0] = 0x80;
+    request[1] = 0x01;
+    request[2..4].copy_from_slice(&u16::try_from(key.len()).unwrap().to_be_bytes());
+    request[4] = extras.len() as u8;
+    request[8..12].copy_from_slice(&u32::try_from(body_len).unwrap().to_be_bytes());
+    request[12..16].copy_from_slice(&opaque.to_be_bytes());
+    request.extend_from_slice(&extras);
+    request.extend_from_slice(key);
+    request.extend_from_slice(value);
+    request
+}
+
+fn protobuf_value(timestamp: u64, stable: &[u8]) -> Vec<u8> {
+    let mut value = vec![0x08, 0x07, 0x90, 0x03];
+    encode_varint(timestamp, &mut value);
+    value.extend_from_slice(&[0x12, stable.len() as u8]);
+    value.extend_from_slice(stable);
+    value
+}
+
+fn encode_varint(mut value: u64, output: &mut Vec<u8>) {
+    while value >= 0x80 {
+        output.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    output.push(value as u8);
 }
 
 fn memcached_binary_dependency(connection_id: Uuid, sequence: u64, key: &[u8]) -> Value {

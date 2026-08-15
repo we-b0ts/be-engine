@@ -11,6 +11,7 @@ use super::config::{
     DynamicValueRule, LoadedReplayPolicy, PolicyProtocol, ReplayPolicyRule, load_replay_policy,
 };
 use super::pattern::{path_pattern_matches, query_values, text_pattern_matches, uri_path};
+use super::protobuf::matches_with_timestamp_fields;
 use super::report::{PolicyRuleReport, ReplayPolicyReport};
 use super::value::{validate_time, validate_value};
 use crate::replay::{
@@ -66,6 +67,18 @@ pub(in crate::replay) struct MysqlPolicyContext<'a> {
     pub(in crate::replay) sql: Option<&'a str>,
     pub(in crate::replay) recorded: Option<&'a [RecordedMysqlValue]>,
     pub(in crate::replay) actual: Option<&'a [RecordedMysqlValue]>,
+}
+
+#[derive(Debug)]
+pub(in crate::replay) struct MemcachedPolicyContext<'a> {
+    pub(in crate::replay) case_id: Option<&'a str>,
+    pub(in crate::replay) target: &'a TargetKey,
+    pub(in crate::replay) command: &'a str,
+    pub(in crate::replay) key: Option<&'a [u8]>,
+    pub(in crate::replay) recorded_value: Option<&'a [u8]>,
+    pub(in crate::replay) actual_value: Option<&'a [u8]>,
+    pub(in crate::replay) recorded_observed_at: DateTime<Utc>,
+    pub(in crate::replay) actual_observed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +180,30 @@ impl ReplayPolicyRuntime {
                     rule.protocol == PolicyProtocol::Http
                         && rule_matches_case(rule, case)
                         && rule_matches_http(rule, target, method, uri)
+                })
+                .map(|rule| rule.id.clone()),
+        );
+    }
+
+    pub(in crate::replay) fn observe_recorded_memcached_exchange(
+        &mut self,
+        case_id: Option<&str>,
+        target: &TargetKey,
+        command: &str,
+        key: Option<&[u8]>,
+    ) {
+        let Some(case) = case_id.and_then(|case_id| self.cases.get(case_id)) else {
+            return;
+        };
+        self.applicable_rule_ids.extend(
+            self.loaded
+                .document
+                .rules
+                .iter()
+                .filter(|rule| {
+                    rule.protocol == PolicyProtocol::Memcached
+                        && rule_matches_case(rule, case)
+                        && rule_matches_memcached(rule, target, command, key)
                 })
                 .map(|rule| rule.id.clone()),
         );
@@ -376,6 +413,70 @@ impl ReplayPolicyRuntime {
         Ok(decision)
     }
 
+    pub(in crate::replay) fn preview_memcached(
+        &self,
+        context: &MemcachedPolicyContext<'_>,
+    ) -> Result<PolicyDecision, String> {
+        let Some(case_id) = context.case_id else {
+            return exact_memcached_value(context.recorded_value, context.actual_value);
+        };
+        let Some(case) = self.cases.get(case_id) else {
+            return Err(format!(
+                "replay policy has no request metadata for case {case_id}"
+            ));
+        };
+        let matching_rules = self
+            .loaded
+            .document
+            .rules
+            .iter()
+            .filter(|rule| {
+                rule.protocol == PolicyProtocol::Memcached
+                    && rule_matches_case(rule, case)
+                    && rule_matches_memcached(rule, context.target, context.command, context.key)
+            })
+            .collect::<Vec<_>>();
+        if matching_rules.is_empty() {
+            return exact_memcached_value(context.recorded_value, context.actual_value);
+        }
+        let (Some(recorded), Some(actual)) = (context.recorded_value, context.actual_value) else {
+            return Err(
+                "replay policy selected a Memcached protobuf value but recorded or actual value is absent"
+                    .to_string(),
+            );
+        };
+
+        let mut selected_fields = BTreeMap::new();
+        for rule in &matching_rules {
+            let memcached = rule.memcached.as_ref().expect("validated Memcached policy");
+            for number in memcached.protobuf.timestamp_fields.keys() {
+                if selected_fields.insert(*number, rule.id.as_str()).is_some() {
+                    return Err(format!(
+                        "multiple replay policy rules select Memcached protobuf field {number}"
+                    ));
+                }
+            }
+        }
+        let field_numbers = selected_fields.keys().copied().collect::<Vec<_>>();
+        matches_with_timestamp_fields(
+            recorded,
+            actual,
+            &field_numbers,
+            context.recorded_observed_at,
+            context.actual_observed_at,
+        )?;
+
+        let mut decision = PolicyDecision::default();
+        for rule_id in selected_fields.values() {
+            decision
+                .usage
+                .entry((*rule_id).to_string())
+                .or_default()
+                .time_validations += 1;
+        }
+        Ok(decision)
+    }
+
     fn preview_dynamic_value(
         &self,
         case_id: &str,
@@ -503,6 +604,17 @@ fn exact_mysql_params(
     }
 }
 
+fn exact_memcached_value(
+    recorded: Option<&[u8]>,
+    actual: Option<&[u8]>,
+) -> Result<PolicyDecision, String> {
+    if recorded == actual {
+        Ok(PolicyDecision::default())
+    } else {
+        Err("Memcached value did not match the recording".to_string())
+    }
+}
+
 fn rule_matches_case(rule: &ReplayPolicyRule, case: &CaseIdentity) -> bool {
     let Some(selector) = rule.case_selector.as_ref() else {
         return true;
@@ -600,6 +712,35 @@ fn rule_matches_http(rule: &ReplayPolicyRule, target: &TargetKey, method: &str, 
             http.method.eq_ignore_ascii_case(method)
                 && path_pattern_matches(&http.path, &uri_path(uri))
         })
+}
+
+fn rule_matches_memcached(
+    rule: &ReplayPolicyRule,
+    target: &TargetKey,
+    command: &str,
+    key: Option<&[u8]>,
+) -> bool {
+    rule.memcached.as_ref().is_some_and(|memcached| {
+        memcached.resource.port() == target.port
+            && memcached.command.eq_ignore_ascii_case(command)
+            && key.is_some_and(|key| {
+                let prefix = memcached.key.prefix.as_bytes();
+                let suffix = memcached.key.suffix.as_bytes();
+                key.strip_prefix(prefix)
+                    .and_then(|middle| middle.strip_suffix(suffix))
+                    .is_some_and(is_u64_ascii)
+            })
+    })
+}
+
+fn is_u64_ascii(value: &[u8]) -> bool {
+    !value.is_empty()
+        && value.len() <= 20
+        && value.iter().all(u8::is_ascii_digit)
+        && std::str::from_utf8(value)
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .is_some()
 }
 
 fn rule_matches_target(rule: &ReplayPolicyRule, actual: Option<&TargetKey>) -> bool {

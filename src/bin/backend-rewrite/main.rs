@@ -8,11 +8,12 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
     DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteCaseDependenciesOptions,
-    RewriteContext, RewriteNextOptions, RewriteRecordingKind, RewriteRecordingReason,
-    RewriteRecordingRequestOptions, RewriteRevalidationRequestOptions, RewriteRouteCause,
-    RewriteRouteOptions, RewriteRulePlanOptions, RewriteTargetQualityOptions,
-    RewriteWorkerConfirmOptions, RewriteWorkerTransferOptions, apply_rewrite_rule,
-    confirm_rewrite_worker, inventory_rewrite, next_rewrite, plan_rewrite_rule,
+    RewriteContext, RewriteMemcachedTimestampRulePlanOptions, RewriteNextOptions,
+    RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
+    RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
+    RewriteRulePlanOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
+    RewriteWorkerTransferOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
+    next_rewrite, plan_rewrite_memcached_timestamp_rule, plan_rewrite_rule,
     query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
     request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
     route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
@@ -180,8 +181,55 @@ struct RuleArgs {
 enum RuleCommand {
     /// Validate current evidence and preview one response-rule change.
     Plan(RulePlanArgs),
+    /// Plan a request-owned Memcached dependency-payload verification rule.
+    Memcached(MemcachedRuleArgs),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(RuleApplyArgs),
+}
+
+#[derive(Debug, Args)]
+struct MemcachedRuleArgs {
+    #[command(subcommand)]
+    command: MemcachedRuleCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum MemcachedRuleCommand {
+    /// Plan a cache-service SET protobuf Unix-seconds field rule.
+    ProtobufTimestamp(MemcachedTimestampRulePlanArgs),
+}
+
+#[derive(Debug, Args)]
+struct MemcachedTimestampRulePlanArgs {
+    /// Dirty-cluster evidence id that exposes a Memcached SET capability candidate.
+    #[arg(long)]
+    evidence_id: String,
+    /// Stable verification-policy rule id.
+    #[arg(long)]
+    name: String,
+    /// Resource addressing contract. Cache service is selected by protocol and port.
+    #[arg(long, value_enum)]
+    resource_kind: MemcachedResourceKindArg,
+    /// Actual Memcached dependency port observed on the recorded node, not a local SDK entry port.
+    #[arg(long)]
+    port: u16,
+    /// Byte-exact key prefix before a required nonempty ASCII integer. At least one key bound must be nonempty.
+    #[arg(long, default_value = "")]
+    key_prefix: String,
+    /// Byte-exact key suffix after a required nonempty ASCII integer. At least one key bound must be nonempty.
+    #[arg(long, default_value = "")]
+    key_suffix: String,
+    /// Top-level protobuf varint field proven by source to contain current Unix seconds.
+    #[arg(long)]
+    protobuf_field: u32,
+    /// One-line source file/symbol proof for the field's current-time mechanism.
+    #[arg(long)]
+    source_evidence: String,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum MemcachedResourceKindArg {
+    CacheService,
 }
 
 #[derive(Debug, Args)]
@@ -500,6 +548,26 @@ async fn run(cli: Cli) -> Result<()> {
                 )?,
                 pretty,
             ),
+            RuleCommand::Memcached(args) => match args.command {
+                MemcachedRuleCommand::ProtobufTimestamp(args) => {
+                    let MemcachedResourceKindArg::CacheService = args.resource_kind;
+                    print_json(
+                        &plan_rewrite_memcached_timestamp_rule(
+                            RewriteContext { target_root },
+                            RewriteMemcachedTimestampRulePlanOptions {
+                                evidence_id: args.evidence_id,
+                                rule_id: args.name,
+                                port: args.port,
+                                key_prefix: args.key_prefix,
+                                key_suffix: args.key_suffix,
+                                field_number: args.protobuf_field,
+                                source_evidence: args.source_evidence,
+                            },
+                        )?,
+                        pretty,
+                    )
+                }
+            },
             RuleCommand::Apply(args) => print_json(
                 &apply_rewrite_rule(RewriteContext { target_root }, &args.plan_id)?,
                 pretty,

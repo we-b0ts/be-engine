@@ -122,7 +122,9 @@ pub(crate) fn ensure_focused_background_reclassification_revisable(
         state.case_source == base_layout.case_source,
         "focused E2E evidence belongs to another case source"
     );
-    ensure_replay_progress_revisable(&base_layout.progress_path, &state)
+    let index =
+        store::load_or_create_index(&base_layout, &base_layout.run_key, &base_layout.case_source)?;
+    ensure_replay_progress_revisable(&base_layout.progress_path, &index, &state)
 }
 
 pub(crate) fn reclassify_focused_background_dependencies(
@@ -168,7 +170,9 @@ pub(crate) fn reclassify_focused_background_dependencies(
         state.case_source == base_layout.case_source,
         "focused E2E evidence belongs to another case source"
     );
-    ensure_replay_progress_revisable(&base_layout.progress_path, &state)?;
+    let mut index =
+        store::load_or_create_index(&base_layout, &base_layout.run_key, &base_layout.case_source)?;
+    ensure_replay_progress_revisable(&base_layout.progress_path, &index, &state)?;
     let previous_state = state.clone();
 
     let reclassified = refresh_background_evidence(&config, &state)?;
@@ -202,11 +206,9 @@ pub(crate) fn reclassify_focused_background_dependencies(
     state.status = terminal_status(&state);
     store::write_yaml(&state_path, &state)?;
 
-    let mut index =
-        store::load_or_create_index(&base_layout, &base_layout.run_key, &base_layout.case_source)?;
     update_focused_index(&mut index, &state, &inventory, inventory_complete);
     store::write_yaml(&base_layout.index_path, &index)?;
-    revise_replay_progress(&base_layout.progress_path, &previous_state, &state)?;
+    revise_replay_progress(&base_layout.progress_path, &index, &previous_state, &state)?;
     let result = api_result(&focused_layout, &state, api, state.sequence);
     Ok(FocusedBackgroundReclassification {
         recording_reused: true,

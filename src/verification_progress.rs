@@ -111,6 +111,10 @@ pub(crate) struct ProgressObservation {
     pub(crate) key: String,
     pub(crate) evidence_fingerprint: String,
     pub(crate) finished_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) passed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) success_streak: Option<SuccessStreak>,
     pub(crate) apis: BTreeMap<String, ApiObservation>,
 }
 
@@ -118,6 +122,8 @@ pub(crate) struct ProgressObservation {
 pub(crate) struct ApiObservation {
     pub(crate) cases: LatestCounts,
     pub(crate) passed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) success_streak: Option<SuccessStreak>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -217,14 +223,16 @@ impl ProgressReport {
             .values()
             .filter(|result| result.passed)
             .count() as u64;
-        let passed = passed_apis == observation.apis.len() as u64;
+        let passed = observation_passed(observation);
 
         self.totals.runs.executed = self.totals.runs.executed.saturating_add(1);
         self.totals.runs.passed = self.totals.runs.passed.saturating_add(u64::from(passed));
         self.totals.cases.executed = self.totals.cases.executed.saturating_add(cases.executed);
         self.totals.cases.passed = self.totals.cases.passed.saturating_add(cases.passed);
 
-        if passed {
+        if let Some(streak) = observation.success_streak {
+            self.success_streak = streak;
+        } else if passed {
             if !same_scope {
                 self.success_streak = SuccessStreak::default();
             }
@@ -252,7 +260,9 @@ impl ProgressReport {
                 .cases
                 .passed
                 .saturating_add(result.cases.passed);
-            if result.passed {
+            if let Some(streak) = result.success_streak {
+                progress.success_streak = streak;
+            } else if result.passed {
                 progress.success_streak.runs = progress.success_streak.runs.saturating_add(1);
                 progress.success_streak.cases = progress
                     .success_streak
@@ -384,8 +394,19 @@ impl ProgressReport {
                 "passing progress API {api:?} must pass every executed case"
             );
         }
+        ensure!(
+            observation.passed != Some(true)
+                || observation.apis.values().all(|result| result.passed),
+            "passing progress run must pass every executed API"
+        );
         Ok(())
     }
+}
+
+fn observation_passed(observation: &ProgressObservation) -> bool {
+    observation
+        .passed
+        .unwrap_or_else(|| observation.apis.values().all(|result| result.passed))
 }
 
 pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<ProgressReport>> {

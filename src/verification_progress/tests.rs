@@ -7,6 +7,8 @@ fn observation(key: &str, apis: &[(&str, u64, u64)]) -> ProgressObservation {
         key: key.to_string(),
         evidence_fingerprint: format!("fingerprint-{key}"),
         finished_at: format!("2026-07-31T00:00:0{}Z", key.len()),
+        passed: None,
+        success_streak: None,
         apis: apis
             .iter()
             .map(|(api, executed, passed)| {
@@ -18,6 +20,7 @@ fn observation(key: &str, apis: &[(&str, u64, u64)]) -> ProgressObservation {
                             passed: *passed,
                         },
                         passed: executed == passed,
+                        success_streak: None,
                     },
                 )
             })
@@ -172,6 +175,41 @@ fn changed_global_scope_starts_a_new_streak() {
     assert_eq!(report.success_streak.runs, 1);
     assert_eq!(report.success_streak.cases, 200);
     assert_eq!(report.apis["GET /users"].success_streak.runs, 2);
+}
+
+#[test]
+fn retrying_one_logical_run_revises_coverage_without_extending_the_streak() {
+    let mut report = ProgressReport::new(VerificationStage::Replay);
+    report
+        .apply(observation("previous", &[("GET /users", 1_000, 1_000)]))
+        .unwrap();
+    report
+        .upsert_logical_run(observation("current", &[("GET /users", 10, 9)]), "current|")
+        .unwrap();
+
+    assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.cases.executed, 1_010);
+    assert_eq!(report.success_streak, SuccessStreak::default());
+
+    let mut passing = observation("current", &[("GET /users", 10, 10)]);
+    passing.evidence_fingerprint = "current-passing".to_string();
+    report.upsert_logical_run(passing, "current|").unwrap();
+
+    assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.runs.passed, 2);
+    assert_eq!(report.totals.cases.executed, 1_010);
+    assert_eq!(report.totals.cases.passed, 1_010);
+    assert_eq!(report.success_streak.runs, 1);
+    assert_eq!(report.success_streak.cases, 10);
+
+    let mut repeated = observation("current", &[("GET /users", 10, 10)]);
+    repeated.evidence_fingerprint = "current-passing-again".to_string();
+    report.upsert_logical_run(repeated, "current|").unwrap();
+
+    assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.cases.executed, 1_010);
+    assert_eq!(report.success_streak.runs, 1);
+    assert_eq!(report.success_streak.cases, 10);
 }
 
 #[test]

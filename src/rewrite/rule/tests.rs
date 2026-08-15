@@ -26,6 +26,7 @@ fn response_state() -> RewriteState {
         source_evidence: Some("src/id.rs:new".to_string()),
         source_example: None,
         target_example: None,
+        memcached_timestamp: None,
         evidence_id: "evidence-response".to_string(),
     });
     state

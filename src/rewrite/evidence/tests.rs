@@ -550,6 +550,63 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
 }
 
 #[test]
+fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicability() {
+    let target = tempfile::tempdir().unwrap();
+    let rules = protocol_rule_hints(
+        target.path(),
+        QUERY_DIRTY_CLUSTERS,
+        &serde_json::json!({
+            "clusters": [
+                {"protocol": "memcached", "reason": "unmatched_actual"},
+                {"protocol": "memcached", "reason": "unused_recorded"}
+            ]
+        }),
+    );
+
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].protocol, "memcached");
+    assert_eq!(rules[0].rule, "protobuf-timestamp");
+    assert!(rules[0].hint.contains("Memcached SET value"));
+    assert!(rules[0].hint.starts_with("Investigate"));
+    assert_eq!(
+        rules[0].help.argv,
+        [
+            "backend-rewrite",
+            "--target-root",
+            target.path().to_str().unwrap(),
+            "rule",
+            "memcached",
+            "protobuf-timestamp",
+            "--help",
+        ]
+    );
+}
+
+#[test]
+fn response_issues_can_query_dirty_clusters_for_protocol_rule_discovery() {
+    let mut state = crate::rewrite::test_state();
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-response-with-dirty-dependency".to_string(),
+        kind: RewriteIssueKind::Response,
+        owner: RewriteIssueOwner::TargetCode,
+        summary: "response and dependency differ".to_string(),
+        pointer_pattern: None,
+        representative: None,
+        response_diagnosis: None,
+        possible_causes: Vec::new(),
+        observed_target_fingerprint: "target".to_string(),
+        attempt: 1,
+        comparison_observation: None,
+    });
+
+    assert!(
+        query_kinds(&state, state.active_issue.as_ref().unwrap())
+            .iter()
+            .any(|(query, _)| *query == QUERY_DIRTY_CLUSTERS)
+    );
+}
+
+#[test]
 fn non_dependency_evidence_does_not_offer_background_rule_planners() {
     let target = tempfile::tempdir().unwrap();
     let planners = applicable_rule_planners(

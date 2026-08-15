@@ -4,10 +4,10 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::model::{
-    RewriteApplicableRulePlanner, RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue,
-    RewriteIssueKind, RewriteState,
+use super::evidence_model::{
+    RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteProtocolRuleHint,
 };
+use super::model::{RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewriteState};
 use super::{artifacts, fingerprint};
 use crate::case_group::resolve_published_case_dir;
 use crate::comparison_recording::resolve_comparison_case_dir;
@@ -83,7 +83,7 @@ pub(super) fn query(
             .trim_start_matches("fnv1a64:")
     );
     Ok(RewriteEvidenceReport {
-        schema_version: 1,
+        schema_version: 2,
         evidence_id: evidence_id.clone(),
         issue_id: issue.id.clone(),
         query: kind.to_string(),
@@ -94,10 +94,46 @@ pub(super) fn query(
             &facts,
             &evidence_id,
         ),
+        protocol_rules: protocol_rule_hints(target_root, kind, &facts),
         facts,
         does_not_prove,
         next_step,
     })
+}
+
+fn protocol_rule_hints(
+    target_root: &Path,
+    query_kind: &str,
+    facts: &Value,
+) -> Vec<RewriteProtocolRuleHint> {
+    if query_kind != QUERY_DIRTY_CLUSTERS {
+        return Vec::new();
+    }
+    let has_memcached = facts
+        .get("clusters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("memcached"));
+    if !has_memcached {
+        return Vec::new();
+    }
+    vec![RewriteProtocolRuleHint {
+        protocol: "memcached".to_string(),
+        rule: "protobuf-timestamp".to_string(),
+        hint: "Investigate this rule when a Memcached SET value contains a protobuf varint field generated from the current Unix time."
+            .to_string(),
+        help: super::action::command(
+            target_root,
+            vec![
+                "rule".to_string(),
+                "memcached".to_string(),
+                "protobuf-timestamp".to_string(),
+                "--help".to_string(),
+            ],
+            Vec::new(),
+        ),
+    }]
 }
 
 fn applicable_rule_planners(
@@ -605,7 +641,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
     }
     if matches!(
         issue.kind,
-        RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
     ) {
         queries.push((
             QUERY_DIRTY_CLUSTERS,

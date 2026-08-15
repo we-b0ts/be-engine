@@ -160,12 +160,64 @@ rules:
           validate: non_empty
 ```
 
-Version one supports only its recorder-declared scalar fields. It does not
-support background allowlists, case-id exceptions, dependency payload fixtures,
-response ignores, or arbitrary JSON-body transformations. A case requiring an
-unsupported rule remains non-passing; return
+Version one supports its recorder-declared scalar fields and the narrow
+Memcached protobuf timestamp contract below. It does not support background
+allowlists, case-id exceptions, dependency payload fixtures, response ignores,
+or arbitrary JSON-body transformations. A case requiring an unsupported rule
+remains non-passing; return
 `verification_policy/action_required` with the missing capability and
 acceptance check. Do not compensate in target code or the test harness.
+
+Memcached `set` supports one narrow dynamic payload contract: a top-level
+protobuf varint field proven by source to contain the current Unix time in
+seconds. Select a supported Memcached resource plus a byte-exact key
+prefix/suffix whose middle is a nonempty ASCII integer, then name each timestamp
+field and retain one-line source evidence. A `cache_service` resource uses
+protocol plus port to select the rule; the recorded exchange remains bound to
+its exact target domain plus port. Cache namespace and deployment group are not
+accepted or exposed:
+
+```yaml
+rules:
+  - id: user-info-cache-writeback
+    protocol: memcached
+    memcached:
+      resource:
+        kind: cache_service
+        port: 11211
+      command: set
+      key:
+        prefix: u
+        suffix: ''
+      protobuf:
+        timestamp_fields:
+          50:
+            mechanism: unix_seconds
+            source_evidence: UserInfoServiceBase.java:438 loads the current time
+```
+
+The engine, not the AI or policy author, owns a fixed symmetric five-second
+window. Validate the recorded field against its recorded `SET` event time and
+the target field against the time Replay observes the target `SET`; never
+compare the two timestamp literals across runs. The exact timestamp and its
+offset are not policy inputs or normal AI evidence. Every unselected protobuf
+field and every other Memcached request property remains exact. A selected
+field must occur exactly once as a varint; malformed protobuf, groups, missing
+or repeated fields, and out-of-window values fail closed. Do not replace this
+field rule with whole-value or command-and-key-only matching.
+
+Memcached `SET` expiration is engine-owned protocol behavior, not a policy
+rule. Equal expiration values match. `0` and relative expirations through 30
+days must otherwise remain exact. When both values are absolute Unix
+timestamps, compare each expiration with the observation time of that same
+`SET`; accept only when the remaining TTLs differ by at most five seconds. A
+relative value never matches an absolute value. This applies to text arguments
+and binary extras while all non-expiration components remain exact. Do not plan
+a dependency rule for an exptime-only difference.
+
+Only `kind: cache_service` is currently supported. Reject `kind: breeze`
+instead of guessing its namespace and dynamic-port semantics; add that kind
+only after a concrete recorded case supplies the required evidence.
 
 ## Dynamic Response Fields
 

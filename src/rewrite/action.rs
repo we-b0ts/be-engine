@@ -193,7 +193,7 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
         }
         if let Some(plan) = &state.rule_plan {
             return RewriteAction::PlanApplyRequired {
-                summary: "apply the unchanged pending response-rule plan".to_string(),
+                summary: "apply the unchanged pending verification-rule plan".to_string(),
                 command: rule_apply_command(target_root, &plan.id),
             };
         }
@@ -809,6 +809,7 @@ mod tests {
             source_evidence: Some("src/id.rs:new".to_string()),
             source_example: None,
             target_example: None,
+            memcached_timestamp: None,
             evidence_id: "evidence-response".to_string(),
         });
 

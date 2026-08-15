@@ -208,6 +208,8 @@ mod tests {
                     key: (*key).to_string(),
                     evidence_fingerprint: format!("fingerprint-{key}"),
                     finished_at: format!("2026-08-14T00:00:0{}Z", key.len()),
+                    passed: None,
+                    success_streak: None,
                     apis: BTreeMap::from([(
                         "GET /api".to_string(),
                         ApiObservation {
@@ -216,6 +218,7 @@ mod tests {
                                 passed: 1,
                             },
                             passed: true,
+                            success_streak: None,
                         },
                     )]),
                 })

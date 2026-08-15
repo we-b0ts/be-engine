@@ -3,6 +3,7 @@ mod feedback;
 mod initialization;
 mod matcher;
 mod pattern;
+mod protobuf;
 mod report;
 mod response;
 mod value;
@@ -14,15 +15,18 @@ pub use config::{ReplayPolicyValidationReport, validate_replay_policy};
 pub(in crate::replay) use config::{fingerprint, load_replay_policy};
 pub use feedback::{
     ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
-    DynamicResponseRuleReport, ResponseRuleFeedback, ResponseRulePlan, ResponseRuleReport,
-    plan_comparison_response_rule, plan_dynamic_response_rule, plan_response_rule,
+    DynamicResponseRuleReport, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
+    MemcachedTimestampRuleReport, ResponseRuleFeedback, ResponseRulePlan, ResponseRuleReport,
+    plan_comparison_response_rule, plan_dynamic_response_rule, plan_memcached_timestamp_rule,
+    plan_response_rule,
 };
 pub(crate) use initialization::render_validated_replay_policy;
 pub use initialization::{
     ReplayPolicyInitOptions, ReplayPolicyInitResult, initialize_replay_policy,
 };
 pub(in crate::replay) use matcher::{
-    HttpPolicyContext, MysqlPolicyContext, PolicyDecision, ReplayPolicyRuntime,
+    HttpPolicyContext, MemcachedPolicyContext, MysqlPolicyContext, PolicyDecision,
+    ReplayPolicyRuntime,
 };
 pub(in crate::replay) use pattern::uri_path;
 pub(in crate::replay) use report::ReplayPolicyReport;

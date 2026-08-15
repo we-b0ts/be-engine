@@ -112,10 +112,12 @@ pub(crate) use policy::response_locations_overlap;
 pub use policy::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
     DynamicResponseMechanism, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
-    DynamicResponseRuleReport, ReplayPolicyInitOptions, ReplayPolicyInitResult,
+    DynamicResponseRuleReport, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
+    MemcachedTimestampRuleReport, ReplayPolicyInitOptions, ReplayPolicyInitResult,
     ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
     ResponseRuleReport, initialize_replay_policy, plan_comparison_response_rule,
-    plan_dynamic_response_rule, plan_response_rule, validate_replay_policy,
+    plan_dynamic_response_rule, plan_memcached_timestamp_rule, plan_response_rule,
+    validate_replay_policy,
 };
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
@@ -329,6 +331,7 @@ impl ReplayRuntime {
                 );
             }
             http::observe_recorded_policy_exchanges(policy, &http_exchanges);
+            memcached::observe_recorded_policy_exchanges(policy, &memcached);
             policy.reject_http_ignore_overlap(&http_ignore_query_params)?;
         }
 
