@@ -46,10 +46,11 @@ current action. Wait only for:
 The stable action envelope has `kind`, `summary`, `details`, and `commands`.
 Read kind-specific facts only from `details` and execute only command roles
 present in `commands`; an empty command object never implies a fallback. Status
-does not guarantee an unconditional top-level `next` command. Treat top-level
-`source_process_traffic` only as bounded startup, configured process-owned, and
-local-cache triage context. Its `process_owned` field reflects configured rule
-matches; neither it nor bootstrap timing proves response causality.
+does not guarantee an unconditional top-level `next` command. Source-process
+traffic is issue-scoped evidence, not coordinator state. When an
+`implementation_required` action returns its evidence command, execute that
+exact command only when startup, configured process-owned traffic, background
+refresh, or local-cache behavior is relevant.
 
 ### `wait_required`
 
@@ -101,8 +102,8 @@ not infer additional input or change the shared recording scope.
 
 When `details.reason=verification_progress_commit_required`, every API is
 verified but terminal delivery is still forbidden. Commit exactly the listed
-coordinator-generated public progress snapshots without editing or resetting
-them, then execute `backend-rewrite next` again. Intermediate failed or passing
+coordinator-generated public `progress.yaml` without editing or resetting it,
+then execute `backend-rewrite next` again. Intermediate failed or passing
 attempts do not require progress commits.
 
 ### `implementation_required`
@@ -187,7 +188,7 @@ Continue other runnable work only through current coordinator-issued commands.
 API-scoped `complete` means only that API has current passing focused E2E and
 comparison evidence. Finish repository-wide verification and delivery only
 when `terminal_allowed=true` proves every API is complete for the same target
-content fingerprint and the final public progress snapshots are committed. Use
+content fingerprint and the final public `progress.yaml` is committed. Use
 `backend-rewrite inventory` when delivery needs the full per-API list.
 
 ## API Inventory And Serialized Traffic

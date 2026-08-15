@@ -121,7 +121,8 @@ Dependency cleanliness is evaluated per active case. Clusters contain
 case-scoped unmatched, unsupported, unsafe, and unused-case events grouped by
 protocol and endpoint. Each has a stable `cluster_id`, bounded operations, a
 representative case, and correlated source pre-readiness count. The complete
-startup summary is available only from `pre_readiness_traffic`;
+recording-global bootstrap and configured process-owned summary is available
+only from `source_process_traffic`;
 `unused_global`, startup context, and case-external target activity do not fail
 the case gate.
 
@@ -134,7 +135,8 @@ recording observation.
 
 ## Bootstrap Dependency Overlay
 
-For a Response issue with pre-readiness traffic, the returned query may expose
-the Redis bootstrap dependency planner. It accepts compact HGET/HMGET
+For a Response issue with Redis bootstrap observations, the returned
+`source_process_traffic` query may expose the Redis bootstrap dependency
+planner. It accepts compact HGET/HMGET
 numeric-key patterns plus exact fields, applies a replay-only overlay to
 immutable Global bootstrap evidence, and returns to the same focused cases.

@@ -46,6 +46,17 @@ real differences until source evidence proves otherwise.
 
 Run only query IDs returned by `action.commands.evidence`:
 
+| Problem signal | Evidence | Command |
+| --- | --- | --- |
+| Response differences need complete case context | `case_response_differences` | Execute the returned evidence command whose query ID ends with `case-response-differences-...-page-0`. |
+| Case-scoped dependency evidence is dirty | `dirty_clusters` | Execute the returned evidence command whose query ID ends with `dirty-clusters`. |
+| Startup, background refresh, or local-cache state may affect behavior | `source_process_traffic` | Execute the returned evidence command whose query ID ends with `source-process-traffic`. |
+| Target startup or lifecycle failed | `target_runtime_diagnostics` | Execute the returned evidence command whose query ID ends with `target-runtime-diagnostics`. |
+
+Always execute the exact opaque command returned by the current action or
+evidence report. The suffixes above are discovery labels; never reconstruct a
+query ID.
+
 - `case_response_differences`: for a response issue, the first evidence command
   returns one fixed-size page of every structured response difference in the
   representative case, including normalized Pointer patterns and explicit
@@ -69,16 +80,17 @@ Run only query IDs returned by `action.commands.evidence`:
   that source order is irrelevant;
 - `dependency_correlation`: response outcomes against dependency cleanliness;
   correlation does not prove response causality;
-- `pre_readiness_traffic`: bounded source data-interaction counts by endpoint
-  before readiness; connection lifecycle, known ping/heartbeat, and setup
-  traffic are excluded, but frequency does not prove process ownership,
-  local-cache lifecycle, or response causality;
+- `source_process_traffic`: recording-global, bounded source bootstrap and
+  configured process-owned traffic grouped by protocol, endpoint, and
+  operation, including Redis snapshot counts. Timing, frequency, and configured
+  rule matches do not prove response causality or replace request-owned target
+  behavior;
 - `dirty_clusters`: case-scoped dirty events grouped by protocol and endpoint,
   with a stable `cluster_id`, bounded operation counts, an exact representative
-  case, and a correlated source pre-readiness count. The complete startup
-  summary remains in `pre_readiness_traffic`. It excludes `unused_global` and
-  case-external target activity, and does not prove request or process
-  ownership. For a dependency issue it also returns
+  case, and a correlated source pre-readiness count. The complete
+  recording-global source-process summary remains in `source_process_traffic`.
+  It excludes `unused_global` and case-external target activity, and does not
+  prove request or process ownership. For a dependency issue it also returns
   `applicable_rule_planners` only for supported protocols present in those
   clusters. Whenever a supported dependency-value rule exists for a protocol
   present in the clusters, it separately returns `protocol_rules` with a short
@@ -232,10 +244,11 @@ response -> cache read -> key -> hit/miss branch -> loader dependency ->
 write/refresh -> readiness or request lifecycle
 ```
 
-Use `pre_readiness_traffic` only to prioritize source startup schedulers and
-cache loaders for the returned endpoints. An absent endpoint is not proof that
-no process-local cache exists, and a high interaction count is not proof that
-the traffic populates a cache.
+Use `source_process_traffic` only to prioritize source startup schedulers,
+background refreshers, and cache loaders for the returned endpoints. An absent
+endpoint is not proof that no process-local cache exists, and a high interaction
+count or configured process-owned match is not proof that the traffic populates
+a response-driving cache.
 
 Do not apply a dynamic rule for a cold, missing, stale, differently keyed,
 partially loaded, or differently refreshed cache. Do not materialize recorded

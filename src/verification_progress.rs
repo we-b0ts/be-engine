@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
@@ -9,17 +9,19 @@ use crate::config::edit::{create_atomic, write_atomic};
 
 mod epoch;
 mod ledger;
+mod public;
 mod revision;
 
 pub(crate) use epoch::begin as begin_epoch;
 
-pub(crate) const PROGRESS_VERSION: u8 = 2;
+pub(crate) const PROGRESS_VERSION: u8 = 3;
 const MIN_SUPPORTED_PROGRESS_VERSION: u8 = 1;
 const MAX_COUNTED_RUNS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum VerificationStage {
+    Progress,
     Replay,
     Comparison,
 }
@@ -78,6 +80,8 @@ pub(crate) struct LatestRun {
     pub(crate) key: String,
     pub(crate) evidence_fingerprint: String,
     pub(crate) number: u64,
+    #[serde(default = "default_true")]
+    pub(crate) finalized: bool,
     pub(crate) passed: bool,
     pub(crate) cases: LatestCounts,
     pub(crate) apis: LatestCounts,
@@ -111,6 +115,8 @@ pub(crate) struct ProgressObservation {
     pub(crate) key: String,
     pub(crate) evidence_fingerprint: String,
     pub(crate) finished_at: String,
+    #[serde(default = "default_true")]
+    pub(crate) finalized: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) passed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -121,6 +127,8 @@ pub(crate) struct ProgressObservation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ApiObservation {
     pub(crate) cases: LatestCounts,
+    #[serde(default = "default_true")]
+    pub(crate) finalized: bool,
     pub(crate) passed: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) success_streak: Option<SuccessStreak>,
@@ -130,6 +138,10 @@ pub(crate) struct ApiObservation {
 #[serde(deny_unknown_fields)]
 pub(crate) struct CountedObservation {
     pub(crate) number: u64,
+    #[serde(default)]
+    pub(crate) streak_broken: bool,
+    #[serde(default)]
+    pub(crate) api_streak_broken: BTreeSet<String>,
     pub(crate) observation: ProgressObservation,
 }
 
@@ -188,7 +200,9 @@ impl ProgressReport {
             self.observation_baseline = Some(self.current_baseline());
         }
         let number = self.totals.runs.executed.saturating_add(1);
-        self.apply_aggregate(&observation, number);
+        let streak_broken = observation_failed(&observation);
+        let api_streak_broken = failed_apis(&observation);
+        self.apply_aggregate(&observation, number, streak_broken, &api_streak_broken);
         self.counted_runs.insert(
             observation.key.clone(),
             observation.evidence_fingerprint.clone(),
@@ -197,18 +211,22 @@ impl ProgressReport {
             observation.key.clone(),
             CountedObservation {
                 number,
+                streak_broken,
+                api_streak_broken,
                 observation,
             },
         );
         Ok(true)
     }
 
-    fn apply_aggregate(&mut self, observation: &ProgressObservation, number: u64) {
+    fn apply_aggregate(
+        &mut self,
+        observation: &ProgressObservation,
+        number: u64,
+        streak_broken: bool,
+        api_streak_broken: &BTreeSet<String>,
+    ) {
         let scope = observation.apis.keys().cloned().collect::<Vec<_>>();
-        let same_scope = self
-            .latest_run
-            .as_ref()
-            .is_some_and(|latest| latest.scope == scope);
         let cases =
             observation
                 .apis
@@ -226,14 +244,16 @@ impl ProgressReport {
         let passed = observation_passed(observation);
 
         self.totals.runs.executed = self.totals.runs.executed.saturating_add(1);
-        self.totals.runs.passed = self.totals.runs.passed.saturating_add(u64::from(passed));
+        self.totals.runs.passed = self
+            .totals
+            .runs
+            .passed
+            .saturating_add(u64::from(observation.finalized && passed));
         self.totals.cases.executed = self.totals.cases.executed.saturating_add(cases.executed);
         self.totals.cases.passed = self.totals.cases.passed.saturating_add(cases.passed);
 
-        if let Some(streak) = observation.success_streak {
-            self.success_streak = streak;
-        } else if passed {
-            if !same_scope {
+        if observation.finalized && passed {
+            if streak_broken {
                 self.success_streak = SuccessStreak::default();
             }
             self.success_streak.runs = self.success_streak.runs.saturating_add(1);
@@ -245,24 +265,29 @@ impl ProgressReport {
         for (api, result) in &observation.apis {
             let progress = self.apis.entry(api.clone()).or_default();
             progress.totals.runs.executed = progress.totals.runs.executed.saturating_add(1);
-            progress.totals.runs.passed = progress
-                .totals
-                .runs
-                .passed
-                .saturating_add(u64::from(result.passed));
+            if result.finalized {
+                progress.totals.runs.passed = progress
+                    .totals
+                    .runs
+                    .passed
+                    .saturating_add(u64::from(result.passed));
+            }
             progress.totals.cases.executed = progress
                 .totals
                 .cases
                 .executed
                 .saturating_add(result.cases.executed);
-            progress.totals.cases.passed = progress
-                .totals
-                .cases
-                .passed
-                .saturating_add(result.cases.passed);
-            if let Some(streak) = result.success_streak {
-                progress.success_streak = streak;
-            } else if result.passed {
+            if result.finalized {
+                progress.totals.cases.passed = progress
+                    .totals
+                    .cases
+                    .passed
+                    .saturating_add(result.cases.passed);
+            }
+            if result.finalized && result.passed {
+                if api_streak_broken.contains(api) {
+                    progress.success_streak = SuccessStreak::default();
+                }
                 progress.success_streak.runs = progress.success_streak.runs.saturating_add(1);
                 progress.success_streak.cases = progress
                     .success_streak
@@ -278,6 +303,7 @@ impl ProgressReport {
             key: observation.key.clone(),
             evidence_fingerprint: observation.evidence_fingerprint.clone(),
             number,
+            finalized: observation.finalized,
             passed,
             cases,
             apis: LatestCounts {
@@ -355,7 +381,12 @@ impl ProgressReport {
             self.apis.clear();
         }
         for counted in &observations {
-            self.apply_aggregate(&counted.observation, counted.number);
+            self.apply_aggregate(
+                &counted.observation,
+                counted.number,
+                counted.streak_broken,
+                &counted.api_streak_broken,
+            );
         }
         Ok(())
     }
@@ -393,12 +424,24 @@ impl ProgressReport {
                 !result.passed || result.cases.passed == result.cases.executed,
                 "passing progress API {api:?} must pass every executed case"
             );
+            if !result.finalized {
+                ensure!(
+                    !result.passed && result.cases.passed == 0,
+                    "pending progress API {api:?} must not contain verification results"
+                );
+            }
         }
         ensure!(
             observation.passed != Some(true)
                 || observation.apis.values().all(|result| result.passed),
             "passing progress run must pass every executed API"
         );
+        if !observation.finalized {
+            ensure!(
+                observation.passed.is_none(),
+                "pending progress run must not contain a global verification result"
+            );
+        }
         Ok(())
     }
 }
@@ -407,6 +450,27 @@ fn observation_passed(observation: &ProgressObservation) -> bool {
     observation
         .passed
         .unwrap_or_else(|| observation.apis.values().all(|result| result.passed))
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn failed_apis(observation: &ProgressObservation) -> BTreeSet<String> {
+    observation
+        .apis
+        .iter()
+        .filter(|(_, result)| result.finalized && !result.passed)
+        .map(|(api, _)| api.clone())
+        .collect()
+}
+
+fn observation_failed(observation: &ProgressObservation) -> bool {
+    (observation.finalized && !observation_passed(observation))
+        || observation
+            .apis
+            .values()
+            .any(|result| result.finalized && !result.passed)
 }
 
 pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<ProgressReport>> {
@@ -419,7 +483,7 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
             );
             let payload = fs::read(path)
                 .with_context(|| format!("failed to read progress {}", path.display()))?;
-            let report: ProgressReport = serde_yaml::from_slice(&payload)
+            let report = parse_progress_payload(&payload, stage)
                 .with_context(|| format!("failed to parse progress {}", path.display()))?;
             Some(report)
         }
@@ -431,6 +495,11 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
     };
     let persisted_ledger = ledger::load(path, stage)?;
     if public_report.is_none() && !persisted_ledger.exists {
+        if stage == VerificationStage::Progress
+            && let Some(report) = migrate_split_progress(path)?
+        {
+            return Ok(Some(report));
+        }
         return Ok(None);
     }
     ensure!(
@@ -474,11 +543,12 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
         &mut report.observation_baseline,
         persisted_ledger.observation_baseline,
     )?;
+    normalize_failure_markers(&mut report.counted_observations);
     report.requires_persistence = public_missing || schema_migration || embedded_counted_runs;
     if report.observation_baseline.is_some() || !report.counted_observations.is_empty() {
-        let public_aggregate = report.current_baseline();
+        let public_aggregate = public::Snapshot::from_report(&report);
         report.rebuild_aggregates()?;
-        report.requires_persistence |= report.current_baseline() != public_aggregate;
+        report.requires_persistence |= public::Snapshot::from_report(&report) != public_aggregate;
     }
     let epoch_baseline = epoch::merge_archived_baseline(path, stage, &mut report)?;
     report.requires_persistence |= epoch_baseline == Some(true);
@@ -520,6 +590,27 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
     Ok(Some(report))
 }
 
+fn migrate_split_progress(path: &Path) -> Result<Option<ProgressReport>> {
+    let parent = path
+        .parent()
+        .context("progress path has no .traffic-e2e directory")?;
+    let replay = load(
+        &parent.join("replay-progress.yaml"),
+        VerificationStage::Replay,
+    )?;
+    let comparison = load(
+        &parent.join("comparison-progress.yaml"),
+        VerificationStage::Comparison,
+    )?;
+    if replay.is_none() && comparison.is_none() {
+        return Ok(None);
+    }
+    let mut merged = replay.unwrap_or_else(|| ProgressReport::new(VerificationStage::Progress));
+    merged.stage = VerificationStage::Progress;
+    merged.requires_persistence = true;
+    Ok(Some(merged))
+}
+
 pub(crate) fn write(path: &Path, report: &ProgressReport) -> Result<()> {
     ensure!(
         report.version == PROGRESS_VERSION,
@@ -530,8 +621,9 @@ pub(crate) fn write(path: &Path, report: &ProgressReport) -> Result<()> {
     let recovery_payload = ledger::recovery_payload(report)?;
     write_payload(path, &recovery_payload)?;
     ledger::write(path, report)?;
-    let public_payload = yaml_payload(report)?;
-    write_payload(path, &public_payload)
+    let public_payload = yaml_payload(&public::Snapshot::from_report(report))?;
+    write_payload(path, &public_payload)?;
+    cleanup_split_public_progress(path)
 }
 
 pub(crate) fn synchronize(path: &Path, stage: VerificationStage) -> Result<bool> {
@@ -545,12 +637,149 @@ pub(crate) fn synchronize(path: &Path, stage: VerificationStage) -> Result<bool>
     Ok(true)
 }
 
+pub(crate) fn record_completed_batch(
+    path: &Path,
+    key: &str,
+    recorded_at: String,
+    apis: BTreeMap<String, u64>,
+) -> Result<bool> {
+    #[derive(Serialize)]
+    struct RecordingEvidence<'a> {
+        key: &'a str,
+        apis: &'a BTreeMap<String, u64>,
+    }
+
+    let mut report = load(path, VerificationStage::Progress)?
+        .unwrap_or_else(|| ProgressReport::new(VerificationStage::Progress));
+    let requires_persistence = report.requires_persistence();
+    if let Some(counted) = report.counted_observations.get(key) {
+        ensure!(
+            counted.observation.apis.len() == apis.len()
+                && counted.observation.apis.iter().all(|(api, observation)| {
+                    apis.get(api) == Some(&observation.cases.executed)
+                }),
+            "recorded progress batch {key:?} changed its API case inventory"
+        );
+        if requires_persistence {
+            write(path, &report)?;
+        }
+        return Ok(false);
+    }
+    if report.counted_runs.contains_key(key) {
+        if requires_persistence {
+            write(path, &report)?;
+        }
+        return Ok(false);
+    }
+    let evidence_fingerprint = fingerprint(&serde_json::to_vec(&RecordingEvidence {
+        key,
+        apis: &apis,
+    })?);
+    let observation = ProgressObservation {
+        key: key.to_string(),
+        evidence_fingerprint,
+        finished_at: recorded_at,
+        finalized: false,
+        passed: None,
+        success_streak: None,
+        apis: apis
+            .into_iter()
+            .map(|(api, executed)| {
+                (
+                    api,
+                    ApiObservation {
+                        cases: LatestCounts {
+                            executed,
+                            passed: 0,
+                        },
+                        finalized: false,
+                        passed: false,
+                        success_streak: None,
+                    },
+                )
+            })
+            .collect(),
+    };
+    report.apply(observation)?;
+    write(path, &report)?;
+    Ok(true)
+}
+
 fn yaml_payload(value: &impl Serialize) -> Result<Vec<u8>> {
     let mut payload = serde_yaml::to_string(value)?.into_bytes();
     if !payload.ends_with(b"\n") {
         payload.push(b'\n');
     }
     Ok(payload)
+}
+
+fn parse_progress_payload(payload: &[u8], stage: VerificationStage) -> Result<ProgressReport> {
+    public::parse(payload, stage)
+}
+
+fn normalize_failure_markers(observations: &mut BTreeMap<String, CountedObservation>) {
+    for counted in observations.values_mut() {
+        counted.streak_broken |= observation_failed(&counted.observation)
+            || (counted.observation.finalized
+                && (counted.observation.success_streak.is_some_and(|streak| {
+                    streak.runs == 1
+                        && streak.cases
+                            == counted
+                                .observation
+                                .apis
+                                .values()
+                                .map(|api| api.cases.executed)
+                                .sum::<u64>()
+                })));
+        counted
+            .api_streak_broken
+            .extend(failed_apis(&counted.observation));
+        if counted.observation.finalized {
+            counted.api_streak_broken.extend(
+                counted
+                    .observation
+                    .apis
+                    .iter()
+                    .filter(|(_, api)| {
+                        api.success_streak.is_some_and(|streak| {
+                            streak.runs == 1 && streak.cases == api.cases.executed
+                        })
+                    })
+                    .map(|(api, _)| api.clone()),
+            );
+        }
+    }
+}
+
+fn cleanup_split_public_progress(progress_path: &Path) -> Result<()> {
+    if progress_path.file_name().and_then(|name| name.to_str()) != Some("progress.yaml") {
+        return Ok(());
+    }
+    let parent = progress_path
+        .parent()
+        .context("progress path has no .traffic-e2e directory")?;
+    for name in ["replay-progress.yaml", "comparison-progress.yaml"] {
+        let legacy = parent.join(name);
+        match fs::symlink_metadata(&legacy) {
+            Ok(metadata) => {
+                ensure!(
+                    metadata.is_file() && !metadata.file_type().is_symlink(),
+                    "legacy progress must be a regular file and not a symlink: {}",
+                    legacy.display()
+                );
+                fs::remove_file(&legacy).with_context(|| {
+                    format!("failed to remove migrated progress {}", legacy.display())
+                })?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to inspect legacy progress {}", legacy.display())
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 fn write_payload(path: &Path, payload: &[u8]) -> Result<()> {

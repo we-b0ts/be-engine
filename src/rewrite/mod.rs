@@ -374,7 +374,15 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 }
             };
             state.recording_rejection = None;
+            let recorded_cases =
+                artifacts::standard_recording_api_case_counts(&target_root, &state, &apis)?;
             crate::verification_progress::begin_epoch(&target_root, &state.recording_run_id)?;
+            crate::verification_progress::record_completed_batch(
+                &target_root.join(".traffic-e2e/progress.yaml"),
+                &state.recording_run_id,
+                chrono::Utc::now().to_rfc3339(),
+                recorded_cases,
+            )?;
             inventory::install(&mut state, apis)?;
             state.recording_refresh = None;
             if inventory::current_requires_source_route(&state) {
@@ -436,9 +444,9 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
         RewritePhase::ComparisonRecordingRequired => {
             let run_id = state
                 .comparison_run_id
-                .as_deref()
+                .clone()
                 .context("comparison phase has no allocated run id")?;
-            match artifacts::comparison_recording_publication(&target_root, run_id)? {
+            match artifacts::comparison_recording_publication(&target_root, &run_id)? {
                 artifacts::RecordingPublication::Missing => {
                     return Ok(action::for_state(&target_root, &state));
                 }
@@ -750,7 +758,8 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
         &policy
             .parent()
             .context("verification policy has no parent")?
-            .join("comparison-progress.yaml"),
+            .join("progress.yaml"),
+        &state.recording_run_id,
     )?;
     state.comparison_current = report.passed;
     if report.passed {

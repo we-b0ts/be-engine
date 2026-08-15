@@ -2,9 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
 use clap::Args;
-use traffic_e2e::{
-    ComparisonVerificationOptions, update_comparison_progress, verify_comparison_recording,
-};
+use traffic_e2e::{ComparisonVerificationOptions, verify_comparison_recording};
 
 #[derive(Debug, Args)]
 pub(super) struct CompareArgs {
@@ -34,10 +32,6 @@ pub(super) async fn run(args: CompareArgs) -> Result<()> {
         .policy
         .canonicalize()
         .with_context(|| format!("failed to resolve policy {}", args.policy.display()))?;
-    let progress_path = policy
-        .parent()
-        .context("verification policy has no parent directory")?
-        .join("comparison-progress.yaml");
     let report_path = args
         .report
         .unwrap_or_else(|| args.case_source.join("comparison-report.json"));
@@ -46,7 +40,6 @@ pub(super) async fn run(args: CompareArgs) -> Result<()> {
         policy,
         report: report_path,
     })?;
-    update_comparison_progress(&report, &progress_path)?;
     let summary = serde_json::json!({
         "complete": report.complete,
         "passed": report.passed,
@@ -54,7 +47,6 @@ pub(super) async fn run(args: CompareArgs) -> Result<()> {
         "apis": &report.apis,
         "representative_difference": &report.representative_difference,
         "representative_policy_mismatch": &report.representative_policy_mismatch,
-        "progress": progress_path,
     });
     super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&summary)?))?;
     ensure!(

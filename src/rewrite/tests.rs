@@ -23,7 +23,8 @@ fn action_commands_are_argv_and_do_not_contain_secret_values() {
     let state = test_state();
     let target = Path::new("/target");
     let value = serde_json::to_value(action::for_state(target, &state)).unwrap();
-    assert_eq!(value.get("schema_version"), Some(&serde_json::json!(17)));
+    assert_eq!(value.get("schema_version"), Some(&serde_json::json!(19)));
+    assert!(value.get("source_process_traffic").is_none());
     assert!(value.get("latest_focused_e2e").is_none());
     assert_eq!(
         value.pointer("/action/commands/execute/cwd"),

@@ -19,8 +19,11 @@ pub(super) fn build_final_evidence(
     inventory: &CaseGroupInventory,
     state: &mut ActiveRunState,
 ) -> Result<()> {
-    refresh_background_evidence(config, state)?;
-    build_final_evidence_from_current_report(config, layout, inventory, state)
+    let reclassified = refresh_background_evidence(config, state)?;
+    apply_reclassified_case_outcomes(state, &reclassified);
+    build_final_evidence_from_current_report(config, layout, inventory, state)?;
+    clear_resolved_dependency_errors(state);
+    Ok(())
 }
 
 pub(super) fn refresh_background_evidence(
@@ -33,6 +36,80 @@ pub(super) fn refresh_background_evidence(
         .map(|case| (case.case_id.clone(), case.case_dir.clone()))
         .collect::<BTreeMap<_, _>>();
     reclassify_background_dependencies(&config.coordinator_rules, &state.replay_report, &case_dirs)
+}
+
+pub(super) fn apply_reclassified_case_outcomes(
+    state: &mut ActiveRunState,
+    reclassified: &BackgroundReclassification,
+) {
+    for case in &mut state.cases {
+        let dirty = reclassified
+            .remaining_dirty_case_ids
+            .contains(&case.case_id);
+        case.replay_clean = Some(!dirty);
+        case.status = if case.assertion_passed == Some(true) && !dirty {
+            CaseStatus::Passed
+        } else {
+            CaseStatus::Failed
+        };
+    }
+}
+
+pub(super) fn clear_resolved_dependency_errors(state: &mut ActiveRunState) {
+    let clean_case_ids = state
+        .cases
+        .iter()
+        .filter(|case| case.replay_clean == Some(true))
+        .map(|case| case.case_id.clone())
+        .collect::<BTreeSet<_>>();
+    let dependency_view_clean = dependency_view_is_clean(state);
+    clear_resolved_dependency_error_messages(
+        &mut state.errors,
+        &clean_case_ids,
+        dependency_view_clean,
+    );
+}
+
+pub(super) fn clear_resolved_dependency_error_messages(
+    errors: &mut Vec<String>,
+    clean_case_ids: &BTreeSet<String>,
+    dependency_view_clean: bool,
+) {
+    errors.retain(|error| {
+        if is_clean_case_dependency_error(error, clean_case_ids) {
+            return false;
+        }
+        !(dependency_view_clean && is_strict_dependency_finalize_error(error))
+    });
+}
+
+pub(super) fn dependency_view_is_clean(state: &ActiveRunState) -> bool {
+    state.replay_finalized
+        && state.aggregate_complete
+        && state.aggregate_clean
+        && state
+            .cases
+            .iter()
+            .all(|case| case.replay_clean == Some(true))
+}
+
+pub(super) fn is_clean_case_dependency_error(
+    error: &str,
+    clean_case_ids: &BTreeSet<String>,
+) -> bool {
+    let Some(rest) = error.strip_prefix("case ") else {
+        return false;
+    };
+    let Some((case_id, _)) = rest.split_once(" replay evidence is dirty:") else {
+        return false;
+    };
+    clean_case_ids.contains(case_id)
+}
+
+pub(super) fn is_strict_dependency_finalize_error(error: &str) -> bool {
+    error.starts_with(
+        "strict replay finalize failed: cannot finalize replay with unmatched, unused, or unsupported exchanges;",
+    )
 }
 
 pub(super) fn build_final_evidence_from_current_report(

@@ -6,16 +6,7 @@ use anyhow::{Context, Result, ensure};
 use super::model::{RewriteApiStatus, RewritePhase, RewriteState};
 use crate::verification_progress::{self, VerificationStage};
 
-const PUBLIC_PROGRESS: [(&str, VerificationStage); 2] = [
-    (
-        ".traffic-e2e/replay-progress.yaml",
-        VerificationStage::Replay,
-    ),
-    (
-        ".traffic-e2e/comparison-progress.yaml",
-        VerificationStage::Comparison,
-    ),
-];
+const PUBLIC_PROGRESS: &str = ".traffic-e2e/progress.yaml";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PublicationState {
@@ -24,8 +15,8 @@ pub(super) enum PublicationState {
     Published,
 }
 
-pub(super) fn public_paths() -> [&'static str; 2] {
-    PUBLIC_PROGRESS.map(|(path, _)| path)
+pub(super) fn public_paths() -> [&'static str; 1] {
+    [PUBLIC_PROGRESS]
 }
 
 pub(super) fn state(target_root: &Path, state: &RewriteState) -> Option<PublicationState> {
@@ -37,15 +28,12 @@ pub(super) fn synchronize_if_complete(target_root: &Path, state: &RewriteState) 
     if !workflow_complete(state) {
         return Ok(());
     }
-    for (relative, stage) in PUBLIC_PROGRESS {
-        let path = target_root.join(relative);
-        let synchronized = verification_progress::synchronize(&path, stage)?;
-        ensure!(
-            synchronized || verification_progress::load(&path, stage)?.is_some(),
-            "final {:?} progress is missing",
-            stage
-        );
-    }
+    let path = target_root.join(PUBLIC_PROGRESS);
+    let synchronized = verification_progress::synchronize(&path, VerificationStage::Progress)?;
+    ensure!(
+        synchronized || verification_progress::load(&path, VerificationStage::Progress)?.is_some(),
+        "final verification progress is missing"
+    );
     Ok(())
 }
 
@@ -59,14 +47,12 @@ fn workflow_complete(state: &RewriteState) -> bool {
 }
 
 fn inspect(target_root: &Path) -> Result<PublicationState> {
-    for (relative, stage) in PUBLIC_PROGRESS {
-        let path = target_root.join(relative);
-        let Some(report) = verification_progress::load(&path, stage)? else {
-            return Ok(PublicationState::SynchronizationRequired);
-        };
-        if report.requires_persistence() {
-            return Ok(PublicationState::SynchronizationRequired);
-        }
+    let path = target_root.join(PUBLIC_PROGRESS);
+    let Some(report) = verification_progress::load(&path, VerificationStage::Progress)? else {
+        return Ok(PublicationState::SynchronizationRequired);
+    };
+    if report.requires_persistence() {
+        return Ok(PublicationState::SynchronizationRequired);
     }
     if git_has_uncommitted_progress(target_root)? {
         Ok(PublicationState::CommitRequired)
@@ -114,12 +100,7 @@ mod tests {
         git(target.path(), &["config", "user.email", "test@example.com"]);
         git(target.path(), &["config", "user.name", "Traffic E2E Test"]);
         fs::write(target.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
-        write_progress(target.path(), VerificationStage::Replay, &["replay-1"]);
-        write_progress(
-            target.path(),
-            VerificationStage::Comparison,
-            &["comparison-1"],
-        );
+        write_progress(target.path(), &["replay-1", "comparison-1"]);
         git(target.path(), &["add", "."]);
         git(target.path(), &["commit", "-m", "baseline progress"]);
 
@@ -129,11 +110,7 @@ mod tests {
             Some(PublicationState::Published)
         );
 
-        write_progress(
-            target.path(),
-            VerificationStage::Replay,
-            &["replay-1", "replay-2"],
-        );
+        write_progress(target.path(), &["replay-1", "comparison-1", "replay-2"]);
         assert_eq!(
             super::state(target.path(), &state),
             Some(PublicationState::CommitRequired)
@@ -150,10 +127,7 @@ mod tests {
         );
         assert_eq!(commit_action["terminal_allowed"], false);
 
-        git(
-            target.path(),
-            &["restore", ".traffic-e2e/replay-progress.yaml"],
-        );
+        git(target.path(), &["restore", ".traffic-e2e/progress.yaml"]);
         assert_eq!(
             super::state(target.path(), &state),
             Some(PublicationState::SynchronizationRequired)
@@ -161,22 +135,22 @@ mod tests {
         synchronize_if_complete(target.path(), &state).unwrap();
         assert_eq!(
             load(
-                &target.path().join(PUBLIC_PROGRESS[0].0),
-                VerificationStage::Replay,
+                &target.path().join(PUBLIC_PROGRESS),
+                VerificationStage::Progress,
             )
             .unwrap()
             .unwrap()
             .totals
             .runs
             .executed,
-            2
+            3
         );
         assert_eq!(
             super::state(target.path(), &state),
             Some(PublicationState::CommitRequired)
         );
 
-        git(target.path(), &["add", ".traffic-e2e/replay-progress.yaml"]);
+        git(target.path(), &["add", ".traffic-e2e/progress.yaml"]);
         git(target.path(), &["commit", "-m", "publish progress"]);
         let published = super::super::action::for_state(target.path(), &state);
         assert!(published.terminal_allowed);
@@ -196,18 +170,16 @@ mod tests {
         state
     }
 
-    fn write_progress(target_root: &Path, stage: VerificationStage, keys: &[&str]) {
-        let path = target_root.join(match stage {
-            VerificationStage::Replay => PUBLIC_PROGRESS[0].0,
-            VerificationStage::Comparison => PUBLIC_PROGRESS[1].0,
-        });
-        let mut report = ProgressReport::new(stage);
+    fn write_progress(target_root: &Path, keys: &[&str]) {
+        let path = target_root.join(PUBLIC_PROGRESS);
+        let mut report = ProgressReport::new(VerificationStage::Progress);
         for key in keys {
             report
                 .apply(ProgressObservation {
                     key: (*key).to_string(),
                     evidence_fingerprint: format!("fingerprint-{key}"),
                     finished_at: format!("2026-08-14T00:00:0{}Z", key.len()),
+                    finalized: true,
                     passed: None,
                     success_streak: None,
                     apis: BTreeMap::from([(
@@ -217,6 +189,7 @@ mod tests {
                                 executed: 1,
                                 passed: 1,
                             },
+                            finalized: true,
                             passed: true,
                             success_streak: None,
                         },

@@ -5,6 +5,7 @@ use std::{fs, io::Read as _};
 use anyhow::{Context, Result, ensure};
 
 const RUNTIME_PROGRESS_PATHSPECS: &[&str] = &[
+    ":(exclude).traffic-e2e/progress.yaml",
     ":(exclude).traffic-e2e/replay-progress.yaml",
     ":(exclude).traffic-e2e/comparison-progress.yaml",
     ":(exclude).traffic-e2e/e2e-progress.yaml",
@@ -288,6 +289,7 @@ mod tests {
         )
         .unwrap();
         for name in [
+            "progress.yaml",
             "replay-progress.yaml",
             "comparison-progress.yaml",
             "e2e-progress.yaml",
@@ -312,6 +314,7 @@ mod tests {
 
         let baseline = repository_fingerprint(repository.path()).unwrap();
         for name in [
+            "progress.yaml",
             "replay-progress.yaml",
             "comparison-progress.yaml",
             "e2e-progress.yaml",

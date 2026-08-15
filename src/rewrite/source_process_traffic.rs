@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use serde::Serialize;
@@ -13,6 +14,7 @@ const MAX_SNAPSHOT_ENDPOINTS: usize = 16;
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteSourceProcessTrafficView {
     pub available: bool,
+    pub scope: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -28,6 +30,7 @@ pub struct RewriteSourceProcessTrafficScopeView {
     pub data_interactions: u64,
     pub excluded_events: u64,
     pub unresolved_interactions: u64,
+    pub protocols: Vec<String>,
     pub observations: Vec<RewriteSourceProcessObservationView>,
     pub omitted_observations: usize,
     pub omitted_interactions: u64,
@@ -90,19 +93,35 @@ pub struct RewriteSourceProcessRedisSnapshotEndpointView {
     pub fill_failures: u64,
 }
 
-pub(super) fn view(
-    _target_root: &Path,
+pub(super) fn evidence_view(
+    target_root: &Path,
     state: &RewriteState,
-) -> Option<RewriteSourceProcessTrafficView> {
-    let case_source = state.case_source.as_deref()?;
-    match load_source_process_traffic_summary(case_source) {
+) -> RewriteSourceProcessTrafficView {
+    let Some(case_source) = state.case_source.as_deref() else {
+        return unavailable("the rewrite workflow has no finalized standard recording");
+    };
+    let case_source = if case_source.is_absolute() {
+        case_source.to_path_buf()
+    } else {
+        target_root.join(case_source)
+    };
+    match load_source_process_traffic_summary(&case_source) {
         Ok(Some(summary)) => {
             let bootstrap_observations_total = summary.bootstrap.observations.len();
+            let bootstrap_protocols = summary
+                .bootstrap
+                .observations
+                .iter()
+                .map(|observation| observation.protocol.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
             let bootstrap = RewriteSourceProcessTrafficScopeView {
                 events: summary.bootstrap.events,
                 data_interactions: summary.bootstrap.data_interactions,
                 excluded_events: summary.bootstrap.excluded_events,
                 unresolved_interactions: summary.bootstrap.unresolved_interactions,
+                protocols: bootstrap_protocols,
                 observations: summary
                     .bootstrap
                     .observations
@@ -168,8 +187,9 @@ pub(super) fn view(
                     }
                 })
                 .collect();
-            Some(RewriteSourceProcessTrafficView {
+            RewriteSourceProcessTrafficView {
                 available: true,
+                scope: "recording_global",
                 reason: None,
                 bootstrap: Some(bootstrap),
                 process_owned: Some(RewriteSourceProcessOwnedView {
@@ -185,14 +205,14 @@ pub(super) fn view(
                         || rules_total > MAX_PROCESS_OWNED_RULES,
                 }),
                 interpretation: "bootstrap observations do not prove ownership; configured process-owned rule matches identify only declared process scope, and neither replaces request-owned target behavior or proves response causality".to_string(),
-            })
+            }
         }
-        Ok(None) => Some(unavailable(
-            "the selected standard recording predates source process traffic summaries",
-        )),
-        Err(_) => Some(unavailable(
+        Ok(None) => {
+            unavailable("the selected standard recording predates source process traffic summaries")
+        }
+        Err(_) => unavailable(
             "the selected standard recording has an unreadable source process traffic summary",
-        )),
+        ),
     }
 }
 
@@ -210,6 +230,7 @@ fn observation_view(
 fn unavailable(reason: &str) -> RewriteSourceProcessTrafficView {
     RewriteSourceProcessTrafficView {
         available: false,
+        scope: "recording_global",
         reason: Some(reason.to_string()),
         bootstrap: None,
         process_owned: None,

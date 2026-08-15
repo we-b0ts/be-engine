@@ -127,18 +127,18 @@ pub(super) fn write_replay_progress(
     state: &ActiveRunState,
 ) -> Result<()> {
     let mut migrated = false;
-    let mut report = match load(progress_path, VerificationStage::Replay)? {
+    let mut report = match load(progress_path, VerificationStage::Progress)? {
         Some(report) => report,
         None if legacy_progress_path.is_file() => {
             migrated = true;
             load_legacy_progress(legacy_progress_path)?
         }
-        None => ProgressReport::new(VerificationStage::Replay),
+        None => ProgressReport::new(VerificationStage::Progress),
     };
     let requires_persistence = report.requires_persistence();
     let applied = report.upsert_logical_run(
         logical_observation(index, state)?,
-        &format!("{}|", state.run_key),
+        Some(&format!("{}|", state.run_key)),
     )?;
     if applied || migrated || requires_persistence {
         write(progress_path, &report)?;
@@ -154,7 +154,7 @@ pub(super) fn ensure_replay_progress_revisable(
     index: &RunIndex,
     state: &ActiveRunState,
 ) -> Result<()> {
-    let report = load(progress_path, VerificationStage::Replay)?
+    let report = load(progress_path, VerificationStage::Progress)?
         .context("replay progress is missing for focused evidence revision")?;
     let logical = logical_observation(index, state)?;
     if let Some(counted) = report.counted_observations.get(&logical.key) {
@@ -179,7 +179,7 @@ pub(super) fn revise_replay_progress(
     previous: &ActiveRunState,
     current: &ActiveRunState,
 ) -> Result<()> {
-    let mut report = load(progress_path, VerificationStage::Replay)?
+    let mut report = load(progress_path, VerificationStage::Progress)?
         .context("replay progress is missing for focused evidence revision")?;
     let requires_persistence = report.requires_persistence();
     let previous_attempt = legacy_attempt_observation(previous, "focused")?;
@@ -191,7 +191,7 @@ pub(super) fn revise_replay_progress(
     }
     if report.upsert_logical_run(
         logical_observation(index, current)?,
-        &format!("{}|", current.run_key),
+        Some(&format!("{}|", current.run_key)),
     )? || requires_persistence
     {
         write(progress_path, &report)?;
@@ -208,20 +208,33 @@ fn logical_observation(index: &RunIndex, state: &ActiveRunState) -> Result<Progr
         state.status.is_terminal(),
         "replay progress requires a terminal run"
     );
-    let apis = index
+    let api_keys = index
         .current_run
-        .apis
+        .api_keys
         .iter()
-        .filter(|(_, contribution)| contribution.counted)
-        .map(|(api, contribution)| {
+        .chain(index.current_run.apis.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let apis = api_keys
+        .iter()
+        .map(|api| {
+            let contribution = index.current_run.apis.get(api);
+            let finalized = contribution.is_some_and(|value| value.counted);
+            let executed = contribution.filter(|value| value.counted).map_or_else(
+                || u64::from(index.apis.get(api).map_or(0, |value| value.cases)),
+                |value| value.executed_cases,
+            );
             (
                 api.clone(),
                 ApiObservation {
                     cases: LatestCounts {
-                        executed: contribution.executed_cases,
-                        passed: contribution.passed_cases,
+                        executed,
+                        passed: contribution
+                            .filter(|value| value.counted)
+                            .map_or(0, |value| value.passed_cases),
                     },
-                    passed: contribution.passed,
+                    finalized,
+                    passed: contribution.is_some_and(|value| value.counted && value.passed),
                     success_streak: None,
                 },
             )
@@ -238,6 +251,7 @@ fn logical_observation(index: &RunIndex, state: &ActiveRunState) -> Result<Progr
         inventory_complete: index.inventory_complete,
         current_run: &index.current_run,
     };
+    let finalized = index.inventory_complete && apis.values().all(|api| api.finalized);
     Ok(ProgressObservation {
         key: state.run_key.clone(),
         evidence_fingerprint: fingerprint(&serde_json::to_vec(&evidence)?),
@@ -245,7 +259,8 @@ fn logical_observation(index: &RunIndex, state: &ActiveRunState) -> Result<Progr
             .finished_at
             .context("terminal replay run is missing finished_at")?
             .to_rfc3339(),
-        passed: Some(index.current_run.passed),
+        finalized,
+        passed: finalized.then_some(index.current_run.passed),
         success_streak: None,
         apis,
     })
@@ -282,6 +297,7 @@ fn legacy_attempt_observation(
                         executed: u64::from(api.total),
                         passed: u64::from(api.passed),
                     },
+                    finalized: true,
                     passed: evidence_clean && api.complete_pass,
                     success_streak: None,
                 },
@@ -328,6 +344,7 @@ fn legacy_attempt_observation(
             .finished_at
             .context("terminal replay run is missing finished_at")?
             .to_rfc3339(),
+        finalized: true,
         passed: None,
         success_streak: None,
         apis,
@@ -385,7 +402,7 @@ fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
     let legacy_evidence_fingerprint = format!("legacy-v{}:{legacy_run_key}", legacy.version);
     Ok(ProgressReport {
         version: crate::verification_progress::PROGRESS_VERSION,
-        stage: VerificationStage::Replay,
+        stage: VerificationStage::Progress,
         updated_at: legacy.updated_at,
         totals: ProgressTotals {
             runs: SuccessCounts {
@@ -403,6 +420,7 @@ fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
             key: legacy_run_key.clone(),
             evidence_fingerprint: legacy_evidence_fingerprint.clone(),
             number: legacy.latest_run.number,
+            finalized: true,
             passed: legacy.latest_run.passed,
             cases: legacy.latest_run.cases,
             apis: legacy.latest_run.apis,

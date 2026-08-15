@@ -396,7 +396,7 @@ fn validate_plan_evidence(
             .as_ref()
             .is_some_and(|issue| issue.kind == RewriteIssueKind::Response)
     {
-        "pre_readiness_traffic"
+        "source_process_traffic"
     } else {
         "dirty_clusters"
     };

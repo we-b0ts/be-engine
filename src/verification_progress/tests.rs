@@ -7,6 +7,7 @@ fn observation(key: &str, apis: &[(&str, u64, u64)]) -> ProgressObservation {
         key: key.to_string(),
         evidence_fingerprint: format!("fingerprint-{key}"),
         finished_at: format!("2026-07-31T00:00:0{}Z", key.len()),
+        finalized: true,
         passed: None,
         success_streak: None,
         apis: apis
@@ -19,6 +20,7 @@ fn observation(key: &str, apis: &[(&str, u64, u64)]) -> ProgressObservation {
                             executed: *executed,
                             passed: *passed,
                         },
+                        finalized: true,
                         passed: executed == passed,
                         success_streak: None,
                     },
@@ -77,7 +79,14 @@ fn public_snapshot_initializes_a_missing_local_ledger_baseline() {
     assert_eq!(baseline.totals.runs.passed, 1);
     assert_eq!(baseline.totals.cases.executed, 8);
     assert_eq!(baseline.success_streak.runs, 1);
-    assert_eq!(baseline.latest_run.as_ref().unwrap().key, "1");
+    assert!(
+        baseline
+            .latest_run
+            .as_ref()
+            .unwrap()
+            .key
+            .starts_with("public-v3:")
+    );
     assert_eq!(baseline.apis["POST /orders"].totals.runs.executed, 1);
     assert_eq!(baseline.apis["POST /orders"].success_streak.cases, 8);
     assert!(imported.requires_persistence());
@@ -160,7 +169,7 @@ fn one_failed_api_resets_global_streak_without_resetting_other_api() {
 }
 
 #[test]
-fn changed_global_scope_starts_a_new_streak() {
+fn changed_global_scope_preserves_the_business_success_streak() {
     let mut report = ProgressReport::new(VerificationStage::Comparison);
     report
         .apply(observation("1", &[("GET /users", 100, 100)]))
@@ -172,8 +181,8 @@ fn changed_global_scope_starts_a_new_streak() {
         ))
         .unwrap();
 
-    assert_eq!(report.success_streak.runs, 1);
-    assert_eq!(report.success_streak.cases, 200);
+    assert_eq!(report.success_streak.runs, 2);
+    assert_eq!(report.success_streak.cases, 300);
     assert_eq!(report.apis["GET /users"].success_streak.runs, 2);
 }
 
@@ -184,7 +193,10 @@ fn retrying_one_logical_run_revises_coverage_without_extending_the_streak() {
         .apply(observation("previous", &[("GET /users", 1_000, 1_000)]))
         .unwrap();
     report
-        .upsert_logical_run(observation("current", &[("GET /users", 10, 9)]), "current|")
+        .upsert_logical_run(
+            observation("current", &[("GET /users", 10, 9)]),
+            Some("current|"),
+        )
         .unwrap();
 
     assert_eq!(report.totals.runs.executed, 2);
@@ -193,7 +205,9 @@ fn retrying_one_logical_run_revises_coverage_without_extending_the_streak() {
 
     let mut passing = observation("current", &[("GET /users", 10, 10)]);
     passing.evidence_fingerprint = "current-passing".to_string();
-    report.upsert_logical_run(passing, "current|").unwrap();
+    report
+        .upsert_logical_run(passing, Some("current|"))
+        .unwrap();
 
     assert_eq!(report.totals.runs.executed, 2);
     assert_eq!(report.totals.runs.passed, 2);
@@ -204,12 +218,68 @@ fn retrying_one_logical_run_revises_coverage_without_extending_the_streak() {
 
     let mut repeated = observation("current", &[("GET /users", 10, 10)]);
     repeated.evidence_fingerprint = "current-passing-again".to_string();
-    report.upsert_logical_run(repeated, "current|").unwrap();
+    report
+        .upsert_logical_run(repeated, Some("current|"))
+        .unwrap();
 
     assert_eq!(report.totals.runs.executed, 2);
     assert_eq!(report.totals.cases.executed, 1_010);
     assert_eq!(report.success_streak.runs, 1);
     assert_eq!(report.success_streak.cases, 10);
+}
+
+#[test]
+fn recording_completion_counts_coverage_and_holds_streaks_until_the_result_is_final() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("progress.yaml");
+    let mut report = ProgressReport::new(VerificationStage::Progress);
+    report
+        .apply(observation(
+            "previous",
+            &[("GET /users", 1_000, 1_000), ("GET /orders", 2, 2)],
+        ))
+        .unwrap();
+    write(&path, &report).unwrap();
+
+    record_completed_batch(
+        &path,
+        "current",
+        "2026-08-15T00:00:00Z".to_string(),
+        BTreeMap::from([("GET /users".to_string(), 10)]),
+    )
+    .unwrap();
+    let pending = load(&path, VerificationStage::Progress).unwrap().unwrap();
+    assert_eq!(pending.totals.runs.executed, 2);
+    assert_eq!(pending.totals.runs.passed, 1);
+    assert_eq!(pending.totals.cases.executed, 1_012);
+    assert_eq!(pending.totals.cases.passed, 1_002);
+    assert_eq!(pending.success_streak, SuccessStreak::default());
+    assert_eq!(pending.apis["GET /users"].success_streak.runs, 0);
+    assert_eq!(pending.apis["GET /orders"].success_streak.runs, 1);
+    assert!(!pending.latest_run.as_ref().unwrap().finalized);
+    let public: serde_yaml::Value = serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(public["latest_run"]["passed"].is_null());
+    assert_eq!(public["totals"]["runs"]["executed"], 2);
+    assert_eq!(public["totals"]["runs"]["passed"], 1);
+    assert_eq!(public["totals"]["runs"]["success_streak"], 0);
+
+    let mut failed = observation("current", &[("GET /users", 10, 9)]);
+    failed.evidence_fingerprint = "current-failed".to_string();
+    let mut report = pending;
+    report.upsert_logical_run(failed, Some("current|")).unwrap();
+    write(&path, &report).unwrap();
+
+    let mut passing = observation("current", &[("GET /users", 10, 10)]);
+    passing.evidence_fingerprint = "current-passing".to_string();
+    report
+        .upsert_logical_run(passing, Some("current|"))
+        .unwrap();
+    assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.runs.passed, 2);
+    assert_eq!(report.success_streak.runs, 1);
+    assert_eq!(report.success_streak.cases, 10);
+    assert_eq!(report.apis["GET /users"].success_streak.runs, 1);
+    assert_eq!(report.apis["GET /orders"].success_streak.runs, 1);
 }
 
 #[test]
@@ -247,8 +317,8 @@ fn revises_latest_focused_observation_without_counting_a_new_run() {
     assert_eq!(report.totals.runs.passed, 2);
     assert_eq!(report.totals.cases.executed, 200);
     assert_eq!(report.totals.cases.passed, 200);
-    assert_eq!(report.success_streak.runs, 2);
-    assert_eq!(report.success_streak.cases, 200);
+    assert_eq!(report.success_streak.runs, 1);
+    assert_eq!(report.success_streak.cases, 100);
     assert_eq!(report.apis["GET /users"].totals.runs.executed, 2);
     assert_eq!(report.apis["GET /users"].totals.runs.passed, 2);
     assert_eq!(
@@ -336,34 +406,76 @@ fn rejects_new_runs_when_the_idempotency_ledger_is_full() {
 }
 
 #[test]
-fn round_trips_the_same_schema_for_both_stages() {
+fn round_trips_the_unified_public_schema_and_local_ledger() {
     let directory = tempdir().unwrap();
-    for (name, stage) in [
-        ("replay-progress.yaml", VerificationStage::Replay),
-        ("comparison-progress.yaml", VerificationStage::Comparison),
-    ] {
-        let path = directory.path().join(name);
-        let mut report = ProgressReport::new(stage);
-        report
-            .apply(observation("1", &[("GET /users", 100, 100)]))
-            .unwrap();
-        write(&path, &report).unwrap();
-        let public_payload = std::fs::read_to_string(&path).unwrap();
-        assert!(!public_payload.contains("counted_runs:"));
-        let ledger_path = ledger::path(&path, stage).unwrap();
-        let ledger_payload = std::fs::read_to_string(ledger_path).unwrap();
-        assert!(ledger_payload.contains("counted_runs:"));
-        assert!(ledger_payload.contains("fingerprint-1"));
-        let loaded = load(&path, stage).unwrap().unwrap();
-        assert_eq!(loaded.stage, stage);
-        assert_eq!(loaded.success_streak.cases, 100);
-        assert!(!loaded.requires_persistence());
-        assert_eq!(
-            loaded.counted_runs.get("1").map(String::as_str),
-            Some("fingerprint-1")
-        );
-        assert_eq!(loaded.counted_observations.len(), 1);
-    }
+    let path = directory.path().join("progress.yaml");
+    let mut report = ProgressReport::new(VerificationStage::Progress);
+    report
+        .apply(observation("1", &[("GET /users", 100, 100)]))
+        .unwrap();
+    write(&path, &report).unwrap();
+
+    let public_payload = std::fs::read_to_string(&path).unwrap();
+    let public: serde_yaml::Value = serde_yaml::from_str(&public_payload).unwrap();
+    assert!(public_payload.contains("success_streak: 1"));
+    assert!(public_payload.contains("covered: 1"));
+    assert!(!public_payload.contains("stage:"));
+    assert!(!public_payload.contains("counted_runs:"));
+    assert_eq!(public["totals"]["runs"]["success_streak"], 1);
+    assert_eq!(public["totals"]["cases"]["success_streak"], 100);
+    assert_eq!(public["totals"]["apis"]["covered"], 1);
+    assert_eq!(public["latest_run"]["passed"], true);
+    assert_eq!(public["apis"]["GET /users"]["runs"]["executed"], 1);
+    let ledger_path = ledger::path(&path, VerificationStage::Progress).unwrap();
+    let ledger_payload = std::fs::read_to_string(ledger_path).unwrap();
+    assert!(ledger_payload.contains("counted_runs:"));
+    assert!(ledger_payload.contains("fingerprint-1"));
+    let loaded = load(&path, VerificationStage::Progress).unwrap().unwrap();
+    assert_eq!(loaded.stage, VerificationStage::Progress);
+    assert_eq!(loaded.success_streak.cases, 100);
+    assert!(!loaded.requires_persistence());
+    assert_eq!(
+        loaded.counted_runs.get("1").map(String::as_str),
+        Some("fingerprint-1")
+    );
+    assert_eq!(loaded.counted_observations.len(), 1);
+}
+
+#[test]
+fn migrates_only_recording_coverage_from_the_split_replay_ledger() {
+    let directory = tempdir().unwrap();
+    let replay_path = directory.path().join("replay-progress.yaml");
+    let comparison_path = directory.path().join("comparison-progress.yaml");
+    let progress_path = directory.path().join("progress.yaml");
+    let mut replay = ProgressReport::new(VerificationStage::Replay);
+    replay
+        .apply(observation("replay", &[("GET /users", 10, 10)]))
+        .unwrap();
+    write(&replay_path, &replay).unwrap();
+    let mut comparison = ProgressReport::new(VerificationStage::Comparison);
+    comparison
+        .apply(observation("comparison", &[("GET /users", 5, 4)]))
+        .unwrap();
+    write(&comparison_path, &comparison).unwrap();
+
+    let migrated = load(&progress_path, VerificationStage::Progress)
+        .unwrap()
+        .unwrap();
+    assert!(migrated.requires_persistence());
+    assert_eq!(migrated.totals.runs.executed, 1);
+    assert_eq!(migrated.totals.runs.passed, 1);
+    assert_eq!(migrated.totals.cases.executed, 10);
+    assert_eq!(migrated.totals.cases.passed, 10);
+    write(&progress_path, &migrated).unwrap();
+
+    assert!(progress_path.is_file());
+    assert!(!replay_path.exists());
+    assert!(!comparison_path.exists());
+    assert!(
+        ledger::path(&progress_path, VerificationStage::Progress)
+            .unwrap()
+            .is_file()
+    );
 }
 
 #[test]
@@ -409,7 +521,7 @@ fn migrates_embedded_counted_runs_to_the_artifact_ledger() {
     assert!(!loaded.apply(first).unwrap());
     write(&path, &loaded).unwrap();
     let public_payload = std::fs::read_to_string(&path).unwrap();
-    assert!(public_payload.starts_with("version: 2\n"));
+    assert!(public_payload.starts_with("version: 3\n"));
     assert!(!public_payload.contains("counted_runs:"));
     let ledger_path = ledger::path(&path, VerificationStage::Comparison).unwrap();
     assert!(
