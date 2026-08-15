@@ -227,7 +227,11 @@ When no response assertion completed, inspect the bounded lifecycle error and
 then the normal target boundary:
 
 1. compile and launch path;
-2. supplied boot/config roots and source-compatible loader;
+2. supplied boot/config roots and source-compatible loader, including declared
+   static startup files and directories mounted read-only at their original
+   absolute source paths from `.traffic-e2e/local/startup/mounts`; these runtime
+   inputs may contain configuration required during startup or request
+   handling;
 3. configured port and readiness endpoint/status;
 4. Replay CA trust and dependency client construction;
 5. container identity, foreground process ownership, and bounded `SIGTERM`

@@ -1548,10 +1548,14 @@ missing, a valid public snapshot initializes its aggregate, API totals,
 streaks, and latest run as the new local baseline.
 
 When the rewrite coordinator accepts a newly finalized standard recording, it
-starts a new verification progress epoch. Replay and comparison progress begin
-empty for that recording; the preceding public progress and private ledgers are
-retained under `.traffic-e2e/local/artifacts/progress/history/` for diagnosis
-but are not loaded into the new epoch.
+starts a new verification progress epoch. The preceding public aggregate becomes
+the new epoch's baseline, so cumulative totals, per-API totals, streaks, and the
+latest run remain continuous. The preceding counted-run and observation ledgers
+are retained under `.traffic-e2e/local/artifacts/progress/history/` for diagnosis
+but are not loaded into the new epoch; only runs observed in the current epoch
+participate in its idempotency checks. An epoch created by an older binary with
+an empty baseline is rebuilt from this archive before its public snapshot is
+published.
 
 Intermediate attempts do not require Git commits for progress. After every API
 is verified, the rewrite coordinator synchronizes the final public Replay and
