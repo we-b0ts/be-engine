@@ -458,22 +458,35 @@ pub(crate) fn load(path: &Path, stage: VerificationStage) -> Result<Option<Progr
         let public_aggregate = report.current_baseline();
         report.rebuild_aggregates()?;
         report.requires_persistence |= report.current_baseline() != public_aggregate;
-    } else if report.totals.runs.executed > 0 {
+    }
+    let epoch_baseline = epoch::merge_archived_baseline(path, stage, &mut report)?;
+    report.requires_persistence |= epoch_baseline == Some(true);
+    if epoch_baseline.is_none()
+        && report.observation_baseline.is_none()
+        && report.counted_observations.is_empty()
+        && report.totals.runs.executed > 0
+    {
         report.observation_baseline = Some(report.current_baseline());
         report.requires_persistence = true;
     }
     if let Some(latest) = &report.latest_run {
-        match report.counted_runs.get(&latest.key) {
-            Some(evidence_fingerprint) => ensure!(
-                evidence_fingerprint == &latest.evidence_fingerprint,
-                "{} contains conflicting evidence for its latest run",
-                path.display()
-            ),
-            None => {
-                report
-                    .counted_runs
-                    .insert(latest.key.clone(), latest.evidence_fingerprint.clone());
-                report.requires_persistence = true;
+        let baseline_number = report
+            .observation_baseline
+            .as_ref()
+            .map_or(0, |baseline| baseline.number);
+        if epoch_baseline.is_none() || latest.number > baseline_number {
+            match report.counted_runs.get(&latest.key) {
+                Some(evidence_fingerprint) => ensure!(
+                    evidence_fingerprint == &latest.evidence_fingerprint,
+                    "{} contains conflicting evidence for its latest run",
+                    path.display()
+                ),
+                None => {
+                    report
+                        .counted_runs
+                        .insert(latest.key.clone(), latest.evidence_fingerprint.clone());
+                    report.requires_persistence = true;
+                }
             }
         }
     }

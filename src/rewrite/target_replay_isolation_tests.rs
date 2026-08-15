@@ -171,7 +171,7 @@ fn rejects_stale_or_unmatched_hardcode_approvals() {
     let error = inspect(
         target.path(),
         "integration",
-        &["src/lib.rs:99:1".to_string()],
+        &["src/lib.rs:99:1=legacy-service@abcdef1:src/Client.java:96:27".to_string()],
     )
     .unwrap_err();
 
@@ -184,7 +184,7 @@ fn approved_hardcode_must_be_committed() {
     let source = "pub const API: &str = \"https://api.demo.test/v1\";\n";
     fs::write(target.path().join("src/lib.rs"), source).unwrap();
     let column = source.find("demo.test").unwrap() + 1;
-    let approval = format!("src/lib.rs:1:{column}");
+    let approval = format!("src/lib.rs:1:{column}=legacy-service@abcdef1:src/Client.java:96:27");
 
     let error = inspect(
         target.path(),
@@ -206,7 +206,9 @@ fn approved_hardcode_requires_source_evidence_in_a_commit_trailer() {
     let source = "pub const API: &str = \"https://api.demo.test/v1\";\n";
     fs::write(target.path().join("src/lib.rs"), source).unwrap();
     let column = source.find("demo.test").unwrap() + 1;
-    let approval = format!("src/lib.rs:1:{column}");
+    let target_location = format!("src/lib.rs:1:{column}");
+    let source_evidence = "legacy-service@abcdef1:src/Client.java:96:27";
+    let approval = format!("{target_location}={source_evidence}");
     git(target.path(), &["add", "src/lib.rs"]);
     commit(target.path(), "Add endpoint without evidence", "");
 
@@ -221,19 +223,79 @@ fn accepts_exact_hardcode_approval_with_source_commit_evidence() {
     let source = "pub const API: &str = \"https://api.sample.test/v1\";\n";
     fs::write(target.path().join("src/lib.rs"), source).unwrap();
     let column = source.find("sample.test").unwrap() + 1;
-    let approval = format!("src/lib.rs:1:{column}");
+    let target_location = format!("src/lib.rs:1:{column}");
+    let source_evidence = "legacy-service@abcdef1:src/Client.java:96:27";
+    let approval = format!("{target_location}={source_evidence}");
     git(target.path(), &["add", "src/lib.rs"]);
     commit(
         target.path(),
         "Add source-compatible endpoint",
-        &format!(
-            "Hardcode-Source-Evidence: {approval} <= legacy-service@abcdef1:src/Client.java:96"
-        ),
+        &format!("Hardcode-Source-Evidence: {target_location} <= {source_evidence}"),
     );
 
     let report = inspect(target.path(), "integration", &[approval]).unwrap();
 
     assert!(report.passed());
+}
+
+#[test]
+fn rejects_legacy_target_only_hardcode_approval_format() {
+    let target = target_with_source("pub fn value() -> u8 { 1 }\n");
+
+    let error = inspect(
+        target.path(),
+        "integration",
+        &["src/lib.rs:1:1".to_string()],
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains(
+        "expected TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN"
+    ));
+}
+
+#[test]
+fn rejects_configuration_file_as_source_code_evidence() {
+    let target = target_with_source("pub fn value() -> u8 { 1 }\n");
+    let source = "pub const API: &str = \"https://api.sample.test/v1\";\n";
+    fs::write(target.path().join("src/lib.rs"), source).unwrap();
+    let column = source.find("sample.test").unwrap() + 1;
+    let approval = format!(
+        "src/lib.rs:1:{column}=legacy-service@abcdef1:src/main/resources/application.properties:9:31"
+    );
+
+    let error = inspect(target.path(), "integration", &[approval]).unwrap_err();
+
+    assert!(
+        format!("{error:#}")
+            .contains("configuration, resource, test, and example files cannot justify")
+    );
+}
+
+#[test]
+fn rejects_ai_verification_that_differs_from_committed_source_evidence() {
+    let target = target_with_source("pub fn value() -> u8 { 1 }\n");
+    let source = "pub const API: &str = \"https://api.sample.test/v1\";\n";
+    fs::write(target.path().join("src/lib.rs"), source).unwrap();
+    let column = source.find("sample.test").unwrap() + 1;
+    let target_location = format!("src/lib.rs:1:{column}");
+    git(target.path(), &["add", "src/lib.rs"]);
+    commit(
+        target.path(),
+        "Add endpoint with different evidence",
+        &format!(
+            "Hardcode-Source-Evidence: {target_location} <= legacy-service@abcdef1:src/Client.java:96:27"
+        ),
+    );
+    let approval = format!("{target_location}=legacy-service@abcdef1:src/OtherClient.java:41:18");
+
+    let error = inspect(target.path(), "integration", &[approval]).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("does not match committed trailer")
+    );
 }
 
 #[test]

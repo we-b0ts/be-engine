@@ -8,13 +8,21 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 
 pub(super) const GATE_NAME: &str = "replay-isolation";
-pub(super) const GATE_VERSION: &str = "replay-isolation-v3";
+pub(super) const GATE_VERSION: &str = "replay-isolation-v4";
 
 const MAX_REPORTED_VIOLATIONS: usize = 64;
 const SOURCE_EVIDENCE_TRAILER: &str = "Hardcode-Source-Evidence:";
 const IGNORED_DIRECTORIES: &[&str] = &[".git", ".traffic-e2e", "node_modules", "target", "vendor"];
 const NON_PRODUCTION_DIRECTORIES: &[&str] =
     &["benches", "examples", "fixtures", "testdata", "tests"];
+const NON_PRODUCTION_SOURCE_DIRECTORIES: &[&str] = &[
+    "benches", "example", "examples", "fixture", "fixtures", "test", "testdata", "tests",
+];
+const PRODUCTION_SOURCE_EXTENSIONS: &[&str] = &[
+    "c", "cc", "clj", "cpp", "cs", "cxx", "ex", "exs", "go", "groovy", "h", "hh", "hpp", "hxx",
+    "java", "js", "jsx", "kt", "kts", "m", "mm", "php", "py", "rb", "rs", "scala", "sh", "swift",
+    "ts", "tsx",
+];
 
 #[derive(Debug, Serialize)]
 pub(super) struct ReplayIsolationReport {
@@ -146,13 +154,13 @@ const SOURCE_HARDCODE_MARKERS: &[ForbiddenMarker] = &[
         rule: "source_hardcoded_domain",
         marker: "sample.test",
         reason: "new code hardcodes a source-sensitive public domain without source-code proof",
-        required_change: "prove the same value is hardcoded in the source repository, add a Hardcode-Source-Evidence commit trailer, and rerun with --hardcode-ai-verified FILE:LINE:COLUMN",
+        required_change: "prove the same value is hardcoded in production source code, add a matching Hardcode-Source-Evidence commit trailer, and rerun with --hardcode-ai-verified TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN; configuration-file values must remain configuration",
     },
     ForbiddenMarker {
         rule: "source_hardcoded_domain",
         marker: "demo.test",
         reason: "new code hardcodes a source-sensitive public domain without source-code proof",
-        required_change: "prove the same value is hardcoded in the source repository, add a Hardcode-Source-Evidence commit trailer, and rerun with --hardcode-ai-verified FILE:LINE:COLUMN",
+        required_change: "prove the same value is hardcoded in production source code, add a matching Hardcode-Source-Evidence commit trailer, and rerun with --hardcode-ai-verified TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN; configuration-file values must remain configuration",
     },
 ];
 
@@ -161,6 +169,29 @@ struct SourceLocation {
     file: PathBuf,
     line: usize,
     column: usize,
+}
+
+#[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+struct SourceEvidence {
+    repository: String,
+    revision: String,
+    file: PathBuf,
+    line: usize,
+    column: usize,
+}
+
+impl fmt::Display for SourceEvidence {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}@{}:{}:{}:{}",
+            self.repository,
+            self.revision,
+            self.file.display(),
+            self.line,
+            self.column
+        )
+    }
 }
 
 impl fmt::Display for SourceLocation {
@@ -215,32 +246,37 @@ pub(super) fn inspect(
             for byte_offset in marker_offsets(&lower, marker.marker) {
                 let location = location(added_line, byte_offset);
                 hardcode_matches.insert(location.clone());
-                if !approvals.contains(&location) {
+                if !approvals.contains_key(&location) {
                     violations.push(violation(added_line, marker, byte_offset));
                 }
             }
         }
     }
 
-    for approval in &approvals {
+    for approval in approvals.keys() {
         ensure!(
             hardcode_matches.contains(approval),
             "--hardcode-ai-verified {approval} does not match a newly added sample.test or demo.test occurrence"
         );
     }
     if !approvals.is_empty() {
-        for approval in &approvals {
+        for approval in approvals.keys() {
             ensure!(
                 committed_hardcode_exists(target_root, approval)?,
                 "--hardcode-ai-verified {approval} must refer to a committed occurrence; commit the target line and its Hardcode-Source-Evidence trailer first"
             );
         }
-        let evidenced = source_evidence_locations(target_root, &added.merge_base)?;
-        for approval in &approvals {
-            ensure!(
-                evidenced.contains(approval),
-                "--hardcode-ai-verified {approval} requires commit trailer `Hardcode-Source-Evidence: {approval} <= SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE`"
-            );
+        let evidenced = source_evidence(target_root, &added.merge_base)?;
+        for (target, source) in &approvals {
+            match evidenced.get(target) {
+                Some(committed) if committed == source => {}
+                Some(committed) => anyhow::bail!(
+                    "--hardcode-ai-verified {target}={source} does not match committed trailer `Hardcode-Source-Evidence: {target} <= {committed}`"
+                ),
+                None => anyhow::bail!(
+                    "--hardcode-ai-verified {target}={source} requires commit trailer `Hardcode-Source-Evidence: {target} <= {source}`"
+                ),
+            }
         }
     }
 
@@ -302,14 +338,21 @@ fn marker_offsets(value: &str, marker: &str) -> Vec<usize> {
     offsets
 }
 
-fn parse_approvals(raw: &[String]) -> Result<BTreeSet<SourceLocation>> {
-    let mut approvals = BTreeSet::new();
-    for raw_location in raw {
-        let location = parse_location(raw_location)
-            .with_context(|| format!("invalid --hardcode-ai-verified {raw_location:?}"))?;
+fn parse_approvals(raw: &[String]) -> Result<BTreeMap<SourceLocation, SourceEvidence>> {
+    let mut approvals = BTreeMap::new();
+    for raw_approval in raw {
+        let (target, source) = raw_approval.split_once('=').context(
+            "expected TARGET_FILE:LINE:COLUMN=SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN",
+        )?;
+        let target = parse_location(target.trim()).with_context(|| {
+            format!("invalid --hardcode-ai-verified target in {raw_approval:?}")
+        })?;
+        let source = parse_source_evidence(source.trim()).with_context(|| {
+            format!("invalid --hardcode-ai-verified source in {raw_approval:?}")
+        })?;
         ensure!(
-            approvals.insert(location),
-            "duplicate --hardcode-ai-verified {raw_location:?}"
+            approvals.insert(target, source).is_none(),
+            "duplicate --hardcode-ai-verified target in {raw_approval:?}"
         );
     }
     Ok(approvals)
@@ -332,13 +375,13 @@ fn parse_location(raw: &str) -> Result<SourceLocation> {
     Ok(SourceLocation { file, line, column })
 }
 
-fn source_evidence_locations(
+fn source_evidence(
     target_root: &Path,
     merge_base: &str,
-) -> Result<BTreeSet<SourceLocation>> {
+) -> Result<BTreeMap<SourceLocation, SourceEvidence>> {
     let range = format!("{merge_base}..HEAD");
     let messages = git_text(target_root, &["log", "--format=%B%x00", &range])?;
-    let mut locations = BTreeSet::new();
+    let mut evidence = BTreeMap::new();
     for message in messages.split('\0') {
         for line in message.lines() {
             let Some(trailer) = line.trim().strip_prefix(SOURCE_EVIDENCE_TRAILER) else {
@@ -347,37 +390,72 @@ fn source_evidence_locations(
             let (target, source) = trailer
                 .trim()
                 .split_once(" <= ")
-                .context("Hardcode-Source-Evidence must use `TARGET_FILE:LINE:COLUMN <= SOURCE_REPOSITORY@SOURCE_REVISION:SOURCE_FILE:LINE`")?;
+                .context("Hardcode-Source-Evidence must use `TARGET_FILE:LINE:COLUMN <= SOURCE_REPOSITORY@REVISION:SOURCE_FILE:LINE:COLUMN`")?;
             let target = parse_location(target.trim())
                 .context("invalid target location in Hardcode-Source-Evidence")?;
-            validate_source_evidence(source.trim())?;
-            locations.insert(target);
+            let source = parse_source_evidence(source.trim())
+                .context("invalid source location in Hardcode-Source-Evidence")?;
+            ensure!(
+                evidence.insert(target.clone(), source).is_none(),
+                "duplicate Hardcode-Source-Evidence target {target}"
+            );
         }
     }
-    Ok(locations)
+    Ok(evidence)
 }
 
-fn validate_source_evidence(value: &str) -> Result<()> {
+fn parse_source_evidence(value: &str) -> Result<SourceEvidence> {
     let (repository, revision_and_source) = value
         .rsplit_once('@')
         .context("source evidence is missing SOURCE_REPOSITORY@SOURCE_REVISION")?;
     let (revision, source_location) = revision_and_source
         .split_once(':')
-        .context("source evidence is missing :SOURCE_FILE:LINE")?;
-    let (source_file, source_line) = source_location
+        .context("source evidence is missing :SOURCE_FILE:LINE:COLUMN")?;
+    let (source_file_and_line, source_column) = source_location
         .rsplit_once(':')
-        .context("source evidence is missing SOURCE_FILE:LINE")?;
+        .context("source evidence is missing SOURCE_FILE:LINE:COLUMN")?;
+    let (source_file, source_line) = source_file_and_line
+        .rsplit_once(':')
+        .context("source evidence is missing SOURCE_FILE:LINE:COLUMN")?;
     ensure!(!repository.trim().is_empty(), "source repository is empty");
     ensure!(
         (7..=64).contains(&revision.len()) && revision.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "source revision must be a 7-64 digit hexadecimal commit ID"
     );
-    ensure!(!source_file.trim().is_empty(), "source file is empty");
+    let file = PathBuf::from(source_file);
     ensure!(
-        source_line.parse::<usize>().is_ok_and(|line| line > 0),
-        "source line must be positive"
+        is_safe_production_source_path(&file),
+        "source evidence file {:?} must be a relative production source-code path; configuration, resource, test, and example files cannot justify target code hardcoding",
+        file
     );
-    Ok(())
+    let line = source_line
+        .parse::<usize>()
+        .context("source line is not a number")?;
+    let column = source_column
+        .parse::<usize>()
+        .context("source column is not a number")?;
+    ensure!(line > 0, "source line must be positive");
+    ensure!(column > 0, "source column must be positive");
+    Ok(SourceEvidence {
+        repository: repository.trim().to_string(),
+        revision: revision.to_string(),
+        file,
+        line,
+        column,
+    })
+}
+
+fn is_safe_production_source_path(path: &Path) -> bool {
+    !path.as_os_str().is_empty()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_)))
+        && !path.components().any(|component| {
+            matches!(component, Component::Normal(value) if NON_PRODUCTION_SOURCE_DIRECTORIES.contains(&value.to_string_lossy().as_ref()))
+        })
+        && path.extension().is_some_and(|extension| {
+            PRODUCTION_SOURCE_EXTENSIONS.contains(&extension.to_string_lossy().as_ref())
+        })
 }
 
 fn committed_hardcode_exists(target_root: &Path, location: &SourceLocation) -> Result<bool> {
