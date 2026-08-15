@@ -11,7 +11,7 @@ use super::model::{
     ActiveRunState, CaseStatus, MAX_RESPONSE_DIFFERENCE_INDEX, ResolvedProjectConfig,
     ResponseAssertionSummary, RunLayout, RunStatus,
 };
-use super::progress::{ReplayRunKind, update_focused_index, update_index, write_replay_progress};
+use super::progress::{update_focused_index, update_index, write_replay_progress};
 use super::request_view::RequestCaseView;
 use super::result::{E2eApiRunResult, E2eRunResult, api_result, run_result};
 use super::runtime::{
@@ -168,8 +168,8 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         write_replay_progress(
             &global_layout.progress_path,
             &global_layout.legacy_progress_path,
+            &index,
             &previous,
-            ReplayRunKind::Focused,
         )?;
     }
     let attempt = if layout.latest_dir.join("state.yaml").is_file() {
@@ -235,8 +235,8 @@ fn finish_focused_and_publish(
     write_replay_progress(
         &global_layout.progress_path,
         &global_layout.legacy_progress_path,
+        index,
         state,
-        ReplayRunKind::Focused,
     )
 }
 
@@ -269,8 +269,8 @@ pub async fn recover_e2e_run(context: E2eRunContext) -> Result<E2eRunResult> {
     write_replay_progress(
         &layout.progress_path,
         &layout.legacy_progress_path,
+        &index,
         &state,
-        ReplayRunKind::Full,
     )?;
     store::write_yaml(&layout.index_path, &index)?;
     Ok(run_result(&layout, &state))
@@ -632,8 +632,8 @@ fn finish_and_publish(
     write_replay_progress(
         &layout.progress_path,
         &layout.legacy_progress_path,
+        index,
         state,
-        ReplayRunKind::Full,
     )?;
     Ok(run_result(layout, state))
 }

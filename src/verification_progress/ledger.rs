@@ -10,7 +10,7 @@ use super::{
 };
 use crate::config::edit::{create_atomic, write_atomic};
 
-const LEDGER_VERSION: u8 = 2;
+const LEDGER_VERSION: u8 = 3;
 const MIN_SUPPORTED_LEDGER_VERSION: u8 = 1;
 
 #[derive(Debug, Deserialize)]
@@ -173,6 +173,7 @@ pub(super) fn path(progress_path: &Path, stage: VerificationStage) -> Result<Pat
         )
     })?;
     let name = match stage {
+        VerificationStage::Progress => "counted-runs.yaml",
         VerificationStage::Replay => "replay-counted-runs.yaml",
         VerificationStage::Comparison => "comparison-counted-runs.yaml",
     };
@@ -208,6 +209,9 @@ mod tests {
             key: "run-1".to_string(),
             evidence_fingerprint: "evidence-1".to_string(),
             finished_at: "2026-08-03T00:00:00Z".to_string(),
+            finalized: true,
+            passed: None,
+            success_streak: None,
             apis: BTreeMap::from([(
                 "GET /users".to_string(),
                 ApiObservation {
@@ -215,7 +219,9 @@ mod tests {
                         executed: 1,
                         passed: 1,
                     },
+                    finalized: true,
                     passed: true,
+                    success_streak: None,
                 },
             )]),
         };

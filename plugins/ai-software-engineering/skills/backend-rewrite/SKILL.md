@@ -70,13 +70,14 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v16 contains an `action` object with exactly `kind`, `summary`,
+Response schema v19 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read kind-specific facts only from
-`action.details`; when present, use the top-level `source_process_traffic` as
-bounded bootstrap/background/local-cache triage context. Execute only command
-roles actually present under `action.commands`; never guess legacy fields or
-missing transitions.
+`action.details`. For `implementation_required`, use only the issue-scoped
+evidence commands returned under `action.commands.evidence`; these may include
+bounded source-process traffic for startup, background, and local-cache triage.
+Execute only command roles actually present under `action.commands`; never
+guess legacy fields or missing transitions.
 
 Every returned command has a canonical `cwd` and argv whose absolute
 `--target-root` is already bound. Execute it opaquely without reconstructing,
@@ -222,9 +223,9 @@ is not successful completion and must never be reported as
 ## Evidence And Repository Contract
 
 `.traffic-e2e/local/artifacts/` is readable, read-only evidence. Preserve
-coordinator-generated `replay-progress.yaml` and `comparison-progress.yaml`.
-Their ignored local ledgers are runner-owned authority; the public files are
-Git snapshots that the coordinator can reconstruct after a reset. Do not
+coordinator-generated `progress.yaml`. Its ignored local ledger is runner-owned
+authority; the public file is a Git snapshot that the coordinator can
+reconstruct after a reset. Do not
 hand-edit them, replace coordinator aggregation with bulk scripts, make target
 code consume recorded results, or modify source business behavior to
 manufacture evidence. Intermediate attempts do not require progress commits.

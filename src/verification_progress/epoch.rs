@@ -83,24 +83,12 @@ fn archive_current_progress(
     }
 
     let traffic_e2e_root = target_root.join(crate::repository::TRAFFIC_E2E_ROOT);
-    let replay_path = traffic_e2e_root.join("replay-progress.yaml");
-    let comparison_path = traffic_e2e_root.join("comparison-progress.yaml");
+    let progress_path = traffic_e2e_root.join("progress.yaml");
     let archive_sources = [
+        (progress_path.clone(), history_root.join("progress.yaml")),
         (
-            replay_path.clone(),
-            history_root.join("replay-progress.yaml"),
-        ),
-        (
-            super::ledger::path(&replay_path, VerificationStage::Replay)?,
-            history_root.join("replay-counted-runs.yaml"),
-        ),
-        (
-            comparison_path.clone(),
-            history_root.join("comparison-progress.yaml"),
-        ),
-        (
-            super::ledger::path(&comparison_path, VerificationStage::Comparison)?,
-            history_root.join("comparison-counted-runs.yaml"),
+            super::ledger::path(&progress_path, VerificationStage::Progress)?,
+            history_root.join("counted-runs.yaml"),
         ),
         (
             progress_root.join(CURRENT_EPOCH_FILE),
@@ -164,26 +152,18 @@ fn archive_file(source: &Path, destination: &Path) -> Result<()> {
 
 fn reset_progress(target_root: &Path) -> Result<()> {
     let traffic_e2e_root = target_root.join(crate::repository::TRAFFIC_E2E_ROOT);
-    for (file_name, stage) in [
-        ("replay-progress.yaml", VerificationStage::Replay),
-        ("comparison-progress.yaml", VerificationStage::Comparison),
-    ] {
-        super::write(
-            &traffic_e2e_root.join(file_name),
-            &ProgressReport::new(stage),
-        )?;
-    }
-    Ok(())
+    super::write(
+        &traffic_e2e_root.join("progress.yaml"),
+        &ProgressReport::new(VerificationStage::Progress),
+    )
 }
 
 fn synchronize_progress(target_root: &Path) -> Result<()> {
     let traffic_e2e_root = target_root.join(crate::repository::TRAFFIC_E2E_ROOT);
-    for (file_name, stage) in [
-        ("replay-progress.yaml", VerificationStage::Replay),
-        ("comparison-progress.yaml", VerificationStage::Comparison),
-    ] {
-        super::synchronize(&traffic_e2e_root.join(file_name), stage)?;
-    }
+    super::synchronize(
+        &traffic_e2e_root.join("progress.yaml"),
+        VerificationStage::Progress,
+    )?;
     Ok(())
 }
 
@@ -249,10 +229,11 @@ fn archived_baseline(
         history_root.display()
     );
     let file_name = match stage {
+        VerificationStage::Progress => "progress.yaml",
         VerificationStage::Replay => "replay-progress.yaml",
         VerificationStage::Comparison => "comparison-progress.yaml",
     };
-    let Some(archived) = read_yaml::<ProgressReport>(&history_root.join(file_name))? else {
+    let Some(archived) = read_progress(&history_root.join(file_name), stage)? else {
         return Ok(None);
     };
     ensure!(
@@ -270,6 +251,27 @@ fn archived_baseline(
         stage
     );
     Ok(Some(archived.current_baseline()))
+}
+
+fn read_progress(path: &Path, stage: VerificationStage) -> Result<Option<ProgressReport>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect progress epoch {}", path.display()));
+        }
+    };
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "progress epoch data must be a regular file and not a symlink: {}",
+        path.display()
+    );
+    let payload = fs::read(path)
+        .with_context(|| format!("failed to read progress epoch {}", path.display()))?;
+    super::parse_progress_payload(&payload, stage)
+        .with_context(|| format!("failed to parse progress epoch {}", path.display()))
+        .map(Some)
 }
 
 fn read_current_epoch(path: &Path) -> Result<Option<CurrentEpoch>> {
@@ -349,55 +351,28 @@ mod tests {
     fn new_recording_archives_progress_and_carries_an_idempotent_aggregate_baseline() {
         let target = tempfile::tempdir().unwrap();
         fs::create_dir(target.path().join(crate::repository::TRAFFIC_E2E_ROOT)).unwrap();
-        let replay_path = target
+        let progress_path = target
             .path()
             .join(crate::repository::TRAFFIC_E2E_ROOT)
-            .join("replay-progress.yaml");
-        let comparison_path = target
-            .path()
-            .join(crate::repository::TRAFFIC_E2E_ROOT)
-            .join("comparison-progress.yaml");
-        append_observation(
-            &replay_path,
-            VerificationStage::Replay,
-            "legacy-replay",
-            "GET /legacy",
-            4,
-        );
-        append_observation(
-            &comparison_path,
-            VerificationStage::Comparison,
-            "legacy-comparison",
-            "GET /legacy",
-            4,
-        );
-        super::super::write_payload(
-            &replay_path,
-            &super::super::yaml_payload(&ProgressReport::new(VerificationStage::Replay)).unwrap(),
-        )
-        .unwrap();
+            .join("progress.yaml");
+        append_observation(&progress_path, "legacy", "GET /legacy", 4);
 
         begin(target.path(), "20260814075248").unwrap();
 
-        let replay = load(&replay_path, VerificationStage::Replay)
+        let progress = load(&progress_path, VerificationStage::Progress)
             .unwrap()
             .unwrap();
-        assert_eq!(replay.totals.runs.executed, 1);
-        assert_eq!(replay.totals.cases.executed, 4);
-        assert_eq!(replay.observation_baseline.as_ref().unwrap().number, 1);
-        assert!(replay.counted_runs.is_empty());
-        assert!(replay.counted_observations.is_empty());
-        let comparison = load(&comparison_path, VerificationStage::Comparison)
-            .unwrap()
-            .unwrap();
-        assert_eq!(comparison.totals.runs.executed, 1);
-        assert!(comparison.counted_runs.is_empty());
+        assert_eq!(progress.totals.runs.executed, 1);
+        assert_eq!(progress.totals.cases.executed, 4);
+        assert_eq!(progress.observation_baseline.as_ref().unwrap().number, 1);
+        assert!(progress.counted_runs.is_empty());
+        assert!(progress.counted_observations.is_empty());
         let history = target
             .path()
             .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
             .join("progress/history/before-20260814075248");
         assert_eq!(
-            read_yaml::<ProgressReport>(&history.join("replay-progress.yaml"))
+            read_progress(&history.join("progress.yaml"), VerificationStage::Progress,)
                 .unwrap()
                 .unwrap()
                 .totals
@@ -406,36 +381,30 @@ mod tests {
             1
         );
         assert!(
-            fs::read_to_string(history.join("replay-counted-runs.yaml"))
+            fs::read_to_string(history.join("counted-runs.yaml"))
                 .unwrap()
-                .contains("legacy-replay")
+                .contains("legacy")
         );
 
-        append_observation(
-            &replay_path,
-            VerificationStage::Replay,
-            "current-replay",
-            "GET /legacy",
-            6,
-        );
+        append_observation(&progress_path, "current", "GET /legacy", 6);
         begin(target.path(), "20260814075248").unwrap();
-        let replay = load(&replay_path, VerificationStage::Replay)
+        let progress = load(&progress_path, VerificationStage::Progress)
             .unwrap()
             .unwrap();
-        assert_eq!(replay.totals.runs.executed, 2);
-        assert_eq!(replay.totals.cases.executed, 10);
-        assert_eq!(replay.apis["GET /legacy"].success_streak.runs, 2);
-        assert!(!replay.counted_runs.contains_key("legacy-replay"));
-        assert!(replay.counted_runs.contains_key("current-replay"));
-        assert_eq!(replay.counted_observations["current-replay"].number, 2);
+        assert_eq!(progress.totals.runs.executed, 2);
+        assert_eq!(progress.totals.cases.executed, 10);
+        assert_eq!(progress.apis["GET /legacy"].success_streak.runs, 2);
+        assert!(!progress.counted_runs.contains_key("legacy"));
+        assert!(progress.counted_runs.contains_key("current"));
+        assert_eq!(progress.counted_observations["current"].number, 2);
 
         begin(target.path(), "20260815000000").unwrap();
-        let replay = load(&replay_path, VerificationStage::Replay)
+        let progress = load(&progress_path, VerificationStage::Progress)
             .unwrap()
             .unwrap();
-        assert_eq!(replay.totals.runs.executed, 2);
-        assert_eq!(replay.observation_baseline.as_ref().unwrap().number, 2);
-        assert!(replay.counted_runs.is_empty());
+        assert_eq!(progress.totals.runs.executed, 2);
+        assert_eq!(progress.observation_baseline.as_ref().unwrap().number, 2);
+        assert!(progress.counted_runs.is_empty());
         let second_history = target
             .path()
             .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
@@ -447,40 +416,28 @@ mod tests {
                 .recording_run_id,
             "20260814075248"
         );
-        assert!(second_history.join("replay-progress.yaml").is_file());
-        assert!(second_history.join("replay-counted-runs.yaml").is_file());
+        assert!(second_history.join("progress.yaml").is_file());
+        assert!(second_history.join("counted-runs.yaml").is_file());
     }
 
     #[test]
-    fn migrates_a_zero_baseline_epoch_without_losing_absent_apis_or_streaks() {
+    fn attaches_the_archived_baseline_to_a_fresh_current_ledger() {
         let target = tempfile::tempdir().unwrap();
         fs::create_dir(target.path().join(crate::repository::TRAFFIC_E2E_ROOT)).unwrap();
-        let replay_path = target
+        let progress_path = target
             .path()
             .join(crate::repository::TRAFFIC_E2E_ROOT)
-            .join("replay-progress.yaml");
-        append_observation(
-            &replay_path,
-            VerificationStage::Replay,
-            "legacy-a",
-            "GET /a",
-            4,
-        );
-        append_observation(
-            &replay_path,
-            VerificationStage::Replay,
-            "legacy-c",
-            "POST /c",
-            1,
-        );
+            .join("progress.yaml");
+        append_observation(&progress_path, "legacy-a", "GET /a", 4);
+        append_observation(&progress_path, "legacy-c", "POST /c", 1);
         begin(target.path(), "20260814153355").unwrap();
 
-        let mut current_only = ProgressReport::new(VerificationStage::Replay);
+        let mut current_only = ProgressReport::new(VerificationStage::Progress);
         apply_observation(&mut current_only, "current-a", "GET /a", 10);
         apply_observation(&mut current_only, "current-b", "POST /b", 100);
-        super::super::write(&replay_path, &current_only).unwrap();
+        super::super::write(&progress_path, &current_only).unwrap();
 
-        let migrated = load(&replay_path, VerificationStage::Replay)
+        let migrated = load(&progress_path, VerificationStage::Progress)
             .unwrap()
             .unwrap();
         assert!(migrated.requires_persistence());
@@ -498,11 +455,11 @@ mod tests {
         assert_eq!(migrated.apis["GET /a"].totals.cases.executed, 14);
         assert_eq!(migrated.apis["GET /a"].success_streak.runs, 2);
         assert_eq!(migrated.apis["GET /a"].success_streak.cases, 14);
-        assert_eq!(migrated.success_streak.runs, 1);
-        assert_eq!(migrated.success_streak.cases, 100);
+        assert_eq!(migrated.success_streak.runs, 4);
+        assert_eq!(migrated.success_streak.cases, 115);
 
-        assert!(super::super::synchronize(&replay_path, VerificationStage::Replay).unwrap());
-        let persisted = load(&replay_path, VerificationStage::Replay)
+        assert!(super::super::synchronize(&progress_path, VerificationStage::Progress).unwrap());
+        let persisted = load(&progress_path, VerificationStage::Progress)
             .unwrap()
             .unwrap();
         assert!(!persisted.requires_persistence());
@@ -510,10 +467,10 @@ mod tests {
         assert_eq!(persisted.counted_observations["current-a"].number, 3);
     }
 
-    fn append_observation(path: &Path, stage: VerificationStage, key: &str, api: &str, cases: u64) {
-        let mut report = load(path, stage)
+    fn append_observation(path: &Path, key: &str, api: &str, cases: u64) {
+        let mut report = load(path, VerificationStage::Progress)
             .unwrap()
-            .unwrap_or_else(|| ProgressReport::new(stage));
+            .unwrap_or_else(|| ProgressReport::new(VerificationStage::Progress));
         apply_observation(&mut report, key, api, cases);
         super::super::write(path, &report).unwrap();
     }
@@ -524,6 +481,9 @@ mod tests {
                 key: key.to_string(),
                 evidence_fingerprint: format!("fingerprint-{key}"),
                 finished_at: "2026-08-14T00:00:00Z".to_string(),
+                finalized: true,
+                passed: None,
+                success_streak: None,
                 apis: BTreeMap::from([(
                     api.to_string(),
                     ApiObservation {
@@ -531,7 +491,9 @@ mod tests {
                             executed: cases,
                             passed: cases,
                         },
+                        finalized: true,
                         passed: true,
+                        success_streak: None,
                     },
                 )]),
             })

@@ -1,6 +1,7 @@
 mod document;
 mod evidence;
 mod justification;
+mod memcached;
 mod model;
 
 use std::collections::BTreeSet;
@@ -26,6 +27,10 @@ use super::response::{
 use crate::config::edit::write_atomic;
 
 use justification::ResponseRuleJustification;
+pub use memcached::{
+    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
+    plan_memcached_timestamp_rule,
+};
 pub use model::{
     ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, ResponseRuleFeedback,
     ResponseRuleReport,

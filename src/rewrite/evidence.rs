@@ -4,15 +4,14 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::model::{
-    RewriteApplicableRulePlanner, RewriteEvidenceCommand, RewriteEvidenceReport, RewriteIssue,
-    RewriteIssueKind, RewriteState,
+use super::evidence_model::{
+    RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteProtocolRuleHint,
 };
-use super::{artifacts, fingerprint};
+use super::model::{RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewriteState};
+use super::{artifacts, fingerprint, source_process_traffic};
 use crate::case_group::resolve_published_case_dir;
 use crate::comparison_recording::resolve_comparison_case_dir;
 use crate::e2e_run::response_pointer_scope;
-use crate::recorder::load_pre_readiness_traffic_summary;
 use crate::{
     E2eDirtyCluster, E2eDirtyCounts, E2eRunContext, E2eValueObservation, E2eValuePresence,
     ResponseDifferenceKind, query_e2e_case_response_differences, query_e2e_dependency_correlation,
@@ -24,7 +23,7 @@ const QUERY_REPRESENTATIVES: &str = "representatives";
 const QUERY_SOURCE_VARIATION: &str = "source_variation";
 const QUERY_COLLECTION_EQUIVALENCE: &str = "collection_equivalence";
 const QUERY_DEPENDENCY_CORRELATION: &str = "dependency_correlation";
-const QUERY_PRE_READINESS_TRAFFIC: &str = "pre_readiness_traffic";
+const QUERY_SOURCE_PROCESS_TRAFFIC: &str = "source_process_traffic";
 const QUERY_DIRTY_CLUSTERS: &str = "dirty_clusters";
 const QUERY_POLICY_APPLICABILITY: &str = "policy_applicability";
 const QUERY_ATTEMPT_DELTA: &str = "attempt_delta";
@@ -83,7 +82,7 @@ pub(super) fn query(
             .trim_start_matches("fnv1a64:")
     );
     Ok(RewriteEvidenceReport {
-        schema_version: 1,
+        schema_version: 2,
         evidence_id: evidence_id.clone(),
         issue_id: issue.id.clone(),
         query: kind.to_string(),
@@ -94,10 +93,46 @@ pub(super) fn query(
             &facts,
             &evidence_id,
         ),
+        protocol_rules: protocol_rule_hints(target_root, kind, &facts),
         facts,
         does_not_prove,
         next_step,
     })
+}
+
+fn protocol_rule_hints(
+    target_root: &Path,
+    query_kind: &str,
+    facts: &Value,
+) -> Vec<RewriteProtocolRuleHint> {
+    if query_kind != QUERY_DIRTY_CLUSTERS {
+        return Vec::new();
+    }
+    let has_memcached = facts
+        .get("clusters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|cluster| cluster.get("protocol").and_then(Value::as_str) == Some("memcached"));
+    if !has_memcached {
+        return Vec::new();
+    }
+    vec![RewriteProtocolRuleHint {
+        protocol: "memcached".to_string(),
+        rule: "protobuf-timestamp".to_string(),
+        hint: "Investigate this rule when a Memcached SET value contains a protobuf varint field generated from the current Unix time."
+            .to_string(),
+        help: super::action::command(
+            target_root,
+            vec![
+                "rule".to_string(),
+                "memcached".to_string(),
+                "protobuf-timestamp".to_string(),
+                "--help".to_string(),
+            ],
+            Vec::new(),
+        ),
+    }]
 }
 
 fn applicable_rule_planners(
@@ -134,8 +169,8 @@ fn applicable_rule_planners(
         });
     }
     if issue_kind == RewriteIssueKind::Response
-        && query_kind == QUERY_PRE_READINESS_TRAFFIC
-        && facts.get("available").and_then(Value::as_bool) == Some(true)
+        && query_kind == QUERY_SOURCE_PROCESS_TRAFFIC
+        && has_redis_bootstrap_traffic(facts)
     {
         planners.push(RewriteApplicableRulePlanner {
             kind: "dependency_ownership".to_string(),
@@ -184,6 +219,29 @@ fn applicable_rule_planners(
             }),
     );
     planners
+}
+
+fn has_redis_bootstrap_traffic(facts: &Value) -> bool {
+    facts
+        .pointer("/bootstrap/protocols")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|protocol| protocol.as_str() == Some("redis"))
+}
+
+fn source_process_next_step(kind: RewriteIssueKind) -> &'static str {
+    match kind {
+        RewriteIssueKind::Dependency | RewriteIssueKind::Replay => {
+            "Compare the dirty-cluster endpoints and operations with this evidence, then use source code to prove request or process ownership."
+        }
+        RewriteIssueKind::Response | RewriteIssueKind::Comparison => {
+            "Use matching endpoints to prioritize source startup, refresh, and local-cache paths, then prove the response-driving path in source code."
+        }
+        RewriteIssueKind::TargetRuntime => {
+            "Inspect source startup and readiness paths only for matching bootstrap dependencies."
+        }
+    }
 }
 
 fn facts(
@@ -259,48 +317,26 @@ fn facts(
                     .to_string(),
             ))
         }
-        QUERY_PRE_READINESS_TRAFFIC => {
-            let summary = load_pre_readiness_traffic_summary(&case_source(target_root, state)?)?;
-            let facts = match summary {
-                Some(summary) => {
-                    let endpoint_counts = summary
-                        .endpoints
-                        .iter()
-                        .map(|endpoint| {
-                            (
-                                endpoint.endpoint.clone(),
-                                Value::from(endpoint.interaction_count),
-                            )
-                        })
-                        .collect::<serde_json::Map<_, _>>();
-                    json!({
-                        "available": true,
-                        "scope": "recorded_source_before_readiness",
-                        "interaction_count": summary.data_interactions,
-                        "endpoint_counts": endpoint_counts,
-                        "excluded_non_data_events": summary.excluded_events,
-                        "unresolved_interactions": summary.unresolved_interactions,
-                        "omitted_interactions": summary.omitted_interactions,
-                        "truncated": summary.truncated,
-                    })
-                }
-                None => json!({
-                    "available": false,
-                    "scope": "recorded_source_before_readiness",
-                    "reason": "the finalized recording has no global dependency evidence",
-                    "endpoint_counts": {},
-                }),
+        QUERY_SOURCE_PROCESS_TRAFFIC => {
+            let facts = serde_json::to_value(source_process_traffic::evidence_view(
+                target_root,
+                state,
+            ))?;
+            let available = facts.get("available").and_then(Value::as_bool) == Some(true);
+            let next_step = if available {
+                source_process_next_step(issue.kind)
+            } else {
+                "Continue with the other issue evidence. Missing source-process traffic evidence does not authorize a new recording or prove that the source has no startup, background, or local-cache behavior."
             };
             Ok((
                 facts,
                 vec![
-                    "endpoint frequency does not prove asynchronous or process ownership"
+                    "bootstrap timing and frequency do not prove process ownership or local-cache causality"
                         .to_string(),
-                    "it does not establish local-cache lifecycle or response causality"
+                    "configured process-owned rule matches prove only declared process scope; they do not prove response causality or replace request-owned target behavior"
                         .to_string(),
                 ],
-                "Inspect source startup scheduling and cache loader paths only for endpoints with relevant data interactions."
-                    .to_string(),
+                next_step.to_string(),
             ))
         }
         QUERY_DIRTY_CLUSTERS => {
@@ -571,14 +607,30 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
             "Inspect all response differences in the representative case before implementation",
         ));
     }
+    let dependency_evidence_first = matches!(
+        issue.kind,
+        RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+    );
+    if dependency_evidence_first {
+        queries.push((
+            QUERY_DIRTY_CLUSTERS,
+            "Cluster case-scoped dirty dependencies by protocol, endpoint, and reason",
+        ));
+        queries.push((
+            QUERY_SOURCE_PROCESS_TRAFFIC,
+            source_process_evidence_purpose(issue.kind),
+        ));
+    }
     queries.push((
         QUERY_REPRESENTATIVES,
         "Show the bounded representative with explicit value presence",
     ));
-    queries.push((
-        QUERY_PRE_READINESS_TRAFFIC,
-        "Summarize source data interactions observed before readiness by endpoint",
-    ));
+    if !dependency_evidence_first && source_process_evidence_relevant(issue) {
+        queries.push((
+            QUERY_SOURCE_PROCESS_TRAFFIC,
+            source_process_evidence_purpose(issue.kind),
+        ));
+    }
     if issue.representative.is_some() {
         if !response_unavailable {
             queries.extend([
@@ -603,10 +655,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
             ));
         }
     }
-    if matches!(
-        issue.kind,
-        RewriteIssueKind::Dependency | RewriteIssueKind::Replay
-    ) {
+    if issue.kind == RewriteIssueKind::Response {
         queries.push((
             QUERY_DIRTY_CLUSTERS,
             "Cluster case-scoped dirty dependencies by protocol, endpoint, and reason",
@@ -619,6 +668,28 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         ));
     }
     queries
+}
+
+fn source_process_evidence_relevant(issue: &RewriteIssue) -> bool {
+    issue.kind != RewriteIssueKind::TargetRuntime
+        || issue
+            .possible_causes
+            .iter()
+            .any(|cause| cause == "source_compatible_configuration")
+}
+
+fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
+    match kind {
+        RewriteIssueKind::Dependency | RewriteIssueKind::Replay => {
+            "Inspect source bootstrap and configured process-owned traffic before classifying dirty dependencies as request-owned or process-owned"
+        }
+        RewriteIssueKind::Response | RewriteIssueKind::Comparison => {
+            "Use this evidence when startup, background refresh, or local-cache state may explain the response mismatch"
+        }
+        RewriteIssueKind::TargetRuntime => {
+            "Use this evidence when target startup or readiness may depend on source bootstrap traffic"
+        }
+    }
 }
 
 fn query_id(state: &RewriteState, issue: &RewriteIssue, kind: &str) -> String {

@@ -67,6 +67,25 @@ rules:
             relative_to: replay_now
             tolerance: 2s
 
+  # Memcached SET protobuf timestamps use an engine-owned ±5 second window.
+  # The recorded timestamp is checked against its recorded SET event; the
+  # target timestamp is checked against the SET observed during Replay.
+  - id: example-user-cache-writeback
+    protocol: memcached
+    memcached:
+      resource:
+        kind: cache_service
+        port: 11211
+      command: set
+      key:
+        prefix: user-
+        suffix: ''
+      protobuf:
+        timestamp_fields:
+          50:
+            mechanism: unix_seconds
+            source_evidence: src/user_cache.rs:writeback sets loading_time from current time
+
 # Add source-proven replay fields through `config replay` and comparison-only
 # fields through `config comparison`. Comparison applies both sets.
 response_rules:

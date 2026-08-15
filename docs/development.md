@@ -1047,14 +1047,14 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v16 always returns `action.kind`, `action.summary`,
+Rewrite action schema v19 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
-After a standard recording is selected, the optional top-level
-`source_process_traffic` projection gives every action bounded `bootstrap`,
-configured `process_owned`, and Redis snapshot observations as triage context.
-It is not an action-specific transition fact.
+Source-process traffic is not repeated in action or status envelopes. Relevant
+`implementation_required` actions return an issue-scoped
+`source_process_traffic` evidence command for bounded bootstrap, configured
+`process_owned`, and Redis snapshot triage.
 Status does not duplicate an `active_issue` or publish an unconditional
 top-level `next`. Every returned command contains a canonical `cwd` plus exact
 argv. The argv includes the canonical absolute `--target-root`, so executing a
@@ -1119,7 +1119,7 @@ mandatory. `terminal_allowed` is false until every inventory item has both
 passing E2E and comparison evidence for the same target content fingerprint.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v16 returns `wait_required` with
+lease. When another API owns it, action schema v19 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1192,16 +1192,31 @@ files under `.traffic-e2e/local/artifacts/`, starting with the representative ca
 efficiency. Artifacts remain read-only, and coordinator results remain
 authoritative for the active run and legal transitions.
 
-For a dependency issue, `representatives` and `dirty_clusters` read a bounded
+For a response, Replay, or dependency issue, `dirty_clusters` reads a bounded
 Replay dependency sidecar instead of the complete Replay report. The sidecar
 contains only case-scoped unmatched, unsupported, unsafe, and unused-case
 events, grouped by protocol and `host:port`, with bounded operation counts and
 one exact representative `case_dir`. Each compact cluster has a stable
-`cluster_id` and the correlated startup interaction count. Full source data
-interactions recorded before readiness are returned only by the separate
-`pre_readiness_traffic` query. They do not affect the case gate.
+`cluster_id` and the correlated startup interaction count. Recording-global
+source bootstrap and configured process-owned traffic are returned only by the
+separate `source_process_traffic` query. They do not affect the case gate.
 `unused_global` events and target activity outside an active case remain
 aggregate diagnostics and do not make a case dirty.
+
+When a dirty cluster uses a protocol with supported dependency-value rules,
+the evidence report includes `protocol_rules`. Each entry contains an English
+applicability hint and an exact read-only `help` command. This list is separate
+from `applicable_rule_planners`, which describes dependency ownership rules;
+neither list proves that a rule applies. Memcached currently exposes
+`protobuf-timestamp`, whose help command is:
+
+```bash
+backend-rewrite --target-root ../target rule memcached protobuf-timestamp --help
+```
+
+The rule planner requires current dirty-cluster evidence and source proof for
+the selected protobuf field. It owns the fixed five-second timestamp window;
+the caller supplies neither an offset nor a tolerance.
 
 Dependency evidence can be projected without parsing the JSONL directly:
 
@@ -1535,17 +1550,43 @@ than ordinary migration evidence.
 
 Run the current complete API group only until it passes, then stop. Focused
 attempts replace the selected API's terminal contribution to the current
-logical run, while each finalized attempt is counted once in
-`replay-progress.yaml`. Reprocessing the same published attempt is idempotent.
-The committed progress file contains aggregate and latest-run evidence; its
-per-run idempotency ledger is stored in the ignored
-`.traffic-e2e/local/artifacts/progress/replay-counted-runs.yaml` sidecar. Comparison
-progress uses the sibling `comparison-counted-runs.yaml` sidecar. Focused
-evidence never replaces the global full-round `latest`. The local ledger is the
-runtime authority: if the public snapshot is reset or removed, the runner
-rebuilds it from the baseline and ordered observations. If the local ledger is
-missing, a valid public snapshot initializes its aggregate, API totals,
-streaks, and latest run as the new local baseline.
+logical recording run. `.traffic-e2e/progress.yaml` is the single public
+business ledger for standard live-traffic recording batches. Only copying one
+new standard batch from live traffic increases run and case coverage. Replay,
+comparison recording, and any retries only settle that standard batch's current
+result; even one hundred verification attempts never add another run or case.
+
+Progress is published in two steps. Recording completion immediately increases
+`executed` coverage, exposes the latest batch with `passed: null`, and clears
+the global streak plus only the per-API streaks covered by that batch. APIs not
+present in the recording keep their streaks. A terminal result then updates
+`passed` counts. Success reconnects the streak that existed before recording
+only when the batch never failed; after any failed attempt, later success for
+the same batch starts at one run and that batch's successful case count. A
+retry never increases `executed`.
+
+The committed file contains only business aggregates and the latest batch
+summary. Replay/comparison provenance, pending state, failure barriers,
+idempotency keys, and ordered observations remain in the ignored
+`.traffic-e2e/local/artifacts/progress/counted-runs.yaml` ledger. That local
+ledger is runtime authority and can reconstruct a reset public snapshot.
+Existing `replay-progress.yaml` coverage is migrated once and both split files
+are removed after `progress.yaml` is durably published. Historical comparison
+counters are execution detail, so they are not added to business coverage.
+
+```yaml
+version: 3
+updated_at: 2026-08-15T02:00:00Z
+totals:
+  runs: { executed: 45, passed: 11, success_streak: 1 }
+  cases: { executed: 7916, passed: 7307, success_streak: 386 }
+  apis: { covered: 3 }
+latest_run: { passed: true, apis: 2, cases: 386 }
+apis:
+  GET /api-a:
+    runs: { executed: 14, passed: 6, success_streak: 4 }
+    cases: { executed: 422, passed: 414, success_streak: 20 }
+```
 
 When the rewrite coordinator accepts a newly finalized standard recording, it
 starts a new verification progress epoch. The preceding public aggregate becomes
@@ -1558,9 +1599,9 @@ an empty baseline is rebuilt from this archive before its public snapshot is
 published.
 
 Intermediate attempts do not require Git commits for progress. After every API
-is verified, the rewrite coordinator synchronizes the final public Replay and
-comparison snapshots and returns
-`input_required/verification_progress_commit_required` until both files are
+is verified, the rewrite coordinator synchronizes the final public
+`progress.yaml` snapshot and returns
+`input_required/verification_progress_commit_required` until that file is
 committed. A reset at that gate is reconstructed from the local ledger and
 cannot make terminal completion available.
 
@@ -1576,7 +1617,7 @@ traffic-e2e run \
 
 The full command uses the same single target lifetime for the complete round,
 atomically publishes runner-owned evidence, and updates
-`.traffic-e2e/replay-progress.yaml`.
+`.traffic-e2e/progress.yaml`.
 
 The current logical run passes only with complete response, replay, and
 dependency gates. Replay success does not replace current comparison evidence.
@@ -1738,8 +1779,8 @@ lifecycle events and known ping, heartbeat, and setup exchanges. The rewrite
 coordinator exposes the projection through its opaque evidence-query API, so a
 target AI does not need to read this file or the Global JSONL directly.
 `source-process-traffic-summary.json` is an independently bounded writer-owned
-projection used directly by the rewrite action envelope. It separates all
-pre-readiness data interactions from configured process-owned-rule traffic and
+projection exposed through the issue-scoped rewrite evidence API. It separates
+all pre-readiness data interactions from configured process-owned-rule traffic and
 retains protocol, `host:port`, operation, and count. Redis process-owned snapshot
 facts include successful seeds, later recorder reuses, fill failures, and the
 same counts per intercepted domain and port. Snapshot hits remain absent from

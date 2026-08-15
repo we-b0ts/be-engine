@@ -7,7 +7,9 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::config::{ExpectedResponseUsage, validate_replay_policy};
-use super::matcher::{HttpPolicyContext, MysqlPolicyContext, ReplayPolicyRuntime};
+use super::matcher::{
+    HttpPolicyContext, MemcachedPolicyContext, MysqlPolicyContext, ReplayPolicyRuntime,
+};
 use crate::replay::{
     RecordedMysqlValue, ReplayCase, ReplayCaseStatus, ReplaySessionIdentity, TargetKey,
 };
@@ -263,6 +265,114 @@ fn rejects_changed_reference_and_out_of_window_time() {
 }
 
 #[test]
+fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
+    let fixture = policy_fixture(memcached_policy());
+    let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
+    let target = TargetKey {
+        host: "cache.internal".to_string(),
+        port: 11211,
+    };
+    runtime.observe_recorded_memcached_exchange(Some(CASE_ID), &target, "set", Some(b"u42"));
+    let recorded_at = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
+    let actual_at = Utc.timestamp_opt(1_800_000_000, 0).unwrap();
+    let recorded = protobuf_user_info(1_699_999_995, b"stable");
+    let actual = protobuf_user_info(1_800_000_005, b"stable");
+    let decision = runtime
+        .preview_memcached(&MemcachedPolicyContext {
+            case_id: Some(CASE_ID),
+            target: &target,
+            command: "set",
+            key: Some(b"u42"),
+            recorded_value: Some(&recorded),
+            actual_value: Some(&actual),
+            recorded_observed_at: recorded_at,
+            actual_observed_at: actual_at,
+        })
+        .unwrap();
+    runtime.commit(Some(CASE_ID), decision);
+
+    let report = runtime.report();
+    assert_eq!(report.rules[0].matches, 1);
+    assert_eq!(report.rules[0].time_validations, 1);
+    assert!(report.unused_applicable_rule_ids.is_empty());
+    let serialized = serde_json::to_string(&report).unwrap();
+    assert!(!serialized.contains("1699999995"));
+    assert!(!serialized.contains("1800000005"));
+
+    let other_host_same_port = TargetKey {
+        host: "another-cache.internal".to_string(),
+        port: 11211,
+    };
+    assert!(
+        runtime
+            .preview_memcached(&MemcachedPolicyContext {
+                case_id: Some(CASE_ID),
+                target: &other_host_same_port,
+                command: "set",
+                key: Some(b"u42"),
+                recorded_value: Some(&recorded),
+                actual_value: Some(&actual),
+                recorded_observed_at: recorded_at,
+                actual_observed_at: actual_at,
+            })
+            .is_ok()
+    );
+
+    let same_host_other_port = TargetKey {
+        host: "cache.internal".to_string(),
+        port: 11212,
+    };
+    let changed_stable_value = protobuf_user_info(1_800_000_005, b"changed");
+    assert!(
+        runtime
+            .preview_memcached(&MemcachedPolicyContext {
+                case_id: Some(CASE_ID),
+                target: &same_host_other_port,
+                command: "set",
+                key: Some(b"u42"),
+                recorded_value: Some(&recorded),
+                actual_value: Some(&changed_stable_value),
+                recorded_observed_at: recorded_at,
+                actual_observed_at: actual_at,
+            })
+            .unwrap_err()
+            .contains("value did not match")
+    );
+}
+
+#[test]
+fn rejects_memcached_timestamp_rule_with_a_broad_or_invalid_selector() {
+    let missing_resource = memcached_policy().replace(
+        "      resource:\n        kind: cache_service\n        port: 11211\n",
+        "",
+    );
+    let fixture = policy_fixture(&missing_resource);
+    let error = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap_err();
+    assert!(format!("{error:#}").contains("missing field `resource`"));
+
+    let unsupported_breeze = memcached_policy().replace(
+        "        kind: cache_service\n        port: 11211",
+        "        kind: breeze\n        namespace: user-info",
+    );
+    let fixture = policy_fixture(&unsupported_breeze);
+    let error = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap_err();
+    assert!(format!("{error:#}").contains("unknown variant `breeze`"));
+
+    let cache_service_namespace = memcached_policy().replace(
+        "        port: 11211",
+        "        port: 11211\n        namespace: user-info",
+    );
+    let fixture = policy_fixture(&cache_service_namespace);
+    let error = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap_err();
+    assert!(format!("{error:#}").contains("unknown field `namespace`"));
+
+    let empty_key = memcached_policy().replace("        prefix: u", "        prefix: ''");
+    let fixture = policy_fixture(&empty_key);
+    let error = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap_err();
+    assert!(format!("{error:#}").contains("requires a prefix or suffix"));
+}
+
+#[test]
 fn validates_scoped_http_query_fields() {
     let fixture = policy_fixture(http_policy());
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
@@ -484,6 +594,45 @@ rules:
             relative_to: replay_now
             tolerance: 2s
 "#
+}
+
+fn memcached_policy() -> &'static str {
+    r#"
+version: 1
+expected_response: assertions_only
+rules:
+  - id: user-info-loading-time
+    protocol: memcached
+    memcached:
+      resource:
+        kind: cache_service
+        port: 11211
+      command: set
+      key:
+        prefix: u
+        suffix: ''
+      protobuf:
+        timestamp_fields:
+          50:
+            mechanism: unix_seconds
+            source_evidence: UserInfoServiceBase.java:438 current time
+"#
+}
+
+fn protobuf_user_info(timestamp: u64, stable: &[u8]) -> Vec<u8> {
+    let mut value = vec![0x08, 0x07, 0x90, 0x03];
+    encode_varint(timestamp, &mut value);
+    value.extend_from_slice(&[0x12, stable.len() as u8]);
+    value.extend_from_slice(stable);
+    value
+}
+
+fn encode_varint(mut value: u64, output: &mut Vec<u8>) {
+    while value >= 0x80 {
+        output.push((value as u8 & 0x7f) | 0x80);
+        value >>= 7;
+    }
+    output.push(value as u8);
 }
 
 fn composed_mysql_policy() -> &'static str {

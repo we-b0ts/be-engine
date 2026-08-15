@@ -199,7 +199,7 @@ pub(super) fn resolve_layout(
         target_root,
         run_key,
         case_source,
-        progress_path: traffic_e2e_dir.join("replay-progress.yaml"),
+        progress_path: traffic_e2e_dir.join("progress.yaml"),
         legacy_progress_path: traffic_e2e_dir.join("e2e-progress.yaml"),
         internal_root: internal_root.clone(),
         current_path: internal_root.join("current.yaml"),

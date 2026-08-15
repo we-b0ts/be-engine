@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -101,6 +101,26 @@ pub(super) fn standard_recording_apis(
     Ok(apis)
 }
 
+pub(super) fn standard_recording_api_case_counts(
+    target_root: &Path,
+    state: &RewriteState,
+    apis: &[String],
+) -> Result<BTreeMap<String, u64>> {
+    let case_source = recording_run(target_root, &state.recording_run_id);
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    let config = crate::config::AppConfig::load(&project.recorder_config)?;
+    let discovered = discover_recorded_api_counts_from_config(&config, &case_source)?;
+    apis.iter()
+        .map(|api| {
+            let cases = discovered
+                .get(api)
+                .copied()
+                .with_context(|| format!("standard recording API {api:?} published no cases"))?;
+            Ok((api.clone(), cases))
+        })
+        .collect()
+}
+
 pub(super) fn validate_comparison_recording(
     target_root: &Path,
     state: &RewriteState,
@@ -162,13 +182,24 @@ fn discover_recorded_apis_from_config(
     config: &crate::config::AppConfig,
     case_source: &Path,
 ) -> Result<Vec<String>> {
+    Ok(
+        discover_recorded_api_counts_from_config(config, case_source)?
+            .into_keys()
+            .collect(),
+    )
+}
+
+fn discover_recorded_api_counts_from_config(
+    config: &crate::config::AppConfig,
+    case_source: &Path,
+) -> Result<BTreeMap<String, u64>> {
     let mut request_files = Vec::new();
-    collect_request_files(case_source, &mut request_files)?;
+    collect_request_files(&case_source.join("record-api"), &mut request_files)?;
     ensure!(
         request_files.len() <= 100_000,
         "standard recording API inventory exceeds the supported case bound"
     );
-    let mut apis = BTreeSet::new();
+    let mut apis = BTreeMap::<String, u64>::new();
     for path in request_files {
         let request: StandardCaseRequest = read_json(&path)?;
         let uri = request
@@ -180,9 +211,10 @@ fn discover_recorded_apis_from_config(
                 .unwrap_or_else(|| uri.path().to_string())
         });
         let api = format!("{} {pattern}", request.method).parse::<RecordingApi>()?;
-        apis.insert(api.to_string());
+        let count = apis.entry(api.to_string()).or_default();
+        *count = count.saturating_add(1);
     }
-    Ok(apis.into_iter().collect())
+    Ok(apis)
 }
 
 fn configured_pattern(
@@ -401,8 +433,9 @@ mod tests {
     #[test]
     fn unscoped_recording_inventory_uses_recorded_patterns_and_legacy_config_fallback() {
         let source = tempfile::tempdir().unwrap();
-        let first = source.path().join("api-a/case-1");
-        let second = source.path().join("api-b/case-2");
+        let published = source.path().join("record-api");
+        let first = published.join("api-a/case-1");
+        let second = published.join("api-b/case-2");
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(&second).unwrap();
         std::fs::write(
@@ -425,6 +458,33 @@ mod tests {
         assert_eq!(
             discover_recorded_apis_from_config(&config, source.path()).unwrap(),
             vec!["GET /users/*", "POST /widgets/*"]
+        );
+    }
+
+    #[test]
+    fn standard_recording_inventory_excludes_quarantined_and_staging_cases() {
+        let source = tempfile::tempdir().unwrap();
+        for relative in [
+            "record-api/api/case-published",
+            "failed/record-api/api/case-quarantined",
+            "staging/record-api/api/case-staging",
+        ] {
+            let case = source.path().join(relative);
+            std::fs::create_dir_all(&case).unwrap();
+            std::fs::write(
+                case.join("request.json"),
+                r#"{"method":"GET","uri":"/users/1","api_pattern":"/users/*","matched_rule":"api"}"#,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            discover_recorded_api_counts_from_config(
+                &crate::config::AppConfig::default(),
+                source.path(),
+            )
+            .unwrap(),
+            BTreeMap::from([("GET /users/*".to_string(), 1)])
         );
     }
 }

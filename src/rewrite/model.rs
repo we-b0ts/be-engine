@@ -13,10 +13,8 @@ use crate::{
     E2eVerificationGates,
 };
 
-use super::source_process_traffic::RewriteSourceProcessTrafficView;
-
 pub(super) const STATE_VERSION: u32 = 1;
-pub(super) const ACTION_SCHEMA_VERSION: u32 = 17;
+pub(super) const ACTION_SCHEMA_VERSION: u32 = 19;
 
 const DEFAULT_RECORDING_DURATION_SECONDS: NonZeroU64 = NonZeroU64::new(60).unwrap();
 const DEFAULT_RECORDING_CASE_LIMIT: NonZeroUsize = NonZeroUsize::new(100).unwrap();
@@ -238,7 +236,19 @@ pub struct RewriteRulePlanRecord {
     pub source_example: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_example: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memcached_timestamp: Option<RewriteMemcachedTimestampRuleSpec>,
     pub evidence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewriteMemcachedTimestampRuleSpec {
+    pub rule_id: String,
+    pub port: u16,
+    pub key_prefix: String,
+    pub key_suffix: String,
+    pub field_number: u32,
+    pub source_evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -692,14 +702,6 @@ pub struct RewriteEvidenceCommand {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RewriteApplicableRulePlanner {
-    pub kind: String,
-    pub protocol: String,
-    pub evidence_id: String,
-    pub command: RewriteCommandSpec,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct RewriteActionEnvelope {
     pub schema_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -708,8 +710,6 @@ pub struct RewriteActionEnvelope {
     pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_process_traffic: Option<RewriteSourceProcessTrafficView>,
     pub action: RewriteAction,
     pub terminal_allowed: bool,
 }
@@ -724,8 +724,6 @@ pub struct RewriteStatusReport {
     pub api_inventory: Option<RewriteApiInventoryView>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latest_focused_e2e: Option<RewriteFocusedE2eExecution>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_process_traffic: Option<RewriteSourceProcessTrafficView>,
     pub e2e_current: bool,
     pub comparison_current: bool,
     pub terminal_allowed: bool,
@@ -788,19 +786,6 @@ pub struct RewriteRecordingStartReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub waiting_on: Option<RewriteTrafficOperationView>,
     pub status: RewriteCommandSpec,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct RewriteEvidenceReport {
-    pub schema_version: u32,
-    pub evidence_id: String,
-    pub issue_id: String,
-    pub query: String,
-    pub facts: Value,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub applicable_rule_planners: Vec<RewriteApplicableRulePlanner>,
-    pub does_not_prove: Vec<String>,
-    pub next_step: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -978,14 +963,13 @@ mod tests {
             workflow: None,
             api_inventory: None,
             latest_focused_e2e: None,
-            source_process_traffic: None,
             e2e_current: false,
             comparison_current: false,
             terminal_allowed: false,
             action,
         })
         .unwrap();
-        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(17)));
+        assert_eq!(status.get("schema_version"), Some(&serde_json::json!(19)));
         assert!(status.get("active_issue").is_none());
         assert!(status.get("next").is_none());
     }

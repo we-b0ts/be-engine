@@ -81,6 +81,11 @@ is unclear.
   observe gate and diagnosis projections computed from different rules; move
   tests out or extract a complete diagnostic sub-contract before adding a new
   responsibility.
+- `verification_progress` owns the unified business progress transaction across
+  recording completion and terminal verification. Its ignored local ledger
+  keeps pending batches, idempotency, and irreversible failure barriers;
+  `verification_progress/public.rs` owns only the compact committed
+  `.traffic-e2e/progress.yaml` projection and migration parser.
 - Within `rewrite`, `mod.rs` remains the atomic coordinator-transition facade,
   `action.rs` keeps the exhaustive action/command projection, and `recording.rs`
   keeps the managed recording request/start/worker lifecycle. `worker.rs` owns

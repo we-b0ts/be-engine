@@ -72,6 +72,29 @@ fn parses_the_bounded_rewrite_surface() {
     assert!(
         Cli::try_parse_from([
             "test",
+            "rule",
+            "memcached",
+            "protobuf-timestamp",
+            "--evidence-id",
+            "evidence-current",
+            "--name",
+            "user-info-loading-time",
+            "--resource-kind",
+            "cache-service",
+            "--port",
+            "15138",
+            "--key-prefix",
+            "u",
+            "--protobuf-field",
+            "50",
+            "--source-evidence",
+            "CacheService.java:2044 sets loading_time from Unix seconds",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
             "worker",
             "transfer",
             "fnv1a64:binding",
@@ -534,4 +557,21 @@ fn dependency_rule_help_is_protocol_specific_and_has_no_api_context() {
         assert!(!help.contains("--key-prefix"));
         assert!(!help.contains("--command"));
     }
+}
+
+#[test]
+fn memcached_protobuf_timestamp_help_is_rule_specific() {
+    let help = Cli::try_parse_from(["test", "rule", "memcached", "protobuf-timestamp", "--help"])
+        .unwrap_err()
+        .to_string();
+
+    assert!(help.contains("protobuf Unix-seconds field rule"));
+    assert!(help.contains("--resource-kind <RESOURCE_KIND>"));
+    assert!(help.contains("--port <PORT>"));
+    assert!(help.contains("--protobuf-field <PROTOBUF_FIELD>"));
+    assert!(help.contains("--source-evidence <SOURCE_EVIDENCE>"));
+    assert!(!help.contains("--namespace"));
+    assert!(!help.contains("--group"));
+    assert!(!help.contains("--tolerance"));
+    assert!(!help.contains("--offset"));
 }

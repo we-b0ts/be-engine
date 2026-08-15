@@ -14,13 +14,6 @@ use crate::verification_progress::{
     VerificationStage, fingerprint, load, write,
 };
 
-#[derive(Debug, Clone, Copy, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum ReplayRunKind {
-    Full,
-    Focused,
-}
-
 #[derive(Debug, Deserialize)]
 struct LegacyProgressReport {
     version: u32,
@@ -130,20 +123,23 @@ pub(super) fn update_focused_index(
 pub(super) fn write_replay_progress(
     progress_path: &Path,
     legacy_progress_path: &Path,
+    index: &RunIndex,
     state: &ActiveRunState,
-    kind: ReplayRunKind,
 ) -> Result<()> {
     let mut migrated = false;
-    let mut report = match load(progress_path, VerificationStage::Replay)? {
+    let mut report = match load(progress_path, VerificationStage::Progress)? {
         Some(report) => report,
         None if legacy_progress_path.is_file() => {
             migrated = true;
             load_legacy_progress(legacy_progress_path)?
         }
-        None => ProgressReport::new(VerificationStage::Replay),
+        None => ProgressReport::new(VerificationStage::Progress),
     };
     let requires_persistence = report.requires_persistence();
-    let applied = report.apply(observation(state, kind)?)?;
+    let applied = report.upsert_logical_run(
+        logical_observation(index, state)?,
+        Some(&format!("{}|", state.run_key)),
+    )?;
     if applied || migrated || requires_persistence {
         write(progress_path, &report)?;
     }
@@ -155,24 +151,47 @@ pub(super) fn write_replay_progress(
 
 pub(super) fn ensure_replay_progress_revisable(
     progress_path: &Path,
+    index: &RunIndex,
     state: &ActiveRunState,
 ) -> Result<()> {
-    let report = load(progress_path, VerificationStage::Replay)?
+    let report = load(progress_path, VerificationStage::Progress)?
         .context("replay progress is missing for focused evidence revision")?;
-    report.ensure_revisable_observation(&observation(state, ReplayRunKind::Focused)?)
+    let logical = logical_observation(index, state)?;
+    if let Some(counted) = report.counted_observations.get(&logical.key) {
+        ensure!(
+            counted.observation.apis.len() == logical.apis.len()
+                && counted.observation.apis.iter().all(|(api, previous)| {
+                    logical.apis.get(api).is_some_and(|current| {
+                        previous.cases == current.cases && previous.passed == current.passed
+                    })
+                })
+                && counted.observation.passed == logical.passed,
+            "logical replay progress changed before focused evidence revision"
+        );
+        return Ok(());
+    }
+    report.ensure_revisable_observation(&legacy_attempt_observation(state, "focused")?)
 }
 
 pub(super) fn revise_replay_progress(
     progress_path: &Path,
+    index: &RunIndex,
     previous: &ActiveRunState,
     current: &ActiveRunState,
 ) -> Result<()> {
-    let mut report = load(progress_path, VerificationStage::Replay)?
+    let mut report = load(progress_path, VerificationStage::Progress)?
         .context("replay progress is missing for focused evidence revision")?;
     let requires_persistence = report.requires_persistence();
-    if report.revise(
-        observation(previous, ReplayRunKind::Focused)?,
-        observation(current, ReplayRunKind::Focused)?,
+    let previous_attempt = legacy_attempt_observation(previous, "focused")?;
+    if report.counted_runs.contains_key(&previous_attempt.key) {
+        report.revise(
+            previous_attempt,
+            legacy_attempt_observation(current, "focused")?,
+        )?;
+    }
+    if report.upsert_logical_run(
+        logical_observation(index, current)?,
+        Some(&format!("{}|", current.run_key)),
     )? || requires_persistence
     {
         write(progress_path, &report)?;
@@ -180,7 +199,77 @@ pub(super) fn revise_replay_progress(
     Ok(())
 }
 
-fn observation(state: &ActiveRunState, kind: ReplayRunKind) -> Result<ProgressObservation> {
+fn logical_observation(index: &RunIndex, state: &ActiveRunState) -> Result<ProgressObservation> {
+    ensure!(
+        index.run_key == state.run_key,
+        "replay progress run key changed"
+    );
+    ensure!(
+        state.status.is_terminal(),
+        "replay progress requires a terminal run"
+    );
+    let api_keys = index
+        .current_run
+        .api_keys
+        .iter()
+        .chain(index.current_run.apis.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let apis = api_keys
+        .iter()
+        .map(|api| {
+            let contribution = index.current_run.apis.get(api);
+            let finalized = contribution.is_some_and(|value| value.counted);
+            let executed = contribution.filter(|value| value.counted).map_or_else(
+                || u64::from(index.apis.get(api).map_or(0, |value| value.cases)),
+                |value| value.executed_cases,
+            );
+            (
+                api.clone(),
+                ApiObservation {
+                    cases: LatestCounts {
+                        executed,
+                        passed: contribution
+                            .filter(|value| value.counted)
+                            .map_or(0, |value| value.passed_cases),
+                    },
+                    finalized,
+                    passed: contribution.is_some_and(|value| value.counted && value.passed),
+                    success_streak: None,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    ensure!(
+        !apis.is_empty(),
+        "replay progress requires at least one summarized API"
+    );
+    let evidence = LogicalReplayEvidence {
+        run_key: &state.run_key,
+        source_revision: &index.source_revision,
+        case_inventory_id: &index.case_inventory_id,
+        inventory_complete: index.inventory_complete,
+        current_run: &index.current_run,
+    };
+    let finalized = index.inventory_complete && apis.values().all(|api| api.finalized);
+    Ok(ProgressObservation {
+        key: state.run_key.clone(),
+        evidence_fingerprint: fingerprint(&serde_json::to_vec(&evidence)?),
+        finished_at: state
+            .finished_at
+            .context("terminal replay run is missing finished_at")?
+            .to_rfc3339(),
+        finalized,
+        passed: finalized.then_some(index.current_run.passed),
+        success_streak: None,
+        apis,
+    })
+}
+
+fn legacy_attempt_observation(
+    state: &ActiveRunState,
+    kind: &'static str,
+) -> Result<ProgressObservation> {
     ensure!(
         state.status.is_terminal(),
         "replay progress requires a terminal run"
@@ -189,7 +278,7 @@ fn observation(state: &ActiveRunState, kind: ReplayRunKind) -> Result<ProgressOb
         !state.apis.is_empty(),
         "replay progress requires at least one summarized API"
     );
-    if matches!(kind, ReplayRunKind::Focused) {
+    if kind == "focused" {
         ensure!(
             state.apis.len() == 1,
             "focused replay progress requires exactly one API"
@@ -208,7 +297,9 @@ fn observation(state: &ActiveRunState, kind: ReplayRunKind) -> Result<ProgressOb
                         executed: u64::from(api.total),
                         passed: u64::from(api.passed),
                     },
+                    finalized: true,
                     passed: evidence_clean && api.complete_pass,
+                    success_streak: None,
                 },
             )
         })
@@ -246,28 +337,34 @@ fn observation(state: &ActiveRunState, kind: ReplayRunKind) -> Result<ProgressOb
     Ok(ProgressObservation {
         key: format!(
             "{}|{}|{}|{}",
-            state.run_key,
-            match kind {
-                ReplayRunKind::Full => "full",
-                ReplayRunKind::Focused => "focused",
-            },
-            scope_key,
-            state.sequence
+            state.run_key, kind, scope_key, state.sequence
         ),
         evidence_fingerprint: fingerprint(&evidence_bytes),
         finished_at: state
             .finished_at
             .context("terminal replay run is missing finished_at")?
             .to_rfc3339(),
+        finalized: true,
+        passed: None,
+        success_streak: None,
         apis,
     })
+}
+
+#[derive(Serialize)]
+struct LogicalReplayEvidence<'a> {
+    run_key: &'a str,
+    source_revision: &'a str,
+    case_inventory_id: &'a str,
+    inventory_complete: bool,
+    current_run: &'a super::model::RunContribution,
 }
 
 #[derive(Serialize)]
 struct ReplayEvidence<'a> {
     run_key: &'a str,
     sequence: u64,
-    kind: ReplayRunKind,
+    kind: &'a str,
     source_revision: &'a str,
     case_inventory_id: &'a str,
     replay_finalized: bool,
@@ -305,7 +402,7 @@ fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
     let legacy_evidence_fingerprint = format!("legacy-v{}:{legacy_run_key}", legacy.version);
     Ok(ProgressReport {
         version: crate::verification_progress::PROGRESS_VERSION,
-        stage: VerificationStage::Replay,
+        stage: VerificationStage::Progress,
         updated_at: legacy.updated_at,
         totals: ProgressTotals {
             runs: SuccessCounts {
@@ -323,6 +420,7 @@ fn load_legacy_progress(path: &Path) -> Result<ProgressReport> {
             key: legacy_run_key.clone(),
             evidence_fingerprint: legacy_evidence_fingerprint.clone(),
             number: legacy.latest_run.number,
+            finalized: true,
             passed: legacy.latest_run.passed,
             cases: legacy.latest_run.cases,
             apis: legacy.latest_run.apis,

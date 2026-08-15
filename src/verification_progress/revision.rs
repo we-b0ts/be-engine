@@ -1,8 +1,189 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, ensure};
 
-use super::{LatestCounts, ProgressObservation, ProgressReport, SuccessCounts, SuccessStreak};
+use super::{
+    CountedObservation, LatestCounts, ProgressObservation, ProgressReport, SuccessCounts,
+    SuccessStreak, failed_apis, observation_passed,
+};
 
 impl ProgressReport {
+    pub(crate) fn settle_api_results(
+        &mut self,
+        key: &str,
+        finished_at: String,
+        results: BTreeMap<String, super::ApiObservation>,
+    ) -> Result<bool> {
+        ensure!(
+            !results.is_empty(),
+            "progress settlement requires at least one API result"
+        );
+        self.validate_observation_history()?;
+        let mut current = self
+            .counted_observations
+            .get(key)
+            .with_context(|| format!("recorded progress batch {key:?} is missing"))?
+            .observation
+            .clone();
+        let mut changed = false;
+        for (api, result) in results {
+            ensure!(
+                result.finalized && result.success_streak.is_none(),
+                "progress settlement for API {api:?} must contain one terminal result"
+            );
+            let recorded = current.apis.get_mut(&api).with_context(|| {
+                format!("recorded progress batch {key:?} does not contain API {api:?}")
+            })?;
+            ensure!(
+                recorded.cases.executed == result.cases.executed,
+                "comparison result for API {api:?} changed the standard recording case inventory"
+            );
+            if *recorded != result {
+                *recorded = result;
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(false);
+        }
+
+        current.finalized = current.apis.values().all(|api| api.finalized);
+        current.passed = current
+            .finalized
+            .then(|| current.apis.values().all(|api| api.passed));
+        current.finished_at = finished_at;
+        self.validate_observation(&current)?;
+        let streak_broken = super::observation_failed(&current);
+        let api_streak_broken = failed_apis(&current);
+        let counted = self
+            .counted_observations
+            .get_mut(key)
+            .expect("validated progress batch disappeared during settlement");
+        counted.streak_broken |= streak_broken;
+        counted.api_streak_broken.extend(api_streak_broken);
+        counted.observation = current;
+        self.rebuild_aggregates()?;
+        Ok(true)
+    }
+
+    pub(crate) fn upsert_logical_run(
+        &mut self,
+        mut current: ProgressObservation,
+        legacy_key_prefix: Option<&str>,
+    ) -> Result<bool> {
+        self.validate_observation(&current)?;
+
+        if let Some(previous) = self
+            .counted_observations
+            .get(&current.key)
+            .map(|counted| counted.observation.clone())
+        {
+            if !previous.finalized {
+                ensure!(
+                    current.apis.iter().all(|(api, result)| {
+                        previous.apis.get(api).is_some_and(|recorded| {
+                            recorded.cases.executed == result.cases.executed
+                        })
+                    }),
+                    "logical progress run {:?} changed its recorded API case inventory",
+                    current.key
+                );
+                let mut merged = previous.clone();
+                merged.evidence_fingerprint = current.evidence_fingerprint.clone();
+                merged.finished_at.clone_from(&current.finished_at);
+                for (api, result) in current.apis {
+                    merged.apis.insert(api, result);
+                }
+                merged.finalized = merged.apis.values().all(|api| api.finalized);
+                merged.passed = merged
+                    .finalized
+                    .then(|| merged.apis.values().all(|api| api.passed));
+                current = merged;
+            }
+            ensure!(
+                previous.apis.iter().all(|(api, previous)| {
+                    current
+                        .apis
+                        .get(api)
+                        .is_some_and(|current| current.cases.executed == previous.cases.executed)
+                }),
+                "logical progress run {:?} changed its recorded API case inventory",
+                current.key
+            );
+            if previous.evidence_fingerprint == current.evidence_fingerprint {
+                return Ok(false);
+            }
+            let counted = self
+                .counted_observations
+                .get_mut(&current.key)
+                .expect("logical run observation disappeared during replacement");
+            counted.streak_broken |= super::observation_failed(&current);
+            counted.api_streak_broken.extend(failed_apis(&current));
+            counted.observation = current.clone();
+            self.counted_runs
+                .insert(current.key.clone(), current.evidence_fingerprint.clone());
+            self.rebuild_aggregates()?;
+            return Ok(true);
+        }
+
+        let legacy_keys = self
+            .counted_observations
+            .iter()
+            .filter(|(key, _)| legacy_key_prefix.is_some_and(|prefix| key.starts_with(prefix)))
+            .map(|(key, counted)| (key.clone(), counted.number))
+            .collect::<Vec<_>>();
+        if legacy_keys.is_empty() {
+            return self.apply(current);
+        }
+        let legacy_key_prefix = legacy_key_prefix
+            .expect("non-empty legacy observation set requires its configured prefix");
+
+        let first_legacy_number = legacy_keys
+            .iter()
+            .map(|(_, number)| *number)
+            .min()
+            .expect("non-empty legacy observation set has a first number");
+        ensure!(
+            self.counted_observations
+                .values()
+                .all(|counted| counted.number < first_legacy_number
+                    || counted.observation.key.starts_with(legacy_key_prefix)),
+            "legacy replay attempts for logical run {:?} are not the latest progress entries",
+            current.key
+        );
+        let streak_broken = super::observation_failed(&current)
+            || legacy_keys.iter().any(|(key, _)| {
+                self.counted_observations.get(key).is_some_and(|counted| {
+                    counted.streak_broken || !observation_passed(&counted.observation)
+                })
+            });
+        let mut api_streak_broken = failed_apis(&current);
+        for (key, _) in &legacy_keys {
+            if let Some(counted) = self.counted_observations.get(key) {
+                api_streak_broken.extend(counted.api_streak_broken.iter().cloned());
+                api_streak_broken.extend(failed_apis(&counted.observation));
+            }
+        }
+
+        self.counted_observations
+            .retain(|key, _| !key.starts_with(legacy_key_prefix));
+        self.counted_runs
+            .retain(|key, _| !key.starts_with(legacy_key_prefix));
+        self.counted_runs
+            .insert(current.key.clone(), current.evidence_fingerprint.clone());
+        self.counted_observations.insert(
+            current.key.clone(),
+            CountedObservation {
+                number: first_legacy_number,
+                streak_broken,
+                api_streak_broken,
+                observation: current,
+            },
+        );
+        self.rebuild_aggregates()?;
+        Ok(true)
+    }
+
     pub(crate) fn ensure_revisable(&self, key: &str) -> Result<()> {
         ensure!(
             self.counted_runs.contains_key(key),
@@ -34,7 +215,7 @@ impl ProgressReport {
         self.ensure_revisable(&observation.key)?;
         if let Some(counted) = self.counted_observations.get(&observation.key) {
             ensure!(
-                counted.observation == *observation,
+                same_source_observation(&counted.observation, observation),
                 "progress run {:?} observation changed before revision",
                 observation.key
             );
@@ -97,10 +278,12 @@ impl ProgressReport {
                 .get_mut(&current.key)
                 .expect("complete observation history contains every counted run");
             ensure!(
-                counted.observation == previous,
+                same_source_observation(&counted.observation, &previous),
                 "progress run {:?} observation changed before revision",
                 current.key
             );
+            counted.streak_broken |= super::observation_failed(&current);
+            counted.api_streak_broken.extend(failed_apis(&current));
             counted.observation = current.clone();
             self.counted_runs
                 .insert(current.key.clone(), current.evidence_fingerprint.clone());
@@ -188,6 +371,7 @@ impl ProgressReport {
             key: current.key,
             evidence_fingerprint: current.evidence_fingerprint,
             number: latest.number,
+            finalized: current.finalized,
             passed: current_api.passed,
             cases: current_api.cases,
             apis: LatestCounts {
@@ -198,6 +382,22 @@ impl ProgressReport {
         });
         Ok(true)
     }
+}
+
+fn same_source_observation(
+    persisted: &ProgressObservation,
+    supplied: &ProgressObservation,
+) -> bool {
+    persisted.key == supplied.key
+        && persisted.evidence_fingerprint == supplied.evidence_fingerprint
+        && persisted.finished_at == supplied.finished_at
+        && persisted.passed == supplied.passed
+        && persisted.apis.len() == supplied.apis.len()
+        && persisted.apis.iter().all(|(api, persisted)| {
+            supplied.apis.get(api).is_some_and(|supplied| {
+                persisted.cases == supplied.cases && persisted.passed == supplied.passed
+            })
+        })
 }
 
 fn revise_success_counts(

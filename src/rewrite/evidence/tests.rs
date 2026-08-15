@@ -30,6 +30,68 @@ fn target_runtime_evidence_starts_with_container_diagnostics() {
 
     assert!(commands[0].query_id.ends_with("target-runtime-diagnostics"));
     assert!(commands[0].purpose.contains("target stdout"));
+    assert!(
+        commands
+            .iter()
+            .all(|command| !command.query_id.ends_with("source-process-traffic"))
+    );
+}
+
+#[test]
+fn startup_runtime_issue_advertises_source_process_evidence() {
+    let target = tempfile::tempdir().unwrap();
+    let mut state = crate::rewrite::test_state();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-target-startup".to_string(),
+        kind: RewriteIssueKind::TargetRuntime,
+        owner: RewriteIssueOwner::TargetRuntime,
+        summary: "target did not become ready".to_string(),
+        pointer_pattern: None,
+        representative: None,
+        response_diagnosis: None,
+        possible_causes: vec!["source_compatible_configuration".to_string()],
+        observed_target_fingerprint: "target".to_string(),
+        attempt: 1,
+        comparison_observation: None,
+    });
+
+    let command = commands(target.path(), &state)
+        .into_iter()
+        .find(|command| command.query_id.ends_with("source-process-traffic"))
+        .unwrap();
+
+    assert!(command.purpose.contains("startup or readiness"));
+}
+
+#[test]
+fn dependency_issue_leads_with_dirty_then_source_process_evidence() {
+    let target = tempfile::tempdir().unwrap();
+    let mut state = crate::rewrite::test_state();
+    state.phase = RewritePhase::ImplementationRequired;
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-dependency".to_string(),
+        kind: RewriteIssueKind::Dependency,
+        owner: RewriteIssueOwner::SourceInvestigation,
+        summary: "dependency evidence is dirty".to_string(),
+        pointer_pattern: None,
+        representative: None,
+        response_diagnosis: None,
+        possible_causes: Vec::new(),
+        observed_target_fingerprint: "target".to_string(),
+        attempt: 1,
+        comparison_observation: None,
+    });
+
+    let commands = commands(target.path(), &state);
+
+    assert!(commands[0].query_id.ends_with("dirty-clusters"));
+    assert!(commands[1].query_id.ends_with("source-process-traffic"));
+    assert!(
+        commands[1]
+            .purpose
+            .contains("request-owned or process-owned")
+    );
 }
 
 #[test]
@@ -152,12 +214,17 @@ fn unavailable_response_evidence_omits_value_and_policy_queries() {
 }
 
 #[test]
-fn response_pre_readiness_evidence_exposes_bootstrap_redis_planner() {
+fn response_source_process_evidence_exposes_bootstrap_redis_planner() {
     let planners = applicable_rule_planners(
         Path::new("/target"),
         RewriteIssueKind::Response,
-        QUERY_PRE_READINESS_TRAFFIC,
-        &serde_json::json!({"available": true}),
+        QUERY_SOURCE_PROCESS_TRAFFIC,
+        &serde_json::json!({
+            "available": true,
+            "bootstrap": {
+                "protocols": ["redis"]
+            }
+        }),
         "evidence-bootstrap",
     );
 
@@ -550,6 +617,63 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
 }
 
 #[test]
+fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicability() {
+    let target = tempfile::tempdir().unwrap();
+    let rules = protocol_rule_hints(
+        target.path(),
+        QUERY_DIRTY_CLUSTERS,
+        &serde_json::json!({
+            "clusters": [
+                {"protocol": "memcached", "reason": "unmatched_actual"},
+                {"protocol": "memcached", "reason": "unused_recorded"}
+            ]
+        }),
+    );
+
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0].protocol, "memcached");
+    assert_eq!(rules[0].rule, "protobuf-timestamp");
+    assert!(rules[0].hint.contains("Memcached SET value"));
+    assert!(rules[0].hint.starts_with("Investigate"));
+    assert_eq!(
+        rules[0].help.argv,
+        [
+            "backend-rewrite",
+            "--target-root",
+            target.path().to_str().unwrap(),
+            "rule",
+            "memcached",
+            "protobuf-timestamp",
+            "--help",
+        ]
+    );
+}
+
+#[test]
+fn response_issues_can_query_dirty_clusters_for_protocol_rule_discovery() {
+    let mut state = crate::rewrite::test_state();
+    state.active_issue = Some(RewriteIssue {
+        id: "issue-response-with-dirty-dependency".to_string(),
+        kind: RewriteIssueKind::Response,
+        owner: RewriteIssueOwner::TargetCode,
+        summary: "response and dependency differ".to_string(),
+        pointer_pattern: None,
+        representative: None,
+        response_diagnosis: None,
+        possible_causes: Vec::new(),
+        observed_target_fingerprint: "target".to_string(),
+        attempt: 1,
+        comparison_observation: None,
+    });
+
+    assert!(
+        query_kinds(&state, state.active_issue.as_ref().unwrap())
+            .iter()
+            .any(|(query, _)| *query == QUERY_DIRTY_CLUSTERS)
+    );
+}
+
+#[test]
 fn non_dependency_evidence_does_not_offer_background_rule_planners() {
     let target = tempfile::tempdir().unwrap();
     let planners = applicable_rule_planners(
@@ -564,16 +688,53 @@ fn non_dependency_evidence_does_not_offer_background_rule_planners() {
 }
 
 #[test]
-fn pre_readiness_query_returns_only_data_interaction_endpoint_counts() {
+fn source_process_query_returns_bounded_bootstrap_and_process_owned_evidence() {
     let target = tempfile::tempdir().unwrap();
     let case_source = target.path().join("recording");
     std::fs::create_dir(&case_source).unwrap();
     std::fs::write(
-        case_source.join("global-dependencies.jsonl"),
-        r#"{"event_type":"redis_connection","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379,"command":"PING"}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379,"command":"GET"}
-{"event_type":"redis_exchange","global_dependency_phase":"bootstrap","target_host":"cache.internal","target_port":6379,"command":"GET"}"#,
+        case_source.join("source-process-traffic-summary.json"),
+        r#"{
+  "version": 1,
+  "source": "recorder_events",
+  "bootstrap": {
+    "events": 3,
+    "data_interactions": 2,
+    "excluded_events": 1,
+    "unresolved_interactions": 0,
+    "observations": [{"protocol":"redis","endpoint":"cache.internal:6379","operation":"GET","interactions":2}],
+    "omitted_interactions": 0,
+    "truncated": false
+  },
+  "background": {
+    "events": 2,
+    "data_interactions": 2,
+    "excluded_events": 0,
+    "unresolved_interactions": 0,
+    "rules": [{
+      "name": "startup-cache-warm",
+      "interactions": 2,
+      "bootstrap_interactions": 1,
+      "runtime_interactions": 1,
+      "other_phase_interactions": 0,
+      "unresolved_interactions": 0,
+      "observations": [{"protocol":"redis","endpoint":"cache.internal:6379","operation":"HGET","interactions":2}],
+      "omitted_interactions": 0,
+      "truncated": false,
+      "redis_snapshot": {
+        "seeds":1,
+        "reuses":1,
+        "fill_failures":0,
+        "endpoints":[{"endpoint":"cache.internal:6379","seeds":1,"reuses":1,"fill_failures":0}],
+        "omitted_interactions":0,
+        "truncated":false
+      }
+    }],
+    "omitted_interactions": 0,
+    "truncated": false
+  },
+  "interpretation": "triage only"
+}"#,
     )
     .unwrap();
     let mut state = crate::rewrite::test_state();
@@ -594,15 +755,28 @@ fn pre_readiness_query_returns_only_data_interaction_endpoint_counts() {
     });
     let command = commands(target.path(), &state)
         .into_iter()
-        .find(|command| command.query_id.contains("pre-readiness-traffic"))
+        .find(|command| command.query_id.contains("source-process-traffic"))
         .unwrap();
 
     let report = query(target.path(), &state, &command.query_id).unwrap();
 
-    assert_eq!(report.query, QUERY_PRE_READINESS_TRAFFIC);
+    assert_eq!(report.query, QUERY_SOURCE_PROCESS_TRAFFIC);
     assert_eq!(report.facts["available"], true);
-    assert_eq!(report.facts["interaction_count"], 2);
-    assert_eq!(report.facts["endpoint_counts"]["cache.internal:6379"], 2);
-    assert_eq!(report.facts["excluded_non_data_events"], 2);
-    assert!(!report.facts.to_string().contains("PING"));
+    assert_eq!(report.facts["scope"], "recording_global");
+    assert_eq!(report.facts["bootstrap"]["data_interactions"], 2);
+    assert_eq!(report.facts["bootstrap"]["protocols"][0], "redis");
+    assert_eq!(
+        report.facts["bootstrap"]["observations"][0]["operation"],
+        "GET"
+    );
+    assert_eq!(
+        report.facts["process_owned"]["rules"][0]["redis_snapshot"]["reuses"],
+        1
+    );
+    assert!(
+        report
+            .applicable_rule_planners
+            .iter()
+            .any(|planner| planner.protocol == "redis_bootstrap")
+    );
 }

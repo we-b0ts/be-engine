@@ -46,6 +46,17 @@ real differences until source evidence proves otherwise.
 
 Run only query IDs returned by `action.commands.evidence`:
 
+| Problem signal | Evidence | Command |
+| --- | --- | --- |
+| Response differences need complete case context | `case_response_differences` | Execute the returned evidence command whose query ID ends with `case-response-differences-...-page-0`. |
+| Case-scoped dependency evidence is dirty | `dirty_clusters` | Execute the returned evidence command whose query ID ends with `dirty-clusters`. |
+| Startup, background refresh, or local-cache state may affect behavior | `source_process_traffic` | Execute the returned evidence command whose query ID ends with `source-process-traffic`. |
+| Target startup or lifecycle failed | `target_runtime_diagnostics` | Execute the returned evidence command whose query ID ends with `target-runtime-diagnostics`. |
+
+Always execute the exact opaque command returned by the current action or
+evidence report. The suffixes above are discovery labels; never reconstruct a
+query ID.
+
 - `case_response_differences`: for a response issue, the first evidence command
   returns one fixed-size page of every structured response difference in the
   representative case, including normalized Pointer patterns and explicit
@@ -69,18 +80,22 @@ Run only query IDs returned by `action.commands.evidence`:
   that source order is irrelevant;
 - `dependency_correlation`: response outcomes against dependency cleanliness;
   correlation does not prove response causality;
-- `pre_readiness_traffic`: bounded source data-interaction counts by endpoint
-  before readiness; connection lifecycle, known ping/heartbeat, and setup
-  traffic are excluded, but frequency does not prove process ownership,
-  local-cache lifecycle, or response causality;
+- `source_process_traffic`: recording-global, bounded source bootstrap and
+  configured process-owned traffic grouped by protocol, endpoint, and
+  operation, including Redis snapshot counts. Timing, frequency, and configured
+  rule matches do not prove response causality or replace request-owned target
+  behavior;
 - `dirty_clusters`: case-scoped dirty events grouped by protocol and endpoint,
   with a stable `cluster_id`, bounded operation counts, an exact representative
-  case, and a correlated source pre-readiness count. The complete startup
-  summary remains in `pre_readiness_traffic`. It excludes `unused_global` and
-  case-external target activity, and does not prove request or process
-  ownership. For a dependency issue it also returns
+  case, and a correlated source pre-readiness count. The complete
+  recording-global source-process summary remains in `source_process_traffic`.
+  It excludes `unused_global` and case-external target activity, and does not
+  prove request or process ownership. For a dependency issue it also returns
   `applicable_rule_planners` only for supported protocols present in those
-  clusters. It also returns the selected case's exact
+  clusters. Whenever a supported dependency-value rule exists for a protocol
+  present in the clusters, it separately returns `protocol_rules` with a short
+  applicability hint and an exact read-only help command. Rule availability
+  does not prove applicability. It also returns the selected case's exact
   `representative_dependencies_command` when available;
 - `policy_applicability`: structural rule eligibility; eligibility does not
   authorize a rule;
@@ -91,6 +106,24 @@ Use the smallest query set that can distinguish the current hypotheses. Then
 inspect the representative case and trace the corresponding source and target
 path. Read other artifact cases only when the representative is insufficient.
 Do not run every query merely because it is available.
+
+### Supported Protocol Rules
+
+Use this table only to discover a rule worth investigating. A listed rule does
+not prove that the observed difference is safe to ignore.
+
+| Problem stage | Protocol | Rule | Repairs |
+| --- | --- | --- | --- |
+| `dirty_clusters` during a response, Replay, or dependency issue | Memcached | `protobuf-timestamp` | A `SET` value mismatch where source proves that one selected top-level protobuf varint field is current Unix seconds; all other protobuf fields must remain equal, and each timestamp must be within the engine-owned fixed five-second window around its own `SET`. |
+
+Run the exact `help` command returned with the rule before planning it. Add a
+row only when the corresponding evidence hint, help command, planner, and
+runtime behavior are all implemented.
+
+Memcached `SET` exptime is not a protocol rule. Replay already keeps `0` and
+relative expirations exact and compares absolute expirations by the remaining
+TTL at each `SET`, with a fixed five-second tolerance. Do not plan a rule for an
+exptime-only mismatch.
 
 For dependency topology, execute the representative result's
 `dependencies_command`, or the dirty-cluster result's
@@ -211,10 +244,11 @@ response -> cache read -> key -> hit/miss branch -> loader dependency ->
 write/refresh -> readiness or request lifecycle
 ```
 
-Use `pre_readiness_traffic` only to prioritize source startup schedulers and
-cache loaders for the returned endpoints. An absent endpoint is not proof that
-no process-local cache exists, and a high interaction count is not proof that
-the traffic populates a cache.
+Use `source_process_traffic` only to prioritize source startup schedulers,
+background refreshers, and cache loaders for the returned endpoints. An absent
+endpoint is not proof that no process-local cache exists, and a high interaction
+count or configured process-owned match is not proof that the traffic populates
+a response-driving cache.
 
 Do not apply a dynamic rule for a cold, missing, stale, differently keyed,
 partially loaded, or differently refreshed cache. Do not materialize recorded
@@ -264,7 +298,10 @@ a Replay capability gap or supply an arbitrary acceptance command.
 
 ## Dirty Dependency Issues
 
-Diagnose dirty dependencies only after responses pass and Replay is complete.
+Inspect dirty dependencies whenever the coordinator returns `dirty_clusters`,
+including while the active issue is a response mismatch. Response equality is
+not a prerequisite for discovering a dependency-value rule. Continue to use
+the gate order above when deciding which failure owns the next repair.
 Classify the representative protocol cluster by source ownership:
 
 - request-owned and required: repair target call topology or Replay support;
@@ -287,6 +324,14 @@ never returns an applicable process-owned rule plan. The orchestrator also owns
 the apply report's exact `next`; the coordinator then reclassifies the same
 focused replay report. Never manually rewrite replay reports, trim traffic, or
 edit immutable request/response/dependency capture files.
+
+For dependency value mismatches, inspect each entry returned in
+`protocol_rules`. Run its exact `help` command, then verify the described value
+mechanism in source and in the representative dependency details before
+planning it. In the currently supported Memcached case,
+`protobuf-timestamp` applies only to a `SET` value whose selected top-level
+protobuf varint field is source-proven current Unix seconds. The hint is a
+discovery mechanism, not authorization to apply the rule.
 
 ## Comparison Issues
 

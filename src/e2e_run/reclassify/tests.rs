@@ -3,13 +3,16 @@ use std::path::PathBuf;
 
 use chrono::Utc;
 
-use super::{
-    clear_resolved_dependency_error_messages, clear_resolved_dependency_errors,
-    is_clean_case_dependency_error, is_strict_dependency_finalize_error, terminal_status,
+use super::terminal_status;
+use crate::e2e_run::final_evidence::{
+    apply_reclassified_case_outcomes, clear_resolved_dependency_error_messages,
+    clear_resolved_dependency_errors, is_clean_case_dependency_error,
+    is_strict_dependency_finalize_error,
 };
 use crate::e2e_run::model::{
     ActiveRunState, ApiExecution, CaseExecution, CaseStatus, RunStatus, STATE_VERSION,
 };
+use crate::replay::BackgroundReclassification;
 
 #[test]
 fn recognizes_only_the_defined_strict_dependency_finalize_failure() {
@@ -108,6 +111,25 @@ fn genuine_lifecycle_error_still_keeps_a_clean_dependency_view_failed() {
         ["target cleanup failed: process exited unexpectedly"]
     );
     assert_eq!(state.status, RunStatus::Failed);
+}
+
+#[test]
+fn final_reclassification_promotes_a_case_that_became_clean_after_case_end() {
+    let mut state = clean_state();
+    state.cases[0].status = CaseStatus::Failed;
+    state.cases[0].replay_clean = Some(false);
+    state
+        .errors
+        .push("case case-clean replay evidence is dirty: memcached unused_recorded=2".to_string());
+
+    apply_reclassified_case_outcomes(&mut state, &BackgroundReclassification::default());
+    clear_resolved_dependency_errors(&mut state);
+    state.status = terminal_status(&state);
+
+    assert_eq!(state.cases[0].replay_clean, Some(true));
+    assert_eq!(state.cases[0].status, CaseStatus::Passed);
+    assert!(state.errors.is_empty());
+    assert_eq!(state.status, RunStatus::Successful);
 }
 
 fn clean_state() -> ActiveRunState {

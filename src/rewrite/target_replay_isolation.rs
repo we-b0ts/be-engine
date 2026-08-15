@@ -137,6 +137,12 @@ const PRODUCTION_FORBIDDEN_MARKERS: &[ForbiddenMarker] = &[
     },
     ForbiddenMarker {
         rule: "recording_artifact",
+        marker: "progress.yaml",
+        reason: "code consumes a replay or recording artifact",
+        required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",
+    },
+    ForbiddenMarker {
+        rule: "recording_artifact",
         marker: "replay-progress.yaml",
         reason: "code consumes a replay or recording artifact",
         required_change: "derive the behavior from the source contract instead of traffic-e2e artifacts",

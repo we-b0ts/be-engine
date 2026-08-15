@@ -34,6 +34,7 @@ pub enum ExpectedResponseUsage {
 pub(in crate::replay) enum PolicyProtocol {
     Mysql,
     Http,
+    Memcached,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -43,12 +44,14 @@ pub(super) struct ReplayPolicyRule {
     #[serde(default, rename = "case", skip_serializing_if = "Option::is_none")]
     pub(super) case_selector: Option<CaseSelector>,
     pub(super) protocol: PolicyProtocol,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "TargetSelector::is_empty")]
     pub(super) target: TargetSelector,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) mysql: Option<MysqlSelector>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) http: Option<HttpSelector>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) memcached: Option<MemcachedSelector>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -65,6 +68,12 @@ pub(super) struct TargetSelector {
     pub(super) host: Option<String>,
     #[serde(default)]
     pub(super) port: Option<u16>,
+}
+
+impl TargetSelector {
+    fn is_empty(&self) -> bool {
+        self.host.is_none() && self.port.is_none()
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -85,6 +94,57 @@ pub(super) struct HttpSelector {
     pub(super) method: String,
     pub(super) path: String,
     pub(super) query: BTreeMap<String, DynamicValueRule>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MemcachedSelector {
+    pub(super) resource: MemcachedResourceSelector,
+    pub(super) command: String,
+    pub(super) key: NumericKeySelector,
+    pub(super) protobuf: ProtobufSelector,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(super) enum MemcachedResourceSelector {
+    CacheService { port: u16 },
+}
+
+impl MemcachedResourceSelector {
+    pub(super) fn port(&self) -> u16 {
+        match self {
+            Self::CacheService { port } => *port,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct NumericKeySelector {
+    #[serde(default)]
+    pub(super) prefix: String,
+    #[serde(default)]
+    pub(super) suffix: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProtobufSelector {
+    pub(super) timestamp_fields: BTreeMap<u32, ProtobufTimestampFieldRule>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ProtobufTimestampFieldRule {
+    pub(super) mechanism: ProtobufTimestampMechanism,
+    pub(super) source_evidence: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum ProtobufTimestampMechanism {
+    UnixSeconds,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -238,6 +298,7 @@ fn dynamic_fields(rule: &ReplayPolicyRule) -> Vec<&DynamicValueRule> {
             .as_ref()
             .map(|http| http.query.values().collect())
             .unwrap_or_default(),
+        PolicyProtocol::Memcached => Vec::new(),
     }
 }
 
@@ -265,8 +326,8 @@ fn validate_rule(rule: &ReplayPolicyRule) -> Result<()> {
     match rule.protocol {
         PolicyProtocol::Mysql => {
             ensure!(
-                rule.http.is_none(),
-                "MySQL rule {:?} must not define http",
+                rule.http.is_none() && rule.memcached.is_none(),
+                "MySQL rule {:?} must not define http or memcached",
                 rule.id
             );
             let mysql = rule
@@ -295,8 +356,8 @@ fn validate_rule(rule: &ReplayPolicyRule) -> Result<()> {
         }
         PolicyProtocol::Http => {
             ensure!(
-                rule.mysql.is_none(),
-                "HTTP rule {:?} must not define mysql",
+                rule.mysql.is_none() && rule.memcached.is_none(),
+                "HTTP rule {:?} must not define mysql or memcached",
                 rule.id
             );
             ensure!(
@@ -328,7 +389,88 @@ fn validate_rule(rule: &ReplayPolicyRule) -> Result<()> {
                     .with_context(|| format!("invalid HTTP rule {:?} query.{name}", rule.id))?;
             }
         }
+        PolicyProtocol::Memcached => {
+            ensure!(
+                rule.mysql.is_none() && rule.http.is_none(),
+                "Memcached rule {:?} must not define mysql or http",
+                rule.id
+            );
+            ensure!(
+                rule.target.host.is_none() && rule.target.port.is_none(),
+                "Memcached rule {:?} must select its resource under memcached.resource, not target",
+                rule.id
+            );
+            let memcached = rule
+                .memcached
+                .as_ref()
+                .with_context(|| format!("Memcached rule {:?} requires memcached", rule.id))?;
+            ensure!(
+                memcached.resource.port() != 0,
+                "Memcached rule {:?} cache_service resource port must be greater than zero",
+                rule.id
+            );
+            ensure!(
+                memcached.command == "set",
+                "Memcached rule {:?} currently supports only command \"set\"",
+                rule.id
+            );
+            ensure!(
+                !memcached.key.prefix.is_empty() || !memcached.key.suffix.is_empty(),
+                "Memcached rule {:?} numeric key selector requires a prefix or suffix",
+                rule.id
+            );
+            ensure!(
+                memcached
+                    .key
+                    .prefix
+                    .len()
+                    .checked_add(memcached.key.suffix.len())
+                    .is_some_and(|len| len < 250),
+                "Memcached rule {:?} numeric key selector leaves no room for a numeric middle",
+                rule.id
+            );
+            ensure!(
+                memcached.protobuf.timestamp_fields.len() <= 32,
+                "Memcached rule {:?} selects more than 32 protobuf timestamp fields",
+                rule.id
+            );
+            ensure!(
+                !memcached.protobuf.timestamp_fields.is_empty(),
+                "Memcached rule {:?} requires at least one protobuf timestamp field",
+                rule.id
+            );
+            for (number, field) in &memcached.protobuf.timestamp_fields {
+                ensure!(
+                    (1..(1_u32 << 29)).contains(number),
+                    "Memcached rule {:?} protobuf field number {number} is invalid",
+                    rule.id
+                );
+                ensure!(
+                    field.mechanism == ProtobufTimestampMechanism::UnixSeconds,
+                    "Memcached rule {:?} protobuf field {number} uses an unsupported timestamp mechanism",
+                    rule.id
+                );
+                validate_source_evidence(&field.source_evidence).with_context(|| {
+                    format!(
+                        "invalid Memcached rule {:?} protobuf timestamp field {number}",
+                        rule.id
+                    )
+                })?;
+            }
+        }
     }
+    Ok(())
+}
+
+fn validate_source_evidence(value: &str) -> Result<()> {
+    ensure!(
+        !value.is_empty() && value.trim() == value,
+        "source_evidence must be non-empty and trimmed"
+    );
+    ensure!(
+        value.len() <= 1024 && !value.contains(['\r', '\n']),
+        "source_evidence must be one line of at most 1024 bytes"
+    );
     Ok(())
 }
 

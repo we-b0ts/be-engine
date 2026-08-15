@@ -118,97 +118,126 @@ fn focused_attempt_updates_the_current_logical_run_state() {
 }
 
 #[test]
-fn replay_progress_counts_each_finalized_attempt_and_is_idempotent() {
+fn replay_progress_replaces_retries_of_one_recording_batch() {
     let directory = tempfile::tempdir().unwrap();
-    let progress_path = directory.path().join("replay-progress.yaml");
+    let progress_path = directory.path().join("progress.yaml");
     let legacy_path = directory.path().join("e2e-progress.yaml");
     let first = state(3, 0, 1);
     let second = state(3, 0, 2);
+    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
 
-    write_replay_progress(&progress_path, &legacy_path, &first, ReplayRunKind::Full).unwrap();
-    write_replay_progress(&progress_path, &legacy_path, &first, ReplayRunKind::Full).unwrap();
-    write_replay_progress(&progress_path, &legacy_path, &second, ReplayRunKind::Full).unwrap();
-    write_replay_progress(&progress_path, &legacy_path, &first, ReplayRunKind::Full).unwrap();
+    update_index(&mut index, &first);
+    write_replay_progress(&progress_path, &legacy_path, &index, &first).unwrap();
+    update_index(&mut index, &second);
+    write_replay_progress(&progress_path, &legacy_path, &index, &second).unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &index, &second).unwrap();
 
-    let report = load(&progress_path, VerificationStage::Replay)
+    let report = load(&progress_path, VerificationStage::Progress)
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.totals.runs.executed, 1);
+    assert_eq!(report.totals.cases.executed, 3);
+    assert_eq!(report.success_streak.runs, 1);
+    assert_eq!(report.success_streak.cases, 3);
+}
+
+#[test]
+fn replay_progress_collapses_legacy_attempt_totals_into_one_recording_batch() {
+    let directory = tempfile::tempdir().unwrap();
+    let progress_path = directory.path().join("progress.yaml");
+    let legacy_path = directory.path().join("e2e-progress.yaml");
+    let failed = state(2, 1, 1);
+    let passing = state(3, 0, 2);
+    let mut report = ProgressReport::new(VerificationStage::Progress);
+    let mut previous_recording = state(3, 0, 1);
+    previous_recording.run_key = "previous".to_string();
+    report
+        .apply(legacy_attempt_observation(&previous_recording, "full").unwrap())
+        .unwrap();
+    report.counted_observations.clear();
+    report
+        .apply(legacy_attempt_observation(&failed, "full").unwrap())
+        .unwrap();
+    report
+        .apply(legacy_attempt_observation(&passing, "full").unwrap())
+        .unwrap();
+    write(&progress_path, &report).unwrap();
+    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+    update_index(&mut index, &passing);
+
+    write_replay_progress(&progress_path, &legacy_path, &index, &passing).unwrap();
+
+    let report = load(&progress_path, VerificationStage::Progress)
         .unwrap()
         .unwrap();
     assert_eq!(report.totals.runs.executed, 2);
+    assert_eq!(report.totals.runs.passed, 2);
     assert_eq!(report.totals.cases.executed, 6);
-    assert_eq!(report.success_streak.runs, 2);
-    assert_eq!(report.success_streak.cases, 6);
+    assert_eq!(report.totals.cases.passed, 6);
+    assert_eq!(report.success_streak.runs, 1);
+    assert_eq!(report.success_streak.cases, 3);
+    assert_eq!(report.latest_run.as_ref().unwrap().key, "run");
 }
 
 #[test]
 fn replay_progress_does_not_recount_an_older_focused_attempt_after_a_full_run() {
     let directory = tempfile::tempdir().unwrap();
-    let progress_path = directory.path().join("replay-progress.yaml");
+    let progress_path = directory.path().join("progress.yaml");
     let legacy_path = directory.path().join("e2e-progress.yaml");
     let focused = state(3, 0, 1);
     let full = state(3, 0, 2);
+    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
 
-    write_replay_progress(
-        &progress_path,
-        &legacy_path,
-        &focused,
-        ReplayRunKind::Focused,
-    )
-    .unwrap();
-    write_replay_progress(&progress_path, &legacy_path, &full, ReplayRunKind::Full).unwrap();
-    write_replay_progress(
-        &progress_path,
-        &legacy_path,
-        &focused,
-        ReplayRunKind::Focused,
-    )
-    .unwrap();
+    update_focused_index(&mut index, &focused, &inventory(), true);
+    write_replay_progress(&progress_path, &legacy_path, &index, &focused).unwrap();
+    update_index(&mut index, &full);
+    write_replay_progress(&progress_path, &legacy_path, &index, &full).unwrap();
+    write_replay_progress(&progress_path, &legacy_path, &index, &focused).unwrap();
 
-    let report = load(&progress_path, VerificationStage::Replay)
+    let report = load(&progress_path, VerificationStage::Progress)
         .unwrap()
         .unwrap();
-    assert_eq!(report.totals.runs.executed, 2);
-    assert_eq!(report.totals.cases.executed, 6);
+    assert_eq!(report.totals.runs.executed, 1);
+    assert_eq!(report.totals.cases.executed, 3);
 }
 
 #[test]
 fn revises_an_older_focused_attempt_after_another_api_advances() {
     let directory = tempfile::tempdir().unwrap();
-    let progress_path = directory.path().join("replay-progress.yaml");
+    let progress_path = directory.path().join("progress.yaml");
     let legacy_path = directory.path().join("e2e-progress.yaml");
     let previous = state(2, 1, 1);
     let mut later = state(1, 0, 2);
     later.apis[0].api_key = "GET /api/friends".to_string();
     later.apis[0].group_id = "GET /api/friends".to_string();
     later.apis[0].api_pattern = "/api/friends".to_string();
+    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
 
-    write_replay_progress(
-        &progress_path,
-        &legacy_path,
-        &previous,
-        ReplayRunKind::Focused,
-    )
-    .unwrap();
-    write_replay_progress(&progress_path, &legacy_path, &later, ReplayRunKind::Focused).unwrap();
-    ensure_replay_progress_revisable(&progress_path, &previous).unwrap();
+    update_focused_index(&mut index, &previous, &inventory(), true);
+    write_replay_progress(&progress_path, &legacy_path, &index, &previous).unwrap();
+    update_focused_index(&mut index, &later, &inventory(), true);
+    write_replay_progress(&progress_path, &legacy_path, &index, &later).unwrap();
+    ensure_replay_progress_revisable(&progress_path, &index, &previous).unwrap();
 
     let current = state(3, 0, 1);
-    revise_replay_progress(&progress_path, &previous, &current).unwrap();
+    update_focused_index(&mut index, &current, &inventory(), true);
+    revise_replay_progress(&progress_path, &index, &previous, &current).unwrap();
 
-    let report = load(&progress_path, VerificationStage::Replay)
+    let report = load(&progress_path, VerificationStage::Progress)
         .unwrap()
         .unwrap();
-    assert_eq!(report.totals.runs.executed, 2);
-    assert_eq!(report.totals.runs.passed, 2);
+    assert_eq!(report.totals.runs.executed, 1);
+    assert_eq!(report.totals.runs.passed, 1);
     assert_eq!(
         report.latest_run.as_ref().unwrap().scope,
-        ["GET /api/friends"]
+        ["GET /api/friends", "GET /api/orders/*"]
     );
 }
 
 #[test]
 fn migrates_legacy_e2e_progress_before_counting_the_next_attempt() {
     let directory = tempfile::tempdir().unwrap();
-    let progress_path = directory.path().join("replay-progress.yaml");
+    let progress_path = directory.path().join("progress.yaml");
     let legacy_path = directory.path().join("e2e-progress.yaml");
     std::fs::write(
         &legacy_path,
@@ -234,38 +263,38 @@ apis:
     )
     .unwrap();
 
-    write_replay_progress(
-        &progress_path,
-        &legacy_path,
-        &state(3, 0, 1),
-        ReplayRunKind::Focused,
-    )
-    .unwrap();
+    let completed = state(3, 0, 1);
+    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+    update_focused_index(&mut index, &completed, &inventory(), true);
+    write_replay_progress(&progress_path, &legacy_path, &index, &completed).unwrap();
 
-    let report = load(&progress_path, VerificationStage::Replay)
+    let report = load(&progress_path, VerificationStage::Progress)
         .unwrap()
         .unwrap();
     assert_eq!(report.totals.runs.executed, 28);
     assert_eq!(report.totals.runs.passed, 7);
     assert_eq!(report.apis["GET /api/orders/*"].totals.runs.executed, 28);
-    assert_eq!(report.success_streak.runs, 1);
+    assert_eq!(report.success_streak.runs, 2);
     assert!(!legacy_path.exists());
 }
 
 #[test]
 fn replay_progress_uses_passed_wording_without_verified_state() {
     let directory = tempfile::tempdir().unwrap();
-    let progress_path = directory.path().join("replay-progress.yaml");
+    let progress_path = directory.path().join("progress.yaml");
+    let completed = state(3, 0, 1);
+    let mut index = RunIndex::empty("run".to_string(), PathBuf::from("/cases"));
+    update_index(&mut index, &completed);
     write_replay_progress(
         &progress_path,
         &directory.path().join("e2e-progress.yaml"),
-        &state(3, 0, 1),
-        ReplayRunKind::Full,
+        &index,
+        &completed,
     )
     .unwrap();
     let yaml = std::fs::read_to_string(progress_path).unwrap();
 
-    assert!(yaml.contains("stage: replay"));
+    assert!(!yaml.contains("stage:"));
     assert!(yaml.contains("totals:"));
     assert!(yaml.contains("success_streak:"));
     assert!(yaml.contains("passed: 3"));

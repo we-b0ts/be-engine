@@ -84,8 +84,12 @@ or order-insensitive collection behavior.
 Dependency rules select one operation by protocol and a narrow dependency
 identity. HTTP rules require a target host, dependency method and dependency
 path. MySQL rules require a SQL pattern plus at least one target host, database,
-or username. Reuse one unscoped rule for the same dependency operation instead
-of copying it for every inbound API.
+or username. Memcached timestamp rules require a supported resource kind,
+`set`, and a bounded numeric key shape. The recorded exchange remains strictly
+identified by target domain plus port. A `cache_service` resource uses protocol
+plus port only to select the applicable policy rule; it neither accepts nor
+exposes a cache namespace or deployment group. Reuse one unscoped rule for the
+same dependency operation instead of copying it for every inbound API.
 
 `case` is optional. Add it only when the same dependency operation has
 different dynamic-field semantics in different request contexts and a narrower
@@ -100,8 +104,8 @@ fields.
 
 ## Dynamic Fields
 
-Version one supports scalar MySQL parameters and single-occurrence HTTP query
-parameters:
+Version one supports scalar MySQL parameters, single-occurrence HTTP query
+parameters, and the narrowly defined Memcached protobuf timestamp fields below:
 
 - `bind`: capture the actual runtime value in the current case.
 - `ref`: require the actual value to equal a value bound earlier in that case.
@@ -173,6 +177,55 @@ rules:
 Durations accept integer `ms`, `s`, `m`, `h`, and `d` units. A time value may
 be RFC 3339, Unix seconds, or use an explicit Chrono format and numeric
 `+HH:MM`/`-HH:MM` timezone.
+
+Memcached `set` rules may select top-level protobuf varint fields that source
+code proves contain the current Unix time in seconds:
+
+```yaml
+rules:
+  - id: user-info-cache-writeback
+    protocol: memcached
+    memcached:
+      resource:
+        kind: cache_service
+        port: 11211
+      command: set
+      key:
+        prefix: u
+        suffix: ''
+      protobuf:
+        timestamp_fields:
+          50:
+            mechanism: unix_seconds
+            source_evidence: UserInfoServiceBase.java:438 loads the current time
+```
+
+The key selector requires a nonempty ASCII-digit middle between its byte-exact
+prefix and suffix. The resource, command, key, flags, byte length, CAS,
+quiet/noreply mode, and every protobuf field not selected by the rule remain
+exact. Target host is deliberately not a policy-rule selector; it is already
+enforced by recorded-exchange matching. Only `kind: cache_service` is
+supported. `kind: breeze` is rejected until traffic evidence requires its
+namespace-based, dynamic-port contract. Each selected field must occur exactly
+once with protobuf wire type varint. Protobuf groups are unsupported and fail
+closed.
+
+The engine owns a fixed, symmetric five-second window. It validates the
+recorded field against that exchange's recorded `SET` timestamp and validates
+the target field against the time Replay observes the target `SET`. The two
+field values are never compared to each other, so recording-to-Replay delay is
+irrelevant. The policy contains only field identity, mechanism, and one-line
+source evidence; it never stores or reports either timestamp literal. Missing,
+repeated, malformed, or out-of-window fields remain mismatches. The five-second
+window is intentionally not configurable by the rule author.
+
+Memcached `SET` expiration uses protocol-owned matching and does not require a
+rule. Equal values match first. `0` and relative expirations through 30 days
+must otherwise remain exact. When both values are absolute Unix timestamps,
+Replay compares each expiration with that same `SET` exchange's observed time;
+the two remaining TTLs may differ by at most five seconds. A relative value
+never matches an absolute value. Text protocol arguments and binary protocol
+extras use the same behavior; every non-expiration component remains exact.
 
 ## Evidence And Failure
 
