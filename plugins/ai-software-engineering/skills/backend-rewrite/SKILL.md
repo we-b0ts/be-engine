@@ -51,6 +51,10 @@ and loads [`backend-engineering`](../backend-engineering/SKILL.md) before
 changing target code. Do not preload conditional coordinator references or
 worker engineering guidance merely to anticipate a later action.
 
+When an assigned worker exposes a Motan service through `brz-motan`, read
+[motan.md](references/motan.md) before defining DTOs, service adapters, or
+export endpoints.
+
 Read [project-init.md](references/project-init.md) only when the caller
 explicitly asks to initialize an uninitialized target repository. Project
 initialization is manual and one-time; normal rewrite and resumed sessions
