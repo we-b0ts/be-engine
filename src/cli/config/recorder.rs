@@ -54,8 +54,6 @@ enum ApplyStrategy {
 
 #[derive(Debug, Args)]
 struct AllowedUnusedHttpHostArgs {
-    #[arg(long, default_value = traffic_e2e::DEFAULT_RECORDING_RULE)]
-    rule: String,
     #[arg(long = "host", required = true)]
     hosts: Vec<String>,
 }
@@ -75,8 +73,6 @@ struct BreezeResourceCaptureArgs {
 
 #[derive(Debug, Args)]
 struct PatternFeedbackArgs {
-    #[arg(long, default_value = traffic_e2e::DEFAULT_RECORDING_RULE)]
-    rule: String,
     #[arg(long)]
     source_revision: String,
     #[arg(long)]
@@ -213,7 +209,6 @@ fn allowed_unused_feedback(
     AllowedUnusedHttpHostFeedback {
         project_config_path,
         rules_path,
-        rule_name: args.rule,
         hosts: args.hosts,
     }
 }
@@ -226,7 +221,6 @@ fn pattern_feedback(
     CasePathPatternFeedback {
         project_config_path,
         rules_path,
-        rule_name: args.rule,
         source_revision: args.source_revision,
         case_source: args.case_source,
         authority: args.authority.into(),

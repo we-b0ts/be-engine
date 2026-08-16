@@ -128,8 +128,6 @@ fn spawn_replay(
         .arg(&project.replay_policy)
         .arg("--recorder-config")
         .arg(&project.recorder_config)
-        .arg("--recording-rule")
-        .arg(&project.recording_rule)
         .arg(run_dir)
         .current_dir(target_root)
         .stdin(Stdio::null())

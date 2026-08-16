@@ -32,7 +32,7 @@ pub(crate) struct RecorderRunState {
     pub(crate) run_id: String,
     pub(crate) recording_apis: Vec<String>,
     pub(crate) published_cases: usize,
-    pub(crate) published_cases_by_group: BTreeMap<(String, Option<String>), usize>,
+    pub(crate) published_cases_by_group: BTreeMap<Option<String>, usize>,
     pub(crate) failed_cases: usize,
     pub(crate) completion_reason: Option<RecordingCompletionReason>,
     pub(crate) errors: Vec<RecordingErrorSummary>,
@@ -123,7 +123,7 @@ impl Recorder {
             state.published_cases += 1;
             *state
                 .published_cases_by_group
-                .entry((case.rule_name.clone(), case.uri_group.clone()))
+                .entry(case.uri_group.clone())
                 .or_default() += 1;
         }
         self.write_run_report("running").await?;
@@ -140,7 +140,7 @@ impl Recorder {
             .lock()
             .await
             .published_cases_by_group
-            .get(&(case.rule_name.clone(), case.uri_group.clone()))
+            .get(&case.uri_group)
             .copied()
             .unwrap_or_default()
     }
@@ -399,11 +399,10 @@ impl Recorder {
     }
 
     pub(crate) fn case_dir(&self, case: &CaseContext) -> PathBuf {
-        let mut path = self.run_dir.join(sanitize_path_component(&case.rule_name));
-        if let Some(uri_group) = &case.uri_group {
-            path = path.join(sanitize_path_component(uri_group));
-        }
-        path.join(case.id.to_string())
+        self.run_dir
+            .join("apis")
+            .join(case_archive_directory(case))
+            .join(case.id.to_string())
     }
 
     pub(crate) fn case_staging_dir(&self, case: &CaseContext) -> PathBuf {
@@ -415,14 +414,10 @@ impl Recorder {
     }
 
     fn run_case_dir(&self, bucket: &str, case: &CaseContext) -> PathBuf {
-        let mut path = self
-            .run_dir
+        self.run_dir
             .join(bucket)
-            .join(sanitize_path_component(&case.rule_name));
-        if let Some(uri_group) = &case.uri_group {
-            path = path.join(sanitize_path_component(uri_group));
-        }
-        path.join(case.id.to_string())
+            .join(case_archive_directory(case))
+            .join(case.id.to_string())
     }
 
     async fn append_run_error(&self, summary: &RecordingErrorSummary) -> Result<()> {
@@ -452,6 +447,10 @@ impl Recorder {
         drop(state);
         write_pretty_json(&self.run_dir.join("recording-run.json"), &report).await
     }
+}
+
+fn case_archive_directory(case: &CaseContext) -> String {
+    sanitize_path_component(case.uri_group.as_deref().unwrap_or(&case.rule_name))
 }
 
 pub(crate) async fn write_pretty_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -499,7 +498,7 @@ mod tests {
     fn case(group: &str) -> CaseContext {
         CaseContext {
             id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
+            rule_name: "http-rule".to_string(),
             uri_group: Some(group.to_string()),
         }
     }
@@ -509,7 +508,8 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let recorder = Recorder::new(temp.path()).await.unwrap();
         let first = case("api-users-wildcard");
-        let second = case("api-users-wildcard");
+        let mut second = case("api-users-wildcard");
+        second.rule_name = "another-http-rule".to_string();
         let other = case("api-projects-wildcard");
         let failed = case("api-users-wildcard");
 
@@ -528,6 +528,13 @@ mod tests {
         assert!(recorder.case_dir(&other).is_dir());
         assert!(recorder.case_failed_dir(&failed).is_dir());
         assert!(!recorder.case_dir(&failed).is_dir());
+        assert_eq!(
+            recorder.case_dir(&first).parent(),
+            Some(recorder.run_dir.join("apis/api-users-wildcard").as_path())
+        );
+        assert!(!recorder.run_dir.join("http-rule").exists());
+        assert!(!recorder.run_dir.join("another-http-rule").exists());
+        assert!(recorder.run_dir.join("apis").is_dir());
 
         let report_raw = tokio::fs::read_to_string(recorder.run_dir.join("recording-run.json"))
             .await

@@ -104,7 +104,7 @@ async fn rejected_http_dependency_invalidates_active_gateway_case() {
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     assert!(!run_dir.join("readonly").exists());
-    let failed_group = run_dir.join("failed/readonly/scenario-readonly");
+    let failed_group = run_dir.join("failed/scenario-readonly");
     let failed_cases = std::fs::read_dir(&failed_group)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -258,7 +258,7 @@ async fn mysql_query_inside_post_response_window_stays_with_case_and_late_query_
 
     let run_dir = only_recording_run_dir(&temp.path().join("recordings"));
     assert!(!run_dir.join("failed").exists());
-    let published_group = run_dir.join("mysql-log/scenario-mysql-log");
+    let published_group = run_dir.join("apis/scenario-mysql-log");
     let published_cases = std::fs::read_dir(&published_group)
         .unwrap()
         .map(|entry| entry.unwrap().path())

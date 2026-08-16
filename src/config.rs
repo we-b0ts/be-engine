@@ -61,8 +61,7 @@ pub use breeze_capture_feedback::{
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use comparison_recording::ComparisonRecordingConfig;
 pub use coordinator_rules::{
-    COORDINATOR_RULES_FILE, CoordinatorBreezeCaptureConfig, CoordinatorHttpRuleConfig,
-    CoordinatorRulesConfig,
+    COORDINATOR_RULES_FILE, CoordinatorBreezeCaptureConfig, CoordinatorRulesConfig,
 };
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
 pub use feedback::{
@@ -73,7 +72,7 @@ pub use http_gateway::{HttpGatewayFallbackMode, HttpGatewayFixedResponseConfig};
 pub use http_response_rewrite::{
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
 };
-pub use initialization::{DEFAULT_HTTP_GATEWAY_PORT, DEFAULT_RECORDING_RULE};
+pub use initialization::DEFAULT_HTTP_GATEWAY_PORT;
 pub use motan_gateway::{MotanGatewayConfig, MotanGatewayRuleConfig};
 pub use process_owned_dependencies::{BackgroundDependencyRuleConfig, RedisKeyPatternConfig};
 pub use recording::{
@@ -186,6 +185,10 @@ pub struct HttpGatewayConfig {
     pub preserve_host: bool,
     pub ready: HttpGatewayReadyConfig,
     pub per_api_case_limits: HttpGatewayCaseLimitsConfig,
+    #[serde(skip)]
+    pub case_path_patterns: Vec<String>,
+    #[serde(skip)]
+    pub allowed_unused_http_hosts: Vec<String>,
     pub exclude_rules: Vec<HttpGatewayRuleConfig>,
     pub rules: Vec<HttpGatewayRuleConfig>,
 }
@@ -207,10 +210,6 @@ pub struct HttpGatewayRuleConfig {
     pub methods: Vec<String>,
     pub path_prefixes: Vec<String>,
     pub headers: BTreeMap<String, String>,
-    #[serde(skip)]
-    pub case_path_patterns: Vec<String>,
-    #[serde(skip)]
-    pub allowed_unused_http_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -331,7 +330,7 @@ impl AppConfig {
         comparison_recording.validate(&self.http_gateway, &self.motan_gateway)?;
         self.http_gateway
             .per_api_case_limits
-            .validate(&self.http_gateway.rules)
+            .validate(&self.http_gateway.case_path_patterns)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -345,7 +344,7 @@ impl AppConfig {
         allowed_unused_http::validate_config(&self.http_gateway)?;
         self.http_gateway
             .per_api_case_limits
-            .validate(&self.http_gateway.rules)?;
+            .validate(&self.http_gateway.case_path_patterns)?;
         if self.process_owned_dependencies.iter().any(|rule| {
             matches!(
                 rule,
@@ -394,6 +393,7 @@ impl AppConfig {
         self.http_gateway
             .per_api_case_limits
             .override_for_run(limit);
+        self.motan_gateway.max_cases_per_api = limit.get();
     }
 
     fn validate_artifacts(&self) -> Result<()> {
@@ -495,6 +495,8 @@ impl Default for HttpGatewayConfig {
             preserve_host: true,
             ready: HttpGatewayReadyConfig::default(),
             per_api_case_limits: HttpGatewayCaseLimitsConfig::default(),
+            case_path_patterns: Vec::new(),
+            allowed_unused_http_hosts: Vec::new(),
             exclude_rules: Vec::new(),
             rules: Vec::new(),
         }
@@ -591,12 +593,12 @@ mod tests {
         for (name, yaml, field) in [
             (
                 "case-pattern",
-                "http_gateway:\n  rules:\n  - name: record-api\n    case_path_patterns: [/api/*]\n",
+                "http_gateway:\n  rules:\n  - name: http-rule\n    case_path_patterns: [/api/*]\n",
                 "case_path_patterns",
             ),
             (
                 "unused-host",
-                "recorder:\n  http_gateway:\n    rules:\n    - name: record-api\n      allowed_unused_http_hosts: [example.com]\n",
+                "recorder:\n  http_gateway:\n    rules:\n    - name: http-rule\n      allowed_unused_http_hosts: [example.com]\n",
                 "allowed_unused_http_hosts",
             ),
             (
@@ -709,6 +711,16 @@ mod tests {
             config.comparison_recording_output_dir(),
             PathBuf::from("./recordings/comparison-recordings")
         );
+    }
+
+    #[test]
+    fn per_api_case_limit_override_applies_to_http_and_motan() {
+        let mut config = AppConfig::default();
+
+        config.override_per_api_case_limit_for_run(NonZeroUsize::new(5).unwrap());
+
+        assert_eq!(config.http_gateway.per_api_case_limits.default, 5);
+        assert_eq!(config.motan_gateway.max_cases_per_api, 5);
     }
 
     #[test]
@@ -836,7 +848,7 @@ mod tests {
             interval_ms = 1000
 
             [[http_gateway.rules]]
-            name = "record-api"
+            name = "http-rule"
             hosts = ["api.example.com"]
             methods = ["GET", "POST"]
             path_prefixes = ["/api/"]
@@ -870,17 +882,12 @@ mod tests {
             config.http_gateway.exclude_rules[0].path_prefixes,
             vec!["/health".to_string()]
         );
-        assert!(config.http_gateway.rules[0].case_path_patterns.is_empty());
-        assert!(
-            config.http_gateway.rules[0]
-                .allowed_unused_http_hosts
-                .is_empty()
-        );
+        assert!(config.http_gateway.case_path_patterns.is_empty());
+        assert!(config.http_gateway.allowed_unused_http_hosts.is_empty());
         assert_eq!(
             config.http_gateway.rules[0].headers["x-record"],
             "yes".to_string()
         );
-        assert!(config.http_gateway.rules[1].case_path_patterns.is_empty());
     }
 
     #[test]

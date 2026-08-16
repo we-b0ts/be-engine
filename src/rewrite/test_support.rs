@@ -67,7 +67,7 @@ pub(in crate::rewrite) fn install_project_config(
             "target": target,
             "replay": { "policy": ".traffic-e2e/verification.yaml" },
             "recording": {
-                "rule": "record-api",
+                "rule": "http-rule",
                 "coordinator_rules": "coordinator-rules.yaml"
             },
             "delivery": { "pr_base": pr_base },
@@ -97,7 +97,7 @@ pub(in crate::rewrite) fn managed_test_recorder() -> crate::config::AppConfig {
     recorder.http_gateway.ready.path = "/healthz".to_string();
     recorder.http_gateway.ready.success_status = 404;
     recorder.http_gateway.rules = vec![crate::config::HttpGatewayRuleConfig {
-        name: Some("record-api".to_string()),
+        name: Some("http-rule".to_string()),
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/".to_string()],
         ..Default::default()

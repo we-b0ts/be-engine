@@ -177,7 +177,7 @@ async fn handle_gateway_request(
     let matched_rule_name = matched_rule.as_ref().map(|rule| rule.name.clone());
     let candidate_case = matched_rule.as_ref().map(|rule| {
         let group = recording_api_pattern.as_ref().map_or_else(
-            || resolve_case_group(&original_uri, &rule.case_path_patterns),
+            || resolve_case_group(&original_uri, &config.case_path_patterns),
             |pattern| resolve_case_group(&original_uri, std::slice::from_ref(pattern)),
         );
         let max_cases = config.per_api_case_limits.limit_for(&group.pattern);

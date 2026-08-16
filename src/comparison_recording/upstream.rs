@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -9,7 +8,7 @@ use chrono::Utc;
 use http_body_util::BodyExt;
 use hyper::body::Incoming;
 use hyper::{HeaderMap, Method, Response, StatusCode, Uri};
-use tracing::info;
+use tracing::{debug, info};
 
 use super::model::{ComparisonRecordingBody, ComparisonRecordingResponse};
 use super::runtime::ComparisonRecordingRuntime;
@@ -18,7 +17,9 @@ use crate::gateway::http::transport::{
     GatewayBody, build_downstream_response, build_upstream_request, build_upstream_uri,
     send_upstream, simple_response,
 };
+use crate::gateway::motan::ready as motan_ready;
 use crate::recorder::{CaseBodyCapture, capture_case_body, redact_headers};
+use crate::recording_control::RecordingListener;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UpstreamErrorKind {
@@ -329,12 +330,49 @@ pub(super) async fn run_ready_probe(runtime: ComparisonRecordingRuntime) {
             &ready,
         );
         if matches!(tokio::join!(baseline, candidate), (Ok(true), Ok(true))) {
-            runtime.ready.store(true, Ordering::Release);
-            runtime.store.summary().set_ready().await;
-            runtime.recording_lifecycle.mark_source_ready();
-            runtime.ready_notify.notify_waiters();
-            info!("baseline and candidate ready probes succeeded");
+            runtime
+                .mark_upstream_ready(RecordingListener::HttpGateway)
+                .await;
+            info!("baseline and candidate HTTP ready probes succeeded");
             return;
+        }
+    }
+}
+
+pub(super) async fn run_motan_ready_probe(runtime: ComparisonRecordingRuntime) {
+    let mut interval = tokio::time::interval(Duration::from_secs(1));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let limits = motan_protocol::Limits {
+        max_frame_bytes: runtime.motan_gateway.max_frame_bytes,
+        max_metadata_bytes: runtime.motan_gateway.max_frame_bytes,
+        max_body_bytes: runtime.motan_gateway.max_frame_bytes,
+    };
+    loop {
+        interval.tick().await;
+        let timeout = Duration::from_millis(runtime.motan_gateway.connect_timeout_ms).min(
+            Duration::from_millis(runtime.comparison_recording.upstream_timeout_ms),
+        );
+        let baseline = motan_ready::probe_once(
+            &runtime.motan_gateway.matched_upstream,
+            timeout,
+            timeout,
+            limits,
+        );
+        let candidate =
+            motan_ready::probe_once(&runtime.candidate_motan_upstream, timeout, timeout, limits);
+        let (baseline_result, candidate_result) = tokio::join!(baseline, candidate);
+        if matches!((&baseline_result, &candidate_result), (Ok(()), Ok(()))) {
+            runtime
+                .mark_upstream_ready(RecordingListener::MotanGateway)
+                .await;
+            info!("baseline and candidate Motan ready probes succeeded");
+            return;
+        }
+        if let Err(error) = baseline_result {
+            debug!(%error, "baseline Motan ready probe failed");
+        }
+        if let Err(error) = candidate_result {
+            debug!(%error, "candidate Motan ready probe failed");
         }
     }
 }

@@ -79,7 +79,8 @@ pub(super) struct ReplayProjectConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RecordingProjectConfig {
-    pub rule: String,
+    #[serde(default, rename = "rule", skip_serializing)]
+    pub _legacy_rule: Option<String>,
     pub coordinator_rules: PathBuf,
 }
 
@@ -120,7 +121,6 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) pr_base: String,
     pub(crate) recorder_config: PathBuf,
     pub(crate) coordinator_rules: PathBuf,
-    pub(crate) recording_rule: String,
     pub(crate) runner_owned_response_assertions: bool,
 }
 
@@ -225,8 +225,6 @@ pub(super) struct ActiveRunState {
     pub case_source: PathBuf,
     pub source_revision: String,
     pub case_inventory_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recording_rule: Option<String>,
     pub replay_session: PathBuf,
     pub replay_report: PathBuf,
     pub aggregate_report: PathBuf,
@@ -257,7 +255,6 @@ impl ActiveRunState {
         run_key: String,
         sequence: u64,
         inventory: &CaseGroupInventory,
-        recording_rule: Option<String>,
         active_dir: &std::path::Path,
     ) -> Self {
         let mut cases = inventory
@@ -298,7 +295,6 @@ impl ActiveRunState {
             case_source: inventory.case_source.clone(),
             source_revision: inventory.source_revision.clone(),
             case_inventory_id: inventory.case_inventory_id.clone(),
-            recording_rule,
             replay_session: active_dir.join("tmp/session.json"),
             replay_report: reports.join("replay-report.json"),
             aggregate_report: reports.join("aggregate.json"),
@@ -494,7 +490,6 @@ mod tests {
             "run".to_string(),
             1,
             &inventory,
-            None,
             std::path::Path::new("/run"),
         );
 
@@ -519,7 +514,6 @@ mod tests {
                 case_inventory_id: "inventory".to_string(),
                 groups: Vec::new(),
             },
-            None,
             std::path::Path::new("/run"),
         );
 

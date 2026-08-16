@@ -106,8 +106,6 @@ impl ComparisonRecordingStore {
     pub(super) async fn try_reserve(
         &self,
         recording_api: &str,
-        rule: &str,
-        pattern: &str,
         limit: usize,
     ) -> Option<Reservation> {
         let key = recording_api.to_string();
@@ -119,7 +117,7 @@ impl ComparisonRecordingStore {
                 .update(|counts| counts.suppressed_by_case_limit += 1)
                 .await;
             self.summary
-                .api_update(rule, pattern, |counts| counts.suppressed_by_case_limit += 1)
+                .api_update(recording_api, |counts| counts.suppressed_by_case_limit += 1)
                 .await;
             return None;
         }
@@ -137,10 +135,10 @@ impl ComparisonRecordingStore {
             Ok(()) => {
                 self.commit(reservation).await;
                 self.summary.update(|counts| counts.published += 1).await;
-                self.summary
-                    .api_update(&case.rule, &case.pattern, |counts| counts.published += 1)
-                    .await;
                 let recording_api = format!("{} {}", case.request.method, case.request.api_pattern);
+                self.summary
+                    .api_update(&recording_api, |counts| counts.published += 1)
+                    .await;
                 if self
                     .explicit_api_case_limits
                     .record_published(&recording_api)
@@ -158,8 +156,9 @@ impl ComparisonRecordingStore {
                 );
                 let _ = self.move_to_failed(case, &message).await;
                 self.summary.update(|counts| counts.failed += 1).await;
+                let recording_api = format!("{} {}", case.request.method, case.request.api_pattern);
                 self.summary
-                    .api_update(&case.rule, &case.pattern, |counts| counts.failed += 1)
+                    .api_update(&recording_api, |counts| counts.failed += 1)
                     .await;
                 self.summary.record_error(message).await;
                 Err(error)
@@ -221,7 +220,7 @@ impl ComparisonRecordingStore {
 
     fn published_path(&self, case: &ComparisonRecordingCase) -> PathBuf {
         self.run_dir
-            .join(sanitize_path_component(&case.rule))
+            .join("apis")
             .join(sanitize_path_component(&case.group))
             .join(case.id.to_string())
     }
@@ -229,7 +228,6 @@ impl ComparisonRecordingStore {
     fn case_path(&self, area: &str, case: &ComparisonRecordingCase) -> PathBuf {
         self.run_dir
             .join(area)
-            .join(sanitize_path_component(&case.rule))
             .join(sanitize_path_component(&case.group))
             .join(case.id.to_string())
     }

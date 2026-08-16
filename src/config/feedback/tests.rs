@@ -24,7 +24,6 @@ fn feedback(fixture: &Fixture, authority: CasePathPatternAuthority) -> CasePathP
     CasePathPatternFeedback {
         project_config_path: fixture.project.clone(),
         rules_path: fixture.rules.clone(),
-        rule_name: "pluto".to_string(),
         source_revision: "abc123".to_string(),
         case_source: "/recordings/focused".to_string(),
         authority,
@@ -50,14 +49,14 @@ fn focused_feedback_updates_only_coordinator_rules_and_converges() {
     assert_eq!(fs::read_to_string(&fixture.project).unwrap(), PROJECT);
     let effective = AppConfig::load(&fixture.project).unwrap();
     assert_eq!(
-        effective.http_gateway.rules[1].case_path_patterns,
+        effective.http_gateway.case_path_patterns,
         vec![
             "/api/huaweiyun/loadbalancers/listeners/list/*".to_string(),
             "/api/xufei/getone/*".to_string()
         ]
     );
     let rules = CoordinatorRulesConfig::load(&fixture.rules).unwrap();
-    assert_eq!(rules.http[0].source_revision, "abc123");
+    assert_eq!(rules.http.source_revision, "abc123");
 }
 
 #[test]
@@ -100,7 +99,6 @@ fn explicit_correction_requires_evidence_and_delete_authorization() {
         AppConfig::load(&fixture.project)
             .unwrap()
             .http_gateway
-            .rules[1]
             .case_path_patterns
             .is_empty()
     );
@@ -163,12 +161,8 @@ impl Fixture {
         let rules_path = temp.path().join("coordinator-rules.yaml");
         fs::write(&project, PROJECT).unwrap();
         let mut rules = CoordinatorRulesConfig::empty();
-        rules.http.push(CoordinatorHttpRuleConfig {
-            name: "pluto".to_string(),
-            source_revision: "old".to_string(),
-            case_path_patterns: patterns.iter().map(|value| (*value).to_string()).collect(),
-            allowed_unused_http_hosts: Vec::new(),
-        });
+        rules.http.source_revision = "old".to_string();
+        rules.http.case_path_patterns = patterns.iter().map(|value| (*value).to_string()).collect();
         fs::write(&rules_path, rules.render().unwrap()).unwrap();
         Self {
             _temp: temp,

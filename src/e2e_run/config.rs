@@ -73,28 +73,13 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
         recorder.http_gateway.ready.enabled,
         "managed project replay requires an enabled http_gateway.ready probe"
     );
-    let matching_rules = recorder
-        .http_gateway
-        .rules
-        .iter()
-        .filter(|rule| rule.name.as_deref() == Some(options.recording_rule.as_str()))
-        .count();
-    ensure!(
-        matching_rules == 1,
-        "expected exactly one recorder HTTP rule named {:?}, found {matching_rules}",
-        options.recording_rule
-    );
-
     let runtime_root_setting = PathBuf::from(DEFAULT_RUNTIME_ROOT);
     let runtime_root = traffic_e2e_dir.join(&runtime_root_setting);
     require_internal_root_ignored(&target_root, &runtime_root)?;
 
     let payload = render_project_config(&options, recorder)?;
     let rules_path = traffic_e2e_dir.join(crate::config::COORDINATOR_RULES_FILE);
-    let rules = crate::config::CoordinatorRulesConfig::repository_defaults_for_rule(
-        &options.recording_rule,
-    )
-    .render()?;
+    let rules = crate::config::CoordinatorRulesConfig::repository_defaults().render()?;
     if options.force {
         crate::config::edit::write_atomic(&config_path, &payload)?;
         crate::config::edit::write_atomic(&rules_path, rules.as_bytes())?;
@@ -148,7 +133,7 @@ pub(crate) fn render_project_config(
                 policy: options.replay_policy.clone(),
             },
             recording: RecordingProjectConfig {
-                rule: options.recording_rule.clone(),
+                _legacy_rule: None,
                 coordinator_rules: PathBuf::from(crate::config::COORDINATOR_RULES_FILE),
             },
             delivery: DeliveryProjectConfig {
@@ -285,7 +270,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             pr_base: config.project.delivery.pr_base,
             recorder_config,
             coordinator_rules,
-            recording_rule: config.project.recording.rule,
             runner_owned_response_assertions: policy.runner_owned_response_assertions,
         },
     ))
@@ -387,10 +371,6 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         project.recording.coordinator_rules == Path::new(crate::config::COORDINATOR_RULES_FILE),
         "project.recording.coordinator_rules must be {:?}",
         crate::config::COORDINATOR_RULES_FILE
-    );
-    ensure!(
-        !project.recording.rule.trim().is_empty(),
-        "recording.rule must not be empty"
     );
     Ok(())
 }
@@ -518,7 +498,7 @@ mod tests {
         recorder.http_gateway.ready.path = "/healthz".to_string();
         recorder.http_gateway.ready.success_status = 404;
         recorder.http_gateway.rules = vec![crate::config::HttpGatewayRuleConfig {
-            name: Some("record-api".to_string()),
+            name: Some("http-rule".to_string()),
             methods: vec!["GET".to_string()],
             path_prefixes: vec!["/".to_string()],
             ..Default::default()
@@ -526,7 +506,7 @@ mod tests {
         write_input_project(root, &recorder);
         fs::write(
             root.join("config/coordinator-rules.yaml"),
-            "version: 1\nhttp:\n- name: record-api\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
+            "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();
         assert!(
@@ -578,7 +558,6 @@ mod tests {
             replay_policy: PathBuf::from("config/replay.yaml"),
             pr_base: "integration".to_string(),
             recorder_config: PathBuf::from("config/project.yaml"),
-            recording_rule: "record-api".to_string(),
             force: false,
         }
     }

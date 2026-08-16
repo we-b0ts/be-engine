@@ -420,7 +420,6 @@ mod tests {
                 case_inventory_id: "inventory".to_string(),
                 groups: Vec::new(),
             },
-            None,
             active_dir,
         );
         state.status = status;

@@ -83,7 +83,6 @@ pub struct ReplayConfig {
 #[derive(Debug, Clone)]
 pub struct ReplayAllowedUnusedHttpConfig {
     pub config_path: PathBuf,
-    pub recording_rule: String,
     pub hosts: BTreeSet<String>,
 }
 
@@ -559,7 +558,6 @@ impl ReplayState {
             allowed_unused_http: self.allowed_unused_http.as_ref().map(|config| {
                 ReplayAllowedUnusedHttpReport {
                     config: config.config_path.display().to_string(),
-                    recording_rule: config.recording_rule.clone(),
                     hosts: config.hosts.iter().cloned().collect(),
                 }
             }),

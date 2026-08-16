@@ -24,7 +24,6 @@ fn feedback(fixture: &Fixture, hosts: &[&str]) -> AllowedUnusedHttpHostFeedback 
     AllowedUnusedHttpHostFeedback {
         project_config_path: fixture.project.clone(),
         rules_path: fixture.rules.clone(),
-        rule_name: "pluto".to_string(),
         hosts: hosts.iter().map(|host| (*host).to_string()).collect(),
     }
 }
@@ -52,7 +51,7 @@ fn plan_updates_the_coordinator_document_and_apply_converges() {
     assert_eq!(fs::read_to_string(&fixture.project).unwrap(), PROJECT);
     let effective = AppConfig::load(&fixture.project).unwrap();
     assert_eq!(
-        effective.http_gateway.rules[1].allowed_unused_http_hosts,
+        effective.http_gateway.allowed_unused_http_hosts,
         vec![
             "cs.aliyuncs.com".to_string(),
             "location-readonly.aliyuncs.com".to_string()
@@ -69,12 +68,7 @@ fn plan_updates_the_coordinator_document_and_apply_converges() {
 #[test]
 fn plan_adds_to_existing_values_and_deduplicates_input() {
     let mut rules = CoordinatorRulesConfig::empty();
-    rules.http.push(CoordinatorHttpRuleConfig {
-        name: "pluto".to_string(),
-        source_revision: String::new(),
-        case_path_patterns: Vec::new(),
-        allowed_unused_http_hosts: vec!["cs.aliyuncs.com".to_string()],
-    });
+    rules.http.allowed_unused_http_hosts = vec!["cs.aliyuncs.com".to_string()];
     let fixture = Fixture::new(rules);
 
     let plan = plan_allowed_unused_http_hosts(feedback(
@@ -92,7 +86,6 @@ fn plan_adds_to_existing_values_and_deduplicates_input() {
         AppConfig::load(&fixture.project)
             .unwrap()
             .http_gateway
-            .rules[1]
             .allowed_unused_http_hosts,
         vec![
             "cs.aliyuncs.com".to_string(),

@@ -574,7 +574,7 @@ default = 100
 "/api/namespaces/**" = 50
 ```
 
-Dynamic override keys must already exist in a recording rule's
+Dynamic override keys must already exist in the global HTTP
 `case_path_patterns`. Once the published count reaches the effective limit,
 later matching requests use the configured fallback strategy without creating
 a case. Failed cases do not consume the limit, and restarting Recorder starts
@@ -762,16 +762,14 @@ handlers:
 ```bash
 traffic-e2e config recorder apply allowed-unused-http-hosts \
   --target-root ../target \
-  --rule record-api \
   --host cs.aliyuncs.com
 ```
 
-The tool updates the named HTTP entry in the wholly coordinator-managed rules
+The tool updates the global HTTP policy in the wholly coordinator-managed rules
 document. Apply replans against current evidence and is add-only, sorted,
 deduplicated, atomic, and safe against concurrent changes to either config
-document. One host applies to every case selected by that recording rule,
-independent of which active API window happened to capture the process-level
-task.
+document. One host applies to every HTTP case, independent of which recording
+rule or active API window happened to capture the process-level task.
 
 When a response-driving source hostname is absent from dependency evidence but
 occurs in the configured Breeze snapshot, preview and enable its logical
@@ -818,17 +816,16 @@ Other API work continues. Once no API remains runnable, all accumulated rules
 trigger one full-scope standard recording; callers must not request a separate
 recording per rule.
 
-Pass the config and rule together for direct replay:
+Pass the recorder config for direct replay:
 
 ```bash
 traffic-e2e replay \
   --policy ../target/.traffic-e2e/verification.yaml \
   --recorder-config ../target/.traffic-e2e/project.yaml \
-  --recording-rule record-api \
   path/to/case-dir
 ```
 
-Replay reads the rule once at startup. A case-owned recorded HTTP exchange for
+Replay reads the global HTTP policy once at startup. A case-owned recorded HTTP exchange for
 an allowed host that remains unconsumed is moved from
 `unused_case_http_exchanges` to
 `allowed_unused_case_http_exchanges`, which is retained as a non-blocking
@@ -879,7 +876,7 @@ For a case collection, start one replay session and control active case
 ownership through the CLI:
 
 ```bash
-traffic-e2e replay path/to/recordings/<run-id>/<rule>/<uri-group>
+traffic-e2e replay path/to/recordings/<run-id>/apis/<api-directory>
 traffic-e2e replay path/to/recordings/<run-id>
 traffic-e2e replay --case-id <case-id> path/to/recordings/<run-id>
 traffic-e2e diagnose replay-control wait-ready
@@ -917,7 +914,7 @@ gate:
 
 ```bash
 traffic-e2e diagnose replay-aggregate \
-  --case-source recordings/<run-id>/<rule> \
+  --case-source recordings/<run-id> \
   --case-id <case-id> \
   --session-id <session-id> \
   --output aggregate-report.json \
@@ -939,18 +936,17 @@ case grouping outside the recording source:
 
 ```bash
 traffic-e2e diagnose case-group ensure \
-  --case-source /path/to/recordings/<run-id>/<rule> \
-  --case-dir /path/to/recordings/<run-id>/<rule>/<current-uri-group> \
+  --case-source /path/to/recordings/<run-id> \
+  --case-dir /path/to/recordings/<run-id>/apis/<api-directory> \
   --method GET \
   --source-route '/api/users/:id' \
   --pattern '/api/users/*' \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --output ../target/.traffic-e2e/local/run-reports/<run-id>-case-groups.json \
-  --recorder-config ../target/.traffic-e2e/project.yaml \
-  --rule record-api
+  --recorder-config ../target/.traffic-e2e/project.yaml
 ```
 
-For an exact static route, omit `--pattern`, `--recorder-config`, and `--rule`.
+For an exact static route, omit `--pattern` and `--recorder-config`.
 The command validates every case in the current directory and returns
 `already_canonical`. A dynamic first call returns `created`; a repeat from any
 member directory returns `already_grouped`. Dynamic groups are manifest-backed
@@ -965,19 +961,16 @@ configuration interface:
 ```bash
 traffic-e2e config recorder apply case-path-patterns \
   --target-root ../target \
-  --rule record-api \
   --authority focused \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --case-source /path/to/focused-cases \
   --pattern '/api/users/*/xxx'
 ```
 
-The selected rule must already contain exactly one explicit
-`BEGIN/END AI-MANAGED CASE PATH PATTERNS` block. The command preserves all text
-outside that block, sorts and deduplicates patterns, validates the complete
-recorder config, and replaces the file atomically. Every authority mode is
-add-only: a full case source or full replay does not authorize deleting patterns
-that were not observed.
+The command updates the global HTTP policy, sorts and deduplicates patterns,
+validates the complete recorder config, and replaces the coordinator rules file
+atomically. Every authority mode is add-only: a full case source or full replay
+does not authorize deleting patterns that were not observed.
 
 Delete only a specifically proven-invalid entry already inside the AI-managed
 block. Name it explicitly, attach single-line source-route evidence, and include
@@ -986,7 +979,6 @@ block. Name it explicitly, attach single-line source-route evidence, and include
 ```bash
 traffic-e2e config recorder apply case-path-patterns \
   --target-root ../target \
-  --rule record-api \
   --source-revision "$(git -C ../source rev-parse HEAD)" \
   --case-source /path/to/cases \
   --remove-incorrect-pattern '/api/incorrect/*' \
@@ -1513,8 +1505,8 @@ Prepare each API after confirming whether its source URI is static or dynamic:
 ```bash
 traffic-e2e prepare \
   --target-root ../target \
-  --case-source recordings/<run>/<rule> \
-  --case-dir recordings/<run>/<rule>/<group> \
+  --case-source recordings/<run> \
+  --case-dir recordings/<run>/apis/<api-directory> \
   --method GET \
   --source-route '/api/widgets/:id' \
   --pattern '/api/widgets/*' \
@@ -1526,7 +1518,7 @@ Use the returned group id for the focused migration loop:
 ```bash
 traffic-e2e run-api \
   --target-root ../target \
-  --case-source recordings/<run>/<rule> \
+  --case-source recordings/<run> \
   --api 'GET /api/widgets/*'
 ```
 
@@ -1612,7 +1604,7 @@ after an earlier group pass. In that case, run the complete regression round:
 ```bash
 traffic-e2e run \
   --target-root ../target \
-  --case-source recordings/<run>/<rule>
+  --case-source recordings/<run>
 ```
 
 The full command uses the same single target lifetime for the complete round,
@@ -1725,12 +1717,12 @@ published inside that run:
 <run-id>/pre-readiness-traffic-summary.json
 <run-id>/source-process-traffic-summary.json
 <run-id>/global-dependencies-debug.jsonl
-<run-id>/<rule-name>/<uri-group>/<case-id>/request.json
-<run-id>/<rule-name>/<uri-group>/<case-id>/expected-response.json
-<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
-<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-summary.json
-<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
-<run-id>/failed/<rule-name>/<uri-group>/<case-id>/
+<run-id>/apis/<api-directory>/<case-id>/request.json
+<run-id>/apis/<api-directory>/<case-id>/expected-response.json
+<run-id>/apis/<api-directory>/<case-id>/dependencies.jsonl
+<run-id>/apis/<api-directory>/<case-id>/dependencies-summary.json
+<run-id>/apis/<api-directory>/<case-id>/dependencies-debug.jsonl
+<run-id>/failed/<api-directory>/<case-id>/
 ```
 
 Every newly published case contains `dependencies.jsonl` and
@@ -1752,7 +1744,7 @@ the Replay report and bounded dependency evidence.
 Failed cases are diagnostic artifacts, not replay fixtures. A case with a
 truncated request or expected response body is kept under `<run-id>/failed`
 with `recording-error.json` instead of being published. Successfully published
-cases remain in their normal rule directories when another case fails. A clean
+cases remain in their normal API directories when another case fails. A clean
 shutdown reports `status: completed` and exits successfully even when
 `failed_cases` is nonzero; consumers select only canonical published cases and
 use `failed_cases` plus `errors` for diagnostics. `status: failed` and a

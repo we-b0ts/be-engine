@@ -18,8 +18,9 @@ const MOTAN1_REQUEST: &[u8] =
 #[tokio::test]
 async fn matched_motan1_and_motan2_requests_are_forwarded_and_published() {
     let limits = Limits::default();
-    let (upstream, source) = fixed_response_source(2, limits).await;
+    let (upstream, source) = fixed_response_source(3, limits).await;
     let (temp, state, listen, gateway) = gateway_state(upstream.to_string(), Vec::new()).await;
+    wait_for_source_ready(&state).await;
     let mut client = connect_retry(listen).await;
 
     let motan1 = round_trip(&mut client, MOTAN1_REQUEST, limits).await;
@@ -109,6 +110,7 @@ async fn overlapping_matched_request_uses_fixed_response_and_is_not_forwarded() 
     let (received, received_rx) = oneshot::channel();
     let (release, release_rx) = oneshot::channel();
     let source = tokio::spawn(async move {
+        respond_once(&listener, limits).await;
         let (mut stream, _) = listener.accept().await.unwrap();
         let mut decoder = FrameDecoder::new(limits).unwrap();
         let request = transport::read_frame(&mut stream, &mut decoder, limits)
@@ -123,6 +125,7 @@ async fn overlapping_matched_request_uses_fixed_response_and_is_not_forwarded() 
         stream.write_all(&response).await.unwrap();
     });
     let (temp, state, listen, gateway) = gateway_state(upstream.to_string(), Vec::new()).await;
+    wait_for_source_ready(&state).await;
     let mut first_client = connect_retry(listen).await;
     let first =
         tokio::spawn(
@@ -149,7 +152,10 @@ async fn overlapping_matched_request_uses_fixed_response_and_is_not_forwarded() 
 #[tokio::test]
 async fn http_and_motan_share_one_process_wide_case_slot() {
     let limits = Limits::default();
-    let (temp, state, listen, gateway) = gateway_state("127.0.0.1:9".to_string(), Vec::new()).await;
+    let (upstream, source) = fixed_response_source(1, limits).await;
+    let (temp, state, listen, gateway) = gateway_state(upstream.to_string(), Vec::new()).await;
+    wait_for_source_ready(&state).await;
+    await_source(source).await;
     let http_case = CaseContext {
         id: Uuid::new_v4(),
         rule_name: "http-api".to_string(),
@@ -212,6 +218,7 @@ async fn gateway_state(
     config.motan_gateway.rules = rules;
     config.motan_gateway.max_frame_bytes = Limits::default().max_frame_bytes;
     config.recording.output_dir = temp.path().join("recordings");
+    config.recording.post_ready_settle_ms = 0;
     config.recording.case_dependency_post_response_window_ms = 0;
     config.recording.case_dependency_drain_timeout_ms = 100;
     config.tls.ca_cert_path = temp.path().join("ca.pem");
@@ -230,21 +237,38 @@ async fn fixed_response_source(
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
         for _ in 0..requests {
-            let (mut stream, _) = listener.accept().await.unwrap();
-            let mut decoder = FrameDecoder::new(limits).unwrap();
-            let request = transport::read_frame(&mut stream, &mut decoder, limits)
-                .await
-                .unwrap()
-                .unwrap();
-            let request_ref = parse_frame_ref(request.raw(), limits).unwrap();
-            let mut response = Vec::new();
-            encode_empty_response(request_ref, &mut response, limits).unwrap();
-            if !response.is_empty() {
-                stream.write_all(&response).await.unwrap();
-            }
+            respond_once(&listener, limits).await;
         }
     });
     (address, task)
+}
+
+async fn respond_once(listener: &TcpListener, limits: Limits) {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let mut decoder = FrameDecoder::new(limits).unwrap();
+    let request = transport::read_frame(&mut stream, &mut decoder, limits)
+        .await
+        .unwrap()
+        .unwrap();
+    let request_ref = parse_frame_ref(request.raw(), limits).unwrap();
+    let mut response = Vec::new();
+    encode_empty_response(request_ref, &mut response, limits).unwrap();
+    if !response.is_empty() {
+        stream.write_all(&response).await.unwrap();
+    }
+}
+
+async fn wait_for_source_ready(state: &AppState) {
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if state.inner.recording_lifecycle.snapshot().source_ready {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("Motan source did not become ready");
 }
 
 async fn round_trip(

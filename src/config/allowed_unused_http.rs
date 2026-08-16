@@ -8,10 +8,7 @@ use serde::Serialize;
 
 use super::edit::write_atomic;
 use super::rule_document::whole_file_diff;
-use super::{
-    AppConfig, CoordinatorHttpRuleConfig, CoordinatorRulesConfig, HttpGatewayConfig,
-    HttpGatewayRuleConfig,
-};
+use super::{AppConfig, CoordinatorRulesConfig, HttpGatewayConfig};
 
 const FIELD: &str = "allowed_unused_http_hosts";
 
@@ -19,14 +16,12 @@ const FIELD: &str = "allowed_unused_http_hosts";
 pub struct AllowedUnusedHttpHostFeedback {
     pub project_config_path: PathBuf,
     pub rules_path: PathBuf,
-    pub rule_name: String,
     pub hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AllowedUnusedHttpHostReport {
     pub rules: PathBuf,
-    pub rule: String,
     pub changed: bool,
     pub applied: bool,
     pub hosts_before: Vec<String>,
@@ -71,7 +66,6 @@ impl AllowedUnusedHttpHostPlan {
 pub fn plan_allowed_unused_http_hosts(
     feedback: AllowedUnusedHttpHostFeedback,
 ) -> Result<AllowedUnusedHttpHostPlan> {
-    validate_single_line("rule name", &feedback.rule_name)?;
     ensure!(
         !feedback.hosts.is_empty(),
         "at least one --host is required"
@@ -85,15 +79,14 @@ pub fn plan_allowed_unused_http_hosts(
     let original_rules = read(&feedback.rules_path, "coordinator rules")?;
     let mut rules = CoordinatorRulesConfig::parse(&original_rules, &feedback.rules_path)?;
     let mut static_config = AppConfig::load_static(&feedback.project_config_path)?;
-    named_rule(&static_config, &feedback.rule_name)?;
-    let overlay = http_overlay_mut(&mut rules, &feedback.rule_name);
-    let before = overlay
+    let before = rules
+        .http
         .allowed_unused_http_hosts
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
     let after = before.union(&requested).cloned().collect::<BTreeSet<_>>();
-    overlay.allowed_unused_http_hosts = after.iter().cloned().collect();
+    rules.http.allowed_unused_http_hosts = after.iter().cloned().collect();
     rules.apply_to(&mut static_config)?;
     static_config.validate()?;
     let updated_rules = rules.render()?;
@@ -112,7 +105,6 @@ pub fn plan_allowed_unused_http_hosts(
         updated_rules,
         report: AllowedUnusedHttpHostReport {
             rules: feedback.rules_path,
-            rule: feedback.rule_name,
             changed,
             applied: false,
             hosts_before: before.into_iter().collect(),
@@ -124,63 +116,8 @@ pub fn plan_allowed_unused_http_hosts(
 }
 
 pub(super) fn validate_config(config: &HttpGatewayConfig) -> Result<()> {
-    for rule in &config.exclude_rules {
-        ensure!(
-            rule.allowed_unused_http_hosts.is_empty(),
-            "http_gateway.exclude_rules cannot define {FIELD}"
-        );
-    }
-    for rule in &config.rules {
-        validate_rule(rule)?;
-    }
-    Ok(())
-}
-
-fn named_rule<'a>(config: &'a AppConfig, name: &str) -> Result<&'a HttpGatewayRuleConfig> {
-    let matches = config
-        .http_gateway
-        .rules
-        .iter()
-        .filter(|rule| rule.name.as_deref() == Some(name))
-        .collect::<Vec<_>>();
-    ensure!(
-        matches.len() == 1,
-        "expected exactly one recorder HTTP rule named {name:?}, found {}",
-        matches.len()
-    );
-    Ok(matches[0])
-}
-
-fn http_overlay_mut<'a>(
-    rules: &'a mut CoordinatorRulesConfig,
-    name: &str,
-) -> &'a mut CoordinatorHttpRuleConfig {
-    if let Some(index) = rules.http.iter().position(|rule| rule.name == name) {
-        return &mut rules.http[index];
-    }
-    rules.http.push(CoordinatorHttpRuleConfig {
-        name: name.to_string(),
-        source_revision: String::new(),
-        case_path_patterns: Vec::new(),
-        allowed_unused_http_hosts: Vec::new(),
-    });
-    rules
-        .http
-        .last_mut()
-        .expect("just inserted coordinator rule")
-}
-
-fn validate_rule(rule: &HttpGatewayRuleConfig) -> Result<()> {
-    if !rule.allowed_unused_http_hosts.is_empty() {
-        ensure!(
-            rule.name
-                .as_ref()
-                .is_some_and(|name| !name.trim().is_empty()),
-            "{FIELD} requires a named recorder HTTP rule"
-        );
-    }
     let mut unique = BTreeSet::new();
-    for host in &rule.allowed_unused_http_hosts {
+    for host in &config.allowed_unused_http_hosts {
         let normalized = normalize_host(host)?;
         ensure!(
             unique.insert(normalized),

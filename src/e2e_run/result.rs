@@ -585,8 +585,7 @@ mod tests {
                 }],
             }],
         };
-        let mut state =
-            ActiveRunState::new("run".to_string(), 1, &inventory, None, Path::new("/active"));
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, Path::new("/active"));
 
         assert_eq!(
             verification_gates(&state),
@@ -624,7 +623,7 @@ mod tests {
         write_response(&published_actual, serde_json::json!({}));
 
         let inventory = one_case_inventory();
-        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, None, &active_dir);
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, &active_dir);
         state.cases[0].assertion_passed = Some(false);
         state.cases[0].response_assertion = Some(ResponseAssertionSummary {
             passed: false,
@@ -678,7 +677,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let inventory = two_case_inventory();
         let active_dir = temp.path().join("active");
-        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, None, &active_dir);
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, &active_dir);
         for case in &mut state.cases {
             case.assertion_passed = Some(false);
         }
@@ -763,7 +762,7 @@ mod tests {
                 ],
             }],
         };
-        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, None, &active_dir);
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, &active_dir);
         let case_differences = [
             vec![
                 difference("/users/0/tree"),
@@ -838,7 +837,7 @@ mod tests {
         std::fs::create_dir_all(&active_dir).unwrap();
         std::fs::create_dir_all(&latest_dir).unwrap();
         let inventory = one_case_inventory();
-        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, None, &active_dir);
+        let mut state = ActiveRunState::new("run".to_string(), 1, &inventory, &active_dir);
         let differences = (0..25)
             .map(|index| difference(&format!("/field-{index}")))
             .collect::<Vec<_>>();

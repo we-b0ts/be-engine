@@ -47,8 +47,6 @@ pub(super) struct ReplayArgs {
     policy: Option<PathBuf>,
     #[arg(long)]
     recorder_config: Option<PathBuf>,
-    #[arg(long, requires = "recorder_config")]
-    recording_rule: Option<String>,
     #[arg(long)]
     ca_cert: Option<PathBuf>,
     #[arg(long)]
@@ -94,7 +92,6 @@ struct ResolvedReplay {
     intercept: bool,
     policy: Option<PathBuf>,
     recorder_config: Option<PathBuf>,
-    recording_rule: Option<String>,
     ca_cert: Option<PathBuf>,
     ca_key: Option<PathBuf>,
     http_ignore_query_params: Vec<String>,
@@ -102,10 +99,7 @@ struct ResolvedReplay {
 
 pub(super) async fn run(args: ReplayArgs) -> Result<()> {
     let resolved = resolve(args)?;
-    let allowed_unused_http = load_allowed_unused_http(
-        resolved.recorder_config.clone(),
-        resolved.recording_rule.clone(),
-    )?;
+    let allowed_unused_http = load_allowed_unused_http(resolved.recorder_config.clone())?;
     let process_owned_dependencies =
         load_background_dependencies(resolved.recorder_config.as_deref())?;
     let mut interception = if resolved.intercept {
@@ -189,10 +183,6 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
             path.display()
         );
     }
-    ensure!(
-        recorder_config.is_some() == args.recording_rule.is_some(),
-        "--recorder-config and --recording-rule must be provided together"
-    );
     let recorder_defaults = recorder_config
         .as_deref()
         .map(AppConfig::load)
@@ -313,7 +303,6 @@ fn resolve(args: ReplayArgs) -> Result<ResolvedReplay> {
         intercept,
         policy,
         recorder_config,
-        recording_rule: args.recording_rule,
         ca_cert: args.ca_cert.map(|path| absolute_from(&cwd, &path)),
         ca_key: args.ca_key.map(|path| absolute_from(&cwd, &path)),
         http_ignore_query_params: args.http_ignore_query_params,
@@ -362,29 +351,16 @@ fn absolute_from(base: &Path, path: &Path) -> PathBuf {
 
 fn load_allowed_unused_http(
     recorder_config: Option<PathBuf>,
-    recording_rule: Option<String>,
 ) -> Result<Option<ReplayAllowedUnusedHttpConfig>> {
-    let (Some(config_path), Some(recording_rule)) = (recorder_config, recording_rule) else {
+    let Some(config_path) = recorder_config else {
         return Ok(None);
     };
     let config_path = config_path.canonicalize()?;
     let config = AppConfig::load(&config_path)?;
-    let matches = config
-        .http_gateway
-        .rules
-        .iter()
-        .filter(|rule| rule.name.as_deref() == Some(recording_rule.as_str()))
-        .collect::<Vec<_>>();
-    ensure!(
-        matches.len() == 1,
-        "expected exactly one [[http_gateway.rules]] entry named {:?}, found {}",
-        recording_rule,
-        matches.len()
-    );
     Ok(Some(ReplayAllowedUnusedHttpConfig {
         config_path,
-        recording_rule,
-        hosts: matches[0]
+        hosts: config
+            .http_gateway
             .allowed_unused_http_hosts
             .iter()
             .cloned()
@@ -503,12 +479,11 @@ mod tests {
         .unwrap();
         std::fs::write(
             directory.path().join("coordinator-rules.yaml"),
-            "version: 1\nhttp: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
+            "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();
         let mut args = replay_args(Some(directory.path().to_path_buf()), None);
         args.recorder_config = Some(recorder_config);
-        args.recording_rule = Some("record-api".to_string());
 
         let resolved = resolve(args).unwrap();
 
@@ -532,7 +507,6 @@ mod tests {
             fake_cidr: None,
             policy: None,
             recorder_config: None,
-            recording_rule: None,
             ca_cert: None,
             ca_key: None,
             http_ignore_query_params: Vec::new(),

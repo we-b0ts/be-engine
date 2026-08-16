@@ -14,7 +14,7 @@ use flate2::write::GzEncoder;
 use hyper::StatusCode;
 use motan_protocol::{
     FrameBuilder, FrameDecoder, Limits, META_GROUP, META_METHOD, META_METHOD_DESC, META_PATH,
-    Metadata, ResponseStatus,
+    Metadata, ResponseStatus, encode_empty_response, parse_frame_ref,
 };
 use serde_json::Value;
 use tempfile::tempdir;
@@ -43,10 +43,12 @@ async fn motan_requests_are_compared_with_the_same_case_lifecycle() {
     let temp = tempdir().unwrap();
     let baseline = spawn_motan_upstream(b"baseline").await;
     let candidate = spawn_motan_upstream(b"candidate").await;
-    let http_gateway = free_addr();
+    let occupied_http_gateway = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let http_gateway = occupied_http_gateway.local_addr().unwrap();
     let motan_gateway = free_addr();
     let run_id = "20260722155956";
     let mut config = comparison_recording_config(&temp, http_gateway, free_addr(), free_addr());
+    config.http_gateway.enabled = false;
     config.motan_gateway = MotanGatewayConfig {
         enabled: true,
         listen: motan_gateway,
@@ -58,11 +60,25 @@ async fn motan_requests_are_compared_with_the_same_case_lifecycle() {
         .as_mut()
         .unwrap()
         .candidate_motan_upstream = Some(candidate.to_string());
-    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+    let control_socket = temp.path().join("motan-only-comparison.sock");
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording_with_options(
         config,
-        Some(run_id.to_string()),
+        ComparisonRecordingRunOptions {
+            run_id: Some(run_id.to_string()),
+            duration: None,
+            recording_apis: Vec::new(),
+            control_socket: Some(control_socket.clone()),
+        },
     ));
-    wait_for_port(motan_gateway).await;
+    let readiness = wait_for_recording_ready(RecordingWaitConfig {
+        control_socket_path: control_socket,
+        timeout: Duration::from_secs(2),
+    })
+    .await
+    .unwrap();
+    assert!(readiness.ready);
+    assert_eq!(readiness.listeners_ready, vec!["motan_gateway"]);
+    assert_eq!(readiness.upstreams_ready, vec!["motan_gateway"]);
 
     let request = motan_request(42);
     let mut stream = TcpStream::connect(motan_gateway).await.unwrap();
@@ -93,6 +109,7 @@ async fn motan_requests_are_compared_with_the_same_case_lifecycle() {
     );
     assert_eq!(recorded_body(&case.join("response.json")), "candidate");
     task.abort();
+    drop(occupied_http_gateway);
 }
 
 #[tokio::test]
@@ -159,7 +176,7 @@ async fn decodes_gzip_response_artifacts_without_changing_the_forwarded_response
     decoder.read_to_string(&mut forwarded_body).unwrap();
     assert_eq!(forwarded_body, body);
 
-    let case = wait_for_only_child(&run_dir(&temp, run_id).join("api/api-gzip")).await;
+    let case = wait_for_only_child(&run_dir(&temp, run_id).join("apis/api-gzip")).await;
     let expected = read_json(&case.join("expected-response.json"));
     assert_eq!(expected["body"]["encoding"], "utf8");
     assert_eq!(expected["body"]["decoded"], true);
@@ -335,7 +352,7 @@ async fn returns_baseline_after_the_serial_comparison_case_is_complete() {
     assert!(started.elapsed() >= Duration::from_millis(300));
     assert!(raw_get(gateway, "/api/ignored").await.contains("fixed"));
 
-    let group = run_dir(&temp, run_id).join("api/api-users-wildcard");
+    let group = run_dir(&temp, run_id).join("apis/api-users-wildcard");
     let case = wait_for_only_child(&group).await;
     for file in [
         "case-kind.json",
@@ -359,7 +376,7 @@ async fn returns_baseline_after_the_serial_comparison_case_is_complete() {
     );
     assert_eq!(read_json(&case.join("response.json"))["status"], 200);
     assert!(!case.join("expected-response-after.json").exists());
-    assert!(!run_dir(&temp, run_id).join("api/api-ignored").exists());
+    assert!(!run_dir(&temp, run_id).join("apis/api-ignored").exists());
     assert_eq!(
         read_json(&run_dir(&temp, run_id).join("comparison-recording-run.json"))["recording_apis"],
         serde_json::json!(["GET /api/users/*"])
@@ -397,7 +414,7 @@ async fn optional_baseline_recheck_records_source_candidate_source_in_order() {
             .await
             .contains("baseline-before")
     );
-    let case = wait_for_only_child(&run_dir(&temp, run_id).join("api/api-recheck")).await;
+    let case = wait_for_only_child(&run_dir(&temp, run_id).join("apis/api-recheck")).await;
     assert_eq!(
         recorded_body(&case.join("expected-response.json")),
         "baseline-before"
@@ -440,7 +457,7 @@ async fn case_limit_returns_fixed_response_without_more_mirroring() {
     assert!(raw_get(gateway, "/api/one").await.contains("fixed"));
     wait_for_counter(&candidate_requests, 1).await;
     assert_eq!(baseline_requests.load(Ordering::SeqCst), 1);
-    let group = run_dir(&temp, run_id).join("api/api-one");
+    let group = run_dir(&temp, run_id).join("apis/api-one");
     let _ = wait_for_only_child(&group).await;
     assert_eq!(std::fs::read_dir(&group).unwrap().count(), 1);
     let summary = wait_for_count(
@@ -452,9 +469,9 @@ async fn case_limit_returns_fixed_response_without_more_mirroring() {
     assert_eq!(summary["counts"]["dual_dispatched"], 1);
     assert_eq!(summary["counts"]["fixed_response"], 1);
     assert_eq!(summary["counts"]["baseline_only"], 0);
-    assert_eq!(summary["apis"]["api:/api/one"]["last_baseline_status"], 200);
+    assert_eq!(summary["apis"]["GET /api/one"]["last_baseline_status"], 200);
     assert_eq!(
-        summary["apis"]["api:/api/one"]["last_candidate_status"],
+        summary["apis"]["GET /api/one"]["last_candidate_status"],
         200
     );
     task.abort();
@@ -482,7 +499,7 @@ async fn response_limit_preserves_baseline_and_records_partial_response() {
             .await
             .contains("baseline-too-large")
     );
-    let case = wait_for_only_child(&run_dir(&temp, run_id).join("api/api-large")).await;
+    let case = wait_for_only_child(&run_dir(&temp, run_id).join("apis/api-large")).await;
     let baseline = read_json(&case.join("expected-response.json"));
     assert_eq!(baseline["status"], 200);
     assert_eq!(baseline["body"]["original_len"], 18);
@@ -611,8 +628,8 @@ async fn http_and_motan_comparison_share_one_process_wide_case_slot() {
         Some(Duration::from_millis(300)),
     )
     .await;
-    let motan_baseline = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let motan_candidate = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let (motan_baseline, motan_baseline_requests) = spawn_motan_readiness_upstream().await;
+    let (motan_candidate, motan_candidate_requests) = spawn_motan_readiness_upstream().await;
     let http_gateway = free_addr();
     let motan_gateway = free_addr();
     let run_id = "20260722160009";
@@ -620,20 +637,30 @@ async fn http_and_motan_comparison_share_one_process_wide_case_slot() {
     config.motan_gateway = MotanGatewayConfig {
         enabled: true,
         listen: motan_gateway,
-        matched_upstream: motan_baseline.local_addr().unwrap().to_string(),
+        matched_upstream: motan_baseline.to_string(),
         ..Default::default()
     };
     config
         .comparison_recording
         .as_mut()
         .unwrap()
-        .candidate_motan_upstream = Some(motan_candidate.local_addr().unwrap().to_string());
-    let task = tokio::spawn(traffic_e2e::run_comparison_recording(
+        .candidate_motan_upstream = Some(motan_candidate.to_string());
+    let control_socket = temp.path().join("http-motan-comparison.sock");
+    let task = tokio::spawn(traffic_e2e::run_comparison_recording_with_options(
         config,
-        Some(run_id.to_string()),
+        ComparisonRecordingRunOptions {
+            run_id: Some(run_id.to_string()),
+            duration: None,
+            recording_apis: Vec::new(),
+            control_socket: Some(control_socket.clone()),
+        },
     ));
-    wait_for_port(http_gateway).await;
-    wait_for_port(motan_gateway).await;
+    wait_for_recording_ready(RecordingWaitConfig {
+        control_socket_path: control_socket,
+        timeout: Duration::from_secs(2),
+    })
+    .await
+    .unwrap();
 
     let http_case = tokio::spawn(raw_get(http_gateway, "/api/one"));
     wait_for_counter(&baseline_requests, 1).await;
@@ -650,16 +677,8 @@ async fn http_and_motan_comparison_share_one_process_wide_case_slot() {
 
     assert_eq!(response.request_id, 43);
     assert!(response.body.is_empty());
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), motan_baseline.accept())
-            .await
-            .is_err()
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), motan_candidate.accept())
-            .await
-            .is_err()
-    );
+    assert_eq!(motan_baseline_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(motan_candidate_requests.load(Ordering::SeqCst), 1);
     assert!(http_case.await.unwrap().contains("baseline"));
     wait_for_counter(&candidate_requests, 1).await;
     let summary = wait_for_count(
@@ -800,6 +819,7 @@ fn comparison_recording_config(
         }),
         ..Default::default()
     };
+    config.http_gateway.enabled = true;
     config.http_gateway.listen = gateway;
     config.http_gateway.matched_upstream = format!("http://{baseline}");
     config.http_gateway.fallback_mode = HttpGatewayFallbackMode::FixedResponse;
@@ -927,7 +947,42 @@ async fn spawn_motan_upstream(body: &'static [u8]) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut decoder = FrameDecoder::new(Limits::default()).unwrap();
+            let request = loop {
+                if let Some(frame) = decoder.decode().unwrap() {
+                    break frame;
+                }
+                assert!(stream.read_buf(decoder.buffer_mut()).await.unwrap() > 0);
+            };
+            let response = if request.flags.heartbeat() {
+                let request_ref = parse_frame_ref(request.raw(), Limits::default()).unwrap();
+                let mut response = Vec::new();
+                encode_empty_response(request_ref, &mut response, Limits::default()).unwrap();
+                response
+            } else {
+                FrameBuilder::response(request.request_id)
+                    .status(ResponseStatus::Normal)
+                    .body(body)
+                    .encode()
+                    .unwrap()
+                    .to_vec()
+            };
+            stream.write_all(&response).await.unwrap();
+        }
+    });
+    address
+}
+
+async fn spawn_motan_readiness_upstream() -> (SocketAddr, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let task_requests = requests.clone();
+    tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
+        task_requests.fetch_add(1, Ordering::SeqCst);
         let mut decoder = FrameDecoder::new(Limits::default()).unwrap();
         let request = loop {
             if let Some(frame) = decoder.decode().unwrap() {
@@ -935,14 +990,13 @@ async fn spawn_motan_upstream(body: &'static [u8]) -> SocketAddr {
             }
             assert!(stream.read_buf(decoder.buffer_mut()).await.unwrap() > 0);
         };
-        let response = FrameBuilder::response(request.request_id)
-            .status(ResponseStatus::Normal)
-            .body(body)
-            .encode()
-            .unwrap();
+        assert!(request.flags.heartbeat());
+        let request_ref = parse_frame_ref(request.raw(), Limits::default()).unwrap();
+        let mut response = Vec::new();
+        encode_empty_response(request_ref, &mut response, Limits::default()).unwrap();
         stream.write_all(&response).await.unwrap();
     });
-    address
+    (address, requests)
 }
 
 async fn raw_get(address: SocketAddr, path: &str) -> String {

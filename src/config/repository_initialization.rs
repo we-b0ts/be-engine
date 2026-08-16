@@ -5,9 +5,7 @@ use std::process::{Command, Stdio};
 use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 
-use super::initialization::{
-    DEFAULT_RECORDING_RULE, RecorderConfigInitOptions, render_validated_recorder_config,
-};
+use super::initialization::{RecorderConfigInitOptions, render_validated_recorder_config};
 use crate::e2e_run::{E2eRunInitOptions, render_project_config};
 
 const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
@@ -119,7 +117,6 @@ fn initialize_repository_config_with(
             replay_policy: PathBuf::from(VERIFICATION_POLICY_PATH),
             pr_base: "dev-migration".to_string(),
             recorder_config: PathBuf::from(PROJECT_CONFIG_PATH),
-            recording_rule: DEFAULT_RECORDING_RULE.to_string(),
             force: false,
         },
         recorder,

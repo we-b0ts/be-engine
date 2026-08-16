@@ -339,10 +339,10 @@ async fn run_managed_runtime(
         "managed recording requires a post-ready quiet period of at least 15 seconds"
     );
     ensure!(
-        recorder.http_gateway.ready.enabled,
-        "managed recording requires an enabled http_gateway.ready probe"
+        !recorder.http_gateway.enabled || recorder.http_gateway.ready.enabled,
+        "managed HTTP recording requires an enabled http_gateway.ready probe"
     );
-    if runtime_operation.requires_listener_preflight() {
+    if runtime_operation.requires_listener_preflight() && recorder.http_gateway.enabled {
         listen_preflight::require_available(recorder.http_gateway.listen).await?;
     }
     let target_image = if runtime_operation
@@ -365,10 +365,17 @@ async fn run_managed_runtime(
         .comparison_recording
         .as_ref()
         .context("managed recording requires comparison configuration")?;
-    let source_origin = comparison
-        .baseline_upstream(&recorder.http_gateway)
-        .to_string();
-    let (source_host, source_port) = http_origin_endpoint(&source_origin, "comparison source")?;
+    let (source_origin, source_host, source_port) = if recorder.http_gateway.enabled {
+        let source_origin = comparison
+            .baseline_upstream(&recorder.http_gateway)
+            .to_string();
+        let (source_host, source_port) = http_origin_endpoint(&source_origin, "comparison source")?;
+        (source_origin, source_host, source_port)
+    } else {
+        // These values remain present for the shared platform script contract,
+        // but are not contacted when HTTP recording is disabled.
+        ("http://127.0.0.1:1".to_string(), "127.0.0.1".to_string(), 1)
+    };
     let (_, target_port) = http_origin_endpoint(&config.target_http_origin, "comparison target")?;
     ensure!(
         target_port == config.target_port,
@@ -427,6 +434,10 @@ async fn run_managed_runtime(
         .env(
             "TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED",
             comparison_motan_port.is_some().to_string(),
+        )
+        .env(
+            "TRAFFIC_E2E_HTTP_RECORDING_ENABLED",
+            recorder.http_gateway.enabled.to_string(),
         )
         .env(
             "TRAFFIC_E2E_TARGET_READY_PATH",

@@ -64,6 +64,10 @@ pub struct RecordingReadiness {
     pub source_ready: bool,
     pub listeners_ready: Vec<String>,
     pub listeners_pending: Vec<String>,
+    #[serde(default)]
+    pub upstreams_ready: Vec<String>,
+    #[serde(default)]
+    pub upstreams_pending: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -72,6 +76,8 @@ pub struct RecordingReadiness {
 struct RecordingLifecycleState {
     expected: BTreeSet<RecordingListener>,
     listening: BTreeSet<RecordingListener>,
+    expected_upstreams: BTreeSet<RecordingListener>,
+    ready_upstreams: BTreeSet<RecordingListener>,
     source_settling: bool,
     source_ready: bool,
     stopping: bool,
@@ -107,27 +113,46 @@ impl RecordingLifecycle {
         if config.mysql.enabled {
             expected.insert(RecordingListener::Mysql);
         }
+        let expected_upstreams = expected_upstreams(
+            config.http_gateway.enabled && config.http_gateway.ready.enabled,
+            config.motan_gateway.enabled,
+        );
+        let source_ready = expected_upstreams.is_empty();
         Self {
             inner: Arc::new(Mutex::new(RecordingLifecycleState {
                 expected,
                 listening: BTreeSet::new(),
+                expected_upstreams,
+                ready_upstreams: BTreeSet::new(),
                 source_settling: false,
-                source_ready: !config.http_gateway.ready.enabled,
+                source_ready,
                 stopping: false,
                 error: None,
             })),
         }
     }
 
-    pub(crate) fn for_comparison_gateway(source_ready: bool, motan_enabled: bool) -> Self {
-        let mut expected = BTreeSet::from([RecordingListener::HttpGateway]);
+    pub(crate) fn for_comparison_gateway(
+        http_enabled: bool,
+        http_readiness_enabled: bool,
+        motan_enabled: bool,
+    ) -> Self {
+        let mut expected = BTreeSet::new();
+        if http_enabled {
+            expected.insert(RecordingListener::HttpGateway);
+        }
         if motan_enabled {
             expected.insert(RecordingListener::MotanGateway);
         }
+        let expected_upstreams =
+            expected_upstreams(http_enabled && http_readiness_enabled, motan_enabled);
+        let source_ready = expected_upstreams.is_empty();
         Self {
             inner: Arc::new(Mutex::new(RecordingLifecycleState {
                 expected,
                 listening: BTreeSet::new(),
+                expected_upstreams,
+                ready_upstreams: BTreeSet::new(),
                 source_settling: false,
                 source_ready,
                 stopping: false,
@@ -140,14 +165,23 @@ impl RecordingLifecycle {
         self.lock().listening.insert(listener);
     }
 
+    pub(crate) fn mark_upstream_ready(&self, listener: RecordingListener) -> bool {
+        let mut state = self.lock();
+        if !state.expected_upstreams.contains(&listener) || !state.ready_upstreams.insert(listener)
+        {
+            return false;
+        }
+        let all_ready = state.ready_upstreams == state.expected_upstreams;
+        if all_ready {
+            state.source_settling = true;
+        }
+        all_ready
+    }
+
     pub(crate) fn mark_source_ready(&self) {
         let mut state = self.lock();
         state.source_settling = false;
         state.source_ready = true;
-    }
-
-    pub(crate) fn mark_source_settling(&self) {
-        self.lock().source_settling = true;
     }
 
     pub(crate) fn mark_stopping(&self) {
@@ -178,6 +212,20 @@ impl RecordingLifecycle {
             .map(str::to_string)
             .collect::<Vec<_>>();
         let listeners_bound = listeners_pending.is_empty();
+        let upstreams_ready = state
+            .ready_upstreams
+            .iter()
+            .copied()
+            .map(RecordingListener::as_str)
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let upstreams_pending = state
+            .expected_upstreams
+            .difference(&state.ready_upstreams)
+            .copied()
+            .map(RecordingListener::as_str)
+            .map(str::to_string)
+            .collect::<Vec<_>>();
         let ready =
             state.error.is_none() && !state.stopping && state.source_ready && listeners_bound;
         let phase = if state.error.is_some() {
@@ -200,6 +248,8 @@ impl RecordingLifecycle {
             source_ready: state.source_ready,
             listeners_ready,
             listeners_pending,
+            upstreams_ready,
+            upstreams_pending,
             error: state.error.clone(),
         }
     }
@@ -209,6 +259,20 @@ impl RecordingLifecycle {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+}
+
+fn expected_upstreams(
+    http_readiness_enabled: bool,
+    motan_enabled: bool,
+) -> BTreeSet<RecordingListener> {
+    let mut expected = BTreeSet::new();
+    if http_readiness_enabled {
+        expected.insert(RecordingListener::HttpGateway);
+    }
+    if motan_enabled {
+        expected.insert(RecordingListener::MotanGateway);
+    }
+    expected
 }
 
 pub(crate) struct RecordingControlServer {
@@ -656,15 +720,42 @@ mod tests {
         assert!(listeners_ready.listeners_bound);
         assert_eq!(listeners_ready.phase, "waiting_for_source");
 
-        lifecycle.mark_source_settling();
+        assert!(lifecycle.mark_upstream_ready(RecordingListener::HttpGateway));
         let settling = lifecycle.snapshot();
         assert!(!settling.ready);
         assert_eq!(settling.phase, "settling");
+        assert!(settling.upstreams_pending.is_empty());
 
         lifecycle.mark_source_ready();
         let ready = lifecycle.snapshot();
         assert!(ready.ready);
         assert_eq!(ready.phase, "ready");
+    }
+
+    #[test]
+    fn readiness_waits_for_every_enabled_gateway_upstream() {
+        let mut config = test_config();
+        config.motan_gateway.enabled = true;
+        let lifecycle = RecordingLifecycle::from_config(&config);
+
+        lifecycle.mark_listener_ready(RecordingListener::DnsMock);
+        lifecycle.mark_listener_ready(RecordingListener::TcpGateway);
+        lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
+        lifecycle.mark_listener_ready(RecordingListener::MotanGateway);
+
+        assert!(!lifecycle.mark_upstream_ready(RecordingListener::HttpGateway));
+        let http_only = lifecycle.snapshot();
+        assert_eq!(http_only.phase, "waiting_for_source");
+        assert_eq!(http_only.upstreams_ready, vec!["http_gateway"]);
+        assert_eq!(http_only.upstreams_pending, vec!["motan_gateway"]);
+
+        assert!(lifecycle.mark_upstream_ready(RecordingListener::MotanGateway));
+        let all_upstreams = lifecycle.snapshot();
+        assert_eq!(all_upstreams.phase, "settling");
+        assert!(all_upstreams.upstreams_pending.is_empty());
+
+        lifecycle.mark_source_ready();
+        assert!(lifecycle.snapshot().ready);
     }
 
     #[tokio::test]
@@ -708,6 +799,7 @@ mod tests {
         lifecycle.mark_listener_ready(RecordingListener::DnsMock);
         lifecycle.mark_listener_ready(RecordingListener::TcpGateway);
         lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
+        assert!(lifecycle.mark_upstream_ready(RecordingListener::HttpGateway));
         lifecycle.mark_source_ready();
 
         let response = wait.await.unwrap().unwrap();
@@ -739,7 +831,7 @@ mod tests {
     async fn comparison_control_accepts_finite_input_completion() {
         let temp = tempfile::tempdir().unwrap();
         let socket = temp.path().join("comparison.sock");
-        let lifecycle = RecordingLifecycle::for_comparison_gateway(true, false);
+        let lifecycle = RecordingLifecycle::for_comparison_gateway(true, false, false);
         lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
         let (server, mut completion) =
             RecordingControlServer::start_for_comparison(lifecycle, socket.clone())

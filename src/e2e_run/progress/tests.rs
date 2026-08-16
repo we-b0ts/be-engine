@@ -25,7 +25,6 @@ fn state(api_passed: u32, api_failed: u32, sequence: u64) -> ActiveRunState {
         case_source: PathBuf::from("/cases"),
         source_revision: "source".to_string(),
         case_inventory_id: "inventory".to_string(),
-        recording_rule: Some("record-api".to_string()),
         replay_session: PathBuf::from("/session"),
         replay_report: PathBuf::from("/report"),
         aggregate_report: PathBuf::from("/aggregate"),

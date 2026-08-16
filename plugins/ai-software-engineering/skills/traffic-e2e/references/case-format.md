@@ -21,12 +21,12 @@ recordings/<run-id>/errors.jsonl
 recordings/<run-id>/global-dependencies.jsonl
 recordings/<run-id>/global-dependencies-summary.json
 recordings/<run-id>/global-dependencies-debug.jsonl
-recordings/<run-id>/<rule>/<uri-group>/<case-id>/request.json
-recordings/<run-id>/<rule>/<uri-group>/<case-id>/expected-response.json
-recordings/<run-id>/<rule>/<uri-group>/<case-id>/dependencies.jsonl
-recordings/<run-id>/<rule>/<uri-group>/<case-id>/dependencies-summary.json
-recordings/<run-id>/<rule>/<uri-group>/<case-id>/dependencies-debug.jsonl
-recordings/<run-id>/failed/<rule>/<uri-group>/<case-id>/
+recordings/<run-id>/apis/<api-directory>/<case-id>/request.json
+recordings/<run-id>/apis/<api-directory>/<case-id>/expected-response.json
+recordings/<run-id>/apis/<api-directory>/<case-id>/dependencies.jsonl
+recordings/<run-id>/apis/<api-directory>/<case-id>/dependencies-summary.json
+recordings/<run-id>/apis/<api-directory>/<case-id>/dependencies-debug.jsonl
+recordings/<run-id>/failed/<api-directory>/<case-id>/
 ```
 
 Each recorder process creates one `YYYYMMDDHHMMSS` run directory. Do not scan
@@ -47,16 +47,16 @@ allowlist from `dependencies.jsonl`; re-record runs created before this artifact
 existed.
 
 `uri-group` is usually built from the full request URI path joined by hyphens,
-for example `/api/users/list` becomes `api-users-list`. When the recorder rule
-defines `case_path_patterns`, the matching pattern defines the group instead.
+for example `/api/users/list` becomes `api-users-list`. When the global HTTP
+policy defines `case_path_patterns`, the matching pattern defines the group instead.
 `*` matches exactly one non-empty path segment; a final `**` is a catch-all
 matching one or more remaining path segments. For example,
 `/api/users/123/xxx` with `/api/users/*/xxx` becomes
 `api-users-wildcard-xxx`.
 
-A path ending at `recordings/<run-id>/<rule>/<uri-group>` is a case collection,
+A path ending at `recordings/<run-id>/apis/<api-directory>` is a case collection,
 not a single case. A path ending at `recordings/<run-id>` is a run collection
-and may contain multiple rules and URI groups. To select cases, open each
+and may contain HTTP and Motan API directories. To select cases, open each
 published child `request.json` and match the recorded `uri` path against the
 requested API/function scope. Multiple matches for the same scope are a case
 set and must all be considered. Do not infer the selected API from `uri-group`

@@ -294,7 +294,7 @@ recorder:
         methods: [GET]
         path_prefixes: [/health, /metrics]
     rules:
-      - name: record-api
+      - name: http-api
         hosts: [api.example.com]
         methods: [GET, POST]
         path_prefixes: [/api/]
@@ -305,12 +305,11 @@ AI/coordinator-owned values are stored only in
 `.traffic-e2e/coordinator-rules.yaml`:
 
 ```yaml
-version: 1
+version: 2
 http:
-  - name: record-api
-    source_revision: source-git-revision
-    case_path_patterns: [/api/users/*/xxx]
-    allowed_unused_http_hosts: []
+  source_revision: source-git-revision
+  case_path_patterns: [/api/users/*/xxx]
+  allowed_unused_http_hosts: []
 breeze_capture: []
 process_owned_dependencies: []
 ```
@@ -359,12 +358,12 @@ after the case is complete and valid:
 <run-id>/bootstrap-dependencies.jsonl
 <run-id>/bootstrap-dependencies-summary.json
 <run-id>/bootstrap-dependencies-debug.jsonl
-<run-id>/<rule-name>/<uri-group>/<case-id>/request.json
-<run-id>/<rule-name>/<uri-group>/<case-id>/expected-response.json
-<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies.jsonl
-<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-summary.json
-<run-id>/<rule-name>/<uri-group>/<case-id>/dependencies-debug.jsonl
-<run-id>/failed/<rule-name>/<uri-group>/<case-id>/
+<run-id>/apis/<api-directory>/<case-id>/request.json
+<run-id>/apis/<api-directory>/<case-id>/expected-response.json
+<run-id>/apis/<api-directory>/<case-id>/dependencies.jsonl
+<run-id>/apis/<api-directory>/<case-id>/dependencies-summary.json
+<run-id>/apis/<api-directory>/<case-id>/dependencies-debug.jsonl
+<run-id>/failed/<api-directory>/<case-id>/
 ```
 
 `uri-group` is built from the full request URI path joined by hyphens, so
@@ -372,7 +371,7 @@ after the case is complete and valid:
 configure `case_path_patterns`. `*` matches exactly one non-empty path segment.
 A final `**` is a catch-all matching one or more remaining path segments. For
 example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
-`api-users-wildcard-xxx` when the rule has
+`api-users-wildcard-xxx` when the global HTTP policy has
 `case_path_patterns = ["/api/users/*/xxx"]`.
 
 For replay-time AI feedback, keep patterns in `coordinator-rules.yaml`. Use
@@ -392,7 +391,7 @@ cases.
 stores the matched upstream response; if the response body has
 `Content-Encoding: gzip` or `deflate`, it is decoded before being written.
 Incomplete cases, including truncated request or expected response bodies, are
-not published into `<rule-name>/<uri-group>/<case-id>`. They are moved under
+not published into `apis/<api-directory>/<case-id>`. They are moved under
 `<run-id>/failed/...` with `recording-error.json`. A cleanly finalized run
 remains `completed`; `failed_cases` and `errors` describe the rejected
 individual cases, while run-level `failed` is reserved for Recorder failure.

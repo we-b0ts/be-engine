@@ -43,7 +43,6 @@ pub async fn run_e2e_round(context: E2eRunContext) -> Result<E2eRunResult> {
         layout.run_key.clone(),
         sequence,
         &inventory,
-        Some(config.recording_rule.clone()),
         &layout.active_dir,
     );
     state.replay_report = allocate_replay_report(
@@ -182,7 +181,6 @@ pub async fn run_e2e_api(context: E2eRunContext, api_key: &str) -> Result<E2eApi
         layout.run_key.clone(),
         attempt,
         &focused_inventory,
-        Some(config.recording_rule.clone()),
         &layout.active_dir,
     );
     state.replay_report = allocate_replay_report(

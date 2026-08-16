@@ -23,23 +23,29 @@ impl ComparisonRecordingConfig {
         motan_gateway: &super::MotanGatewayConfig,
     ) -> Result<()> {
         ensure!(
-            gateway.fallback_mode == HttpGatewayFallbackMode::FixedResponse,
-            "comparison recording requires http_gateway.fallback_mode = \"fixed_response\" so rejected requests reach neither upstream"
+            gateway.enabled || motan_gateway.enabled,
+            "comparison recording requires at least one enabled primary gateway"
         );
-        let baseline = validate_upstream(
-            self.baseline_upstream
-                .as_deref()
-                .map(|value| ("comparison_recording.baseline_upstream", value))
-                .unwrap_or(("http_gateway.matched_upstream", &gateway.matched_upstream)),
-        )?;
-        let candidate = validate_upstream((
-            "comparison_recording.candidate_upstream",
-            &self.candidate_upstream,
-        ))?;
-        ensure!(
-            baseline != candidate,
-            "comparison recording baseline and candidate upstreams must be different"
-        );
+        if gateway.enabled {
+            ensure!(
+                gateway.fallback_mode == HttpGatewayFallbackMode::FixedResponse,
+                "comparison recording requires http_gateway.fallback_mode = \"fixed_response\" so rejected requests reach neither upstream"
+            );
+            let baseline = validate_upstream(
+                self.baseline_upstream
+                    .as_deref()
+                    .map(|value| ("comparison_recording.baseline_upstream", value))
+                    .unwrap_or(("http_gateway.matched_upstream", &gateway.matched_upstream)),
+            )?;
+            let candidate = validate_upstream((
+                "comparison_recording.candidate_upstream",
+                &self.candidate_upstream,
+            ))?;
+            ensure!(
+                baseline != candidate,
+                "comparison recording baseline and candidate upstreams must be different"
+            );
+        }
         if motan_gateway.enabled
             && let Some(candidate) = self.candidate_motan_upstream.as_deref()
         {
@@ -68,6 +74,9 @@ impl ComparisonRecordingConfig {
             self.summary_flush_interval_ms > 0,
             "comparison_recording.summary_flush_interval_ms must be greater than zero"
         );
+        if !gateway.enabled {
+            return Ok(());
+        }
         ensure!(
             !gateway.rules.is_empty(),
             "comparison recording requires at least one explicit [[http_gateway.rules]] entry"
@@ -165,6 +174,7 @@ mod tests {
 
     fn gateway(methods: &[&str]) -> HttpGatewayConfig {
         HttpGatewayConfig {
+            enabled: true,
             fallback_mode: HttpGatewayFallbackMode::FixedResponse,
             fixed_response: Some(HttpGatewayFixedResponseConfig {
                 status: 200,
@@ -278,6 +288,7 @@ mod tests {
             candidate_upstream = "http://127.0.0.1:8083"
 
             [http_gateway]
+            enabled = true
             matched_upstream = "http://127.0.0.1:8081"
             fallback_mode = "fixed_response"
 

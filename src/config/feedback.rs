@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::HttpGatewayRuleConfig;
 use super::edit::write_atomic;
 use super::rule_document::whole_file_diff;
-use super::{AppConfig, CoordinatorHttpRuleConfig, CoordinatorRulesConfig};
+use super::{AppConfig, CoordinatorRulesConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -30,7 +30,6 @@ impl std::fmt::Display for CasePathPatternAuthority {
 pub struct CasePathPatternFeedback {
     pub project_config_path: PathBuf,
     pub rules_path: PathBuf,
-    pub rule_name: String,
     pub source_revision: String,
     pub case_source: String,
     pub authority: CasePathPatternAuthority,
@@ -42,7 +41,6 @@ pub struct CasePathPatternFeedback {
 #[derive(Debug, Clone, Serialize)]
 pub struct CasePathPatternReport {
     pub rules: PathBuf,
-    pub rule: String,
     pub source_revision: String,
     pub case_source: String,
     pub authority: CasePathPatternAuthority,
@@ -118,29 +116,15 @@ pub fn plan_case_path_pattern_feedback(
     let original_rules = fs::read_to_string(&feedback.rules_path)
         .with_context(|| format!("failed to read {}", feedback.rules_path.display()))?;
     let mut static_config = AppConfig::load_static(&feedback.project_config_path)?;
-    let matching = static_config
-        .http_gateway
-        .rules
-        .iter()
-        .filter(|rule| rule.name.as_deref() == Some(feedback.rule_name.as_str()))
-        .cloned()
-        .collect::<Vec<_>>();
-    ensure!(
-        matching.len() == 1,
-        "expected exactly one recorder HTTP rule named {:?}, found {}",
-        feedback.rule_name,
-        matching.len()
-    );
-    let rule = &matching[0];
     let mut rules = CoordinatorRulesConfig::parse(&original_rules, &feedback.rules_path)?;
-    let overlay = http_overlay_mut(&mut rules, &feedback.rule_name);
 
     let requested = feedback
         .patterns
         .iter()
-        .map(|pattern| validate_feedback_pattern(pattern, rule))
+        .map(|pattern| validate_feedback_pattern(pattern, &static_config.http_gateway.rules))
         .collect::<Result<BTreeSet<_>>>()?;
-    let before = overlay
+    let before = rules
+        .http
         .case_path_patterns
         .iter()
         .cloned()
@@ -174,7 +158,6 @@ pub fn plan_case_path_pattern_feedback(
             updated_rules: original_rules,
             report: CasePathPatternReport {
                 rules: feedback.rules_path,
-                rule: feedback.rule_name,
                 source_revision: feedback.source_revision,
                 case_source: feedback.case_source,
                 authority: feedback.authority,
@@ -197,8 +180,8 @@ pub fn plan_case_path_pattern_feedback(
         after.remove(pattern);
     }
 
-    overlay.case_path_patterns = after.iter().cloned().collect();
-    overlay.source_revision = feedback.source_revision.clone();
+    rules.http.case_path_patterns = after.iter().cloned().collect();
+    rules.http.source_revision = feedback.source_revision.clone();
     rules.apply_to(&mut static_config)?;
     static_config.validate()?;
     let updated_rules = rules.render()?;
@@ -224,7 +207,6 @@ pub fn plan_case_path_pattern_feedback(
         updated_rules,
         report: CasePathPatternReport {
             rules: feedback.rules_path,
-            rule: feedback.rule_name,
             source_revision: feedback.source_revision,
             case_source: feedback.case_source,
             authority: feedback.authority,
@@ -244,7 +226,6 @@ pub fn plan_case_path_pattern_feedback(
 }
 
 fn validate_feedback_metadata(feedback: &CasePathPatternFeedback) -> Result<()> {
-    validate_single_line("rule name", &feedback.rule_name)?;
     validate_single_line("source revision", &feedback.source_revision)?;
     validate_single_line("case source", &feedback.case_source)?;
     Ok(())
@@ -259,7 +240,7 @@ fn validate_single_line(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_feedback_pattern(pattern: &str, rule: &HttpGatewayRuleConfig) -> Result<String> {
+fn validate_feedback_pattern(pattern: &str, rules: &[HttpGatewayRuleConfig]) -> Result<String> {
     ensure!(
         pattern.starts_with('/'),
         "pattern must start with '/': {pattern}"
@@ -299,12 +280,16 @@ fn validate_feedback_pattern(pattern: &str, rule: &HttpGatewayRuleConfig) -> Res
         "'**' catch-all must be the final path segment: {pattern}"
     );
 
-    if !rule.path_prefixes.is_empty() {
+    if !rules.is_empty() {
         ensure!(
-            rule.path_prefixes
-                .iter()
-                .any(|prefix| path_matches_prefix(pattern, prefix)),
-            "pattern {pattern} is outside the selected rule's path_prefixes"
+            rules.iter().any(|rule| {
+                rule.path_prefixes.is_empty()
+                    || rule
+                        .path_prefixes
+                        .iter()
+                        .any(|prefix| path_matches_prefix(pattern, prefix))
+            }),
+            "pattern {pattern} is outside every configured HTTP recording rule's path_prefixes"
         );
     }
     Ok(pattern.to_string())
@@ -325,25 +310,6 @@ fn path_matches_prefix(path: &str, prefix: &str) -> bool {
     }
     let normalized = prefix.trim_end_matches('/');
     path == normalized || path.starts_with(&format!("{normalized}/"))
-}
-
-fn http_overlay_mut<'a>(
-    rules: &'a mut CoordinatorRulesConfig,
-    name: &str,
-) -> &'a mut CoordinatorHttpRuleConfig {
-    if let Some(index) = rules.http.iter().position(|rule| rule.name == name) {
-        return &mut rules.http[index];
-    }
-    rules.http.push(CoordinatorHttpRuleConfig {
-        name: name.to_string(),
-        source_revision: String::new(),
-        case_path_patterns: Vec::new(),
-        allowed_unused_http_hosts: Vec::new(),
-    });
-    rules
-        .http
-        .last_mut()
-        .expect("just inserted coordinator rule")
 }
 
 #[cfg(test)]

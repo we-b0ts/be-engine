@@ -154,6 +154,7 @@ fn embedded_platform_manager_is_valid_bash() {
         .0;
     assert!(comparison_runtime.contains("resolve_or_build_recording_adapter"));
     assert!(comparison_runtime.contains("start_comparison_source"));
+    assert!(MANAGER.contains("if \"$http_recording_enabled\"; then"));
     assert_in_order(
         comparison_source,
         &[

@@ -71,7 +71,7 @@ response_rules:
 fn verifies_motan_payloads_through_the_common_api_report() {
     let temp = tempdir().unwrap();
     let run = create_run(temp.path(), json!("unused"), json!("unused"));
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     fs::write(
         case.join("request.json"),
         serde_json::to_vec(&json!({
@@ -239,7 +239,7 @@ fn applies_a_candidate_rule_when_the_source_recheck_is_stable() {
         json!({"token": "baseline"}),
         json!({"token": "candidate"}),
     );
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     write_response(
         &case.join("expected-response-after.json"),
         json!({"token": "baseline"}),
@@ -279,7 +279,7 @@ fn compares_a_legacy_gzip_response_with_an_uncompressed_response() {
     let temp = tempdir().unwrap();
     let body = json!({"token": "same"});
     let run = create_run(temp.path(), body.clone(), body.clone());
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder
         .write_all(&serde_json::to_vec(&body).unwrap())
@@ -385,7 +385,7 @@ fn classifies_an_overlapping_baseline_change_as_source_change() {
         json!({"value": "before"}),
         json!({"value": "candidate"}),
     );
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     write_response(
         &case.join("expected-response-after.json"),
         json!({"value": "after"}),
@@ -430,7 +430,7 @@ fn source_after_is_not_an_alternate_oracle_by_default() {
         json!({"left": "before", "right": "before"}),
         json!({"left": "after", "right": "after"}),
     );
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     write_response(
         &case.join("expected-response-after.json"),
         json!({"left": "after", "right": "after"}),
@@ -466,7 +466,7 @@ fn before_or_after_accepts_a_complete_source_after_match() {
         json!({"left": "before", "right": "before"}),
         json!({"left": "after", "right": "after"}),
     );
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     write_response(
         &case.join("expected-response-after.json"),
         json!({"left": "after", "right": "after"}),
@@ -510,7 +510,7 @@ fn before_or_after_does_not_mix_fields_from_source_observations() {
         json!({"left": "before", "right": "before"}),
         json!({"left": "before", "right": "after"}),
     );
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     write_response(
         &case.join("expected-response-after.json"),
         json!({"left": "after", "right": "after"}),
@@ -585,7 +585,7 @@ fn unrelated_source_change_does_not_hide_a_candidate_difference() {
         json!({"source_owned": "before", "candidate_owned": "expected"}),
         json!({"source_owned": "before", "candidate_owned": "wrong"}),
     );
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     write_response(
         &case.join("expected-response-after.json"),
         json!({"source_owned": "after", "candidate_owned": "expected"}),
@@ -622,7 +622,7 @@ fn source_change_is_diagnostic_when_candidate_matches_source_before() {
     let temp = tempdir().unwrap();
     let body = json!({"value": "before"});
     let run = create_run(temp.path(), body.clone(), body);
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     write_response(
         &case.join("expected-response-after.json"),
         json!({"value": "after"}),
@@ -744,7 +744,7 @@ fn marks_a_response_content_decoding_failure_as_unevaluable() {
         json!({"value": "baseline"}),
         json!({"value": "candidate"}),
     );
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     fs::write(
         case.join("expected-response.json"),
         serde_json::to_vec(&json!({
@@ -795,7 +795,7 @@ fn marks_a_response_content_decoding_failure_as_unevaluable() {
 
 fn create_run(root: &Path, expected: serde_json::Value, response: serde_json::Value) -> PathBuf {
     let run = root.join("comparison-recordings/20260722160000");
-    let case = run.join("record-api/api-token/00000000-0000-4000-8000-000000000001");
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
     fs::create_dir_all(&case).unwrap();
     fs::write(
         run.join("comparison-recording-run.json"),

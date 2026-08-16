@@ -37,7 +37,7 @@ async fn fixed_response_handles_not_ready_excluded_and_unmatched_requests() {
         interval_ms: 20,
     };
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
-        name: Some("record-api".to_string()),
+        name: Some("http-rule".to_string()),
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/record/".to_string()],
         ..Default::default()
@@ -69,7 +69,7 @@ async fn fixed_response_handles_not_ready_excluded_and_unmatched_requests() {
         .unwrap()
         .unwrap()
         .path();
-    assert!(!run_dir.join("record-api").exists());
+    assert!(!run_dir.join("http-rule").exists());
 }
 
 #[tokio::test]
@@ -88,7 +88,7 @@ async fn fixed_response_handles_concurrent_case_rejection_without_fallback_upstr
         r#"{"code":"busy"}"#,
     );
     config.http_gateway.rules = vec![HttpGatewayRuleConfig {
-        name: Some("record-api".to_string()),
+        name: Some("http-rule".to_string()),
         methods: vec!["GET".to_string()],
         path_prefixes: vec!["/record/".to_string()],
         ..Default::default()

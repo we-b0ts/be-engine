@@ -15,6 +15,7 @@ use crate::recorder::{CaseContext, ProxyErrorEvent, RecorderEvent};
 use crate::recording_control::RecordingListener;
 
 mod case;
+pub(crate) mod ready;
 pub(crate) mod rules;
 pub(crate) mod transport;
 
@@ -35,11 +36,21 @@ async fn run_with_listener(state: AppState, listener: TcpListener) -> Result<()>
         "Motan gateway listening"
     );
     let connections = Arc::new(Semaphore::new(config.max_connections));
+    let mut ready_task = Some(tokio::spawn(ready::run(state.clone(), config.clone())));
     loop {
-        let (stream, peer) = listener
-            .accept()
-            .await
-            .context("failed to accept Motan gateway client")?;
+        let accepted = tokio::select! {
+            ready_result = async {
+                ready_task.as_mut().expect("ready task branch is guarded").await
+            }, if ready_task.is_some() => {
+                ready_task = None;
+                ready_result
+                    .context("Motan gateway ready task failed")?
+                    .context("Motan gateway readiness failed")?;
+                continue;
+            }
+            accepted = listener.accept() => accepted,
+        };
+        let (stream, peer) = accepted.context("failed to accept Motan gateway client")?;
         let Ok(permit) = connections.clone().try_acquire_owned() else {
             warn!(%peer, "Motan gateway connection limit reached; rejecting client");
             drop(stream);
@@ -100,7 +111,7 @@ async fn handle_connection(
             transport::write_fixed_response(&mut stream, &request, limits).await?;
             continue;
         };
-        let api_pattern = format!("/rpc/{}", rules::api_directory(&matched.descriptor.api_key));
+        let api_pattern = format!("/rpc/{}", rules::api_directory(&matched.descriptor));
         if !state.should_record_motan_api(&api_pattern) {
             transport::write_fixed_response(&mut stream, &request, limits).await?;
             continue;

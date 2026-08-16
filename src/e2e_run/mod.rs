@@ -71,7 +71,6 @@ pub struct E2eRunInitOptions {
     pub replay_policy: PathBuf,
     pub pr_base: String,
     pub recorder_config: PathBuf,
-    pub recording_rule: String,
     pub force: bool,
 }
 
@@ -163,7 +162,6 @@ pub fn prepare_e2e_run(options: E2eRunPrepareOptions) -> Result<E2eRunPrepareRes
         source_revision: options.source_revision,
         output: layout.group_index_path.clone(),
         recorder_config: Some(config.recorder_config),
-        rule: Some(config.recording_rule),
     })?;
     let group_cases = group.case_ids.len();
     let complete =

@@ -4,8 +4,6 @@ use std::num::NonZeroUsize;
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::HttpGatewayRuleConfig;
-
 pub(crate) const DEFAULT_MAX_CASES_PER_PATTERN: usize = 100;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -31,14 +29,12 @@ impl HttpGatewayCaseLimitsConfig {
         }
     }
 
-    pub(super) fn validate(&self, rules: &[HttpGatewayRuleConfig]) -> Result<()> {
+    pub(super) fn validate(&self, case_path_patterns: &[String]) -> Result<()> {
         for pattern in self.overrides.keys() {
             validate_case_pattern(pattern)?;
             if pattern.contains('*') {
                 ensure!(
-                    rules
-                        .iter()
-                        .any(|rule| rule.case_path_patterns.contains(pattern)),
+                    case_path_patterns.contains(pattern),
                     "http_gateway.per_api_case_limits override {pattern:?} must exactly match a configured case_path_patterns entry"
                 );
             }
@@ -135,14 +131,7 @@ mod tests {
         };
 
         assert!(limits.validate(&[]).is_err());
-        assert!(
-            limits
-                .validate(&[HttpGatewayRuleConfig {
-                    case_path_patterns: vec!["/api/users/*".to_string()],
-                    ..Default::default()
-                }])
-                .is_ok()
-        );
+        assert!(limits.validate(&["/api/users/*".to_string()]).is_ok());
     }
 
     #[test]

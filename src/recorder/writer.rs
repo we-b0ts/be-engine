@@ -480,13 +480,12 @@ fn global_dependency_line(
 }
 
 fn case_staging_dir(run_dir: &Path, case: &CaseContext) -> PathBuf {
-    let mut path = run_dir
+    run_dir
         .join("staging")
-        .join(super::sanitize_path_component(&case.rule_name));
-    if let Some(uri_group) = &case.uri_group {
-        path = path.join(super::sanitize_path_component(uri_group));
-    }
-    path.join(case.id.to_string())
+        .join(super::sanitize_path_component(
+            case.uri_group.as_deref().unwrap_or(&case.rule_name),
+        ))
+        .join(case.id.to_string())
 }
 
 #[cfg(test)]

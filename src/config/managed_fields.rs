@@ -33,6 +33,9 @@ fn reject_http_fields(recorder: &Mapping) -> Result<()> {
     let Some(http_gateway) = value(recorder, "http_gateway").and_then(Value::as_mapping) else {
         return Ok(());
     };
+    for field in ["case_path_patterns", "allowed_unused_http_hosts"] {
+        reject_key(http_gateway, field, &format!("http_gateway.{field}"))?;
+    }
     for collection in ["rules", "exclude_rules"] {
         let Some(entries) = value(http_gateway, collection).and_then(Value::as_sequence) else {
             continue;

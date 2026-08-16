@@ -33,7 +33,7 @@ async fn explicit_api_case_limit_stops_and_finalizes_the_recorder_runtime() {
         .publish_case_for_api(
             &CaseContext {
                 id: Uuid::new_v4(),
-                rule_name: "record-api".to_string(),
+                rule_name: "http-rule".to_string(),
                 uri_group: Some("api-users-wildcard".to_string()),
             },
             Some("GET /api/users/*"),
@@ -78,7 +78,7 @@ async fn preflight_case_limit_keeps_the_runtime_alive_for_the_fixed_grace() {
         .publish_case_for_api(
             &CaseContext {
                 id: Uuid::new_v4(),
-                rule_name: "record-api".to_string(),
+                rule_name: "http-rule".to_string(),
                 uri_group: Some("api-users-wildcard".to_string()),
             },
             Some("GET /api/users/*"),

@@ -194,7 +194,7 @@ fn discover_recorded_api_counts_from_config(
     case_source: &Path,
 ) -> Result<BTreeMap<String, u64>> {
     let mut request_files = Vec::new();
-    collect_request_files(&case_source.join("record-api"), &mut request_files)?;
+    collect_request_files(case_source, case_source, &mut request_files)?;
     ensure!(
         request_files.len() <= 100_000,
         "standard recording API inventory exceeds the supported case bound"
@@ -207,8 +207,7 @@ fn discover_recorded_api_counts_from_config(
             .parse::<hyper::Uri>()
             .with_context(|| format!("recorded request has invalid URI in {}", path.display()))?;
         let pattern = request.api_pattern.unwrap_or_else(|| {
-            configured_pattern(config, request.matched_rule.as_deref(), uri.path())
-                .unwrap_or_else(|| uri.path().to_string())
+            configured_pattern(config, uri.path()).unwrap_or_else(|| uri.path().to_string())
         });
         let api = format!("{} {pattern}", request.method).parse::<RecordingApi>()?;
         let count = apis.entry(api.to_string()).or_default();
@@ -217,34 +216,36 @@ fn discover_recorded_api_counts_from_config(
     Ok(apis)
 }
 
-fn configured_pattern(
-    config: &crate::config::AppConfig,
-    matched_rule: Option<&str>,
-    path: &str,
-) -> Option<String> {
-    let patterns = if config.http_gateway.rules.is_empty() && matched_rule == Some("default") {
-        None
-    } else {
-        config.http_gateway.rules.iter().find(|rule| {
-            rule.name.as_deref().unwrap_or("unnamed") == matched_rule.unwrap_or_default()
-        })
-    }
-    .map(|rule| &rule.case_path_patterns)?;
-    patterns
+fn configured_pattern(config: &crate::config::AppConfig, path: &str) -> Option<String> {
+    config
+        .http_gateway
+        .case_path_patterns
         .iter()
         .find(|pattern| crate::path_pattern::matches_path_pattern(pattern, path))
         .cloned()
 }
 
-fn collect_request_files(root: &Path, output: &mut Vec<PathBuf>) -> Result<()> {
-    for entry in std::fs::read_dir(root)
-        .with_context(|| format!("failed to inspect recording cases {}", root.display()))?
+fn collect_request_files(
+    case_source: &Path,
+    directory: &Path,
+    output: &mut Vec<PathBuf>,
+) -> Result<()> {
+    for entry in std::fs::read_dir(directory)
+        .with_context(|| format!("failed to inspect recording cases {}", directory.display()))?
     {
         let entry = entry?;
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            collect_request_files(&path, output)?;
+            if directory == case_source
+                && matches!(
+                    entry.file_name().to_str(),
+                    Some("failed" | "staging" | ".replay" | ".partial" | ".truncated")
+                )
+            {
+                continue;
+            }
+            collect_request_files(case_source, &path, output)?;
         } else if file_type.is_file() && entry.file_name() == "request.json" {
             output.push(path);
         }
@@ -335,8 +336,6 @@ struct StandardCaseRequest {
     uri: String,
     #[serde(default)]
     api_pattern: Option<String>,
-    #[serde(default)]
-    matched_rule: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -387,7 +386,7 @@ mod tests {
                 "published_cases": 651,
                 "failed_cases": 1,
                 "errors": [{
-                    "rule_name": "record-api",
+                    "rule_name": "http-rule",
                     "case_id": "f036616f-aa65-4938-b805-64fc26ef5165",
                     "reason": "dependency_replay_unsafe"
                 }]
@@ -416,7 +415,7 @@ mod tests {
                 "published_cases": 667,
                 "failed_cases": 1,
                 "errors": [{
-                    "rule_name": "record-api",
+                    "rule_name": "http-rule",
                     "case_id": "f036616f-aa65-4938-b805-64fc26ef5165",
                     "reason": "dependency_replay_unsafe"
                 }]
@@ -433,9 +432,8 @@ mod tests {
     #[test]
     fn unscoped_recording_inventory_uses_recorded_patterns_and_legacy_config_fallback() {
         let source = tempfile::tempdir().unwrap();
-        let published = source.path().join("record-api");
-        let first = published.join("api-a/case-1");
-        let second = published.join("api-b/case-2");
+        let first = source.path().join("apis/api-a/case-1");
+        let second = source.path().join("apis/api-b/case-2");
         std::fs::create_dir_all(&first).unwrap();
         std::fs::create_dir_all(&second).unwrap();
         std::fs::write(
@@ -451,9 +449,9 @@ mod tests {
         let mut config = crate::config::AppConfig::default();
         config.http_gateway.rules = vec![crate::config::HttpGatewayRuleConfig {
             name: Some("api".to_string()),
-            case_path_patterns: vec!["/widgets/*".to_string()],
             ..Default::default()
         }];
+        config.http_gateway.case_path_patterns = vec!["/widgets/*".to_string()];
 
         assert_eq!(
             discover_recorded_apis_from_config(&config, source.path()).unwrap(),
@@ -465,9 +463,9 @@ mod tests {
     fn standard_recording_inventory_excludes_quarantined_and_staging_cases() {
         let source = tempfile::tempdir().unwrap();
         for relative in [
-            "record-api/api/case-published",
-            "failed/record-api/api/case-quarantined",
-            "staging/record-api/api/case-staging",
+            "apis/api/case-published",
+            "failed/api/case-quarantined",
+            "staging/api/case-staging",
         ] {
             let case = source.path().join(relative);
             std::fs::create_dir_all(&case).unwrap();

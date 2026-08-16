@@ -138,7 +138,6 @@ pub(in crate::replay) struct UnrecordedTargetReport {
 #[derive(Debug, Clone, Serialize)]
 pub(in crate::replay) struct ReplayAllowedUnusedHttpReport {
     pub(in crate::replay) config: String,
-    pub(in crate::replay) recording_rule: String,
     pub(in crate::replay) hosts: Vec<String>,
 }
 

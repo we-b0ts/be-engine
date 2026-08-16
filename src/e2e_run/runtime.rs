@@ -89,8 +89,6 @@ fn recorder_config_args(config: &ResolvedProjectConfig) -> Vec<OsString> {
     vec![
         OsString::from("--recorder-config"),
         config.recorder_config.as_os_str().to_owned(),
-        OsString::from("--recording-rule"),
-        OsString::from(&config.recording_rule),
     ]
 }
 
@@ -516,7 +514,6 @@ mod tests {
             pr_base: "dev-migration".to_string(),
             recorder_config: "project.yaml".into(),
             coordinator_rules: "coordinator-rules.yaml".into(),
-            recording_rule: "record-api".to_string(),
             runner_owned_response_assertions: true,
         }
     }
@@ -607,7 +604,6 @@ mod tests {
         config.replay_startup_timeout = Duration::from_secs(60);
         config.pr_base = "integration".to_string();
         config.recorder_config = PathBuf::from("/target/config/project.yaml");
-        config.recording_rule = "pluto".to_string();
         config.runner_owned_response_assertions = false;
 
         assert_eq!(
@@ -615,8 +611,6 @@ mod tests {
             vec![
                 OsString::from("--recorder-config"),
                 OsString::from("/target/config/project.yaml"),
-                OsString::from("--recording-rule"),
-                OsString::from("pluto"),
             ]
         );
     }
