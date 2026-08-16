@@ -89,6 +89,7 @@ fn configure_runtime(
         config.http_gateway.matched_upstream = comparison.candidate_upstream.clone();
     }
     config.http_gateway.listen = SocketAddr::from(([127, 0, 0, 1], 0));
+    config.motan_gateway.listen = SocketAddr::from(([127, 0, 0, 1], 0));
     config.tcp_gateway.enabled = true;
     if let Some(interception_listen_ip) = interception_listen_ip {
         config
@@ -132,11 +133,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn isolates_snapshot_listener_from_comparison_gateway_port() {
+    fn isolates_snapshot_listeners_from_comparison_gateway_ports() {
         let mut config = AppConfig::default();
         config.http_gateway.enabled = true;
         config.http_gateway.ready.enabled = true;
         config.http_gateway.listen = SocketAddr::from(([0, 0, 0, 0], 18_062));
+        config.motan_gateway.enabled = true;
+        config.motan_gateway.listen = SocketAddr::from(([0, 0, 0, 0], 18_064));
         config.comparison_recording = Some(Default::default());
         config
             .comparison_recording
@@ -154,6 +157,10 @@ mod tests {
         assert!(config.http_gateway.ready.enabled);
         assert_eq!(
             config.http_gateway.listen,
+            SocketAddr::from(([127, 0, 0, 1], 0))
+        );
+        assert_eq!(
+            config.motan_gateway.listen,
             SocketAddr::from(([127, 0, 0, 1], 0))
         );
         assert_eq!(

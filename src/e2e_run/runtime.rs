@@ -187,7 +187,13 @@ pub(super) async fn verify_target_runtime_contract(
         target.breeze_enabled,
     )
     .await?;
-    crate::target_container::verify_listen_address(container, target.port).await?;
+    if config.target_http_readiness_enabled {
+        crate::target_container::verify_listen_address(container, target.port).await?;
+    }
+    if let Some(upstream) = config.target_motan_upstream.as_deref() {
+        let port = crate::platform::endpoint_port(upstream, "target Motan endpoint")?;
+        crate::target_container::verify_listen_address(container, port).await?;
+    }
     let logs = crate::target_container::bounded_logs(container).await?;
     ensure!(
         !logs.trim().is_empty(),
@@ -500,7 +506,11 @@ mod tests {
             target_startup: crate::startup::StartupConfig::default(),
             target_http_origin: "http://127.0.0.1:8081".to_string(),
             target_port: 8081,
+            target_http_readiness_enabled: true,
             target_motan_upstream: None,
+            target_motan_connect_timeout: Duration::from_secs(1),
+            target_motan_request_timeout: Duration::from_secs(1),
+            target_motan_limits: motan_protocol::Limits::default(),
             target_readiness_path: "/healthz".to_string(),
             target_readiness_status: 404,
             target_startup_timeout: Duration::from_secs(1),
