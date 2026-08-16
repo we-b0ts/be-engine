@@ -944,9 +944,9 @@ run_comparison_recording() {
     if "$http_recording_enabled"; then
         require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
     fi
-    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
-        require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_MOTAN_PORT" target-motan
-    fi
+    # The comparison runtime owns candidate Motan readiness through a protocol
+    # heartbeat and waits for every enabled upstream before recording input.
+    # A one-shot TCP check here races the target container's normal startup.
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
     local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
     [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}" ]] || comparison_command+=(--listen "$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN")

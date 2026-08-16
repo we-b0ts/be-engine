@@ -193,6 +193,20 @@ fn embedded_platform_manager_is_valid_bash() {
             "require_port_open \"$target_network_ip\"",
         ],
     );
+    assert!(!comparison_runtime.contains(
+        "require_port_open \"$target_network_ip\" \"$TRAFFIC_E2E_TARGET_MOTAN_PORT\" target-motan"
+    ));
+    assert_in_order(
+        comparison_runtime,
+        &[
+            "start_target",
+            "require_container_running \"$target_name\" target",
+            "recording wait-ready --control-socket /workspace/control/cache-snapshot.sock",
+            "internal comparison-run --config",
+            "wait_for_comparison_ready \"$comparison_control_socket\"",
+            "start_recording_input \"$comparison_control_socket\"",
+        ],
+    );
     assert!(COMPARISON_TARGET_NETWORK.contains("docker network create --driver bridge"));
     assert!(COMPARISON_TARGET_NETWORK.contains("net.ipv4.conf.all.route_localnet=1"));
     assert!(COMPARISON_TARGET_NETWORK.contains("enable_comparison_target_loopback_ingress()"));
