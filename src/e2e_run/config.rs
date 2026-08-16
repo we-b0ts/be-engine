@@ -70,31 +70,16 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     );
     let recorder = crate::config::AppConfig::load_static(&recorder_config)?;
     ensure!(
-        recorder.http_gateway.ready.enabled,
-        "managed project replay requires an enabled http_gateway.ready probe"
+        !recorder.http_gateway.enabled || recorder.http_gateway.ready.enabled,
+        "managed project replay with http_gateway.enabled requires an enabled http_gateway.ready probe"
     );
-    let matching_rules = recorder
-        .http_gateway
-        .rules
-        .iter()
-        .filter(|rule| rule.name.as_deref() == Some(options.recording_rule.as_str()))
-        .count();
-    ensure!(
-        matching_rules == 1,
-        "expected exactly one recorder HTTP rule named {:?}, found {matching_rules}",
-        options.recording_rule
-    );
-
     let runtime_root_setting = PathBuf::from(DEFAULT_RUNTIME_ROOT);
     let runtime_root = traffic_e2e_dir.join(&runtime_root_setting);
     require_internal_root_ignored(&target_root, &runtime_root)?;
 
     let payload = render_project_config(&options, recorder)?;
     let rules_path = traffic_e2e_dir.join(crate::config::COORDINATOR_RULES_FILE);
-    let rules = crate::config::CoordinatorRulesConfig::repository_defaults_for_rule(
-        &options.recording_rule,
-    )
-    .render()?;
+    let rules = crate::config::CoordinatorRulesConfig::repository_defaults().render()?;
     if options.force {
         crate::config::edit::write_atomic(&config_path, &payload)?;
         crate::config::edit::write_atomic(&rules_path, rules.as_bytes())?;
@@ -148,7 +133,7 @@ pub(crate) fn render_project_config(
                 policy: options.replay_policy.clone(),
             },
             recording: RecordingProjectConfig {
-                rule: options.recording_rule.clone(),
+                _legacy_rule: None,
                 coordinator_rules: PathBuf::from(crate::config::COORDINATOR_RULES_FILE),
             },
             delivery: DeliveryProjectConfig {
@@ -232,8 +217,8 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     )?;
     let recorder = crate::config::AppConfig::load(&recorder_config)?;
     ensure!(
-        recorder.http_gateway.ready.enabled,
-        "managed project replay requires an enabled http_gateway.ready probe"
+        !recorder.http_gateway.enabled || recorder.http_gateway.ready.enabled,
+        "managed project replay with http_gateway.enabled requires an enabled http_gateway.ready probe"
     );
     let target_request_timeout = recorder
         .comparison_recording
@@ -244,6 +229,16 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
         });
     let target_max_response_bytes = recorder.recording.max_body_bytes;
     let target_port = recorder_target_http_port(&recorder.http_gateway.matched_upstream)?;
+    let target_http_readiness_enabled = recorder.http_gateway.enabled;
+    let target_motan_connect_timeout =
+        Duration::from_millis(recorder.motan_gateway.connect_timeout_ms);
+    let target_motan_request_timeout =
+        Duration::from_millis(recorder.motan_gateway.request_timeout_ms);
+    let target_motan_limits = motan_protocol::Limits {
+        max_frame_bytes: recorder.motan_gateway.max_frame_bytes,
+        max_metadata_bytes: recorder.motan_gateway.max_frame_bytes,
+        max_body_bytes: recorder.motan_gateway.max_frame_bytes,
+    };
     let target_motan_upstream = recorder
         .motan_gateway
         .enabled
@@ -267,7 +262,11 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_startup: config.project.target.startup,
             target_http_origin: format!("http://127.0.0.1:{target_port}"),
             target_port,
+            target_http_readiness_enabled,
             target_motan_upstream,
+            target_motan_connect_timeout,
+            target_motan_request_timeout,
+            target_motan_limits,
             target_readiness_path: recorder.http_gateway.ready.path,
             target_readiness_status: recorder.http_gateway.ready.success_status,
             target_startup_timeout: Duration::from_secs(
@@ -285,7 +284,6 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             pr_base: config.project.delivery.pr_base,
             recorder_config,
             coordinator_rules,
-            recording_rule: config.project.recording.rule,
             runner_owned_response_assertions: policy.runner_owned_response_assertions,
         },
     ))
@@ -387,10 +385,6 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
         project.recording.coordinator_rules == Path::new(crate::config::COORDINATOR_RULES_FILE),
         "project.recording.coordinator_rules must be {:?}",
         crate::config::COORDINATOR_RULES_FILE
-    );
-    ensure!(
-        !project.recording.rule.trim().is_empty(),
-        "recording.rule must not be empty"
     );
     Ok(())
 }
@@ -518,7 +512,7 @@ mod tests {
         recorder.http_gateway.ready.path = "/healthz".to_string();
         recorder.http_gateway.ready.success_status = 404;
         recorder.http_gateway.rules = vec![crate::config::HttpGatewayRuleConfig {
-            name: Some("record-api".to_string()),
+            name: Some("http-rule".to_string()),
             methods: vec!["GET".to_string()],
             path_prefixes: vec!["/".to_string()],
             ..Default::default()
@@ -526,7 +520,7 @@ mod tests {
         write_input_project(root, &recorder);
         fs::write(
             root.join("config/coordinator-rules.yaml"),
-            "version: 1\nhttp:\n- name: record-api\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
+            "version: 2\nhttp:\n  case_path_patterns: []\n  allowed_unused_http_hosts: []\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
         )
         .unwrap();
         assert!(
@@ -578,7 +572,6 @@ mod tests {
             replay_policy: PathBuf::from("config/replay.yaml"),
             pr_base: "integration".to_string(),
             recorder_config: PathBuf::from("config/project.yaml"),
-            recording_rule: "record-api".to_string(),
             force: false,
         }
     }
@@ -659,6 +652,27 @@ mod tests {
 
         assert_eq!(config.target_http_origin, "http://127.0.0.1:8080");
         assert_eq!(config.target_port, 8080);
+    }
+
+    #[test]
+    fn managed_replay_accepts_motan_only_readiness() {
+        let target = target();
+        let recorder_path = target.path().join("config/project.yaml");
+        let mut recorder = crate::config::AppConfig::load(&recorder_path).unwrap();
+        recorder.http_gateway.enabled = false;
+        recorder.http_gateway.ready.enabled = false;
+        recorder.motan_gateway.enabled = true;
+        recorder.motan_gateway.matched_upstream = "127.0.0.1:8884".to_string();
+        write_input_project(target.path(), &recorder);
+        initialize(options(target.path())).unwrap();
+
+        let (_, config) = resolve_project(target.path()).unwrap();
+
+        assert!(!config.target_http_readiness_enabled);
+        assert_eq!(
+            config.target_motan_upstream.as_deref(),
+            Some("127.0.0.1:8884")
+        );
     }
 
     #[test]

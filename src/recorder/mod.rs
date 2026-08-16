@@ -39,7 +39,9 @@ mod writer;
 
 pub use artifact_owner::ArtifactOwner;
 pub use capture::*;
-pub(crate) use case::{CaseInvalidation, CaseInvalidationContext, PrimaryCaseDescriptor};
+pub(crate) use case::{
+    CaseInvalidation, CaseInvalidationContext, PrimaryCaseDescriptor, PrimarySourceBinding,
+};
 pub use event::*;
 pub(crate) use summary::{
     SourceProcessTrafficObservation, load_pre_readiness_traffic_summary,

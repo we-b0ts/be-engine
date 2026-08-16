@@ -8,7 +8,7 @@ use tracing::{debug, info};
 
 use crate::AppState;
 use crate::config::{HttpGatewayConfig, HttpGatewayReadyConfig};
-use crate::recorder::readiness::PostReadyWaitOutcome;
+use crate::recording_control::RecordingListener;
 
 use super::transport::{build_upstream_request, build_upstream_uri, send_upstream};
 
@@ -30,54 +30,21 @@ pub(super) async fn run(state: AppState, config: HttpGatewayConfig) -> Result<()
         ticker.tick().await;
         match probe_once(&state, &config.matched_upstream, &config.ready).await {
             Ok(status) if status == config.ready.success_status => {
-                let ready_at = tokio::time::Instant::now();
-                if state.has_background_initial_loads() || !post_ready_quiet.is_zero() {
-                    state.mark_recording_source_settling();
-                    info!(
-                        upstream = %config.matched_upstream,
-                        path = %config.ready.path,
-                        status,
-                        post_ready_quiet_ms = post_ready_quiet.as_millis(),
-                        post_ready_max_wait_ms = post_ready_max_wait.as_millis(),
-                        waits_for_background_initial_load = state.has_background_initial_loads(),
-                        "HTTP gateway ready probe succeeded; waiting for case admission prerequisites"
-                    );
-                }
-                let wait_outcome = state
-                    .wait_for_post_ready_admission(ready_at)
+                let admission_enabled = state
+                    .mark_recording_upstream_ready(
+                        RecordingListener::HttpGateway,
+                        "all enabled upstreams ready",
+                    )
                     .await
-                    .context(
-                        "post-ready process-owned dependency observation failed with the source",
-                    )?;
-                if wait_outcome == PostReadyWaitOutcome::MaximumWaitElapsed {
-                    tracing::warn!(
-                        post_ready_max_wait_ms = post_ready_max_wait.as_millis(),
-                        "post-ready process-owned dependency observation reached its hard limit; continuing recording"
-                    );
-                }
-                if !state.is_bootstrap_open() {
-                    info!("HTTP gateway readiness stopped because bootstrap is already closed");
-                    return Ok(());
-                }
-                match state.close_bootstrap("http_gateway.ready").await {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        info!("HTTP gateway ready probe stopped before case admission was enabled");
-                        return Ok(());
-                    }
-                    Err(error) => {
-                        return Err(error).context(
-                            "HTTP gateway ready probe could not seal bootstrap dependencies",
-                        );
-                    }
-                }
+                    .context("HTTP gateway readiness could not update source readiness")?;
                 info!(
                     upstream = %config.matched_upstream,
                     path = %config.ready.path,
                     status,
                     post_ready_quiet_ms = post_ready_quiet.as_millis(),
                     post_ready_max_wait_ms = post_ready_max_wait.as_millis(),
-                    "HTTP gateway ready probe succeeded and case admission is enabled"
+                    admission_enabled,
+                    "HTTP gateway ready probe succeeded"
                 );
                 return Ok(());
             }
@@ -177,6 +144,7 @@ mod tests {
 
         let temp = tempdir().unwrap();
         let mut config = AppConfig::default();
+        config.http_gateway.enabled = true;
         config.http_gateway.matched_upstream = format!("http://{upstream_addr}");
         config.http_gateway.ready = HttpGatewayReadyConfig {
             enabled: true,
@@ -190,6 +158,7 @@ mod tests {
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
         let state = AppState::new(config).await.unwrap();
+        state.mark_recording_listener_ready(RecordingListener::HttpGateway);
         assert!(state.is_bootstrap_open());
 
         let ready_config = state.config().http_gateway.clone();
@@ -219,6 +188,7 @@ mod tests {
 
         let temp = tempdir().unwrap();
         let mut config = AppConfig::default();
+        config.http_gateway.enabled = true;
         config.http_gateway.matched_upstream = format!("http://{upstream_addr}");
         config.http_gateway.ready = HttpGatewayReadyConfig {
             enabled: true,
@@ -232,6 +202,7 @@ mod tests {
         config.tls.ca_key_path = temp.path().join("ca-key.pem");
 
         let state = AppState::new(config).await.unwrap();
+        state.mark_recording_listener_ready(RecordingListener::HttpGateway);
         let ready_config = state.config().http_gateway.clone();
         let started = tokio::time::Instant::now();
         let ready_task = tokio::spawn(run(state.clone(), ready_config));

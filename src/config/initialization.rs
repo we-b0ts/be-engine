@@ -9,7 +9,6 @@ use super::{
 use anyhow::{Context, Result, ensure};
 use hyper::StatusCode;
 
-pub const DEFAULT_RECORDING_RULE: &str = "record-api";
 pub const DEFAULT_HTTP_GATEWAY_PORT: u16 = 17_171;
 
 #[derive(Debug, Clone)]
@@ -274,7 +273,7 @@ http_gateway:
     default: 100
     overrides: {}
   rules:
-  - name: record-api
+  - name: http-api
     methods:
     - GET
     path_prefixes:

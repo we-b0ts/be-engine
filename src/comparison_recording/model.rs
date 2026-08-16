@@ -53,9 +53,7 @@ pub(super) struct ComparisonRecordingResponse {
 #[derive(Debug)]
 pub(super) struct ComparisonRecordingCase {
     pub(super) id: uuid::Uuid,
-    pub(super) rule: String,
     pub(super) group: String,
-    pub(super) pattern: String,
     pub(super) request: ComparisonRecordingRequest,
     pub(super) baseline: ComparisonRecordingResponse,
     pub(super) candidate: ComparisonRecordingResponse,

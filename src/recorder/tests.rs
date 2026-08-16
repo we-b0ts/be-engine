@@ -575,8 +575,7 @@ async fn publish_case_moves_staging_to_published_and_updates_report() {
     assert!(!recorder.case_staging_dir(&case).exists());
     let published_case_dir = recorder
         .run_dir
-        .join("record-api")
-        .join("api-users")
+        .join("apis/api-users")
         .join(case.id.to_string());
     assert!(published_case_dir.join("request.json").exists());
     let dependencies = tokio::fs::read_to_string(published_case_dir.join("dependencies.jsonl"))
@@ -631,8 +630,7 @@ async fn finalized_case_ignores_late_dependencies() {
     assert!(!recorder.case_staging_dir(&case).exists());
     let published_case_dir = recorder
         .run_dir
-        .join("record-api")
-        .join("api-users")
+        .join("apis/api-users")
         .join(case.id.to_string());
     let dependencies = tokio::fs::read_to_string(published_case_dir.join("dependencies.jsonl"))
         .await
@@ -680,8 +678,7 @@ async fn fail_case_moves_staging_to_failed_and_records_error() {
     assert!(
         !recorder
             .run_dir
-            .join("record-api")
-            .join("api-users")
+            .join("apis/api-users")
             .join(case.id.to_string())
             .exists()
     );

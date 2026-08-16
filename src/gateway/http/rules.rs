@@ -7,7 +7,6 @@ use crate::path_pattern::{matches_path_pattern, segments};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Match {
     pub(crate) name: String,
-    pub(crate) case_path_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +41,6 @@ pub(crate) fn evaluate_request(
     if rules.is_empty() {
         return RuleDecision::Matched(Match {
             name: "default".to_string(),
-            case_path_patterns: Vec::new(),
         });
     }
 
@@ -51,7 +49,6 @@ pub(crate) fn evaluate_request(
         .find(|rule| rule_matches(rule, method, uri, headers))
         .map(|rule| Match {
             name: rule.name.clone().unwrap_or_else(|| "unnamed".to_string()),
-            case_path_patterns: rule.case_path_patterns.clone(),
         })
         .map_or(RuleDecision::Unmatched, RuleDecision::Matched)
 }
@@ -162,7 +159,6 @@ mod tests {
             methods: vec!["POST".to_string()],
             path_prefixes: vec!["/v1/".to_string()],
             headers: [("x-record".to_string(), "yes".to_string())].into(),
-            ..Default::default()
         };
         let request = Request::builder()
             .method("POST")
@@ -190,7 +186,7 @@ mod tests {
             ..Default::default()
         }];
         let rules = vec![HttpGatewayRuleConfig {
-            name: Some("record-api".to_string()),
+            name: Some("http-rule".to_string()),
             path_prefixes: vec!["/api".to_string()],
             ..Default::default()
         }];
@@ -242,8 +238,7 @@ mod tests {
                 ordinary_request.headers()
             ),
             RuleDecision::Matched(Match {
-                name: "default".to_string(),
-                case_path_patterns: Vec::new()
+                name: "default".to_string()
             })
         );
         assert_eq!(

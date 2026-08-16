@@ -8,34 +8,63 @@ use serde::{Deserialize, Serialize};
 use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
 use super::{AppConfig, DnsBypassStrategyConfig};
 
-pub const COORDINATOR_RULES_VERSION: u32 = 1;
+pub const COORDINATOR_RULES_VERSION: u32 = 2;
 pub const COORDINATOR_RULES_FILE: &str = "coordinator-rules.yaml";
 
 const MANAGED_HEADER: &str =
     "# Managed by the backend-rewrite coordinator. Do not edit manually.\n";
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CoordinatorRulesConfig {
     pub version: u32,
     #[serde(default)]
-    pub http: Vec<CoordinatorHttpRuleConfig>,
+    pub http: CoordinatorHttpConfig,
     #[serde(default)]
     pub breeze_capture: Vec<CoordinatorBreezeCaptureConfig>,
     #[serde(default)]
     pub process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct CoordinatorHttpRuleConfig {
-    pub name: String,
+pub struct CoordinatorHttpConfig {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_revision: String,
     #[serde(default)]
     pub case_path_patterns: Vec<String>,
     #[serde(default)]
     pub allowed_unused_http_hosts: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoordinatorRulesVersion {
+    version: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyCoordinatorRulesConfig {
+    version: u32,
+    #[serde(default)]
+    http: Vec<LegacyCoordinatorHttpRuleConfig>,
+    #[serde(default)]
+    breeze_capture: Vec<CoordinatorBreezeCaptureConfig>,
+    #[serde(default)]
+    process_owned_dependencies: Vec<BackgroundDependencyRuleConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyCoordinatorHttpRuleConfig {
+    #[serde(rename = "name")]
+    _name: String,
+    #[serde(default)]
+    source_revision: String,
+    #[serde(default)]
+    case_path_patterns: Vec<String>,
+    #[serde(default)]
+    allowed_unused_http_hosts: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -51,25 +80,16 @@ impl CoordinatorRulesConfig {
     pub fn empty() -> Self {
         Self {
             version: COORDINATOR_RULES_VERSION,
-            http: Vec::new(),
+            http: CoordinatorHttpConfig::default(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: Vec::new(),
         }
     }
 
     pub fn repository_defaults() -> Self {
-        Self::repository_defaults_for_rule("record-api")
-    }
-
-    pub(crate) fn repository_defaults_for_rule(recording_rule: &str) -> Self {
         Self {
             version: COORDINATOR_RULES_VERSION,
-            http: vec![CoordinatorHttpRuleConfig {
-                name: recording_rule.to_string(),
-                source_revision: String::new(),
-                case_path_patterns: Vec::new(),
-                allowed_unused_http_hosts: Vec::new(),
-            }],
+            http: CoordinatorHttpConfig::default(),
             breeze_capture: Vec::new(),
             process_owned_dependencies: vec![BackgroundDependencyRuleConfig::Http {
                 name: "breeze_vintage".to_string(),
@@ -98,8 +118,22 @@ impl CoordinatorRulesConfig {
     }
 
     pub fn parse(raw: &str, path: &Path) -> Result<Self> {
-        let config: Self = serde_yaml::from_str(raw)
+        let version: CoordinatorRulesVersion = serde_yaml::from_str(raw)
             .with_context(|| format!("failed to parse coordinator rules {}", path.display()))?;
+        let config = match version.version {
+            1 => {
+                let legacy: LegacyCoordinatorRulesConfig =
+                    serde_yaml::from_str(raw).with_context(|| {
+                        format!("failed to parse coordinator rules {}", path.display())
+                    })?;
+                Self::from_legacy(legacy)
+            }
+            COORDINATOR_RULES_VERSION => serde_yaml::from_str(raw)
+                .with_context(|| format!("failed to parse coordinator rules {}", path.display()))?,
+            unsupported => anyhow::bail!(
+                "unsupported coordinator rules version {unsupported}; expected 1 or {COORDINATOR_RULES_VERSION}"
+            ),
+        };
         config
             .validate()
             .with_context(|| format!("invalid coordinator rules {}", path.display()))?;
@@ -113,13 +147,6 @@ impl CoordinatorRulesConfig {
             self.version,
             COORDINATOR_RULES_VERSION
         );
-        let mut http_names = BTreeSet::new();
-        for rule in &self.http {
-            ensure!(
-                !rule.name.trim().is_empty() && http_names.insert(&rule.name),
-                "coordinator HTTP rule names must be non-empty and unique"
-            );
-        }
         let mut snapshots = BTreeSet::new();
         for capture in &self.breeze_capture {
             ensure!(
@@ -142,26 +169,8 @@ impl CoordinatorRulesConfig {
     }
 
     pub fn apply_to(&self, config: &mut AppConfig) -> Result<()> {
-        for overlay in &self.http {
-            let mut matches = config
-                .http_gateway
-                .rules
-                .iter_mut()
-                .filter(|rule| rule.name.as_deref() == Some(overlay.name.as_str()));
-            let rule = matches.next().with_context(|| {
-                format!(
-                    "coordinator HTTP rule {:?} has no matching recorder rule",
-                    overlay.name
-                )
-            })?;
-            ensure!(
-                matches.next().is_none(),
-                "coordinator HTTP rule {:?} matches multiple recorder rules",
-                overlay.name
-            );
-            rule.case_path_patterns = overlay.case_path_patterns.clone();
-            rule.allowed_unused_http_hosts = overlay.allowed_unused_http_hosts.clone();
-        }
+        config.http_gateway.case_path_patterns = self.http.case_path_patterns.clone();
+        config.http_gateway.allowed_unused_http_hosts = self.http.allowed_unused_http_hosts.clone();
         for overlay in &self.breeze_capture {
             let mut matches = config
                 .dns_mock
@@ -190,6 +199,49 @@ impl CoordinatorRulesConfig {
         }
         config.process_owned_dependencies = self.process_owned_dependencies.clone();
         Ok(())
+    }
+
+    fn from_legacy(legacy: LegacyCoordinatorRulesConfig) -> Self {
+        debug_assert_eq!(legacy.version, 1);
+        let source_revisions = legacy
+            .http
+            .iter()
+            .map(|rule| rule.source_revision.as_str())
+            .filter(|revision| !revision.is_empty())
+            .collect::<BTreeSet<_>>();
+        let source_revision = if source_revisions.len() == 1 {
+            source_revisions
+                .into_iter()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        } else {
+            String::new()
+        };
+        let case_path_patterns = legacy
+            .http
+            .iter()
+            .flat_map(|rule| rule.case_path_patterns.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let allowed_unused_http_hosts = legacy
+            .http
+            .iter()
+            .flat_map(|rule| rule.allowed_unused_http_hosts.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        Self {
+            version: COORDINATOR_RULES_VERSION,
+            http: CoordinatorHttpConfig {
+                source_revision,
+                case_path_patterns,
+                allowed_unused_http_hosts,
+            },
+            breeze_capture: legacy.breeze_capture,
+            process_owned_dependencies: legacy.process_owned_dependencies,
+        }
     }
 }
 
@@ -246,9 +298,26 @@ mod tests {
     }
 
     #[test]
-    fn repository_defaults_follow_the_selected_recording_rule() {
-        let rules = CoordinatorRulesConfig::repository_defaults_for_rule("custom-api");
-        assert_eq!(rules.http[0].name, "custom-api");
+    fn repository_defaults_use_global_http_policy() {
+        let rules = CoordinatorRulesConfig::repository_defaults();
+        assert_eq!(rules.http, CoordinatorHttpConfig::default());
         rules.validate().unwrap();
+    }
+
+    #[test]
+    fn legacy_named_http_rules_merge_into_global_policy() {
+        let parsed = CoordinatorRulesConfig::parse(
+            "version: 1\nhttp:\n- name: first\n  source_revision: abc\n  case_path_patterns: [/a/*]\n  allowed_unused_http_hosts: [a.example]\n- name: second\n  source_revision: abc\n  case_path_patterns: [/b/*]\n  allowed_unused_http_hosts: [b.example]\nbreeze_capture: []\nprocess_owned_dependencies: []\n",
+            Path::new("coordinator-rules.yaml"),
+        )
+        .unwrap();
+
+        assert_eq!(parsed.version, COORDINATOR_RULES_VERSION);
+        assert_eq!(parsed.http.source_revision, "abc");
+        assert_eq!(parsed.http.case_path_patterns, ["/a/*", "/b/*"]);
+        assert_eq!(
+            parsed.http.allowed_unused_http_hosts,
+            ["a.example", "b.example"]
+        );
     }
 }

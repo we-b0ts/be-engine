@@ -141,7 +141,7 @@ pub(super) fn request_record(
     matched_rule: &str,
     upstream: &str,
 ) -> MotanCaseRequestRecord {
-    let api_pattern = format!("/rpc/{}", super::rules::api_directory(&descriptor.api_key));
+    let api_pattern = format!("/rpc/{}", super::rules::api_directory(descriptor));
     MotanCaseRequestRecord {
         timestamp: Utc::now(),
         client_addr,

@@ -10,7 +10,7 @@ recorder:
   http_gateway:
     enabled: true
     rules:
-    - name: record-api
+    - name: http-rule
       path_prefixes: [/api]
       headers: {}
   recording:
@@ -45,14 +45,14 @@ fn write_recording_case(
     uri: &str,
     api_pattern: &str,
 ) -> PathBuf {
-    let directory = source.join("record-api").join(member).join(case_id);
+    let directory = source.join("apis").join(member).join(case_id);
     fs::create_dir_all(&directory).unwrap();
     fs::write(
         directory.join("request.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
             "method": method,
             "uri": uri,
-            "matched_rule": "record-api",
+            "matched_rule": "http-rule",
             "api_pattern": api_pattern,
         }))
         .unwrap(),
@@ -102,7 +102,6 @@ fn options(
         source_revision: "source-abc123".to_string(),
         output: output.to_path_buf(),
         recorder_config: None,
-        rule: None,
     }
 }
 
@@ -144,7 +143,6 @@ fn dynamic_group_collects_sibling_directories_applies_pattern_and_is_idempotent(
         Some("/api/huaweiyun/loadbalancers/get/*"),
     );
     first_options.recorder_config = Some(config.clone());
-    first_options.rule = Some("record-api".to_string());
 
     let created = ensure_case_group(first_options.clone()).unwrap();
 
@@ -241,11 +239,11 @@ fn static_route_uses_the_existing_directory_as_the_group() {
 }
 
 #[test]
-fn recording_rule_wrapper_preserves_each_api_member() {
+fn recording_run_preserves_each_api_member() {
     let temporary = tempdir().unwrap();
     let source = temporary.path().join("recording-run");
-    let show_member = source.join("record-api/2-users-show.json");
-    let batch_member = source.join("record-api/2-users-show_batch.json");
+    let show_member = source.join("apis/2-users-show.json");
+    let batch_member = source.join("apis/2-users-show_batch.json");
     write_recording_case(
         &source,
         "2-users-show.json",
@@ -282,6 +280,45 @@ fn recording_rule_wrapper_preserves_each_api_member() {
     assert_eq!(result.group_dir, Some(batch_member.clone()));
     assert_eq!(result.member_dirs, vec![batch_member]);
     assert_eq!(result.case_ids, vec!["case-batch"]);
+}
+
+#[test]
+fn http_and_motan_share_the_apis_root_without_mixed_layout() {
+    let temporary = tempdir().unwrap();
+    let source = temporary.path().join("recording-run");
+    let http_member = source.join("apis/http-users");
+    let motan_member = source.join("apis/AlchemyRpcService-getConfig-hash");
+    write_recording_case(
+        &source,
+        "http-users",
+        "case-http",
+        "GET",
+        "/api/users/1",
+        "/api/users/*",
+    );
+    write_recording_case(
+        &source,
+        "AlchemyRpcService-getConfig-hash",
+        "case-motan",
+        "MOTAN",
+        "/rpc/AlchemyRpcService-getConfig-hash",
+        "/rpc/AlchemyRpcService-getConfig-hash",
+    );
+
+    assert_eq!(
+        resolve_recording_api_member(&source, &"GET /api/users/*".parse().unwrap()).unwrap(),
+        http_member
+    );
+    assert_eq!(
+        resolve_recording_api_member(
+            &source,
+            &"MOTAN /rpc/AlchemyRpcService-getConfig-hash"
+                .parse()
+                .unwrap(),
+        )
+        .unwrap(),
+        motan_member
+    );
 }
 
 #[test]

@@ -503,7 +503,7 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, PathBuf) {
         let temp = tempfile::tempdir().unwrap();
         let run = temp.path().join("recordings/20260805000000");
-        let case = run.join("record-api/example/case-1");
+        let case = run.join("apis/example/case-1");
         fs::create_dir_all(&case).unwrap();
         fs::write(case.join("expected-response.json"), "{}\n").unwrap();
         let manifest = run.join("recording-run.json");
@@ -626,7 +626,7 @@ mod tests {
     fn motan_preflight_allows_a_window_with_no_business_cases() {
         let (_temp, manifest) = fixture();
         let run = manifest.parent().unwrap();
-        fs::remove_dir_all(run.join("record-api")).unwrap();
+        fs::remove_dir_all(run.join("apis")).unwrap();
         fs::write(
             &manifest,
             r#"{"status":"completed","published_cases":0,"failed_cases":0,"errors":[]}"#,
@@ -650,7 +650,7 @@ mod tests {
     fn motan_preflight_verifies_a_published_motan_case() {
         let (_temp, manifest) = fixture();
         let run = manifest.parent().unwrap();
-        let case = run.join("record-api/example/case-1");
+        let case = run.join("apis/example/case-1");
         fs::write(case.join("case.json"), r#"{"kind":"motan_rpc"}"#).unwrap();
         fs::write(
             run.join("global-dependencies.jsonl"),

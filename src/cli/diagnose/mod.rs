@@ -71,8 +71,6 @@ struct CaseGroupEnsureArgs {
     output: PathBuf,
     #[arg(long)]
     recorder_config: Option<PathBuf>,
-    #[arg(long)]
-    rule: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -101,10 +99,8 @@ struct ReplayArgs {
     policy: Option<PathBuf>,
     #[arg(long = "http-ignore-query-param")]
     http_ignore_query_params: Vec<String>,
-    #[arg(long, requires = "recording_rule")]
+    #[arg(long)]
     recorder_config: Option<PathBuf>,
-    #[arg(long, requires = "recorder_config")]
-    recording_rule: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -182,7 +178,6 @@ fn run_case_group(args: CaseGroupArgs) -> Result<()> {
                 source_revision: args.source_revision,
                 output: args.output,
                 recorder_config: args.recorder_config,
-                rule: args.rule,
             })?;
             serde_json::to_writer_pretty(io::stdout(), &result)?;
             println!();
@@ -228,7 +223,7 @@ async fn run_replay_command(args: ReplayArgs) -> Result<()> {
         .map(|path| AppConfig::load(path).map(|config| config.process_owned_dependencies))
         .transpose()?
         .unwrap_or_default();
-    let allowed_unused_http = load_allowed_unused_http(args.recorder_config, args.recording_rule)?;
+    let allowed_unused_http = load_allowed_unused_http(args.recorder_config)?;
     run_replay(ReplayConfig {
         case_dir: args.case,
         selected_case_ids: args.case_ids,
@@ -250,29 +245,16 @@ async fn run_replay_command(args: ReplayArgs) -> Result<()> {
 
 fn load_allowed_unused_http(
     recorder_config: Option<PathBuf>,
-    recording_rule: Option<String>,
 ) -> Result<Option<ReplayAllowedUnusedHttpConfig>> {
-    let (Some(config_path), Some(recording_rule)) = (recorder_config, recording_rule) else {
+    let Some(config_path) = recorder_config else {
         return Ok(None);
     };
     let config_path = config_path.canonicalize()?;
     let config = AppConfig::load(&config_path)?;
-    let matches = config
-        .http_gateway
-        .rules
-        .iter()
-        .filter(|rule| rule.name.as_deref() == Some(recording_rule.as_str()))
-        .collect::<Vec<_>>();
-    anyhow::ensure!(
-        matches.len() == 1,
-        "expected exactly one [[http_gateway.rules]] entry named {:?}, found {}",
-        recording_rule,
-        matches.len()
-    );
     Ok(Some(ReplayAllowedUnusedHttpConfig {
         config_path,
-        recording_rule,
-        hosts: matches[0]
+        hosts: config
+            .http_gateway
             .allowed_unused_http_hosts
             .iter()
             .cloned()

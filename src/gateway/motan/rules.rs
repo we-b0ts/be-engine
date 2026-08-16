@@ -1,7 +1,7 @@
 use motan_codec::RequestEnvelope;
 
 use crate::config::MotanGatewayRuleConfig;
-use crate::recorder::PrimaryCaseDescriptor;
+use crate::recorder::{PrimaryCaseDescriptor, PrimarySourceBinding};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Match {
@@ -30,7 +30,7 @@ pub(crate) fn evaluate_request(
         envelope.parameter_desc.as_deref(),
         envelope.method_sign.as_deref(),
     );
-    let directory = api_directory(&descriptor.api_key);
+    let directory = api_directory(&descriptor);
     Some(Match {
         rule_name,
         descriptor,
@@ -47,9 +47,9 @@ fn matches_optional(allowed: &[String], actual: Option<&str>) -> bool {
     allowed.is_empty() || actual.is_some_and(|actual| allowed.iter().any(|item| item == actual))
 }
 
-pub(crate) fn api_directory(api_key: &str) -> String {
-    const MAX_PREFIX_BYTES: usize = 160;
-    let sanitized = crate::recorder::sanitize_path_component(api_key);
+pub(crate) fn api_directory(descriptor: &PrimaryCaseDescriptor) -> String {
+    const MAX_PREFIX_BYTES: usize = 96;
+    let sanitized = crate::recorder::sanitize_path_component(&short_api_name(descriptor));
     let mut prefix = sanitized
         .char_indices()
         .take_while(|(index, _)| *index < MAX_PREFIX_BYTES)
@@ -58,7 +58,55 @@ pub(crate) fn api_directory(api_key: &str) -> String {
     if prefix.is_empty() {
         prefix.push_str("motan-api");
     }
-    format!("{prefix}-{:016x}", fnv1a64(api_key.as_bytes()))
+    format!("{prefix}-{:016x}", fnv1a64(descriptor.api_key.as_bytes()))
+}
+
+fn short_api_name(descriptor: &PrimaryCaseDescriptor) -> String {
+    let PrimarySourceBinding::Motan {
+        interface,
+        method,
+        parameter_desc,
+        method_sign,
+        ..
+    } = &descriptor.source_binding
+    else {
+        return "motan-api".to_string();
+    };
+    match (interface.as_deref(), method.as_deref()) {
+        (Some(interface), Some(method)) => {
+            let mut parts = vec![
+                short_qualified_name(interface).to_string(),
+                method.to_string(),
+            ];
+            if let Some(parameter_desc) = parameter_desc {
+                parts.extend(parameter_desc.split(',').map(short_parameter_type));
+            }
+            parts.join("-")
+        }
+        _ => method_sign
+            .as_deref()
+            .map(|method_sign| format!("method-sign-{method_sign}"))
+            .unwrap_or_else(|| "motan-api".to_string()),
+    }
+}
+
+fn short_parameter_type(parameter: &str) -> String {
+    let mut parameter = parameter.trim();
+    let mut array_dimensions = 0;
+    while let Some(element) = parameter.strip_suffix("[]") {
+        parameter = element.trim_end();
+        array_dimensions += 1;
+    }
+    let short = short_qualified_name(parameter);
+    if array_dimensions == 0 {
+        short.to_string()
+    } else {
+        format!("{short}{}", "Array".repeat(array_dimensions))
+    }
+}
+
+fn short_qualified_name(value: &str) -> &str {
+    value.rsplit(['.', '$']).next().unwrap_or(value)
 }
 
 fn fnv1a64(bytes: &[u8]) -> u64 {
@@ -93,7 +141,10 @@ mod tests {
             matched.descriptor.api_key,
             "motan:abtest/com.weibo.AlchemyRpcService#getConfig(java.lang.String)"
         );
-        assert!(matched.directory.starts_with("motan-abtest-com.weibo"));
+        assert_eq!(
+            matched.directory,
+            "AlchemyRpcService-getConfig-String-bcf3bd52547daefb"
+        );
     }
 
     #[test]
@@ -129,5 +180,48 @@ mod tests {
         }];
 
         assert!(evaluate_request(&rules, &envelope).is_some());
+    }
+
+    #[test]
+    fn directory_exposes_short_interface_method_and_parameter_names() {
+        let descriptor = PrimaryCaseDescriptor::motan(
+            Some("hwyun-weibo-abtest-rpc-core-motan2"),
+            Some("com.weibo.abtest.traffic.rpc.AlchemyRpcService"),
+            Some("getConfig"),
+            Some("com.weibo.abtest.traffic.rpc.model.ConfigRequest"),
+            None,
+        );
+
+        assert_eq!(
+            api_directory(&descriptor),
+            "AlchemyRpcService-getConfig-ConfigRequest-80fc5b0d5ce479a4"
+        );
+    }
+
+    #[test]
+    fn directory_shortens_multiple_primitive_and_array_parameters() {
+        let primitives = PrimaryCaseDescriptor::motan(
+            Some("hwyun-weibo-abtest-rpc-core-motan2"),
+            Some("com.weibo.abtest.traffic.rpc.AlchemyRpcService"),
+            Some("getList"),
+            Some("long,long"),
+            None,
+        );
+        let array = PrimaryCaseDescriptor::motan(
+            Some("hwyun-weibo-abtest-rpc-core-motan2"),
+            Some("com.weibo.abtest.traffic.rpc.AlchemyRpcService"),
+            Some("getExperimentTrafficRule"),
+            Some("byte[]"),
+            None,
+        );
+
+        assert_eq!(
+            api_directory(&primitives),
+            "AlchemyRpcService-getList-long-long-ac8b465ce0481234"
+        );
+        assert_eq!(
+            api_directory(&array),
+            "AlchemyRpcService-getExperimentTrafficRule-byteArray-8cd698b4fea1fb48"
+        );
     }
 }

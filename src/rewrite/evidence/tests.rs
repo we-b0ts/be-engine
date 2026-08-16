@@ -412,7 +412,7 @@ fn comparison_representatives_link_the_comparison_case_and_three_way_difference(
         .path()
         .join(".traffic-e2e/local/artifacts/comparison-recordings")
         .join(run_id)
-        .join("record-api")
+        .join("apis/api-comparison")
         .join("case-comparison");
     std::fs::create_dir_all(&case_dir).unwrap();
     std::fs::write(

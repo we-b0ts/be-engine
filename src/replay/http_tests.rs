@@ -415,7 +415,6 @@ async fn allowed_unused_http_host_is_diagnostic_but_unmatched_requests_stay_dirt
     .await;
     let allowed = ReplayAllowedUnusedHttpConfig {
         config_path: temp.path().join("project.yaml"),
-        recording_rule: "record-api".to_string(),
         hosts: BTreeSet::from(["background.example.test".to_string()]),
     };
     let (addr, runtime, task) =
@@ -428,7 +427,6 @@ async fn allowed_unused_http_host_is_diagnostic_but_unmatched_requests_stay_dirt
         assert_eq!(report.allowed_unused_case_http_exchanges.len(), 1);
         assert!(!super::super::report_is_dirty(&report));
         let config = report.allowed_unused_http.unwrap();
-        assert_eq!(config.recording_rule, "record-api");
         assert_eq!(config.hosts, vec!["background.example.test"]);
     }
 

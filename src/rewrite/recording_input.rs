@@ -410,7 +410,7 @@ mod tests {
                 "published_cases": 1,
                 "failed_cases": 1,
                 "errors": [{
-                    "rule_name": "record-api",
+                    "rule_name": "http-rule",
                     "reason": "dependency_replay_unsafe"
                 }]
             }))
@@ -459,7 +459,7 @@ mod tests {
             .join(run_id);
         fs::create_dir_all(&run).unwrap();
         for (index, uri) in uris.iter().enumerate() {
-            let case = run.join("record-api").join(format!("case-{index:04}"));
+            let case = run.join("apis/api-users").join(format!("case-{index:04}"));
             fs::create_dir_all(&case).unwrap();
             fs::write(
                 case.join("request.json"),

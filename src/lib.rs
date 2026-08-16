@@ -100,9 +100,9 @@ pub use config::{
     BreezeResourceCapturePlan, BreezeResourceCaptureReport, CasePathPatternAuthority,
     CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport, ComparisonRecordingConfig,
     DEFAULT_DNS_MOCK_LISTEN, DEFAULT_DNS_MOCK_PORT, DEFAULT_FAKE_CIDR, DEFAULT_HTTP_GATEWAY_PORT,
-    DEFAULT_RECORDING_RULE, DEFAULT_TCP_GATEWAY_LISTEN, DEFAULT_TCP_GATEWAY_PORT,
-    DEFAULT_UDP_GATEWAY_LISTEN, DEFAULT_UDP_GATEWAY_PORT, DnsBypassStrategyConfig, DnsMockConfig,
-    HttpConfig, HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
+    DEFAULT_TCP_GATEWAY_LISTEN, DEFAULT_TCP_GATEWAY_PORT, DEFAULT_UDP_GATEWAY_LISTEN,
+    DEFAULT_UDP_GATEWAY_PORT, DnsBypassStrategyConfig, DnsMockConfig, HttpConfig,
+    HttpGatewayCaseLimitsConfig, HttpGatewayConfig, HttpGatewayFallbackMode,
     HttpGatewayFixedResponseConfig, HttpGatewayReadyConfig, HttpGatewayRuleConfig,
     HttpResponseRewriteConfig, HttpResponseRewritePluginConfig, HttpResponseRewriteRuleConfig,
     InspectedContainer, MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
@@ -337,7 +337,9 @@ impl AppState {
             .build();
         let client = Client::builder(TokioExecutor::new()).build(https);
 
-        let case_matching_ready = !config.http_gateway.ready.enabled;
+        let case_matching_ready = !(config.http_gateway.enabled
+            && config.http_gateway.ready.enabled
+            || config.motan_gateway.enabled);
         let recording_lifecycle = RecordingLifecycle::from_config(&config);
         Ok(Self {
             inner: Arc::new(AppStateInner {
@@ -627,8 +629,41 @@ impl AppState {
         self.inner.recording_lifecycle.mark_listener_ready(listener);
     }
 
-    pub(crate) fn mark_recording_source_settling(&self) {
-        self.inner.recording_lifecycle.mark_source_settling();
+    pub(crate) async fn mark_recording_upstream_ready(
+        &self,
+        listener: RecordingListener,
+        reason: &'static str,
+    ) -> Result<bool> {
+        if !self.inner.recording_lifecycle.mark_upstream_ready(listener) {
+            return Ok(false);
+        }
+        let ready_at = tokio::time::Instant::now();
+        if self.has_background_initial_loads()
+            || !self.config().recording.post_ready_quiet_period().is_zero()
+        {
+            info!(
+                reason,
+                post_ready_quiet_ms = self
+                    .config()
+                    .recording
+                    .post_ready_quiet_period()
+                    .as_millis(),
+                post_ready_max_wait_ms = self.config().recording.post_ready_max_wait_ms,
+                waits_for_background_initial_load = self.has_background_initial_loads(),
+                "all enabled upstreams ready; waiting for case admission prerequisites"
+            );
+        }
+        let wait_outcome = self
+            .wait_for_post_ready_admission(ready_at)
+            .await
+            .context("post-ready process-owned dependency observation failed with the source")?;
+        if wait_outcome == PostReadyWaitOutcome::MaximumWaitElapsed {
+            warn!(
+                post_ready_max_wait_ms = self.config().recording.post_ready_max_wait_ms,
+                "post-ready process-owned dependency observation reached its hard limit; continuing recording"
+            );
+        }
+        self.close_bootstrap(reason).await
     }
 
     pub(crate) async fn wait_for_active_case_shutdown_drain(&self) -> bool {

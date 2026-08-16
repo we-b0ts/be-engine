@@ -12,7 +12,7 @@ source root:
 
 ```bash
 traffic-e2e diagnose replay-aggregate \
-  --case-source /path/to/recordings/<run-id>/<rule-or-collection> \
+  --case-source /path/to/recordings/<run-id-or-api-directory> \
   --case-id <selected-case-id> \
   --session-id <final-session-id> \
   --output /path/to/aggregate-report.json \

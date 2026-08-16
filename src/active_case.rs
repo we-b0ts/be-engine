@@ -332,7 +332,7 @@ mod tests {
     fn case() -> CaseContext {
         CaseContext {
             id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
+            rule_name: "http-rule".to_string(),
             uri_group: Some("api-user".to_string()),
         }
     }

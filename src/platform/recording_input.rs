@@ -10,11 +10,10 @@ use tokio::net::TcpStream;
 use tracing::{info, warn};
 
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
-use crate::gateway::http::rules::case_group_directory;
 use crate::recorded_request::RecordedHttpClient;
-use crate::recorder::sanitize_path_component;
 use crate::recording_api::RecordingApi;
 use crate::recording_control::notify_recording_input_complete;
+use crate::resolve_recording_api_member;
 
 const MAX_REQUEST_FILES: usize = 1_000;
 const REQUEST_INTERVAL: Duration = Duration::from_millis(100);
@@ -254,16 +253,11 @@ fn resolve_case_sources(
     if recording_apis.is_empty() {
         return Ok(vec![case_source.to_path_buf()]);
     }
-    recording_apis
+    let sources = recording_apis
         .iter()
-        .map(|api| {
-            case_source
-                .join("record-api")
-                .join(sanitize_path_component(&case_group_directory(
-                    api.path_pattern(),
-                )))
-        })
-        .collect::<BTreeSet<_>>()
+        .map(|api| resolve_recording_api_member(case_source, api))
+        .collect::<Result<BTreeSet<_>>>()?;
+    sources
         .into_iter()
         .map(|path| {
             let metadata = std::fs::symlink_metadata(&path).with_context(|| {
@@ -347,11 +341,19 @@ mod tests {
             for index in 0..cases {
                 let case = root
                     .path()
-                    .join("record-api")
+                    .join("apis")
                     .join(directory)
-                    .join(format!("case-{index}"));
+                    .join(format!("case-{directory}-{index}"));
                 std::fs::create_dir_all(&case).unwrap();
-                std::fs::write(case.join("request.json"), b"{}").unwrap();
+                let api_name = &directory[4..];
+                std::fs::write(
+                    case.join("request.json"),
+                    format!(
+                        r#"{{"method":"POST","uri":"/api/{api_name}","api_pattern":"/api/{api_name}"}}"#
+                    ),
+                )
+                .unwrap();
+                std::fs::write(case.join("expected-response.json"), b"{}").unwrap();
             }
         }
         let api = "POST /api/b".parse::<RecordingApi>().unwrap();
@@ -359,7 +361,7 @@ mod tests {
         let sources = resolve_case_sources(root.path(), &[api]).unwrap();
         let requests = discover_requests(&sources).unwrap();
 
-        assert_eq!(sources, [root.path().join("record-api/api-b")]);
+        assert_eq!(sources, [root.path().join("apis/api-b")]);
         assert_eq!(requests.len(), 1);
         assert!(requests[0].starts_with(&sources[0]));
     }
@@ -393,7 +395,7 @@ mod tests {
         });
 
         let control_socket = root.path().join("comparison.sock");
-        let lifecycle = RecordingLifecycle::for_comparison_gateway(true, false);
+        let lifecycle = RecordingLifecycle::for_comparison_gateway(true, false, false);
         lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
         let (control, mut completion) =
             RecordingControlServer::start_for_comparison(lifecycle, control_socket.clone())

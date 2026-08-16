@@ -8,7 +8,6 @@ project:
   replay:
     policy: config/verification.example.yaml
   recording:
-    rule: record-api
     coordinator_rules: coordinator-rules.example.yaml
   delivery:
     pr_base: dev-migration
@@ -112,7 +111,7 @@ recorder:
       - /metrics
       headers: {}
     rules:
-    - name: record-api
+    - name: http-api
       hosts: []
       methods:
       - GET

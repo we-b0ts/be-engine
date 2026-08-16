@@ -184,7 +184,7 @@ mod tests {
         let uri = "/api/resource/isok".parse().unwrap();
         let first = CaseContext {
             id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
+            rule_name: "http-rule".to_string(),
             uri_group: Some("api-resource-isok".to_string()),
         };
         let guard = try_admit_case(
@@ -245,7 +245,7 @@ mod tests {
         let write_guard = dependency_write_lock.lock().await;
         let case = CaseContext {
             id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
+            rule_name: "http-rule".to_string(),
             uri_group: Some("api-resource-isok".to_string()),
         };
         let case_for_task = case.clone();
@@ -303,7 +303,7 @@ mod tests {
         let write_guard = dependency_write_lock.lock().await;
         let first = CaseContext {
             id: Uuid::new_v4(),
-            rule_name: "record-api".to_string(),
+            rule_name: "http-rule".to_string(),
             uri_group: Some("api-resource-isok".to_string()),
         };
         let first_for_task = first.clone();

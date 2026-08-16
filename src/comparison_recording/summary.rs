@@ -97,12 +97,17 @@ impl ComparisonRecordingSummary {
 
     pub(super) async fn api_update(
         &self,
-        rule: &str,
-        pattern: &str,
+        recording_api: &str,
         change: impl FnOnce(&mut ApiCounts),
     ) {
-        let key = format!("{rule}:{pattern}");
-        change(self.state.lock().await.apis.entry(key).or_default());
+        change(
+            self.state
+                .lock()
+                .await
+                .apis
+                .entry(recording_api.to_string())
+                .or_default(),
+        );
     }
 
     pub(super) async fn record_error(&self, error: String) {

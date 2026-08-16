@@ -15,6 +15,7 @@ required_environment=(
     TRAFFIC_E2E_TARGET_READY_PATH
     TRAFFIC_E2E_TARGET_READY_STATUS
     TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS
+    TRAFFIC_E2E_HTTP_RECORDING_ENABLED
     TRAFFIC_E2E_SOURCE_ORIGIN
     TRAFFIC_E2E_SOURCE_HOST
     TRAFFIC_E2E_SOURCE_PORT
@@ -32,6 +33,14 @@ for name in "${required_environment[@]}"; do
         exit 1
     }
 done
+case "$TRAFFIC_E2E_HTTP_RECORDING_ENABLED" in
+    true|false) ;;
+    *)
+        printf 'error: TRAFFIC_E2E_HTTP_RECORDING_ENABLED must be true or false\n' >&2
+        exit 1
+        ;;
+esac
+http_recording_enabled=$TRAFFIC_E2E_HTTP_RECORDING_ENABLED
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/preflight-business-input.sh"
 
 case "$operation" in
@@ -558,14 +567,20 @@ start_comparison_source() {
             --env "MESH_CONNECT_HOST=${target_network_ip}"
         )
     fi
-    require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
+    if "$http_recording_enabled"; then
+        require_port_available "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
+    fi
     docker run --detach --name "$source_name" --network "$network" \
         "${runtime_args[@]}" "$adapter_image_id" >/dev/null
     source_started=true
-    wait_http "$TRAFFIC_E2E_SOURCE_ORIGIN" "$TRAFFIC_E2E_SOURCE_READY_PATH" \
-        "$TRAFFIC_E2E_SOURCE_READY_STATUS" source "$source_name"
+    if "$http_recording_enabled"; then
+        wait_http "$TRAFFIC_E2E_SOURCE_ORIGIN" "$TRAFFIC_E2E_SOURCE_READY_PATH" \
+            "$TRAFFIC_E2E_SOURCE_READY_STATUS" source "$source_name"
+    fi
     require_container_running "$source_name" source
-    require_port_open "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
+    if "$http_recording_enabled"; then
+        require_port_open "$TRAFFIC_E2E_SOURCE_HOST" "$TRAFFIC_E2E_SOURCE_PORT" source
+    fi
     docker exec "$source_name" /bin/sh -ec '
         test "$(awk "/^Uid:/{print \$2}" /proc/1/status)" = 998
         test "$(awk "/^Gid:/{print \$2}" /proc/1/status)" = 998
@@ -920,14 +935,18 @@ run_comparison_recording() {
     fi
     start_comparison_source "container:${anchor_name}"
     start_target
-    wait_http "$target_origin" "$TRAFFIC_E2E_TARGET_READY_PATH" \
-        "$TRAFFIC_E2E_TARGET_READY_STATUS" target "$target_name" \
-        "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
-    require_container_running "$target_name" target
-    require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
-    if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
-        require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_MOTAN_PORT" target-motan
+    if "$http_recording_enabled"; then
+        wait_http "$target_origin" "$TRAFFIC_E2E_TARGET_READY_PATH" \
+            "$TRAFFIC_E2E_TARGET_READY_STATUS" target "$target_name" \
+            "$TRAFFIC_E2E_TARGET_STARTUP_TIMEOUT_SECONDS"
     fi
+    require_container_running "$target_name" target
+    if "$http_recording_enabled"; then
+        require_port_open "$target_network_ip" "$TRAFFIC_E2E_TARGET_PORT" target
+    fi
+    # The comparison runtime owns candidate Motan readiness through a protocol
+    # heartbeat and waits for every enabled upstream before recording input.
+    # A one-shot TCP check here races the target container's normal startup.
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
     local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
     [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}" ]] || comparison_command+=(--listen "$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN")

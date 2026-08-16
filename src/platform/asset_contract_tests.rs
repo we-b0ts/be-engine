@@ -154,6 +154,7 @@ fn embedded_platform_manager_is_valid_bash() {
         .0;
     assert!(comparison_runtime.contains("resolve_or_build_recording_adapter"));
     assert!(comparison_runtime.contains("start_comparison_source"));
+    assert!(MANAGER.contains("if \"$http_recording_enabled\"; then"));
     assert_in_order(
         comparison_source,
         &[
@@ -190,6 +191,20 @@ fn embedded_platform_manager_is_valid_bash() {
             "wait_http \"$target_origin\"",
             "require_container_running \"$target_name\" target",
             "require_port_open \"$target_network_ip\"",
+        ],
+    );
+    assert!(!comparison_runtime.contains(
+        "require_port_open \"$target_network_ip\" \"$TRAFFIC_E2E_TARGET_MOTAN_PORT\" target-motan"
+    ));
+    assert_in_order(
+        comparison_runtime,
+        &[
+            "start_target",
+            "require_container_running \"$target_name\" target",
+            "recording wait-ready --control-socket /workspace/control/cache-snapshot.sock",
+            "internal comparison-run --config",
+            "wait_for_comparison_ready \"$comparison_control_socket\"",
+            "start_recording_input \"$comparison_control_socket\"",
         ],
     );
     assert!(COMPARISON_TARGET_NETWORK.contains("docker network create --driver bridge"));

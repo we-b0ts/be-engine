@@ -22,7 +22,8 @@ use super::store::{ComparisonRecordingStore, Reservation};
 use super::tasks::BackgroundTasks;
 use super::upstream::{
     LimitedBodyError, ResponseDisposition, UpstreamCapture, UpstreamErrorKind, collect_limited,
-    downstream_response, fetch_upstream, request_body_capture, run_ready_probe,
+    downstream_response, fetch_upstream, request_body_capture, run_motan_ready_probe,
+    run_ready_probe,
 };
 use crate::config::{AppConfig, ComparisonRecordingConfig, HttpGatewayConfig, MotanGatewayConfig};
 use crate::gateway::http::rules::{
@@ -143,14 +144,20 @@ pub async fn run_with_options(
         })
         .collect();
     let gateway = config.http_gateway.clone();
-    let listener = crate::tcp_listener::bind_with_diagnostic(
-        gateway.listen,
-        format!(
-            "failed to bind comparison recording gateway {}",
-            gateway.listen
-        ),
-    )
-    .await?;
+    let listener = if gateway.enabled {
+        Some(
+            crate::tcp_listener::bind_with_diagnostic(
+                gateway.listen,
+                format!(
+                    "failed to bind comparison recording gateway {}",
+                    gateway.listen
+                ),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
     let motan_gateway = config.motan_gateway.clone();
     let motan_listener = if motan_gateway.enabled {
         Some(
@@ -178,9 +185,14 @@ pub async fn run_with_options(
         .enable_http1()
         .build();
     let client = Client::builder(TokioExecutor::new()).build(https);
-    let recording_lifecycle =
-        RecordingLifecycle::for_comparison_gateway(!gateway.ready.enabled, motan_gateway.enabled);
-    recording_lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
+    let recording_lifecycle = RecordingLifecycle::for_comparison_gateway(
+        gateway.enabled,
+        gateway.ready.enabled,
+        motan_gateway.enabled,
+    );
+    if listener.is_some() {
+        recording_lifecycle.mark_listener_ready(RecordingListener::HttpGateway);
+    }
     if motan_listener.is_some() {
         recording_lifecycle.mark_listener_ready(RecordingListener::MotanGateway);
     }
@@ -188,6 +200,7 @@ pub async fn run_with_options(
         .candidate_motan_upstream
         .clone()
         .unwrap_or_default();
+    let initially_ready = !(gateway.enabled && gateway.ready.enabled || motan_gateway.enabled);
     let runtime = ComparisonRecordingRuntime {
         config: Arc::new(config),
         comparison_recording: comparison_recording.clone(),
@@ -198,7 +211,7 @@ pub async fn run_with_options(
         recording_apis,
         client,
         store,
-        ready: Arc::new(AtomicBool::new(!gateway.ready.enabled)),
+        ready: Arc::new(AtomicBool::new(initially_ready)),
         ready_notify: Arc::new(Notify::new()),
         recording_lifecycle: recording_lifecycle.clone(),
         request_header_capture,
@@ -216,10 +229,13 @@ pub async fn run_with_options(
         }
         None => (None, None),
     };
-    let ready_task = gateway
-        .ready
-        .enabled
-        .then(|| tokio::spawn(run_ready_probe(runtime.clone())));
+    let mut ready_tasks = JoinSet::new();
+    if gateway.enabled && gateway.ready.enabled {
+        ready_tasks.spawn(run_ready_probe(runtime.clone()));
+    }
+    if runtime.motan_gateway.enabled {
+        ready_tasks.spawn(run_motan_ready_probe(runtime.clone()));
+    }
     let summary_task = tokio::spawn(run_summary_flush(runtime.clone()));
     let motan_listener = async {
         match motan_listener {
@@ -235,7 +251,8 @@ pub async fn run_with_options(
     let input_completion = wait_for_input_completion(input_completion);
     tokio::pin!(input_completion);
     info!(
-        listen = %gateway.listen,
+        http_listen = gateway.enabled.then_some(gateway.listen).map(tracing::field::display),
+        motan_listen = runtime.motan_gateway.enabled.then_some(runtime.motan_gateway.listen).map(tracing::field::display),
         baseline = %baseline_upstream,
         candidate = %comparison_recording.candidate_upstream,
         run_id,
@@ -252,6 +269,9 @@ pub async fn run_with_options(
             result = &mut motan_listener => {
                 result.context("Motan comparison listener stopped")?;
                 unreachable!("Motan comparison listener returned successfully")
+            }
+            Some(result) = ready_tasks.join_next(), if !ready_tasks.is_empty() => {
+                result.context("comparison readiness task failed")?;
             }
             _ = &mut duration_wait => {
                 info!("comparison recording duration elapsed");
@@ -286,7 +306,7 @@ pub async fn run_with_options(
                     }
                 }
             }
-            accepted = listener.accept() => {
+            accepted = accept_optional(&listener) => {
                 let (stream, peer) =
                     accepted.context("failed to accept comparison recording client")?;
                 let runtime = runtime.clone();
@@ -320,10 +340,8 @@ pub async fn run_with_options(
     runtime.recording_lifecycle.mark_stopping();
     connections.abort_all();
     while connections.join_next().await.is_some() {}
-    if let Some(task) = ready_task {
-        task.abort();
-        let _ = task.await;
-    }
+    ready_tasks.abort_all();
+    while ready_tasks.join_next().await.is_some() {}
     summary_task.abort();
     let _ = summary_task.await;
     runtime
@@ -349,6 +367,32 @@ pub async fn run_with_options(
     };
     finalization_result?;
     control_result
+}
+
+async fn accept_optional(
+    listener: &Option<tokio::net::TcpListener>,
+) -> Result<(tokio::net::TcpStream, std::net::SocketAddr)> {
+    match listener {
+        Some(listener) => listener
+            .accept()
+            .await
+            .context("failed to accept comparison recording client"),
+        None => std::future::pending().await,
+    }
+}
+
+impl ComparisonRecordingRuntime {
+    pub(super) async fn mark_upstream_ready(&self, listener: RecordingListener) {
+        if !self.recording_lifecycle.mark_upstream_ready(listener) {
+            return;
+        }
+        if !self.ready.swap(true, Ordering::AcqRel) {
+            self.store.summary().set_ready().await;
+            self.recording_lifecycle.mark_source_ready();
+            self.ready_notify.notify_waiters();
+            info!("all enabled comparison upstream probes succeeded");
+        }
+    }
 }
 
 async fn wait_for_duration(runtime: ComparisonRecordingRuntime, duration: Option<Duration>) {
@@ -474,7 +518,7 @@ async fn handle_request(
         return fixed_response(&runtime).await;
     };
     let group = recording_api_pattern.as_ref().map_or_else(
-        || resolve_case_group(&uri, &rule.case_path_patterns),
+        || resolve_case_group(&uri, &runtime.gateway.case_path_patterns),
         |pattern| resolve_case_group(&uri, std::slice::from_ref(pattern)),
     );
     let limit = runtime
@@ -482,11 +526,7 @@ async fn handle_request(
         .per_api_case_limits
         .limit_for(&group.pattern);
     let recording_api = format!("{method} {}", group.pattern);
-    let Some(reservation) = runtime
-        .store
-        .try_reserve(&recording_api, &rule.name, &group.pattern, limit)
-        .await
-    else {
+    let Some(reservation) = runtime.store.try_reserve(&recording_api, limit).await else {
         return fixed_response(&runtime).await;
     };
 
@@ -566,7 +606,6 @@ async fn handle_request(
             uri,
             headers,
             body,
-            rule.name,
             group.directory,
             group.pattern,
             request_record,
@@ -592,7 +631,6 @@ async fn run_dual(
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
-    rule: String,
     group: String,
     pattern: String,
     request: ComparisonRecordingRequest,
@@ -600,6 +638,7 @@ async fn run_dual(
     permit: OwnedSemaphorePermit,
     baseline_sender: oneshot::Sender<UpstreamCapture>,
 ) {
+    let recording_api = format!("{method} {pattern}");
     let baseline = fetch_upstream(
         &runtime,
         &runtime.baseline_upstream,
@@ -648,7 +687,7 @@ async fn run_dual(
     runtime
         .store
         .summary()
-        .api_update(&rule, &pattern, |counts| {
+        .api_update(&recording_api, |counts| {
             counts.last_observed_at = Some(Utc::now());
             counts.last_baseline_status = baseline.record.status;
             counts.last_candidate_status = candidate.record.status;
@@ -664,9 +703,7 @@ async fn run_dual(
         .await;
     let case = ComparisonRecordingCase {
         id: Uuid::new_v4(),
-        rule,
         group,
-        pattern,
         request,
         baseline: baseline.record.clone(),
         candidate: candidate.record,

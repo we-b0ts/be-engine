@@ -30,7 +30,6 @@ pub struct CaseGroupOptions {
     pub source_revision: String,
     pub output: PathBuf,
     pub recorder_config: Option<PathBuf>,
-    pub rule: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,8 +54,6 @@ pub struct PatternOutcome {
     pub status: PatternOutcomeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub config: Option<PathBuf>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rule: Option<String>,
     pub added: Vec<String>,
     pub patterns_after: Vec<String>,
 }
@@ -247,7 +244,6 @@ pub fn ensure_case_group(options: CaseGroupOptions) -> Result<CaseGroupEnsureRes
         &case_source,
         &options.source_revision,
         options.recorder_config.as_deref(),
-        options.rule.as_deref(),
     )?;
     let group_dir = pattern.is_none().then_some(current_dir);
     let status = if pattern.is_some() {
@@ -375,13 +371,6 @@ fn load_case_group_inventory_impl(
 fn validate_options(options: &CaseGroupOptions) -> Result<()> {
     validate_single_line("method", &options.method)?;
     validate_single_line("source revision", &options.source_revision)?;
-    ensure!(
-        options.recorder_config.is_some() == options.rule.is_some(),
-        "--recorder-config and --rule must be supplied together"
-    );
-    if let Some(rule) = &options.rule {
-        validate_single_line("rule", rule)?;
-    }
     Ok(())
 }
 
@@ -475,22 +464,19 @@ fn apply_pattern_feedback(
     case_source: &Path,
     source_revision: &str,
     recorder_config: Option<&Path>,
-    rule: Option<&str>,
 ) -> Result<PatternOutcome> {
     let Some(pattern) = pattern else {
         return Ok(PatternOutcome {
             status: PatternOutcomeStatus::NotRequiredStatic,
             config: None,
-            rule: None,
             added: Vec::new(),
             patterns_after: Vec::new(),
         });
     };
-    let (Some(config), Some(rule)) = (recorder_config, rule) else {
+    let Some(config) = recorder_config else {
         return Ok(PatternOutcome {
             status: PatternOutcomeStatus::NotApplicableMissingManagedConfig,
             config: None,
-            rule: None,
             added: Vec::new(),
             patterns_after: Vec::new(),
         });
@@ -502,7 +488,6 @@ fn apply_pattern_feedback(
     let plan = plan_case_path_pattern_feedback(CasePathPatternFeedback {
         project_config_path: config.to_path_buf(),
         rules_path,
-        rule_name: rule.to_string(),
         source_revision: source_revision.to_string(),
         case_source: case_source.display().to_string(),
         authority: CasePathPatternAuthority::Focused,
@@ -519,7 +504,6 @@ fn apply_pattern_feedback(
             PatternOutcomeStatus::ConfirmedExisting
         },
         config: Some(report.rules),
-        rule: Some(report.rule),
         added: report.added,
         patterns_after: report.patterns_after,
     })

@@ -19,7 +19,7 @@ pattern plan/apply/replan gate below.
 
 ## Inputs
 
-- published case, collection, rule, or run directory
+- published case, API collection, or run directory
 - source repository and revision used to interpret API routes
 - target repository recorder config, when it is source-controlled
 - whether the supplied cases are focused or collection-wide feedback; this
@@ -72,13 +72,12 @@ live under `recorder` in `.traffic-e2e/project.yaml`; dynamic feedback lives in
 the wholly coordinator-managed `.traffic-e2e/coordinator-rules.yaml`:
 
 ```yaml
-version: 1
+version: 2
 http:
-  - name: record-api
-    source_revision: <revision>
-    case_path_patterns:
-      - /api/example/*
-    allowed_unused_http_hosts: []
+  source_revision: <revision>
+  case_path_patterns:
+    - /api/example/*
+  allowed_unused_http_hosts: []
 breeze_capture: []
 process_owned_dependencies: []
 ```
@@ -101,13 +100,12 @@ process_owned_dependencies: []
   and planning before writing atomically. Use `plan` only when a diagnostic
   preview is useful. A focused call with no candidate patterns omits
   `--pattern` and MUST return `no_candidates: true`, `changed: false`, and an
-  empty diff. Supply the target root, rule name, source revision, case source,
-  authority mode, and every accepted pattern:
+  empty diff. Supply the target root, source revision, case source, authority
+  mode, and every accepted pattern:
 
 ```bash
 traffic-e2e config recorder apply case-path-patterns \
   --target-root <target> \
-  --rule record-api \
   --authority focused \
   --source-revision <revision> \
   --case-source path/to/cases \

@@ -101,7 +101,7 @@ async fn handle_connection(
             transport::write_fixed_response(&mut stream, &request, limits).await?;
             continue;
         };
-        let api_pattern = format!("/rpc/{}", rules::api_directory(&matched.descriptor.api_key));
+        let api_pattern = format!("/rpc/{}", rules::api_directory(&matched.descriptor));
         let motan_method = "MOTAN".parse().expect("MOTAN is a valid HTTP token");
         let motan_uri = api_pattern
             .parse()
@@ -142,8 +142,6 @@ async fn handle_connection(
             .store
             .try_reserve(
                 &format!("MOTAN {api_pattern}"),
-                &matched.rule_name,
-                &api_pattern,
                 runtime.motan_gateway.max_cases_per_api,
             )
             .await
@@ -196,7 +194,7 @@ async fn handle_connection(
         runtime
             .store
             .summary()
-            .api_update(&matched.rule_name, &api_pattern, |counts| {
+            .api_update(&format!("MOTAN {api_pattern}"), |counts| {
                 counts.last_observed_at = Some(Utc::now());
                 counts.last_baseline_status = baseline.capture.record.status;
                 counts.last_candidate_status = candidate.capture.record.status;
@@ -212,9 +210,7 @@ async fn handle_connection(
             .await;
         let case = ComparisonRecordingCase {
             id: Uuid::new_v4(),
-            rule: matched.rule_name,
             group: matched.directory,
-            pattern: api_pattern,
             request: request_record,
             baseline: baseline.capture.record,
             candidate: candidate.capture.record,

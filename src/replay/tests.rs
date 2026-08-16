@@ -567,7 +567,7 @@ mod tests {
     #[tokio::test]
     async fn collection_replay_uses_begin_end_case_lifecycle() {
         let temp = tempfile::tempdir().unwrap();
-        let collection_dir = temp.path().join("record-api").join("api-user");
+        let collection_dir = temp.path().join("api-user");
         let case_a = collection_dir.join("case-a");
         let case_b = collection_dir.join("case-b");
         tokio::fs::create_dir_all(&case_a).await.unwrap();
@@ -632,7 +632,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_rejects_pending_collection_cases() {
         let temp = tempfile::tempdir().unwrap();
-        let collection_dir = temp.path().join("record-api").join("api-user");
+        let collection_dir = temp.path().join("api-user");
         for case_id in ["case-a", "case-b"] {
             let case_dir = collection_dir.join(case_id);
             tokio::fs::create_dir_all(&case_dir).await.unwrap();
@@ -668,7 +668,7 @@ mod tests {
     #[tokio::test]
     async fn finalize_keeps_session_running_when_report_cannot_be_persisted() {
         let temp = tempfile::tempdir().unwrap();
-        let collection_dir = temp.path().join("record-api").join("api-user");
+        let collection_dir = temp.path().join("api-user");
         let case_dir = collection_dir.join("case-a");
         tokio::fs::create_dir_all(&case_dir).await.unwrap();
         tokio::fs::write(case_dir.join("dependencies.jsonl"), "")
@@ -723,22 +723,14 @@ mod tests {
     async fn run_directory_replay_discovers_published_cases_recursively() {
         let temp = tempfile::tempdir().unwrap();
         let run_dir = temp.path().join("20260709123456");
-        let case_a = run_dir
-            .join("record-api")
-            .join("api-users-list")
-            .join("case-a");
-        let case_b = run_dir
-            .join("record-api")
-            .join("api-users-list")
-            .join("case-b");
+        let case_a = run_dir.join("apis/api-users-list").join("case-a");
+        let case_b = run_dir.join("apis/api-users-list").join("case-b");
         let failed_case = run_dir
             .join("failed")
-            .join("record-api")
             .join("api-users-list")
             .join("case-failed");
         let staging_case = run_dir
             .join("staging")
-            .join("record-api")
             .join("api-users-list")
             .join("case-staging");
         write_string_dependency(&case_a, "SELECT name FROM user WHERE id = 1", "alice").await;
@@ -784,7 +776,7 @@ mod tests {
     #[tokio::test]
     async fn replay_selection_loads_only_requested_cases() {
         let temp = tempfile::tempdir().unwrap();
-        let collection_dir = temp.path().join("record-api").join("api-user");
+        let collection_dir = temp.path().join("api-user");
         let case_a = collection_dir.join("case-a");
         let case_b = collection_dir.join("case-b");
         write_string_dependency(&case_a, "SELECT 1", "alice").await;
