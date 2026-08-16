@@ -1,6 +1,7 @@
 mod artifact;
 mod compare;
 mod model;
+mod motan;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -71,12 +72,16 @@ pub fn assert_recorded_response(
         None if oneway => 204,
         None => anyhow::bail!("expected response has no status"),
     };
-    let expected_body = match expected.body.as_ref().or(expected.frame.as_ref()) {
+    let mut expected_body = match expected.body.as_ref().or(expected.frame.as_ref()) {
         Some(body) => decode_body(body, "expected response")?,
         None if oneway => Vec::new(),
         None => anyhow::bail!("expected response has no body or frame"),
     };
-    let actual_body = decode_body(&actual.body, "actual response")?;
+    let mut actual_body = decode_body(&actual.body, "actual response")?;
+    if request.is_motan2() && !oneway {
+        expected_body = motan::comparable_response_frame(&expected_body, "expected response")?;
+        actual_body = motan::comparable_response_frame(&actual_body, "actual response")?;
+    }
     evaluate_response(AssertionInputs {
         mode: AssertionMode::Replay,
         case_id: options.case_id,

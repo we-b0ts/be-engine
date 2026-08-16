@@ -9,6 +9,13 @@ use crate::recorder::HeaderMapSnapshot;
 pub(super) struct RecordedRequest {
     pub(super) method: String,
     pub(super) uri: String,
+    pub(super) protocol_version: Option<String>,
+}
+
+impl RecordedRequest {
+    pub(super) fn is_motan2(&self) -> bool {
+        self.method == "MOTAN" && self.protocol_version.as_deref() == Some("motan2")
+    }
 }
 
 #[derive(Debug, Deserialize)]

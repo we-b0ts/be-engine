@@ -80,6 +80,11 @@ case at a time, regardless of whether the primary request is HTTP or Motan.
 Both replay adapters read the same `active_case_id`, so process-shared
 dependencies remain attributed to that single case.
 
+Motan2 response assertions compare the complete response frame after removing
+only the framework-generated `M_pt` process-time metadata entry from both
+sides. Response status, serialization, all other metadata, and the business
+body remain exact. The recorded and live wire frames are not rewritten.
+
 The terminal JSON is the primary engine result interface. Consume `status`,
 `passed`, `gates`, bounded `diagnosis`, and `progress` first. Read-only runtime
 inspection is available when those APIs are insufficient, but its paths and
