@@ -458,11 +458,11 @@ fn validate_unreported_protocol_candidate(
         MotanBodyProtocol::Hessian2 => {
             ensure!(
                 is_motan_hessian2_body(&expected.body),
-                "case {case_id:?} source-before body is not a valid Hessian2 simple byte-array envelope"
+                "case {case_id:?} source-before body is not one complete Hessian2 value, bare or inside a simple byte-array envelope"
             );
             ensure!(
                 is_motan_hessian2_body(&actual.body),
-                "case {case_id:?} candidate body is not a valid Hessian2 simple byte-array envelope"
+                "case {case_id:?} candidate body is not one complete Hessian2 value, bare or inside a simple byte-array envelope"
             );
         }
     }

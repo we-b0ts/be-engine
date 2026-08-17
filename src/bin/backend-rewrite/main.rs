@@ -207,7 +207,9 @@ struct MotanRulePlanArgs {
     /// Coordinator-issued evidence id for the exact Motan body mismatch.
     #[arg(long)]
     evidence_id: String,
-    /// Binary protocol used inside the Motan simple byte-array envelope.
+    /// Binary protocol of the Motan response body. Protobuf is carried inside
+    /// the Motan simple byte-array envelope; Hessian2 is accepted bare or
+    /// inside that envelope.
     #[arg(long, value_enum)]
     protocol: MotanBodyProtocolArg,
     /// Reviewed unordered collection from protocol-aware evidence as JSON. Protobuf uses field_path + element_type; Hessian2 uses value_path.

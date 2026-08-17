@@ -406,7 +406,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                     MotanBodyAssertionReport {
                         rule_kind: "motan".to_string(),
                         protocol: rule.protocol,
-                        envelope: "simple_byte_array".to_string(),
+                        envelope: discovery.envelope.as_str().to_string(),
                         configured: true,
                         protocol_candidates: vec![rule.protocol],
                         unordered_path_candidates: discovery
@@ -507,7 +507,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                         report.motan = Some(MotanBodyAssertionReport {
                             rule_kind: "motan".to_string(),
                             protocol: crate::replay::policy::MotanBodyProtocol::Hessian2,
-                            envelope: "simple_byte_array".to_string(),
+                            envelope: discovery.envelope.as_str().to_string(),
                             configured: false,
                             protocol_candidates,
                             unordered_path_candidates: discovery

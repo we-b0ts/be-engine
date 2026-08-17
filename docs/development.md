@@ -1201,9 +1201,13 @@ exact read-only `help` command. This list is separate from
 `applicable_rule_planners`, which contains planner entrypoints appropriate to
 the current evidence state; neither list proves that a rule applies. For a
 Motan body without a configured protocol, the planner offers each
-syntactically valid protobuf or Hessian2 protocol candidate. Once one is
-configured, the protocol rule hint instead directs the AI to the reported
-field/value differences and unordered-path candidates. Memcached dirty-cluster
+syntactically valid protobuf or Hessian2 protocol candidate. Protobuf is
+recognized inside the Motan simple byte-array envelope written for a `byte[]`
+return value; Hessian2 is recognized both there and as a bare body, which is
+how Motan serializes any other return type. The observed framing is reported as
+`envelope`. Once one protocol is configured, the protocol rule hint instead
+directs the AI to the reported field/value differences and unordered-path
+candidates. Memcached dirty-cluster
 evidence currently exposes `protobuf-timestamp`, whose help command is:
 
 ```bash

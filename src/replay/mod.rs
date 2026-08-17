@@ -98,7 +98,7 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
-pub(crate) use assertion::hessian2::is_motan_hessian2_body;
+pub(crate) use assertion::hessian2::{is_motan_hessian2_body, motan_hessian2_envelope_name};
 pub(crate) use assertion::protobuf::is_motan_protobuf_body;
 pub(crate) use assertion::{
     ComparisonResponseAssertionOptions, ComparisonResponseObservation, assert_comparison_response,

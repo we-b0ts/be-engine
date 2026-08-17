@@ -5,7 +5,8 @@ use serde_json::Value;
 
 use super::{QUERY_REPRESENTATIVES, RewriteState};
 use crate::replay::{
-    is_motan_hessian2_body, is_motan_protobuf_body, read_comparison_response_observation,
+    is_motan_hessian2_body, is_motan_protobuf_body, motan_hessian2_envelope_name,
+    read_comparison_response_observation,
 };
 
 pub(super) fn enrich_protocol_candidate(
@@ -57,6 +58,10 @@ pub(super) fn enrich_protocol_candidate(
         protocol_candidates.push("hessian2");
     }
     if let Some(protocol) = protocol_candidates.first().copied() {
+        let envelope = match protocol {
+            "hessian2" => motan_hessian2_envelope_name(&expected.body).unwrap_or("raw"),
+            _ => "simple_byte_array",
+        };
         let observation = facts
             .get_mut("comparison_observation")
             .and_then(Value::as_object_mut)
@@ -82,7 +87,7 @@ pub(super) fn enrich_protocol_candidate(
         );
         motan
             .entry("envelope")
-            .or_insert_with(|| Value::String("simple_byte_array".to_string()));
+            .or_insert_with(|| Value::String(envelope.to_string()));
         motan
             .entry("configured")
             .or_insert_with(|| Value::Bool(false));

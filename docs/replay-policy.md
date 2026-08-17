@@ -351,12 +351,21 @@ top-level list:
 ```yaml
 response_rules:
   motan:
-    "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-byteArray-8cd698b4fea1fb48":
+    "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-long-long-095f05367f122cf4":
       protocol: hessian2
       unordered_paths:
-        - value_path: [ruleCollection, groups, "*", whiteList]
-          display_path: rule_collection.groups[].white_list
+        - value_path: [result, ruleCollection, groups, "*", whiteList]
+          display_path: cache_result.rule_collection.groups[].white_list
 ```
+
+The two Motan body envelopes are recognized without configuration. A method
+returning `byte[]` carries its business bytes inside the Motan simple
+byte-array envelope, while Hessian2 serialization of any other return type
+occupies the whole body. Protobuf bodies are always the enveloped `byte[]`
+form; a Hessian2 body is accepted in either form, and the report names the
+observed framing as `envelope: simple_byte_array` or `envelope: raw`. Both
+compared bodies must use the same envelope, because a framing change is a
+response-shape difference rather than a body-value difference.
 
 The configured rule relaxes only the ordering of the declared repeated
 protobuf fields or Hessian2 lists inside the business body. During standard
