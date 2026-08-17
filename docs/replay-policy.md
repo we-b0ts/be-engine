@@ -353,24 +353,29 @@ protocol-only rule does not relax any body field; it only enables field-level
 protobuf differences. Standard replay without a configured Motan body rule
 keeps the same normalized full-frame exact comparison.
 
-This is one progressively completed rule with two review stages. The first
-plan supplies only `protocol: protobuf`. Applying it immediately reruns the
+This is one Motan response rule whose available action follows the current
+configuration. When the body protocol is not configured, evidence offers the
+`protobuf` protocol choice. Applying that choice immediately reruns only the
 existing comparison verifier against the immutable response artifacts; it
 does not start source or target processes, send Motan requests, or record new
 traffic. A report produced before protocol-aware Motan diagnostics were
-available remains usable: evidence and protocol-stage planning probe the
+available remains usable: evidence and protocol configuration probe the
 existing source/candidate bodies read-only instead of requiring another
-comparison recording. The refreshed standard comparison report keeps the exact `$body`
-mismatch and adds protocol-aware field paths, difference kinds, and an
-`order_only` decision. Apply returns the same comparison verifier's compact
-outcome (`complete`, `passed`, counts, per-API counts, and the bounded
-representative difference); complete per-case details remain in that standard report. The
-second plan must provide every newly discovered
-unordered `field_path` together with a source/proto-reviewed semantic
-`display_path` and an explicit repeated `element_type`. A packed numeric array
-is wire-ambiguous without the protobuf type, so it first appears as a
-field-level value difference; the reviewed numeric type is accepted only when
-offline typed comparison proves that the same field is reorder-only:
+comparison recording. The refreshed standard comparison report keeps the
+exact `$body` mismatch and adds protocol-aware field paths, difference kinds,
+and an `order_only` decision. Apply returns the same comparison verifier's
+compact outcome (`complete`, `passed`, counts, per-API counts, and the bounded
+representative difference); complete per-case details remain in that standard
+report.
+
+When `protocol: protobuf` is already configured, evidence skips protocol
+selection and lists the supported refinement directly. Adding unordered
+fields must provide every newly discovered `field_path` together with a
+source/proto-reviewed semantic `display_path` and an explicit repeated
+`element_type`. A packed numeric array is wire-ambiguous without the protobuf
+type, so it first appears as a field-level value difference; the reviewed
+numeric type is accepted only when offline typed comparison proves that the
+same field is reorder-only:
 
 ```bash
 backend-rewrite rule motan \

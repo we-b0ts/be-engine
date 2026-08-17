@@ -650,7 +650,7 @@ fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicab
 }
 
 #[test]
-fn exact_motan_protobuf_body_exposes_the_two_stage_rule_planner() {
+fn exact_motan_protobuf_body_without_a_protocol_offers_protocol_configuration() {
     let target = tempfile::tempdir().unwrap();
     let facts = serde_json::json!({
         "comparison_observation": {
@@ -674,6 +674,11 @@ fn exact_motan_protobuf_body_exposes_the_two_stage_rule_planner() {
 
     assert_eq!(hints.len(), 1);
     assert_eq!(hints[0].rule, "motan");
+    assert!(
+        hints[0]
+            .hint
+            .contains("No Motan body protocol is configured")
+    );
     assert!(hints[0].hint.contains("offline"));
     assert!(hints[0].hint.contains("without recording"));
     assert_eq!(planners.len(), 2);
@@ -687,6 +692,40 @@ fn exact_motan_protobuf_body_exposes_the_two_stage_rule_planner() {
             .command
             .argv
             .ends_with(&["--protocol".to_string(), "protobuf".to_string(),])
+    );
+}
+
+#[test]
+fn configured_motan_protobuf_body_offers_rules_without_repeating_protocol_configuration() {
+    let target = tempfile::tempdir().unwrap();
+    let facts = serde_json::json!({
+        "comparison_observation": {
+            "pointer": "$body",
+            "motan": {
+                "rule_kind": "motan",
+                "protocol": "protobuf",
+                "configured": true,
+                "unordered_path_candidates": [{"field_path": [3, 3]}]
+            }
+        }
+    });
+
+    let hints = protocol_rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
+    let planners = applicable_rule_planners(
+        target.path(),
+        RewriteIssueKind::Comparison,
+        QUERY_REPRESENTATIVES,
+        &facts,
+        "evidence-current",
+    );
+
+    assert_eq!(hints.len(), 1);
+    assert!(hints[0].hint.contains("unordered_path_candidates"));
+    assert!(hints[0].hint.contains("display_path"));
+    assert!(
+        planners
+            .iter()
+            .all(|planner| planner.protocol != "motan_protobuf")
     );
 }
 

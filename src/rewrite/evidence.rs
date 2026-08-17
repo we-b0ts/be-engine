@@ -169,11 +169,19 @@ fn protocol_rule_hints(
             .and_then(Value::as_str)
             == Some("protobuf")
     {
+        let configured = facts
+            .pointer("/comparison_observation/motan/configured")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let hint = if configured {
+            "The Motan body protocol is protobuf. Review the protocol-aware field differences and unordered_path_candidates in this evidence, then apply only repeated fields whose order is irrelevant with a semantic display_path and explicit element_type."
+        } else {
+            "No Motan body protocol is configured. Configure protobuf for this Motan rule; apply re-verifies the existing response artifacts offline and returns precise field paths without recording or starting processes."
+        };
         return vec![RewriteProtocolRuleHint {
             protocol: "motan_protobuf".to_string(),
             rule: "motan".to_string(),
-            hint: "The exact Motan body has a valid protobuf envelope. Apply the protocol-only stage first; apply re-verifies the existing response artifacts offline and returns precise field paths without recording or starting processes. Then review those paths and add the repeated fields whose order is irrelevant to the same rule."
-                .to_string(),
+            hint: hint.to_string(),
             help: super::action::command(
                 target_root,
                 vec![
@@ -229,6 +237,10 @@ fn applicable_rule_planners(
             .pointer("/comparison_observation/motan/protocol")
             .and_then(Value::as_str)
             == Some("protobuf")
+        && facts
+            .pointer("/comparison_observation/motan/configured")
+            .and_then(Value::as_bool)
+            != Some(true)
     {
         planners.push(RewriteApplicableRulePlanner {
             kind: "response_body".to_string(),

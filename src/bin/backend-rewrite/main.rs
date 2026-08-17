@@ -184,7 +184,7 @@ enum RuleCommand {
     Plan(RulePlanArgs),
     /// Plan a request-owned Memcached dependency-payload verification rule.
     Memcached(MemcachedRuleArgs),
-    /// Plan the next stage of one Motan response-body rule.
+    /// Configure a Motan body protocol or apply a supported protocol-aware rule.
     Motan(MotanRulePlanArgs),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(RuleApplyArgs),
@@ -210,7 +210,7 @@ struct MotanRulePlanArgs {
     /// Binary protocol used inside the Motan simple byte-array envelope.
     #[arg(long, value_enum)]
     protocol: MotanBodyProtocolArg,
-    /// Reviewed protobuf repeated field as JSON: {"field_path":[3,1],"display_path":"...","element_type":"string"}. Omit in the protocol stage.
+    /// Reviewed protobuf repeated field from protocol-aware evidence as JSON: {"field_path":[3,1],"display_path":"...","element_type":"string"}.
     #[arg(long = "unordered-path", value_parser = parse_motan_unordered_path)]
     unordered_paths: Vec<ProtobufUnorderedPath>,
 }

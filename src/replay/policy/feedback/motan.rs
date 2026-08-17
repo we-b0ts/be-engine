@@ -37,7 +37,6 @@ pub struct MotanRuleReport {
     pub comparison_fingerprint: String,
     pub api: String,
     pub rule_id: String,
-    pub stage: &'static str,
     pub protocol: MotanBodyProtocol,
     pub matching_cases: usize,
     pub selected_difference_cases: usize,
@@ -164,14 +163,10 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             "Motan response rule already uses a different protocol"
         );
     }
-    let stage = if existing.is_some() {
-        "unordered_paths"
-    } else {
-        "protocol"
-    };
+    let protocol_configured = existing.is_some();
     ensure!(
-        existing.is_some() || feedback.unordered_paths.is_empty(),
-        "the first Motan rule stage accepts only protocol; rerun comparison before adding unordered paths"
+        protocol_configured || feedback.unordered_paths.is_empty(),
+        "configure the Motan body protocol before adding unordered paths; apply the protocol configuration to obtain protocol-aware comparison evidence"
     );
     let matching = comparison
         .cases
@@ -224,7 +219,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
                 "case {:?} does not support the requested Motan protocol",
                 case.case_id
             );
-        } else if existing.is_none() {
+        } else if !protocol_configured {
             validate_unreported_protocol_candidate(
                 Path::new(&case.case_dir),
                 &case.case_id,
@@ -237,7 +232,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             );
         }
         selected_difference_cases += 1;
-        if existing.is_some() {
+        if protocol_configured {
             let motan = motan.context("configured Motan protocol report is missing")?;
             ensure!(
                 motan.configured,
@@ -272,7 +267,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
         .difference(&existing_fields)
         .cloned()
         .collect::<BTreeSet<_>>();
-    if existing.is_some() {
+    if protocol_configured {
         let requested = feedback
             .unordered_paths
             .iter()
@@ -284,7 +279,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
         );
         ensure!(
             !requested.is_empty(),
-            "the second Motan rule stage requires at least one reviewed protobuf field path"
+            "the configured Motan body protocol requires at least one reviewed protobuf field path from current protocol-aware comparison evidence"
         );
         ensure!(
             requested.is_disjoint(&existing_fields),
@@ -314,7 +309,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             .map(|path| (path.field_path.clone(), path)),
     );
     let effective_paths = effective_paths.into_values().collect::<Vec<_>>();
-    if existing.is_some() {
+    if protocol_configured {
         for case in matching.iter().filter(|case| !case.passed) {
             let case_dir = Path::new(&case.case_dir);
             let expected = read_comparison_response_observation(
@@ -388,7 +383,6 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             comparison_fingerprint: fingerprint(&comparison_bytes),
             api: feedback.api.clone(),
             rule_id: motan_response_rule_id(&feedback.api),
-            stage,
             protocol: feedback.protocol,
             matching_cases: matching.len(),
             selected_difference_cases,

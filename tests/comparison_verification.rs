@@ -194,7 +194,6 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
         comparison_report: report_path.clone(),
     })
     .unwrap();
-    assert_eq!(protocol_plan.report().stage, "protocol");
     let protocol_applied = protocol_plan.apply().unwrap();
     assert!(protocol_applied.applied);
     let protocol_outcome = protocol_applied.offline_comparison.as_ref().unwrap();
@@ -276,7 +275,6 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
         comparison_report: report_path.clone(),
     })
     .unwrap();
-    assert_eq!(unordered_plan.report().stage, "unordered_paths");
     let unordered_applied = unordered_plan.apply().unwrap();
     assert!(
         unordered_applied
@@ -294,7 +292,7 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
 }
 
 #[test]
-fn motan_protocol_stage_rejects_a_legacy_report_with_non_protobuf_bodies() {
+fn motan_protocol_configuration_rejects_a_legacy_report_with_non_protobuf_bodies() {
     let temp = tempdir().unwrap();
     let run = create_run(temp.path(), json!("unused"), json!("unused"));
     let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");

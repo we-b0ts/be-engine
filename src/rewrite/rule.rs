@@ -527,7 +527,6 @@ fn project_motan_report(report: &crate::MotanRuleReport) -> Value {
         "kind": "motan",
         "api": report.api,
         "rule_id": report.rule_id,
-        "stage": report.stage,
         "protocol": report.protocol,
         "matching_cases": report.matching_cases,
         "selected_difference_cases": report.selected_difference_cases,
