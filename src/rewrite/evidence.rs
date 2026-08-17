@@ -12,6 +12,7 @@ use super::{artifacts, fingerprint, source_process_traffic};
 use crate::case_group::resolve_published_case_dir;
 use crate::comparison_recording::resolve_comparison_case_dir;
 use crate::e2e_run::response_pointer_scope;
+use crate::replay::{is_motan_protobuf_body, read_comparison_response_observation};
 use crate::{
     E2eDirtyCluster, E2eDirtyCounts, E2eRunContext, E2eValueObservation, E2eValuePresence,
     ResponseDifferenceKind, query_e2e_case_response_differences, query_e2e_dependency_correlation,
@@ -75,7 +76,8 @@ pub(super) fn query(
             )
         })?;
     let (kind, offset) = requested;
-    let (facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
+    let (mut facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
+    enrich_motan_protocol_candidate(state, kind, &mut facts)?;
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
@@ -100,6 +102,62 @@ pub(super) fn query(
     })
 }
 
+fn enrich_motan_protocol_candidate(
+    state: &RewriteState,
+    query_kind: &str,
+    facts: &mut Value,
+) -> Result<()> {
+    if query_kind != QUERY_REPRESENTATIVES
+        || !state.api.starts_with("MOTAN ")
+        || facts
+            .pointer("/comparison_observation/motan")
+            .is_some_and(|motan| !motan.is_null())
+    {
+        return Ok(());
+    }
+    let observation = facts
+        .get("comparison_observation")
+        .filter(|value| !value.is_null());
+    let eligible = observation.is_some_and(|observation| {
+        observation.get("classification").and_then(Value::as_str) == Some("candidate_difference")
+            && observation.get("pointer").and_then(Value::as_str) == Some("$body")
+            && observation.get("difference_kind").and_then(Value::as_str)
+                == Some("exact_body_mismatch")
+    });
+    if !eligible {
+        return Ok(());
+    }
+    let case_dir = facts
+        .pointer("/representative/case_dir")
+        .and_then(Value::as_str)
+        .context("comparison representative has no case directory")?;
+    let case_dir = Path::new(case_dir);
+    let expected = read_comparison_response_observation(
+        &case_dir.join("expected-response.json"),
+        "source-before response",
+    )?;
+    let actual = read_comparison_response_observation(
+        &case_dir.join("response.json"),
+        "candidate response",
+    )?;
+    if is_motan_protobuf_body(&expected.body) && is_motan_protobuf_body(&actual.body) {
+        let observation = facts
+            .get_mut("comparison_observation")
+            .and_then(Value::as_object_mut)
+            .context("comparison observation is not an object")?;
+        observation.insert(
+            "motan".to_string(),
+            json!({
+                "rule_kind": "motan",
+                "protocol": "protobuf",
+                "envelope": "simple_byte_array",
+                "configured": false,
+            }),
+        );
+    }
+    Ok(())
+}
+
 fn protocol_rule_hints(
     target_root: &Path,
     query_kind: &str,
@@ -114,7 +172,7 @@ fn protocol_rule_hints(
         return vec![RewriteProtocolRuleHint {
             protocol: "motan_protobuf".to_string(),
             rule: "motan".to_string(),
-            hint: "The exact Motan body has a valid protobuf envelope. First apply the protocol stage; a subsequent comparison will report precise repeated-field paths, and the same rule can then add them as unordered paths."
+            hint: "The exact Motan body has a valid protobuf envelope. Apply the protocol-only stage first; apply re-verifies the existing response artifacts offline and returns precise field paths without recording or starting processes. Then review those paths and add the repeated fields whose order is irrelevant to the same rule."
                 .to_string(),
             help: super::action::command(
                 target_root,

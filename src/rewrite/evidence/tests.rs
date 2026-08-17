@@ -674,7 +674,8 @@ fn exact_motan_protobuf_body_exposes_the_two_stage_rule_planner() {
 
     assert_eq!(hints.len(), 1);
     assert_eq!(hints[0].rule, "motan");
-    assert!(hints[0].hint.contains("First apply the protocol stage"));
+    assert!(hints[0].hint.contains("offline"));
+    assert!(hints[0].hint.contains("without recording"));
     assert_eq!(planners.len(), 2);
     let motan = planners
         .iter()
@@ -686,6 +687,74 @@ fn exact_motan_protobuf_body_exposes_the_two_stage_rule_planner() {
             .command
             .argv
             .ends_with(&["--protocol".to_string(), "protobuf".to_string(),])
+    );
+}
+
+#[test]
+fn representative_evidence_probes_legacy_motan_reports_from_existing_bodies() {
+    let target = tempfile::tempdir().unwrap();
+    let case = target.path().join("comparison-case");
+    std::fs::create_dir(&case).unwrap();
+    let protobuf = |values: [&str; 2]| {
+        let mut payload = Vec::new();
+        for value in values {
+            payload.push(0x1a);
+            payload.push(value.len() as u8);
+            payload.extend_from_slice(value.as_bytes());
+        }
+        let mut body = vec![3];
+        body.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        body.extend(payload);
+        String::from_utf8(body).unwrap()
+    };
+    for (name, body) in [
+        ("expected-response.json", protobuf(["alice", "bob"])),
+        ("response.json", protobuf(["bob", "alice"])),
+    ] {
+        std::fs::write(
+            case.join(name),
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "status": 200,
+                "body": {
+                    "encoding": "utf8",
+                    "data": body,
+                    "truncated": false
+                },
+                "error": null
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let mut state = crate::rewrite::test_state();
+    state.api = "MOTAN /rpc/example".to_string();
+    let mut facts = serde_json::json!({
+        "representative": {"case_dir": case},
+        "comparison_observation": {
+            "classification": "candidate_difference",
+            "pointer": "$body",
+            "difference_kind": "exact_body_mismatch"
+        }
+    });
+
+    enrich_motan_protocol_candidate(&state, QUERY_REPRESENTATIVES, &mut facts).unwrap();
+
+    assert_eq!(
+        facts.pointer("/comparison_observation/motan/protocol"),
+        Some(&Value::String("protobuf".to_string()))
+    );
+    let planners = applicable_rule_planners(
+        target.path(),
+        RewriteIssueKind::Comparison,
+        QUERY_REPRESENTATIVES,
+        &facts,
+        "evidence-current",
+    );
+    assert!(
+        planners
+            .iter()
+            .any(|planner| planner.protocol == "motan_protobuf")
     );
 }
 

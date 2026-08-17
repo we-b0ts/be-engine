@@ -17,7 +17,7 @@ use crate::comparison_recording::{
 use crate::config::edit::write_atomic;
 use crate::replay::{
     ComparisonSourceMatch, ProtobufFieldPathCandidate, ResponseDifferenceKind,
-    read_comparison_response_observation,
+    is_motan_protobuf_body, read_comparison_response_observation,
 };
 
 #[derive(Debug, Clone)]
@@ -217,17 +217,28 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             "case {:?} has differences other than the exact Motan body",
             case.case_id
         );
-        let motan = response
-            .motan
-            .as_ref()
-            .with_context(|| format!("case {:?} has no Motan protobuf candidate", case.case_id))?;
-        ensure!(
-            motan.protocol == feedback.protocol && motan.rule_kind == "motan",
-            "case {:?} does not support the requested Motan protocol",
-            case.case_id
-        );
+        let motan = response.motan.as_ref();
+        if let Some(motan) = motan {
+            ensure!(
+                motan.protocol == feedback.protocol && motan.rule_kind == "motan",
+                "case {:?} does not support the requested Motan protocol",
+                case.case_id
+            );
+        } else if existing.is_none() {
+            validate_unreported_protocol_candidate(
+                Path::new(&case.case_dir),
+                &case.case_id,
+                feedback.protocol,
+            )?;
+        } else {
+            anyhow::bail!(
+                "case {:?} was not evaluated with the configured Motan protocol",
+                case.case_id
+            );
+        }
         selected_difference_cases += 1;
         if existing.is_some() {
+            let motan = motan.context("configured Motan protocol report is missing")?;
             ensure!(
                 motan.configured,
                 "case {:?} was not evaluated with the configured Motan protocol",
@@ -390,6 +401,34 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             diff,
         },
     })
+}
+
+fn validate_unreported_protocol_candidate(
+    case_dir: &Path,
+    case_id: &str,
+    protocol: MotanBodyProtocol,
+) -> Result<()> {
+    let expected = read_comparison_response_observation(
+        &case_dir.join("expected-response.json"),
+        "source-before response",
+    )?;
+    let actual = read_comparison_response_observation(
+        &case_dir.join("response.json"),
+        "candidate response",
+    )?;
+    match protocol {
+        MotanBodyProtocol::Protobuf => {
+            ensure!(
+                is_motan_protobuf_body(&expected.body),
+                "case {case_id:?} source-before body is not a valid protobuf simple byte-array envelope"
+            );
+            ensure!(
+                is_motan_protobuf_body(&actual.body),
+                "case {case_id:?} candidate body is not a valid protobuf simple byte-array envelope"
+            );
+        }
+    }
+    Ok(())
 }
 
 fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {

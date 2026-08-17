@@ -175,6 +175,16 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
             .field_path,
         ProtobufFieldPath(vec![3])
     );
+    let mut legacy_report = serde_json::to_value(&initial).unwrap();
+    legacy_report["cases"][0]["response"]
+        .as_object_mut()
+        .unwrap()
+        .remove("motan");
+    legacy_report["representative_difference"]
+        .as_object_mut()
+        .unwrap()
+        .remove("motan");
+    fs::write(&report_path, serde_json::to_vec(&legacy_report).unwrap()).unwrap();
 
     let protocol_plan = plan_motan_rule(MotanRuleFeedback {
         policy_path: policy.clone(),
@@ -281,6 +291,56 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
     assert!(updated.contains("field_path:"));
     assert!(updated.contains("display_path: rule_collection.white_list"));
     assert!(updated.contains("element_type: string"));
+}
+
+#[test]
+fn motan_protocol_stage_rejects_a_legacy_report_with_non_protobuf_bodies() {
+    let temp = tempdir().unwrap();
+    let run = create_run(temp.path(), json!("unused"), json!("unused"));
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
+    fs::write(
+        case.join("request.json"),
+        serde_json::to_vec(&json!({
+            "protocol": "motan",
+            "method": "MOTAN",
+            "uri": "/rpc/example",
+            "api_pattern": "/rpc/example",
+            "api_key": "motan:test/example#method()"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_binary_response(&case.join("expected-response.json"), 200, b"source");
+    write_binary_response(&case.join("response.json"), 200, b"candidate");
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+    let report_path = run.join("comparison-report.json");
+    verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run,
+        policy: policy.clone(),
+        report: report_path.clone(),
+    })
+    .unwrap();
+
+    let error = plan_motan_rule(MotanRuleFeedback {
+        policy_path: policy,
+        api: "MOTAN /rpc/example".to_string(),
+        protocol: MotanBodyProtocol::Protobuf,
+        unordered_paths: Vec::new(),
+        comparison_report: report_path,
+    })
+    .err()
+    .unwrap();
+
+    assert!(
+        error
+            .to_string()
+            .contains("source-before body is not a valid protobuf simple byte-array envelope")
+    );
 }
 
 #[test]

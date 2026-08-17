@@ -348,7 +348,10 @@ This is one progressively completed rule with two review stages. The first
 plan supplies only `protocol: protobuf`. Applying it immediately reruns the
 existing comparison verifier against the immutable response artifacts; it
 does not start source or target processes, send Motan requests, or record new
-traffic. The refreshed standard comparison report keeps the exact `$body`
+traffic. A report produced before protocol-aware Motan diagnostics were
+available remains usable: evidence and protocol-stage planning probe the
+existing source/candidate bodies read-only instead of requiring another
+comparison recording. The refreshed standard comparison report keeps the exact `$body`
 mismatch and adds protocol-aware field paths, difference kinds, and an
 `order_only` decision. Apply returns the same comparison verifier's compact
 outcome (`complete`, `passed`, counts, per-API counts, and the bounded

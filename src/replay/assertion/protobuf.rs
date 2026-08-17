@@ -29,7 +29,7 @@ struct Field<'a> {
     payload_offset: usize,
 }
 
-pub(super) fn is_motan_protobuf_body(body: &[u8]) -> bool {
+pub(crate) fn is_motan_protobuf_body(body: &[u8]) -> bool {
     extract_simple_payload(body)
         .and_then(|payload| parse_fields(payload).map(|_| ()))
         .is_ok()

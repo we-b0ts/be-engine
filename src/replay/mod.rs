@@ -98,6 +98,7 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
+pub(crate) use assertion::protobuf::is_motan_protobuf_body;
 pub(crate) use assertion::{
     ComparisonResponseAssertionOptions, ComparisonResponseObservation, assert_comparison_response,
     read_comparison_response_observation,
