@@ -8,8 +8,10 @@ use super::model::{
     RewriteRouteReport, RewriteState,
 };
 use super::store::RewriteStore;
-use super::{action, artifacts, evidence, fingerprint, inventory, recording};
-use crate::{ManagedRecordingOperation, RecordingApi, RewriteContext};
+use super::{
+    action, artifacts, evidence, fingerprint, inventory, recording, traffic_operation, worker,
+};
+use crate::{E2eRunContext, ManagedRecordingOperation, RecordingApi, RewriteContext};
 
 #[derive(Debug, Clone)]
 pub(super) struct SystemRepairRouteOptions {
@@ -25,6 +27,16 @@ pub struct RewriteRepairCancelOptions {
     pub repair_id: String,
     pub reason: String,
     pub confirm_misroute: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RewriteReplayRetryOptions {
+    pub target_root: PathBuf,
+    pub api: String,
+    pub failed_attempt: u64,
+    pub out_of_band_attempt: u64,
+    pub reason: String,
+    pub confirm_out_of_band_run: bool,
 }
 
 pub(super) fn route(
@@ -222,6 +234,118 @@ pub fn cancel_misrouted_rewrite_repair(
     )?;
     store.save(&state)?;
     Ok(report)
+}
+
+pub fn retry_rewrite_replay_after_out_of_band_run(
+    options: RewriteReplayRetryOptions,
+) -> Result<RewriteActionEnvelope> {
+    ensure!(
+        options.confirm_out_of_band_run,
+        "retrying Replay after an out-of-band run requires --confirm-out-of-band-run"
+    );
+    validate_single_line("out-of-band Replay recovery reason", &options.reason)?;
+    ensure!(
+        options.reason.len() <= 500,
+        "out-of-band Replay recovery reason must not exceed 500 bytes"
+    );
+    let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+    ensure!(
+        matches!(
+            traffic_operation::state(&target_root)?,
+            traffic_operation::TrafficOperationState::Absent
+        ),
+        "cannot recover out-of-band Replay state while a traffic operation is active or stale"
+    );
+    let store = RewriteStore::new(&target_root)?;
+    let _lock = store.lock()?;
+    let mut state = store
+        .load()?
+        .context("rewrite workflow has not been initialized")?;
+    ensure!(
+        state.api == options.api,
+        "out-of-band Replay recovery targets API {:?}, but the active API is {:?}",
+        options.api,
+        state.api
+    );
+    worker::ensure_api_confirmed(&state, &options.api, "recovering out-of-band Replay state")?;
+    let case_source = state
+        .case_source
+        .clone()
+        .context("rewrite workflow has no focused case source")?;
+    let observed = crate::e2e_run::finalized_focused_attempt_summary(
+        E2eRunContext {
+            target_root: target_root.clone(),
+            case_source,
+            run_key: None,
+        },
+        &options.api,
+    )?;
+    let action = retry_replay_after_out_of_band_run(&target_root, &mut state, &options, &observed)?;
+    store.save(&state)?;
+    Ok(action)
+}
+
+fn retry_replay_after_out_of_band_run(
+    target_root: &Path,
+    state: &mut RewriteState,
+    options: &RewriteReplayRetryOptions,
+    observed: &crate::e2e_run::E2eFocusedAttemptSummary,
+) -> Result<RewriteActionEnvelope> {
+    ensure!(
+        state.phase == RewritePhase::ImplementationRequired,
+        "rewrite workflow has no implementation failure eligible for Replay retry"
+    );
+    ensure!(
+        state.route.is_none()
+            && state.rule_plan.is_none()
+            && state.dependency_rule_plan.is_none()
+            && state.recorder_capture_plan.is_none(),
+        "rewrite workflow has a pending repair or rule transition; execute its coordinator command instead"
+    );
+    let issue = state
+        .active_issue
+        .as_ref()
+        .context("rewrite workflow has no active implementation issue")?;
+    let current_attempt = state
+        .attempts
+        .last()
+        .context("rewrite workflow has no failed focused attempt")?;
+    ensure!(
+        !current_attempt.passed
+            && current_attempt.attempt == options.failed_attempt
+            && issue.attempt == options.failed_attempt,
+        "failed attempt does not match the active coordinator issue"
+    );
+    ensure!(
+        observed.attempt == options.out_of_band_attempt
+            && observed.attempt > options.failed_attempt
+            && observed.passed,
+        "the declared out-of-band attempt is not the newer passing focused result"
+    );
+    ensure!(
+        state.case_source.as_ref() == Some(&observed.case_source)
+            && state.case_inventory_id.as_ref() == Some(&observed.case_inventory_id),
+        "out-of-band focused evidence does not match the coordinator case source and inventory"
+    );
+    let current_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
+    ensure!(
+        state.target_fingerprint.as_deref() == Some(current_target_fingerprint.as_str())
+            && issue.observed_target_fingerprint == current_target_fingerprint,
+        "target repository changed after the failed coordinator attempt; use the normal target quality and acceptance flow"
+    );
+
+    state.target_fingerprint = None;
+    state.e2e_current = false;
+    state.comparison_current = false;
+    state.bump();
+    Ok(action::advance_envelope(
+        target_root,
+        state,
+        format!(
+            "administrator discarded out-of-band focused attempt {} and re-armed coordinator Replay after attempt {}: {}",
+            options.out_of_band_attempt, options.failed_attempt, options.reason
+        ),
+    ))
 }
 
 fn cancel_misroute(
@@ -455,8 +579,14 @@ fn validate_single_line(label: &str, value: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+    use std::process::Command;
+
     use super::*;
-    use crate::rewrite::model::{RewriteIssueOwner, RewritePhase};
+    use crate::rewrite::model::{RewriteAttemptSummary, RewriteIssueOwner, RewritePhase};
+    use crate::{
+        E2eDependencyGate, E2eDiagnosisCounts, E2eReplayGate, E2eResponseGate, E2eVerificationGates,
+    };
 
     #[test]
     fn repair_verification_rejects_stale_ids_and_unchanged_revisions() {
@@ -556,6 +686,61 @@ mod tests {
         assert!(state.route.is_some());
     }
 
+    #[test]
+    fn administrator_can_rearm_replay_after_a_matching_out_of_band_run() {
+        let target = committed_target();
+        let target_fingerprint = fingerprint::repository_fingerprint(target.path()).unwrap();
+        let mut state = out_of_band_retry_state(&target_fingerprint);
+        let options = retry_options();
+        let observed = crate::e2e_run::E2eFocusedAttemptSummary {
+            attempt: 13,
+            passed: true,
+            case_source: PathBuf::from("/cases"),
+            case_inventory_id: "inventory".to_string(),
+        };
+
+        let action =
+            retry_replay_after_out_of_band_run(target.path(), &mut state, &options, &observed)
+                .unwrap();
+
+        assert!(state.target_fingerprint.is_none());
+        assert!(!state.e2e_current);
+        assert!(!state.comparison_current);
+        assert!(matches!(
+            action.action,
+            super::super::model::RewriteAction::AdvanceRequired { .. }
+        ));
+    }
+
+    #[test]
+    fn replay_retry_rejects_a_changed_target_or_nonpassing_external_attempt() {
+        let target = committed_target();
+        let target_fingerprint = fingerprint::repository_fingerprint(target.path()).unwrap();
+        let options = retry_options();
+        let mut state = out_of_band_retry_state(&target_fingerprint);
+        let nonpassing = crate::e2e_run::E2eFocusedAttemptSummary {
+            attempt: 13,
+            passed: false,
+            case_source: PathBuf::from("/cases"),
+            case_inventory_id: "inventory".to_string(),
+        };
+        assert!(
+            retry_replay_after_out_of_band_run(target.path(), &mut state, &options, &nonpassing)
+                .is_err()
+        );
+
+        let mut state = out_of_band_retry_state(&target_fingerprint);
+        fs::write(target.path().join("src.rs"), "fn changed() {}\n").unwrap();
+        let passing = crate::e2e_run::E2eFocusedAttemptSummary {
+            passed: true,
+            ..nonpassing
+        };
+        assert!(
+            retry_replay_after_out_of_band_run(target.path(), &mut state, &options, &passing)
+                .is_err()
+        );
+    }
+
     fn repair_state(observed_revision: String) -> RewriteState {
         let mut state = crate::rewrite::test_state();
         state.phase = RewritePhase::SystemRepairRequired;
@@ -583,5 +768,78 @@ mod tests {
             legacy_acceptance_command: None,
         });
         state
+    }
+
+    fn out_of_band_retry_state(target_fingerprint: &str) -> RewriteState {
+        let mut state = crate::rewrite::test_state();
+        state.phase = RewritePhase::ImplementationRequired;
+        state.api = "MOTAN /rpc/example".to_string();
+        state.case_source = Some(PathBuf::from("/cases"));
+        state.case_inventory_id = Some("inventory".to_string());
+        state.target_fingerprint = Some(target_fingerprint.to_string());
+        state.attempts.push(RewriteAttemptSummary {
+            attempt: 12,
+            passed: false,
+            gates: E2eVerificationGates {
+                responses: E2eResponseGate::Nonpassing,
+                replay: E2eReplayGate::Complete,
+                dependencies: E2eDependencyGate::Clean,
+            },
+            counts: E2eDiagnosisCounts {
+                selected: 10,
+                executed: 10,
+                response_passed: 0,
+                response_nonpassing: 10,
+                response_incomplete: 0,
+            },
+        });
+        state.active_issue = Some(RewriteIssue {
+            id: "issue-response".to_string(),
+            kind: RewriteIssueKind::Response,
+            owner: RewriteIssueOwner::TargetCode,
+            summary: "response assertion could not be evaluated".to_string(),
+            pointer_pattern: Some("$response".to_string()),
+            representative: None,
+            response_diagnosis: None,
+            possible_causes: vec!["response_assertion_evaluation_or_evidence_failure".to_string()],
+            observed_target_fingerprint: target_fingerprint.to_string(),
+            attempt: 12,
+            comparison_observation: None,
+        });
+        state
+    }
+
+    fn retry_options() -> RewriteReplayRetryOptions {
+        RewriteReplayRetryOptions {
+            target_root: PathBuf::from("/target"),
+            api: "MOTAN /rpc/example".to_string(),
+            failed_attempt: 12,
+            out_of_band_attempt: 13,
+            reason: "focused Replay was run outside the coordinator".to_string(),
+            confirm_out_of_band_run: true,
+        }
+    }
+
+    fn committed_target() -> tempfile::TempDir {
+        let target = tempfile::tempdir().unwrap();
+        fs::write(target.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+        git_ok(target.path(), &["init", "-q"]);
+        git_ok(target.path(), &["config", "user.email", "test@example.com"]);
+        git_ok(target.path(), &["config", "user.name", "Traffic E2E Test"]);
+        git_ok(target.path(), &["add", "."]);
+        git_ok(target.path(), &["commit", "-q", "-m", "baseline"]);
+        target
+    }
+
+    fn git_ok(repository: &Path, args: &[&str]) {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(repository)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
     }
 }

@@ -5,8 +5,9 @@ use std::process::ExitCode;
 use anyhow::{Result, ensure};
 use clap::{Args, Parser, Subcommand};
 use traffic_e2e::{
-    RewriteRepairCancelOptions, StartupSnapshotRecaptureOptions, cancel_misrouted_rewrite_repair,
-    recapture_startup_snapshot,
+    RewriteRepairCancelOptions, RewriteReplayRetryOptions, StartupSnapshotRecaptureOptions,
+    cancel_misrouted_rewrite_repair, recapture_startup_snapshot,
+    retry_rewrite_replay_after_out_of_band_run,
 };
 
 #[derive(Debug, Parser)]
@@ -47,6 +48,8 @@ struct RepairArgs {
 enum RepairCommand {
     /// Return a misrouted source-change repair to target implementation.
     Cancel(RepairCancelArgs),
+    /// Re-arm coordinator Replay after a confirmed out-of-band focused run.
+    RetryReplay(RepairRetryReplayArgs),
 }
 
 #[derive(Debug, Args)]
@@ -59,6 +62,25 @@ struct RepairCancelArgs {
     /// Confirm that this repair was routed by mistake.
     #[arg(long)]
     confirm_misroute: bool,
+}
+
+#[derive(Debug, Args)]
+struct RepairRetryReplayArgs {
+    /// Exact active API selector.
+    #[arg(long)]
+    api: String,
+    /// Failed focused attempt still owned by the coordinator.
+    #[arg(long)]
+    failed_attempt: u64,
+    /// Newer passing focused attempt started outside the coordinator.
+    #[arg(long)]
+    out_of_band_attempt: u64,
+    /// Human-readable reason for the administrator action.
+    #[arg(long)]
+    reason: String,
+    /// Confirm that the newer focused attempt was run outside the coordinator.
+    #[arg(long)]
+    confirm_out_of_band_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -126,6 +148,24 @@ fn run(cli: Cli) -> Result<()> {
                 println!();
                 Ok(())
             }
+            RepairCommand::RetryReplay(args) => {
+                let result =
+                    retry_rewrite_replay_after_out_of_band_run(RewriteReplayRetryOptions {
+                        target_root: cli.target_root,
+                        api: args.api,
+                        failed_attempt: args.failed_attempt,
+                        out_of_band_attempt: args.out_of_band_attempt,
+                        reason: args.reason,
+                        confirm_out_of_band_run: args.confirm_out_of_band_run,
+                    })?;
+                if cli.pretty {
+                    serde_json::to_writer_pretty(std::io::stdout(), &result)?;
+                } else {
+                    serde_json::to_writer(std::io::stdout(), &result)?;
+                }
+                println!();
+                Ok(())
+            }
         },
     }
 }
@@ -158,5 +198,27 @@ mod tests {
         let error = run(cli).unwrap_err();
 
         assert!(error.to_string().contains("--confirm-misroute"));
+    }
+
+    #[test]
+    fn replay_retry_requires_explicit_confirmation() {
+        let cli = Cli::try_parse_from([
+            "backend-rewrite-admin",
+            "repair",
+            "retry-replay",
+            "--api",
+            "MOTAN /rpc/example",
+            "--failed-attempt",
+            "12",
+            "--out-of-band-attempt",
+            "13",
+            "--reason",
+            "focused Replay was run outside the coordinator",
+        ])
+        .unwrap();
+
+        let error = run(cli).unwrap_err();
+
+        assert!(error.to_string().contains("--confirm-out-of-band-run"));
     }
 }

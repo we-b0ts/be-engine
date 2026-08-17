@@ -75,7 +75,8 @@ pub use recording::{
     start_rewrite_recording,
 };
 pub use repair::{
-    RewriteRepairCancelOptions, cancel_misrouted_rewrite_repair, resume_rewrite_replay_planning,
+    RewriteRepairCancelOptions, RewriteReplayRetryOptions, cancel_misrouted_rewrite_repair,
+    resume_rewrite_replay_planning, retry_rewrite_replay_after_out_of_band_run,
 };
 pub use revalidation::{
     RewriteRevalidationRequestOptions, RewriteRevalidationRequestReport,

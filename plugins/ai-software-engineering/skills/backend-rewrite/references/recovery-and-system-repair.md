@@ -61,3 +61,12 @@ status/actions and immutable artifact paths exposed by the coordinator as the
 primary interface. Read-only inspection of `.traffic-e2e/local/runtime/**` is
 allowed for diagnosis, but never edit it or reconstruct recovery actions from
 its layout.
+
+If an administrator confirms that `traffic-e2e run-api` was mistakenly run
+outside an active rewrite workflow, use `backend-rewrite-admin repair
+retry-replay` with the exact failed coordinator attempt, newer passing
+out-of-band attempt, API, reason, and confirmation flag. The command accepts
+only unchanged target content and matching case source/inventory, discards the
+external result as workflow authority, and returns the coordinator-owned
+Replay advance command. Execute that returned command once. Never edit rewrite
+state or treat the out-of-band result as API completion.
