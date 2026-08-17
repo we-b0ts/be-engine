@@ -344,10 +344,14 @@ response_rules:
           element_type: message
 ```
 
-The configured rule compares the response status and business body. Outer
-Motan frame fields and metadata are not part of this body rule. Standard replay
-without a configured Motan body rule keeps its existing normalized full-frame
-exact comparison.
+The configured rule relaxes only the ordering of the declared repeated fields
+inside the protobuf business body. During standard replay, the outer Motan
+frame remains exact after removing only the framework-generated `M_pt`
+process-time metadata entry: protocol version, flags, request ID, response
+status, serialization, and every other metadata entry must still match. A
+protocol-only rule does not relax any body field; it only enables field-level
+protobuf differences. Standard replay without a configured Motan body rule
+keeps the same normalized full-frame exact comparison.
 
 This is one progressively completed rule with two review stages. The first
 plan supplies only `protocol: protobuf`. Applying it immediately reruns the

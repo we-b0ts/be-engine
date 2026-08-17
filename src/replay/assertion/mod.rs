@@ -262,6 +262,16 @@ impl AssertionBody {
             Self::MotanFrame(frame) => frame.body(),
         }
     }
+
+    fn protocol_carrier_matches(&self, actual: &Self) -> bool {
+        match (self, actual) {
+            (Self::Bytes(_), Self::Bytes(_)) => true,
+            (Self::MotanFrame(expected), Self::MotanFrame(actual)) => {
+                expected.carrier() == actual.carrier()
+            }
+            _ => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -354,7 +364,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             differences: discovery.differences,
             order_only: discovery.order_only,
         });
-        if !body_matches {
+        if !body_matches || !expected_body.protocol_carrier_matches(&actual_body) {
             report
                 .differences
                 .push(ResponseDifference::exact_body_mismatch());

@@ -381,7 +381,29 @@ fn motan2_protocol_rule_compares_the_business_body() {
 }
 
 #[test]
-fn motan2_unordered_rule_compares_only_the_business_body() {
+fn motan2_unordered_rule_relaxes_only_business_body_order() {
+    let response_rules = "response_rules:\n  motan:\n    \"MOTAN /rpc/example\":\n      protocol: protobuf\n      unordered_paths:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n";
+    let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
+    let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
+    let (_temp, options) = write_motan2_case_with_rules(
+        response_rules,
+        Some("3"),
+        Some("1"),
+        "value",
+        "value",
+        &expected,
+        &actual,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn motan2_unordered_rule_keeps_other_metadata_exact() {
     let response_rules = "response_rules:\n  motan:\n    \"MOTAN /rpc/example\":\n      protocol: protobuf\n      unordered_paths:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n";
     let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
     let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
@@ -397,9 +419,13 @@ fn motan2_unordered_rule_compares_only_the_business_body() {
 
     let report = assert_recorded_response(options).unwrap();
 
-    assert!(report.passed);
+    assert!(!report.passed);
     assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
-    assert!(report.differences.is_empty());
+    assert_eq!(report.differences.len(), 1);
+    assert_eq!(
+        report.differences[0].kind,
+        ResponseDifferenceKind::ExactBodyMismatch
+    );
 }
 
 #[test]

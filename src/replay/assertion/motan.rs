@@ -16,6 +16,10 @@ impl ComparableResponseFrame {
     pub(super) fn body(&self) -> &[u8] {
         &self.encoded[self.body_offset..]
     }
+
+    pub(super) fn carrier(&self) -> &[u8] {
+        &self.encoded[..self.body_offset]
+    }
 }
 
 pub(super) fn comparable_response_frame(
