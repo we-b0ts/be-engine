@@ -105,6 +105,28 @@ fn protocol_rule_hints(
     query_kind: &str,
     facts: &Value,
 ) -> Vec<RewriteProtocolRuleHint> {
+    if query_kind == QUERY_REPRESENTATIVES
+        && facts
+            .pointer("/comparison_observation/motan/protocol")
+            .and_then(Value::as_str)
+            == Some("protobuf")
+    {
+        return vec![RewriteProtocolRuleHint {
+            protocol: "motan_protobuf".to_string(),
+            rule: "motan".to_string(),
+            hint: "The exact Motan body has a valid protobuf envelope. First apply the protocol stage; a subsequent comparison will report precise repeated-field paths, and the same rule can then add them as unordered paths."
+                .to_string(),
+            help: super::action::command(
+                target_root,
+                vec![
+                    "rule".to_string(),
+                    "motan".to_string(),
+                    "--help".to_string(),
+                ],
+                Vec::new(),
+            ),
+        }];
+    }
     if query_kind != QUERY_DIRTY_CLUSTERS {
         return Vec::new();
     }
@@ -143,6 +165,31 @@ fn applicable_rule_planners(
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
     let mut planners = Vec::new();
+    if query_kind == QUERY_REPRESENTATIVES
+        && issue_kind == RewriteIssueKind::Comparison
+        && facts
+            .pointer("/comparison_observation/motan/protocol")
+            .and_then(Value::as_str)
+            == Some("protobuf")
+    {
+        planners.push(RewriteApplicableRulePlanner {
+            kind: "response_body".to_string(),
+            protocol: "motan_protobuf".to_string(),
+            evidence_id: evidence_id.to_string(),
+            command: super::action::command(
+                target_root,
+                vec![
+                    "rule".to_string(),
+                    "motan".to_string(),
+                    "--evidence-id".to_string(),
+                    evidence_id.to_string(),
+                    "--protocol".to_string(),
+                    "protobuf".to_string(),
+                ],
+                Vec::new(),
+            ),
+        });
+    }
     if query_kind == QUERY_REPRESENTATIVES
         && matches!(
             issue_kind,

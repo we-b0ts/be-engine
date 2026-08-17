@@ -2,14 +2,60 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::replay::policy::{ResponseField, ResponseRuleKind};
+use crate::replay::policy::{
+    MotanBodyProtocol, ProtobufFieldPath, ResponseField, ResponseRuleKind,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseBodyMode {
     Unknown,
     JsonStructural,
+    MotanProtobuf,
     ExactBytes,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MotanBodyAssertionReport {
+    pub rule_kind: String,
+    pub protocol: MotanBodyProtocol,
+    pub envelope: String,
+    pub configured: bool,
+    pub unordered_path_candidates: Vec<ProtobufFieldPathCandidate>,
+    pub differences: Vec<ProtobufBodyDifference>,
+    pub order_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtobufBodyDifferenceKind {
+    RepeatedFieldOrderMismatch,
+    OccurrenceCountMismatch,
+    WireTypeMismatch,
+    ValueMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProtobufBodyDifference {
+    pub field_path: ProtobufFieldPath,
+    pub display_path: String,
+    pub kind: ProtobufBodyDifferenceKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProtobufFieldPathCandidate {
+    pub field_path: ProtobufFieldPath,
+    pub display_path: String,
+}
+
+impl From<ProtobufFieldPath> for ProtobufFieldPathCandidate {
+    fn from(field_path: ProtobufFieldPath) -> Self {
+        let display_path = field_path.display_path();
+        Self {
+            field_path,
+            display_path,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -91,6 +137,12 @@ pub struct ResponseAssertionCaseReport {
     pub applied_counter_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_applicable_counter_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_motan_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unused_applicable_motan_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motan: Option<MotanBodyAssertionReport>,
     pub unordered_candidates: Vec<String>,
     pub passed: bool,
 }
@@ -128,12 +180,15 @@ impl ResponseAssertionCaseReport {
             unused_applicable_unordered_rule_ids: Vec::new(),
             applied_counter_rule_ids: Vec::new(),
             unused_applicable_counter_rule_ids: Vec::new(),
+            applied_motan_rule_ids: Vec::new(),
+            unused_applicable_motan_rule_ids: Vec::new(),
+            motan: None,
             unordered_candidates: Vec::new(),
             passed: false,
         }
     }
 
-    pub(super) fn finish(&mut self, applicable: &[ResponseField]) {
+    pub(super) fn finish(&mut self, applicable: &[ResponseField], applicable_motan: &[String]) {
         let applied_dynamic = self
             .applied_dynamic_rule_ids
             .iter()
@@ -167,6 +222,16 @@ impl ResponseAssertionCaseReport {
             .filter(|field| !applied_counter.contains(&field.id))
             .map(|field| field.id.clone())
             .collect();
+        let applied_motan = self
+            .applied_motan_rule_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        self.unused_applicable_motan_rule_ids = applicable_motan
+            .iter()
+            .filter(|rule_id| !applied_motan.contains(*rule_id))
+            .cloned()
+            .collect();
         self.dynamic_candidates = self
             .differences
             .iter()
@@ -189,6 +254,7 @@ impl ResponseAssertionCaseReport {
         self.passed = self.differences.is_empty()
             && self.unused_applicable_dynamic_rule_ids.is_empty()
             && self.unused_applicable_unordered_rule_ids.is_empty()
-            && self.unused_applicable_counter_rule_ids.is_empty();
+            && self.unused_applicable_counter_rule_ids.is_empty()
+            && self.unused_applicable_motan_rule_ids.is_empty();
     }
 }

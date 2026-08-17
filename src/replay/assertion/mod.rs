@@ -2,6 +2,7 @@ mod artifact;
 mod compare;
 mod model;
 mod motan;
+pub(in crate::replay) mod protobuf;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,7 +14,9 @@ use self::artifact::{
 };
 use self::compare::compare_json;
 pub use self::model::{
-    ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference, ResponseDifferenceKind,
+    MotanBodyAssertionReport, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
+    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference,
+    ResponseDifferenceKind,
 };
 use super::policy::{fingerprint, load_replay_policy, uri_path};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
@@ -264,6 +267,17 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             .response_rules
             .matching_comparison_fields(&request.method, &path),
     };
+    let motan_rules = loaded
+        .document
+        .response_rules
+        .matching_motan_rules(&request.method, &path);
+    let is_motan_request = request.method.eq_ignore_ascii_case("MOTAN");
+    ensure!(
+        motan_rules.len() <= 1,
+        "multiple Motan response rules match {} {}",
+        request.method,
+        path
+    );
     let mut report = ResponseAssertionCaseReport::new(
         case_id,
         request.method,
@@ -280,6 +294,38 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             .differences
             .push(ResponseDifference::status(expected_status, actual_status));
     }
+    if let Some(rule) = motan_rules.first() {
+        ensure!(
+            response_fields.is_empty(),
+            "Motan response rules cannot be combined with JSON response rules"
+        );
+        report.body_mode = ResponseBodyMode::MotanProtobuf;
+        let (matches, discovery) =
+            protobuf::evaluate_motan_protobuf(&expected_body, &actual_body, &rule.unordered_paths)
+                .context("failed to apply configured Motan protobuf response rule")?;
+        report.applied_motan_rule_ids.push(rule.id.clone());
+        report.motan = Some(MotanBodyAssertionReport {
+            rule_kind: "motan".to_string(),
+            protocol: rule.protocol,
+            envelope: "simple_byte_array".to_string(),
+            configured: true,
+            unordered_path_candidates: discovery
+                .unordered_paths
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            differences: discovery.differences,
+            order_only: discovery.order_only,
+        });
+        if !matches {
+            report
+                .differences
+                .push(ResponseDifference::exact_body_mismatch());
+        }
+        report.finish(&[], std::slice::from_ref(&rule.id));
+        return Ok(report);
+    }
+
     match (
         serde_json::from_slice::<serde_json::Value>(&expected_body),
         serde_json::from_slice::<serde_json::Value>(&actual_body),
@@ -295,7 +341,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            report.finish(&applicable_fields);
+            report.finish(&applicable_fields, &[]);
         }
         _ => {
             report.body_mode = ResponseBodyMode::ExactBytes;
@@ -307,8 +353,28 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                 report
                     .differences
                     .push(ResponseDifference::exact_body_mismatch());
+                if is_motan_request
+                    && protobuf::is_motan_protobuf_body(&expected_body)
+                    && protobuf::is_motan_protobuf_body(&actual_body)
+                {
+                    let discovery =
+                        protobuf::discover_motan_protobuf_order(&expected_body, &actual_body)?;
+                    report.motan = Some(MotanBodyAssertionReport {
+                        rule_kind: "motan".to_string(),
+                        protocol: crate::replay::policy::MotanBodyProtocol::Protobuf,
+                        envelope: "simple_byte_array".to_string(),
+                        configured: false,
+                        unordered_path_candidates: discovery
+                            .unordered_paths
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                        differences: discovery.differences,
+                        order_only: discovery.order_only,
+                    });
+                }
             }
-            report.finish(&[]);
+            report.finish(&[], &[]);
         }
     }
     Ok(report)

@@ -27,6 +27,8 @@ pub(in crate::replay) struct ResponseRules {
     pub(in crate::replay) dynamic: BTreeMap<String, Vec<DynamicResponseRule>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(in crate::replay) unordered: BTreeMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(in crate::replay) motan: BTreeMap<String, MotanResponseRule>,
     #[serde(default, skip_serializing_if = "ComparisonResponseRules::is_empty")]
     pub(in crate::replay) comparison: ComparisonResponseRules,
 }
@@ -51,6 +53,7 @@ impl ResponseRules {
     pub(in crate::replay) fn is_empty(&self) -> bool {
         self.dynamic.values().all(Vec::is_empty)
             && self.unordered.values().all(Vec::is_empty)
+            && self.motan.is_empty()
             && self.comparison.is_empty()
     }
 
@@ -83,6 +86,92 @@ impl ResponseRules {
             ))
             .collect()
     }
+
+    pub(in crate::replay) fn matching_motan_rules(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> Vec<MotanResponseRuleMatch> {
+        self.motan
+            .iter()
+            .filter_map(|(api, rule)| {
+                let (candidate_method, candidate_path) = parse_api(api).ok()?;
+                (candidate_method.eq_ignore_ascii_case(method)
+                    && path_pattern_matches(candidate_path, path))
+                .then(|| MotanResponseRuleMatch {
+                    id: motan_response_rule_id(api),
+                    api: api.clone(),
+                    protocol: rule.protocol,
+                    unordered_paths: rule.unordered_paths.clone(),
+                })
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MotanBodyProtocol {
+    Protobuf,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(transparent)]
+pub struct ProtobufFieldPath(pub Vec<u32>);
+
+impl ProtobufFieldPath {
+    pub fn display_path(&self) -> String {
+        self.0
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::replay) struct MotanResponseRule {
+    pub(in crate::replay) protocol: MotanBodyProtocol,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) unordered_paths: Vec<ProtobufUnorderedPath>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct ProtobufUnorderedPath {
+    pub field_path: ProtobufFieldPath,
+    pub display_path: String,
+    pub element_type: ProtobufRepeatedElementType,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtobufRepeatedElementType {
+    String,
+    Message,
+    Int32,
+    Int64,
+    Uint32,
+    Uint64,
+    Sint32,
+    Sint64,
+    Bool,
+    Enum,
+    Fixed32,
+    Sfixed32,
+    Float,
+    Fixed64,
+    Sfixed64,
+    Double,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(in crate::replay) struct MotanResponseRuleMatch {
+    pub(in crate::replay) id: String,
+    pub(in crate::replay) api: String,
+    pub(in crate::replay) protocol: MotanBodyProtocol,
+    pub(in crate::replay) unordered_paths: Vec<ProtobufUnorderedPath>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -140,7 +229,17 @@ pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Resul
         &rules.unordered,
         &mut locations,
     )?;
+    validate_motan_rule_map(&rules.motan)?;
     validate_counter_rule_map(&rules.comparison.counter, &mut locations)?;
+    for motan_api in rules.motan.keys() {
+        let (_, motan_path) = parse_api(motan_api)?;
+        for (method, path, pointer, kind) in &locations {
+            ensure!(
+                !method.eq_ignore_ascii_case("MOTAN") || !path_patterns_overlap(motan_path, path),
+                "Motan response rule {motan_api:?} overlaps JSON response rule {kind:?} MOTAN {path} at {pointer}"
+            );
+        }
+    }
     for (index, left) in locations.iter().enumerate() {
         for right in locations.iter().skip(index + 1) {
             if left.0.eq_ignore_ascii_case(right.0)
@@ -171,7 +270,12 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
             ResponseRuleKind::Unordered,
         ))
         .chain(counter_rule_ids(&rules.comparison.counter))
+        .chain(rules.motan.keys().map(|api| motan_response_rule_id(api)))
         .collect()
+}
+
+pub(in crate::replay) fn motan_response_rule_id(api: &str) -> String {
+    format!("response:motan:{api}")
 }
 
 pub(in crate::replay) fn response_rule_id(
@@ -283,6 +387,71 @@ fn validate_counter_rule_map<'a>(
             );
             validate_counter_rule(field)?;
             locations.push((method, path, &field.pointer, ResponseRuleKind::Counter));
+        }
+    }
+    Ok(())
+}
+
+fn validate_motan_rule_map(rules: &BTreeMap<String, MotanResponseRule>) -> Result<()> {
+    const MAX_FIELD_NUMBER: u32 = (1 << 29) - 1;
+    const MAX_PATHS: usize = 32;
+    const MAX_PATH_DEPTH: usize = 32;
+
+    let mut routes = Vec::new();
+    for (api, rule) in rules {
+        let (method, path) = parse_api(api)?;
+        ensure!(
+            method == "MOTAN",
+            "Motan response rule API method must be MOTAN: {api:?}"
+        );
+        ensure!(
+            rule.unordered_paths.len() <= MAX_PATHS,
+            "Motan response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
+        );
+        let mut unique = BTreeSet::new();
+        let mut unique_display = BTreeSet::new();
+        for unordered_path in &rule.unordered_paths {
+            let field_path = &unordered_path.field_path;
+            ensure!(
+                !field_path.0.is_empty() && field_path.0.len() <= MAX_PATH_DEPTH,
+                "Motan response rule API {api:?} has an empty or over-deep protobuf field path"
+            );
+            ensure!(
+                field_path
+                    .0
+                    .iter()
+                    .all(|number| (1..=MAX_FIELD_NUMBER).contains(number)),
+                "Motan response rule API {api:?} has an invalid protobuf field number"
+            );
+            ensure!(
+                unique.insert(field_path),
+                "Motan response rule API {api:?} repeats protobuf field path {:?}",
+                field_path.0
+            );
+            validate_audit_text(&unordered_path.display_path, "display_path", 512)?;
+            ensure!(
+                unordered_path.display_path != field_path.display_path()
+                    && unordered_path
+                        .display_path
+                        .chars()
+                        .any(|character| character.is_alphabetic() || character == '_'),
+                "Motan response rule API {api:?} protobuf field path {:?} requires a semantic display_path",
+                field_path.0
+            );
+            ensure!(
+                unique_display.insert(unordered_path.display_path.as_str()),
+                "Motan response rule API {api:?} repeats display_path {:?}",
+                unordered_path.display_path
+            );
+        }
+        routes.push((api.as_str(), path));
+    }
+    for (index, (left_api, left_path)) in routes.iter().enumerate() {
+        for (right_api, right_path) in routes.iter().skip(index + 1) {
+            ensure!(
+                !path_patterns_overlap(left_path, right_path),
+                "overlapping Motan response rules select the same API: {left_api:?} and {right_api:?}"
+            );
         }
     }
     Ok(())
@@ -512,6 +681,7 @@ mod tests {
                 ("GET /api/sessions/*".to_string(), vec![dynamic("/data/id")]),
             ]),
             unordered: BTreeMap::new(),
+            motan: BTreeMap::new(),
             comparison: ComparisonResponseRules::default(),
         };
 
@@ -544,6 +714,7 @@ mod tests {
                 ),
             ]),
             unordered: BTreeMap::new(),
+            motan: BTreeMap::new(),
             comparison: ComparisonResponseRules::default(),
         };
 
@@ -561,6 +732,7 @@ mod tests {
                 "GET /api/resource".to_string(),
                 vec!["/content".to_string()],
             )]),
+            motan: BTreeMap::new(),
             comparison: ComparisonResponseRules::default(),
         };
 
@@ -588,6 +760,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_overlapping_motan_and_json_response_rules() {
+        let rules = ResponseRules {
+            unordered: BTreeMap::from([(
+                "MOTAN /rpc/example".to_string(),
+                vec!["/content".to_string()],
+            )]),
+            motan: BTreeMap::from([(
+                "MOTAN /rpc/*".to_string(),
+                MotanResponseRule {
+                    protocol: MotanBodyProtocol::Protobuf,
+                    unordered_paths: Vec::new(),
+                },
+            )]),
+            ..Default::default()
+        };
+
+        assert!(validate_response_rules(&rules).is_err());
+    }
+
+    #[test]
     fn matches_and_identifies_unordered_fields() {
         let rules = ResponseRules {
             dynamic: BTreeMap::new(),
@@ -595,6 +787,7 @@ mod tests {
                 "GET /api/config/ansible_facts".to_string(),
                 vec!["/general/sudo_users".to_string()],
             )]),
+            motan: BTreeMap::new(),
             comparison: ComparisonResponseRules::default(),
         };
 
@@ -654,6 +847,7 @@ mod tests {
                 }],
             )]),
             unordered: BTreeMap::new(),
+            motan: BTreeMap::new(),
             comparison: ComparisonResponseRules::default(),
         };
 
@@ -672,5 +866,79 @@ dynamic:
         .unwrap_err();
 
         assert!(error.to_string().contains("invalid type"));
+    }
+
+    #[test]
+    fn accepts_protocol_only_then_reviewable_motan_paths() {
+        let protocol_only = serde_yaml::from_str::<ResponseRules>(
+            r#"
+motan:
+  "MOTAN /rpc/example":
+    protocol: protobuf
+"#,
+        )
+        .unwrap();
+        validate_response_rules(&protocol_only).unwrap();
+        assert!(
+            protocol_only.motan["MOTAN /rpc/example"]
+                .unordered_paths
+                .is_empty()
+        );
+
+        let reviewed = serde_yaml::from_str::<ResponseRules>(
+            r#"
+motan:
+  "MOTAN /rpc/example":
+    protocol: protobuf
+    unordered_paths:
+      - field_path: [3, 1, 6, 3]
+        display_path: rule_collection.experiments.groups.white_list
+        element_type: string
+"#,
+        )
+        .unwrap();
+        validate_response_rules(&reviewed).unwrap();
+        assert_eq!(
+            reviewed.motan["MOTAN /rpc/example"].unordered_paths[0]
+                .field_path
+                .display_path(),
+            "3.1.6.3"
+        );
+    }
+
+    #[test]
+    fn does_not_offer_bytes_as_an_unordered_element_type() {
+        let error = serde_yaml::from_str::<ResponseRules>(
+            r#"
+motan:
+  "MOTAN /rpc/example":
+    protocol: protobuf
+    unordered_paths:
+      - field_path: [3]
+        display_path: payload
+        element_type: bytes
+"#,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("unknown variant `bytes`"));
+    }
+
+    #[test]
+    fn requires_a_semantic_display_path_for_review() {
+        let rules = serde_yaml::from_str::<ResponseRules>(
+            r#"
+motan:
+  "MOTAN /rpc/example":
+    protocol: protobuf
+    unordered_paths:
+      - field_path: [3, 1, 6, 3]
+        display_path: 3.1.6.3
+        element_type: string
+"#,
+        )
+        .unwrap();
+
+        assert!(validate_response_rules(&rules).is_err());
     }
 }

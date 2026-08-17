@@ -1,0 +1,408 @@
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, ensure};
+use serde::Serialize;
+
+use super::super::config::{fingerprint, load_replay_policy};
+use super::super::response::{
+    MotanBodyProtocol, MotanResponseRule, ProtobufUnorderedPath, motan_response_rule_id, parse_api,
+};
+use super::document::{render_response_rules, replace_response_rules};
+use crate::comparison_recording::{
+    ComparisonVerificationClassification, ComparisonVerificationOptions,
+    ComparisonVerificationOutcome, ComparisonVerificationReport, verify_comparison_recording,
+};
+use crate::config::edit::write_atomic;
+use crate::replay::{
+    ComparisonSourceMatch, ProtobufFieldPathCandidate, ResponseDifferenceKind,
+    read_comparison_response_observation,
+};
+
+#[derive(Debug, Clone)]
+pub struct MotanRuleFeedback {
+    pub policy_path: PathBuf,
+    pub api: String,
+    pub protocol: MotanBodyProtocol,
+    pub unordered_paths: Vec<ProtobufUnorderedPath>,
+    pub comparison_report: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MotanRuleReport {
+    pub policy: PathBuf,
+    pub policy_fingerprint: String,
+    pub comparison_report: PathBuf,
+    pub comparison_fingerprint: String,
+    pub api: String,
+    pub rule_id: String,
+    pub stage: &'static str,
+    pub protocol: MotanBodyProtocol,
+    pub matching_cases: usize,
+    pub selected_difference_cases: usize,
+    pub discovered_unordered_paths: Vec<ProtobufFieldPathCandidate>,
+    pub effective_unordered_paths: Vec<ProtobufUnorderedPath>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offline_comparison: Option<ComparisonVerificationOutcome>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub order_only: Option<bool>,
+    pub changed: bool,
+    pub applied: bool,
+    pub diff: String,
+}
+
+pub struct MotanRulePlan {
+    policy_path: PathBuf,
+    original: String,
+    updated: String,
+    comparison_case_source: PathBuf,
+    report: MotanRuleReport,
+}
+
+impl MotanRulePlan {
+    pub fn report(&self) -> &MotanRuleReport {
+        &self.report
+    }
+
+    pub fn apply(self) -> Result<MotanRuleReport> {
+        let current = fs::read_to_string(&self.policy_path).with_context(|| {
+            format!(
+                "failed to reread replay policy {}",
+                self.policy_path.display()
+            )
+        })?;
+        ensure!(
+            current == self.original,
+            "replay policy changed after planning; rerun plan before applying"
+        );
+        if self.report.changed {
+            write_atomic(&self.policy_path, self.updated.as_bytes())?;
+        }
+        let mut report = self.report;
+        let verification = verify_comparison_recording(ComparisonVerificationOptions {
+            case_source: self.comparison_case_source,
+            policy: self.policy_path.clone(),
+            report: report.comparison_report.clone(),
+        })?;
+        let matching = verification
+            .cases
+            .iter()
+            .filter(|case| case.api == report.api)
+            .collect::<Vec<_>>();
+        ensure!(
+            !matching.is_empty(),
+            "offline Motan verification contains no cases for {}",
+            report.api
+        );
+        let motan_reports = matching
+            .iter()
+            .filter_map(|case| case.response.as_ref()?.motan.as_ref())
+            .collect::<Vec<_>>();
+        ensure!(
+            motan_reports.len() == matching.len(),
+            "offline Motan verification did not produce protocol-aware body reports"
+        );
+        report.discovered_unordered_paths = motan_reports
+            .iter()
+            .flat_map(|motan| motan.unordered_path_candidates.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        report.order_only = Some(motan_reports.iter().all(|motan| motan.order_only));
+        report.offline_comparison = Some(verification.outcome());
+        report.policy_fingerprint = verification.policy_fingerprint;
+        report.comparison_fingerprint = fingerprint(&read_regular(
+            &report.comparison_report,
+            "refreshed comparison report",
+        )?);
+        report.applied = true;
+        Ok(report)
+    }
+}
+
+pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
+    let (method, _) = parse_api(&feedback.api)?;
+    ensure!(
+        method == "MOTAN",
+        "Motan response rule API must use canonical method MOTAN"
+    );
+    let original = read_regular_text(&feedback.policy_path, "replay policy")?;
+    let mut loaded = load_replay_policy(&feedback.policy_path)?;
+    ensure!(
+        loaded.document.version >= 2,
+        "Motan response rules require replay policy version 2"
+    );
+    let comparison_bytes = read_regular(&feedback.comparison_report, "comparison report")?;
+    let comparison: ComparisonVerificationReport =
+        serde_json::from_slice(&comparison_bytes).context("invalid comparison report")?;
+    ensure!(
+        comparison.version == 5
+            && comparison.kind == "comparison_recording_verification"
+            && comparison.expected_response == "assertions_only"
+            && comparison.assertion_mode == "comparison_recording",
+        "Motan rule planning requires current comparison recording verification evidence"
+    );
+    ensure!(
+        comparison.complete,
+        "comparison recording verification evidence must be complete"
+    );
+    ensure!(
+        comparison.policy_fingerprint == loaded.fingerprint,
+        "comparison report replay policy fingerprint is stale"
+    );
+
+    let existing = loaded
+        .document
+        .response_rules
+        .motan
+        .get(&feedback.api)
+        .cloned();
+    if let Some(existing) = &existing {
+        ensure!(
+            existing.protocol == feedback.protocol,
+            "Motan response rule already uses a different protocol"
+        );
+    }
+    let stage = if existing.is_some() {
+        "unordered_paths"
+    } else {
+        "protocol"
+    };
+    ensure!(
+        existing.is_some() || feedback.unordered_paths.is_empty(),
+        "the first Motan rule stage accepts only protocol; rerun comparison before adding unordered paths"
+    );
+    let matching = comparison
+        .cases
+        .iter()
+        .filter(|case| case.api == feedback.api)
+        .collect::<Vec<_>>();
+    ensure!(
+        !matching.is_empty(),
+        "comparison evidence contains no cases for {}",
+        feedback.api
+    );
+    let mut selected_difference_cases = 0;
+    let mut discovered = BTreeSet::new();
+    let mut diagnostic_paths = BTreeSet::new();
+    for case in &matching {
+        ensure!(
+            case.classification != ComparisonVerificationClassification::PolicyMismatch
+                && case.policy_mismatch_rule_ids.is_empty(),
+            "case {:?} has an unused applicable response rule",
+            case.case_id
+        );
+        ensure!(
+            case.source_change_pointers.is_empty(),
+            "case {:?} has source changes and cannot authorize a Motan response rule",
+            case.case_id
+        );
+        if case.passed {
+            continue;
+        }
+        ensure!(
+            case.classification == ComparisonVerificationClassification::CandidateDifference,
+            "case {:?} is not a candidate-only response difference",
+            case.case_id
+        );
+        let response = case
+            .response
+            .as_ref()
+            .with_context(|| format!("case {:?} has no response assertion", case.case_id))?;
+        ensure!(
+            response.differences.len() == 1
+                && response.differences[0].pointer == "$body"
+                && response.differences[0].kind == ResponseDifferenceKind::ExactBodyMismatch,
+            "case {:?} has differences other than the exact Motan body",
+            case.case_id
+        );
+        let motan = response
+            .motan
+            .as_ref()
+            .with_context(|| format!("case {:?} has no Motan protobuf candidate", case.case_id))?;
+        ensure!(
+            motan.protocol == feedback.protocol && motan.rule_kind == "motan",
+            "case {:?} does not support the requested Motan protocol",
+            case.case_id
+        );
+        selected_difference_cases += 1;
+        if existing.is_some() {
+            ensure!(
+                motan.configured,
+                "case {:?} was not evaluated with the configured Motan protocol",
+                case.case_id
+            );
+            discovered.extend(
+                motan
+                    .unordered_path_candidates
+                    .iter()
+                    .map(|candidate| candidate.field_path.clone()),
+            );
+            diagnostic_paths.extend(
+                motan
+                    .differences
+                    .iter()
+                    .map(|difference| difference.field_path.clone()),
+            );
+        }
+    }
+    ensure!(
+        selected_difference_cases > 0,
+        "comparison evidence contains no exact Motan body difference"
+    );
+    let existing_fields = existing
+        .as_ref()
+        .into_iter()
+        .flat_map(|rule| rule.unordered_paths.iter())
+        .map(|path| path.field_path.clone())
+        .collect::<BTreeSet<_>>();
+    let new_discovered = discovered
+        .difference(&existing_fields)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    if existing.is_some() {
+        let requested = feedback
+            .unordered_paths
+            .iter()
+            .map(|path| path.field_path.clone())
+            .collect::<BTreeSet<_>>();
+        ensure!(
+            requested.len() == feedback.unordered_paths.len(),
+            "Motan rule plan repeats an unordered protobuf field path"
+        );
+        ensure!(
+            !requested.is_empty(),
+            "the second Motan rule stage requires at least one reviewed protobuf field path"
+        );
+        ensure!(
+            requested.is_disjoint(&existing_fields),
+            "Motan rule plan repeats a protobuf field path already present in the rule"
+        );
+        ensure!(
+            new_discovered.is_subset(&requested),
+            "Motan rule plan must include every newly discovered unordered protobuf field path"
+        );
+        ensure!(
+            requested.is_subset(&diagnostic_paths),
+            "Motan rule plan field paths must be present in the protocol-aware comparison differences"
+        );
+    }
+
+    let mut effective_paths = existing
+        .as_ref()
+        .into_iter()
+        .flat_map(|rule| rule.unordered_paths.iter().cloned())
+        .map(|path| (path.field_path.clone(), path))
+        .collect::<BTreeMap<_, _>>();
+    effective_paths.extend(
+        feedback
+            .unordered_paths
+            .iter()
+            .cloned()
+            .map(|path| (path.field_path.clone(), path)),
+    );
+    let effective_paths = effective_paths.into_values().collect::<Vec<_>>();
+    if existing.is_some() {
+        for case in matching.iter().filter(|case| !case.passed) {
+            let case_dir = Path::new(&case.case_dir);
+            let expected = read_comparison_response_observation(
+                &case_dir.join("expected-response.json"),
+                "source-before response",
+            )?;
+            let actual = read_comparison_response_observation(
+                &case_dir.join("response.json"),
+                "candidate response",
+            )?;
+            let matches_before = crate::replay::assertion::protobuf::compare_motan_protobuf(
+                &expected.body,
+                &actual.body,
+                &effective_paths,
+            )?;
+            let matches_after = if !matches_before
+                && comparison.source_match == ComparisonSourceMatch::BeforeOrAfter
+                && case.response_after.is_some()
+            {
+                let after = read_comparison_response_observation(
+                    &case_dir.join("expected-response-after.json"),
+                    "source-after response",
+                )?;
+                crate::replay::assertion::protobuf::compare_motan_protobuf(
+                    &after.body,
+                    &actual.body,
+                    &effective_paths,
+                )?
+            } else {
+                false
+            };
+            ensure!(
+                matches_before || matches_after,
+                "reviewed Motan unordered paths do not fully explain case {:?}",
+                case.case_id
+            );
+        }
+    }
+    loaded.document.response_rules.motan.insert(
+        feedback.api.clone(),
+        MotanResponseRule {
+            protocol: feedback.protocol,
+            unordered_paths: effective_paths.clone(),
+        },
+    );
+    let updated = replace_response_rules(&original, &loaded.document.response_rules)?;
+    let changed = updated != original;
+    let diff = if changed {
+        format!(
+            "--- {}\n+++ {}\n@@ response_rules @@\n{}",
+            feedback.policy_path.display(),
+            feedback.policy_path.display(),
+            render_response_rules(&loaded.document.response_rules)?
+                .lines()
+                .map(|line| format!("+{line}\n"))
+                .collect::<String>()
+        )
+    } else {
+        String::new()
+    };
+
+    Ok(MotanRulePlan {
+        policy_path: feedback.policy_path.clone(),
+        original,
+        updated,
+        comparison_case_source: PathBuf::from(&comparison.case_source),
+        report: MotanRuleReport {
+            policy: feedback.policy_path,
+            policy_fingerprint: loaded.fingerprint,
+            comparison_report: feedback.comparison_report,
+            comparison_fingerprint: fingerprint(&comparison_bytes),
+            api: feedback.api.clone(),
+            rule_id: motan_response_rule_id(&feedback.api),
+            stage,
+            protocol: feedback.protocol,
+            matching_cases: matching.len(),
+            selected_difference_cases,
+            discovered_unordered_paths: discovered.into_iter().map(Into::into).collect(),
+            effective_unordered_paths: effective_paths,
+            offline_comparison: None,
+            order_only: None,
+            changed,
+            applied: false,
+            diff,
+        },
+    })
+}
+
+fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("failed to inspect {label} {}", path.display()))?;
+    ensure!(
+        metadata.is_file() && !metadata.file_type().is_symlink(),
+        "{label} must be a regular file and not a symlink"
+    );
+    fs::read(path).with_context(|| format!("failed to read {label} {}", path.display()))
+}
+
+fn read_regular_text(path: &Path, label: &str) -> Result<String> {
+    String::from_utf8(read_regular(path, label)?)
+        .with_context(|| format!("{label} {} is not UTF-8", path.display()))
+}

@@ -16,9 +16,9 @@ pub(in crate::replay) use config::{fingerprint, load_replay_policy};
 pub use feedback::{
     ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
     DynamicResponseRuleReport, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
-    MemcachedTimestampRuleReport, ResponseRuleFeedback, ResponseRulePlan, ResponseRuleReport,
-    plan_comparison_response_rule, plan_dynamic_response_rule, plan_memcached_timestamp_rule,
-    plan_response_rule,
+    MemcachedTimestampRuleReport, MotanRuleFeedback, MotanRulePlan, MotanRuleReport,
+    ResponseRuleFeedback, ResponseRulePlan, ResponseRuleReport, plan_comparison_response_rule,
+    plan_dynamic_response_rule, plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule,
 };
 pub(crate) use initialization::render_validated_replay_policy;
 pub use initialization::{
@@ -32,6 +32,7 @@ pub(in crate::replay) use pattern::uri_path;
 pub(in crate::replay) use report::ReplayPolicyReport;
 pub(crate) use response::response_locations_overlap;
 pub use response::{
-    ComparisonSourceMatch, ComparisonVerificationPolicy, DynamicResponseMechanism, ResponseField,
-    ResponseRuleKind,
+    ComparisonSourceMatch, ComparisonVerificationPolicy, DynamicResponseMechanism,
+    MotanBodyProtocol, ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
+    ResponseField, ResponseRuleKind,
 };

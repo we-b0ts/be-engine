@@ -238,7 +238,16 @@ pub struct RewriteRulePlanRecord {
     pub target_example: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memcached_timestamp: Option<RewriteMemcachedTimestampRuleSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motan: Option<RewriteMotanRuleSpec>,
     pub evidence_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RewriteMotanRuleSpec {
+    pub protocol: crate::MotanBodyProtocol,
+    #[serde(default)]
+    pub unordered_paths: Vec<crate::ProtobufUnorderedPath>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -40,14 +40,7 @@ pub(super) async fn run(args: CompareArgs) -> Result<()> {
         policy,
         report: report_path,
     })?;
-    let summary = serde_json::json!({
-        "complete": report.complete,
-        "passed": report.passed,
-        "counts": &report.counts,
-        "apis": &report.apis,
-        "representative_difference": &report.representative_difference,
-        "representative_policy_mismatch": &report.representative_policy_mismatch,
-    });
+    let summary = report.outcome();
     super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&summary)?))?;
     ensure!(
         report.passed,

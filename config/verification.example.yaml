@@ -91,6 +91,9 @@ rules:
 response_rules:
   dynamic: {}
   unordered: {}
+  # Motan byte-array responses may declare an inner protocol first, then add
+  # reviewed protobuf repeated-field paths discovered by offline verification.
+  motan: {}
   comparison:
     # before_or_after automatically enables source rechecks during record-comparison.
     source_match: before

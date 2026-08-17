@@ -324,8 +324,60 @@ traffic-e2e config replay apply response-rule \
 Both actions accept only the difference kind selected by `--kind`,
 runner-owned assertions using the current policy fingerprint, exact
 focused-case coverage, and complete, clean aggregate evidence. Apply is
-additive, sorted, and atomic. Rerun the entire affected API group after every
-policy change.
+additive, sorted, and atomic. These JSON response-rule changes require rerunning
+the entire affected API group.
+
+Motan responses whose business body is a simple byte-array envelope can opt
+into protocol-aware comparison without making the carrier bytes unordered:
+
+```yaml
+response_rules:
+  motan:
+    "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-byteArray-8cd698b4fea1fb48":
+      protocol: protobuf
+      unordered_paths:
+        - field_path: [3, 1, 6, 3]
+          display_path: rule_collection.experiments.groups.white_list
+          element_type: string
+        - field_path: [3, 3]
+          display_path: rule_collection.group_config
+          element_type: message
+```
+
+This is one progressively completed rule with two review stages. The first
+plan supplies only `protocol: protobuf`. Applying it immediately reruns the
+existing comparison verifier against the immutable response artifacts; it
+does not start source or target processes, send Motan requests, or record new
+traffic. The refreshed standard comparison report keeps the exact `$body`
+mismatch and adds protocol-aware field paths, difference kinds, and an
+`order_only` decision. Apply returns the same comparison verifier's compact
+outcome (`complete`, `passed`, counts, per-API counts, and the bounded
+representative difference); complete per-case details remain in that standard report. The
+second plan must provide every newly discovered
+unordered `field_path` together with a source/proto-reviewed semantic
+`display_path` and an explicit repeated `element_type`. A packed numeric array
+is wire-ambiguous without the protobuf type, so it first appears as a
+field-level value difference; the reviewed numeric type is accepted only when
+offline typed comparison proves that the same field is reorder-only:
+
+```bash
+backend-rewrite rule motan \
+  --evidence-id <current-evidence-id> \
+  --protocol protobuf
+
+backend-rewrite rule motan \
+  --evidence-id <current-evidence-id> \
+  --protocol protobuf \
+  --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string"}'
+```
+
+Only selected repeated fields ignore element order. Element contents,
+duplicate multiplicity, status, undeclared fields, and all other bytes remain
+exact. Intermediate field numbers are interpreted as embedded messages.
+Supported terminal types are strings, messages, booleans, enums, and protobuf
+integer/fixed-width numeric types, including packed numeric encodings.
+`bytes` is deliberately unsupported: neither the outer Motan `byte[]`, a
+protobuf `bytes` field, nor `repeated bytes` can be declared unordered.
 
 Comparison-only live counter semantics are nested separately:
 

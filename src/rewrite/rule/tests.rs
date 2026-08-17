@@ -27,6 +27,7 @@ fn response_state() -> RewriteState {
         source_example: None,
         target_example: None,
         memcached_timestamp: None,
+        motan: None,
         evidence_id: "evidence-response".to_string(),
     });
     state

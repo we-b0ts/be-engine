@@ -650,6 +650,46 @@ fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicab
 }
 
 #[test]
+fn exact_motan_protobuf_body_exposes_the_two_stage_rule_planner() {
+    let target = tempfile::tempdir().unwrap();
+    let facts = serde_json::json!({
+        "comparison_observation": {
+            "pointer": "$body",
+            "motan": {
+                "rule_kind": "motan",
+                "protocol": "protobuf",
+                "configured": false
+            }
+        }
+    });
+
+    let hints = protocol_rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
+    let planners = applicable_rule_planners(
+        target.path(),
+        RewriteIssueKind::Comparison,
+        QUERY_REPRESENTATIVES,
+        &facts,
+        "evidence-current",
+    );
+
+    assert_eq!(hints.len(), 1);
+    assert_eq!(hints[0].rule, "motan");
+    assert!(hints[0].hint.contains("First apply the protocol stage"));
+    assert_eq!(planners.len(), 2);
+    let motan = planners
+        .iter()
+        .find(|planner| planner.protocol == "motan_protobuf")
+        .unwrap();
+    assert_eq!(motan.kind, "response_body");
+    assert!(
+        motan
+            .command
+            .argv
+            .ends_with(&["--protocol".to_string(), "protobuf".to_string(),])
+    );
+}
+
+#[test]
 fn response_issues_can_query_dirty_clusters_for_protocol_rule_discovery() {
     let mut state = crate::rewrite::test_state();
     state.active_issue = Some(RewriteIssue {

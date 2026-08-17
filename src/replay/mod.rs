@@ -103,8 +103,9 @@ pub(crate) use assertion::{
     read_comparison_response_observation,
 };
 pub use assertion::{
-    ResponseAssertionCaseReport, ResponseAssertionOptions, ResponseDifference,
-    ResponseDifferenceKind, assert_recorded_response,
+    MotanBodyAssertionReport, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
+    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseAssertionOptions,
+    ResponseDifference, ResponseDifferenceKind, assert_recorded_response,
 };
 pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;
@@ -112,11 +113,12 @@ pub use policy::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
     DynamicResponseMechanism, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
     DynamicResponseRuleReport, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
-    MemcachedTimestampRuleReport, ReplayPolicyInitOptions, ReplayPolicyInitResult,
-    ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
-    ResponseRuleReport, initialize_replay_policy, plan_comparison_response_rule,
-    plan_dynamic_response_rule, plan_memcached_timestamp_rule, plan_response_rule,
-    validate_replay_policy,
+    MemcachedTimestampRuleReport, MotanBodyProtocol, MotanRuleFeedback, MotanRulePlan,
+    MotanRuleReport, ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
+    ReplayPolicyInitOptions, ReplayPolicyInitResult, ReplayPolicyValidationReport,
+    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport,
+    initialize_replay_policy, plan_comparison_response_rule, plan_dynamic_response_rule,
+    plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule, validate_replay_policy,
 };
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,
