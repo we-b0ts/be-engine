@@ -328,7 +328,7 @@ additive, sorted, and atomic. These JSON response-rule changes require rerunning
 the entire affected API group.
 
 Motan responses whose business body is a simple byte-array envelope can opt
-into protocol-aware comparison without making the carrier bytes unordered:
+into protocol-aware business-body comparison:
 
 ```yaml
 response_rules:
@@ -343,6 +343,11 @@ response_rules:
           display_path: rule_collection.group_config
           element_type: message
 ```
+
+The configured rule compares the response status and business body. Outer
+Motan frame fields and metadata are not part of this body rule. Standard replay
+without a configured Motan body rule keeps its existing normalized full-frame
+exact comparison.
 
 This is one progressively completed rule with two review stages. The first
 plan supplies only `protocol: protobuf`. Applying it immediately reruns the
@@ -375,8 +380,9 @@ backend-rewrite rule motan \
 ```
 
 Only selected repeated fields ignore element order. Element contents,
-duplicate multiplicity, status, undeclared fields, and all other bytes remain
-exact. Intermediate field numbers are interpreted as embedded messages.
+duplicate multiplicity, status, undeclared fields, and all other business-body
+bytes remain exact. Intermediate field numbers are interpreted as embedded
+messages.
 Supported terminal types are strings, messages, booleans, enums, and protobuf
 integer/fixed-width numeric types, including packed numeric encodings.
 `bytes` is deliberately unsupported: neither the outer Motan `byte[]`, a

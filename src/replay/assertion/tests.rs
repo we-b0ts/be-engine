@@ -2,7 +2,10 @@ use std::fs;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use motan_protocol::{FrameBuilder, META_PROCESS_TIME, Metadata};
+use motan_protocol::{
+    FrameBuilder, Limits, META_PROCESS_TIME, MessageFlags, Metadata, ProtocolVersion,
+    ResponseEncoder, ResponseStatus,
+};
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -90,18 +93,86 @@ fn write_motan2_case(
     expected_body: &[u8],
     actual_body: &[u8],
 ) -> (tempfile::TempDir, ResponseAssertionOptions) {
-    fn response(process_time: Option<&str>, stable_metadata: &str, body: &[u8]) -> Vec<u8> {
+    write_motan2_case_with_rules(
+        "",
+        expected_process_time,
+        actual_process_time,
+        expected_stable_metadata,
+        actual_stable_metadata,
+        expected_body,
+        actual_body,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_motan2_case_with_rules(
+    response_rules: &str,
+    expected_process_time: Option<&str>,
+    actual_process_time: Option<&str>,
+    expected_stable_metadata: &str,
+    actual_stable_metadata: &str,
+    expected_body: &[u8],
+    actual_body: &[u8],
+) -> (tempfile::TempDir, ResponseAssertionOptions) {
+    write_motan_case_with_rules(
+        ProtocolVersion::Motan2,
+        response_rules,
+        expected_process_time,
+        actual_process_time,
+        expected_stable_metadata,
+        actual_stable_metadata,
+        expected_body,
+        actual_body,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_motan_case_with_rules(
+    protocol_version: ProtocolVersion,
+    response_rules: &str,
+    expected_process_time: Option<&str>,
+    actual_process_time: Option<&str>,
+    expected_stable_metadata: &str,
+    actual_stable_metadata: &str,
+    expected_body: &[u8],
+    actual_body: &[u8],
+) -> (tempfile::TempDir, ResponseAssertionOptions) {
+    fn response(
+        protocol_version: ProtocolVersion,
+        process_time: Option<&str>,
+        stable_metadata: &str,
+        body: &[u8],
+    ) -> Vec<u8> {
         let mut metadata = Metadata::new();
         metadata.insert("stable", stable_metadata);
         if let Some(process_time) = process_time {
             metadata.insert(META_PROCESS_TIME, process_time);
         }
-        FrameBuilder::response(42)
-            .metadata(metadata)
-            .body(body.to_vec())
-            .encode()
-            .unwrap()
-            .to_vec()
+        match protocol_version {
+            ProtocolVersion::Motan1 => {
+                let mut output = Vec::new();
+                let mut encoder = ResponseEncoder::new(
+                    &mut output,
+                    protocol_version,
+                    42,
+                    MessageFlags::default(),
+                    ResponseStatus::Normal,
+                    None,
+                    &Metadata::new(),
+                    Limits::default(),
+                )
+                .unwrap();
+                encoder.write_body(body).unwrap();
+                encoder.finish().unwrap();
+                output
+            }
+            ProtocolVersion::Motan2 => FrameBuilder::response(42)
+                .metadata(metadata)
+                .body(body.to_vec())
+                .encode()
+                .unwrap()
+                .to_vec(),
+        }
     }
 
     let temp = tempdir().unwrap();
@@ -114,7 +185,10 @@ fn write_motan2_case(
         serde_json::to_vec(&json!({
             "method": "MOTAN",
             "uri": "/rpc/example",
-            "protocol_version": "motan2"
+            "protocol_version": match protocol_version {
+                ProtocolVersion::Motan1 => "motan1",
+                ProtocolVersion::Motan2 => "motan2",
+            }
         }))
         .unwrap(),
     )
@@ -126,6 +200,7 @@ fn write_motan2_case(
             "frame": {
                 "encoding": "base64",
                 "data": STANDARD.encode(response(
+                    protocol_version,
                     expected_process_time,
                     expected_stable_metadata,
                     expected_body
@@ -144,6 +219,7 @@ fn write_motan2_case(
             "body": {
                 "encoding": "base64",
                 "data": STANDARD.encode(response(
+                    protocol_version,
                     actual_process_time,
                     actual_stable_metadata,
                     actual_body
@@ -156,7 +232,7 @@ fn write_motan2_case(
     .unwrap();
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        format!("version: 2\nexpected_response: assertions_only\nrules: []\n{response_rules}"),
     )
     .unwrap();
     let options = ResponseAssertionOptions {
@@ -167,6 +243,19 @@ fn write_motan2_case(
         policy,
     };
     (temp, options)
+}
+
+fn protobuf_repeated_strings(values: &[&[u8]]) -> Vec<u8> {
+    let mut payload = Vec::new();
+    for value in values {
+        payload.push((3 << 3) | 2);
+        payload.push(u8::try_from(value.len()).unwrap());
+        payload.extend_from_slice(value);
+    }
+    let mut body = vec![3];
+    body.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+    body.extend_from_slice(&payload);
+    body
 }
 
 #[test]
@@ -262,6 +351,77 @@ fn motan2_other_metadata_remains_exact_after_process_time_normalization() {
         report.differences[0].kind,
         ResponseDifferenceKind::ExactBodyMismatch
     );
+}
+
+#[test]
+fn motan2_protocol_rule_compares_the_business_body() {
+    let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
+    let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
+    let (_temp, options) = write_motan2_case_with_rules(
+        "response_rules:\n  motan:\n    \"MOTAN /rpc/example\":\n      protocol: protobuf\n",
+        Some("3"),
+        Some("1"),
+        "value",
+        "value",
+        &expected,
+        &actual,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
+    let motan = report.motan.unwrap();
+    assert!(motan.configured);
+    assert!(motan.order_only);
+    assert_eq!(
+        motan.unordered_path_candidates[0].field_path,
+        crate::replay::policy::ProtobufFieldPath(vec![3])
+    );
+}
+
+#[test]
+fn motan2_unordered_rule_compares_only_the_business_body() {
+    let response_rules = "response_rules:\n  motan:\n    \"MOTAN /rpc/example\":\n      protocol: protobuf\n      unordered_paths:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n";
+    let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
+    let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
+    let (_temp, options) = write_motan2_case_with_rules(
+        response_rules,
+        Some("3"),
+        Some("1"),
+        "source",
+        "target",
+        &expected,
+        &actual,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn motan1_unordered_rule_compares_the_business_body() {
+    let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
+    let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
+    let (_temp, options) = write_motan_case_with_rules(
+        ProtocolVersion::Motan1,
+        "response_rules:\n  motan:\n    \"MOTAN /rpc/example\":\n      protocol: protobuf\n      unordered_paths:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n",
+        None,
+        None,
+        "",
+        "",
+        &expected,
+        &actual,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
+    assert!(report.differences.is_empty());
 }
 
 #[test]

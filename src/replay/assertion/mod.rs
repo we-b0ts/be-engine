@@ -75,16 +75,29 @@ pub fn assert_recorded_response(
         None if oneway => 204,
         None => anyhow::bail!("expected response has no status"),
     };
-    let mut expected_body = match expected.body.as_ref().or(expected.frame.as_ref()) {
+    let expected_body = match expected.body.as_ref().or(expected.frame.as_ref()) {
         Some(body) => decode_body(body, "expected response")?,
         None if oneway => Vec::new(),
         None => anyhow::bail!("expected response has no body or frame"),
     };
-    let mut actual_body = decode_body(&actual.body, "actual response")?;
-    if request.is_motan2() && !oneway {
-        expected_body = motan::comparable_response_frame(&expected_body, "expected response")?;
-        actual_body = motan::comparable_response_frame(&actual_body, "actual response")?;
-    }
+    let actual_body = decode_body(&actual.body, "actual response")?;
+    let (expected_body, actual_body) = if request.has_motan_frame() && !oneway {
+        (
+            AssertionBody::MotanFrame(motan::comparable_response_frame(
+                &expected_body,
+                "expected response",
+            )?),
+            AssertionBody::MotanFrame(motan::comparable_response_frame(
+                &actual_body,
+                "actual response",
+            )?),
+        )
+    } else {
+        (
+            AssertionBody::Bytes(expected_body),
+            AssertionBody::Bytes(actual_body),
+        )
+    };
     evaluate_response(AssertionInputs {
         mode: AssertionMode::Replay,
         case_id: options.case_id,
@@ -129,9 +142,9 @@ pub(crate) fn assert_comparison_response(
         response.version
     );
     let expected_status = captured_status(&expected, "expected response")?;
-    let expected_body = captured_body(&expected, "expected response")?;
+    let expected_body = AssertionBody::Bytes(captured_body(&expected, "expected response")?);
     let actual_status = captured_status(&response, "response")?;
-    let actual_body = captured_body(&response, "response")?;
+    let actual_body = AssertionBody::Bytes(captured_body(&response, "response")?);
     evaluate_response(AssertionInputs {
         mode: AssertionMode::Comparison,
         case_id: options.case_id,
@@ -220,14 +233,35 @@ struct AssertionInputs {
     case_id: String,
     request: RecordedRequest,
     expected_status: u16,
-    expected_body: Vec<u8>,
+    expected_body: AssertionBody,
     expected_path: PathBuf,
     expected_bytes: Vec<u8>,
     actual_status: u16,
-    actual_body: Vec<u8>,
+    actual_body: AssertionBody,
     actual_path: PathBuf,
     actual_bytes: Vec<u8>,
     policy: PathBuf,
+}
+
+enum AssertionBody {
+    Bytes(Vec<u8>),
+    MotanFrame(motan::ComparableResponseFrame),
+}
+
+impl AssertionBody {
+    fn exact_bytes(&self) -> &[u8] {
+        match self {
+            Self::Bytes(bytes) => bytes,
+            Self::MotanFrame(frame) => frame.encoded(),
+        }
+    }
+
+    fn protocol_body(&self) -> &[u8] {
+        match self {
+            Self::Bytes(bytes) => bytes,
+            Self::MotanFrame(frame) => frame.body(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -300,9 +334,12 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             "Motan response rules cannot be combined with JSON response rules"
         );
         report.body_mode = ResponseBodyMode::MotanProtobuf;
-        let (matches, discovery) =
-            protobuf::evaluate_motan_protobuf(&expected_body, &actual_body, &rule.unordered_paths)
-                .context("failed to apply configured Motan protobuf response rule")?;
+        let (body_matches, discovery) = protobuf::evaluate_motan_protobuf(
+            expected_body.protocol_body(),
+            actual_body.protocol_body(),
+            &rule.unordered_paths,
+        )
+        .context("failed to apply configured Motan protobuf response rule")?;
         report.applied_motan_rule_ids.push(rule.id.clone());
         report.motan = Some(MotanBodyAssertionReport {
             rule_kind: "motan".to_string(),
@@ -317,7 +354,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             differences: discovery.differences,
             order_only: discovery.order_only,
         });
-        if !matches {
+        if !body_matches {
             report
                 .differences
                 .push(ResponseDifference::exact_body_mismatch());
@@ -327,8 +364,8 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
     }
 
     match (
-        serde_json::from_slice::<serde_json::Value>(&expected_body),
-        serde_json::from_slice::<serde_json::Value>(&actual_body),
+        serde_json::from_slice::<serde_json::Value>(expected_body.exact_bytes()),
+        serde_json::from_slice::<serde_json::Value>(actual_body.exact_bytes()),
     ) {
         (Ok(expected), Ok(actual)) => {
             report.body_mode = ResponseBodyMode::JsonStructural;
@@ -349,16 +386,21 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                 response_fields.is_empty(),
                 "response rules require JSON response bodies"
             );
-            if expected_body != actual_body {
+            if expected_body.exact_bytes() != actual_body.exact_bytes() {
                 report
                     .differences
                     .push(ResponseDifference::exact_body_mismatch());
+                let expected_protocol_body = expected_body.protocol_body();
+                let actual_protocol_body = actual_body.protocol_body();
                 if is_motan_request
-                    && protobuf::is_motan_protobuf_body(&expected_body)
-                    && protobuf::is_motan_protobuf_body(&actual_body)
+                    && expected_protocol_body != actual_protocol_body
+                    && protobuf::is_motan_protobuf_body(expected_protocol_body)
+                    && protobuf::is_motan_protobuf_body(actual_protocol_body)
                 {
-                    let discovery =
-                        protobuf::discover_motan_protobuf_order(&expected_body, &actual_body)?;
+                    let discovery = protobuf::discover_motan_protobuf_order(
+                        expected_protocol_body,
+                        actual_protocol_body,
+                    )?;
                     report.motan = Some(MotanBodyAssertionReport {
                         rule_kind: "motan".to_string(),
                         protocol: crate::replay::policy::MotanBodyProtocol::Protobuf,
