@@ -327,14 +327,8 @@ fn canonicalize_rules(payload: &[u8], rules: &[ProtobufUnorderedPath]) -> Result
             .then_with(|| left.field_path.cmp(&right.field_path))
     });
     for rule in ordered {
-        let (next, found) =
+        let (next, _) =
             canonicalize_path(&canonical, &rule.field_path.0, Some(rule.element_type), 0)?;
-        ensure!(
-            found,
-            "protobuf unordered path {:?} ({}) is missing from the Motan body",
-            rule.field_path.0,
-            rule.display_path
-        );
         canonical = next;
     }
     Ok(canonical)
@@ -787,6 +781,11 @@ mod tests {
         field
     }
 
+    fn varint_field(number: u32, value: u8) -> Vec<u8> {
+        assert!(number < 16 && value < 128);
+        vec![(number << 3) as u8, value]
+    }
+
     fn message(fields: impl IntoIterator<Item = Vec<u8>>) -> Vec<u8> {
         fields.into_iter().flatten().collect()
     }
@@ -840,6 +839,44 @@ mod tests {
 
         assert!(discovery.unordered_paths.is_empty());
         assert!(!discovery.order_only);
+    }
+
+    #[test]
+    fn absent_unordered_path_is_a_no_op_without_hiding_presence_mismatch() {
+        let absent = body(message([varint_field(1, 81), varint_field(4, 0)]));
+        let present = body(message([bytes_field(
+            3,
+            &message([bytes_field(3, &message([bytes_field(2, &message([]))]))]),
+        )]));
+        let rule = ProtobufUnorderedPath {
+            field_path: ProtobufFieldPath(vec![3, 3, 2]),
+            display_path: "rule_collection.group_config.groups".to_string(),
+            element_type: ProtobufRepeatedElementType::Message,
+        };
+
+        assert!(compare_motan_protobuf(&absent, &absent, std::slice::from_ref(&rule)).unwrap());
+        assert!(!compare_motan_protobuf(&absent, &present, &[rule]).unwrap());
+    }
+
+    #[test]
+    fn present_unordered_path_still_requires_compatible_wire_types() {
+        let malformed = body(message([bytes_field(
+            3,
+            &message([bytes_field(3, &message([varint_field(2, 1)]))]),
+        )]));
+        let rule = ProtobufUnorderedPath {
+            field_path: ProtobufFieldPath(vec![3, 3, 2]),
+            display_path: "rule_collection.group_config.groups".to_string(),
+            element_type: ProtobufRepeatedElementType::Message,
+        };
+
+        let error = compare_motan_protobuf(&malformed, &malformed, &[rule]).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("protobuf Message repeated field is not length-delimited")
+        );
     }
 
     #[test]
