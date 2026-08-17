@@ -2,6 +2,7 @@ use std::fs;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use motan_hessian2::{Limits as HessianLimits, to_vec as encode_hessian2};
 use motan_protocol::{
     FrameBuilder, Limits, META_PROCESS_TIME, MessageFlags, Metadata, ProtocolVersion,
     ResponseEncoder, ResponseStatus,
@@ -258,6 +259,14 @@ fn protobuf_repeated_strings(values: &[&[u8]]) -> Vec<u8> {
     body
 }
 
+fn hessian2_string_list(values: &[&str]) -> Vec<u8> {
+    let payload = encode_hessian2(&values.to_vec(), HessianLimits::default()).unwrap();
+    let mut body = vec![3];
+    body.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_be_bytes());
+    body.extend_from_slice(&payload);
+    body
+}
+
 #[test]
 fn empty_bodies_compare_as_exact_bytes() {
     let (_temp, options) = write_raw_case("", "", "");
@@ -375,8 +384,13 @@ fn motan2_protocol_rule_compares_the_business_body() {
     assert!(motan.configured);
     assert!(motan.order_only);
     assert_eq!(
-        motan.unordered_path_candidates[0].field_path,
-        crate::replay::policy::ProtobufFieldPath(vec![3])
+        motan.unordered_path_candidates[0],
+        crate::replay::assertion::MotanUnorderedPathCandidate::Protobuf(
+            crate::replay::assertion::ProtobufFieldPathCandidate {
+                field_path: crate::replay::policy::ProtobufFieldPath(vec![3]),
+                display_path: "3".to_string(),
+            }
+        )
     );
 }
 
@@ -429,6 +443,74 @@ fn motan2_unordered_rule_keeps_other_metadata_exact() {
 }
 
 #[test]
+fn exact_motan2_body_reports_hessian2_as_a_protocol_candidate() {
+    let expected = hessian2_string_list(&["alice", "bob"]);
+    let actual = hessian2_string_list(&["bob", "alice"]);
+    let (_temp, options) =
+        write_motan2_case(Some("3"), Some("1"), "value", "value", &expected, &actual);
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    let motan = report.motan.unwrap();
+    assert!(!motan.configured);
+    assert_eq!(
+        motan.protocol,
+        crate::replay::policy::MotanBodyProtocol::Hessian2
+    );
+    assert!(
+        motan
+            .protocol_candidates
+            .contains(&crate::replay::policy::MotanBodyProtocol::Hessian2)
+    );
+}
+
+#[test]
+fn motan2_hessian2_unordered_rule_relaxes_only_the_selected_list() {
+    let response_rules = "response_rules:\n  motan:\n    \"MOTAN /rpc/example\":\n      protocol: hessian2\n      unordered_paths:\n        - value_path: []\n          display_path: response.names\n";
+    let expected = hessian2_string_list(&["alice", "bob"]);
+    let actual = hessian2_string_list(&["bob", "alice"]);
+    let (_temp, options) = write_motan2_case_with_rules(
+        response_rules,
+        Some("3"),
+        Some("1"),
+        "value",
+        "value",
+        &expected,
+        &actual,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::MotanHessian2);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn motan2_hessian2_unordered_rule_keeps_metadata_exact() {
+    let response_rules = "response_rules:\n  motan:\n    \"MOTAN /rpc/example\":\n      protocol: hessian2\n      unordered_paths:\n        - value_path: []\n          display_path: response.names\n";
+    let expected = hessian2_string_list(&["alice", "bob"]);
+    let actual = hessian2_string_list(&["bob", "alice"]);
+    let (_temp, options) = write_motan2_case_with_rules(
+        response_rules,
+        Some("3"),
+        Some("1"),
+        "source",
+        "target",
+        &expected,
+        &actual,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::MotanHessian2);
+    assert_eq!(report.differences.len(), 1);
+}
+
+#[test]
 fn motan1_unordered_rule_compares_the_business_body() {
     let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
     let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
@@ -447,6 +529,28 @@ fn motan1_unordered_rule_compares_the_business_body() {
 
     assert!(report.passed);
     assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn motan1_hessian2_unordered_rule_compares_the_business_body() {
+    let expected = hessian2_string_list(&["alice", "bob"]);
+    let actual = hessian2_string_list(&["bob", "alice"]);
+    let (_temp, options) = write_motan_case_with_rules(
+        ProtocolVersion::Motan1,
+        "response_rules:\n  motan:\n    \"MOTAN /rpc/example\":\n      protocol: hessian2\n      unordered_paths:\n        - value_path: []\n          display_path: response.names\n",
+        None,
+        None,
+        "",
+        "",
+        &expected,
+        &actual,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::MotanHessian2);
     assert!(report.differences.is_empty());
 }
 

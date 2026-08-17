@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::replay::policy::{
-    MotanBodyProtocol, ProtobufFieldPath, ResponseField, ResponseRuleKind,
+    Hessian2ValuePath, MotanBodyProtocol, ProtobufFieldPath, ResponseField, ResponseRuleKind,
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -12,6 +12,7 @@ pub enum ResponseBodyMode {
     Unknown,
     JsonStructural,
     MotanProtobuf,
+    MotanHessian2,
     ExactBytes,
 }
 
@@ -21,9 +22,25 @@ pub struct MotanBodyAssertionReport {
     pub protocol: MotanBodyProtocol,
     pub envelope: String,
     pub configured: bool,
-    pub unordered_path_candidates: Vec<ProtobufFieldPathCandidate>,
-    pub differences: Vec<ProtobufBodyDifference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocol_candidates: Vec<MotanBodyProtocol>,
+    pub unordered_path_candidates: Vec<MotanUnorderedPathCandidate>,
+    pub differences: Vec<MotanBodyDifference>,
     pub order_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(untagged)]
+pub enum MotanUnorderedPathCandidate {
+    Protobuf(ProtobufFieldPathCandidate),
+    Hessian2(Hessian2ValuePathCandidate),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(untagged)]
+pub enum MotanBodyDifference {
+    Protobuf(ProtobufBodyDifference),
+    Hessian2(Hessian2BodyDifference),
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -55,6 +72,62 @@ impl From<ProtobufFieldPath> for ProtobufFieldPathCandidate {
             field_path,
             display_path,
         }
+    }
+}
+
+impl From<ProtobufFieldPath> for MotanUnorderedPathCandidate {
+    fn from(field_path: ProtobufFieldPath) -> Self {
+        Self::Protobuf(field_path.into())
+    }
+}
+
+impl From<ProtobufBodyDifference> for MotanBodyDifference {
+    fn from(difference: ProtobufBodyDifference) -> Self {
+        Self::Protobuf(difference)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Hessian2ValuePathCandidate {
+    pub value_path: Hessian2ValuePath,
+    pub display_path: String,
+}
+
+impl From<Hessian2ValuePath> for Hessian2ValuePathCandidate {
+    fn from(value_path: Hessian2ValuePath) -> Self {
+        let display_path = value_path.display_path();
+        Self {
+            value_path,
+            display_path,
+        }
+    }
+}
+
+impl From<Hessian2ValuePath> for MotanUnorderedPathCandidate {
+    fn from(value_path: Hessian2ValuePath) -> Self {
+        Self::Hessian2(value_path.into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Hessian2BodyDifferenceKind {
+    ListOrderMismatch,
+    ListLengthMismatch,
+    TypeMismatch,
+    ValueMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Hessian2BodyDifference {
+    pub value_path: Hessian2ValuePath,
+    pub display_path: String,
+    pub kind: Hessian2BodyDifferenceKind,
+}
+
+impl From<Hessian2BodyDifference> for MotanBodyDifference {
+    fn from(difference: Hessian2BodyDifference) -> Self {
+        Self::Hessian2(difference)
     }
 }
 

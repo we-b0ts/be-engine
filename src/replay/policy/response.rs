@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, ensure};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use super::pattern::path_pattern_matches;
 
@@ -113,6 +113,7 @@ impl ResponseRules {
 #[serde(rename_all = "snake_case")]
 pub enum MotanBodyProtocol {
     Protobuf,
+    Hessian2,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -134,7 +135,7 @@ impl ProtobufFieldPath {
 pub(in crate::replay) struct MotanResponseRule {
     pub(in crate::replay) protocol: MotanBodyProtocol,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) unordered_paths: Vec<ProtobufUnorderedPath>,
+    pub(in crate::replay) unordered_paths: Vec<MotanUnorderedPath>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -143,6 +144,84 @@ pub struct ProtobufUnorderedPath {
     pub field_path: ProtobufFieldPath,
     pub display_path: String,
     pub element_type: ProtobufRepeatedElementType,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(transparent)]
+pub struct Hessian2ValuePath(pub Vec<String>);
+
+impl Hessian2ValuePath {
+    pub fn display_path(&self) -> String {
+        if self.0.is_empty() {
+            return "$".to_string();
+        }
+        self.0
+            .iter()
+            .fold(String::from("$"), |mut display, segment| {
+                if segment == "*" {
+                    display.push_str("[*]");
+                } else {
+                    display.push('.');
+                    display.push_str(segment);
+                }
+                display
+            })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct Hessian2UnorderedPath {
+    pub value_path: Hessian2ValuePath,
+    pub display_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(untagged)]
+pub enum MotanUnorderedPath {
+    Protobuf(ProtobufUnorderedPath),
+    Hessian2(Hessian2UnorderedPath),
+}
+
+impl<'de> Deserialize<'de> for MotanUnorderedPath {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let has_field_path = value.get("field_path").is_some();
+        let has_value_path = value.get("value_path").is_some();
+        match (has_field_path, has_value_path) {
+            (true, false) => serde_json::from_value(value)
+                .map(Self::Protobuf)
+                .map_err(D::Error::custom),
+            (false, true) => serde_json::from_value(value)
+                .map(Self::Hessian2)
+                .map_err(D::Error::custom),
+            (true, true) => Err(D::Error::custom(
+                "Motan unordered path cannot contain both field_path and value_path",
+            )),
+            (false, false) => Err(D::Error::custom(
+                "Motan unordered path requires field_path or value_path",
+            )),
+        }
+    }
+}
+
+impl MotanUnorderedPath {
+    pub fn protocol(&self) -> MotanBodyProtocol {
+        match self {
+            Self::Protobuf(_) => MotanBodyProtocol::Protobuf,
+            Self::Hessian2(_) => MotanBodyProtocol::Hessian2,
+        }
+    }
+
+    pub fn display_path(&self) -> &str {
+        match self {
+            Self::Protobuf(path) => &path.display_path,
+            Self::Hessian2(path) => &path.display_path,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -171,7 +250,7 @@ pub(in crate::replay) struct MotanResponseRuleMatch {
     pub(in crate::replay) id: String,
     pub(in crate::replay) api: String,
     pub(in crate::replay) protocol: MotanBodyProtocol,
-    pub(in crate::replay) unordered_paths: Vec<ProtobufUnorderedPath>,
+    pub(in crate::replay) unordered_paths: Vec<MotanUnorderedPath>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -408,41 +487,68 @@ fn validate_motan_rule_map(rules: &BTreeMap<String, MotanResponseRule>) -> Resul
             rule.unordered_paths.len() <= MAX_PATHS,
             "Motan response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
         );
-        let mut unique = BTreeSet::new();
+        let mut unique_protobuf = BTreeSet::new();
+        let mut unique_hessian2 = BTreeSet::new();
         let mut unique_display = BTreeSet::new();
         for unordered_path in &rule.unordered_paths {
-            let field_path = &unordered_path.field_path;
             ensure!(
-                !field_path.0.is_empty() && field_path.0.len() <= MAX_PATH_DEPTH,
-                "Motan response rule API {api:?} has an empty or over-deep protobuf field path"
+                unordered_path.protocol() == rule.protocol,
+                "Motan response rule API {api:?} has an unordered path for a different body protocol"
+            );
+            validate_audit_text(unordered_path.display_path(), "display_path", 512)?;
+            ensure!(
+                unordered_path
+                    .display_path()
+                    .chars()
+                    .any(|character| character.is_alphabetic() || character == '_'),
+                "Motan response rule API {api:?} requires a semantic display_path"
             );
             ensure!(
-                field_path
-                    .0
-                    .iter()
-                    .all(|number| (1..=MAX_FIELD_NUMBER).contains(number)),
-                "Motan response rule API {api:?} has an invalid protobuf field number"
-            );
-            ensure!(
-                unique.insert(field_path),
-                "Motan response rule API {api:?} repeats protobuf field path {:?}",
-                field_path.0
-            );
-            validate_audit_text(&unordered_path.display_path, "display_path", 512)?;
-            ensure!(
-                unordered_path.display_path != field_path.display_path()
-                    && unordered_path
-                        .display_path
-                        .chars()
-                        .any(|character| character.is_alphabetic() || character == '_'),
-                "Motan response rule API {api:?} protobuf field path {:?} requires a semantic display_path",
-                field_path.0
-            );
-            ensure!(
-                unique_display.insert(unordered_path.display_path.as_str()),
+                unique_display.insert(unordered_path.display_path()),
                 "Motan response rule API {api:?} repeats display_path {:?}",
-                unordered_path.display_path
+                unordered_path.display_path()
             );
+            match unordered_path {
+                MotanUnorderedPath::Protobuf(unordered_path) => {
+                    let field_path = &unordered_path.field_path;
+                    ensure!(
+                        !field_path.0.is_empty() && field_path.0.len() <= MAX_PATH_DEPTH,
+                        "Motan response rule API {api:?} has an empty or over-deep protobuf field path"
+                    );
+                    ensure!(
+                        field_path
+                            .0
+                            .iter()
+                            .all(|number| (1..=MAX_FIELD_NUMBER).contains(number)),
+                        "Motan response rule API {api:?} has an invalid protobuf field number"
+                    );
+                    ensure!(
+                        unique_protobuf.insert(field_path),
+                        "Motan response rule API {api:?} repeats protobuf field path {:?}",
+                        field_path.0
+                    );
+                    ensure!(
+                        unordered_path.display_path != field_path.display_path(),
+                        "Motan response rule API {api:?} protobuf field path {:?} requires a semantic display_path",
+                        field_path.0
+                    );
+                }
+                MotanUnorderedPath::Hessian2(unordered_path) => {
+                    let value_path = &unordered_path.value_path;
+                    ensure!(
+                        value_path.0.len() <= MAX_PATH_DEPTH,
+                        "Motan response rule API {api:?} has an over-deep Hessian2 value path"
+                    );
+                    for segment in &value_path.0 {
+                        validate_audit_text(segment, "Hessian2 value path segment", 256)?;
+                    }
+                    ensure!(
+                        unique_hessian2.insert(value_path),
+                        "Motan response rule API {api:?} repeats Hessian2 value path {:?}",
+                        value_path.0
+                    );
+                }
+            }
         }
         routes.push((api.as_str(), path));
     }
@@ -646,6 +752,10 @@ fn path_patterns_overlap(left: &str, right: &str) -> bool {
             .zip(right)
             .all(|(left, right)| left == &"*" || right == "*" || left == &right)
 }
+
+#[cfg(test)]
+#[path = "response/motan_tests.rs"]
+mod motan_tests;
 
 #[cfg(test)]
 mod tests {
@@ -866,79 +976,5 @@ dynamic:
         .unwrap_err();
 
         assert!(error.to_string().contains("invalid type"));
-    }
-
-    #[test]
-    fn accepts_protocol_only_then_reviewable_motan_paths() {
-        let protocol_only = serde_yaml::from_str::<ResponseRules>(
-            r#"
-motan:
-  "MOTAN /rpc/example":
-    protocol: protobuf
-"#,
-        )
-        .unwrap();
-        validate_response_rules(&protocol_only).unwrap();
-        assert!(
-            protocol_only.motan["MOTAN /rpc/example"]
-                .unordered_paths
-                .is_empty()
-        );
-
-        let reviewed = serde_yaml::from_str::<ResponseRules>(
-            r#"
-motan:
-  "MOTAN /rpc/example":
-    protocol: protobuf
-    unordered_paths:
-      - field_path: [3, 1, 6, 3]
-        display_path: rule_collection.experiments.groups.white_list
-        element_type: string
-"#,
-        )
-        .unwrap();
-        validate_response_rules(&reviewed).unwrap();
-        assert_eq!(
-            reviewed.motan["MOTAN /rpc/example"].unordered_paths[0]
-                .field_path
-                .display_path(),
-            "3.1.6.3"
-        );
-    }
-
-    #[test]
-    fn does_not_offer_bytes_as_an_unordered_element_type() {
-        let error = serde_yaml::from_str::<ResponseRules>(
-            r#"
-motan:
-  "MOTAN /rpc/example":
-    protocol: protobuf
-    unordered_paths:
-      - field_path: [3]
-        display_path: payload
-        element_type: bytes
-"#,
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("unknown variant `bytes`"));
-    }
-
-    #[test]
-    fn requires_a_semantic_display_path_for_review() {
-        let rules = serde_yaml::from_str::<ResponseRules>(
-            r#"
-motan:
-  "MOTAN /rpc/example":
-    protocol: protobuf
-    unordered_paths:
-      - field_path: [3, 1, 6, 3]
-        display_path: 3.1.6.3
-        element_type: string
-"#,
-        )
-        .unwrap();
-
-        assert!(validate_response_rules(&rules).is_err());
     }
 }

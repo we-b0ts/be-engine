@@ -1200,11 +1200,11 @@ When evidence identifies a protocol with supported rules, the report includes
 exact read-only `help` command. This list is separate from
 `applicable_rule_planners`, which contains planner entrypoints appropriate to
 the current evidence state; neither list proves that a rule applies. For a
-Motan body without a configured protocol, the
-planner offers protocol configuration. Once protobuf is configured, the
-protocol rule hint instead directs the AI to the reported field differences
-and unordered-path candidates. Memcached dirty-cluster evidence currently
-exposes `protobuf-timestamp`, whose help command is:
+Motan body without a configured protocol, the planner offers each
+syntactically valid protobuf or Hessian2 protocol candidate. Once one is
+configured, the protocol rule hint instead directs the AI to the reported
+field/value differences and unordered-path candidates. Memcached dirty-cluster
+evidence currently exposes `protobuf-timestamp`, whose help command is:
 
 ```bash
 backend-rewrite --target-root ../target rule memcached protobuf-timestamp --help

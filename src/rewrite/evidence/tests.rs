@@ -773,15 +773,29 @@ fn representative_evidence_probes_legacy_motan_reports_from_existing_bodies() {
         "comparison_observation": {
             "classification": "candidate_difference",
             "pointer": "$body",
-            "difference_kind": "exact_body_mismatch"
+            "difference_kind": "exact_body_mismatch",
+            "motan": {
+                "rule_kind": "motan",
+                "protocol": "protobuf",
+                "configured": false,
+                "order_only": true
+            }
         }
     });
 
-    enrich_motan_protocol_candidate(&state, QUERY_REPRESENTATIVES, &mut facts).unwrap();
+    motan::enrich_protocol_candidate(&state, QUERY_REPRESENTATIVES, &mut facts).unwrap();
 
     assert_eq!(
         facts.pointer("/comparison_observation/motan/protocol"),
         Some(&Value::String("protobuf".to_string()))
+    );
+    assert_eq!(
+        facts.pointer("/comparison_observation/motan/protocol_candidates/0"),
+        Some(&Value::String("protobuf".to_string()))
+    );
+    assert_eq!(
+        facts.pointer("/comparison_observation/motan/order_only"),
+        Some(&Value::Bool(true))
     );
     let planners = applicable_rule_planners(
         target.path(),

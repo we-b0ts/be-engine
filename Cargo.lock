@@ -1015,6 +1015,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "motan-hessian2"
+version = "0.1.0"
+dependencies = [
+ "cesu8",
+ "smallvec",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "motan-protocol"
 version = "0.1.0"
 dependencies = [
@@ -1878,6 +1887,7 @@ dependencies = [
  "kafka-protocol",
  "libc",
  "motan-codec",
+ "motan-hessian2",
  "motan-protocol",
  "rcgen",
  "redis-protocol",

@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    DynamicResponseMechanism, MotanBodyProtocol, ProtobufUnorderedPath, RecordingApi,
+    DynamicResponseMechanism, MotanBodyProtocol, MotanUnorderedPath, RecordingApi,
     ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteContext,
     RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteNextOptions,
     RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
@@ -210,24 +210,26 @@ struct MotanRulePlanArgs {
     /// Binary protocol used inside the Motan simple byte-array envelope.
     #[arg(long, value_enum)]
     protocol: MotanBodyProtocolArg,
-    /// Reviewed protobuf repeated field from protocol-aware evidence as JSON: {"field_path":[3,1],"display_path":"...","element_type":"string"}.
+    /// Reviewed unordered collection from protocol-aware evidence as JSON. Protobuf uses field_path + element_type; Hessian2 uses value_path.
     #[arg(long = "unordered-path", value_parser = parse_motan_unordered_path)]
-    unordered_paths: Vec<ProtobufUnorderedPath>,
+    unordered_paths: Vec<MotanUnorderedPath>,
 }
 
-fn parse_motan_unordered_path(value: &str) -> Result<ProtobufUnorderedPath, String> {
+fn parse_motan_unordered_path(value: &str) -> Result<MotanUnorderedPath, String> {
     serde_json::from_str(value).map_err(|error| format!("invalid unordered path JSON: {error}"))
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum MotanBodyProtocolArg {
     Protobuf,
+    Hessian2,
 }
 
 impl From<MotanBodyProtocolArg> for MotanBodyProtocol {
     fn from(value: MotanBodyProtocolArg) -> Self {
         match value {
             MotanBodyProtocolArg::Protobuf => Self::Protobuf,
+            MotanBodyProtocolArg::Hessian2 => Self::Hessian2,
         }
     }
 }

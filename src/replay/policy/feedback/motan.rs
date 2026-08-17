@@ -7,7 +7,8 @@ use serde::Serialize;
 
 use super::super::config::{fingerprint, load_replay_policy};
 use super::super::response::{
-    MotanBodyProtocol, MotanResponseRule, ProtobufUnorderedPath, motan_response_rule_id, parse_api,
+    Hessian2ValuePath, MotanBodyProtocol, MotanResponseRule, MotanUnorderedPath, ProtobufFieldPath,
+    motan_response_rule_id, parse_api,
 };
 use super::document::{render_response_rules, replace_response_rules};
 use crate::comparison_recording::{
@@ -16,16 +17,23 @@ use crate::comparison_recording::{
 };
 use crate::config::edit::write_atomic;
 use crate::replay::{
-    ComparisonSourceMatch, ProtobufFieldPathCandidate, ResponseDifferenceKind,
-    is_motan_protobuf_body, read_comparison_response_observation,
+    ComparisonSourceMatch, Hessian2ValuePathCandidate, MotanBodyDifference,
+    MotanUnorderedPathCandidate, ProtobufFieldPathCandidate, ResponseDifferenceKind,
+    is_motan_hessian2_body, is_motan_protobuf_body, read_comparison_response_observation,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum BodyPath {
+    Protobuf(ProtobufFieldPath),
+    Hessian2(Hessian2ValuePath),
+}
 
 #[derive(Debug, Clone)]
 pub struct MotanRuleFeedback {
     pub policy_path: PathBuf,
     pub api: String,
     pub protocol: MotanBodyProtocol,
-    pub unordered_paths: Vec<ProtobufUnorderedPath>,
+    pub unordered_paths: Vec<MotanUnorderedPath>,
     pub comparison_report: PathBuf,
 }
 
@@ -40,8 +48,8 @@ pub struct MotanRuleReport {
     pub protocol: MotanBodyProtocol,
     pub matching_cases: usize,
     pub selected_difference_cases: usize,
-    pub discovered_unordered_paths: Vec<ProtobufFieldPathCandidate>,
-    pub effective_unordered_paths: Vec<ProtobufUnorderedPath>,
+    pub discovered_unordered_paths: Vec<MotanUnorderedPathCandidate>,
+    pub effective_unordered_paths: Vec<MotanUnorderedPath>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offline_comparison: Option<ComparisonVerificationOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -165,6 +173,13 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
     }
     let protocol_configured = existing.is_some();
     ensure!(
+        feedback
+            .unordered_paths
+            .iter()
+            .all(|path| path.protocol() == feedback.protocol),
+        "Motan rule plan contains an unordered path for a different body protocol"
+    );
+    ensure!(
         protocol_configured || feedback.unordered_paths.is_empty(),
         "configure the Motan body protocol before adding unordered paths; apply the protocol configuration to obtain protocol-aware comparison evidence"
     );
@@ -215,10 +230,25 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
         let motan = response.motan.as_ref();
         if let Some(motan) = motan {
             ensure!(
-                motan.protocol == feedback.protocol && motan.rule_kind == "motan",
-                "case {:?} does not support the requested Motan protocol",
+                motan.rule_kind == "motan",
+                "case {:?} has an invalid Motan body report",
                 case.case_id
             );
+            let protocol_reported = motan.protocol == feedback.protocol
+                || (!motan.configured && motan.protocol_candidates.contains(&feedback.protocol));
+            if !protocol_reported && !protocol_configured && !motan.configured {
+                validate_unreported_protocol_candidate(
+                    Path::new(&case.case_dir),
+                    &case.case_id,
+                    feedback.protocol,
+                )?;
+            } else {
+                ensure!(
+                    protocol_reported,
+                    "case {:?} does not support the requested Motan protocol",
+                    case.case_id
+                );
+            }
         } else if !protocol_configured {
             validate_unreported_protocol_candidate(
                 Path::new(&case.case_dir),
@@ -243,13 +273,12 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
                 motan
                     .unordered_path_candidates
                     .iter()
-                    .map(|candidate| candidate.field_path.clone()),
+                    .filter_map(|candidate| body_path_from_candidate(candidate, feedback.protocol)),
             );
             diagnostic_paths.extend(
-                motan
-                    .differences
-                    .iter()
-                    .map(|difference| difference.field_path.clone()),
+                motan.differences.iter().filter_map(|difference| {
+                    body_path_from_difference(difference, feedback.protocol)
+                }),
             );
         }
     }
@@ -261,7 +290,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
         .as_ref()
         .into_iter()
         .flat_map(|rule| rule.unordered_paths.iter())
-        .map(|path| path.field_path.clone())
+        .map(body_path_from_rule)
         .collect::<BTreeSet<_>>();
     let new_discovered = discovered
         .difference(&existing_fields)
@@ -271,27 +300,27 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
         let requested = feedback
             .unordered_paths
             .iter()
-            .map(|path| path.field_path.clone())
+            .map(body_path_from_rule)
             .collect::<BTreeSet<_>>();
         ensure!(
             requested.len() == feedback.unordered_paths.len(),
-            "Motan rule plan repeats an unordered protobuf field path"
+            "Motan rule plan repeats an unordered body path"
         );
         ensure!(
             !requested.is_empty(),
-            "the configured Motan body protocol requires at least one reviewed protobuf field path from current protocol-aware comparison evidence"
+            "the configured Motan body protocol requires at least one reviewed unordered path from current protocol-aware comparison evidence"
         );
         ensure!(
             requested.is_disjoint(&existing_fields),
-            "Motan rule plan repeats a protobuf field path already present in the rule"
+            "Motan rule plan repeats a body path already present in the rule"
         );
         ensure!(
             new_discovered.is_subset(&requested),
-            "Motan rule plan must include every newly discovered unordered protobuf field path"
+            "Motan rule plan must include every newly discovered unordered body path"
         );
         ensure!(
             requested.is_subset(&diagnostic_paths),
-            "Motan rule plan field paths must be present in the protocol-aware comparison differences"
+            "Motan rule plan paths must be present in the protocol-aware comparison differences"
         );
     }
 
@@ -299,14 +328,14 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
         .as_ref()
         .into_iter()
         .flat_map(|rule| rule.unordered_paths.iter().cloned())
-        .map(|path| (path.field_path.clone(), path))
+        .map(|path| (body_path_from_rule(&path), path))
         .collect::<BTreeMap<_, _>>();
     effective_paths.extend(
         feedback
             .unordered_paths
             .iter()
             .cloned()
-            .map(|path| (path.field_path.clone(), path)),
+            .map(|path| (body_path_from_rule(&path), path)),
     );
     let effective_paths = effective_paths.into_values().collect::<Vec<_>>();
     if protocol_configured {
@@ -320,9 +349,10 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
                 &case_dir.join("response.json"),
                 "candidate response",
             )?;
-            let matches_before = crate::replay::assertion::protobuf::compare_motan_protobuf(
+            let matches_before = compare_motan_body(
                 &expected.body,
                 &actual.body,
+                feedback.protocol,
                 &effective_paths,
             )?;
             let matches_after = if !matches_before
@@ -333,9 +363,10 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
                     &case_dir.join("expected-response-after.json"),
                     "source-after response",
                 )?;
-                crate::replay::assertion::protobuf::compare_motan_protobuf(
+                compare_motan_body(
                     &after.body,
                     &actual.body,
+                    feedback.protocol,
                     &effective_paths,
                 )?
             } else {
@@ -386,7 +417,10 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             protocol: feedback.protocol,
             matching_cases: matching.len(),
             selected_difference_cases,
-            discovered_unordered_paths: discovered.into_iter().map(Into::into).collect(),
+            discovered_unordered_paths: discovered
+                .into_iter()
+                .map(candidate_from_body_path)
+                .collect(),
             effective_unordered_paths: effective_paths,
             offline_comparison: None,
             order_only: None,
@@ -421,8 +455,100 @@ fn validate_unreported_protocol_candidate(
                 "case {case_id:?} candidate body is not a valid protobuf simple byte-array envelope"
             );
         }
+        MotanBodyProtocol::Hessian2 => {
+            ensure!(
+                is_motan_hessian2_body(&expected.body),
+                "case {case_id:?} source-before body is not a valid Hessian2 simple byte-array envelope"
+            );
+            ensure!(
+                is_motan_hessian2_body(&actual.body),
+                "case {case_id:?} candidate body is not a valid Hessian2 simple byte-array envelope"
+            );
+        }
     }
     Ok(())
+}
+
+fn body_path_from_rule(path: &MotanUnorderedPath) -> BodyPath {
+    match path {
+        MotanUnorderedPath::Protobuf(path) => BodyPath::Protobuf(path.field_path.clone()),
+        MotanUnorderedPath::Hessian2(path) => BodyPath::Hessian2(path.value_path.clone()),
+    }
+}
+
+fn body_path_from_candidate(
+    path: &MotanUnorderedPathCandidate,
+    protocol: MotanBodyProtocol,
+) -> Option<BodyPath> {
+    match (path, protocol) {
+        (MotanUnorderedPathCandidate::Protobuf(path), MotanBodyProtocol::Protobuf) => {
+            Some(BodyPath::Protobuf(path.field_path.clone()))
+        }
+        (MotanUnorderedPathCandidate::Hessian2(path), MotanBodyProtocol::Hessian2) => {
+            Some(BodyPath::Hessian2(path.value_path.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn body_path_from_difference(
+    difference: &MotanBodyDifference,
+    protocol: MotanBodyProtocol,
+) -> Option<BodyPath> {
+    match (difference, protocol) {
+        (MotanBodyDifference::Protobuf(difference), MotanBodyProtocol::Protobuf) => {
+            Some(BodyPath::Protobuf(difference.field_path.clone()))
+        }
+        (MotanBodyDifference::Hessian2(difference), MotanBodyProtocol::Hessian2) => {
+            Some(BodyPath::Hessian2(difference.value_path.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn candidate_from_body_path(path: BodyPath) -> MotanUnorderedPathCandidate {
+    match path {
+        BodyPath::Protobuf(field_path) => {
+            MotanUnorderedPathCandidate::Protobuf(ProtobufFieldPathCandidate::from(field_path))
+        }
+        BodyPath::Hessian2(value_path) => {
+            MotanUnorderedPathCandidate::Hessian2(Hessian2ValuePathCandidate::from(value_path))
+        }
+    }
+}
+
+fn compare_motan_body(
+    expected: &[u8],
+    actual: &[u8],
+    protocol: MotanBodyProtocol,
+    unordered_paths: &[MotanUnorderedPath],
+) -> Result<bool> {
+    match protocol {
+        MotanBodyProtocol::Protobuf => {
+            let paths = unordered_paths
+                .iter()
+                .map(|path| match path {
+                    MotanUnorderedPath::Protobuf(path) => Ok(path.clone()),
+                    MotanUnorderedPath::Hessian2(_) => {
+                        anyhow::bail!("protobuf rule contains a Hessian2 unordered path")
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            crate::replay::assertion::protobuf::compare_motan_protobuf(expected, actual, &paths)
+        }
+        MotanBodyProtocol::Hessian2 => {
+            let paths = unordered_paths
+                .iter()
+                .map(|path| match path {
+                    MotanUnorderedPath::Hessian2(path) => Ok(path.clone()),
+                    MotanUnorderedPath::Protobuf(_) => {
+                        anyhow::bail!("Hessian2 rule contains a protobuf unordered path")
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            crate::replay::assertion::hessian2::compare_motan_hessian2(expected, actual, &paths)
+        }
+    }
 }
 
 fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {

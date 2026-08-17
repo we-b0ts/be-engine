@@ -98,28 +98,32 @@ pub struct ReplayControlConfig {
 
 pub type MysqlReplayControlConfig = ReplayControlConfig;
 
+pub(crate) use assertion::hessian2::is_motan_hessian2_body;
 pub(crate) use assertion::protobuf::is_motan_protobuf_body;
 pub(crate) use assertion::{
     ComparisonResponseAssertionOptions, ComparisonResponseObservation, assert_comparison_response,
     read_comparison_response_observation,
 };
 pub use assertion::{
-    MotanBodyAssertionReport, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
-    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseAssertionOptions,
-    ResponseDifference, ResponseDifferenceKind, assert_recorded_response,
+    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2ValuePathCandidate,
+    MotanBodyAssertionReport, MotanBodyDifference, MotanUnorderedPathCandidate,
+    ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate,
+    ResponseAssertionCaseReport, ResponseAssertionOptions, ResponseDifference,
+    ResponseDifferenceKind, assert_recorded_response,
 };
 pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;
 pub use policy::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
     DynamicResponseMechanism, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
-    DynamicResponseRuleReport, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
-    MemcachedTimestampRuleReport, MotanBodyProtocol, MotanRuleFeedback, MotanRulePlan,
-    MotanRuleReport, ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
-    ReplayPolicyInitOptions, ReplayPolicyInitResult, ReplayPolicyValidationReport,
-    ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan, ResponseRuleReport,
-    initialize_replay_policy, plan_comparison_response_rule, plan_dynamic_response_rule,
-    plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule, validate_replay_policy,
+    DynamicResponseRuleReport, Hessian2UnorderedPath, Hessian2ValuePath,
+    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
+    MotanBodyProtocol, MotanRuleFeedback, MotanRulePlan, MotanRuleReport, MotanUnorderedPath,
+    ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath, ReplayPolicyInitOptions,
+    ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, ResponseRuleReport, initialize_replay_policy, plan_comparison_response_rule,
+    plan_dynamic_response_rule, plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule,
+    validate_replay_policy,
 };
 pub use report::aggregate::{
     ReplayAggregateCounts, ReplayAggregateOptions, ReplayAggregateReport, aggregate_replay_reports,

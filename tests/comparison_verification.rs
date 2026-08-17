@@ -6,12 +6,15 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use motan_hessian2::{Limits as HessianLimits, to_vec as encode_hessian2};
 use serde_json::json;
 use tempfile::tempdir;
 use traffic_e2e::{
-    ComparisonVerificationClassification, ComparisonVerificationOptions, MatchedSourceObservation,
-    MotanBodyProtocol, MotanRuleFeedback, ProtobufFieldPath, ProtobufRepeatedElementType,
-    ProtobufUnorderedPath, ResponseDifferenceKind, plan_motan_rule, verify_comparison_recording,
+    ComparisonVerificationClassification, ComparisonVerificationOptions, Hessian2UnorderedPath,
+    Hessian2ValuePath, MatchedSourceObservation, MotanBodyDifference, MotanBodyProtocol,
+    MotanRuleFeedback, MotanUnorderedPath, MotanUnorderedPathCandidate, ProtobufFieldPath,
+    ProtobufRepeatedElementType, ProtobufUnorderedPath, ResponseDifferenceKind, plan_motan_rule,
+    verify_comparison_recording,
 };
 
 #[test]
@@ -163,18 +166,18 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
     })
     .unwrap();
     assert!(!initial.passed);
-    assert_eq!(
-        initial.cases[0]
+    assert!(matches!(
+        &initial.cases[0]
             .response
             .as_ref()
             .unwrap()
             .motan
             .as_ref()
             .unwrap()
-            .unordered_path_candidates[0]
-            .field_path,
-        ProtobufFieldPath(vec![3])
-    );
+            .unordered_path_candidates[0],
+        MotanUnorderedPathCandidate::Protobuf(candidate)
+            if candidate.field_path == ProtobufFieldPath(vec![3])
+    ));
     let mut legacy_report = serde_json::to_value(&initial).unwrap();
     legacy_report["cases"][0]["response"]
         .as_object_mut()
@@ -200,10 +203,11 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
     assert!(protocol_outcome.complete);
     assert!(!protocol_outcome.passed);
     assert_eq!(protocol_applied.order_only, Some(true));
-    assert_eq!(
-        protocol_applied.discovered_unordered_paths[0].field_path,
-        ProtobufFieldPath(vec![3])
-    );
+    assert!(matches!(
+        &protocol_applied.discovered_unordered_paths[0],
+        MotanUnorderedPathCandidate::Protobuf(candidate)
+            if candidate.field_path == ProtobufFieldPath(vec![3])
+    ));
     let refreshed: traffic_e2e::ComparisonVerificationReport =
         serde_json::from_slice(&fs::read(&report_path).unwrap()).unwrap();
     assert_eq!(protocol_outcome.counts.failed, 1);
@@ -248,11 +252,11 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
         policy_path: policy.clone(),
         api: "MOTAN /rpc/example".to_string(),
         protocol: MotanBodyProtocol::Protobuf,
-        unordered_paths: vec![ProtobufUnorderedPath {
+        unordered_paths: vec![MotanUnorderedPath::Protobuf(ProtobufUnorderedPath {
             field_path: ProtobufFieldPath(vec![3]),
             display_path: "rule_collection.white_list".to_string(),
             element_type: ProtobufRepeatedElementType::Message,
-        }],
+        })],
         comparison_report: report_path.clone(),
     })
     .err()
@@ -267,11 +271,11 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
         policy_path: policy.clone(),
         api: "MOTAN /rpc/example".to_string(),
         protocol: MotanBodyProtocol::Protobuf,
-        unordered_paths: vec![ProtobufUnorderedPath {
+        unordered_paths: vec![MotanUnorderedPath::Protobuf(ProtobufUnorderedPath {
             field_path: ProtobufFieldPath(vec![3]),
             display_path: "rule_collection.white_list".to_string(),
             element_type: ProtobufRepeatedElementType::String,
-        }],
+        })],
         comparison_report: report_path.clone(),
     })
     .unwrap();
@@ -342,6 +346,118 @@ fn motan_protocol_configuration_rejects_a_legacy_report_with_non_protobuf_bodies
 }
 
 #[test]
+fn motan_hessian2_rule_apply_reuses_comparison_bodies_for_offline_verification() {
+    fn hessian2_list(values: &[&str]) -> Vec<u8> {
+        let payload = encode_hessian2(&values.to_vec(), HessianLimits::default()).unwrap();
+        [
+            vec![3],
+            (payload.len() as u32).to_be_bytes().to_vec(),
+            payload,
+        ]
+        .concat()
+    }
+
+    let temp = tempdir().unwrap();
+    let run = create_run(temp.path(), json!("unused"), json!("unused"));
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
+    fs::write(
+        case.join("request.json"),
+        serde_json::to_vec(&json!({
+            "protocol": "motan",
+            "method": "MOTAN",
+            "uri": "/rpc/hessian",
+            "api_pattern": "/rpc/hessian",
+            "api_key": "motan:test/example#hessian()"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_binary_response(
+        &case.join("expected-response.json"),
+        200,
+        &hessian2_list(&["alice", "bob"]),
+    );
+    write_binary_response(
+        &case.join("response.json"),
+        200,
+        &hessian2_list(&["bob", "alice"]),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+    let report_path = run.join("comparison-report.json");
+    let initial = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run,
+        policy: policy.clone(),
+        report: report_path.clone(),
+    })
+    .unwrap();
+    assert!(matches!(
+        &initial.cases[0]
+            .response
+            .as_ref()
+            .unwrap()
+            .motan
+            .as_ref()
+            .unwrap()
+            .unordered_path_candidates[0],
+        MotanUnorderedPathCandidate::Hessian2(candidate)
+            if candidate.value_path == Hessian2ValuePath(vec![])
+    ));
+    // Older reports exposed only one syntactic guess. Planning must re-probe
+    // immutable bodies when the reviewed protocol was not named by that report.
+    let mut legacy_report = serde_json::to_value(&initial).unwrap();
+    let legacy_motan = legacy_report["cases"][0]["response"]["motan"]
+        .as_object_mut()
+        .unwrap();
+    legacy_motan.insert("protocol".to_string(), json!("protobuf"));
+    legacy_motan.remove("protocol_candidates");
+    fs::write(&report_path, serde_json::to_vec(&legacy_report).unwrap()).unwrap();
+
+    let protocol_applied = plan_motan_rule(MotanRuleFeedback {
+        policy_path: policy.clone(),
+        api: "MOTAN /rpc/hessian".to_string(),
+        protocol: MotanBodyProtocol::Hessian2,
+        unordered_paths: Vec::new(),
+        comparison_report: report_path.clone(),
+    })
+    .unwrap()
+    .apply()
+    .unwrap();
+    assert!(!protocol_applied.offline_comparison.as_ref().unwrap().passed);
+    assert_eq!(protocol_applied.order_only, Some(true));
+
+    let unordered_applied = plan_motan_rule(MotanRuleFeedback {
+        policy_path: policy.clone(),
+        api: "MOTAN /rpc/hessian".to_string(),
+        protocol: MotanBodyProtocol::Hessian2,
+        unordered_paths: vec![MotanUnorderedPath::Hessian2(Hessian2UnorderedPath {
+            value_path: Hessian2ValuePath(vec![]),
+            display_path: "response.names".to_string(),
+        })],
+        comparison_report: report_path,
+    })
+    .unwrap()
+    .apply()
+    .unwrap();
+
+    assert!(
+        unordered_applied
+            .offline_comparison
+            .as_ref()
+            .unwrap()
+            .passed
+    );
+    let updated = fs::read_to_string(policy).unwrap();
+    assert!(updated.contains("protocol: hessian2"));
+    assert!(updated.contains("value_path: []"));
+    assert!(updated.contains("display_path: response.names"));
+}
+
+#[test]
 fn motan_rule_uses_reviewed_type_to_resolve_packed_integer_order() {
     fn packed_uint32(values: &[u8]) -> Vec<u8> {
         let payload = [vec![0x12, values.len() as u8], values.to_vec()].concat();
@@ -403,11 +519,11 @@ fn motan_rule_uses_reviewed_type_to_resolve_packed_integer_order() {
         policy_path: policy,
         api: "MOTAN /rpc/packed".to_string(),
         protocol: MotanBodyProtocol::Protobuf,
-        unordered_paths: vec![ProtobufUnorderedPath {
+        unordered_paths: vec![MotanUnorderedPath::Protobuf(ProtobufUnorderedPath {
             field_path: ProtobufFieldPath(vec![2]),
             display_path: "config_scene.values".to_string(),
             element_type: ProtobufRepeatedElementType::Uint32,
-        }],
+        })],
         comparison_report: report_path.clone(),
     })
     .unwrap()
@@ -427,7 +543,11 @@ fn motan_rule_uses_reviewed_type_to_resolve_packed_integer_order() {
         .unwrap()
         .differences;
     assert_eq!(differences.len(), 1);
-    assert_eq!(differences[0].display_path, "config_scene.values");
+    assert!(matches!(
+        &differences[0],
+        MotanBodyDifference::Protobuf(difference)
+            if difference.display_path == "config_scene.values"
+    ));
 }
 
 #[test]

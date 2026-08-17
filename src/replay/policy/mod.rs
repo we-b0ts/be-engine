@@ -33,6 +33,7 @@ pub(in crate::replay) use report::ReplayPolicyReport;
 pub(crate) use response::response_locations_overlap;
 pub use response::{
     ComparisonSourceMatch, ComparisonVerificationPolicy, DynamicResponseMechanism,
-    MotanBodyProtocol, ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
-    ResponseField, ResponseRuleKind,
+    Hessian2UnorderedPath, Hessian2ValuePath, MotanBodyProtocol, MotanUnorderedPath,
+    ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath, ResponseField,
+    ResponseRuleKind,
 };

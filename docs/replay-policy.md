@@ -344,18 +344,35 @@ response_rules:
           element_type: message
 ```
 
-The configured rule relaxes only the ordering of the declared repeated fields
-inside the protobuf business body. During standard replay, the outer Motan
-frame remains exact after removing only the framework-generated `M_pt`
+Hessian2 uses value names rather than protobuf field numbers. `"*"` traverses
+every element of an intermediate list; an empty `value_path` selects a
+top-level list:
+
+```yaml
+response_rules:
+  motan:
+    "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-byteArray-8cd698b4fea1fb48":
+      protocol: hessian2
+      unordered_paths:
+        - value_path: [ruleCollection, groups, "*", whiteList]
+          display_path: rule_collection.groups[].white_list
+```
+
+The configured rule relaxes only the ordering of the declared repeated
+protobuf fields or Hessian2 lists inside the business body. During standard
+replay, the outer Motan frame remains exact after removing only the
+framework-generated `M_pt`
 process-time metadata entry: protocol version, flags, request ID, response
 status, serialization, and every other metadata entry must still match. A
-protocol-only rule does not relax any body field; it only enables field-level
-protobuf differences. Standard replay without a configured Motan body rule
-keeps the same normalized full-frame exact comparison.
+protocol-only rule does not relax any body value; it only enables
+protocol-aware differences. Standard replay without a configured Motan body
+rule keeps the same normalized full-frame exact comparison.
 
 This is one Motan response rule whose available action follows the current
 configuration. When the body protocol is not configured, evidence offers the
-`protobuf` protocol choice. Applying that choice immediately reruns only the
+syntactically valid `protobuf` and/or `hessian2` protocol choices. These are
+candidates rather than protocol claims; the AI must select the protocol using
+application/schema context. Applying that choice immediately reruns only the
 existing comparison verifier against the immutable response artifacts; it
 does not start source or target processes, send Motan requests, or record new
 traffic. A report produced before protocol-aware Motan diagnostics were
@@ -368,11 +385,11 @@ compact outcome (`complete`, `passed`, counts, per-API counts, and the bounded
 representative difference); complete per-case details remain in that standard
 report.
 
-When `protocol: protobuf` is already configured, evidence skips protocol
-selection and lists the supported refinement directly. Adding unordered
-fields must provide every newly discovered `field_path` together with a
-source/proto-reviewed semantic `display_path` and an explicit repeated
-`element_type`. A packed numeric array is wire-ambiguous without the protobuf
+When a supported protocol is already configured, evidence skips protocol
+selection and lists its supported refinement directly. For protobuf, adding
+unordered fields must provide every newly discovered `field_path` together
+with a source/proto-reviewed semantic `display_path` and an explicit repeated
+`element_type`. A packed numeric array is wire-ambiguous without its protobuf
 type, so it first appears as a field-level value difference; the reviewed
 numeric type is accepted only when offline typed comparison proves that the
 same field is reorder-only:
@@ -386,6 +403,11 @@ backend-rewrite rule motan \
   --evidence-id <current-evidence-id> \
   --protocol protobuf \
   --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string"}'
+
+backend-rewrite rule motan \
+  --evidence-id <current-evidence-id> \
+  --protocol hessian2 \
+  --unordered-path '{"value_path":["ruleCollection","groups","*","whiteList"],"display_path":"rule_collection.groups[].white_list"}'
 ```
 
 Only selected repeated fields ignore element order. Element contents,
@@ -396,6 +418,16 @@ Supported terminal types are strings, messages, booleans, enums, and protobuf
 integer/fixed-width numeric types, including packed numeric encodings.
 `bytes` is deliberately unsupported: neither the outer Motan `byte[]`, a
 protobuf `bytes` field, nor `repeated bytes` can be declared unordered.
+
+For Hessian2, `value_path` walks object field names and string-valued map keys;
+`"*"` is permitted only to traverse an intermediate list. The selected
+terminal must be a Hessian2 list. A path absent from both bodies is a no-op, so
+null or smaller cases can share a rule; a one-sided occurrence still differs,
+and selecting a present non-list fails closed. Hessian2 maps compare by key
+independent of their wire entry order, while list order changes only at an
+explicitly reviewed `value_path`. Elements, duplicate multiplicity, types,
+unselected values, and binary values remain exact; Hessian2 binary data cannot
+be declared unordered.
 
 Comparison-only live counter semantics are nested separately:
 

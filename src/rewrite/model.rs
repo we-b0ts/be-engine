@@ -247,7 +247,7 @@ pub struct RewriteRulePlanRecord {
 pub struct RewriteMotanRuleSpec {
     pub protocol: crate::MotanBodyProtocol,
     #[serde(default)]
-    pub unordered_paths: Vec<crate::ProtobufUnorderedPath>,
+    pub unordered_paths: Vec<crate::MotanUnorderedPath>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

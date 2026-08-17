@@ -12,10 +12,9 @@ use super::{action, evidence};
 use crate::{
     ComparisonResponseRuleFeedback, DynamicResponseMechanism, E2eRunContext,
     MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MotanBodyProtocol,
-    MotanRuleFeedback, MotanRulePlan, ProtobufUnorderedPath, ResponseRuleFeedback,
-    ResponseRuleKind, ResponseRulePlan, plan_comparison_response_rule,
-    plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule,
-    resolve_e2e_response_rule_evidence,
+    MotanRuleFeedback, MotanRulePlan, MotanUnorderedPath, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, plan_comparison_response_rule, plan_memcached_timestamp_rule,
+    plan_motan_rule, plan_response_rule, resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Clone)]
@@ -44,7 +43,7 @@ pub struct RewriteMemcachedTimestampRulePlanOptions {
 pub struct RewriteMotanRulePlanOptions {
     pub evidence_id: String,
     pub protocol: MotanBodyProtocol,
-    pub unordered_paths: Vec<ProtobufUnorderedPath>,
+    pub unordered_paths: Vec<MotanUnorderedPath>,
 }
 
 enum VerificationRulePlan {

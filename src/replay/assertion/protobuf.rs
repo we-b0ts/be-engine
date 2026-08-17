@@ -2,12 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail, ensure};
 
+use super::binary_body::extract_simple_payload;
 use super::model::{ProtobufBodyDifference, ProtobufBodyDifferenceKind};
 use crate::replay::policy::{
     ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
 };
 
-const SIMPLE_BYTE_ARRAY: u8 = 3;
 const MAX_DISCOVERED_PATHS: usize = 32;
 const MAX_NESTING_DEPTH: usize = 32;
 const MAX_FIELDS: usize = 1_000_000;
@@ -278,19 +278,6 @@ fn push_difference(
         field_path,
         kind,
     });
-}
-
-fn extract_simple_payload(body: &[u8]) -> Result<&[u8]> {
-    ensure!(
-        body.len() >= 5 && body[0] == SIMPLE_BYTE_ARRAY,
-        "Motan body is not a simple byte-array envelope"
-    );
-    let declared = u32::from_be_bytes(body[1..5].try_into().expect("four-byte length")) as usize;
-    ensure!(
-        declared == body.len() - 5,
-        "Motan simple byte-array length does not match its payload"
-    );
-    Ok(&body[5..])
 }
 
 fn canonicalize_paths(payload: &[u8], paths: &[ProtobufFieldPath]) -> Result<Vec<u8>> {
@@ -791,7 +778,7 @@ mod tests {
     }
 
     fn body(payload: Vec<u8>) -> Vec<u8> {
-        let mut body = vec![SIMPLE_BYTE_ARRAY];
+        let mut body = vec![3];
         body.extend_from_slice(&(payload.len() as u32).to_be_bytes());
         body.extend(payload);
         body

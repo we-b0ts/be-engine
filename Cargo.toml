@@ -21,6 +21,7 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "server", 
 kafka-protocol = { version = "0.17", default-features = false, features = ["broker", "client", "messages_enums"] }
 libc = "0.2"
 motan-codec = { path = "../breeze/motan/crates/motan-codec" }
+motan-hessian2 = { path = "../breeze/motan/crates/motan-hessian2", default-features = false }
 motan-protocol = { path = "../breeze/motan/crates/motan-protocol" }
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 redis-protocol = { version = "6", features = ["bytes"] }
