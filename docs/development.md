@@ -1245,6 +1245,20 @@ recording evidence. A successful `missing-recorded-resource` route instead
 returns the existing recorder-capture apply command and never enters system
 repair.
 
+If an administrator confirms that a comparison issue was incorrectly routed
+as a `source_change` system repair, return that exact repair to target
+implementation explicitly:
+
+```bash
+backend-rewrite-admin --target-root ../target repair cancel <repair-id> \
+  --reason 'comparison evidence was misclassified' \
+  --confirm-misroute
+```
+
+The command accepts only the current comparison repair, clears its accepted
+route, and restores the issue's target-code owner. It does not cancel other
+repair kinds, delete evidence, or provide an ordinary AI workflow bypass.
+
 Initialize a rewrite target's three generated documents once, before its first
 coordinator session:
 

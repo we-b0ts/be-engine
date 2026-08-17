@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
@@ -17,6 +17,14 @@ pub(super) struct SystemRepairRouteOptions {
     pub evidence_id: String,
     pub source_ref: String,
     pub required_change: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RewriteRepairCancelOptions {
+    pub target_root: PathBuf,
+    pub repair_id: String,
+    pub reason: String,
+    pub confirm_misroute: bool,
 }
 
 pub(super) fn route(
@@ -180,6 +188,81 @@ pub fn resume_rewrite_replay_planning(
     let report = resume_replay_planning(&target_root, &mut state, requested_id)?;
     store.save(&state)?;
     Ok(report)
+}
+
+pub fn cancel_misrouted_rewrite_repair(
+    options: RewriteRepairCancelOptions,
+) -> Result<RewriteActionEnvelope> {
+    ensure!(
+        options.confirm_misroute,
+        "canceling a misrouted repair requires --confirm-misroute"
+    );
+    validate_single_line("repair cancellation reason", &options.reason)?;
+    ensure!(
+        options.reason.len() <= 500,
+        "repair cancellation reason must not exceed 500 bytes"
+    );
+    let (target_root, _) = crate::e2e_run::resolve_project(&options.target_root)?;
+    let store = RewriteStore::new(&target_root)?;
+    let _lock = store.lock()?;
+    let mut state = store
+        .load()?
+        .context("rewrite workflow has not been initialized")?;
+    let api = inventory::api_for_repair(&state, &options.repair_id)
+        .context("repair cancellation is stale or belongs to no concurrent API work item")?;
+    if state.api != api {
+        let requested_api = api.parse::<RecordingApi>()?;
+        inventory::activate_requested(&mut state, Some(&requested_api))?;
+    }
+    let report = cancel_misroute(
+        &target_root,
+        &mut state,
+        &options.repair_id,
+        &options.reason,
+    )?;
+    store.save(&state)?;
+    Ok(report)
+}
+
+fn cancel_misroute(
+    target_root: &Path,
+    state: &mut RewriteState,
+    requested_id: &str,
+    reason: &str,
+) -> Result<RewriteActionEnvelope> {
+    ensure!(
+        state.phase == RewritePhase::SystemRepairRequired,
+        "rewrite workflow has no system repair eligible for cancellation"
+    );
+    let route = state
+        .route
+        .as_ref()
+        .context("system repair has no accepted route")?;
+    ensure!(
+        route.repair_id.as_deref() == Some(requested_id),
+        "repair cancellation is stale or belongs to another issue"
+    );
+    ensure!(
+        route.kind == "source_change",
+        "only a misrouted source-change repair can be canceled"
+    );
+    let issue = state
+        .active_issue
+        .as_mut()
+        .context("system repair has no active issue")?;
+    ensure!(
+        issue.kind == RewriteIssueKind::Comparison,
+        "source-change repair cancellation requires a comparison issue"
+    );
+    issue.owner = RewriteIssueOwner::TargetCode;
+    state.phase = RewritePhase::ImplementationRequired;
+    state.route = None;
+    state.bump();
+    Ok(action::advance_envelope(
+        target_root,
+        state,
+        format!("administrator canceled misrouted repair {requested_id}: {reason}"),
+    ))
 }
 
 fn resume_replay_planning(
@@ -428,6 +511,49 @@ mod tests {
             action.action,
             super::super::model::RewriteAction::AdvanceRequired { .. }
         ));
+    }
+
+    #[test]
+    fn administrator_can_cancel_a_misrouted_source_change_repair() {
+        let target = tempfile::tempdir().unwrap();
+        let mut state = repair_state("source-revision".to_string());
+        state.active_issue.as_mut().unwrap().kind = RewriteIssueKind::Comparison;
+        state.active_issue.as_mut().unwrap().owner = RewriteIssueOwner::SourceInvestigation;
+        state.route.as_mut().unwrap().kind = "source_change".to_string();
+        state.route.as_mut().unwrap().acceptance_kind =
+            Some(RewriteRepairAcceptanceKind::SourceRevisionChanged);
+        let revision = state.revision;
+
+        let action = cancel_misroute(
+            target.path(),
+            &mut state,
+            "repair-current",
+            "comparison evidence was misclassified",
+        )
+        .unwrap();
+
+        assert_eq!(state.phase, RewritePhase::ImplementationRequired);
+        assert_eq!(
+            state.active_issue.as_ref().map(|issue| issue.owner),
+            Some(RewriteIssueOwner::TargetCode)
+        );
+        assert!(state.route.is_none());
+        assert_eq!(state.revision, revision + 1);
+        assert!(matches!(
+            action.action,
+            super::super::model::RewriteAction::AdvanceRequired { .. }
+        ));
+    }
+
+    #[test]
+    fn repair_cancellation_rejects_wrong_id_and_non_source_routes() {
+        let target = tempfile::tempdir().unwrap();
+        let mut state = repair_state("revision".to_string());
+
+        assert!(cancel_misroute(target.path(), &mut state, "repair-stale", "misroute").is_err());
+        assert!(cancel_misroute(target.path(), &mut state, "repair-current", "misroute").is_err());
+        assert_eq!(state.phase, RewritePhase::SystemRepairRequired);
+        assert!(state.route.is_some());
     }
 
     fn repair_state(observed_revision: String) -> RewriteState {
