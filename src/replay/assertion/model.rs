@@ -25,6 +25,8 @@ pub struct MotanBodyAssertionReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protocol_candidates: Vec<MotanBodyProtocol>,
     pub unordered_path_candidates: Vec<MotanUnorderedPathCandidate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unordered_joined_string_candidates: Vec<Hessian2JoinedStringCandidate>,
     pub differences: Vec<MotanBodyDifference>,
     pub order_only: bool,
 }
@@ -106,6 +108,24 @@ impl From<Hessian2ValuePath> for Hessian2ValuePathCandidate {
 impl From<Hessian2ValuePath> for MotanUnorderedPathCandidate {
     fn from(value_path: Hessian2ValuePath) -> Self {
         Self::Hessian2(value_path.into())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Hessian2JoinedStringCandidate {
+    pub value_path: Hessian2ValuePath,
+    pub display_path: String,
+    pub separator: String,
+}
+
+impl From<(Hessian2ValuePath, String)> for Hessian2JoinedStringCandidate {
+    fn from((value_path, separator): (Hessian2ValuePath, String)) -> Self {
+        let display_path = value_path.display_path();
+        Self {
+            value_path,
+            display_path,
+            separator,
+        }
     }
 }
 

@@ -103,6 +103,7 @@ impl ResponseRules {
                     api: api.clone(),
                     protocol: rule.protocol,
                     unordered_paths: rule.unordered_paths.clone(),
+                    unordered_joined_string_paths: rule.unordered_joined_string_paths.clone(),
                 })
             })
             .collect()
@@ -136,6 +137,8 @@ pub(in crate::replay) struct MotanResponseRule {
     pub(in crate::replay) protocol: MotanBodyProtocol,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) unordered_paths: Vec<MotanUnorderedPath>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -174,6 +177,17 @@ impl Hessian2ValuePath {
 pub struct Hessian2UnorderedPath {
     pub value_path: Hessian2ValuePath,
     pub display_path: String,
+}
+
+/// Selects a Hessian2 **String** field whose value is a set joined into one
+/// string (for example `"alice,bob,carol"`). The string is split on
+/// `separator` and compared as a multiset, so element order is ignored.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+pub struct Hessian2JoinedStringPath {
+    pub value_path: Hessian2ValuePath,
+    pub display_path: String,
+    pub separator: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -251,6 +265,7 @@ pub(in crate::replay) struct MotanResponseRuleMatch {
     pub(in crate::replay) api: String,
     pub(in crate::replay) protocol: MotanBodyProtocol,
     pub(in crate::replay) unordered_paths: Vec<MotanUnorderedPath>,
+    pub(in crate::replay) unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -549,6 +564,53 @@ fn validate_motan_rule_map(rules: &BTreeMap<String, MotanResponseRule>) -> Resul
                     );
                 }
             }
+        }
+        ensure!(
+            rule.unordered_joined_string_paths.len() <= MAX_PATHS,
+            "Motan response rule API {api:?} selects more than {MAX_PATHS} unordered joined-string paths"
+        );
+        let mut unique_joined_string = BTreeSet::new();
+        for joined in &rule.unordered_joined_string_paths {
+            ensure!(
+                rule.protocol == MotanBodyProtocol::Hessian2,
+                "Motan response rule API {api:?} uses joined-string paths on a non-Hessian2 protocol"
+            );
+            let value_path = &joined.value_path;
+            ensure!(
+                value_path.0.len() <= MAX_PATH_DEPTH,
+                "Motan response rule API {api:?} has an over-deep Hessian2 joined-string value path"
+            );
+            for segment in &value_path.0 {
+                validate_audit_text(segment, "Hessian2 joined-string value path segment", 256)?;
+            }
+            ensure!(
+                !joined.separator.is_empty(),
+                "Motan response rule API {api:?} has a joined-string path with an empty separator"
+            );
+            validate_audit_text(&joined.separator, "Hessian2 joined-string separator", 16)?;
+            validate_audit_text(&joined.display_path, "display_path", 512)?;
+            ensure!(
+                joined
+                    .display_path
+                    .chars()
+                    .any(|character| character.is_alphabetic() || character == '_'),
+                "Motan response rule API {api:?} requires a semantic display_path"
+            );
+            ensure!(
+                unique_display.insert(&joined.display_path),
+                "Motan response rule API {api:?} repeats display_path {:?}",
+                joined.display_path
+            );
+            ensure!(
+                unique_joined_string.insert(value_path),
+                "Motan response rule API {api:?} repeats Hessian2 joined-string value path {:?}",
+                value_path.0
+            );
+            ensure!(
+                unique_hessian2.insert(value_path),
+                "Motan response rule API {api:?} joins the same Hessian2 value path {:?} as an unordered list path",
+                value_path.0
+            );
         }
         routes.push((api.as_str(), path));
     }
@@ -881,6 +943,7 @@ mod tests {
                 MotanResponseRule {
                     protocol: MotanBodyProtocol::Protobuf,
                     unordered_paths: Vec::new(),
+                    unordered_joined_string_paths: Vec::new(),
                 },
             )]),
             ..Default::default()

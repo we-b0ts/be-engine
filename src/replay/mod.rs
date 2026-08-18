@@ -105,23 +105,24 @@ pub(crate) use assertion::{
     read_comparison_response_observation,
 };
 pub use assertion::{
-    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2ValuePathCandidate,
-    MotanBodyAssertionReport, MotanBodyDifference, MotanUnorderedPathCandidate,
-    ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate,
-    ResponseAssertionCaseReport, ResponseAssertionOptions, ResponseDifference,
-    ResponseDifferenceKind, assert_recorded_response,
+    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
+    Hessian2ValuePathCandidate, MotanBodyAssertionReport, MotanBodyDifference,
+    MotanUnorderedPathCandidate, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
+    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseAssertionOptions,
+    ResponseDifference, ResponseDifferenceKind, assert_recorded_response,
 };
 pub(crate) use policy::render_validated_replay_policy;
 pub(crate) use policy::response_locations_overlap;
 pub use policy::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
     DynamicResponseMechanism, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
-    DynamicResponseRuleReport, Hessian2UnorderedPath, Hessian2ValuePath,
-    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
-    MotanBodyProtocol, MotanRuleFeedback, MotanRulePlan, MotanRuleReport, MotanUnorderedPath,
-    ProtobufFieldPath, ProtobufRepeatedElementType, ProtobufUnorderedPath, ReplayPolicyInitOptions,
-    ReplayPolicyInitResult, ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind,
-    ResponseRulePlan, ResponseRuleReport, initialize_replay_policy, plan_comparison_response_rule,
+    DynamicResponseRuleReport, Hessian2JoinedStringPath, Hessian2UnorderedPath,
+    Hessian2ValuePath, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
+    MemcachedTimestampRuleReport, MotanBodyProtocol, MotanRuleFeedback, MotanRulePlan,
+    MotanRuleReport, MotanUnorderedPath, ProtobufFieldPath, ProtobufRepeatedElementType,
+    ProtobufUnorderedPath, ReplayPolicyInitOptions, ReplayPolicyInitResult,
+    ReplayPolicyValidationReport, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
+    ResponseRuleReport, initialize_replay_policy, plan_comparison_response_rule,
     plan_dynamic_response_rule, plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule,
     validate_replay_policy,
 };

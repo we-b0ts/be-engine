@@ -358,6 +358,31 @@ response_rules:
           display_path: cache_result.rule_collection.groups[].white_list
 ```
 
+Some business fields carry a `Set` that has been joined into a single string
+(for example `"alice,bob,carol"`). Such a field is a Hessian2 string, not a
+list, so `unordered_paths` cannot relax it. Use
+`unordered_joined_string_paths` instead: the selected string is split on
+`separator` and compared as a multiset (element order is ignored, but
+duplicate counts are preserved, matching the List semantics above).
+`separator` is required and must be non-empty:
+
+```yaml
+response_rules:
+  motan:
+    "MOTAN /rpc/ExampleService-getMembers-long-long-095f05367f122cf4":
+      protocol: hessian2
+      unordered_joined_string_paths:
+        - value_path: [result, whiteList]
+          display_path: cache_result.white_list
+          separator: ","
+```
+
+When a Hessian2 body mismatches only on such a joined string, the
+protocol-aware comparison report surfaces `unordered_joined_string_candidates`
+with the value path and the separator that makes the two sides compare equal.
+Joined-string paths are Hessian2-only and a given value path may be either an
+`unordered_paths` list or a joined string, but not both.
+
 The two Motan body envelopes are recognized without configuration. A method
 returning `byte[]` carries its business bytes inside the Motan simple
 byte-array envelope, while Hessian2 serialization of any other return type
@@ -417,6 +442,11 @@ backend-rewrite rule motan \
   --evidence-id <current-evidence-id> \
   --protocol hessian2 \
   --unordered-path '{"value_path":["ruleCollection","groups","*","whiteList"],"display_path":"rule_collection.groups[].white_list"}'
+
+backend-rewrite rule motan \
+  --evidence-id <current-evidence-id> \
+  --protocol hessian2 \
+  --unordered-joined-string-path '{"value_path":["result","whiteList"],"display_path":"result.white_list","separator":","}'
 ```
 
 Only selected repeated fields ignore element order. Element contents,
@@ -437,6 +467,14 @@ independent of their wire entry order, while list order changes only at an
 explicitly reviewed `value_path`. Elements, duplicate multiplicity, types,
 unselected values, and binary values remain exact; Hessian2 binary data cannot
 be declared unordered.
+
+For Hessian2 joined-string paths, `value_path` selects a string terminal with
+the same traversal rules as list paths, but the terminal must be a Hessian2
+string. The string is split on `separator` and compared as a multiset, so
+element order is ignored while duplicate multiplicity is preserved. A path
+absent from both bodies is a no-op; selecting a present non-string fails
+closed. Joined-string paths are Hessian2-only and never overlap a list
+`unordered_paths` value path on the same field.
 
 Comparison-only live counter semantics are nested separately:
 

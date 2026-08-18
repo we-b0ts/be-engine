@@ -248,6 +248,8 @@ pub struct RewriteMotanRuleSpec {
     pub protocol: crate::MotanBodyProtocol,
     #[serde(default)]
     pub unordered_paths: Vec<crate::MotanUnorderedPath>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unordered_joined_string_paths: Vec<crate::Hessian2JoinedStringPath>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

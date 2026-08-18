@@ -16,10 +16,11 @@ use self::artifact::{
 };
 use self::compare::compare_json;
 pub use self::model::{
-    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2ValuePathCandidate,
-    MotanBodyAssertionReport, MotanBodyDifference, MotanUnorderedPathCandidate,
-    ProtobufBodyDifference, ProtobufBodyDifferenceKind, ProtobufFieldPathCandidate,
-    ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference, ResponseDifferenceKind,
+    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
+    Hessian2ValuePathCandidate, MotanBodyAssertionReport, MotanBodyDifference,
+    MotanUnorderedPathCandidate, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
+    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference,
+    ResponseDifferenceKind,
 };
 use super::policy::{fingerprint, load_replay_policy, uri_path};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
@@ -348,6 +349,10 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         );
         let (body_matches, motan_report) = match rule.protocol {
             super::policy::MotanBodyProtocol::Protobuf => {
+                ensure!(
+                    rule.unordered_joined_string_paths.is_empty(),
+                    "protobuf Motan rule cannot carry joined-string paths"
+                );
                 let unordered_paths = rule
                     .unordered_paths
                     .iter()
@@ -378,6 +383,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                             .into_iter()
                             .map(Into::into)
                             .collect(),
+                        unordered_joined_string_candidates: Vec::new(),
                         differences: discovery.differences.into_iter().map(Into::into).collect(),
                         order_only: discovery.order_only,
                     },
@@ -399,6 +405,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                     expected_body.protocol_body(),
                     actual_body.protocol_body(),
                     &unordered_paths,
+                    &rule.unordered_joined_string_paths,
                 )
                 .context("failed to apply configured Motan Hessian2 response rule")?;
                 (
@@ -411,6 +418,11 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                         protocol_candidates: vec![rule.protocol],
                         unordered_path_candidates: discovery
                             .unordered_paths
+                            .into_iter()
+                            .map(Into::into)
+                            .collect(),
+                        unordered_joined_string_candidates: discovery
+                            .unordered_joined_string_paths
                             .into_iter()
                             .map(Into::into)
                             .collect(),
@@ -492,6 +504,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                                 .into_iter()
                                 .map(Into::into)
                                 .collect(),
+                            unordered_joined_string_candidates: Vec::new(),
                             differences: discovery
                                 .differences
                                 .into_iter()
@@ -512,6 +525,11 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                             protocol_candidates,
                             unordered_path_candidates: discovery
                                 .unordered_paths
+                                .into_iter()
+                                .map(Into::into)
+                                .collect(),
+                            unordered_joined_string_candidates: discovery
+                                .unordered_joined_string_paths
                                 .into_iter()
                                 .map(Into::into)
                                 .collect(),

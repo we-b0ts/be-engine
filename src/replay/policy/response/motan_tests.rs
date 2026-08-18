@@ -116,3 +116,81 @@ motan:
 
     assert!(validate_response_rules(&rules).is_err());
 }
+
+#[test]
+fn accepts_reviewable_hessian2_joined_string_paths() {
+    let rules = serde_yaml::from_str::<ResponseRules>(
+        r#"
+motan:
+  "MOTAN /rpc/example":
+    protocol: hessian2
+    unordered_joined_string_paths:
+      - value_path: [result, whiteList]
+        display_path: cache_result.white_list
+        separator: ","
+"#,
+    )
+    .unwrap();
+
+    validate_response_rules(&rules).unwrap();
+    let joined = &rules.motan["MOTAN /rpc/example"].unordered_joined_string_paths[0];
+    assert_eq!(joined.value_path.display_path(), "$.result.whiteList");
+    assert_eq!(joined.separator, ",");
+}
+
+#[test]
+fn rejects_joined_string_paths_on_a_protobuf_protocol() {
+    let rules = serde_yaml::from_str::<ResponseRules>(
+        r#"
+motan:
+  "MOTAN /rpc/example":
+    protocol: protobuf
+    unordered_joined_string_paths:
+      - value_path: [result, whiteList]
+        display_path: cache_result.white_list
+        separator: ","
+"#,
+    )
+    .unwrap();
+
+    assert!(validate_response_rules(&rules).is_err());
+}
+
+#[test]
+fn rejects_a_joined_string_path_with_an_empty_separator() {
+    let rules = serde_yaml::from_str::<ResponseRules>(
+        r#"
+motan:
+  "MOTAN /rpc/example":
+    protocol: hessian2
+    unordered_joined_string_paths:
+      - value_path: [result, whiteList]
+        display_path: cache_result.white_list
+        separator: ""
+"#,
+    )
+    .unwrap();
+
+    assert!(validate_response_rules(&rules).is_err());
+}
+
+#[test]
+fn rejects_a_joined_string_path_colliding_with_an_unordered_list_path() {
+    let rules = serde_yaml::from_str::<ResponseRules>(
+        r#"
+motan:
+  "MOTAN /rpc/example":
+    protocol: hessian2
+    unordered_paths:
+      - value_path: [result, whiteList]
+        display_path: cache_result.white_list
+    unordered_joined_string_paths:
+      - value_path: [result, whiteList]
+        display_path: cache_result.white_list_joined
+        separator: ","
+"#,
+    )
+    .unwrap();
+
+    assert!(validate_response_rules(&rules).is_err());
+}

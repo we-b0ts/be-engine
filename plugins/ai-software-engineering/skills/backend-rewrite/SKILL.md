@@ -55,6 +55,10 @@ When an assigned worker exposes a Motan service through `brz-motan`, read
 [motan.md](references/motan.md) before defining DTOs, service adapters, or
 export endpoints.
 
+When an assigned worker uses memcache `CacheService`, read
+[memcache.md](references/memcache.md) before constructing the cache or calling
+`get`/`set`.
+
 Read [project-init.md](references/project-init.md) only when the caller
 explicitly asks to initialize an uninitialized target repository. Project
 initialization is manual and one-time; normal rewrite and resumed sessions

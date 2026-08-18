@@ -33,7 +33,7 @@ fn discovers_and_applies_root_list_order() {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.members".to_string(),
     };
-    assert!(compare_motan_hessian2(&expected, &actual, &[rule]).unwrap());
+    assert!(compare_motan_hessian2(&expected, &actual, &[rule], &[]).unwrap());
 }
 
 #[test]
@@ -45,7 +45,7 @@ fn unordered_list_preserves_duplicate_multiplicity() {
         display_path: "response.members".to_string(),
     };
 
-    assert!(!compare_motan_hessian2(&expected, &actual, &[rule]).unwrap());
+    assert!(!compare_motan_hessian2(&expected, &actual, &[rule], &[]).unwrap());
 }
 
 #[test]
@@ -55,14 +55,14 @@ fn missing_path_is_a_no_op_but_a_non_list_terminal_is_rejected() {
         value_path: Hessian2ValuePath(vec!["missing".to_string()]),
         display_path: "response.missing".to_string(),
     };
-    assert!(compare_motan_hessian2(&expected, &expected, std::slice::from_ref(&missing)).unwrap());
+    assert!(compare_motan_hessian2(&expected, &expected, std::slice::from_ref(&missing), &[]).unwrap());
 
     let scalar = Hessian2UnorderedPath {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.value".to_string(),
     };
     let scalar_body = body(to_vec(&42_i32, Limits::default()).unwrap());
-    assert!(compare_motan_hessian2(&scalar_body, &scalar_body, &[scalar]).is_err());
+    assert!(compare_motan_hessian2(&scalar_body, &scalar_body, &[scalar], &[]).is_err());
 }
 
 #[test]
@@ -113,6 +113,7 @@ fn discovers_and_applies_nested_lists_through_map_keys_and_wildcards() {
                 value_path,
                 display_path: "rule_collection.groups[].names".to_string(),
             }],
+            &[],
         )
         .unwrap()
     );
@@ -138,7 +139,7 @@ fn applies_a_list_path_through_an_object_field() {
         display_path: "response.names".to_string(),
     };
 
-    assert!(compare_motan_hessian2(&expected, &actual, &[rule]).unwrap());
+    assert!(compare_motan_hessian2(&expected, &actual, &[rule], &[]).unwrap());
 }
 
 /// Compact Hessian2 string, valid for the ASCII names used by these fixtures.
@@ -227,7 +228,7 @@ fn discovers_and_applies_list_order_in_a_bare_body() {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.names".to_string(),
     };
-    assert!(compare_motan_hessian2(&expected, &actual, &[rule]).unwrap());
+    assert!(compare_motan_hessian2(&expected, &actual, &[rule], &[]).unwrap());
 }
 
 #[test]
@@ -286,7 +287,100 @@ fn discovers_order_under_an_object_with_a_high_class_index() {
                 value_path,
                 display_path: "nodes[].value".to_string(),
             }],
+            &[],
         )
         .unwrap()
     );
+}
+
+#[test]
+fn joined_string_matches_when_elements_differ_only_by_order() {
+    let expected = body(to_vec(&"alice,bob,carol", Limits::default()).unwrap());
+    let actual = body(to_vec(&"carol,alice,bob", Limits::default()).unwrap());
+
+    let rule = Hessian2JoinedStringPath {
+        value_path: Hessian2ValuePath(vec![]),
+        display_path: "response.white_list".to_string(),
+        separator: ",".to_string(),
+    };
+    assert!(compare_motan_hessian2(&expected, &actual, &[], &[rule]).unwrap());
+}
+
+#[test]
+fn joined_string_preserves_duplicate_multiplicity() {
+    let expected = body(to_vec(&"alice,alice,bob", Limits::default()).unwrap());
+    let actual = body(to_vec(&"alice,bob,bob", Limits::default()).unwrap());
+    let rule = Hessian2JoinedStringPath {
+        value_path: Hessian2ValuePath(vec![]),
+        display_path: "response.white_list".to_string(),
+        separator: ",".to_string(),
+    };
+    assert!(!compare_motan_hessian2(&expected, &actual, &[], &[rule]).unwrap());
+}
+
+#[test]
+fn joined_string_missing_path_is_a_no_op_but_a_non_string_terminal_is_rejected() {
+    let list_body = body(to_vec(&vec!["alpha", "beta"], Limits::default()).unwrap());
+    let missing = Hessian2JoinedStringPath {
+        value_path: Hessian2ValuePath(vec!["missing".to_string()]),
+        display_path: "response.missing".to_string(),
+        separator: ",".to_string(),
+    };
+    assert!(compare_motan_hessian2(&list_body, &list_body, &[], std::slice::from_ref(&missing)).unwrap());
+
+    let present_non_string = Hessian2JoinedStringPath {
+        value_path: Hessian2ValuePath(vec![]),
+        display_path: "response.value".to_string(),
+        separator: ",".to_string(),
+    };
+    assert!(compare_motan_hessian2(&list_body, &list_body, &[], std::slice::from_ref(&present_non_string)).is_err());
+}
+
+#[test]
+fn joined_string_path_reaches_a_nested_field() {
+    fn response(white_list: &str) -> Vec<u8> {
+        let mut payload = Vec::new();
+        let mut encoder = Encoder::new(&mut payload, Limits::default());
+        encoder
+            .begin_object(ClassSchema::new("example.Response", &["whiteList"]))
+            .unwrap();
+        encoder.encode_value(&white_list.to_string()).unwrap();
+        encoder.end_object();
+        body(payload)
+    }
+
+    let expected = response("alice,bob,carol");
+    let actual = response("carol,bob,alice");
+    let rule = Hessian2JoinedStringPath {
+        value_path: Hessian2ValuePath(vec!["whiteList".to_string()]),
+        display_path: "response.white_list".to_string(),
+        separator: ",".to_string(),
+    };
+    assert!(compare_motan_hessian2(&expected, &actual, &[], &[rule]).unwrap());
+}
+
+#[test]
+fn discovers_a_joined_string_candidate_with_the_matching_separator() {
+    let expected = body(to_vec(&"alice,bob", Limits::default()).unwrap());
+    let actual = body(to_vec(&"bob,alice", Limits::default()).unwrap());
+
+    let discovery = discover_motan_hessian2_order(&expected, &actual).unwrap();
+
+    assert_eq!(
+        discovery.unordered_joined_string_paths,
+        vec![(Hessian2ValuePath(vec![]), ",".to_string())]
+    );
+    // The reordered joined string is not a list, so no list candidate appears.
+    assert!(discovery.unordered_paths.is_empty());
+}
+
+#[test]
+fn joined_string_discovery_skips_fields_that_are_not_reordered_sets() {
+    let expected = body(to_vec(&"alice,bob", Limits::default()).unwrap());
+    let actual = body(to_vec(&"alice,carol", Limits::default()).unwrap());
+
+    let discovery = discover_motan_hessian2_order(&expected, &actual).unwrap();
+
+    assert!(discovery.unordered_joined_string_paths.is_empty());
+    assert!(discovery.unordered_paths.is_empty());
 }

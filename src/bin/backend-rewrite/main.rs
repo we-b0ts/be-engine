@@ -7,7 +7,8 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    DynamicResponseMechanism, MotanBodyProtocol, MotanUnorderedPath, RecordingApi,
+    DynamicResponseMechanism, Hessian2JoinedStringPath, MotanBodyProtocol,
+    MotanUnorderedPath, RecordingApi,
     ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteContext,
     RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteNextOptions,
     RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
@@ -215,10 +216,20 @@ struct MotanRulePlanArgs {
     /// Reviewed unordered collection from protocol-aware evidence as JSON. Protobuf uses field_path + element_type; Hessian2 uses value_path.
     #[arg(long = "unordered-path", value_parser = parse_motan_unordered_path)]
     unordered_paths: Vec<MotanUnorderedPath>,
+    /// Reviewed joined-string field (a Set joined into one string) from
+    /// protocol-aware evidence as JSON. Hessian2 only. Each entry carries
+    /// value_path, display_path, and separator.
+    #[arg(long = "unordered-joined-string-path", value_parser = parse_hessian2_joined_string_path)]
+    unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
 }
 
 fn parse_motan_unordered_path(value: &str) -> Result<MotanUnorderedPath, String> {
     serde_json::from_str(value).map_err(|error| format!("invalid unordered path JSON: {error}"))
+}
+
+fn parse_hessian2_joined_string_path(value: &str) -> Result<Hessian2JoinedStringPath, String> {
+    serde_json::from_str(value)
+        .map_err(|error| format!("invalid joined-string path JSON: {error}"))
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -613,6 +624,7 @@ async fn run(cli: Cli) -> Result<()> {
                         evidence_id: args.evidence_id,
                         protocol: args.protocol.into(),
                         unordered_paths: args.unordered_paths,
+                        unordered_joined_string_paths: args.unordered_joined_string_paths,
                     },
                 )?,
                 pretty,
