@@ -498,9 +498,10 @@ enum RecordingKindArg {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RecordingReasonArg {
+    /// Explicit user authorization for a fresh standard recording. Standard
+    /// recording always requires explicit user authorization; the other
+    /// recording reasons are coordinator-owned and cannot be requested here.
     UserRequested,
-    RecorderContractChanged,
-    SourceBaselineChanged,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -778,8 +779,6 @@ impl From<RecordingReasonArg> for RewriteRecordingReason {
     fn from(value: RecordingReasonArg) -> Self {
         match value {
             RecordingReasonArg::UserRequested => Self::UserRequested,
-            RecordingReasonArg::RecorderContractChanged => Self::RecorderContractChanged,
-            RecordingReasonArg::SourceBaselineChanged => Self::SourceBaselineChanged,
         }
     }
 }
