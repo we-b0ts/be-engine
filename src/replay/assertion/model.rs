@@ -25,7 +25,7 @@ pub struct MotanBodyAssertionReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub protocol_candidates: Vec<MotanBodyProtocol>,
     pub unordered_path_candidates: Vec<MotanUnorderedPathCandidate>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub unordered_joined_string_candidates: Vec<Hessian2JoinedStringCandidate>,
     pub differences: Vec<MotanBodyDifference>,
     pub order_only: bool,

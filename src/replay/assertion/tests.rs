@@ -392,6 +392,14 @@ fn motan2_protocol_rule_compares_the_business_body() {
             }
         )
     );
+
+    // Protobuf also emits the joined-string candidate array (empty), so the
+    // rule shape is uniform across protocols.
+    let value = serde_json::to_value(&motan).unwrap();
+    assert_eq!(
+        value.get("unordered_joined_string_candidates"),
+        Some(&serde_json::json!([]))
+    );
 }
 
 #[test]
@@ -464,6 +472,16 @@ fn exact_motan2_body_reports_hessian2_as_a_protocol_candidate() {
             .protocol_candidates
             .contains(&crate::replay::policy::MotanBodyProtocol::Hessian2)
     );
+
+    // The Hessian2 report always carries the joined-string candidate array,
+    // even when discovery found no candidate: an empty array is the signal that
+    // joined-string rules exist as an option.
+    let value = serde_json::to_value(&motan).unwrap();
+    assert_eq!(
+        value.get("unordered_joined_string_candidates"),
+        Some(&serde_json::json!([]))
+    );
+    assert!(value.get("unordered_path_candidates").is_some());
 }
 
 #[test]
