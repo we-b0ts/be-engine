@@ -535,6 +535,11 @@ fn project_motan_report(report: &crate::MotanRuleReport) -> Value {
         "selected_difference_cases": report.selected_difference_cases,
         "discovered_unordered_paths": report.discovered_unordered_paths,
         "effective_unordered_paths": report.effective_unordered_paths,
+        // Joined-string paths are Hessian2-only. Always emit them (empty when
+        // none) so downstream tooling sees that joined-string rules exist even
+        // when this run found no candidate.
+        "discovered_unordered_joined_string_paths": report.discovered_unordered_joined_string_paths,
+        "effective_unordered_joined_string_paths": report.effective_unordered_joined_string_paths,
         "offline_comparison": report.offline_comparison,
         "order_only": report.order_only,
         "changed": report.changed,
