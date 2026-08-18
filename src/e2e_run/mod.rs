@@ -38,6 +38,7 @@ pub use dirty_evidence::{
     E2eDependencyRepresentative, E2eDirtyCluster, E2eDirtyCounts, E2eSourcePreReadiness,
     E2eSourcePreReadinessEndpoint,
 };
+pub(crate) use evidence::finalized_focused_attempt_summary;
 pub use evidence::{
     E2eCaseResponseDifference, E2eCaseResponseDifferences, E2eDependencyCorrelation,
     E2eSourceValueCount, E2eSourceVariation, E2eTargetLog, E2eTargetRuntimeDiagnostics,
@@ -123,6 +124,14 @@ pub struct E2eFocusedApiStatus {
     pub api: String,
     pub status: String,
     pub active: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct E2eFocusedAttemptSummary {
+    pub(crate) attempt: u64,
+    pub(crate) passed: bool,
+    pub(crate) case_source: PathBuf,
+    pub(crate) case_inventory_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

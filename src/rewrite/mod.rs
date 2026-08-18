@@ -74,13 +74,18 @@ pub use recording::{
     RewriteRecordingRequestOptions, execute_rewrite_recording_worker, request_rewrite_recording,
     start_rewrite_recording,
 };
-pub use repair::resume_rewrite_replay_planning;
+pub use repair::{
+    RewriteRepairCancelOptions, RewriteReplayRetryOptions, cancel_misrouted_rewrite_repair,
+    resume_rewrite_replay_planning, retry_rewrite_replay_after_out_of_band_run,
+};
 pub use revalidation::{
     RewriteRevalidationRequestOptions, RewriteRevalidationRequestReport,
     request as request_rewrite_revalidation,
 };
 pub use route::{RewriteRouteCause, RewriteRouteOptions, RewriteRouteOutcome};
-pub use rule::{RewriteMemcachedTimestampRulePlanOptions, RewriteRulePlanOptions};
+pub use rule::{
+    RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteRulePlanOptions,
+};
 pub use source_process_traffic::*;
 pub use status::{inventory_rewrite, status_rewrite, status_rewrite_for_api};
 pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
@@ -574,6 +579,26 @@ pub fn plan_rewrite_memcached_timestamp_rule(
     worker::ensure_api_confirmed(&state, &api, "planning a Memcached SET payload rule")?;
     let report = inventory::with_slice_mut(&mut state, &api, |state| {
         rule::plan_memcached_timestamp(&target_root, state, options)
+    })?;
+    store.save(&state)?;
+    Ok(report)
+}
+
+pub fn plan_rewrite_motan_rule(
+    context: RewriteContext,
+    options: RewriteMotanRulePlanOptions,
+) -> Result<RewriteRuleReport> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let store = RewriteStore::new(&target_root)?;
+    let _lock = store.lock()?;
+    let mut state = store
+        .load()?
+        .context("rewrite workflow has not been initialized")?;
+    let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
+        .context("Motan rule evidence is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "planning a Motan response-body rule")?;
+    let report = inventory::with_slice_mut(&mut state, &api, |state| {
+        rule::plan_motan(&target_root, state, options)
     })?;
     store.save(&state)?;
     Ok(report)

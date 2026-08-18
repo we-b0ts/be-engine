@@ -13,8 +13,9 @@ pub(super) struct RecordedRequest {
 }
 
 impl RecordedRequest {
-    pub(super) fn is_motan2(&self) -> bool {
-        self.method == "MOTAN" && self.protocol_version.as_deref() == Some("motan2")
+    pub(super) fn has_motan_frame(&self) -> bool {
+        self.method.eq_ignore_ascii_case("MOTAN")
+            && matches!(self.protocol_version.as_deref(), Some("motan1" | "motan2"))
     }
 }
 

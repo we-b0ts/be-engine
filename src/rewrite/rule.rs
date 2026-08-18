@@ -5,14 +5,16 @@ use serde_json::{Value, json};
 
 use super::fingerprint;
 use super::model::{
-    RewriteMemcachedTimestampRuleSpec, RewriteRulePlanRecord, RewriteRuleReport, RewriteState,
+    RewriteMemcachedTimestampRuleSpec, RewriteMotanRuleSpec, RewriteRulePlanRecord,
+    RewriteRuleReport, RewriteState,
 };
 use super::{action, evidence};
 use crate::{
     ComparisonResponseRuleFeedback, DynamicResponseMechanism, E2eRunContext,
-    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, ResponseRuleFeedback,
-    ResponseRuleKind, ResponseRulePlan, plan_comparison_response_rule,
-    plan_memcached_timestamp_rule, plan_response_rule, resolve_e2e_response_rule_evidence,
+    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MotanBodyProtocol,
+    MotanRuleFeedback, MotanRulePlan, MotanUnorderedPath, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, plan_comparison_response_rule, plan_memcached_timestamp_rule,
+    plan_motan_rule, plan_response_rule, resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Clone)]
@@ -37,9 +39,17 @@ pub struct RewriteMemcachedTimestampRulePlanOptions {
     pub source_evidence: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct RewriteMotanRulePlanOptions {
+    pub evidence_id: String,
+    pub protocol: MotanBodyProtocol,
+    pub unordered_paths: Vec<MotanUnorderedPath>,
+}
+
 enum VerificationRulePlan {
     Response(ResponseRulePlan),
     MemcachedTimestamp(MemcachedTimestampRulePlan),
+    Motan(Box<MotanRulePlan>),
 }
 
 impl VerificationRulePlan {
@@ -47,6 +57,7 @@ impl VerificationRulePlan {
         match self {
             Self::Response(plan) => project_response_report(plan.report()),
             Self::MemcachedTimestamp(plan) => Ok(project_memcached_report(plan.report())),
+            Self::Motan(plan) => Ok(project_motan_report(plan.report())),
         }
     }
 
@@ -54,6 +65,7 @@ impl VerificationRulePlan {
         match self {
             Self::Response(plan) => project_response_report(&plan.apply()?),
             Self::MemcachedTimestamp(plan) => Ok(project_memcached_report(&plan.apply()?)),
+            Self::Motan(plan) => Ok(project_motan_report(&plan.apply()?)),
         }
     }
 }
@@ -109,6 +121,7 @@ pub(super) fn plan(
         source_example: options.source_example,
         target_example: options.target_example,
         memcached_timestamp: None,
+        motan: None,
         evidence_id: options.evidence_id,
     };
     let traffic_plan = build_plan(target_root, state, &record)?;
@@ -179,10 +192,66 @@ pub(super) fn plan_memcached_timestamp(
         source_example: None,
         target_example: None,
         memcached_timestamp: Some(spec),
+        motan: None,
         evidence_id: options.evidence_id,
     };
     let traffic_plan = build_plan(target_root, state, &record)?;
     let traffic_report = traffic_plan.report()?;
+    state.dependency_rule_plan = None;
+    state.recorder_capture_plan = None;
+    state.rule_plan = Some(record.clone());
+    state.bump();
+    Ok(RewriteRuleReport {
+        plan_id: record.id.clone(),
+        issue_id: issue.id,
+        traffic_e2e_report: traffic_report,
+        next_command: action::rule_apply_command(target_root, &record.id),
+    })
+}
+
+pub(super) fn plan_motan(
+    target_root: &Path,
+    state: &mut RewriteState,
+    options: RewriteMotanRulePlanOptions,
+) -> Result<RewriteRuleReport> {
+    let issue = state
+        .active_issue
+        .clone()
+        .context("rewrite workflow has no active issue")?;
+    ensure!(
+        matches!(issue.kind, super::model::RewriteIssueKind::Comparison),
+        "Motan response-body rules require comparison evidence"
+    );
+    validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
+    let spec = RewriteMotanRuleSpec {
+        protocol: options.protocol,
+        unordered_paths: options.unordered_paths,
+    };
+    let spec_json = serde_json::to_string(&spec)?;
+    let record = RewriteRulePlanRecord {
+        id: format!(
+            "plan-{}",
+            fingerprint::id(&[
+                &state.workflow_id,
+                &issue.id,
+                "motan",
+                &spec_json,
+                &options.evidence_id,
+            ])
+            .trim_start_matches("fnv1a64:")
+        ),
+        issue_id: issue.id.clone(),
+        kind: "motan".to_string(),
+        json_pointer: String::new(),
+        dynamic_mechanisms: Vec::new(),
+        source_evidence: None,
+        source_example: None,
+        target_example: None,
+        memcached_timestamp: None,
+        motan: Some(spec),
+        evidence_id: options.evidence_id,
+    };
+    let traffic_report = build_plan(target_root, state, &record)?.report()?;
     state.dependency_rule_plan = None;
     state.recorder_capture_plan = None;
     state.rule_plan = Some(record.clone());
@@ -219,6 +288,25 @@ fn build_plan(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> Result<VerificationRulePlan> {
+    if let Some(spec) = &record.motan {
+        let comparison_run = state
+            .comparison_run_id
+            .as_ref()
+            .context("Motan response rule requires a comparison run")?;
+        return Ok(VerificationRulePlan::Motan(Box::new(plan_motan_rule(
+            MotanRuleFeedback {
+                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+                api: state.api.clone(),
+                protocol: spec.protocol,
+                unordered_paths: spec.unordered_paths.clone(),
+                comparison_report: target_root
+                    .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
+                    .join("comparison-recordings")
+                    .join(comparison_run)
+                    .join("comparison-report.json"),
+            },
+        )?)));
+    }
     if let Some(spec) = &record.memcached_timestamp {
         return Ok(VerificationRulePlan::MemcachedTimestamp(
             plan_memcached_timestamp_rule(MemcachedTimestampRuleFeedback {
@@ -427,6 +515,24 @@ fn project_memcached_report(report: &crate::MemcachedTimestampRuleReport) -> Val
         "mechanism": report.mechanism,
         "fixed_tolerance_seconds": report.fixed_tolerance_seconds,
         "reused_existing": report.reused_existing,
+        "changed": report.changed,
+        "applied": report.applied,
+        "diff": report.diff,
+    })
+}
+
+fn project_motan_report(report: &crate::MotanRuleReport) -> Value {
+    json!({
+        "kind": "motan",
+        "api": report.api,
+        "rule_id": report.rule_id,
+        "protocol": report.protocol,
+        "matching_cases": report.matching_cases,
+        "selected_difference_cases": report.selected_difference_cases,
+        "discovered_unordered_paths": report.discovered_unordered_paths,
+        "effective_unordered_paths": report.effective_unordered_paths,
+        "offline_comparison": report.offline_comparison,
+        "order_only": report.order_only,
         "changed": report.changed,
         "applied": report.applied,
         "diff": report.diff,

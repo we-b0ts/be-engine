@@ -73,6 +73,46 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from([
             "test",
             "rule",
+            "motan",
+            "--evidence-id",
+            "evidence-current",
+            "--protocol",
+            "protobuf",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "rule",
+            "motan",
+            "--evidence-id",
+            "evidence-current",
+            "--protocol",
+            "protobuf",
+            "--unordered-path",
+            r#"{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string"}"#,
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "rule",
+            "motan",
+            "--evidence-id",
+            "evidence-current",
+            "--protocol",
+            "protobuf",
+            "--unordered-path",
+            r#"{"field_path":[3],"display_path":"payload","element_type":"bytes"}"#,
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "rule",
             "memcached",
             "protobuf-timestamp",
             "--evidence-id",

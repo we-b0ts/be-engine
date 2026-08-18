@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
@@ -17,6 +17,51 @@ use crate::replay::{ResponseAssertionCaseReport, ResponseDifferenceKind};
 const MAX_DISTINCT_SOURCE_VALUES: usize = 8;
 const RESPONSE_DIFFERENCE_PAGE_SIZE: usize = 20;
 const MAX_TARGET_DIAGNOSTIC_BYTES: usize = 16 * 1024;
+
+pub(crate) fn finalized_focused_attempt_summary(
+    context: E2eRunContext,
+    api: &str,
+) -> Result<super::E2eFocusedAttemptSummary> {
+    let (_, layout) = config::resolve_layout(
+        &context.target_root,
+        &context.case_source,
+        context.run_key.as_deref(),
+    )?;
+    let (state, _) = finalized_focused_evidence(context, api)?;
+    let inventory = crate::case_group::load_complete_case_group_inventory(
+        &layout.group_index_path,
+        &layout.case_source,
+    )?;
+    let group = inventory
+        .groups
+        .iter()
+        .find(|group| group.group_id == api)
+        .with_context(|| format!("canonical case inventory has no API {api:?}"))?;
+    let expected_cases = group
+        .cases
+        .iter()
+        .map(|case| case.case_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let actual_cases = state
+        .cases
+        .iter()
+        .filter(|case| case.group_id == api)
+        .map(|case| case.case_id.as_str())
+        .collect::<BTreeSet<_>>();
+    ensure!(
+        expected_cases == actual_cases
+            && state.cases.len() == group.cases.len()
+            && state.case_source == inventory.case_source
+            && state.source_revision == inventory.source_revision,
+        "focused attempt does not match the canonical API case inventory"
+    );
+    Ok(super::E2eFocusedAttemptSummary {
+        attempt: state.sequence,
+        passed: state.status == model::RunStatus::Successful,
+        case_source: state.case_source,
+        case_inventory_id: group.case_inventory_id.clone(),
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2eSourceValueCount {

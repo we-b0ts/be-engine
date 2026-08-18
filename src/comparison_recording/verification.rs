@@ -121,6 +121,33 @@ pub struct ComparisonVerificationReport {
     pub cases: Vec<ComparisonVerificationCase>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComparisonVerificationOutcome {
+    pub report_path: String,
+    pub complete: bool,
+    pub passed: bool,
+    pub counts: ComparisonVerificationCounts,
+    pub apis: std::collections::BTreeMap<String, ComparisonVerificationApi>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub representative_difference: Option<ComparisonRepresentativeDifference>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub representative_policy_mismatch: Option<ComparisonRepresentativePolicyMismatch>,
+}
+
+impl ComparisonVerificationReport {
+    pub fn outcome(&self) -> ComparisonVerificationOutcome {
+        ComparisonVerificationOutcome {
+            report_path: self.report_path.clone(),
+            complete: self.complete,
+            passed: self.passed,
+            counts: self.counts.clone(),
+            apis: self.apis.clone(),
+            representative_difference: self.representative_difference.clone(),
+            representative_policy_mismatch: self.representative_policy_mismatch.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct RecordingSummary {
     status: String,
@@ -490,6 +517,7 @@ fn policy_mismatch_rule_ids(
                 .iter()
                 .chain(&report.applied_unordered_rule_ids)
                 .chain(&report.applied_counter_rule_ids)
+                .chain(&report.applied_motan_rule_ids)
         })
         .collect::<BTreeSet<_>>();
     reports
@@ -500,6 +528,7 @@ fn policy_mismatch_rule_ids(
                 .iter()
                 .chain(&report.unused_applicable_unordered_rule_ids)
                 .chain(&report.unused_applicable_counter_rule_ids)
+                .chain(&report.unused_applicable_motan_rule_ids)
         })
         .filter(|rule_id| !applied.contains(rule_id))
         .cloned()

@@ -18,6 +18,6 @@ pub(crate) use verification::resolve_comparison_case_dir;
 pub use verification::{
     ComparisonVerificationApi, ComparisonVerificationApiCounts, ComparisonVerificationCase,
     ComparisonVerificationClassification, ComparisonVerificationCounts,
-    ComparisonVerificationOptions, ComparisonVerificationReport, MatchedSourceObservation,
-    verify_comparison_recording,
+    ComparisonVerificationOptions, ComparisonVerificationOutcome, ComparisonVerificationReport,
+    MatchedSourceObservation, verify_comparison_recording,
 };

@@ -2,14 +2,133 @@ use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::replay::policy::{ResponseField, ResponseRuleKind};
+use crate::replay::policy::{
+    Hessian2ValuePath, MotanBodyProtocol, ProtobufFieldPath, ResponseField, ResponseRuleKind,
+};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseBodyMode {
     Unknown,
     JsonStructural,
+    MotanProtobuf,
+    MotanHessian2,
     ExactBytes,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MotanBodyAssertionReport {
+    pub rule_kind: String,
+    pub protocol: MotanBodyProtocol,
+    pub envelope: String,
+    pub configured: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub protocol_candidates: Vec<MotanBodyProtocol>,
+    pub unordered_path_candidates: Vec<MotanUnorderedPathCandidate>,
+    pub differences: Vec<MotanBodyDifference>,
+    pub order_only: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(untagged)]
+pub enum MotanUnorderedPathCandidate {
+    Protobuf(ProtobufFieldPathCandidate),
+    Hessian2(Hessian2ValuePathCandidate),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(untagged)]
+pub enum MotanBodyDifference {
+    Protobuf(ProtobufBodyDifference),
+    Hessian2(Hessian2BodyDifference),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtobufBodyDifferenceKind {
+    RepeatedFieldOrderMismatch,
+    OccurrenceCountMismatch,
+    WireTypeMismatch,
+    ValueMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProtobufBodyDifference {
+    pub field_path: ProtobufFieldPath,
+    pub display_path: String,
+    pub kind: ProtobufBodyDifferenceKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ProtobufFieldPathCandidate {
+    pub field_path: ProtobufFieldPath,
+    pub display_path: String,
+}
+
+impl From<ProtobufFieldPath> for ProtobufFieldPathCandidate {
+    fn from(field_path: ProtobufFieldPath) -> Self {
+        let display_path = field_path.display_path();
+        Self {
+            field_path,
+            display_path,
+        }
+    }
+}
+
+impl From<ProtobufFieldPath> for MotanUnorderedPathCandidate {
+    fn from(field_path: ProtobufFieldPath) -> Self {
+        Self::Protobuf(field_path.into())
+    }
+}
+
+impl From<ProtobufBodyDifference> for MotanBodyDifference {
+    fn from(difference: ProtobufBodyDifference) -> Self {
+        Self::Protobuf(difference)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Hessian2ValuePathCandidate {
+    pub value_path: Hessian2ValuePath,
+    pub display_path: String,
+}
+
+impl From<Hessian2ValuePath> for Hessian2ValuePathCandidate {
+    fn from(value_path: Hessian2ValuePath) -> Self {
+        let display_path = value_path.display_path();
+        Self {
+            value_path,
+            display_path,
+        }
+    }
+}
+
+impl From<Hessian2ValuePath> for MotanUnorderedPathCandidate {
+    fn from(value_path: Hessian2ValuePath) -> Self {
+        Self::Hessian2(value_path.into())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Hessian2BodyDifferenceKind {
+    ListOrderMismatch,
+    ListLengthMismatch,
+    TypeMismatch,
+    ValueMismatch,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Hessian2BodyDifference {
+    pub value_path: Hessian2ValuePath,
+    pub display_path: String,
+    pub kind: Hessian2BodyDifferenceKind,
+}
+
+impl From<Hessian2BodyDifference> for MotanBodyDifference {
+    fn from(difference: Hessian2BodyDifference) -> Self {
+        Self::Hessian2(difference)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -91,6 +210,12 @@ pub struct ResponseAssertionCaseReport {
     pub applied_counter_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unused_applicable_counter_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_motan_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unused_applicable_motan_rule_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motan: Option<MotanBodyAssertionReport>,
     pub unordered_candidates: Vec<String>,
     pub passed: bool,
 }
@@ -128,12 +253,15 @@ impl ResponseAssertionCaseReport {
             unused_applicable_unordered_rule_ids: Vec::new(),
             applied_counter_rule_ids: Vec::new(),
             unused_applicable_counter_rule_ids: Vec::new(),
+            applied_motan_rule_ids: Vec::new(),
+            unused_applicable_motan_rule_ids: Vec::new(),
+            motan: None,
             unordered_candidates: Vec::new(),
             passed: false,
         }
     }
 
-    pub(super) fn finish(&mut self, applicable: &[ResponseField]) {
+    pub(super) fn finish(&mut self, applicable: &[ResponseField], applicable_motan: &[String]) {
         let applied_dynamic = self
             .applied_dynamic_rule_ids
             .iter()
@@ -167,6 +295,16 @@ impl ResponseAssertionCaseReport {
             .filter(|field| !applied_counter.contains(&field.id))
             .map(|field| field.id.clone())
             .collect();
+        let applied_motan = self
+            .applied_motan_rule_ids
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        self.unused_applicable_motan_rule_ids = applicable_motan
+            .iter()
+            .filter(|rule_id| !applied_motan.contains(*rule_id))
+            .cloned()
+            .collect();
         self.dynamic_candidates = self
             .differences
             .iter()
@@ -189,6 +327,7 @@ impl ResponseAssertionCaseReport {
         self.passed = self.differences.is_empty()
             && self.unused_applicable_dynamic_rule_ids.is_empty()
             && self.unused_applicable_unordered_rule_ids.is_empty()
-            && self.unused_applicable_counter_rule_ids.is_empty();
+            && self.unused_applicable_counter_rule_ids.is_empty()
+            && self.unused_applicable_motan_rule_ids.is_empty();
     }
 }

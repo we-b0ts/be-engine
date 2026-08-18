@@ -324,8 +324,119 @@ traffic-e2e config replay apply response-rule \
 Both actions accept only the difference kind selected by `--kind`,
 runner-owned assertions using the current policy fingerprint, exact
 focused-case coverage, and complete, clean aggregate evidence. Apply is
-additive, sorted, and atomic. Rerun the entire affected API group after every
-policy change.
+additive, sorted, and atomic. These JSON response-rule changes require rerunning
+the entire affected API group.
+
+Motan responses whose business body is a simple byte-array envelope can opt
+into protocol-aware business-body comparison:
+
+```yaml
+response_rules:
+  motan:
+    "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-byteArray-8cd698b4fea1fb48":
+      protocol: protobuf
+      unordered_paths:
+        - field_path: [3, 1, 6, 3]
+          display_path: rule_collection.experiments.groups.white_list
+          element_type: string
+        - field_path: [3, 3]
+          display_path: rule_collection.group_config
+          element_type: message
+```
+
+Hessian2 uses value names rather than protobuf field numbers. `"*"` traverses
+every element of an intermediate list; an empty `value_path` selects a
+top-level list:
+
+```yaml
+response_rules:
+  motan:
+    "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-long-long-095f05367f122cf4":
+      protocol: hessian2
+      unordered_paths:
+        - value_path: [result, ruleCollection, groups, "*", whiteList]
+          display_path: cache_result.rule_collection.groups[].white_list
+```
+
+The two Motan body envelopes are recognized without configuration. A method
+returning `byte[]` carries its business bytes inside the Motan simple
+byte-array envelope, while Hessian2 serialization of any other return type
+occupies the whole body. Protobuf bodies are always the enveloped `byte[]`
+form; a Hessian2 body is accepted in either form, and the report names the
+observed framing as `envelope: simple_byte_array` or `envelope: raw`. Both
+compared bodies must use the same envelope, because a framing change is a
+response-shape difference rather than a body-value difference.
+
+The configured rule relaxes only the ordering of the declared repeated
+protobuf fields or Hessian2 lists inside the business body. During standard
+replay, the outer Motan frame remains exact after removing only the
+framework-generated `M_pt`
+process-time metadata entry: protocol version, flags, request ID, response
+status, serialization, and every other metadata entry must still match. A
+protocol-only rule does not relax any body value; it only enables
+protocol-aware differences. Standard replay without a configured Motan body
+rule keeps the same normalized full-frame exact comparison.
+
+This is one Motan response rule whose available action follows the current
+configuration. When the body protocol is not configured, evidence offers the
+syntactically valid `protobuf` and/or `hessian2` protocol choices. These are
+candidates rather than protocol claims; the AI must select the protocol using
+application/schema context. Applying that choice immediately reruns only the
+existing comparison verifier against the immutable response artifacts; it
+does not start source or target processes, send Motan requests, or record new
+traffic. A report produced before protocol-aware Motan diagnostics were
+available remains usable: evidence and protocol configuration probe the
+existing source/candidate bodies read-only instead of requiring another
+comparison recording. The refreshed standard comparison report keeps the
+exact `$body` mismatch and adds protocol-aware field paths, difference kinds,
+and an `order_only` decision. Apply returns the same comparison verifier's
+compact outcome (`complete`, `passed`, counts, per-API counts, and the bounded
+representative difference); complete per-case details remain in that standard
+report.
+
+When a supported protocol is already configured, evidence skips protocol
+selection and lists its supported refinement directly. For protobuf, adding
+unordered fields must provide every newly discovered `field_path` together
+with a source/proto-reviewed semantic `display_path` and an explicit repeated
+`element_type`. A packed numeric array is wire-ambiguous without its protobuf
+type, so it first appears as a field-level value difference; the reviewed
+numeric type is accepted only when offline typed comparison proves that the
+same field is reorder-only:
+
+```bash
+backend-rewrite rule motan \
+  --evidence-id <current-evidence-id> \
+  --protocol protobuf
+
+backend-rewrite rule motan \
+  --evidence-id <current-evidence-id> \
+  --protocol protobuf \
+  --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string"}'
+
+backend-rewrite rule motan \
+  --evidence-id <current-evidence-id> \
+  --protocol hessian2 \
+  --unordered-path '{"value_path":["ruleCollection","groups","*","whiteList"],"display_path":"rule_collection.groups[].white_list"}'
+```
+
+Only selected repeated fields ignore element order. Element contents,
+duplicate multiplicity, status, undeclared fields, and all other business-body
+bytes remain exact. Intermediate field numbers are interpreted as embedded
+messages.
+Supported terminal types are strings, messages, booleans, enums, and protobuf
+integer/fixed-width numeric types, including packed numeric encodings.
+`bytes` is deliberately unsupported: neither the outer Motan `byte[]`, a
+protobuf `bytes` field, nor `repeated bytes` can be declared unordered.
+
+For Hessian2, `value_path` walks object field names and string-valued map keys;
+`"*"` is permitted only to traverse an intermediate list. The selected
+terminal must be a Hessian2 list. A path absent from both bodies is a no-op, so
+null or smaller cases can share a rule; a one-sided occurrence still differs,
+and selecting a present non-list fails closed. Hessian2 maps compare by key
+independent of their wire entry order, while list order changes only at an
+explicitly reviewed `value_path`. Elements, duplicate multiplicity, types,
+unselected values, and binary values remain exact; Hessian2 binary data cannot
+be declared unordered.
 
 Comparison-only live counter semantics are nested separately:
 

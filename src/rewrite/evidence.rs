@@ -18,6 +18,8 @@ use crate::{
     query_e2e_dirty_counts, query_e2e_source_variation, query_e2e_target_runtime_diagnostics,
 };
 
+mod motan;
+
 const QUERY_CASE_RESPONSE_DIFFERENCES: &str = "case_response_differences";
 const QUERY_REPRESENTATIVES: &str = "representatives";
 const QUERY_SOURCE_VARIATION: &str = "source_variation";
@@ -75,7 +77,8 @@ pub(super) fn query(
             )
         })?;
     let (kind, offset) = requested;
-    let (facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
+    let (mut facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
+    motan::enrich_protocol_candidate(state, kind, &mut facts)?;
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
@@ -105,6 +108,42 @@ fn protocol_rule_hints(
     query_kind: &str,
     facts: &Value,
 ) -> Vec<RewriteProtocolRuleHint> {
+    if query_kind == QUERY_REPRESENTATIVES {
+        let protocols = motan::protocol_candidates(facts);
+        if protocols.is_empty() {
+            return Vec::new();
+        }
+        let configured = facts
+            .pointer("/comparison_observation/motan/configured")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        return protocols
+            .into_iter()
+            .map(|protocol| {
+                let hint = match (configured, protocol) {
+                    (true, "protobuf") => "The Motan body protocol is protobuf. Review the protocol-aware field differences and unordered_path_candidates in this evidence, then apply only repeated fields whose order is irrelevant with a semantic display_path and explicit element_type.",
+                    (true, "hessian2") => "The Motan body protocol is Hessian2. Review the protocol-aware value differences and unordered_path_candidates in this evidence, then apply only lists whose order is irrelevant with a reviewed value_path and semantic display_path.",
+                    (false, "protobuf") => "No Motan body protocol is configured. The exact body is a protobuf candidate; configure protobuf to re-verify existing response artifacts offline and return precise field paths without recording or starting processes.",
+                    (false, "hessian2") => "No Motan body protocol is configured. The exact body is a Hessian2 candidate; configure Hessian2 to re-verify existing response artifacts offline and return precise value paths without recording or starting processes.",
+                    _ => "The exact Motan body has a supported protocol candidate. Review and configure it before applying protocol-aware rules.",
+                };
+                RewriteProtocolRuleHint {
+                    protocol: format!("motan_{protocol}"),
+                    rule: "motan".to_string(),
+                    hint: hint.to_string(),
+                    help: super::action::command(
+                        target_root,
+                        vec![
+                            "rule".to_string(),
+                            "motan".to_string(),
+                            "--help".to_string(),
+                        ],
+                        Vec::new(),
+                    ),
+                }
+            })
+            .collect();
+    }
     if query_kind != QUERY_DIRTY_CLUSTERS {
         return Vec::new();
     }
@@ -143,6 +182,35 @@ fn applicable_rule_planners(
     evidence_id: &str,
 ) -> Vec<RewriteApplicableRulePlanner> {
     let mut planners = Vec::new();
+    if query_kind == QUERY_REPRESENTATIVES
+        && issue_kind == RewriteIssueKind::Comparison
+        && facts
+            .pointer("/comparison_observation/motan/configured")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        planners.extend(
+            motan::protocol_candidates(facts)
+                .into_iter()
+                .map(|protocol| RewriteApplicableRulePlanner {
+                    kind: "response_body".to_string(),
+                    protocol: format!("motan_{protocol}"),
+                    evidence_id: evidence_id.to_string(),
+                    command: super::action::command(
+                        target_root,
+                        vec![
+                            "rule".to_string(),
+                            "motan".to_string(),
+                            "--evidence-id".to_string(),
+                            evidence_id.to_string(),
+                            "--protocol".to_string(),
+                            protocol.to_string(),
+                        ],
+                        Vec::new(),
+                    ),
+                }),
+        );
+    }
     if query_kind == QUERY_REPRESENTATIVES
         && matches!(
             issue_kind,
@@ -855,6 +923,10 @@ fn policy_applicability(issue: &RewriteIssue) -> Value {
         "forbidden_without_more_proof": ["missing_field", "type_mismatch", "local_cache", "stable_target_logic"],
     })
 }
+
+#[cfg(test)]
+#[path = "evidence/motan_tests.rs"]
+mod motan_tests;
 
 #[cfg(test)]
 #[path = "evidence/tests.rs"]

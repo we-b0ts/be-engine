@@ -1195,12 +1195,20 @@ separate `source_process_traffic` query. They do not affect the case gate.
 `unused_global` events and target activity outside an active case remain
 aggregate diagnostics and do not make a case dirty.
 
-When a dirty cluster uses a protocol with supported dependency-value rules,
-the evidence report includes `protocol_rules`. Each entry contains an English
-applicability hint and an exact read-only `help` command. This list is separate
-from `applicable_rule_planners`, which describes dependency ownership rules;
-neither list proves that a rule applies. Memcached currently exposes
-`protobuf-timestamp`, whose help command is:
+When evidence identifies a protocol with supported rules, the report includes
+`protocol_rules`. Each entry contains an English applicability hint and an
+exact read-only `help` command. This list is separate from
+`applicable_rule_planners`, which contains planner entrypoints appropriate to
+the current evidence state; neither list proves that a rule applies. For a
+Motan body without a configured protocol, the planner offers each
+syntactically valid protobuf or Hessian2 protocol candidate. Protobuf is
+recognized inside the Motan simple byte-array envelope written for a `byte[]`
+return value; Hessian2 is recognized both there and as a bare body, which is
+how Motan serializes any other return type. The observed framing is reported as
+`envelope`. Once one protocol is configured, the protocol rule hint instead
+directs the AI to the reported field/value differences and unordered-path
+candidates. Memcached dirty-cluster
+evidence currently exposes `protobuf-timestamp`, whose help command is:
 
 ```bash
 backend-rewrite --target-root ../target rule memcached protobuf-timestamp --help
@@ -1244,6 +1252,20 @@ verification decides whether to rerun the same cases or allocate fresh standard
 recording evidence. A successful `missing-recorded-resource` route instead
 returns the existing recorder-capture apply command and never enters system
 repair.
+
+If an administrator confirms that a comparison issue was incorrectly routed
+as a `source_change` system repair, return that exact repair to target
+implementation explicitly:
+
+```bash
+backend-rewrite-admin --target-root ../target repair cancel <repair-id> \
+  --reason 'comparison evidence was misclassified' \
+  --confirm-misroute
+```
+
+The command accepts only the current comparison repair, clears its accepted
+route, and restores the issue's target-code owner. It does not cancel other
+repair kinds, delete evidence, or provide an ordinary AI workflow bypass.
 
 Initialize a rewrite target's three generated documents once, before its first
 coordinator session:

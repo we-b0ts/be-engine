@@ -3,6 +3,7 @@ mod evidence;
 mod justification;
 mod memcached;
 mod model;
+mod motan;
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -35,6 +36,7 @@ pub use model::{
     ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, ResponseRuleFeedback,
     ResponseRuleReport,
 };
+pub use motan::{MotanRuleFeedback, MotanRulePlan, MotanRuleReport, plan_motan_rule};
 
 pub struct ResponseRulePlan {
     policy_path: PathBuf,

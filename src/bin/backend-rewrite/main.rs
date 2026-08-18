@@ -7,14 +7,15 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    DynamicResponseMechanism, RecordingApi, ResponseRuleKind, RewriteCaseDependenciesOptions,
-    RewriteContext, RewriteMemcachedTimestampRulePlanOptions, RewriteNextOptions,
+    DynamicResponseMechanism, MotanBodyProtocol, MotanUnorderedPath, RecordingApi,
+    ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteContext,
+    RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteNextOptions,
     RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
     RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
     RewriteRulePlanOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
     RewriteWorkerTransferOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
-    next_rewrite, plan_rewrite_memcached_timestamp_rule, plan_rewrite_rule,
-    query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
+    next_rewrite, plan_rewrite_memcached_timestamp_rule, plan_rewrite_motan_rule,
+    plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
     request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
     route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
     status_rewrite_for_api, transfer_rewrite_worker, verify_rewrite_repair,
@@ -183,6 +184,8 @@ enum RuleCommand {
     Plan(RulePlanArgs),
     /// Plan a request-owned Memcached dependency-payload verification rule.
     Memcached(MemcachedRuleArgs),
+    /// Configure a Motan body protocol or apply a supported protocol-aware rule.
+    Motan(MotanRulePlanArgs),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(RuleApplyArgs),
 }
@@ -197,6 +200,40 @@ struct MemcachedRuleArgs {
 enum MemcachedRuleCommand {
     /// Plan a cache-service SET protobuf Unix-seconds field rule.
     ProtobufTimestamp(MemcachedTimestampRulePlanArgs),
+}
+
+#[derive(Debug, Args)]
+struct MotanRulePlanArgs {
+    /// Coordinator-issued evidence id for the exact Motan body mismatch.
+    #[arg(long)]
+    evidence_id: String,
+    /// Binary protocol of the Motan response body. Protobuf is carried inside
+    /// the Motan simple byte-array envelope; Hessian2 is accepted bare or
+    /// inside that envelope.
+    #[arg(long, value_enum)]
+    protocol: MotanBodyProtocolArg,
+    /// Reviewed unordered collection from protocol-aware evidence as JSON. Protobuf uses field_path + element_type; Hessian2 uses value_path.
+    #[arg(long = "unordered-path", value_parser = parse_motan_unordered_path)]
+    unordered_paths: Vec<MotanUnorderedPath>,
+}
+
+fn parse_motan_unordered_path(value: &str) -> Result<MotanUnorderedPath, String> {
+    serde_json::from_str(value).map_err(|error| format!("invalid unordered path JSON: {error}"))
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum MotanBodyProtocolArg {
+    Protobuf,
+    Hessian2,
+}
+
+impl From<MotanBodyProtocolArg> for MotanBodyProtocol {
+    fn from(value: MotanBodyProtocolArg) -> Self {
+        match value {
+            MotanBodyProtocolArg::Protobuf => Self::Protobuf,
+            MotanBodyProtocolArg::Hessian2 => Self::Hessian2,
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -461,9 +498,10 @@ enum RecordingKindArg {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RecordingReasonArg {
+    /// Explicit user authorization for a fresh standard recording. Standard
+    /// recording always requires explicit user authorization; the other
+    /// recording reasons are coordinator-owned and cannot be requested here.
     UserRequested,
-    RecorderContractChanged,
-    SourceBaselineChanged,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -568,6 +606,17 @@ async fn run(cli: Cli) -> Result<()> {
                     )
                 }
             },
+            RuleCommand::Motan(args) => print_json(
+                &plan_rewrite_motan_rule(
+                    RewriteContext { target_root },
+                    RewriteMotanRulePlanOptions {
+                        evidence_id: args.evidence_id,
+                        protocol: args.protocol.into(),
+                        unordered_paths: args.unordered_paths,
+                    },
+                )?,
+                pretty,
+            ),
             RuleCommand::Apply(args) => print_json(
                 &apply_rewrite_rule(RewriteContext { target_root }, &args.plan_id)?,
                 pretty,
@@ -730,8 +779,6 @@ impl From<RecordingReasonArg> for RewriteRecordingReason {
     fn from(value: RecordingReasonArg) -> Self {
         match value {
             RecordingReasonArg::UserRequested => Self::UserRequested,
-            RecordingReasonArg::RecorderContractChanged => Self::RecorderContractChanged,
-            RecordingReasonArg::SourceBaselineChanged => Self::SourceBaselineChanged,
         }
     }
 }
