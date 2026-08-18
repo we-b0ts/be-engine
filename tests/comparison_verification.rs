@@ -197,6 +197,7 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
         api: "MOTAN /rpc/example".to_string(),
         protocol: MotanBodyProtocol::Protobuf,
         unordered_paths: Vec::new(),
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
     })
     .unwrap();
@@ -260,6 +261,7 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
             display_path: "rule_collection.white_list".to_string(),
             element_type: ProtobufRepeatedElementType::Message,
         })],
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
     })
     .err()
@@ -279,6 +281,7 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
             display_path: "rule_collection.white_list".to_string(),
             element_type: ProtobufRepeatedElementType::String,
         })],
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
     })
     .unwrap();
@@ -336,6 +339,7 @@ fn motan_protocol_configuration_rejects_a_legacy_report_with_non_protobuf_bodies
         api: "MOTAN /rpc/example".to_string(),
         protocol: MotanBodyProtocol::Protobuf,
         unordered_paths: Vec::new(),
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path,
     })
     .err()
@@ -405,6 +409,7 @@ fn motan_body_rule_reports_that_a_value_difference_has_no_ordering_rule() {
         api: "MOTAN /rpc/hessian-value".to_string(),
         protocol: MotanBodyProtocol::Hessian2,
         unordered_paths: Vec::new(),
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
     })
     .unwrap()
@@ -420,6 +425,7 @@ fn motan_body_rule_reports_that_a_value_difference_has_no_ordering_rule() {
         api: "MOTAN /rpc/hessian-value".to_string(),
         protocol: MotanBodyProtocol::Hessian2,
         unordered_paths: Vec::new(),
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path,
     })
     .err()
@@ -428,7 +434,7 @@ fn motan_body_rule_reports_that_a_value_difference_has_no_ordering_rule() {
     assert!(
         error
             .to_string()
-            .contains("requires at least one reviewed unordered path"),
+            .contains("requires at least one reviewed unordered or joined-string path"),
         "{error}"
     );
 }
@@ -507,6 +513,7 @@ fn motan_hessian2_rule_applies_to_a_body_without_a_byte_array_envelope() {
         api: "MOTAN /rpc/hessian-object".to_string(),
         protocol: MotanBodyProtocol::Hessian2,
         unordered_paths: Vec::new(),
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
     })
     .unwrap()
@@ -522,6 +529,7 @@ fn motan_hessian2_rule_applies_to_a_body_without_a_byte_array_envelope() {
             value_path: Hessian2ValuePath(vec!["names".to_string()]),
             display_path: "cache_result.names".to_string(),
         })],
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path,
     })
     .unwrap()
@@ -611,6 +619,7 @@ fn motan_hessian2_rule_apply_reuses_comparison_bodies_for_offline_verification()
         api: "MOTAN /rpc/hessian".to_string(),
         protocol: MotanBodyProtocol::Hessian2,
         unordered_paths: Vec::new(),
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
     })
     .unwrap()
@@ -627,6 +636,7 @@ fn motan_hessian2_rule_apply_reuses_comparison_bodies_for_offline_verification()
             value_path: Hessian2ValuePath(vec![]),
             display_path: "response.names".to_string(),
         })],
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path,
     })
     .unwrap()
@@ -698,6 +708,7 @@ fn motan_rule_uses_reviewed_type_to_resolve_packed_integer_order() {
         api: "MOTAN /rpc/packed".to_string(),
         protocol: MotanBodyProtocol::Protobuf,
         unordered_paths: Vec::new(),
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
     })
     .unwrap()
@@ -713,6 +724,7 @@ fn motan_rule_uses_reviewed_type_to_resolve_packed_integer_order() {
             display_path: "config_scene.values".to_string(),
             element_type: ProtobufRepeatedElementType::Uint32,
         })],
+        unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
     })
     .unwrap()

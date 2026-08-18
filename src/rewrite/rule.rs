@@ -11,10 +11,11 @@ use super::model::{
 use super::{action, evidence};
 use crate::{
     ComparisonResponseRuleFeedback, DynamicResponseMechanism, E2eRunContext,
-    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MotanBodyProtocol,
-    MotanRuleFeedback, MotanRulePlan, MotanUnorderedPath, ResponseRuleFeedback, ResponseRuleKind,
-    ResponseRulePlan, plan_comparison_response_rule, plan_memcached_timestamp_rule,
-    plan_motan_rule, plan_response_rule, resolve_e2e_response_rule_evidence,
+    Hessian2JoinedStringPath, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
+    MotanBodyProtocol, MotanRuleFeedback, MotanRulePlan, MotanUnorderedPath, ResponseRuleFeedback,
+    ResponseRuleKind, ResponseRulePlan, plan_comparison_response_rule,
+    plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule,
+    resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ pub struct RewriteMotanRulePlanOptions {
     pub evidence_id: String,
     pub protocol: MotanBodyProtocol,
     pub unordered_paths: Vec<MotanUnorderedPath>,
+    pub unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
 }
 
 enum VerificationRulePlan {
@@ -226,6 +228,7 @@ pub(super) fn plan_motan(
     let spec = RewriteMotanRuleSpec {
         protocol: options.protocol,
         unordered_paths: options.unordered_paths,
+        unordered_joined_string_paths: options.unordered_joined_string_paths,
     };
     let spec_json = serde_json::to_string(&spec)?;
     let record = RewriteRulePlanRecord {
@@ -299,6 +302,7 @@ fn build_plan(
                 api: state.api.clone(),
                 protocol: spec.protocol,
                 unordered_paths: spec.unordered_paths.clone(),
+                unordered_joined_string_paths: spec.unordered_joined_string_paths.clone(),
                 comparison_report: target_root
                     .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
                     .join("comparison-recordings")

@@ -8,16 +8,24 @@ use motan_hessian2::{ClassId, Decoder, Limits, TypeId, ValueKind};
 use super::binary_body::{MotanBodyEnvelope, simple_payload};
 use super::model::{Hessian2BodyDifference, Hessian2BodyDifferenceKind};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
-use crate::replay::policy::{Hessian2UnorderedPath, Hessian2ValuePath};
+use crate::replay::policy::{
+    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
+};
 
 const MAX_NODES: usize = 1_000_000;
 const MAX_DISCOVERED_PATHS: usize = 32;
 const MAX_DIFFERENCES: usize = 32;
 
+/// Separators tried when discovering joined-string candidates. Kept to the
+/// common Set-join separators in this business; extend only when a real case
+/// appears.
+const JOINED_STRING_SEPARATORS: [&str; 3] = [",", ";", "|"];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Hessian2OrderDiscovery {
     pub(super) envelope: MotanBodyEnvelope,
     pub(super) unordered_paths: Vec<Hessian2ValuePath>,
+    pub(super) unordered_joined_string_paths: Vec<(Hessian2ValuePath, String)>,
     pub(super) differences: Vec<Hessian2BodyDifference>,
     pub(super) order_only: bool,
 }
@@ -83,11 +91,16 @@ pub(in crate::replay) fn compare_motan_hessian2(
     expected: &[u8],
     actual: &[u8],
     unordered_paths: &[Hessian2UnorderedPath],
+    joined_string_paths: &[Hessian2JoinedStringPath],
 ) -> Result<bool> {
     let (_, mut expected, mut actual) = parse_bodies(expected, actual)?;
     for path in unordered_paths {
         canonicalize_path(&mut expected, &path.value_path.0, &path.value_path)?;
         canonicalize_path(&mut actual, &path.value_path.0, &path.value_path)?;
+    }
+    for path in joined_string_paths {
+        canonicalize_joined_string(&mut expected, &path.value_path.0, &path.separator)?;
+        canonicalize_joined_string(&mut actual, &path.value_path.0, &path.separator)?;
     }
     Ok(expected == actual)
 }
@@ -96,10 +109,20 @@ pub(super) fn evaluate_motan_hessian2(
     expected: &[u8],
     actual: &[u8],
     unordered_paths: &[Hessian2UnorderedPath],
+    joined_string_paths: &[Hessian2JoinedStringPath],
 ) -> Result<(bool, Hessian2OrderDiscovery)> {
     let mut discovery = discover_motan_hessian2_order(expected, actual)?;
-    let matches = compare_motan_hessian2(expected, actual, unordered_paths)?;
+    let matches = compare_motan_hessian2(expected, actual, unordered_paths, joined_string_paths)?;
     for rule in unordered_paths {
+        for difference in discovery
+            .differences
+            .iter_mut()
+            .filter(|difference| difference.value_path == rule.value_path)
+        {
+            difference.display_path.clone_from(&rule.display_path);
+        }
+    }
+    for rule in joined_string_paths {
         for difference in discovery
             .differences
             .iter_mut()
@@ -120,10 +143,17 @@ pub(super) fn discover_motan_hessian2_order(
 ) -> Result<Hessian2OrderDiscovery> {
     let (envelope, mut expected, mut actual) = parse_bodies(expected, actual)?;
     let mut selected = BTreeSet::new();
+    let mut joined_string = BTreeSet::<(Hessian2ValuePath, String)>::new();
 
     while expected != actual && selected.len() < MAX_DISCOVERED_PATHS {
         let mut discovered = BTreeSet::new();
-        discover_paths(&expected, &actual, &mut Vec::new(), &mut discovered);
+        discover_paths(
+            &expected,
+            &actual,
+            &mut Vec::new(),
+            &mut discovered,
+            &mut joined_string,
+        );
         discovered.retain(|path| !selected.contains(path));
         if discovered.is_empty() {
             break;
@@ -136,6 +166,9 @@ pub(super) fn discover_motan_hessian2_order(
         }
         selected.extend(next);
     }
+    // Joined-string discovery does not feed back into the canonicalization loop:
+    // canonicalizing a joined string would require a chosen separator, which the
+    // discovery pass does not fix. Candidates are reported as-is for review.
 
     let order_only = expected == actual;
     let mut differences = selected
@@ -156,6 +189,7 @@ pub(super) fn discover_motan_hessian2_order(
     Ok(Hessian2OrderDiscovery {
         envelope,
         unordered_paths: selected.into_iter().collect(),
+        unordered_joined_string_paths: joined_string.into_iter().collect(),
         differences,
         order_only,
     })
@@ -394,11 +428,60 @@ fn canonicalize_path(
     }
 }
 
+/// Canonicalizes a joined-string field: split on `separator`, sort the parts
+/// (multiset semantics — duplicates preserved), and re-join. Walking the value
+/// tree mirrors `canonicalize_path`; the terminal must be a Hessian2 string.
+fn canonicalize_joined_string(
+    value: &mut HessianValue<'_>,
+    path: &[String],
+    separator: &str,
+) -> Result<bool> {
+    let Some((segment, remaining)) = path.split_first() else {
+        let HessianValue::String(text) = value else {
+            bail!("joined-string path does not select a Hessian2 string");
+        };
+        let mut parts = text.split(separator).collect::<Vec<_>>();
+        parts.sort_unstable();
+        let canonical = parts.join(separator);
+        *text = Cow::Owned(canonical);
+        return Ok(true);
+    };
+    match value {
+        HessianValue::Object { class, fields } => {
+            let mut found = false;
+            for (name, value) in class.fields.iter().zip(fields.iter_mut()) {
+                if name.as_ref() == segment {
+                    found |= canonicalize_joined_string(value, remaining, separator)?;
+                }
+            }
+            Ok(found)
+        }
+        HessianValue::Map { entries, .. } => {
+            let mut found = false;
+            for (key, value) in entries {
+                if matches!(key, HessianValue::String(name) if name.as_ref() == segment) {
+                    found |= canonicalize_joined_string(value, remaining, separator)?;
+                }
+            }
+            Ok(found)
+        }
+        HessianValue::List { values, .. } if segment == "*" => {
+            let mut found = false;
+            for value in values {
+                found |= canonicalize_joined_string(value, remaining, separator)?;
+            }
+            Ok(found)
+        }
+        _ => Ok(false),
+    }
+}
+
 fn discover_paths(
     expected: &HessianValue<'_>,
     actual: &HessianValue<'_>,
     path: &mut Vec<String>,
     discovered: &mut BTreeSet<Hessian2ValuePath>,
+    joined_string: &mut BTreeSet<(Hessian2ValuePath, String)>,
 ) {
     if discovered.len() >= MAX_DISCOVERED_PATHS || expected == actual {
         return;
@@ -424,7 +507,7 @@ fn discover_paths(
             }
             path.push("*".to_string());
             for (expected, actual) in expected_values.iter().zip(actual_values) {
-                discover_paths(expected, actual, path, discovered);
+                discover_paths(expected, actual, path, discovered, joined_string);
             }
             path.pop();
         }
@@ -444,7 +527,7 @@ fn discover_paths(
                 .zip(expected_fields.iter().zip(actual_fields))
             {
                 path.push(name.to_string());
-                discover_paths(expected, actual, path, discovered);
+                discover_paths(expected, actual, path, discovered, joined_string);
                 path.pop();
             }
         }
@@ -468,8 +551,25 @@ fn discover_paths(
                     continue;
                 };
                 path.push(key.to_string());
-                discover_paths(expected, actual, path, discovered);
+                discover_paths(expected, actual, path, discovered, joined_string);
                 path.pop();
+            }
+        }
+        (HessianValue::String(expected), HessianValue::String(actual)) => {
+            for separator in JOINED_STRING_SEPARATORS {
+                let mut expected_parts = expected.split(separator).collect::<Vec<_>>();
+                let mut actual_parts = actual.split(separator).collect::<Vec<_>>();
+                // A separator that does not appear in either string yields a
+                // single-element split on both sides, which trivially compares
+                // equal — ignore those to avoid spurious candidates.
+                if expected_parts.len() < 2 && actual_parts.len() < 2 {
+                    continue;
+                }
+                expected_parts.sort_unstable();
+                actual_parts.sort_unstable();
+                if expected_parts == actual_parts {
+                    joined_string.insert((Hessian2ValuePath(path.clone()), separator.to_string()));
+                }
             }
         }
         _ => {}
