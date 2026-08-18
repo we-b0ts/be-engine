@@ -176,7 +176,11 @@ async fn handle_connection(
 
         let baseline = fetch(&runtime, &request, &runtime.motan_gateway.matched_upstream).await;
         update_upstream_counts(&runtime, UpstreamRole::Baseline, &baseline.capture).await;
-        let downstream_result = write_downstream(&mut stream, &request, &baseline, limits).await;
+        // Preserve what `write_downstream` needs from the baseline before
+        // `baseline.capture.record` is moved into the case below. `response` is
+        // cloned (an `Option<Frame>`); `error_kind` is `Copy`.
+        let baseline_response = baseline.response.clone();
+        let baseline_error_kind = baseline.capture.error_kind;
         let candidate = fetch(&runtime, &request, &runtime.candidate_motan_upstream).await;
         update_upstream_counts(&runtime, UpstreamRole::Candidate, &candidate.capture).await;
         let baseline_recheck = if runtime.comparison_recording.baseline_recheck {
@@ -220,7 +224,23 @@ async fn handle_connection(
             warn!(%error, case_id = %case.id, "failed to publish Motan comparison case");
         }
         drop(permit);
-        downstream_result?;
+        // Return the baseline response only after the case is published and the
+        // active-case permit is released. This aligns the Motan path with the
+        // HTTP path (`run_dual` sends the baseline back after `drop(permit)`):
+        // the managed input driver treats a received response as "the previous
+        // case finished", so responding earlier would let the next serialized
+        // request arrive before the permit is freed, causing it to be dropped as
+        // `overloaded` under `max_in_flight == 1`. `baseline_response` and
+        // `baseline_error_kind` were saved before `baseline.capture.record`
+        // moved into the case above.
+        write_downstream_response(
+            &mut stream,
+            &request,
+            baseline_response,
+            baseline_error_kind,
+            limits,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -298,15 +318,16 @@ async fn fetch(
     }
 }
 
-async fn write_downstream(
+async fn write_downstream_response(
     stream: &mut TcpStream,
     request: &Frame,
-    baseline: &MotanCapture,
+    response: Option<Frame>,
+    error_kind: Option<UpstreamErrorKind>,
     limits: Limits,
 ) -> Result<()> {
-    if let Some(response) = &baseline.response {
-        transport::write_frame(stream, response).await
-    } else if request.flags.oneway() && baseline.capture.error_kind.is_none() {
+    if let Some(response) = response {
+        transport::write_frame(stream, &response).await
+    } else if request.flags.oneway() && error_kind.is_none() {
         Ok(())
     } else {
         transport::write_fixed_response(stream, request, limits).await?;
