@@ -32,10 +32,7 @@ use brz_vintage as vintage;
 
 // 1. Build the Vintage client (endpoint + group come from pt-config / local
 //    config, mirroring the source's mcClient bean).
-let vintage_cfg = vintage::ClientConfig::new(
-    format!("http://{vintage_host}:{vintage_port}"),
-    vintage::SnapshotConfig::disabled(),
-)?;
+let vintage_cfg = vintage::ClientConfig::new(format!("http://{vintage_host}:{vintage_port}"))?;
 let vintage_client = vintage::Client::new(vintage_cfg)?;
 
 // 2. Build a live CacheService for (group, namespace). The backend is built
