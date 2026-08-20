@@ -741,3 +741,41 @@ fn a_rule_present_on_only_one_side_remains_an_exact_difference() {
     );
     assert!(report.unused_applicable_generated_rule_ids.is_empty());
 }
+
+#[test]
+fn equal_non_json_body_passes_with_configured_response_rules() {
+    // A configured response rule (here uuid on /content) is JSON-pointer-based
+    // and cannot apply to a plain-text body, but when both bodies are byte-equal
+    // there is no difference for any rule to evaluate, so the case passes.
+    let (_temp, options) = write_raw_case(
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
+        "ip not found",
+        "ip not found",
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
+fn differing_non_json_body_with_configured_rules_is_unevaluable() {
+    // Only the equal case is relaxed: a differing non-JSON body with configured
+    // rules remains unevaluable because the rules cannot judge the difference.
+    let (_temp, options) = write_raw_case(
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
+        "ip not found",
+        "other",
+    );
+
+    let error = assert_recorded_response(options).unwrap_err();
+
+    assert!(
+        error
+            .to_string()
+            .contains("response rules require JSON response bodies"),
+        "unexpected error: {error}"
+    );
+}
