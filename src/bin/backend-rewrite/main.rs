@@ -18,7 +18,8 @@ use traffic_e2e::{
     plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
     request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
     route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
-    status_rewrite_for_api, transfer_rewrite_worker, verify_rewrite_repair,
+    status_rewrite_for_api, status_rewrite_for_process_output, transfer_rewrite_worker,
+    verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -134,6 +135,9 @@ struct NextArgs {
     /// Optional canonical API selector; omit at startup to process every API observed through recorder configuration.
     #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
     api: Option<RecordingApi>,
+    /// Process-level output work item returned by the coordinator.
+    #[arg(long, conflicts_with = "api")]
+    process_output: Option<String>,
     /// Source registration route for the active dynamic API when requested by the coordinator.
     #[arg(long)]
     source_route: Option<String>,
@@ -144,6 +148,9 @@ struct StatusArgs {
     /// API work item whose action should be reconstructed while other AI work proceeds.
     #[arg(long, value_name = "METHOD PATH_OR_PATTERN")]
     api: Option<RecordingApi>,
+    /// Process-level output work item whose action should be reconstructed.
+    #[arg(long, conflicts_with = "api")]
+    process_output: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -537,6 +544,7 @@ async fn run(cli: Cli) -> Result<()> {
             let mut operation = Box::pin(next_rewrite(RewriteNextOptions {
                 target_root,
                 api: args.api,
+                process_output: args.process_output,
                 source_route: args.source_route,
             }));
             tokio::select! {
@@ -557,6 +565,8 @@ async fn run(cli: Cli) -> Result<()> {
             let context = RewriteContext { target_root };
             let report = if let Some(api) = args.api.as_ref() {
                 status_rewrite_for_api(context, Some(api))?
+            } else if let Some(id) = args.process_output.as_deref() {
+                status_rewrite_for_process_output(context, id)?
             } else {
                 status_rewrite(context)?
             };

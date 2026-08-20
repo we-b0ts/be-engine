@@ -125,7 +125,10 @@ worker by default:
    immediately and repeat from step 1.
 4. If the coordinator returns `wait_required`, wait at least
    `retry_after_seconds` and execute only its returned status argv.
-5. Wait for worker handoffs only when no pending API can advance.
+5. After every API work item has been traversed, dispatch returned
+   process-output work items before waiting.
+6. Wait for worker handoffs only when no pending API or process-output item can
+   advance.
 
 Do not call `TaskOutput`, join, or another worker-wait mechanism immediately
 after dispatch while a pending inventory item can advance. Do not run an
@@ -139,15 +142,16 @@ work overlaps while traffic operations remain serial:
 ```text
 Replay API A -> implementation_required -> worker A diagnoses and codes
 Replay API B -> implementation_required -> worker B diagnoses and codes
+process output -> implementation_required -> process worker diagnoses and codes
 batch compatible changes -> freeze content fingerprint -> serialized acceptance
 ```
 
 ## Assignment And Worker Lifecycle
 
-Assign one API with its exact method/path pattern, absolute worktree path,
-complete action, opaque evidence commands, expected module ownership when
-known, and required handoff. Do not ask the worker to rediscover workflow state
-or enumerate other APIs.
+Assign one work item with its exact API method/path pattern or process-output
+ID, absolute worktree path, complete action, opaque evidence commands when
+present, expected module ownership when known, and required handoff. Do not ask
+the worker to rediscover workflow state or enumerate other work items.
 
 The worker handoff is ready after local tests when it returns:
 

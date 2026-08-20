@@ -8,9 +8,7 @@ use motan_hessian2::{ClassId, Decoder, Limits, TypeId, ValueKind};
 use super::binary_body::{MotanBodyEnvelope, simple_payload};
 use super::model::{Hessian2BodyDifference, Hessian2BodyDifferenceKind};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
-use crate::replay::policy::{
-    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath,
-};
+use crate::replay::policy::{Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath};
 
 const MAX_NODES: usize = 1_000_000;
 const MAX_DISCOVERED_PATHS: usize = 32;

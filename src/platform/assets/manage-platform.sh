@@ -875,6 +875,9 @@ run_standard_recording() {
     wait_for_recorder_or_duration
     stop_recording_input
     finalize_recorder
+    "$TRAFFIC_E2E_BIN" internal process-output-capture --target-root "$TRAFFIC_E2E_TARGET_ROOT" \
+        --container "$source_name" --side source \
+        --output-root "$artifacts_dir/recordings/$run_id/process-outputs"
     local manifest_filter='.status == "completed" and .failed_cases == 0 and (.errors | length == 0)'
     if [[ "$operation" == preflight && "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" != true ]]; then
         manifest_filter+=' and .published_cases > 0'

@@ -468,6 +468,7 @@ fn next_runnable_index(state: &RewriteState) -> Option<usize> {
 }
 
 pub(super) fn reset_for_recording(state: &mut RewriteState) {
+    super::process_outputs::reset(state);
     state.api_inventory.clear();
     state.current_api_index = None;
     state.parked_slices.clear();

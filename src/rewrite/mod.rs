@@ -10,6 +10,8 @@ mod inventory;
 mod issue;
 mod model;
 mod preparation;
+mod process_output_model;
+mod process_outputs;
 mod progress_publication;
 mod recorder_capture;
 mod recording;
@@ -66,6 +68,10 @@ pub use model::{
     RewriteTrafficOperationView, RewriteWorkerBlockingReason, RewriteWorkerDispatchState,
     RewriteWorkerDispatchView, RewriteWorkflowView,
 };
+pub use process_output_model::{
+    RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
+    RewriteProcessOutputProgress, RewriteProcessOutputStatus, RewriteWorkScope,
+};
 pub use recorder_capture::{
     RewriteRecorderCapturePlanOptions, apply_rewrite_recorder_capture,
     plan_rewrite_recorder_capture,
@@ -87,7 +93,9 @@ pub use rule::{
     RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteRulePlanOptions,
 };
 pub use source_process_traffic::*;
-pub use status::{inventory_rewrite, status_rewrite, status_rewrite_for_api};
+pub use status::{
+    inventory_rewrite, status_rewrite, status_rewrite_for_api, status_rewrite_for_process_output,
+};
 pub use target_quality::{RewriteTargetQualityOptions, run as run_rewrite_target_quality};
 pub use worker::{
     RewriteWorkerConfirmOptions, RewriteWorkerTransferOptions, confirm as confirm_rewrite_worker,
@@ -111,6 +119,7 @@ use crate::{
 pub struct RewriteNextOptions {
     pub target_root: PathBuf,
     pub api: Option<RecordingApi>,
+    pub process_output: Option<String>,
     pub source_route: Option<String>,
 }
 
@@ -121,18 +130,31 @@ pub struct RewriteContext {
 
 pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEnvelope> {
     let (target_root, project) = crate::e2e_run::resolve_project(&options.target_root)?;
+    ensure!(
+        options.api.is_none() || options.process_output.is_none(),
+        "--api and --process-output are mutually exclusive"
+    );
+    ensure!(
+        options.process_output.is_none() || options.source_route.is_none(),
+        "--source-route is valid only with --api"
+    );
     let store = RewriteStore::new(&target_root)?;
     let requested_api = options.api.as_ref().map(ToString::to_string);
+    let requested_process_output = options.process_output.clone();
     let Some(_lock) = store.try_lock()? else {
         if let Some(state) = store.load()? {
             match traffic_operation::state(&target_root)? {
                 traffic_operation::TrafficOperationState::Live(active) => {
-                    return Ok(action::wait_envelope(
-                        &target_root,
-                        &state,
-                        requested_api,
-                        &active,
-                    ));
+                    let mut envelope =
+                        action::wait_envelope(&target_root, &state, requested_api, &active);
+                    if let Some(id) = requested_process_output.as_deref() {
+                        action::retarget_wait_status_for_process_output(
+                            &mut envelope,
+                            &target_root,
+                            id,
+                        );
+                    }
+                    return Ok(envelope);
                 }
                 traffic_operation::TrafficOperationState::Stale(_) => {
                     return Ok(action::recovery_required(&target_root));
@@ -141,7 +163,16 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
             }
             return Ok(match store.lock_state()? {
                 RewriteLockState::Live => {
-                    action::coordinator_wait_envelope(&target_root, &state, requested_api)
+                    let mut envelope =
+                        action::coordinator_wait_envelope(&target_root, &state, requested_api);
+                    if let Some(id) = requested_process_output.as_deref() {
+                        action::retarget_wait_status_for_process_output(
+                            &mut envelope,
+                            &target_root,
+                            id,
+                        );
+                    }
+                    envelope
                 }
                 RewriteLockState::Stale | RewriteLockState::Absent => {
                     action::recovery_required(&target_root)
@@ -160,12 +191,16 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
     match traffic_operation::state(&target_root)? {
         traffic_operation::TrafficOperationState::Live(active) => {
             if let Some(state) = store.load()? {
-                return Ok(action::wait_envelope(
-                    &target_root,
-                    &state,
-                    requested_api,
-                    &active,
-                ));
+                let mut envelope =
+                    action::wait_envelope(&target_root, &state, requested_api, &active);
+                if let Some(id) = requested_process_output.as_deref() {
+                    action::retarget_wait_status_for_process_output(
+                        &mut envelope,
+                        &target_root,
+                        id,
+                    );
+                }
+                return Ok(envelope);
             }
         }
         traffic_operation::TrafficOperationState::Stale(_) => {
@@ -176,9 +211,14 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
     let mut state = match store.load()? {
         Some(mut state) => {
             let migrated = inventory::initialize_legacy(&mut state);
+            if !state.api_inventory.is_empty() {
+                process_outputs::ensure_inventory_matches(&state, &project.process_outputs)?;
+            }
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             let invalidated =
                 inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
+            let process_invalidated =
+                process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
             if recording::begin_pending_capture_refresh(&target_root, &mut state)? {
                 store.save(&state)?;
             }
@@ -212,7 +252,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                         "recorded API inventory does not contain {requested_api:?}"
                     );
                 }
-                if migrated || invalidated || active_comparison_stale {
+                if migrated || invalidated || process_invalidated || active_comparison_stale {
                     store.save(&state)?;
                 }
                 return Ok(action::api_selection_wait_envelope(
@@ -221,29 +261,45 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                     requested_api.to_string(),
                 ));
             }
+            if worker::active_dispatch_required(&state) {
+                if migrated || invalidated || process_invalidated || active_comparison_stale {
+                    store.save(&state)?;
+                }
+                let requested_scope = options
+                    .api
+                    .as_ref()
+                    .map(|api| process_output_model::RewriteWorkScope::Api {
+                        api: api.to_string(),
+                    })
+                    .or_else(|| {
+                        options.process_output.as_ref().map(|id| {
+                            process_output_model::RewriteWorkScope::ProcessOutput { id: id.clone() }
+                        })
+                    });
+                return Ok(worker::gate_envelope(&target_root, &state, requested_scope));
+            }
+            if let Some(id) = options.process_output.as_deref() {
+                process_outputs::activate_and_compare(
+                    &target_root,
+                    &mut state,
+                    id,
+                    &target_fingerprint,
+                    &project.process_outputs,
+                )?;
+                store.save(&state)?;
+                progress_publication::synchronize_if_complete(&target_root, &state)?;
+                return Ok(action::for_state(&target_root, &state));
+            }
+            if options.api.is_some() {
+                state.process_outputs.current_id = None;
+            }
             if state.phase == RewritePhase::SliceComplete {
-                if migrated || invalidated || active_comparison_stale {
+                if migrated || invalidated || process_invalidated || active_comparison_stale {
                     store.save(&state)?;
                 }
                 progress_publication::synchronize_if_complete(&target_root, &state)?;
                 let scoped = inventory::scoped(&state, options.api.as_ref())?;
                 return action::for_status(&target_root, &scoped);
-            }
-            if state.phase == RewritePhase::ImplementationRequired
-                && !worker::current_is_confirmed(&state)
-            {
-                if migrated || invalidated || active_comparison_stale {
-                    store.save(&state)?;
-                }
-                return Ok(worker::gate_envelope(
-                    &target_root,
-                    &state,
-                    options
-                        .api
-                        .as_ref()
-                        .map(ToString::to_string)
-                        .filter(|requested| requested != &state.api),
-                ));
             }
             let activated = inventory::activate_requested(&mut state, options.api.as_ref())?;
             let bound = inventory::bind_options(
@@ -251,12 +307,22 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 options.api.as_ref(),
                 options.source_route.as_deref(),
             )?;
-            if migrated || invalidated || active_comparison_stale || activated || bound {
+            if migrated
+                || invalidated
+                || process_invalidated
+                || active_comparison_stale
+                || activated
+                || bound
+            {
                 store.save(&state)?;
             }
             state
         }
         None => {
+            ensure!(
+                options.process_output.is_none(),
+                "--process-output requires an initialized workflow"
+            );
             let (api, source_route, recording_apis) = match options.api {
                 Some(api) => {
                     let source_route = match options.source_route {
@@ -288,6 +354,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 current_api_index: None,
                 parked_slices: std::collections::BTreeMap::new(),
                 worker_bindings: std::collections::BTreeMap::new(),
+                process_outputs: Default::default(),
                 target_quality_fingerprint: None,
                 recording_run_id,
                 recording_rejection: None,
@@ -389,6 +456,7 @@ pub async fn next_rewrite(options: RewriteNextOptions) -> Result<RewriteActionEn
                 recorded_cases,
             )?;
             inventory::install(&mut state, apis)?;
+            process_outputs::install(&mut state, &project.process_outputs);
             state.recording_refresh = None;
             if inventory::current_requires_source_route(&state) {
                 state.phase = RewritePhase::ApiPending;
@@ -739,15 +807,12 @@ async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Res
         .group_id
         .clone()
         .context("rewrite workflow has no prepared API group")?;
-    let result = run_e2e_api(
-        E2eRunContext {
-            target_root: target_root.to_path_buf(),
-            case_source,
-            run_key: None,
-        },
-        &api,
-    )
-    .await?;
+    let context = E2eRunContext {
+        target_root: target_root.to_path_buf(),
+        case_source,
+        run_key: None,
+    };
+    let result = run_e2e_api(context.clone(), &api).await?;
     let current_target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
     if current_target_fingerprint != replay_target_fingerprint {
         state.phase = RewritePhase::ApiPending;
@@ -757,6 +822,17 @@ async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Res
         state.comparison_current = false;
         state.bump();
         return Ok(());
+    }
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    if !project.process_outputs.is_empty() {
+        let root = crate::e2e_run::focused_process_output_evidence(&context, &api)?;
+        crate::process_output::validate_capture_set(
+            &project.process_outputs,
+            crate::process_output::ProcessOutputCaptureSide::Target,
+            &root,
+            false,
+        )?;
+        process_outputs::observe_target_evidence(state, root, current_target_fingerprint.clone());
     }
     transition::from_e2e_result(
         target_root,

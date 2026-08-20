@@ -21,6 +21,7 @@ mod mysql;
 mod network_probe;
 mod path_pattern;
 mod platform;
+mod process_output;
 mod proxy;
 mod recorded_request;
 mod recorder;
@@ -152,6 +153,9 @@ pub use platform::{
     drive_managed_recording_input, recover_managed_recording, run_managed_recording,
     run_managed_recording_preflight,
 };
+pub use process_output::{
+    ProcessOutputCaptureReport, ProcessOutputCaptureSide, capture_project_process_outputs,
+};
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,
     HeaderMapSnapshot, HttpExchangeEvent, KafkaConnectionEvent, KafkaDeliveryEvent,
@@ -198,8 +202,10 @@ pub use rewrite::{
     RewriteInputRequiredReason, RewriteInventoryReport, RewriteIssue, RewriteIssueKind,
     RewriteIssueOwner, RewriteMemcachedExchangeDetail, RewriteMemcachedOperationDetail,
     RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteNextOptions,
-    RewritePhase, RewriteProtocolRuleHint, RewriteRecorderCapturePlanOptions,
-    RewriteRecorderCaptureReport, RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
+    RewritePhase, RewriteProcessOutputInventoryDetails, RewriteProcessOutputInventoryView,
+    RewriteProcessOutputProgress, RewriteProcessOutputStatus, RewriteProtocolRuleHint,
+    RewriteRecorderCapturePlanOptions, RewriteRecorderCaptureReport,
+    RewriteRecordingExecutionReport, RewriteRecordingInputCandidate,
     RewriteRecordingInputCandidateDisposition, RewriteRecordingInputDiagnosis,
     RewriteRecordingInputMode, RewriteRecordingInputRejections, RewriteRecordingKind,
     RewriteRecordingReason, RewriteRecordingRequestOptions, RewriteRecordingStartReport,
@@ -212,17 +218,18 @@ pub use rewrite::{
     RewriteSourceProcessRedisSnapshotEndpointView, RewriteSourceProcessRedisSnapshotView,
     RewriteSourceProcessTrafficScopeView, RewriteSourceProcessTrafficView, RewriteStatusReport,
     RewriteTargetQualityOptions, RewriteTrafficOperationKind, RewriteTrafficOperationView,
-    RewriteWorkerBlockingReason, RewriteWorkerConfirmOptions, RewriteWorkerDispatchState,
-    RewriteWorkerDispatchView, RewriteWorkerTransferOptions, RewriteWorkflowView,
-    apply_rewrite_dependency_rule, apply_rewrite_recorder_capture, apply_rewrite_rule,
-    cancel_misrouted_rewrite_repair, confirm_rewrite_worker, execute_rewrite_recording_worker,
-    inventory_rewrite, next_rewrite, plan_rewrite_dependency_rule,
-    plan_rewrite_memcached_timestamp_rule, plan_rewrite_motan_rule, plan_rewrite_recorder_capture,
-    plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
+    RewriteWorkScope, RewriteWorkerBlockingReason, RewriteWorkerConfirmOptions,
+    RewriteWorkerDispatchState, RewriteWorkerDispatchView, RewriteWorkerTransferOptions,
+    RewriteWorkflowView, apply_rewrite_dependency_rule, apply_rewrite_recorder_capture,
+    apply_rewrite_rule, cancel_misrouted_rewrite_repair, confirm_rewrite_worker,
+    execute_rewrite_recording_worker, inventory_rewrite, next_rewrite,
+    plan_rewrite_dependency_rule, plan_rewrite_memcached_timestamp_rule, plan_rewrite_motan_rule,
+    plan_rewrite_recorder_capture, plan_rewrite_rule, query_rewrite_case_dependencies,
+    query_rewrite_evidence, recover_rewrite, request_rewrite_recording,
+    request_rewrite_revalidation, resume_rewrite_replay_planning,
     retry_rewrite_replay_after_out_of_band_run, route_rewrite, run_rewrite_target_quality,
-    start_rewrite_recording, status_rewrite, status_rewrite_for_api, transfer_rewrite_worker,
-    verify_rewrite_repair,
+    start_rewrite_recording, status_rewrite, status_rewrite_for_api,
+    status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
 };
 pub use startup::{StartupConfig, StartupSnapshotReport};
 pub use target_container::TargetImage;

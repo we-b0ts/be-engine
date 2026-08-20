@@ -95,6 +95,7 @@ impl Serialize for RewriteAction {
                 summary,
                 details: RewriteImplementationDetails {
                     issue: RewriteIssueDetails::from(issue),
+                    work_scope: &worker.work_scope,
                     worker,
                 },
                 commands: RewriteImplementationCommands {
@@ -270,6 +271,7 @@ struct RewriteIssueDetails<'a> {
 struct RewriteImplementationDetails<'a> {
     #[serde(flatten)]
     issue: RewriteIssueDetails<'a>,
+    work_scope: &'a super::process_output_model::RewriteWorkScope,
     worker: &'a RewriteWorkerDispatchView,
 }
 

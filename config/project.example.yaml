@@ -2,6 +2,13 @@ version: 14
 project:
   source:
     container: source-app
+  process_outputs:
+  - id: metrics-profile
+    path: /data1/weibo/logs/profile.log
+    comparison:
+      kind: regular_file_exists
+    observation: before_shutdown
+    max_bytes: 8388608
   target:
     dockerfile: .traffic-e2e/Dockerfile.e2e
     startup: {}

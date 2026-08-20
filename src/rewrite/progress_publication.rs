@@ -40,6 +40,7 @@ pub(super) fn synchronize_if_complete(target_root: &Path, state: &RewriteState) 
 fn workflow_complete(state: &RewriteState) -> bool {
     state.phase == RewritePhase::SliceComplete
         && !state.api_inventory.is_empty()
+        && super::process_outputs::all_complete(state)
         && state
             .api_inventory
             .iter()
