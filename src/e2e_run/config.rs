@@ -60,7 +60,7 @@ pub(super) fn initialize(options: E2eRunInitOptions) -> Result<E2eRunInitResult>
     let replay = validate_replay_policy(&replay_policy).context("invalid replay policy")?;
     ensure!(
         replay.runner_owned_response_assertions,
-        "managed project replay requires verification policy version 2 with runner-owned response assertions"
+        "managed project replay requires verification policy version 3 with runner-owned response assertions"
     );
     let recorder_config = resolve_under(&target_root, &options.recorder_config);
     ensure!(
@@ -208,7 +208,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
     let policy = validate_replay_policy(&policy_path).context("invalid replay policy")?;
     ensure!(
         policy.runner_owned_response_assertions,
-        "managed project replay requires verification policy version 2 with runner-owned response assertions"
+        "managed project replay requires verification policy version 3 with runner-owned response assertions"
     );
     let recorder_config = config_path.clone();
     let coordinator_rules = crate::config::coordinator_rules::resolve_from_project_config(
@@ -504,7 +504,7 @@ mod tests {
         fs::create_dir_all(root.join("config")).unwrap();
         fs::write(
             root.join("config/replay.yaml"),
-            "version: 2\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\nrules: []\n",
         )
         .unwrap();
         let mut recorder = crate::config::AppConfig::default();

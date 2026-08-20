@@ -22,8 +22,8 @@ use super::pattern::path_pattern_matches;
 #[cfg(test)]
 use super::response::DynamicResponseMechanism;
 use super::response::{
-    CounterResponseRule, DynamicResponseRule, ResponseRuleKind, parse_api,
-    response_locations_overlap, response_rule_id, validate_json_pointer,
+    CounterResponseRule, DynamicResponseRule, JsonUnorderedResponseRule, ResponseRuleKind,
+    parse_api, response_locations_overlap, response_rule_id, validate_json_pointer,
 };
 use crate::config::edit::write_atomic;
 
@@ -310,8 +310,8 @@ fn prepare_response_rule(
         .with_context(|| format!("failed to read replay policy {}", policy_path.display()))?;
     let loaded = load_replay_policy(policy_path)?;
     ensure!(
-        loaded.document.version >= 2,
-        "response rules require replay policy version 2"
+        loaded.document.version >= 3,
+        "response rules require replay policy version 3"
     );
     Ok(PreparedResponseRule {
         method: method.to_string(),
@@ -447,33 +447,27 @@ fn build_response_rule_plan(
     evidence: ResponseRuleEvidence,
 ) -> Result<ResponseRulePlan> {
     let mut updated_rules = prepared.loaded.document.response_rules.clone();
+    let api_rules = updated_rules.json.entry(api.clone()).or_default();
     let before = match kind {
-        ResponseRuleKind::Dynamic => updated_rules
+        ResponseRuleKind::Dynamic => api_rules
             .dynamic
-            .get(&api)
-            .into_iter()
-            .flatten()
+            .iter()
             .map(|field| field.pointer.clone())
             .collect::<BTreeSet<_>>(),
-        ResponseRuleKind::Unordered => updated_rules
+        ResponseRuleKind::Unordered => api_rules
             .unordered
-            .get(&api)
-            .into_iter()
-            .flatten()
-            .cloned()
+            .iter()
+            .map(|field| field.pointer.clone())
             .collect::<BTreeSet<_>>(),
-        ResponseRuleKind::Counter => updated_rules
-            .comparison
+        ResponseRuleKind::Counter => api_rules
             .counter
-            .get(&api)
-            .into_iter()
-            .flatten()
+            .iter()
             .map(|field| field.pointer.clone())
             .collect::<BTreeSet<_>>(),
     };
     match kind {
         ResponseRuleKind::Dynamic => {
-            let fields = updated_rules.dynamic.entry(api.clone()).or_default();
+            let fields = &mut api_rules.dynamic;
             for pointer in &prepared.requested {
                 let proposed = DynamicResponseRule {
                     pointer: pointer.clone(),
@@ -500,17 +494,19 @@ fn build_response_rule_plan(
             fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
         }
         ResponseRuleKind::Unordered => {
-            let fields = updated_rules.unordered.entry(api.clone()).or_default();
-            fields.extend(prepared.requested.iter().cloned());
-            fields.sort();
-            fields.dedup();
+            let fields = &mut api_rules.unordered;
+            fields.extend(
+                prepared
+                    .requested
+                    .iter()
+                    .cloned()
+                    .map(|pointer| JsonUnorderedResponseRule { pointer }),
+            );
+            fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
+            fields.dedup_by(|left, right| left.pointer == right.pointer);
         }
         ResponseRuleKind::Counter => {
-            let fields = updated_rules
-                .comparison
-                .counter
-                .entry(api.clone())
-                .or_default();
+            let fields = &mut api_rules.counter;
             for pointer in &prepared.requested {
                 let proposed = CounterResponseRule {
                     pointer: pointer.clone(),

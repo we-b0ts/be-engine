@@ -31,17 +31,18 @@ fn reuses_replay_response_rules_for_offline_comparison() {
     let policy = temp.path().join("replay.yaml");
     fs::write(
         &policy,
-        r#"version: 2
+        r#"version: 3
 expected_response: assertions_only
 rules: []
 response_rules:
-  dynamic:
+  json:
     "GET /api/token":
-      - pointer: /token
-        mechanisms: [uuid]
-        source_evidence: src/token.rs:issue_token
-        source_example: <redacted source UUID>
-        target_example: <redacted target UUID>
+      dynamic:
+        - pointer: /token
+          mechanisms: [uuid]
+          source_evidence: src/token.rs:issue_token
+          source_example: <redacted source UUID>
+          target_example: <redacted target UUID>
 "#,
     )
     .unwrap();
@@ -96,7 +97,7 @@ fn verifies_motan_payloads_through_the_common_api_report() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
 
@@ -158,7 +159,7 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let report_path = run.join("comparison-report.json");
@@ -295,7 +296,7 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
     );
 
     let updated = fs::read_to_string(&policy).unwrap();
-    assert!(updated.contains("protocol: protobuf"));
+    assert!(updated.contains("protobuf:"));
     assert!(updated.contains("field_path:"));
     assert!(updated.contains("display_path: rule_collection.white_list"));
     assert!(updated.contains("element_type: string"));
@@ -323,7 +324,7 @@ fn motan_protocol_configuration_rejects_a_legacy_report_with_non_protobuf_bodies
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let report_path = run.join("comparison-report.json");
@@ -393,7 +394,7 @@ fn motan_body_rule_reports_that_a_value_difference_has_no_ordering_rule() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let report_path = run.join("comparison-report.json");
@@ -482,7 +483,7 @@ fn motan_hessian2_rule_applies_to_a_body_without_a_byte_array_envelope() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let report_path = run.join("comparison-report.json");
@@ -538,7 +539,7 @@ fn motan_hessian2_rule_applies_to_a_body_without_a_byte_array_envelope() {
 
     assert!(applied.offline_comparison.as_ref().unwrap().passed);
     let updated = fs::read_to_string(policy).unwrap();
-    assert!(updated.contains("protocol: hessian2"));
+    assert!(updated.contains("hessian2:"));
     assert!(updated.contains("value_path:\n        - names"));
 }
 
@@ -582,7 +583,7 @@ fn motan_hessian2_rule_apply_reuses_comparison_bodies_for_offline_verification()
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let report_path = run.join("comparison-report.json");
@@ -651,7 +652,7 @@ fn motan_hessian2_rule_apply_reuses_comparison_bodies_for_offline_verification()
             .passed
     );
     let updated = fs::read_to_string(policy).unwrap();
-    assert!(updated.contains("protocol: hessian2"));
+    assert!(updated.contains("hessian2:"));
     assert!(updated.contains("value_path: []"));
     assert!(updated.contains("display_path: response.names"));
 }
@@ -692,7 +693,7 @@ fn motan_rule_uses_reviewed_type_to_resolve_packed_integer_order() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let report_path = run.join("comparison-report.json");
@@ -770,13 +771,13 @@ fn applies_explicit_comparison_counter_rules_by_representation_class() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        r#"version: 2
+        r#"version: 3
 expected_response: assertions_only
 rules: []
 response_rules:
-  comparison:
-    counter:
-      "GET /api/token":
+  json:
+    "GET /api/token":
+      counter:
         - pointer: /empty_count_str
           source_evidence: src/user.rs:load live counters
           source_example: <empty>
@@ -830,13 +831,13 @@ fn comparison_counter_rules_preserve_type_presence_and_empty_string() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        r#"version: 2
+        r#"version: 3
 expected_response: assertions_only
 rules: []
 response_rules:
-  comparison:
-    counter:
-      "GET /api/token":
+  json:
+    "GET /api/token":
+      counter:
         - pointer: /followers_count
           source_evidence: src/user.rs:load live counters
           source_example: "100"
@@ -890,17 +891,18 @@ fn applies_a_candidate_rule_when_the_source_recheck_is_stable() {
     let policy = temp.path().join("replay.yaml");
     fs::write(
         &policy,
-        r#"version: 2
+        r#"version: 3
 expected_response: assertions_only
 rules: []
 response_rules:
-  dynamic:
+  json:
     "GET /api/token":
-      - pointer: /token
-        mechanisms: [uuid]
-        source_evidence: src/token.rs:issue_token
-        source_example: <redacted source UUID>
-        target_example: <redacted target UUID>
+      dynamic:
+        - pointer: /token
+          mechanisms: [uuid]
+          source_evidence: src/token.rs:issue_token
+          source_example: <redacted source UUID>
+          target_example: <redacted target UUID>
 "#,
     )
     .unwrap();
@@ -950,7 +952,7 @@ fn compares_a_legacy_gzip_response_with_an_uncompressed_response() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
 
@@ -977,7 +979,7 @@ fn writes_a_failed_report_for_an_unexempted_difference() {
     let policy = temp.path().join("replay.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let report_path = run.join("comparison-report.json");
@@ -1036,7 +1038,7 @@ fn classifies_an_overlapping_baseline_change_as_source_change() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
 
@@ -1081,7 +1083,7 @@ fn source_after_is_not_an_alternate_oracle_by_default() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
 
@@ -1117,7 +1119,7 @@ fn before_or_after_accepts_a_complete_source_after_match() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 
@@ -1161,7 +1163,7 @@ fn before_or_after_does_not_mix_fields_from_source_observations() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 
@@ -1197,7 +1199,7 @@ fn before_or_after_requires_a_source_after_artifact() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 
@@ -1236,7 +1238,7 @@ fn unrelated_source_change_does_not_hide_a_candidate_difference() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
 
@@ -1273,7 +1275,7 @@ fn source_change_is_diagnostic_when_candidate_matches_source_before() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
 
@@ -1301,17 +1303,18 @@ fn allows_a_rule_absent_from_the_entire_api_sample() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        r#"version: 2
+        r#"version: 3
 expected_response: assertions_only
 rules: []
 response_rules:
-  dynamic:
+  json:
     "GET /api/token":
-      - pointer: /missing
-        mechanisms: [uuid]
-        source_evidence: src/token.rs:issue_token
-        source_example: <redacted source UUID>
-        target_example: <redacted target UUID>
+      dynamic:
+        - pointer: /missing
+          mechanisms: [uuid]
+          source_evidence: src/token.rs:issue_token
+          source_example: <redacted source UUID>
+          target_example: <redacted target UUID>
 "#,
     )
     .unwrap();
@@ -1345,17 +1348,18 @@ fn an_absent_rule_does_not_mask_a_candidate_difference() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        r#"version: 2
+        r#"version: 3
 expected_response: assertions_only
 rules: []
 response_rules:
-  dynamic:
+  json:
     "GET /api/token":
-      - pointer: /missing
-        mechanisms: [uuid]
-        source_evidence: src/token.rs:issue_token
-        source_example: <redacted source UUID>
-        target_example: <redacted target UUID>
+      dynamic:
+        - pointer: /missing
+          mechanisms: [uuid]
+          source_evidence: src/token.rs:issue_token
+          source_example: <redacted source UUID>
+          target_example: <redacted target UUID>
 "#,
     )
     .unwrap();
@@ -1409,7 +1413,7 @@ fn marks_a_response_content_decoding_failure_as_unevaluable() {
     let policy = temp.path().join("verification.yaml");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
 

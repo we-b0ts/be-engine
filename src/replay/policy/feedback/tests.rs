@@ -15,7 +15,7 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
     let aggregate = temp.path().join("aggregate.json");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
@@ -117,7 +117,7 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
     fs::create_dir_all(published_detail.parent().unwrap()).unwrap();
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
@@ -342,7 +342,7 @@ fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
     let comparison = temp.path().join("comparison-report.json");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
@@ -405,7 +405,7 @@ fn plans_and_applies_comparison_only_counter_fields() {
     let comparison = temp.path().join("comparison-report.json");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
@@ -479,7 +479,7 @@ fn a_permitted_source_after_match_does_not_authorize_a_response_rule() {
     let comparison = temp.path().join("comparison-report.json");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
@@ -544,7 +544,7 @@ fn plans_and_applies_evidence_backed_unordered_array() {
     let aggregate = temp.path().join("aggregate.json");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
@@ -739,7 +739,7 @@ fn write_dynamic_replay_feedback(
     let aggregate = root.join("aggregate.json");
     fs::write(
         &policy,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
     )
     .unwrap();
     let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;

@@ -7,8 +7,9 @@ use serde::Serialize;
 
 use super::super::config::{fingerprint, load_replay_policy};
 use super::super::response::{
-    Hessian2JoinedStringPath, Hessian2ValuePath, MotanBodyProtocol, MotanResponseRule,
-    MotanUnorderedPath, ProtobufFieldPath, motan_response_rule_id, parse_api,
+    Hessian2JoinedStringPath, Hessian2ResponseRules, Hessian2ValuePath, MotanBodyProtocol,
+    MotanUnorderedPath, ProtobufFieldPath, ProtobufResponseRules, motan_response_rule_id,
+    parse_api,
 };
 use super::document::{render_response_rules, replace_response_rules};
 use crate::comparison_recording::{
@@ -150,8 +151,8 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
     let original = read_regular_text(&feedback.policy_path, "replay policy")?;
     let mut loaded = load_replay_policy(&feedback.policy_path)?;
     ensure!(
-        loaded.document.version >= 2,
-        "Motan response rules require replay policy version 2"
+        loaded.document.version >= 3,
+        "Motan response rules require replay policy version 3"
     );
     let comparison_bytes = read_regular(&feedback.comparison_report, "comparison report")?;
     let comparison: ComparisonVerificationReport =
@@ -175,9 +176,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
     let existing = loaded
         .document
         .response_rules
-        .motan
-        .get(&feedback.api)
-        .cloned();
+        .configured_motan_rule(&feedback.api);
     if let Some(existing) = &existing {
         ensure!(
             existing.protocol == feedback.protocol,
@@ -313,17 +312,18 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
                     body_path_from_difference(difference, feedback.protocol)
                 }),
             );
-            diagnostic_joined_string_paths.extend(
-                motan.differences.iter().filter_map(|difference| {
+            diagnostic_joined_string_paths.extend(motan.differences.iter().filter_map(
+                |difference| {
                     let path = body_path_from_difference(difference, feedback.protocol)?;
                     match path {
-                        BodyPath::Hessian2(value_path) | BodyPath::Hessian2JoinedString(value_path) => {
+                        BodyPath::Hessian2(value_path)
+                        | BodyPath::Hessian2JoinedString(value_path) => {
                             Some(BodyPath::Hessian2JoinedString(value_path))
                         }
                         BodyPath::Protobuf(_) => None,
                     }
-                }),
-            );
+                },
+            ));
         }
     }
     ensure!(
@@ -435,7 +435,9 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             .cloned()
             .map(|path| (body_path_from_joined_string_rule(&path), path)),
     );
-    let effective_joined_string_paths = effective_joined_string_paths.into_values().collect::<Vec<_>>();
+    let effective_joined_string_paths = effective_joined_string_paths
+        .into_values()
+        .collect::<Vec<_>>();
     if protocol_configured {
         for case in matching.iter().filter(|case| !case.passed) {
             let case_dir = Path::new(&case.case_dir);
@@ -479,14 +481,42 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             );
         }
     }
-    loaded.document.response_rules.motan.insert(
-        feedback.api.clone(),
-        MotanResponseRule {
-            protocol: feedback.protocol,
-            unordered_paths: effective_paths.clone(),
-            unordered_joined_string_paths: effective_joined_string_paths.clone(),
-        },
-    );
+    match feedback.protocol {
+        MotanBodyProtocol::Protobuf => {
+            let unordered = effective_paths
+                .iter()
+                .map(|path| match path {
+                    MotanUnorderedPath::Protobuf(path) => Ok(path.clone()),
+                    MotanUnorderedPath::Hessian2(_) => {
+                        anyhow::bail!("protobuf rule contains a Hessian2 unordered path")
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            loaded
+                .document
+                .response_rules
+                .protobuf
+                .insert(feedback.api.clone(), ProtobufResponseRules { unordered });
+        }
+        MotanBodyProtocol::Hessian2 => {
+            let unordered = effective_paths
+                .iter()
+                .map(|path| match path {
+                    MotanUnorderedPath::Hessian2(path) => Ok(path.clone()),
+                    MotanUnorderedPath::Protobuf(_) => {
+                        anyhow::bail!("Hessian2 rule contains a protobuf unordered path")
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            loaded.document.response_rules.hessian2.insert(
+                feedback.api.clone(),
+                Hessian2ResponseRules {
+                    unordered,
+                    unordered_joined_string: effective_joined_string_paths.clone(),
+                },
+            );
+        }
+    }
     let updated = replace_response_rules(&original, &loaded.document.response_rules)?;
     let changed = updated != original;
     let diff = if changed {
@@ -524,9 +554,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
                 .collect(),
             discovered_unordered_joined_string_paths: discovered_joined_string
                 .into_iter()
-                .map(|(path, separator)| {
-                    joined_string_candidate_from_body_path(path, separator)
-                })
+                .map(|(path, separator)| joined_string_candidate_from_body_path(path, separator))
                 .collect(),
             effective_unordered_paths: effective_paths,
             effective_unordered_joined_string_paths: effective_joined_string_paths,
@@ -641,9 +669,9 @@ fn candidate_from_body_path(path: BodyPath) -> MotanUnorderedPathCandidate {
         // Joined-string candidates carry a separator and are handled separately
         // (see `joined_string_candidate_from_body_path`); this arm is unreachable
         // for the existing List/protobuf candidate flow.
-        BodyPath::Hessian2JoinedString(_) => unreachable!(
-            "joined-string body paths use joined_string_candidate_from_body_path"
-        ),
+        BodyPath::Hessian2JoinedString(_) => {
+            unreachable!("joined-string body paths use joined_string_candidate_from_body_path")
+        }
     }
 }
 

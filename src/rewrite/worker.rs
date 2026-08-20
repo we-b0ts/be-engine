@@ -820,7 +820,7 @@ mod tests {
         );
         fs::write(
             target.path().join(".traffic-e2e/verification.yaml"),
-            "version: 2\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\nrules: []\n",
         )
         .unwrap();
         fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();

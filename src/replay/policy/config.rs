@@ -6,11 +6,12 @@ use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::response::{
-    ComparisonVerificationPolicy, ResponseRules, response_rule_ids, validate_response_rules,
+    ComparisonVerificationPolicy, ResponseRules, ResponseSettings, response_rule_ids,
+    validate_response_rules,
 };
 
 const MIN_POLICY_VERSION: u8 = 1;
-const MAX_POLICY_VERSION: u8 = 2;
+const MAX_POLICY_VERSION: u8 = 3;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -19,6 +20,8 @@ pub(in crate::replay) struct ReplayPolicyDocument {
     pub(in crate::replay) expected_response: ExpectedResponseUsage,
     #[serde(default)]
     pub(super) rules: Vec<ReplayPolicyRule>,
+    #[serde(default, skip_serializing_if = "ResponseSettings::is_empty")]
+    pub(in crate::replay) response_settings: ResponseSettings,
     #[serde(default, skip_serializing_if = "ResponseRules::is_empty")]
     pub(in crate::replay) response_rules: ResponseRules,
 }
@@ -209,9 +212,7 @@ pub(in crate::replay) struct LoadedReplayPolicy {
 pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationReport> {
     let loaded = load_replay_policy(path)?;
     let response_rule_ids = response_rule_ids(&loaded.document.response_rules);
-    let comparison = ComparisonVerificationPolicy {
-        source_match: loaded.document.response_rules.comparison.source_match,
-    };
+    let comparison = loaded.document.response_settings.comparison;
     Ok(ReplayPolicyValidationReport {
         version: loaded.document.version,
         path: loaded.path.display().to_string(),
@@ -225,7 +226,7 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
             .map(|rule| rule.id)
             .collect(),
         response_rule_ids,
-        runner_owned_response_assertions: loaded.document.version >= 2,
+        runner_owned_response_assertions: loaded.document.version >= 3,
     })
 }
 
@@ -248,13 +249,14 @@ pub(in crate::replay) fn load_replay_policy(path: &Path) -> Result<LoadedReplayP
 
 pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     ensure!(
-        (MIN_POLICY_VERSION..=MAX_POLICY_VERSION).contains(&document.version),
+        matches!(document.version, MIN_POLICY_VERSION | MAX_POLICY_VERSION),
         "unsupported replay policy version {}; expected {MIN_POLICY_VERSION} or {MAX_POLICY_VERSION}",
         document.version
     );
     ensure!(
-        document.version >= 2 || document.response_rules.is_empty(),
-        "response_rules require replay policy version 2"
+        document.version >= 3
+            || (document.response_settings.is_empty() && document.response_rules.is_empty()),
+        "response_settings and response_rules require replay policy version 3"
     );
     validate_response_rules(&document.response_rules)?;
     let mut ids = BTreeSet::new();

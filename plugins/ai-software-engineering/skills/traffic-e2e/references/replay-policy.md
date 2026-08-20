@@ -26,26 +26,28 @@ expected_response: assertions_only
 rules: []
 ```
 
-Use version two when the standard runner owns response assertions:
+Use version three when the standard runner owns response assertions:
 
 ```yaml
-version: 2
+version: 3
 expected_response: assertions_only
 rules: []
-response_rules:
-  dynamic: {}
-  unordered: {}
+response_settings:
   comparison:
     source_match: before
-    counter: {}
+response_rules:
+  json: {}
+  protobuf: {}
+  hessian2: {}
 ```
 
-Standard replay loads only root `dynamic` and `unordered` rules. Comparison
-loads those replay rules and then adds `comparison` rules. Replay and
-comparison-only rules must select disjoint JSON subtrees; overlapping
-strategies are rejected rather than ordered by precedence.
+Response field rules are grouped by body protocol, canonical API, and then
+rule kind. Standard replay loads JSON `dynamic` and `unordered` rules plus
+configured protobuf and Hessian2 rules. Comparison also loads JSON `counter`
+rules. Replay and comparison-only rules must select disjoint JSON subtrees;
+overlapping strategies are rejected rather than ordered by precedence.
 
-`response_rules.comparison.source_match` is whole-response verification
+`response_settings.comparison.source_match` is whole-response verification
 behavior, not a Pointer rule. `before` is the default. `before_or_after` requires
 `expected-response-after.json` for every comparison case and accepts the
 candidate only when it matches either complete source observation under all
@@ -221,24 +223,25 @@ only after a concrete recorded case supplies the required evidence.
 
 ## Dynamic Response Fields
 
-Version two makes the runner compare expected and actual responses. The runner
+Version three makes the runner compare expected and actual responses. The runner
 reads `request.json`, sends the genuine request to the managed target HTTP
 endpoint, and writes the actual-response artifact. The target MUST NOT read
 `request.json` or `expected-response.json`.
 
-`response_rules.dynamic` selects an exact scalar JSON value by canonical API
-group and JSON Pointer:
+`response_rules.json.<API>.dynamic` selects an exact scalar JSON value by JSON
+Pointer:
 
 ```yaml
 response_rules:
-  dynamic:
+  json:
     "GET /api/resource/token":
-      - pointer: /content
-        mechanisms:
-          - uuid
-        source_evidence: src/token.rs:issue_token UUID generation
-        source_example: <redacted source UUID>
-        target_example: <redacted target UUID>
+      dynamic:
+        - pointer: /content
+          mechanisms:
+            - uuid
+          source_evidence: src/token.rs:issue_token UUID generation
+          source_example: <redacted source UUID>
+          target_example: <redacted target UUID>
 ```
 
 For a response pair, the rule applies only when the selected field exists in
@@ -300,14 +303,15 @@ must still be diagnosed after the policy change.
 
 ## Unordered Response Arrays
 
-`response_rules.unordered` selects an exact JSON array by canonical API group
-and JSON Pointer:
+`response_rules.json.<API>.unordered` selects an exact JSON array by JSON
+Pointer:
 
 ```yaml
 response_rules:
-  unordered:
+  json:
     "GET /api/config/ansible_facts":
-      - /general/sudo_users
+      unordered:
+        - pointer: /general/sudo_users
 ```
 
 For a response pair, the rule applies only when the selected field exists in
@@ -341,7 +345,7 @@ Apply is additive, sorted, and atomic.
 
 ## Comparison Counter Fields
 
-`response_rules.comparison.counter` is ignored by standard replay and loaded
+`response_rules.json.<API>.counter` is ignored by standard replay and loaded
 only by comparison verification. Never infer it from a Pointer name. After
 source implementation evidence proves a selected scalar is a count that may
 change between valid observations, use

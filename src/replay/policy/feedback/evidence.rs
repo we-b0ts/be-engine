@@ -139,20 +139,22 @@ pub(super) fn response_rule_exists(
     api: &str,
     pointer: &str,
 ) -> bool {
+    let Some(api_rules) = rules.json.get(api) else {
+        return false;
+    };
     match kind {
-        ResponseRuleKind::Dynamic => rules
+        ResponseRuleKind::Dynamic => api_rules
             .dynamic
-            .get(api)
-            .is_some_and(|fields| fields.iter().any(|field| field.pointer == pointer)),
-        ResponseRuleKind::Unordered => rules
+            .iter()
+            .any(|field| field.pointer == pointer),
+        ResponseRuleKind::Unordered => api_rules
             .unordered
-            .get(api)
-            .is_some_and(|pointers| pointers.iter().any(|candidate| candidate == pointer)),
-        ResponseRuleKind::Counter => rules
-            .comparison
+            .iter()
+            .any(|field| field.pointer == pointer),
+        ResponseRuleKind::Counter => api_rules
             .counter
-            .get(api)
-            .is_some_and(|fields| fields.iter().any(|field| field.pointer == pointer)),
+            .iter()
+            .any(|field| field.pointer == pointer),
     }
 }
 

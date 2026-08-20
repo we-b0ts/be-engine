@@ -28,25 +28,27 @@ expected_response: assertions_only
 rules: []
 ```
 
-Version two enables runner-owned response assertions:
+Version three enables runner-owned response assertions:
 
 ```yaml
-version: 2
+version: 3
 expected_response: assertions_only
 rules: []
-response_rules:
-  dynamic: {}
-  unordered: {}
+response_settings:
   comparison:
     source_match: before
-    counter: {}
+response_rules:
+  json: {}
+  protobuf: {}
+  hessian2: {}
 ```
 
-Standard replay loads only the root `dynamic` and `unordered` rules.
-Comparison loads those replay rules plus the nested `comparison` rules.
-Strategies across both sets must select disjoint JSON subtrees.
+Rules are grouped by body protocol, canonical API, and rule kind. Standard
+replay loads JSON `dynamic` and `unordered` rules plus configured protobuf and
+Hessian2 rules. Comparison also loads JSON `counter` rules. Strategies across
+the JSON rule kinds must select disjoint subtrees.
 
-`response_rules.comparison.source_match` controls which complete source
+`response_settings.comparison.source_match` controls which complete source
 observation may serve as the comparison oracle. `before` is the default. Set
 `before_or_after` only for runs that record `expected-response-after.json` for
 every case. The candidate must match either complete source response under the
@@ -59,7 +61,7 @@ status, headers, or body to create the actual response, dependency result,
 branch decision, cache result, or side effect. The policy parser requires this
 declaration; migration review must also verify the target harness obeys it.
 
-The same version 2 `response_rules` also apply to offline comparison recording
+The same version 3 `response_rules` also apply to offline comparison recording
 verification. `traffic-e2e compare <comparison-recording-run> --policy
 <verification.yaml>` treats the baseline `expected-response.json` as the
 oracle and the candidate `response.json` as actual output. When
@@ -242,19 +244,20 @@ A query field cannot be both policy-managed and passed through the global
 `--http-ignore-query-param` option. Replay rejects that configuration at
 startup.
 
-Version two supports exact scalar JSON response locations whose runtime value
+Version three supports exact scalar JSON response locations whose runtime value
 is intentionally non-deterministic:
 
 ```yaml
 response_rules:
-  dynamic:
+  json:
     "GET /api/resource/token":
-      - pointer: /content
-        mechanisms:
-          - uuid
-        source_evidence: src/token.rs:issue_token UUID generation
-        source_example: <redacted source UUID>
-        target_example: <redacted target UUID>
+      dynamic:
+        - pointer: /content
+          mechanisms:
+            - uuid
+          source_evidence: src/token.rs:issue_token UUID generation
+          source_example: <redacted source UUID>
+          target_example: <redacted target UUID>
 ```
 
 The field must exist in both responses and keep the same scalar JSON kind.
@@ -293,14 +296,15 @@ traffic-e2e config replay apply response-rule \
   --case-source <exact-finalized-case-source>
 ```
 
-Version two also supports arrays whose product contract does not assign meaning
+Version three also supports arrays whose product contract does not assign meaning
 to element order:
 
 ```yaml
 response_rules:
-  unordered:
+  json:
     "GET /api/config/ansible_facts":
-      - /general/sudo_users
+      unordered:
+        - pointer: /general/sudo_users
 ```
 
 Both selected values must be arrays. They are compared as multisets: length,
@@ -332,10 +336,9 @@ into protocol-aware business-body comparison:
 
 ```yaml
 response_rules:
-  motan:
+  protobuf:
     "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-byteArray-8cd698b4fea1fb48":
-      protocol: protobuf
-      unordered_paths:
+      unordered:
         - field_path: [3, 1, 6, 3]
           display_path: rule_collection.experiments.groups.white_list
           element_type: string
@@ -350,28 +353,26 @@ top-level list:
 
 ```yaml
 response_rules:
-  motan:
+  hessian2:
     "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-long-long-095f05367f122cf4":
-      protocol: hessian2
-      unordered_paths:
+      unordered:
         - value_path: [result, ruleCollection, groups, "*", whiteList]
           display_path: cache_result.rule_collection.groups[].white_list
 ```
 
 Some business fields carry a `Set` that has been joined into a single string
 (for example `"alice,bob,carol"`). Such a field is a Hessian2 string, not a
-list, so `unordered_paths` cannot relax it. Use
-`unordered_joined_string_paths` instead: the selected string is split on
+list, so `unordered` cannot relax it. Use `unordered_joined_string` instead:
+the selected string is split on
 `separator` and compared as a multiset (element order is ignored, but
 duplicate counts are preserved, matching the List semantics above).
 `separator` is required and must be non-empty:
 
 ```yaml
 response_rules:
-  motan:
+  hessian2:
     "MOTAN /rpc/ExampleService-getMembers-long-long-095f05367f122cf4":
-      protocol: hessian2
-      unordered_joined_string_paths:
+      unordered_joined_string:
         - value_path: [result, whiteList]
           display_path: cache_result.white_list
           separator: ","
@@ -381,7 +382,7 @@ When a Hessian2 body mismatches only on such a joined string, the
 protocol-aware comparison report surfaces `unordered_joined_string_candidates`
 with the value path and the separator that makes the two sides compare equal.
 Joined-string paths are Hessian2-only and a given value path may be either an
-`unordered_paths` list or a joined string, but not both.
+`unordered` list or a joined string, but not both.
 
 The two Motan body envelopes are recognized without configuration. A method
 returning `byte[]` carries its business bytes inside the Motan simple
@@ -473,16 +474,16 @@ the same traversal rules as list paths, but the terminal must be a Hessian2
 string. The string is split on `separator` and compared as a multiset, so
 element order is ignored while duplicate multiplicity is preserved. A path
 absent from both bodies is a no-op; selecting a present non-string fails
-closed. Joined-string paths are Hessian2-only and never overlap a list
-`unordered_paths` value path on the same field.
+closed. Joined-string paths are Hessian2-only and never overlap an `unordered`
+value path on the same field.
 
-Comparison-only live counter semantics are nested separately:
+Comparison-only live counter semantics use the `counter` kind under the JSON API:
 
 ```yaml
 response_rules:
-  comparison:
-    counter:
-      "GET /api/users/show":
+  json:
+    "GET /api/users/show":
+      counter:
         - pointer: /followers_count
           source_evidence: src/user.rs:load live follower count
           source_example: "100"

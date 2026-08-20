@@ -128,7 +128,7 @@ fn configure_baseline_recheck(
     let policy = validate_replay_policy(policy_path)?;
     ensure!(
         policy.runner_owned_response_assertions,
-        "comparison recording requires verification policy version 2"
+        "comparison recording requires verification policy version 3"
     );
     let comparison = config
         .comparison_recording
@@ -298,7 +298,7 @@ mod tests {
         let policy = temp.path().join("verification.yaml");
         fs::write(
             &policy,
-            "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
+            "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
         )
         .unwrap();
         let mut config = AppConfig::load_comparison_recording(
@@ -326,7 +326,7 @@ mod tests {
         let policy = temp.path().join("verification.yaml");
         fs::write(
             &policy,
-            "version: 2\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\nrules: []\n",
         )
         .unwrap();
         let load_config = || {

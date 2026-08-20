@@ -203,7 +203,7 @@ pub fn verify_comparison_recording(
     let policy = validate_replay_policy(&options.policy)?;
     ensure!(
         policy.runner_owned_response_assertions,
-        "comparison verification requires replay policy version 2"
+        "comparison verification requires replay policy version 3"
     );
     let mut case_dirs = discover_cases(&case_source)?;
     case_dirs.sort();
@@ -286,7 +286,7 @@ pub fn verify_comparison_recording(
                 .map(Some)
             }
             ComparisonSourceMatch::BeforeOrAfter => Err(anyhow!(
-                "response_rules.comparison.source_match=before_or_after requires expected-response-after.json"
+                "response_settings.comparison.source_match=before_or_after requires expected-response-after.json"
             )),
         };
         match (response, baseline_recheck.transpose(), response_after) {

@@ -232,7 +232,7 @@ CA. Managed comparison installs only the cache-port interception needed for
 configured Redis process-owned rules; source and candidate share a new run-local
 first-value snapshot independent of standard Replay evidence. It validates the
 verification policy and reads
-only `response_rules.comparison.source_match` to decide whether source recheck
+only `response_settings.comparison.source_match` to decide whether source recheck
 evidence is required. The policy defaults to `verification.yaml` next to the
 recorder config and may be provided explicitly with `--policy`. Response bodies
 are decoded according to their own `Content-Encoding` before being stored for
@@ -275,7 +275,7 @@ changing the source-controlled default. A policy with
 The verification policy separately controls source-observation acceptance:
 
 ```yaml
-response_rules:
+response_settings:
   comparison:
     source_match: before_or_after
 ```
@@ -350,8 +350,8 @@ and exits non-zero when a response differs from every permitted source
 observation, source-before/source-after drift makes a case inconclusive, or a
 case cannot be evaluated. The comparison behavior and field rules under
 `response_rules` participate in this phase; dependency matching rules remain
-replay-only. Comparison applies both shared response rules and rules nested
-under `response_rules.comparison`. A failed response report includes one
+replay-only. Comparison applies JSON `dynamic`, `unordered`, and `counter`
+rules plus configured protobuf and Hessian2 rules. A failed response report includes one
 top-level `representative_difference` with the API, case ID, Pointer,
 difference kind, and bounded source-before/candidate/source-after values. A
 response-rule applicability failure appears in
@@ -392,7 +392,7 @@ current-time/random scalar fields or order-insensitive arrays may use replay
 dynamic/unordered rules. A live count may use
 `config comparison ... --kind counter` only with exact API/Pointer,
 comparison-report evidence, source ownership evidence, and two different
-observations. The resulting `response_rules.comparison.counter` rule checks
+observations. The resulting `response_rules.json.<API>.counter` rule checks
 presence and representation class only during comparison; standard replay
 remains exact. Number matches only number, string matches only string, and an
 empty string does not match a nonempty string.
