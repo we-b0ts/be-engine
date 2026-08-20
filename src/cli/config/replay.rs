@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{ArgGroup, Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    ComparisonResponseRuleFeedback, DynamicResponseMechanism, E2eRunContext, ResponseRuleFeedback,
-    ResponseRuleKind, plan_comparison_response_rule, plan_response_rule,
-    resolve_e2e_response_rule_evidence,
+    ComparisonResponseRuleFeedback, E2eRunContext, ResponseRuleFeedback, ResponseRuleKind,
+    plan_comparison_response_rule, plan_response_rule, resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Args)]
@@ -36,7 +35,7 @@ struct ApplyArgs {
 
 #[derive(Debug, Subcommand)]
 enum ReplayStrategy {
-    /// Add evidence-backed dynamic or unordered response fields.
+    /// Add evidence-backed generated-scalar or unordered response fields.
     ResponseRule(ResponseRuleArgs),
 }
 
@@ -53,17 +52,23 @@ struct ResponseRuleArgs {
     api: String,
     #[arg(long = "json-pointer", required = true)]
     json_pointers: Vec<String>,
+    #[arg(long)]
+    source_evidence: String,
     #[arg(
-        long = "dynamic-mechanism",
-        value_enum,
-        required_if_eq("kind", "dynamic")
+        long,
+        required_if_eq("kind", "timestamp"),
+        required_if_eq("kind", "duration"),
+        required_if_eq("kind", "uuid"),
+        required_if_eq("kind", "random")
     )]
-    dynamic_mechanisms: Vec<DynamicResponseMechanismArg>,
-    #[arg(long, required_if_eq("kind", "dynamic"))]
-    source_evidence: Option<String>,
-    #[arg(long, required_if_eq("kind", "dynamic"))]
     source_example: Option<String>,
-    #[arg(long, required_if_eq("kind", "dynamic"))]
+    #[arg(
+        long,
+        required_if_eq("kind", "timestamp"),
+        required_if_eq("kind", "duration"),
+        required_if_eq("kind", "uuid"),
+        required_if_eq("kind", "random")
+    )]
     target_example: Option<String>,
     /// Exact finalized replay case source; runner-owned evidence is resolved internally.
     #[arg(long, conflicts_with = "comparison_run")]
@@ -75,39 +80,20 @@ struct ResponseRuleArgs {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ResponseRuleKindArg {
-    Dynamic,
-    Unordered,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum DynamicResponseMechanismArg {
     Timestamp,
     Duration,
     Uuid,
     Random,
-    Nonce,
-    RandomSalt,
-    DynamicDerived,
-}
-
-impl From<DynamicResponseMechanismArg> for DynamicResponseMechanism {
-    fn from(value: DynamicResponseMechanismArg) -> Self {
-        match value {
-            DynamicResponseMechanismArg::Timestamp => Self::Timestamp,
-            DynamicResponseMechanismArg::Duration => Self::Duration,
-            DynamicResponseMechanismArg::Uuid => Self::Uuid,
-            DynamicResponseMechanismArg::Random => Self::Random,
-            DynamicResponseMechanismArg::Nonce => Self::Nonce,
-            DynamicResponseMechanismArg::RandomSalt => Self::RandomSalt,
-            DynamicResponseMechanismArg::DynamicDerived => Self::DynamicDerived,
-        }
-    }
+    Unordered,
 }
 
 impl From<ResponseRuleKindArg> for ResponseRuleKind {
     fn from(value: ResponseRuleKindArg) -> Self {
         match value {
-            ResponseRuleKindArg::Dynamic => Self::Dynamic,
+            ResponseRuleKindArg::Timestamp => Self::Timestamp,
+            ResponseRuleKindArg::Duration => Self::Duration,
+            ResponseRuleKindArg::Uuid => Self::Uuid,
+            ResponseRuleKindArg::Random => Self::Random,
             ResponseRuleKindArg::Unordered => Self::Unordered,
         }
     }
@@ -144,19 +130,13 @@ fn response_rule_plan(
 ) -> Result<traffic_e2e::ResponseRulePlan> {
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
     let kind = args.kind.into();
-    let dynamic_mechanisms = args
-        .dynamic_mechanisms
-        .into_iter()
-        .map(Into::into)
-        .collect();
     if let Some(comparison_run) = args.comparison_run {
         plan_comparison_response_rule(ComparisonResponseRuleFeedback {
             policy_path,
             kind,
             api: args.api,
             json_pointers: args.json_pointers,
-            dynamic_mechanisms,
-            source_evidence: args.source_evidence,
+            source_evidence: Some(args.source_evidence),
             source_example: args.source_example,
             target_example: args.target_example,
             comparison_report: comparison_run.join("comparison-report.json"),
@@ -177,8 +157,7 @@ fn response_rule_plan(
             kind,
             api: args.api,
             json_pointers: args.json_pointers,
-            dynamic_mechanisms,
-            source_evidence: args.source_evidence,
+            source_evidence: Some(args.source_evidence),
             source_example: args.source_example,
             target_example: args.target_example,
             assertion_report: evidence.assertions,
@@ -212,6 +191,8 @@ mod tests {
                 "GET /api",
                 "--json-pointer",
                 "/items",
+                "--source-evidence",
+                "src/api.rs:items is a Set",
                 "--case-source",
                 "/cases/run",
             ])
@@ -228,6 +209,8 @@ mod tests {
                 "GET /api",
                 "--json-pointer",
                 "/items",
+                "--source-evidence",
+                "src/api.rs:items is a Set",
                 "--comparison-run",
                 "/comparison/run",
             ])
@@ -244,6 +227,8 @@ mod tests {
                 "GET /api",
                 "--json-pointer",
                 "/items",
+                "--source-evidence",
+                "src/api.rs:items is a Set",
             ])
             .is_err()
         );

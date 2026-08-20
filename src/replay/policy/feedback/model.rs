@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use super::super::response::{DynamicResponseMechanism, ResponseRuleKind};
+use super::super::response::ResponseRuleKind;
 
 #[derive(Debug, Clone)]
 pub struct ResponseRuleFeedback {
@@ -10,23 +10,9 @@ pub struct ResponseRuleFeedback {
     pub kind: ResponseRuleKind,
     pub api: String,
     pub json_pointers: Vec<String>,
-    pub dynamic_mechanisms: Vec<DynamicResponseMechanism>,
     pub source_evidence: Option<String>,
     pub source_example: Option<String>,
     pub target_example: Option<String>,
-    pub assertion_report: PathBuf,
-    pub aggregate_report: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub struct DynamicResponseRuleFeedback {
-    pub policy_path: PathBuf,
-    pub api: String,
-    pub json_pointers: Vec<String>,
-    pub dynamic_mechanisms: Vec<DynamicResponseMechanism>,
-    pub source_evidence: String,
-    pub source_example: String,
-    pub target_example: String,
     pub assertion_report: PathBuf,
     pub aggregate_report: PathBuf,
 }
@@ -37,7 +23,6 @@ pub struct ComparisonResponseRuleFeedback {
     pub kind: ResponseRuleKind,
     pub api: String,
     pub json_pointers: Vec<String>,
-    pub dynamic_mechanisms: Vec<DynamicResponseMechanism>,
     pub source_evidence: Option<String>,
     pub source_example: Option<String>,
     pub target_example: Option<String>,
@@ -63,8 +48,6 @@ pub struct ResponseRuleReport {
     pub kind: ResponseRuleKind,
     pub api: String,
     pub json_pointers: Vec<String>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub dynamic_mechanisms: Vec<DynamicResponseMechanism>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_evidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -73,6 +73,42 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from([
             "test",
             "rule",
+            "plan",
+            "--evidence-id",
+            "evidence-current",
+            "--kind",
+            "uuid",
+            "--json-pointer",
+            "/request_id",
+            "--source-evidence",
+            "src/request.rs:request_id generates a UUID",
+            "--source-example",
+            "source-uuid",
+            "--target-example",
+            "target-uuid",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "rule",
+            "plan",
+            "--evidence-id",
+            "evidence-current",
+            "--kind",
+            "dynamic",
+            "--json-pointer",
+            "/request_id",
+            "--source-evidence",
+            "src/request.rs:request_id generation",
+        ])
+        .is_err()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "rule",
             "motan",
             "--evidence-id",
             "evidence-current",
@@ -91,7 +127,7 @@ fn parses_the_bounded_rewrite_surface() {
             "--protocol",
             "protobuf",
             "--unordered-path",
-            r#"{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string"}"#,
+            r#"{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:white_list is a Set"}"#,
         ])
         .is_ok()
     );
@@ -105,7 +141,7 @@ fn parses_the_bounded_rewrite_surface() {
             "--protocol",
             "protobuf",
             "--unordered-path",
-            r#"{"field_path":[3],"display_path":"payload","element_type":"bytes"}"#,
+            r#"{"field_path":[3],"display_path":"payload","element_type":"bytes","source_evidence":"src/rule.rs:payload is a Set"}"#,
         ])
         .is_err()
     );

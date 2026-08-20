@@ -381,6 +381,7 @@ mod tests {
     use std::process::Command;
 
     use super::*;
+    use crate::ResponseRuleKind;
     use crate::rewrite::model::{
         RewriteApiProgress, RewriteApiStatus, RewriteIssue, RewriteIssueKind, RewriteIssueOwner,
     };
@@ -389,7 +390,6 @@ mod tests {
         RewriteDependencyRuleSelector, RewriteRecorderCapturePlanOptions, RewriteRouteCause,
         RewriteRouteOptions, RewriteRulePlanOptions,
     };
-    use crate::{DynamicResponseMechanism, ResponseRuleKind};
 
     #[test]
     fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
@@ -417,9 +417,8 @@ mod tests {
                 context(),
                 RewriteRulePlanOptions {
                     evidence_id: evidence_id.clone(),
-                    kind: ResponseRuleKind::Dynamic,
+                    kind: ResponseRuleKind::Uuid,
                     json_pointer: Some("/request_id".to_string()),
-                    dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
                     source_evidence: Some("src/id.rs:new".to_string()),
                     source_example: None,
                     target_example: None,
@@ -820,7 +819,7 @@ mod tests {
         );
         fs::write(
             target.path().join(".traffic-e2e/verification.yaml"),
-            "version: 2\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\nrules: []\n",
         )
         .unwrap();
         fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();

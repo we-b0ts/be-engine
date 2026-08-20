@@ -20,41 +20,131 @@ pub struct ComparisonVerificationPolicy {
     pub source_match: ComparisonSourceMatch,
 }
 
+impl ComparisonVerificationPolicy {
+    fn is_empty(&self) -> bool {
+        self.source_match == ComparisonSourceMatch::Before
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::replay) struct ResponseSettings {
+    #[serde(
+        default,
+        skip_serializing_if = "ComparisonVerificationPolicy::is_empty"
+    )]
+    pub(in crate::replay) comparison: ComparisonVerificationPolicy,
+}
+
+impl ResponseSettings {
+    pub(in crate::replay) fn is_empty(&self) -> bool {
+        self.comparison.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct ResponseRules {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in crate::replay) dynamic: BTreeMap<String, Vec<DynamicResponseRule>>,
+    pub(in crate::replay) json: BTreeMap<String, JsonResponseRules>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in crate::replay) unordered: BTreeMap<String, Vec<String>>,
+    pub(in crate::replay) protobuf: BTreeMap<String, ProtobufResponseRules>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in crate::replay) motan: BTreeMap<String, MotanResponseRule>,
-    #[serde(default, skip_serializing_if = "ComparisonResponseRules::is_empty")]
-    pub(in crate::replay) comparison: ComparisonResponseRules,
+    pub(in crate::replay) hessian2: BTreeMap<String, Hessian2ResponseRules>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::replay) struct ComparisonResponseRules {
-    #[serde(default)]
-    pub(in crate::replay) source_match: ComparisonSourceMatch,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(in crate::replay) counter: BTreeMap<String, Vec<CounterResponseRule>>,
+pub(in crate::replay) struct JsonResponseRules {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) timestamp: Vec<GeneratedResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) duration: Vec<GeneratedResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) uuid: Vec<GeneratedResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) random: Vec<GeneratedResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) unordered: Vec<JsonUnorderedResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) counter: Vec<CounterResponseRule>,
 }
 
-impl ComparisonResponseRules {
+impl JsonResponseRules {
     fn is_empty(&self) -> bool {
-        self.source_match == ComparisonSourceMatch::Before
-            && self.counter.values().all(Vec::is_empty)
+        self.timestamp.is_empty()
+            && self.duration.is_empty()
+            && self.uuid.is_empty()
+            && self.random.is_empty()
+            && self.unordered.is_empty()
+            && self.counter.is_empty()
     }
+
+    pub(in crate::replay) fn generated(
+        &self,
+    ) -> impl Iterator<Item = (ResponseRuleKind, &GeneratedResponseRule)> {
+        self.timestamp
+            .iter()
+            .map(|rule| (ResponseRuleKind::Timestamp, rule))
+            .chain(
+                self.duration
+                    .iter()
+                    .map(|rule| (ResponseRuleKind::Duration, rule)),
+            )
+            .chain(self.uuid.iter().map(|rule| (ResponseRuleKind::Uuid, rule)))
+            .chain(
+                self.random
+                    .iter()
+                    .map(|rule| (ResponseRuleKind::Random, rule)),
+            )
+    }
+
+    pub(in crate::replay) fn generated_for_kind(
+        &self,
+        kind: ResponseRuleKind,
+    ) -> Option<&Vec<GeneratedResponseRule>> {
+        match kind {
+            ResponseRuleKind::Timestamp => Some(&self.timestamp),
+            ResponseRuleKind::Duration => Some(&self.duration),
+            ResponseRuleKind::Uuid => Some(&self.uuid),
+            ResponseRuleKind::Random => Some(&self.random),
+            ResponseRuleKind::Unordered | ResponseRuleKind::Counter => None,
+        }
+    }
+
+    pub(in crate::replay) fn generated_for_kind_mut(
+        &mut self,
+        kind: ResponseRuleKind,
+    ) -> Option<&mut Vec<GeneratedResponseRule>> {
+        match kind {
+            ResponseRuleKind::Timestamp => Some(&mut self.timestamp),
+            ResponseRuleKind::Duration => Some(&mut self.duration),
+            ResponseRuleKind::Uuid => Some(&mut self.uuid),
+            ResponseRuleKind::Random => Some(&mut self.random),
+            ResponseRuleKind::Unordered | ResponseRuleKind::Counter => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::replay) struct ProtobufResponseRules {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) unordered: Vec<ProtobufUnorderedPath>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::replay) struct Hessian2ResponseRules {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) unordered: Vec<Hessian2UnorderedPath>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) unordered_joined_string: Vec<Hessian2JoinedStringPath>,
 }
 
 impl ResponseRules {
     pub(in crate::replay) fn is_empty(&self) -> bool {
-        self.dynamic.values().all(Vec::is_empty)
-            && self.unordered.values().all(Vec::is_empty)
-            && self.motan.is_empty()
-            && self.comparison.is_empty()
+        self.json.is_empty() && self.protobuf.is_empty() && self.hessian2.is_empty()
     }
 
     pub(in crate::replay) fn matching_replay_fields(
@@ -62,13 +152,15 @@ impl ResponseRules {
         method: &str,
         path: &str,
     ) -> Vec<ResponseField> {
-        matching_dynamic_fields(&self.dynamic, method, path)
-            .chain(matching_pointer_fields(
-                &self.unordered,
-                ResponseRuleKind::Unordered,
-                method,
-                path,
-            ))
+        matching_json_rules(&self.json, method, path)
+            .flat_map(|(api, rules)| {
+                rules
+                    .generated()
+                    .map(move |(kind, field)| response_field(kind, api, &field.pointer))
+                    .chain(rules.unordered.iter().map(move |field| {
+                        response_field(ResponseRuleKind::Unordered, api, &field.pointer)
+                    }))
+            })
             .collect()
     }
 
@@ -79,11 +171,13 @@ impl ResponseRules {
     ) -> Vec<ResponseField> {
         self.matching_replay_fields(method, path)
             .into_iter()
-            .chain(matching_counter_fields(
-                &self.comparison.counter,
-                method,
-                path,
-            ))
+            .chain(
+                matching_json_rules(&self.json, method, path).flat_map(|(api, rules)| {
+                    rules.counter.iter().map(move |field| {
+                        response_field(ResponseRuleKind::Counter, api, &field.pointer)
+                    })
+                }),
+            )
             .collect()
     }
 
@@ -92,21 +186,70 @@ impl ResponseRules {
         method: &str,
         path: &str,
     ) -> Vec<MotanResponseRuleMatch> {
-        self.motan
-            .iter()
-            .filter_map(|(api, rule)| {
-                let (candidate_method, candidate_path) = parse_api(api).ok()?;
-                (candidate_method.eq_ignore_ascii_case(method)
-                    && path_pattern_matches(candidate_path, path))
-                .then(|| MotanResponseRuleMatch {
+        matching_body_rules(&self.protobuf, method, path)
+            .map(|(api, rules)| MotanResponseRuleMatch {
+                id: motan_response_rule_id(api),
+                api: api.clone(),
+                protocol: MotanBodyProtocol::Protobuf,
+                unordered_paths: rules
+                    .unordered
+                    .iter()
+                    .cloned()
+                    .map(MotanUnorderedPath::Protobuf)
+                    .collect(),
+                unordered_joined_string_paths: Vec::new(),
+            })
+            .chain(
+                matching_body_rules(&self.hessian2, method, path).map(|(api, rules)| {
+                    MotanResponseRuleMatch {
+                        id: motan_response_rule_id(api),
+                        api: api.clone(),
+                        protocol: MotanBodyProtocol::Hessian2,
+                        unordered_paths: rules
+                            .unordered
+                            .iter()
+                            .cloned()
+                            .map(MotanUnorderedPath::Hessian2)
+                            .collect(),
+                        unordered_joined_string_paths: rules.unordered_joined_string.clone(),
+                    }
+                }),
+            )
+            .collect()
+    }
+
+    pub(in crate::replay) fn configured_motan_rule(
+        &self,
+        api: &str,
+    ) -> Option<MotanResponseRuleMatch> {
+        self.protobuf
+            .get(api)
+            .map(|rules| MotanResponseRuleMatch {
+                id: motan_response_rule_id(api),
+                api: api.to_string(),
+                protocol: MotanBodyProtocol::Protobuf,
+                unordered_paths: rules
+                    .unordered
+                    .iter()
+                    .cloned()
+                    .map(MotanUnorderedPath::Protobuf)
+                    .collect(),
+                unordered_joined_string_paths: Vec::new(),
+            })
+            .or_else(|| {
+                self.hessian2.get(api).map(|rules| MotanResponseRuleMatch {
                     id: motan_response_rule_id(api),
-                    api: api.clone(),
-                    protocol: rule.protocol,
-                    unordered_paths: rule.unordered_paths.clone(),
-                    unordered_joined_string_paths: rule.unordered_joined_string_paths.clone(),
+                    api: api.to_string(),
+                    protocol: MotanBodyProtocol::Hessian2,
+                    unordered_paths: rules
+                        .unordered
+                        .iter()
+                        .cloned()
+                        .map(MotanUnorderedPath::Hessian2)
+                        .collect(),
+                    unordered_joined_string_paths: rules.unordered_joined_string.clone(),
                 })
             })
-            .collect()
     }
 }
 
@@ -131,22 +274,13 @@ impl ProtobufFieldPath {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub(in crate::replay) struct MotanResponseRule {
-    pub(in crate::replay) protocol: MotanBodyProtocol,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) unordered_paths: Vec<MotanUnorderedPath>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(deny_unknown_fields)]
 pub struct ProtobufUnorderedPath {
     pub field_path: ProtobufFieldPath,
     pub display_path: String,
     pub element_type: ProtobufRepeatedElementType,
+    pub source_evidence: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -177,6 +311,7 @@ impl Hessian2ValuePath {
 pub struct Hessian2UnorderedPath {
     pub value_path: Hessian2ValuePath,
     pub display_path: String,
+    pub source_evidence: String,
 }
 
 /// Selects a Hessian2 **String** field whose value is a set joined into one
@@ -188,6 +323,7 @@ pub struct Hessian2JoinedStringPath {
     pub value_path: Hessian2ValuePath,
     pub display_path: String,
     pub separator: String,
+    pub source_evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -271,31 +407,37 @@ pub(in crate::replay) struct MotanResponseRuleMatch {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseRuleKind {
-    Dynamic,
-    Unordered,
-    Counter,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum DynamicResponseMechanism {
     Timestamp,
     Duration,
     Uuid,
     Random,
-    Nonce,
-    RandomSalt,
-    DynamicDerived,
+    Unordered,
+    Counter,
+}
+
+impl ResponseRuleKind {
+    pub(in crate::replay) fn is_generated(self) -> bool {
+        matches!(
+            self,
+            Self::Timestamp | Self::Duration | Self::Uuid | Self::Random
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(in crate::replay) struct DynamicResponseRule {
+pub(in crate::replay) struct GeneratedResponseRule {
     pub(in crate::replay) pointer: String,
-    pub(in crate::replay) mechanisms: Vec<DynamicResponseMechanism>,
     pub(in crate::replay) source_evidence: String,
     pub(in crate::replay) source_example: String,
     pub(in crate::replay) target_example: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(in crate::replay) struct JsonUnorderedResponseRule {
+    pub(in crate::replay) pointer: String,
+    pub(in crate::replay) source_evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -317,23 +459,10 @@ pub struct ResponseField {
 
 pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Result<()> {
     let mut locations = Vec::new();
-    validate_dynamic_rule_map(&rules.dynamic, &mut locations)?;
-    validate_pointer_rule_map(
-        ResponseRuleKind::Unordered,
-        &rules.unordered,
-        &mut locations,
-    )?;
-    validate_motan_rule_map(&rules.motan)?;
-    validate_counter_rule_map(&rules.comparison.counter, &mut locations)?;
-    for motan_api in rules.motan.keys() {
-        let (_, motan_path) = parse_api(motan_api)?;
-        for (method, path, pointer, kind) in &locations {
-            ensure!(
-                !method.eq_ignore_ascii_case("MOTAN") || !path_patterns_overlap(motan_path, path),
-                "Motan response rule {motan_api:?} overlaps JSON response rule {kind:?} MOTAN {path} at {pointer}"
-            );
-        }
-    }
+    validate_json_rule_map(&rules.json, &mut locations)?;
+    validate_protobuf_rule_map(&rules.protobuf)?;
+    validate_hessian2_rule_map(&rules.hessian2)?;
+    validate_body_protocol_routes(rules)?;
     for (index, left) in locations.iter().enumerate() {
         for right in locations.iter().skip(index + 1) {
             if left.0.eq_ignore_ascii_case(right.0)
@@ -358,13 +487,27 @@ pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Resul
 }
 
 pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String> {
-    dynamic_rule_ids(&rules.dynamic)
-        .chain(pointer_rule_ids(
-            &rules.unordered,
-            ResponseRuleKind::Unordered,
-        ))
-        .chain(counter_rule_ids(&rules.comparison.counter))
-        .chain(rules.motan.keys().map(|api| motan_response_rule_id(api)))
+    rules
+        .json
+        .iter()
+        .flat_map(|(api, rules)| {
+            rules
+                .generated()
+                .map(move |(kind, field)| response_rule_id(kind, api, &field.pointer))
+                .chain(rules.unordered.iter().map(move |field| {
+                    response_rule_id(ResponseRuleKind::Unordered, api, &field.pointer)
+                }))
+                .chain(rules.counter.iter().map(move |field| {
+                    response_rule_id(ResponseRuleKind::Counter, api, &field.pointer)
+                }))
+        })
+        .chain(
+            rules
+                .protobuf
+                .keys()
+                .chain(rules.hessian2.keys())
+                .map(|api| motan_response_rule_id(api)),
+        )
         .collect()
 }
 
@@ -378,7 +521,10 @@ pub(in crate::replay) fn response_rule_id(
     pointer: &str,
 ) -> String {
     let (namespace, kind) = match kind {
-        ResponseRuleKind::Dynamic => ("response", "dynamic"),
+        ResponseRuleKind::Timestamp => ("response", "timestamp"),
+        ResponseRuleKind::Duration => ("response", "duration"),
+        ResponseRuleKind::Uuid => ("response", "uuid"),
+        ResponseRuleKind::Random => ("response", "random"),
         ResponseRuleKind::Unordered => ("response", "unordered"),
         ResponseRuleKind::Counter => ("response:comparison", "counter"),
     };
@@ -424,59 +570,48 @@ pub(in crate::replay) fn validate_json_pointer(pointer: &str) -> Result<()> {
 
 type RuleLocation<'a> = (&'a str, &'a str, &'a str, ResponseRuleKind);
 
-fn validate_dynamic_rule_map<'a>(
-    rules: &'a BTreeMap<String, Vec<DynamicResponseRule>>,
+fn validate_json_rule_map<'a>(
+    rules: &'a BTreeMap<String, JsonResponseRules>,
     locations: &mut Vec<RuleLocation<'a>>,
 ) -> Result<()> {
-    for (api, fields) in rules {
-        let (method, path) = validate_rule_api(api, fields.is_empty())?;
-        let mut unique = BTreeSet::new();
-        for field in fields {
+    for (api, rules) in rules {
+        let (method, path) = validate_rule_api(api)?;
+        ensure!(
+            method != "MOTAN",
+            "JSON response rule API cannot use the MOTAN carrier: {api:?}"
+        );
+        ensure!(
+            !rules.is_empty(),
+            "JSON response rule API {api:?} must select at least one rule"
+        );
+        let mut unique_generated = BTreeSet::new();
+        for (kind, field) in rules.generated() {
             validate_json_pointer(&field.pointer)?;
             ensure!(
-                unique.insert(field.pointer.as_str()),
-                "response rule API {api:?} repeats JSON Pointer {:?}",
+                unique_generated.insert(field.pointer.as_str()),
+                "generated response rules for API {api:?} repeat JSON Pointer {:?}",
                 field.pointer
             );
-            validate_dynamic_rule(field)?;
-            locations.push((method, path, &field.pointer, ResponseRuleKind::Dynamic));
+            validate_generated_rule(kind, field)?;
+            locations.push((method, path, &field.pointer, kind));
         }
-    }
-    Ok(())
-}
-
-fn validate_pointer_rule_map<'a>(
-    kind: ResponseRuleKind,
-    rules: &'a BTreeMap<String, Vec<String>>,
-    locations: &mut Vec<RuleLocation<'a>>,
-) -> Result<()> {
-    for (api, pointers) in rules {
-        let (method, path) = validate_rule_api(api, pointers.is_empty())?;
-        let mut unique = BTreeSet::new();
-        for pointer in pointers {
-            validate_json_pointer(pointer)?;
-            ensure!(
-                unique.insert(pointer),
-                "response rule API {api:?} repeats JSON Pointer {pointer:?}"
-            );
-            locations.push((method, path, pointer, kind));
-        }
-    }
-    Ok(())
-}
-
-fn validate_counter_rule_map<'a>(
-    rules: &'a BTreeMap<String, Vec<CounterResponseRule>>,
-    locations: &mut Vec<RuleLocation<'a>>,
-) -> Result<()> {
-    for (api, fields) in rules {
-        let (method, path) = validate_rule_api(api, fields.is_empty())?;
-        let mut unique = BTreeSet::new();
-        for field in fields {
+        let mut unique_unordered = BTreeSet::new();
+        for field in &rules.unordered {
             validate_json_pointer(&field.pointer)?;
             ensure!(
-                unique.insert(field.pointer.as_str()),
-                "response rule API {api:?} repeats JSON Pointer {:?}",
+                unique_unordered.insert(field.pointer.as_str()),
+                "unordered response rule API {api:?} repeats JSON Pointer {:?}",
+                field.pointer
+            );
+            validate_audit_text(&field.source_evidence, "source_evidence", 512)?;
+            locations.push((method, path, &field.pointer, ResponseRuleKind::Unordered));
+        }
+        let mut unique_counter = BTreeSet::new();
+        for field in &rules.counter {
+            validate_json_pointer(&field.pointer)?;
+            ensure!(
+                unique_counter.insert(field.pointer.as_str()),
+                "counter response rule API {api:?} repeats JSON Pointer {:?}",
                 field.pointer
             );
             validate_counter_rule(field)?;
@@ -486,181 +621,198 @@ fn validate_counter_rule_map<'a>(
     Ok(())
 }
 
-fn validate_motan_rule_map(rules: &BTreeMap<String, MotanResponseRule>) -> Result<()> {
+fn validate_protobuf_rule_map(rules: &BTreeMap<String, ProtobufResponseRules>) -> Result<()> {
     const MAX_FIELD_NUMBER: u32 = (1 << 29) - 1;
     const MAX_PATHS: usize = 32;
     const MAX_PATH_DEPTH: usize = 32;
 
-    let mut routes = Vec::new();
     for (api, rule) in rules {
-        let (method, path) = parse_api(api)?;
+        let (method, _) = validate_rule_api(api)?;
         ensure!(
             method == "MOTAN",
-            "Motan response rule API method must be MOTAN: {api:?}"
+            "protobuf response rule API method must be MOTAN: {api:?}"
         );
         ensure!(
-            rule.unordered_paths.len() <= MAX_PATHS,
-            "Motan response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
+            rule.unordered.len() <= MAX_PATHS,
+            "protobuf response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
         );
         let mut unique_protobuf = BTreeSet::new();
-        let mut unique_hessian2 = BTreeSet::new();
         let mut unique_display = BTreeSet::new();
-        for unordered_path in &rule.unordered_paths {
-            ensure!(
-                unordered_path.protocol() == rule.protocol,
-                "Motan response rule API {api:?} has an unordered path for a different body protocol"
-            );
-            validate_audit_text(unordered_path.display_path(), "display_path", 512)?;
+        for unordered_path in &rule.unordered {
+            validate_audit_text(&unordered_path.display_path, "display_path", 512)?;
+            validate_audit_text(&unordered_path.source_evidence, "source_evidence", 512)?;
             ensure!(
                 unordered_path
-                    .display_path()
-                    .chars()
-                    .any(|character| character.is_alphabetic() || character == '_'),
-                "Motan response rule API {api:?} requires a semantic display_path"
-            );
-            ensure!(
-                unique_display.insert(unordered_path.display_path()),
-                "Motan response rule API {api:?} repeats display_path {:?}",
-                unordered_path.display_path()
-            );
-            match unordered_path {
-                MotanUnorderedPath::Protobuf(unordered_path) => {
-                    let field_path = &unordered_path.field_path;
-                    ensure!(
-                        !field_path.0.is_empty() && field_path.0.len() <= MAX_PATH_DEPTH,
-                        "Motan response rule API {api:?} has an empty or over-deep protobuf field path"
-                    );
-                    ensure!(
-                        field_path
-                            .0
-                            .iter()
-                            .all(|number| (1..=MAX_FIELD_NUMBER).contains(number)),
-                        "Motan response rule API {api:?} has an invalid protobuf field number"
-                    );
-                    ensure!(
-                        unique_protobuf.insert(field_path),
-                        "Motan response rule API {api:?} repeats protobuf field path {:?}",
-                        field_path.0
-                    );
-                    ensure!(
-                        unordered_path.display_path != field_path.display_path(),
-                        "Motan response rule API {api:?} protobuf field path {:?} requires a semantic display_path",
-                        field_path.0
-                    );
-                }
-                MotanUnorderedPath::Hessian2(unordered_path) => {
-                    let value_path = &unordered_path.value_path;
-                    ensure!(
-                        value_path.0.len() <= MAX_PATH_DEPTH,
-                        "Motan response rule API {api:?} has an over-deep Hessian2 value path"
-                    );
-                    for segment in &value_path.0 {
-                        validate_audit_text(segment, "Hessian2 value path segment", 256)?;
-                    }
-                    ensure!(
-                        unique_hessian2.insert(value_path),
-                        "Motan response rule API {api:?} repeats Hessian2 value path {:?}",
-                        value_path.0
-                    );
-                }
-            }
-        }
-        ensure!(
-            rule.unordered_joined_string_paths.len() <= MAX_PATHS,
-            "Motan response rule API {api:?} selects more than {MAX_PATHS} unordered joined-string paths"
-        );
-        let mut unique_joined_string = BTreeSet::new();
-        for joined in &rule.unordered_joined_string_paths {
-            ensure!(
-                rule.protocol == MotanBodyProtocol::Hessian2,
-                "Motan response rule API {api:?} uses joined-string paths on a non-Hessian2 protocol"
-            );
-            let value_path = &joined.value_path;
-            ensure!(
-                value_path.0.len() <= MAX_PATH_DEPTH,
-                "Motan response rule API {api:?} has an over-deep Hessian2 joined-string value path"
-            );
-            for segment in &value_path.0 {
-                validate_audit_text(segment, "Hessian2 joined-string value path segment", 256)?;
-            }
-            ensure!(
-                !joined.separator.is_empty(),
-                "Motan response rule API {api:?} has a joined-string path with an empty separator"
-            );
-            validate_audit_text(&joined.separator, "Hessian2 joined-string separator", 16)?;
-            validate_audit_text(&joined.display_path, "display_path", 512)?;
-            ensure!(
-                joined
                     .display_path
                     .chars()
                     .any(|character| character.is_alphabetic() || character == '_'),
-                "Motan response rule API {api:?} requires a semantic display_path"
+                "protobuf response rule API {api:?} requires a semantic display_path"
             );
             ensure!(
-                unique_display.insert(&joined.display_path),
-                "Motan response rule API {api:?} repeats display_path {:?}",
-                joined.display_path
+                unique_display.insert(&unordered_path.display_path),
+                "protobuf response rule API {api:?} repeats display_path {:?}",
+                unordered_path.display_path
+            );
+            let field_path = &unordered_path.field_path;
+            ensure!(
+                !field_path.0.is_empty() && field_path.0.len() <= MAX_PATH_DEPTH,
+                "protobuf response rule API {api:?} has an empty or over-deep field path"
             );
             ensure!(
-                unique_joined_string.insert(value_path),
-                "Motan response rule API {api:?} repeats Hessian2 joined-string value path {:?}",
-                value_path.0
+                field_path
+                    .0
+                    .iter()
+                    .all(|number| (1..=MAX_FIELD_NUMBER).contains(number)),
+                "protobuf response rule API {api:?} has an invalid field number"
             );
             ensure!(
-                unique_hessian2.insert(value_path),
-                "Motan response rule API {api:?} joins the same Hessian2 value path {:?} as an unordered list path",
-                value_path.0
+                unique_protobuf.insert(field_path),
+                "protobuf response rule API {api:?} repeats field path {:?}",
+                field_path.0
             );
-        }
-        routes.push((api.as_str(), path));
-    }
-    for (index, (left_api, left_path)) in routes.iter().enumerate() {
-        for (right_api, right_path) in routes.iter().skip(index + 1) {
             ensure!(
-                !path_patterns_overlap(left_path, right_path),
-                "overlapping Motan response rules select the same API: {left_api:?} and {right_api:?}"
+                unordered_path.display_path != field_path.display_path(),
+                "protobuf response rule API {api:?} field path {:?} requires a semantic display_path",
+                field_path.0
             );
         }
     }
     Ok(())
 }
 
-fn validate_rule_api(api: &str, empty: bool) -> Result<(&str, &str)> {
+fn validate_hessian2_rule_map(rules: &BTreeMap<String, Hessian2ResponseRules>) -> Result<()> {
+    const MAX_PATHS: usize = 32;
+    const MAX_PATH_DEPTH: usize = 32;
+
+    for (api, rule) in rules {
+        let (method, _) = validate_rule_api(api)?;
+        ensure!(
+            method == "MOTAN",
+            "Hessian2 response rule API method must be MOTAN: {api:?}"
+        );
+        ensure!(
+            rule.unordered.len() <= MAX_PATHS,
+            "Hessian2 response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
+        );
+        ensure!(
+            rule.unordered_joined_string.len() <= MAX_PATHS,
+            "Hessian2 response rule API {api:?} selects more than {MAX_PATHS} unordered joined-string paths"
+        );
+        let mut unique_hessian2 = BTreeSet::new();
+        let mut unique_display = BTreeSet::new();
+        for unordered_path in &rule.unordered {
+            validate_hessian2_value_path(api, &unordered_path.value_path, MAX_PATH_DEPTH)?;
+            validate_semantic_display_path(api, &unordered_path.display_path)?;
+            validate_audit_text(&unordered_path.source_evidence, "source_evidence", 512)?;
+            ensure!(
+                unique_display.insert(&unordered_path.display_path),
+                "Hessian2 response rule API {api:?} repeats display_path {:?}",
+                unordered_path.display_path
+            );
+            ensure!(
+                unique_hessian2.insert(&unordered_path.value_path),
+                "Hessian2 response rule API {api:?} repeats value path {:?}",
+                unordered_path.value_path.0
+            );
+        }
+        let mut unique_joined_string = BTreeSet::new();
+        for joined in &rule.unordered_joined_string {
+            validate_hessian2_value_path(api, &joined.value_path, MAX_PATH_DEPTH)?;
+            ensure!(
+                !joined.separator.is_empty(),
+                "Hessian2 response rule API {api:?} has a joined-string path with an empty separator"
+            );
+            validate_audit_text(&joined.separator, "Hessian2 joined-string separator", 16)?;
+            validate_semantic_display_path(api, &joined.display_path)?;
+            validate_audit_text(&joined.source_evidence, "source_evidence", 512)?;
+            ensure!(
+                unique_display.insert(&joined.display_path),
+                "Hessian2 response rule API {api:?} repeats display_path {:?}",
+                joined.display_path
+            );
+            ensure!(
+                unique_joined_string.insert(&joined.value_path),
+                "Hessian2 response rule API {api:?} repeats joined-string value path {:?}",
+                joined.value_path.0
+            );
+            ensure!(
+                unique_hessian2.insert(&joined.value_path),
+                "Hessian2 response rule API {api:?} joins the same value path {:?} as an unordered list path",
+                joined.value_path.0
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_body_protocol_routes(rules: &ResponseRules) -> Result<()> {
+    let routes = rules
+        .protobuf
+        .keys()
+        .map(|api| ("protobuf", api))
+        .chain(rules.hessian2.keys().map(|api| ("hessian2", api)))
+        .map(|(protocol, api)| {
+            let (_, path) = parse_api(api)?;
+            Ok((protocol, api.as_str(), path))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (index, (left_protocol, left_api, left_path)) in routes.iter().enumerate() {
+        for (right_protocol, right_api, right_path) in routes.iter().skip(index + 1) {
+            ensure!(
+                !path_patterns_overlap(left_path, right_path),
+                "overlapping body protocol response rules select the same API: {left_protocol} {left_api:?} and {right_protocol} {right_api:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_hessian2_value_path(
+    api: &str,
+    value_path: &Hessian2ValuePath,
+    max_depth: usize,
+) -> Result<()> {
+    ensure!(
+        value_path.0.len() <= max_depth,
+        "Hessian2 response rule API {api:?} has an over-deep value path"
+    );
+    for segment in &value_path.0 {
+        validate_audit_text(segment, "Hessian2 value path segment", 256)?;
+    }
+    Ok(())
+}
+
+fn validate_semantic_display_path(api: &str, display_path: &str) -> Result<()> {
+    validate_audit_text(display_path, "display_path", 512)?;
+    ensure!(
+        display_path
+            .chars()
+            .any(|character| character.is_alphabetic() || character == '_'),
+        "Hessian2 response rule API {api:?} requires a semantic display_path"
+    );
+    Ok(())
+}
+
+fn validate_rule_api(api: &str) -> Result<(&str, &str)> {
     let (method, path) = parse_api(api)?;
     ensure!(
         method == method.to_ascii_uppercase(),
         "response rule API method must use uppercase canonical form: {api:?}"
     );
-    ensure!(
-        !empty,
-        "response rule API {api:?} must select at least one JSON Pointer"
-    );
     Ok((method, path))
 }
 
-fn validate_dynamic_rule(rule: &DynamicResponseRule) -> Result<()> {
+fn validate_generated_rule(kind: ResponseRuleKind, rule: &GeneratedResponseRule) -> Result<()> {
     ensure!(
-        !rule.mechanisms.is_empty(),
-        "dynamic response rule {} requires at least one mechanism",
-        rule.pointer
-    );
-    let mechanisms = rule.mechanisms.iter().copied().collect::<BTreeSet<_>>();
-    ensure!(
-        mechanisms.len() == rule.mechanisms.len(),
-        "dynamic response rule {} repeats a mechanism",
-        rule.pointer
-    );
-    ensure!(
-        !mechanisms.contains(&DynamicResponseMechanism::DynamicDerived) || mechanisms.len() > 1,
-        "dynamic response rule {} uses dynamic_derived without its underlying mechanism",
-        rule.pointer
+        kind.is_generated(),
+        "generated response rule has an invalid kind"
     );
     validate_audit_text(&rule.source_evidence, "source_evidence", 512)?;
     validate_audit_text(&rule.source_example, "source_example", 1024)?;
     validate_audit_text(&rule.target_example, "target_example", 1024)?;
     ensure!(
         rule.source_example != rule.target_example,
-        "dynamic response rule {} requires different source and target examples",
+        "{kind:?} response rule {} requires different source and target examples",
         rule.pointer
     );
     Ok(())
@@ -694,105 +846,39 @@ fn validate_audit_text(value: &str, label: &str, max_len: usize) -> Result<()> {
     Ok(())
 }
 
-fn matching_dynamic_fields<'a>(
-    rules: &'a BTreeMap<String, Vec<DynamicResponseRule>>,
+fn matching_json_rules<'a>(
+    rules: &'a BTreeMap<String, JsonResponseRules>,
     method: &'a str,
     path: &'a str,
-) -> impl Iterator<Item = ResponseField> + 'a {
-    rules
-        .iter()
-        .filter_map(move |(api, fields)| {
-            let (candidate_method, candidate_path) = parse_api(api).ok()?;
-            (candidate_method.eq_ignore_ascii_case(method)
-                && path_pattern_matches(candidate_path, path))
-            .then_some((api, fields))
-        })
-        .flat_map(move |(api, fields)| {
-            fields.iter().map(move |field| ResponseField {
-                id: response_rule_id(ResponseRuleKind::Dynamic, api, &field.pointer),
-                api: api.clone(),
-                pointer: field.pointer.clone(),
-                kind: ResponseRuleKind::Dynamic,
-            })
-        })
-}
-
-fn matching_pointer_fields<'a>(
-    rules: &'a BTreeMap<String, Vec<String>>,
-    kind: ResponseRuleKind,
-    method: &'a str,
-    path: &'a str,
-) -> impl Iterator<Item = ResponseField> + 'a {
-    rules
-        .iter()
-        .filter_map(move |(api, pointers)| {
-            let (candidate_method, candidate_path) = parse_api(api).ok()?;
-            (candidate_method.eq_ignore_ascii_case(method)
-                && path_pattern_matches(candidate_path, path))
-            .then_some((api, pointers))
-        })
-        .flat_map(move |(api, pointers)| {
-            pointers.iter().map(move |pointer| ResponseField {
-                id: response_rule_id(kind, api, pointer),
-                api: api.clone(),
-                pointer: pointer.clone(),
-                kind,
-            })
-        })
-}
-
-fn matching_counter_fields<'a>(
-    rules: &'a BTreeMap<String, Vec<CounterResponseRule>>,
-    method: &'a str,
-    path: &'a str,
-) -> impl Iterator<Item = ResponseField> + 'a {
-    rules
-        .iter()
-        .filter_map(move |(api, fields)| {
-            let (candidate_method, candidate_path) = parse_api(api).ok()?;
-            (candidate_method.eq_ignore_ascii_case(method)
-                && path_pattern_matches(candidate_path, path))
-            .then_some((api, fields))
-        })
-        .flat_map(move |(api, fields)| {
-            fields.iter().map(move |field| ResponseField {
-                id: response_rule_id(ResponseRuleKind::Counter, api, &field.pointer),
-                api: api.clone(),
-                pointer: field.pointer.clone(),
-                kind: ResponseRuleKind::Counter,
-            })
-        })
-}
-
-fn dynamic_rule_ids(
-    rules: &BTreeMap<String, Vec<DynamicResponseRule>>,
-) -> impl Iterator<Item = String> + '_ {
-    rules.iter().flat_map(|(api, fields)| {
-        fields
-            .iter()
-            .map(move |field| response_rule_id(ResponseRuleKind::Dynamic, api, &field.pointer))
+) -> impl Iterator<Item = (&'a String, &'a JsonResponseRules)> + 'a {
+    rules.iter().filter_map(move |(api, rules)| {
+        let (candidate_method, candidate_path) = parse_api(api).ok()?;
+        (candidate_method.eq_ignore_ascii_case(method)
+            && path_pattern_matches(candidate_path, path))
+        .then_some((api, rules))
     })
 }
 
-fn pointer_rule_ids(
-    rules: &BTreeMap<String, Vec<String>>,
-    kind: ResponseRuleKind,
-) -> impl Iterator<Item = String> + '_ {
-    rules.iter().flat_map(move |(api, pointers)| {
-        pointers
-            .iter()
-            .map(move |pointer| response_rule_id(kind, api, pointer))
+fn matching_body_rules<'a, T>(
+    rules: &'a BTreeMap<String, T>,
+    method: &'a str,
+    path: &'a str,
+) -> impl Iterator<Item = (&'a String, &'a T)> + 'a {
+    rules.iter().filter_map(move |(api, rules)| {
+        let (candidate_method, candidate_path) = parse_api(api).ok()?;
+        (candidate_method.eq_ignore_ascii_case(method)
+            && path_pattern_matches(candidate_path, path))
+        .then_some((api, rules))
     })
 }
 
-fn counter_rule_ids(
-    rules: &BTreeMap<String, Vec<CounterResponseRule>>,
-) -> impl Iterator<Item = String> + '_ {
-    rules.iter().flat_map(|(api, fields)| {
-        fields
-            .iter()
-            .map(move |field| response_rule_id(ResponseRuleKind::Counter, api, &field.pointer))
-    })
+fn response_field(kind: ResponseRuleKind, api: &str, pointer: &str) -> ResponseField {
+    ResponseField {
+        id: response_rule_id(kind, api, pointer),
+        api: api.to_string(),
+        pointer: pointer.to_string(),
+        kind,
+    }
 }
 
 pub(crate) fn response_locations_overlap(left: &str, right: &str) -> bool {
@@ -820,224 +906,5 @@ fn path_patterns_overlap(left: &str, right: &str) -> bool {
 mod motan_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn dynamic(pointer: &str) -> DynamicResponseRule {
-        DynamicResponseRule {
-            pointer: pointer.to_string(),
-            mechanisms: vec![DynamicResponseMechanism::Uuid],
-            source_evidence: "src/token.rs:issue_token".to_string(),
-            source_example: "<redacted source UUID>".to_string(),
-            target_example: "<redacted target UUID>".to_string(),
-        }
-    }
-
-    fn counter(pointer: &str) -> CounterResponseRule {
-        CounterResponseRule {
-            pointer: pointer.to_string(),
-            source_evidence: "src/user.rs:load live count".to_string(),
-            source_example: "100".to_string(),
-            target_example: "101".to_string(),
-        }
-    }
-
-    #[test]
-    fn matches_exact_and_segment_pattern_apis() {
-        let rules = ResponseRules {
-            dynamic: BTreeMap::from([
-                (
-                    "GET /api/resource/token".to_string(),
-                    vec![dynamic("/content")],
-                ),
-                ("GET /api/sessions/*".to_string(), vec![dynamic("/data/id")]),
-            ]),
-            unordered: BTreeMap::new(),
-            motan: BTreeMap::new(),
-            comparison: ComparisonResponseRules::default(),
-        };
-
-        assert_eq!(
-            rules
-                .matching_replay_fields("GET", "/api/resource/token")
-                .iter()
-                .map(|field| field.pointer.as_str())
-                .collect::<Vec<_>>(),
-            vec!["/content"]
-        );
-        assert_eq!(
-            rules
-                .matching_replay_fields("GET", "/api/sessions/42")
-                .iter()
-                .map(|field| field.pointer.as_str())
-                .collect::<Vec<_>>(),
-            vec!["/data/id"]
-        );
-    }
-
-    #[test]
-    fn rejects_overlapping_routes_for_the_same_pointer() {
-        let rules = ResponseRules {
-            dynamic: BTreeMap::from([
-                ("GET /api/sessions/*".to_string(), vec![dynamic("/content")]),
-                (
-                    "GET /api/sessions/current".to_string(),
-                    vec![dynamic("/content")],
-                ),
-            ]),
-            unordered: BTreeMap::new(),
-            motan: BTreeMap::new(),
-            comparison: ComparisonResponseRules::default(),
-        };
-
-        assert!(validate_response_rules(&rules).is_err());
-    }
-
-    #[test]
-    fn rejects_overlapping_dynamic_and_unordered_subtrees() {
-        let rules = ResponseRules {
-            dynamic: BTreeMap::from([(
-                "GET /api/resource".to_string(),
-                vec![dynamic("/content/0/id")],
-            )]),
-            unordered: BTreeMap::from([(
-                "GET /api/resource".to_string(),
-                vec!["/content".to_string()],
-            )]),
-            motan: BTreeMap::new(),
-            comparison: ComparisonResponseRules::default(),
-        };
-
-        assert!(validate_response_rules(&rules).is_err());
-    }
-
-    #[test]
-    fn rejects_overlapping_replay_and_comparison_subtrees() {
-        let rules = ResponseRules {
-            dynamic: BTreeMap::from([(
-                "GET /api/users/show".to_string(),
-                vec![dynamic("/followers_count")],
-            )]),
-            comparison: ComparisonResponseRules {
-                counter: BTreeMap::from([(
-                    "GET /api/users/show".to_string(),
-                    vec![counter("/followers_count")],
-                )]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        assert!(validate_response_rules(&rules).is_err());
-    }
-
-    #[test]
-    fn rejects_overlapping_motan_and_json_response_rules() {
-        let rules = ResponseRules {
-            unordered: BTreeMap::from([(
-                "MOTAN /rpc/example".to_string(),
-                vec!["/content".to_string()],
-            )]),
-            motan: BTreeMap::from([(
-                "MOTAN /rpc/*".to_string(),
-                MotanResponseRule {
-                    protocol: MotanBodyProtocol::Protobuf,
-                    unordered_paths: Vec::new(),
-                    unordered_joined_string_paths: Vec::new(),
-                },
-            )]),
-            ..Default::default()
-        };
-
-        assert!(validate_response_rules(&rules).is_err());
-    }
-
-    #[test]
-    fn matches_and_identifies_unordered_fields() {
-        let rules = ResponseRules {
-            dynamic: BTreeMap::new(),
-            unordered: BTreeMap::from([(
-                "GET /api/config/ansible_facts".to_string(),
-                vec!["/general/sudo_users".to_string()],
-            )]),
-            motan: BTreeMap::new(),
-            comparison: ComparisonResponseRules::default(),
-        };
-
-        let fields = rules.matching_replay_fields("GET", "/api/config/ansible_facts");
-
-        assert_eq!(fields.len(), 1);
-        assert_eq!(fields[0].kind, ResponseRuleKind::Unordered);
-        assert_eq!(
-            fields[0].id,
-            "response:unordered:GET /api/config/ansible_facts:/general/sudo_users"
-        );
-    }
-
-    #[test]
-    fn counter_fields_are_available_only_to_comparison_matching() {
-        let rules = ResponseRules {
-            comparison: ComparisonResponseRules {
-                counter: BTreeMap::from([(
-                    "GET /api/users/show".to_string(),
-                    vec![counter("/followers_count")],
-                )]),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        assert!(
-            rules
-                .matching_replay_fields("GET", "/api/users/show")
-                .is_empty()
-        );
-        let fields = rules.matching_comparison_fields("GET", "/api/users/show");
-        assert_eq!(fields.len(), 1);
-        assert_eq!(fields[0].kind, ResponseRuleKind::Counter);
-        assert_eq!(
-            fields[0].id,
-            "response:comparison:counter:GET /api/users/show:/followers_count"
-        );
-    }
-
-    #[test]
-    fn rejects_invalid_json_pointer_escape() {
-        assert!(validate_json_pointer("/content/~2").is_err());
-    }
-
-    #[test]
-    fn rejects_dynamic_rules_without_auditable_evidence() {
-        let rules = ResponseRules {
-            dynamic: BTreeMap::from([(
-                "GET /api/resource".to_string(),
-                vec![DynamicResponseRule {
-                    pointer: "/content".to_string(),
-                    mechanisms: vec![DynamicResponseMechanism::Uuid],
-                    source_evidence: "src/token.rs:issue_token".to_string(),
-                    source_example: "<same>".to_string(),
-                    target_example: "<same>".to_string(),
-                }],
-            )]),
-            unordered: BTreeMap::new(),
-            motan: BTreeMap::new(),
-            comparison: ComparisonResponseRules::default(),
-        };
-
-        assert!(validate_response_rules(&rules).is_err());
-    }
-
-    #[test]
-    fn rejects_legacy_pointer_only_dynamic_rules() {
-        let error = serde_yaml::from_str::<ResponseRules>(
-            r#"
-dynamic:
-  "GET /api/resource":
-    - /content
-"#,
-        )
-        .unwrap_err();
-
-        assert!(error.to_string().contains("invalid type"));
-    }
-}
+#[path = "response/tests.rs"]
+mod tests;

@@ -234,7 +234,7 @@ mod tests {
         let policy_path = temp.path().join("verification.yaml");
         fs::write(
             &policy_path,
-            "version: 2\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\nrules: []\n",
         )
         .unwrap();
 

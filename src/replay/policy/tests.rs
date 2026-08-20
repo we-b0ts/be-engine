@@ -23,17 +23,17 @@ fn validates_verification_policy_example() {
         .join("verification.example.yaml");
     let report = validate_replay_policy(&path).unwrap();
 
-    assert_eq!(report.version, 2);
+    assert_eq!(report.version, 3);
     assert!(report.runner_owned_response_assertions);
 }
 
 #[test]
-fn validates_comparison_source_match_and_requires_version_two() {
+fn validates_comparison_source_match_and_requires_version_three() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("verification.yaml");
     fs::write(
         &path,
-        "version: 2\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 
@@ -45,11 +45,28 @@ fn validates_comparison_source_match_and_requires_version_two() {
 
     fs::write(
         &path,
-        "version: 1\nexpected_response: assertions_only\nrules: []\nresponse_rules:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 1\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
     let error = validate_replay_policy(&path).unwrap_err();
-    assert!(format!("{error:#}").contains("response_rules require replay policy version 2"));
+    assert!(
+        format!("{error:#}")
+            .contains("response_settings and response_rules require replay policy version 3")
+    );
+}
+
+#[test]
+fn rejects_removed_version_two_policy_contract() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("verification.yaml");
+    fs::write(
+        &path,
+        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+
+    let error = validate_replay_policy(&path).unwrap_err();
+    assert!(format!("{error:#}").contains("unsupported replay policy version 2; expected 1 or 3"));
 }
 
 #[test]

@@ -19,11 +19,10 @@ use self::evidence::{
 };
 use super::config::{LoadedReplayPolicy, fingerprint, load_replay_policy};
 use super::pattern::path_pattern_matches;
-#[cfg(test)]
-use super::response::DynamicResponseMechanism;
 use super::response::{
-    CounterResponseRule, DynamicResponseRule, ResponseRuleKind, parse_api,
-    response_locations_overlap, response_rule_id, validate_json_pointer,
+    CounterResponseRule, GeneratedResponseRule, JsonUnorderedResponseRule, ResponseRuleKind,
+    parse_api, response_locations_overlap, response_rule_id, validate_json_pointer,
+    validate_response_rules,
 };
 use crate::config::edit::write_atomic;
 
@@ -32,10 +31,7 @@ pub use memcached::{
     MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
     plan_memcached_timestamp_rule,
 };
-pub use model::{
-    ComparisonResponseRuleFeedback, DynamicResponseRuleFeedback, ResponseRuleFeedback,
-    ResponseRuleReport,
-};
+pub use model::{ComparisonResponseRuleFeedback, ResponseRuleFeedback, ResponseRuleReport};
 pub use motan::{MotanRuleFeedback, MotanRulePlan, MotanRuleReport, plan_motan_rule};
 
 pub struct ResponseRulePlan {
@@ -44,9 +40,6 @@ pub struct ResponseRulePlan {
     updated: String,
     report: ResponseRuleReport,
 }
-
-pub type DynamicResponseRuleReport = ResponseRuleReport;
-pub type DynamicResponseRulePlan = ResponseRulePlan;
 
 impl ResponseRulePlan {
     pub fn report(&self) -> &ResponseRuleReport {
@@ -80,7 +73,6 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
     );
     let justification = justification::validate(
         feedback.kind,
-        feedback.dynamic_mechanisms,
         feedback.source_evidence,
         feedback.source_example,
         feedback.target_example,
@@ -111,7 +103,7 @@ pub fn plan_response_rule(feedback: ResponseRuleFeedback) -> Result<ResponseRule
         "aggregate replay evidence must be complete"
     );
     ensure!(
-        feedback.kind == ResponseRuleKind::Dynamic || !aggregate.dirty,
+        feedback.kind.is_generated() || !aggregate.dirty,
         "unordered response rule evidence requires clean aggregate replay evidence"
     );
     ensure!(
@@ -199,7 +191,6 @@ pub fn plan_comparison_response_rule(
 ) -> Result<ResponseRulePlan> {
     let justification = justification::validate(
         feedback.kind,
-        feedback.dynamic_mechanisms,
         feedback.source_evidence,
         feedback.source_example,
         feedback.target_example,
@@ -310,8 +301,8 @@ fn prepare_response_rule(
         .with_context(|| format!("failed to read replay policy {}", policy_path.display()))?;
     let loaded = load_replay_policy(policy_path)?;
     ensure!(
-        loaded.document.version >= 2,
-        "response rules require replay policy version 2"
+        loaded.document.version >= 3,
+        "response rules require replay policy version 3"
     );
     Ok(PreparedResponseRule {
         method: method.to_string(),
@@ -386,7 +377,7 @@ fn validate_response_evidence(
                 );
                 observed_difference = true;
                 case_has_selected_difference = true;
-            } else if matches!(kind, ResponseRuleKind::Dynamic | ResponseRuleKind::Counter) {
+            } else if kind.is_generated() || kind == ResponseRuleKind::Counter {
                 unselected_difference_pointers.insert(difference.pointer.clone());
             } else {
                 anyhow::bail!(
@@ -407,7 +398,7 @@ fn validate_response_evidence(
                     || response
                         .applied_rule_ids(kind)
                         .contains(&response_rule_id(kind, api, pointer))
-                    || (kind == ResponseRuleKind::Dynamic && !has_overlapping_difference)
+                    || (kind.is_generated() && !has_overlapping_difference)
                     || (kind == ResponseRuleKind::Counter && has_overlapping_difference)
                     || response.differences.is_empty(),
                 "case {:?} does not provide {:?} evidence for {}",
@@ -447,49 +438,46 @@ fn build_response_rule_plan(
     evidence: ResponseRuleEvidence,
 ) -> Result<ResponseRulePlan> {
     let mut updated_rules = prepared.loaded.document.response_rules.clone();
+    let api_rules = updated_rules.json.entry(api.clone()).or_default();
     let before = match kind {
-        ResponseRuleKind::Dynamic => updated_rules
-            .dynamic
-            .get(&api)
-            .into_iter()
-            .flatten()
+        kind if kind.is_generated() => api_rules
+            .generated_for_kind(kind)
+            .expect("generated kind has a rule collection")
+            .iter()
             .map(|field| field.pointer.clone())
             .collect::<BTreeSet<_>>(),
-        ResponseRuleKind::Unordered => updated_rules
+        ResponseRuleKind::Unordered => api_rules
             .unordered
-            .get(&api)
-            .into_iter()
-            .flatten()
-            .cloned()
-            .collect::<BTreeSet<_>>(),
-        ResponseRuleKind::Counter => updated_rules
-            .comparison
-            .counter
-            .get(&api)
-            .into_iter()
-            .flatten()
+            .iter()
             .map(|field| field.pointer.clone())
             .collect::<BTreeSet<_>>(),
+        ResponseRuleKind::Counter => api_rules
+            .counter
+            .iter()
+            .map(|field| field.pointer.clone())
+            .collect::<BTreeSet<_>>(),
+        _ => unreachable!("all response rule kinds are covered"),
     };
     match kind {
-        ResponseRuleKind::Dynamic => {
-            let fields = updated_rules.dynamic.entry(api.clone()).or_default();
+        kind if kind.is_generated() => {
+            let fields = api_rules
+                .generated_for_kind_mut(kind)
+                .expect("generated kind has a rule collection");
             for pointer in &prepared.requested {
-                let proposed = DynamicResponseRule {
+                let proposed = GeneratedResponseRule {
                     pointer: pointer.clone(),
-                    mechanisms: justification.dynamic_mechanisms.clone(),
                     source_evidence: justification
                         .source_evidence
                         .clone()
-                        .expect("dynamic justification requires source evidence"),
+                        .expect("generated justification requires source evidence"),
                     source_example: justification
                         .source_example
                         .clone()
-                        .expect("dynamic justification requires a source example"),
+                        .expect("generated justification requires a source example"),
                     target_example: justification
                         .target_example
                         .clone()
-                        .expect("dynamic justification requires a target example"),
+                        .expect("generated justification requires a target example"),
                 };
                 if let Some(existing) = fields.iter_mut().find(|field| field.pointer == *pointer) {
                     *existing = proposed;
@@ -500,17 +488,25 @@ fn build_response_rule_plan(
             fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
         }
         ResponseRuleKind::Unordered => {
-            let fields = updated_rules.unordered.entry(api.clone()).or_default();
-            fields.extend(prepared.requested.iter().cloned());
-            fields.sort();
-            fields.dedup();
+            let fields = &mut api_rules.unordered;
+            for pointer in &prepared.requested {
+                let proposed = JsonUnorderedResponseRule {
+                    pointer: pointer.clone(),
+                    source_evidence: justification
+                        .source_evidence
+                        .clone()
+                        .expect("unordered justification requires source evidence"),
+                };
+                if let Some(existing) = fields.iter_mut().find(|field| field.pointer == *pointer) {
+                    *existing = proposed;
+                } else {
+                    fields.push(proposed);
+                }
+            }
+            fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
         }
         ResponseRuleKind::Counter => {
-            let fields = updated_rules
-                .comparison
-                .counter
-                .entry(api.clone())
-                .or_default();
+            let fields = &mut api_rules.counter;
             for pointer in &prepared.requested {
                 let proposed = CounterResponseRule {
                     pointer: pointer.clone(),
@@ -535,7 +531,9 @@ fn build_response_rule_plan(
             }
             fields.sort_by(|left, right| left.pointer.cmp(&right.pointer));
         }
+        _ => unreachable!("all response rule kinds are covered"),
     }
+    validate_response_rules(&updated_rules)?;
     let added = prepared
         .requested
         .difference(&before)
@@ -609,7 +607,6 @@ fn build_response_rule_plan(
             kind,
             api,
             json_pointers: prepared.requested.into_iter().collect(),
-            dynamic_mechanisms: justification.dynamic_mechanisms,
             source_evidence: justification.source_evidence,
             source_example: justification.source_example,
             target_example: justification.target_example,
@@ -622,23 +619,6 @@ fn build_response_rule_plan(
             added_rule_ids: added,
             diff,
         },
-    })
-}
-
-pub fn plan_dynamic_response_rule(
-    feedback: DynamicResponseRuleFeedback,
-) -> Result<DynamicResponseRulePlan> {
-    plan_response_rule(ResponseRuleFeedback {
-        policy_path: feedback.policy_path,
-        kind: ResponseRuleKind::Dynamic,
-        api: feedback.api,
-        json_pointers: feedback.json_pointers,
-        dynamic_mechanisms: feedback.dynamic_mechanisms,
-        source_evidence: Some(feedback.source_evidence),
-        source_example: Some(feedback.source_example),
-        target_example: Some(feedback.target_example),
-        assertion_report: feedback.assertion_report,
-        aggregate_report: feedback.aggregate_report,
     })
 }
 

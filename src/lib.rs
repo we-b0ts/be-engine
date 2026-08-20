@@ -170,11 +170,9 @@ pub use recording_control::{
 };
 pub use replay::{
     ComparisonResponseRuleFeedback, ComparisonSourceMatch, ComparisonVerificationPolicy,
-    DynamicResponseMechanism, DynamicResponseRuleFeedback, DynamicResponseRulePlan,
-    DynamicResponseRuleReport, Hessian2BodyDifference, Hessian2BodyDifferenceKind,
-    Hessian2JoinedStringCandidate, Hessian2JoinedStringPath, Hessian2UnorderedPath,
-    Hessian2ValuePath, Hessian2ValuePathCandidate, MemcachedTimestampRuleFeedback,
-    MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
+    Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
+    Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath, Hessian2ValuePathCandidate,
+    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MemcachedTimestampRuleReport,
     MotanBodyAssertionReport, MotanBodyDifference, MotanBodyProtocol, MotanRuleFeedback,
     MotanRulePlan, MotanRuleReport, MotanUnorderedPath, MotanUnorderedPathCandidate,
     MysqlReplayConfig, MysqlReplayControlConfig, ProtobufBodyDifference,
@@ -185,9 +183,8 @@ pub use replay::{
     ResponseDifference, ResponseDifferenceKind, ResponseRuleFeedback, ResponseRuleKind,
     ResponseRulePlan, ResponseRuleReport, aggregate_replay_reports,
     aggregate_replay_reports_with_options, initialize_replay_policy, plan_comparison_response_rule,
-    plan_dynamic_response_rule, plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule,
-    run_mysql_replay, run_mysql_replay_control, run_replay, run_replay_control,
-    validate_replay_policy,
+    plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule, run_mysql_replay,
+    run_mysql_replay_control, run_replay, run_replay_control, validate_replay_policy,
 };
 pub use rewrite::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,

@@ -55,9 +55,9 @@ pub(super) struct ResponseCaseEvidence {
     #[serde(default)]
     pub(super) detail_fingerprint: Option<String>,
     #[serde(default)]
-    applied_dynamic_rule_ids: Vec<String>,
+    applied_generated_rule_ids: Vec<String>,
     #[serde(default)]
-    dynamic_candidates: Vec<String>,
+    generated_scalar_candidates: Vec<String>,
     #[serde(default)]
     applied_unordered_rule_ids: Vec<String>,
     #[serde(default)]
@@ -69,17 +69,19 @@ pub(super) struct ResponseCaseEvidence {
 impl ResponseCaseEvidence {
     pub(super) fn candidates(&self, kind: ResponseRuleKind) -> &[String] {
         match kind {
-            ResponseRuleKind::Dynamic => &self.dynamic_candidates,
+            kind if kind.is_generated() => &self.generated_scalar_candidates,
             ResponseRuleKind::Unordered => &self.unordered_candidates,
             ResponseRuleKind::Counter => &[],
+            _ => unreachable!("all response rule kinds are covered"),
         }
     }
 
     pub(super) fn applied_rule_ids(&self, kind: ResponseRuleKind) -> &[String] {
         match kind {
-            ResponseRuleKind::Dynamic => &self.applied_dynamic_rule_ids,
+            kind if kind.is_generated() => &self.applied_generated_rule_ids,
             ResponseRuleKind::Unordered => &self.applied_unordered_rule_ids,
             ResponseRuleKind::Counter => &self.applied_counter_rule_ids,
+            _ => unreachable!("all response rule kinds are covered"),
         }
     }
 }
@@ -109,7 +111,7 @@ pub(super) fn difference_supports_rule(
         return false;
     }
     match kind {
-        ResponseRuleKind::Dynamic => {
+        kind if kind.is_generated() => {
             difference.kind == "value_mismatch"
                 && difference.expected_type == difference.actual_type
                 && difference
@@ -130,6 +132,7 @@ pub(super) fn difference_supports_rule(
                     .as_deref()
                     .is_some_and(|kind| matches!(kind, "string" | "number"))
         }
+        _ => unreachable!("all response rule kinds are covered"),
     }
 }
 
@@ -139,20 +142,22 @@ pub(super) fn response_rule_exists(
     api: &str,
     pointer: &str,
 ) -> bool {
+    let Some(api_rules) = rules.json.get(api) else {
+        return false;
+    };
     match kind {
-        ResponseRuleKind::Dynamic => rules
-            .dynamic
-            .get(api)
+        kind if kind.is_generated() => api_rules
+            .generated_for_kind(kind)
             .is_some_and(|fields| fields.iter().any(|field| field.pointer == pointer)),
-        ResponseRuleKind::Unordered => rules
+        ResponseRuleKind::Unordered => api_rules
             .unordered
-            .get(api)
-            .is_some_and(|pointers| pointers.iter().any(|candidate| candidate == pointer)),
-        ResponseRuleKind::Counter => rules
-            .comparison
+            .iter()
+            .any(|field| field.pointer == pointer),
+        ResponseRuleKind::Counter => api_rules
             .counter
-            .get(api)
-            .is_some_and(|fields| fields.iter().any(|field| field.pointer == pointer)),
+            .iter()
+            .any(|field| field.pointer == pointer),
+        _ => unreachable!("all response rule kinds are covered"),
     }
 }
 

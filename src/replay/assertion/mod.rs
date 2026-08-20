@@ -301,8 +301,8 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
     } = inputs;
     let loaded = load_replay_policy(&policy)?;
     ensure!(
-        loaded.document.version >= 2,
-        "runner-owned response assertions require replay policy version 2"
+        loaded.document.version >= 3,
+        "runner-owned response assertions require replay policy version 3"
     );
     let path = uri_path(&request.uri);
     let response_fields = match mode {

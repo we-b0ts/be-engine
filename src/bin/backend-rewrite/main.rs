@@ -7,8 +7,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    DynamicResponseMechanism, Hessian2JoinedStringPath, MotanBodyProtocol,
-    MotanUnorderedPath, RecordingApi,
+    Hessian2JoinedStringPath, MotanBodyProtocol, MotanUnorderedPath, RecordingApi,
     ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteContext,
     RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteNextOptions,
     RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
@@ -213,12 +212,12 @@ struct MotanRulePlanArgs {
     /// inside that envelope.
     #[arg(long, value_enum)]
     protocol: MotanBodyProtocolArg,
-    /// Reviewed unordered collection from protocol-aware evidence as JSON. Protobuf uses field_path + element_type; Hessian2 uses value_path.
+    /// Source-proven unordered collection as JSON. Protobuf uses field_path + element_type; Hessian2 uses value_path; both require display_path + source_evidence.
     #[arg(long = "unordered-path", value_parser = parse_motan_unordered_path)]
     unordered_paths: Vec<MotanUnorderedPath>,
     /// Reviewed joined-string field (a Set joined into one string) from
     /// protocol-aware evidence as JSON. Hessian2 only. Each entry carries
-    /// value_path, display_path, and separator.
+    /// value_path, display_path, separator, and source_evidence.
     #[arg(long = "unordered-joined-string-path", value_parser = parse_hessian2_joined_string_path)]
     unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
 }
@@ -228,8 +227,7 @@ fn parse_motan_unordered_path(value: &str) -> Result<MotanUnorderedPath, String>
 }
 
 fn parse_hessian2_joined_string_path(value: &str) -> Result<Hessian2JoinedStringPath, String> {
-    serde_json::from_str(value)
-        .map_err(|error| format!("invalid joined-string path JSON: {error}"))
+    serde_json::from_str(value).map_err(|error| format!("invalid joined-string path JSON: {error}"))
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -288,13 +286,25 @@ struct RulePlanArgs {
     kind: RuleKindArg,
     #[arg(long)]
     json_pointer: Option<String>,
-    #[arg(long = "dynamic-mechanism", value_enum)]
-    dynamic_mechanisms: Vec<DynamicMechanismArg>,
     #[arg(long)]
-    source_evidence: Option<String>,
-    #[arg(long)]
+    source_evidence: String,
+    #[arg(
+        long,
+        required_if_eq("kind", "timestamp"),
+        required_if_eq("kind", "duration"),
+        required_if_eq("kind", "uuid"),
+        required_if_eq("kind", "random"),
+        required_if_eq("kind", "counter")
+    )]
     source_example: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        required_if_eq("kind", "timestamp"),
+        required_if_eq("kind", "duration"),
+        required_if_eq("kind", "uuid"),
+        required_if_eq("kind", "random"),
+        required_if_eq("kind", "counter")
+    )]
     target_example: Option<String>,
 }
 
@@ -305,20 +315,12 @@ struct RuleApplyArgs {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum RuleKindArg {
-    Dynamic,
-    Unordered,
-    Counter,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum DynamicMechanismArg {
     Timestamp,
     Duration,
     Uuid,
     Random,
-    Nonce,
-    RandomSalt,
-    DynamicDerived,
+    Unordered,
+    Counter,
 }
 
 #[derive(Debug, Args)]
@@ -585,12 +587,7 @@ async fn run(cli: Cli) -> Result<()> {
                         evidence_id: args.evidence_id,
                         kind: args.kind.into(),
                         json_pointer: args.json_pointer,
-                        dynamic_mechanisms: args
-                            .dynamic_mechanisms
-                            .into_iter()
-                            .map(Into::into)
-                            .collect(),
-                        source_evidence: args.source_evidence,
+                        source_evidence: Some(args.source_evidence),
                         source_example: args.source_example,
                         target_example: args.target_example,
                     },
@@ -731,23 +728,12 @@ async fn run(cli: Cli) -> Result<()> {
 impl From<RuleKindArg> for ResponseRuleKind {
     fn from(value: RuleKindArg) -> Self {
         match value {
-            RuleKindArg::Dynamic => Self::Dynamic,
+            RuleKindArg::Timestamp => Self::Timestamp,
+            RuleKindArg::Duration => Self::Duration,
+            RuleKindArg::Uuid => Self::Uuid,
+            RuleKindArg::Random => Self::Random,
             RuleKindArg::Unordered => Self::Unordered,
             RuleKindArg::Counter => Self::Counter,
-        }
-    }
-}
-
-impl From<DynamicMechanismArg> for DynamicResponseMechanism {
-    fn from(value: DynamicMechanismArg) -> Self {
-        match value {
-            DynamicMechanismArg::Timestamp => Self::Timestamp,
-            DynamicMechanismArg::Duration => Self::Duration,
-            DynamicMechanismArg::Uuid => Self::Uuid,
-            DynamicMechanismArg::Random => Self::Random,
-            DynamicMechanismArg::Nonce => Self::Nonce,
-            DynamicMechanismArg::RandomSalt => Self::RandomSalt,
-            DynamicMechanismArg::DynamicDerived => Self::DynamicDerived,
         }
     }
 }

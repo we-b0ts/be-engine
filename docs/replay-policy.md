@@ -28,25 +28,28 @@ expected_response: assertions_only
 rules: []
 ```
 
-Version two enables runner-owned response assertions:
+Version three enables runner-owned response assertions:
 
 ```yaml
-version: 2
+version: 3
 expected_response: assertions_only
 rules: []
-response_rules:
-  dynamic: {}
-  unordered: {}
+response_settings:
   comparison:
     source_match: before
-    counter: {}
+response_rules:
+  json: {}
+  protobuf: {}
+  hessian2: {}
 ```
 
-Standard replay loads only the root `dynamic` and `unordered` rules.
-Comparison loads those replay rules plus the nested `comparison` rules.
-Strategies across both sets must select disjoint JSON subtrees.
+Rules are grouped by body protocol, canonical API, and concrete rule kind.
+Standard replay loads JSON `timestamp`, `duration`, `uuid`, `random`, and
+`unordered` rules plus configured protobuf and Hessian2 rules. Comparison also
+loads JSON `counter` rules. Rule kinds selecting JSON must use disjoint
+subtrees.
 
-`response_rules.comparison.source_match` controls which complete source
+`response_settings.comparison.source_match` controls which complete source
 observation may serve as the comparison oracle. `before` is the default. Set
 `before_or_after` only for runs that record `expected-response-after.json` for
 every case. The candidate must match either complete source response under the
@@ -59,7 +62,7 @@ status, headers, or body to create the actual response, dependency result,
 branch decision, cache result, or side effect. The policy parser requires this
 declaration; migration review must also verify the target harness obeys it.
 
-The same version 2 `response_rules` also apply to offline comparison recording
+The same version 3 `response_rules` also apply to offline comparison recording
 verification. `traffic-e2e compare <comparison-recording-run> --policy
 <verification.yaml>` treats the baseline `expected-response.json` as the
 oracle and the candidate `response.json` as actual output. When
@@ -75,7 +78,7 @@ enabled.
 Do not put recorded values, response bodies, secrets, absolute case paths, or
 case-id exceptions in the policy. Use selectors and semantic validation only.
 In particular, ordinary mutable business data observed at different times is
-not a dynamic-response exemption. Re-record it under comparable state. Add a
+not a generated-scalar exemption. Re-record it under comparable state. Add a
 response rule only after source semantics prove current-time/random generation
 or order-insensitive collection behavior.
 
@@ -242,49 +245,50 @@ A query field cannot be both policy-managed and passed through the global
 `--http-ignore-query-param` option. Replay rejects that configuration at
 startup.
 
-Version two supports exact scalar JSON response locations whose runtime value
-is intentionally non-deterministic:
+Version three supports exact scalar JSON response locations whose runtime value
+is intentionally generated from a source-proven mechanism. Use the concrete
+mechanism as the rule-kind key:
 
 ```yaml
 response_rules:
-  dynamic:
+  json:
     "GET /api/resource/token":
-      - pointer: /content
-        mechanisms:
-          - uuid
-        source_evidence: src/token.rs:issue_token UUID generation
-        source_example: <redacted source UUID>
-        target_example: <redacted target UUID>
+      uuid:
+        - pointer: /content
+          source_evidence: src/token.rs:issue_token UUID generation
+          source_example: <redacted source UUID>
+          target_example: <redacted target UUID>
 ```
 
 The field must exist in both responses and keep the same scalar JSON kind.
 When both responses omit it, the rule does not participate and creates no
 coverage requirement; a one-sided omission remains an exact structural
 difference. Only literal equality is skipped; status, structure, other fields,
-and non-JSON bodies stay exact. Every dynamic field persists its declared
-mechanism, single-line source citation, and distinct redacted source/target
-examples in the policy. These audit fields do not make the comparator infer or
-validate the generation mechanism; verify that semantic claim through source
-review, unit tests, or real-traffic integration tests.
+and non-JSON bodies stay exact. Every generated field persists a single-line
+source citation and distinct redacted source/target examples in the policy.
+These audit fields do not make the comparator infer or validate the declared
+rule kind; verify that semantic claim through source review, unit tests, or
+real-traffic integration tests.
 
-Never use a dynamic rule for a difference caused by process-local cache state
-or implementation. Do not exempt an entire scalar when it contains stable
+Never use a generated-scalar rule for a difference caused by process-local
+cache state or implementation. Do not exempt an entire scalar when it contains stable
 structure that the target omitted. Use evidence-backed apply only after source
-review proves the declared nondeterministic mechanism and redacted
-source/target examples demonstrate the same stable structure. Supported
-mechanisms are `timestamp`, `duration`, `uuid`, `random`, `nonce`,
-`random-salt`, and `dynamic-derived`; a derived digest or signature must also
-declare its underlying dynamic input. It replans
-against current evidence before writing; `plan` is optional diagnostics with
+review proves the concrete generation mechanism and redacted source/target
+examples demonstrate the same stable structure. Supported
+rule kinds are `timestamp`, `duration`, `uuid`, and `random`. A nonce or random
+salt uses `random`; those names describe a value's business use, not a separate
+comparison strategy. For a digest, signature, or encoding derived from a
+generated input, use that root rule kind and explain the derivation in
+`source_evidence`. It replans against current evidence before writing; `plan`
+is optional diagnostics with
 the same strategy and arguments. Multiple Pointers may be submitted together
-only when the same citation, mechanism, and examples prove each selected
+only when the same citation, rule kind, and examples prove each selected
 field; otherwise plan and apply them separately:
 
 ```bash
 traffic-e2e config replay apply response-rule \
   --target-root . \
-  --kind dynamic \
-  --dynamic-mechanism uuid \
+  --kind uuid \
   --source-evidence 'src/token.rs:issue_token UUID generation' \
   --source-example '<redacted UUID from source>' \
   --target-example '<redacted UUID from target>' \
@@ -293,20 +297,23 @@ traffic-e2e config replay apply response-rule \
   --case-source <exact-finalized-case-source>
 ```
 
-Version two also supports arrays whose product contract does not assign meaning
-to element order:
+Version three also supports arrays whose product contract does not assign
+meaning to element order:
 
 ```yaml
 response_rules:
-  unordered:
+  json:
     "GET /api/config/ansible_facts":
-      - /general/sudo_users
+      unordered:
+        - pointer: /general/sudo_users
+          source_evidence: src/config.rs:sudo_users is built from a Set
 ```
 
 Both selected values must be arrays. They are compared as multisets: length,
 elements, and duplicate counts must match, while only their outer order is
 ignored. Nested JSON values remain exact, as do every undeclared response
-location. Dynamic and unordered rules cannot overlap the same JSON subtree.
+location. Generated-scalar and unordered rules cannot overlap the same JSON
+subtree.
 
 An exact reorder-only mismatch produces an `unordered_candidates` diagnostic.
 After source and target review proves the array is semantically unordered, use
@@ -316,15 +323,19 @@ the same evidence-backed workflow:
 traffic-e2e config replay apply response-rule \
   --target-root . \
   --kind unordered \
+  --source-evidence 'src/config.rs:sudo_users is built from a Set' \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
   --case-source <exact-finalized-case-source>
 ```
 
-Both actions accept only the difference kind selected by `--kind`,
-runner-owned assertions using the current policy fingerprint, exact
-focused-case coverage, and complete, clean aggregate evidence. Apply is
-additive, sorted, and atomic. These JSON response-rule changes require rerunning
+Both actions accept only the difference kind selected by `--kind`, runner-owned
+assertions using the current policy fingerprint, exact focused-case coverage,
+and complete aggregate evidence. Generated-scalar rules may be planned while
+dependency evidence is dirty and report every unrelated difference as an
+independent failing gate; unordered rules require clean aggregate evidence and
+no undeclared response differences. Apply is additive, sorted, and atomic.
+These JSON response-rule changes require rerunning
 the entire affected API group.
 
 Motan responses whose business body is a simple byte-array envelope can opt
@@ -332,16 +343,17 @@ into protocol-aware business-body comparison:
 
 ```yaml
 response_rules:
-  motan:
+  protobuf:
     "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-byteArray-8cd698b4fea1fb48":
-      protocol: protobuf
-      unordered_paths:
+      unordered:
         - field_path: [3, 1, 6, 3]
           display_path: rule_collection.experiments.groups.white_list
           element_type: string
+          source_evidence: src/rule.rs:white_list is a Set
         - field_path: [3, 3]
           display_path: rule_collection.group_config
           element_type: message
+          source_evidence: src/rule.rs:group_config order is irrelevant
 ```
 
 Hessian2 uses value names rather than protobuf field numbers. `"*"` traverses
@@ -350,38 +362,38 @@ top-level list:
 
 ```yaml
 response_rules:
-  motan:
+  hessian2:
     "MOTAN /rpc/AlchemyRpcService-getExperimentTrafficRule-long-long-095f05367f122cf4":
-      protocol: hessian2
-      unordered_paths:
+      unordered:
         - value_path: [result, ruleCollection, groups, "*", whiteList]
           display_path: cache_result.rule_collection.groups[].white_list
+          source_evidence: src/rule.rs:white_list is a Set
 ```
 
 Some business fields carry a `Set` that has been joined into a single string
 (for example `"alice,bob,carol"`). Such a field is a Hessian2 string, not a
-list, so `unordered_paths` cannot relax it. Use
-`unordered_joined_string_paths` instead: the selected string is split on
+list, so `unordered` cannot relax it. Use `unordered_joined_string` instead:
+the selected string is split on
 `separator` and compared as a multiset (element order is ignored, but
 duplicate counts are preserved, matching the List semantics above).
 `separator` is required and must be non-empty:
 
 ```yaml
 response_rules:
-  motan:
+  hessian2:
     "MOTAN /rpc/ExampleService-getMembers-long-long-095f05367f122cf4":
-      protocol: hessian2
-      unordered_joined_string_paths:
+      unordered_joined_string:
         - value_path: [result, whiteList]
           display_path: cache_result.white_list
           separator: ","
+          source_evidence: src/cache.rs:white_list joins a Set
 ```
 
 When a Hessian2 body mismatches only on such a joined string, the
 protocol-aware comparison report surfaces `unordered_joined_string_candidates`
 with the value path and the separator that makes the two sides compare equal.
 Joined-string paths are Hessian2-only and a given value path may be either an
-`unordered_paths` list or a joined string, but not both.
+`unordered` list or a joined string, but not both.
 
 The two Motan body envelopes are recognized without configuration. A method
 returning `byte[]` carries its business bytes inside the Motan simple
@@ -422,11 +434,20 @@ report.
 When a supported protocol is already configured, evidence skips protocol
 selection and lists its supported refinement directly. For protobuf, adding
 unordered fields must provide every newly discovered `field_path` together
-with a source/proto-reviewed semantic `display_path` and an explicit repeated
-`element_type`. A packed numeric array is wire-ambiguous without its protobuf
+with a source/proto-reviewed semantic `display_path`, an explicit repeated
+`element_type`, and one-line `source_evidence` proving order is irrelevant. A
+packed numeric array is wire-ambiguous without its protobuf
 type, so it first appears as a field-level value difference; the reviewed
 numeric type is accepted only when offline typed comparison proves that the
-same field is reorder-only:
+same field is reorder-only.
+
+The reported paths and successful offline multiset comparison are mechanical
+candidates, not authorization that order is absent from the product contract.
+Every selected protobuf path, Hessian2 list, and Hessian2 joined string must
+persist its own source citation. Protocol-only selection is the sole
+evidence-light step because it enables decoding without ignoring a body value.
+
+Use the staged planner commands:
 
 ```bash
 backend-rewrite rule motan \
@@ -436,17 +457,17 @@ backend-rewrite rule motan \
 backend-rewrite rule motan \
   --evidence-id <current-evidence-id> \
   --protocol protobuf \
-  --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string"}'
+  --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:white_list is a Set"}'
 
 backend-rewrite rule motan \
   --evidence-id <current-evidence-id> \
   --protocol hessian2 \
-  --unordered-path '{"value_path":["ruleCollection","groups","*","whiteList"],"display_path":"rule_collection.groups[].white_list"}'
+  --unordered-path '{"value_path":["ruleCollection","groups","*","whiteList"],"display_path":"rule_collection.groups[].white_list","source_evidence":"src/rule.rs:white_list is a Set"}'
 
 backend-rewrite rule motan \
   --evidence-id <current-evidence-id> \
   --protocol hessian2 \
-  --unordered-joined-string-path '{"value_path":["result","whiteList"],"display_path":"result.white_list","separator":","}'
+  --unordered-joined-string-path '{"value_path":["result","whiteList"],"display_path":"result.white_list","separator":",","source_evidence":"src/cache.rs:white_list joins a Set"}'
 ```
 
 Only selected repeated fields ignore element order. Element contents,
@@ -473,16 +494,16 @@ the same traversal rules as list paths, but the terminal must be a Hessian2
 string. The string is split on `separator` and compared as a multiset, so
 element order is ignored while duplicate multiplicity is preserved. A path
 absent from both bodies is a no-op; selecting a present non-string fails
-closed. Joined-string paths are Hessian2-only and never overlap a list
-`unordered_paths` value path on the same field.
+closed. Joined-string paths are Hessian2-only and never overlap an `unordered`
+value path on the same field.
 
-Comparison-only live counter semantics are nested separately:
+Comparison-only live counter semantics use the `counter` kind under the JSON API:
 
 ```yaml
 response_rules:
-  comparison:
-    counter:
-      "GET /api/users/show":
+  json:
+    "GET /api/users/show":
+      counter:
         - pointer: /followers_count
           source_evidence: src/user.rs:load live follower count
           source_example: "100"

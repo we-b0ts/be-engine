@@ -121,8 +121,8 @@ fn protocol_rule_hints(
             .into_iter()
             .map(|protocol| {
                 let hint = match (configured, protocol) {
-                    (true, "protobuf") => "The Motan body protocol is protobuf. Review the protocol-aware field differences and unordered_path_candidates in this evidence, then apply only repeated fields whose order is irrelevant with a semantic display_path and explicit element_type.",
-                    (true, "hessian2") => "The Motan body protocol is Hessian2. Review the protocol-aware value differences and unordered_path_candidates in this evidence, then apply only lists whose order is irrelevant with a reviewed value_path and semantic display_path. If a field is a Set joined into a single string (for example \"a,b,c\"), review the unordered_joined_string_candidates and apply it with a value_path, semantic display_path, and the separator that splits the set.",
+                    (true, "protobuf") => "The Motan body protocol is protobuf. Review unordered_path_candidates as mechanical candidates; they do not authorize order-insensitive comparison. Apply only fields whose order is irrelevant in the source contract, and include field_path, semantic display_path, explicit element_type, and one-line source_evidence for every field.",
+                    (true, "hessian2") => "The Motan body protocol is Hessian2. Candidates identify lists or joined strings but do not authorize order-insensitive comparison. Apply only source-proven sets: every selector requires value_path, semantic display_path, and one-line source_evidence; joined strings also require the reviewed separator.",
                     (false, "protobuf") => "No Motan body protocol is configured. The exact body is a protobuf candidate; configure protobuf to re-verify existing response artifacts offline and return precise field paths without recording or starting processes.",
                     (false, "hessian2") => "No Motan body protocol is configured. The exact body is a Hessian2 candidate; configure Hessian2 to re-verify existing response artifacts offline and return precise value paths without recording or starting processes.",
                     _ => "The exact Motan body has a supported protocol candidate. Review and configure it before applying protocol-aware rules.",
@@ -908,7 +908,12 @@ fn policy_applicability(issue: &RewriteIssue) -> Value {
     if representative.expected.presence == E2eValuePresence::Present
         && representative.actual.presence == E2eValuePresence::Present
     {
-        eligible.push("dynamic_with_source_proof");
+        eligible.extend([
+            "timestamp_with_source_proof",
+            "duration_with_source_proof",
+            "uuid_with_source_proof",
+            "random_with_source_proof",
+        ]);
         eligible.push("counter_in_comparison_with_source_proof");
         if matches!(representative.expected.value, Some(Value::Array(_)))
             && matches!(representative.actual.value, Some(Value::Array(_)))

@@ -232,7 +232,7 @@ CA. Managed comparison installs only the cache-port interception needed for
 configured Redis process-owned rules; source and candidate share a new run-local
 first-value snapshot independent of standard Replay evidence. It validates the
 verification policy and reads
-only `response_rules.comparison.source_match` to decide whether source recheck
+only `response_settings.comparison.source_match` to decide whether source recheck
 evidence is required. The policy defaults to `verification.yaml` next to the
 recorder config and may be provided explicitly with `--policy`. Response bodies
 are decoded according to their own `Content-Encoding` before being stored for
@@ -275,7 +275,7 @@ changing the source-controlled default. A policy with
 The verification policy separately controls source-observation acceptance:
 
 ```yaml
-response_rules:
+response_settings:
   comparison:
     source_match: before_or_after
 ```
@@ -350,22 +350,21 @@ and exits non-zero when a response differs from every permitted source
 observation, source-before/source-after drift makes a case inconclusive, or a
 case cannot be evaluated. The comparison behavior and field rules under
 `response_rules` participate in this phase; dependency matching rules remain
-replay-only. Comparison applies both shared response rules and rules nested
-under `response_rules.comparison`. A failed response report includes one
+replay-only. Comparison applies JSON `timestamp`, `duration`, `uuid`, `random`,
+`unordered`, and `counter` rules plus configured protobuf and Hessian2 rules. A failed response report includes one
 top-level `representative_difference` with the API, case ID, Pointer,
 difference kind, and bounded source-before/candidate/source-after values. A
 response-rule applicability failure appears in
 `representative_policy_mismatch`. The report records
 `matched_source` for a passing case and groups cases by the recorded
 `METHOD + api_pattern`; `apis_passed` is the current validation-success count,
-while both stage progress files use the generic `passed` wording. Dynamic and
-unordered candidates, plus source-proven live counters, can be fed back through the
+while both stage progress files use the generic `passed` wording. Generated-scalar
+and unordered candidates, plus source-proven live counters, can be fed back through the
 evidence-validating response-rule workflow:
 
 ```bash
 traffic-e2e config replay plan response-rule \
-  --kind dynamic \
-  --dynamic-mechanism uuid \
+  --kind uuid \
   --source-evidence 'src/token.rs:issue_token UUID generation' \
   --source-example '<redacted UUID from source>' \
   --target-example '<redacted UUID from target>' \
@@ -388,11 +387,11 @@ evidence. A changed source recheck is `source_change` only for candidate
 differences at the same response location; unrelated candidate differences
 remain target behavior. Ordinary mutable business data must be re-recorded in
 a quieter or snapshot-consistent window, not exempted. Only source-proven
-current-time/random scalar fields or order-insensitive arrays may use replay
-dynamic/unordered rules. A live count may use
+current-time/random scalar fields or order-insensitive arrays may use concrete
+generated-scalar/unordered rules. A live count may use
 `config comparison ... --kind counter` only with exact API/Pointer,
 comparison-report evidence, source ownership evidence, and two different
-observations. The resulting `response_rules.comparison.counter` rule checks
+observations. The resulting `response_rules.json.<API>.counter` rule checks
 presence and representation class only during comparison; standard replay
 remains exact. Number matches only number, string matches only string, and an
 empty string does not match a nonempty string.
@@ -750,7 +749,7 @@ traffic-e2e replay --policy ../target/.traffic-e2e/verification.yaml path/to/cas
 
 See [replay-policy.md](replay-policy.md) for the policy schemas,
 assertion-only `expected-response.json` contract, dependency rule scoping,
-runner-owned dynamic and unordered response fields, and dirty-evidence
+runner-owned generated-scalar and unordered response fields, and dirty-evidence
 behavior.
 
 Coordinator-owned host exceptions for API-independent process-level tasks live
@@ -1207,7 +1206,10 @@ return value; Hessian2 is recognized both there and as a bare body, which is
 how Motan serializes any other return type. The observed framing is reported as
 `envelope`. Once one protocol is configured, the protocol rule hint instead
 directs the AI to the reported field/value differences and unordered-path
-candidates. Memcached dirty-cluster
+candidates. These candidates identify mechanically explainable paths but do
+not prove that order is semantically irrelevant. Every selected
+protobuf/Hessian2 path must include one-line source evidence; protocol-only
+selection is evidence-light because it does not relax body values. Memcached dirty-cluster
 evidence currently exposes `protobuf-timestamp`, whose help command is:
 
 ```bash
