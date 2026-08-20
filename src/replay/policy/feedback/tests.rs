@@ -8,7 +8,7 @@ use super::*;
 use crate::replay::validate_replay_policy;
 
 #[test]
-fn plans_and_applies_evidence_backed_dynamic_field() {
+fn plans_and_applies_evidence_backed_uuid_field() {
     let temp = tempdir().unwrap();
     let policy = temp.path().join("replay.yaml");
     let assertions = temp.path().join("assertions.json");
@@ -38,8 +38,8 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
                         "expected_type": "string",
                         "actual_type": "string"
                     }],
-                    "applied_dynamic_rule_ids": [],
-                    "dynamic_candidates": ["/content"]
+                    "applied_generated_rule_ids": [],
+                    "generated_scalar_candidates": ["/content"]
                 }
             }]
         }))
@@ -59,10 +59,9 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
     .unwrap();
     let feedback = ResponseRuleFeedback {
         policy_path: policy.clone(),
-        kind: ResponseRuleKind::Dynamic,
+        kind: ResponseRuleKind::Uuid,
         api: "GET /api/resource/token".to_string(),
         json_pointers: vec!["/content".to_string()],
-        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
         source_evidence: Some("src/token.rs:issue_token".to_string()),
         source_example: Some("<redacted source UUID>".to_string()),
         target_example: Some("<redacted target UUID>".to_string()),
@@ -73,10 +72,6 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
     let plan = plan_response_rule(feedback).unwrap();
     assert!(plan.report().changed);
     assert_eq!(plan.report().matching_cases, 1);
-    assert_eq!(
-        plan.report().dynamic_mechanisms,
-        vec![DynamicResponseMechanism::Uuid]
-    );
     assert_eq!(
         plan.report().source_evidence.as_deref(),
         Some("src/token.rs:issue_token")
@@ -94,8 +89,7 @@ fn plans_and_applies_evidence_backed_dynamic_field() {
     let updated = fs::read_to_string(&policy).unwrap();
     assert!(updated.contains("GET /api/resource/token"));
     assert!(updated.contains("pointer: /content"));
-    assert!(updated.contains("mechanisms:"));
-    assert!(updated.contains("- uuid"));
+    assert!(updated.contains("uuid:"));
     assert!(updated.contains("source_evidence: src/token.rs:issue_token"));
     assert!(updated.contains("source_example: <redacted source UUID>"));
     assert!(updated.contains("target_example: <redacted target UUID>"));
@@ -133,7 +127,7 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
                 "expected_type": "string",
                 "actual_type": "string"
             }],
-            "dynamic_candidates": ["/content"]
+            "generated_scalar_candidates": ["/content"]
         }))
         .unwrap(),
     )
@@ -174,10 +168,9 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
 
     let plan = plan_response_rule(ResponseRuleFeedback {
         policy_path: policy,
-        kind: ResponseRuleKind::Dynamic,
+        kind: ResponseRuleKind::Uuid,
         api: "GET /api/resource/token".to_string(),
         json_pointers: vec!["/content".to_string()],
-        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
         source_evidence: Some("src/token.rs:issue_token".to_string()),
         source_example: Some("<redacted source UUID>".to_string()),
         target_example: Some("<redacted target UUID>".to_string()),
@@ -191,9 +184,9 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
 }
 
 #[test]
-fn dynamic_field_plan_preserves_unselected_differences_and_dirty_dependencies() {
+fn generated_field_plan_preserves_unselected_differences_and_dirty_dependencies() {
     let temp = tempdir().unwrap();
-    let feedback = write_dynamic_replay_feedback(
+    let feedback = write_generated_replay_feedback(
         temp.path(),
         json!([
             {
@@ -222,8 +215,8 @@ fn dynamic_field_plan_preserves_unselected_differences_and_dirty_dependencies() 
                             "actual_type": "number"
                         }
                     ],
-                    "applied_dynamic_rule_ids": [],
-                    "dynamic_candidates": ["/content", "/avatar"]
+                    "applied_generated_rule_ids": [],
+                    "generated_scalar_candidates": ["/content", "/avatar"]
                 }
             },
             {
@@ -238,8 +231,8 @@ fn dynamic_field_plan_preserves_unselected_differences_and_dirty_dependencies() 
                         "expected_type": "number",
                         "actual_type": "number"
                     }],
-                    "applied_dynamic_rule_ids": [],
-                    "dynamic_candidates": []
+                    "applied_generated_rule_ids": [],
+                    "generated_scalar_candidates": []
                 }
             }
         ]),
@@ -265,9 +258,9 @@ fn dynamic_field_plan_preserves_unselected_differences_and_dirty_dependencies() 
 }
 
 #[test]
-fn dynamic_field_plan_still_requires_complete_aggregate_evidence() {
+fn generated_field_plan_still_requires_complete_aggregate_evidence() {
     let temp = tempdir().unwrap();
-    let feedback = write_dynamic_replay_feedback(
+    let feedback = write_generated_replay_feedback(
         temp.path(),
         json!([{
             "case_id": "case-1",
@@ -281,8 +274,8 @@ fn dynamic_field_plan_still_requires_complete_aggregate_evidence() {
                     "expected_type": "string",
                     "actual_type": "string"
                 }],
-                "applied_dynamic_rule_ids": [],
-                "dynamic_candidates": ["/content"]
+                "applied_generated_rule_ids": [],
+                "generated_scalar_candidates": ["/content"]
             }
         }]),
         json!(["case-1"]),
@@ -300,9 +293,9 @@ fn dynamic_field_plan_still_requires_complete_aggregate_evidence() {
 }
 
 #[test]
-fn dynamic_field_plan_rejects_structural_differences_at_selected_location() {
+fn generated_field_plan_rejects_structural_differences_at_selected_location() {
     let temp = tempdir().unwrap();
-    let feedback = write_dynamic_replay_feedback(
+    let feedback = write_generated_replay_feedback(
         temp.path(),
         json!([{
             "case_id": "case-1",
@@ -316,8 +309,8 @@ fn dynamic_field_plan_rejects_structural_differences_at_selected_location() {
                     "expected_type": "string",
                     "actual_type": "string"
                 }],
-                "applied_dynamic_rule_ids": [],
-                "dynamic_candidates": ["/content"]
+                "applied_generated_rule_ids": [],
+                "generated_scalar_candidates": ["/content"]
             }
         }]),
         json!(["case-1"]),
@@ -327,7 +320,7 @@ fn dynamic_field_plan_rejects_structural_differences_at_selected_location() {
 
     let error = plan_response_rule(feedback)
         .err()
-        .expect("a parent dynamic rule must not cover a child difference");
+        .expect("a parent generated rule must not cover a child difference");
     assert!(
         error
             .to_string()
@@ -336,7 +329,7 @@ fn dynamic_field_plan_rejects_structural_differences_at_selected_location() {
 }
 
 #[test]
-fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
+fn plans_and_applies_uuid_field_from_comparison_recording_evidence() {
     let temp = tempdir().unwrap();
     let policy = temp.path().join("replay.yaml");
     let comparison = temp.path().join("comparison-report.json");
@@ -369,8 +362,8 @@ fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
                         "expected_type": "string",
                         "actual_type": "string"
                     }],
-                    "applied_dynamic_rule_ids": [],
-                    "dynamic_candidates": ["/content"]
+                    "applied_generated_rule_ids": [],
+                    "generated_scalar_candidates": ["/content"]
                 }
             }]
         }))
@@ -379,10 +372,9 @@ fn plans_and_applies_dynamic_field_from_comparison_recording_evidence() {
     .unwrap();
     let feedback = ComparisonResponseRuleFeedback {
         policy_path: policy.clone(),
-        kind: ResponseRuleKind::Dynamic,
+        kind: ResponseRuleKind::Uuid,
         api: "GET /api/resource/token".to_string(),
         json_pointers: vec!["/content".to_string()],
-        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
         source_evidence: Some("src/token.rs:issue_token".to_string()),
         source_example: Some("<redacted source UUID>".to_string()),
         target_example: Some("<redacted target UUID>".to_string()),
@@ -444,7 +436,6 @@ fn plans_and_applies_comparison_only_counter_fields() {
         kind: ResponseRuleKind::Counter,
         api: "GET /api/users/show".to_string(),
         json_pointers: vec!["/followers_count".to_string()],
-        dynamic_mechanisms: vec![],
         source_evidence: Some("src/user.rs:load live follower count".to_string()),
         source_example: Some("100".to_string()),
         target_example: Some("101".to_string()),
@@ -518,7 +509,6 @@ fn a_permitted_source_after_match_does_not_authorize_a_response_rule() {
         kind: ResponseRuleKind::Counter,
         api: "GET /api/users/show".to_string(),
         json_pointers: vec!["/followers_count".to_string()],
-        dynamic_mechanisms: vec![],
         source_evidence: Some("src/user.rs:load live follower count".to_string()),
         source_example: Some("100".to_string()),
         target_example: Some("101".to_string()),
@@ -591,8 +581,7 @@ fn plans_and_applies_evidence_backed_unordered_array() {
         kind: ResponseRuleKind::Unordered,
         api: "GET /api/config/ansible_facts".to_string(),
         json_pointers: vec!["/general/sudo_users".to_string()],
-        dynamic_mechanisms: vec![],
-        source_evidence: None,
+        source_evidence: Some("src/config.rs:sudo_users is a set".to_string()),
         source_example: None,
         target_example: None,
         assertion_report: assertions,
@@ -610,6 +599,7 @@ fn plans_and_applies_evidence_backed_unordered_array() {
     let updated = fs::read_to_string(&policy).unwrap();
     assert!(updated.contains("unordered:"));
     assert!(updated.contains("/general/sudo_users"));
+    assert!(updated.contains("src/config.rs:sudo_users is a set"));
     validate_replay_policy(&policy).unwrap();
 }
 
@@ -642,34 +632,26 @@ fn unordered_evidence_rejects_content_differences() {
 }
 
 #[test]
-fn dynamic_rule_requires_auditable_mechanism_evidence() {
-    let error = justification::validate(ResponseRuleKind::Dynamic, vec![], None, None, None)
+fn generated_rule_requires_auditable_source_evidence() {
+    let error = justification::validate(ResponseRuleKind::Uuid, None, None, None)
         .err()
-        .expect("missing dynamic evidence must fail");
-    assert!(
-        error
-            .to_string()
-            .contains("at least one --dynamic-mechanism")
-    );
+        .expect("missing UUID evidence must fail");
+    assert!(error.to_string().contains("--source-evidence"));
 
     let justification = justification::validate(
-        ResponseRuleKind::Dynamic,
-        vec![
-            DynamicResponseMechanism::DynamicDerived,
-            DynamicResponseMechanism::Timestamp,
-        ],
-        Some("src/signed_url.rs:sign".to_string()),
+        ResponseRuleKind::Timestamp,
+        Some("src/signed_url.rs:sign derives the signature from current time".to_string()),
         Some("https://img.test/a?Expires=<source-time>&ssig=<source-signature>".to_string()),
         Some("https://img.test/a?Expires=<target-time>&ssig=<target-signature>".to_string()),
     )
     .unwrap();
-    assert_eq!(justification.dynamic_mechanisms.len(), 2);
+    assert!(justification.source_evidence.is_some());
 }
 
 #[test]
-fn one_evidence_bundle_can_cover_multiple_dynamic_fields() {
+fn one_evidence_bundle_can_cover_multiple_generated_fields() {
     let temp = tempdir().unwrap();
-    let mut feedback = write_dynamic_replay_feedback(
+    let mut feedback = write_generated_replay_feedback(
         temp.path(),
         json!([{
             "case_id": "case-1",
@@ -691,7 +673,7 @@ fn one_evidence_bundle_can_cover_multiple_dynamic_fields() {
                         "actual_type": "string"
                     }
                 ],
-                "dynamic_candidates": ["/first", "/second"]
+                "generated_scalar_candidates": ["/first", "/second"]
             }
         }]),
         json!(["case-1"]),
@@ -727,7 +709,7 @@ fn source_change_can_block_only_an_overlapping_response_rule() {
     ));
 }
 
-fn write_dynamic_replay_feedback(
+fn write_generated_replay_feedback(
     root: &Path,
     cases: serde_json::Value,
     selected_case_ids: serde_json::Value,
@@ -768,10 +750,9 @@ fn write_dynamic_replay_feedback(
     .unwrap();
     ResponseRuleFeedback {
         policy_path: policy,
-        kind: ResponseRuleKind::Dynamic,
+        kind: ResponseRuleKind::Uuid,
         api: "GET /api/resource/token".to_string(),
         json_pointers: vec!["/content".to_string()],
-        dynamic_mechanisms: vec![DynamicResponseMechanism::Uuid],
         source_evidence: Some("src/token.rs:issue_token".to_string()),
         source_example: Some("<redacted source UUID>".to_string()),
         target_example: Some("<redacted target UUID>".to_string()),

@@ -1,9 +1,8 @@
 use super::*;
 
-fn dynamic(pointer: &str) -> DynamicResponseRule {
-    DynamicResponseRule {
+fn uuid(pointer: &str) -> GeneratedResponseRule {
+    GeneratedResponseRule {
         pointer: pointer.to_string(),
-        mechanisms: vec![DynamicResponseMechanism::Uuid],
         source_evidence: "src/token.rs:issue_token".to_string(),
         source_example: "<redacted source UUID>".to_string(),
         target_example: "<redacted target UUID>".to_string(),
@@ -22,6 +21,7 @@ fn counter(pointer: &str) -> CounterResponseRule {
 fn unordered(pointer: &str) -> JsonUnorderedResponseRule {
     JsonUnorderedResponseRule {
         pointer: pointer.to_string(),
+        source_evidence: "src/config.rs:collection is a set".to_string(),
     }
 }
 
@@ -32,14 +32,14 @@ fn matches_exact_and_segment_pattern_apis() {
             (
                 "GET /api/resource/token".to_string(),
                 JsonResponseRules {
-                    dynamic: vec![dynamic("/content")],
+                    uuid: vec![uuid("/content")],
                     ..Default::default()
                 },
             ),
             (
                 "GET /api/sessions/*".to_string(),
                 JsonResponseRules {
-                    dynamic: vec![dynamic("/data/id")],
+                    uuid: vec![uuid("/data/id")],
                     ..Default::default()
                 },
             ),
@@ -72,14 +72,14 @@ fn rejects_overlapping_routes_for_the_same_pointer() {
             (
                 "GET /api/sessions/*".to_string(),
                 JsonResponseRules {
-                    dynamic: vec![dynamic("/content")],
+                    uuid: vec![uuid("/content")],
                     ..Default::default()
                 },
             ),
             (
                 "GET /api/sessions/current".to_string(),
                 JsonResponseRules {
-                    dynamic: vec![dynamic("/content")],
+                    uuid: vec![uuid("/content")],
                     ..Default::default()
                 },
             ),
@@ -96,7 +96,7 @@ fn rejects_overlapping_rule_kinds_in_one_json_api() {
         json: BTreeMap::from([(
             "GET /api/resource".to_string(),
             JsonResponseRules {
-                dynamic: vec![dynamic("/content/0/id")],
+                uuid: vec![uuid("/content/0/id")],
                 unordered: vec![unordered("/content")],
                 ..Default::default()
             },
@@ -113,7 +113,7 @@ fn rejects_overlapping_replay_and_comparison_rules() {
         json: BTreeMap::from([(
             "GET /api/users/show".to_string(),
             JsonResponseRules {
-                dynamic: vec![dynamic("/followers_count")],
+                uuid: vec![uuid("/followers_count")],
                 counter: vec![counter("/followers_count")],
                 ..Default::default()
             },
@@ -196,14 +196,13 @@ fn rejects_invalid_json_pointer_escape() {
 }
 
 #[test]
-fn rejects_dynamic_rules_without_auditable_evidence() {
+fn rejects_generated_rules_without_auditable_evidence() {
     let rules = ResponseRules {
         json: BTreeMap::from([(
             "GET /api/resource".to_string(),
             JsonResponseRules {
-                dynamic: vec![DynamicResponseRule {
+                uuid: vec![GeneratedResponseRule {
                     pointer: "/content".to_string(),
-                    mechanisms: vec![DynamicResponseMechanism::Uuid],
                     source_evidence: "src/token.rs:issue_token".to_string(),
                     source_example: "<same>".to_string(),
                     target_example: "<same>".to_string(),
@@ -215,6 +214,63 @@ fn rejects_dynamic_rules_without_auditable_evidence() {
     };
 
     assert!(validate_response_rules(&rules).is_err());
+}
+
+#[test]
+fn accepts_only_concrete_generated_scalar_rule_kinds() {
+    let rules = serde_yaml::from_str::<ResponseRules>(
+        r#"
+json:
+  "GET /api/resource":
+    timestamp:
+      - pointer: /created_at
+        source_evidence: src/resource.rs:created_at uses current time
+        source_example: "100"
+        target_example: "101"
+    duration:
+      - pointer: /elapsed
+        source_evidence: src/resource.rs:elapsed measures runtime duration
+        source_example: "10"
+        target_example: "11"
+    uuid:
+      - pointer: /request_id
+        source_evidence: src/resource.rs:request_id generates a UUID
+        source_example: source-uuid
+        target_example: target-uuid
+    random:
+      - pointer: /nonce
+        source_evidence: src/resource.rs:nonce uses random bytes
+        source_example: source-nonce
+        target_example: target-nonce
+"#,
+    )
+    .unwrap();
+
+    validate_response_rules(&rules).unwrap();
+    assert_eq!(response_rule_ids(&rules).len(), 4);
+}
+
+#[test]
+fn rejects_abstract_or_business_use_generated_rule_keys() {
+    for kind in ["dynamic", "nonce", "random_salt"] {
+        let yaml = format!(
+            r#"
+json:
+  "GET /api/resource":
+    {kind}:
+      - pointer: /value
+        source_evidence: src/resource.rs:value generation
+        source_example: source
+        target_example: target
+"#
+        );
+        let error = serde_yaml::from_str::<ResponseRules>(&yaml).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("unknown field `{kind}`"))
+        );
+    }
 }
 
 #[test]

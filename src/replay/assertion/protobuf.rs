@@ -812,6 +812,7 @@ mod tests {
                 display_path: field_path.display_path(),
                 field_path,
                 element_type: ProtobufRepeatedElementType::String,
+                source_evidence: "test source contract".to_string(),
             })
             .collect::<Vec<_>>();
         assert!(compare_motan_protobuf(&expected, &actual, &rules).unwrap());
@@ -839,6 +840,7 @@ mod tests {
             field_path: ProtobufFieldPath(vec![3, 3, 2]),
             display_path: "rule_collection.group_config.groups".to_string(),
             element_type: ProtobufRepeatedElementType::Message,
+            source_evidence: "test source contract".to_string(),
         };
 
         assert!(compare_motan_protobuf(&absent, &absent, std::slice::from_ref(&rule)).unwrap());
@@ -855,6 +857,7 @@ mod tests {
             field_path: ProtobufFieldPath(vec![3, 3, 2]),
             display_path: "rule_collection.group_config.groups".to_string(),
             element_type: ProtobufRepeatedElementType::Message,
+            source_evidence: "test source contract".to_string(),
         };
 
         let error = compare_motan_protobuf(&malformed, &malformed, &[rule]).unwrap_err();
@@ -879,6 +882,7 @@ mod tests {
             field_path: ProtobufFieldPath(vec![2]),
             display_path: "config_scene.values".to_string(),
             element_type: ProtobufRepeatedElementType::Uint32,
+            source_evidence: "test source contract".to_string(),
         };
 
         let (matches, discovery) = evaluate_motan_protobuf(&expected, &actual, &[rule]).unwrap();
@@ -935,11 +939,13 @@ mod tests {
                 field_path: ProtobufFieldPath(vec![3, 3, 2]),
                 display_path: "rule_collection.group_config.values".to_string(),
                 element_type: ProtobufRepeatedElementType::Message,
+                source_evidence: "test source contract".to_string(),
             },
             ProtobufUnorderedPath {
                 field_path: ProtobufFieldPath(vec![3, 3]),
                 display_path: "rule_collection.group_config".to_string(),
                 element_type: ProtobufRepeatedElementType::Message,
+                source_evidence: "test source contract".to_string(),
             },
         ];
         assert!(compare_motan_protobuf(&expected, &actual, &rules).unwrap());

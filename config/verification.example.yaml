@@ -94,6 +94,11 @@ response_settings:
 
 # Add source-proven replay fields through `config replay` and comparison-only
 # fields through `config comparison`. Rules are grouped by body protocol, then API.
+# JSON generated scalars use concrete `timestamp`, `duration`, `uuid`, or
+# `random` keys. Nonces and random salts use `random`; they are business uses,
+# not separate comparison strategies. Every value-relaxing selector persists
+# one-line `source_evidence`; generated scalars and counters also persist
+# distinct redacted source/target examples.
 response_rules:
   json: {}
   # Motan byte-array responses may declare an API under protobuf or hessian2,

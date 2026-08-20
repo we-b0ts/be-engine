@@ -37,9 +37,8 @@ rules: []
 response_rules:
   json:
     "GET /api/token":
-      dynamic:
+      uuid:
         - pointer: /token
-          mechanisms: [uuid]
           source_evidence: src/token.rs:issue_token
           source_example: <redacted source UUID>
           target_example: <redacted target UUID>
@@ -68,7 +67,7 @@ response_rules:
             .response
             .as_ref()
             .unwrap()
-            .applied_dynamic_rule_ids
+            .applied_generated_rule_ids
             .len(),
         1
     );
@@ -261,6 +260,7 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
             field_path: ProtobufFieldPath(vec![3]),
             display_path: "rule_collection.white_list".to_string(),
             element_type: ProtobufRepeatedElementType::Message,
+            source_evidence: "src/rule.rs:white_list is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
@@ -281,6 +281,7 @@ fn motan_rule_apply_reuses_comparison_bodies_for_offline_verification() {
             field_path: ProtobufFieldPath(vec![3]),
             display_path: "rule_collection.white_list".to_string(),
             element_type: ProtobufRepeatedElementType::String,
+            source_evidence: "src/rule.rs:white_list is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
@@ -529,6 +530,7 @@ fn motan_hessian2_rule_applies_to_a_body_without_a_byte_array_envelope() {
         unordered_paths: vec![MotanUnorderedPath::Hessian2(Hessian2UnorderedPath {
             value_path: Hessian2ValuePath(vec!["names".to_string()]),
             display_path: "cache_result.names".to_string(),
+            source_evidence: "src/cache.rs:names is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path,
@@ -636,6 +638,7 @@ fn motan_hessian2_rule_apply_reuses_comparison_bodies_for_offline_verification()
         unordered_paths: vec![MotanUnorderedPath::Hessian2(Hessian2UnorderedPath {
             value_path: Hessian2ValuePath(vec![]),
             display_path: "response.names".to_string(),
+            source_evidence: "src/service.rs:names is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path,
@@ -724,6 +727,7 @@ fn motan_rule_uses_reviewed_type_to_resolve_packed_integer_order() {
             field_path: ProtobufFieldPath(vec![2]),
             display_path: "config_scene.values".to_string(),
             element_type: ProtobufRepeatedElementType::Uint32,
+            source_evidence: "src/config.rs:values is a set".to_string(),
         })],
         unordered_joined_string_paths: Vec::new(),
         comparison_report: report_path.clone(),
@@ -897,9 +901,8 @@ rules: []
 response_rules:
   json:
     "GET /api/token":
-      dynamic:
+      uuid:
         - pointer: /token
-          mechanisms: [uuid]
           source_evidence: src/token.rs:issue_token
           source_example: <redacted source UUID>
           target_example: <redacted target UUID>
@@ -999,7 +1002,7 @@ fn writes_a_failed_report_for_an_unexempted_difference() {
             .response
             .as_ref()
             .unwrap()
-            .dynamic_candidates,
+            .generated_scalar_candidates,
         ["/token"]
     );
     let representative = report.representative_difference.as_ref().unwrap();
@@ -1309,9 +1312,8 @@ rules: []
 response_rules:
   json:
     "GET /api/token":
-      dynamic:
+      uuid:
         - pointer: /missing
-          mechanisms: [uuid]
           source_evidence: src/token.rs:issue_token
           source_example: <redacted source UUID>
           target_example: <redacted target UUID>
@@ -1354,9 +1356,8 @@ rules: []
 response_rules:
   json:
     "GET /api/token":
-      dynamic:
+      uuid:
         - pointer: /missing
-          mechanisms: [uuid]
           source_evidence: src/token.rs:issue_token
           source_example: <redacted source UUID>
           target_example: <redacted target UUID>

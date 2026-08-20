@@ -513,7 +513,7 @@ fn policy_mismatch_rule_ids(
         .iter()
         .flat_map(|report| {
             report
-                .applied_dynamic_rule_ids
+                .applied_generated_rule_ids
                 .iter()
                 .chain(&report.applied_unordered_rule_ids)
                 .chain(&report.applied_counter_rule_ids)
@@ -524,7 +524,7 @@ fn policy_mismatch_rule_ids(
         .iter()
         .flat_map(|report| {
             report
-                .unused_applicable_dynamic_rule_ids
+                .unused_applicable_generated_rule_ids
                 .iter()
                 .chain(&report.unused_applicable_unordered_rule_ids)
                 .chain(&report.unused_applicable_counter_rule_ids)

@@ -404,7 +404,7 @@ fn motan2_protocol_rule_compares_the_business_body() {
 
 #[test]
 fn motan2_unordered_rule_relaxes_only_business_body_order() {
-    let response_rules = "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n";
+    let response_rules = "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n          source_evidence: src/service.rs:names is a Set\n";
     let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
     let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
     let (_temp, options) = write_motan2_case_with_rules(
@@ -426,7 +426,7 @@ fn motan2_unordered_rule_relaxes_only_business_body_order() {
 
 #[test]
 fn motan2_unordered_rule_keeps_other_metadata_exact() {
-    let response_rules = "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n";
+    let response_rules = "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n          source_evidence: src/service.rs:names is a Set\n";
     let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
     let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
     let (_temp, options) = write_motan2_case_with_rules(
@@ -486,7 +486,7 @@ fn exact_motan2_body_reports_hessian2_as_a_protocol_candidate() {
 
 #[test]
 fn motan2_hessian2_unordered_rule_relaxes_only_the_selected_list() {
-    let response_rules = "response_rules:\n  hessian2:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - value_path: []\n          display_path: response.names\n";
+    let response_rules = "response_rules:\n  hessian2:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - value_path: []\n          display_path: response.names\n          source_evidence: src/service.rs:names is a Set\n";
     let expected = hessian2_string_list(&["alice", "bob"]);
     let actual = hessian2_string_list(&["bob", "alice"]);
     let (_temp, options) = write_motan2_case_with_rules(
@@ -508,7 +508,7 @@ fn motan2_hessian2_unordered_rule_relaxes_only_the_selected_list() {
 
 #[test]
 fn motan2_hessian2_unordered_rule_keeps_metadata_exact() {
-    let response_rules = "response_rules:\n  hessian2:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - value_path: []\n          display_path: response.names\n";
+    let response_rules = "response_rules:\n  hessian2:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - value_path: []\n          display_path: response.names\n          source_evidence: src/service.rs:names is a Set\n";
     let expected = hessian2_string_list(&["alice", "bob"]);
     let actual = hessian2_string_list(&["bob", "alice"]);
     let (_temp, options) = write_motan2_case_with_rules(
@@ -534,7 +534,7 @@ fn motan1_unordered_rule_compares_the_business_body() {
     let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
     let (_temp, options) = write_motan_case_with_rules(
         ProtocolVersion::Motan1,
-        "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n",
+        "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n          source_evidence: src/service.rs:names is a Set\n",
         None,
         None,
         "",
@@ -556,7 +556,7 @@ fn motan1_hessian2_unordered_rule_compares_the_business_body() {
     let actual = hessian2_string_list(&["bob", "alice"]);
     let (_temp, options) = write_motan_case_with_rules(
         ProtocolVersion::Motan1,
-        "response_rules:\n  hessian2:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - value_path: []\n          display_path: response.names\n",
+        "response_rules:\n  hessian2:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - value_path: []\n          display_path: response.names\n          source_evidence: src/service.rs:names is a Set\n",
         None,
         None,
         "",
@@ -573,9 +573,9 @@ fn motan1_hessian2_unordered_rule_compares_the_business_body() {
 }
 
 #[test]
-fn dynamic_scalar_skips_only_its_literal_value() {
+fn generated_scalar_skips_only_its_literal_value() {
     let (_temp, options) = write_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      dynamic:\n        - pointer: /content\n          mechanisms: [uuid]\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
         json!("recorded"),
         json!("actual"),
     );
@@ -583,7 +583,7 @@ fn dynamic_scalar_skips_only_its_literal_value() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.applied_dynamic_rule_ids.len(), 1);
+    assert_eq!(report.applied_generated_rule_ids.len(), 1);
     assert!(report.differences.is_empty());
 }
 
@@ -594,7 +594,7 @@ fn exact_mismatch_surfaces_a_dynamic_candidate() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(!report.passed);
-    assert_eq!(report.dynamic_candidates, vec!["/content"]);
+    assert_eq!(report.generated_scalar_candidates, vec!["/content"]);
 }
 
 #[test]
@@ -609,13 +609,13 @@ fn comparison_counter_rules_do_not_relax_standard_replay() {
 
     assert!(!report.passed);
     assert!(report.applied_counter_rule_ids.is_empty());
-    assert_eq!(report.dynamic_candidates, vec!["/content"]);
+    assert_eq!(report.generated_scalar_candidates, vec!["/content"]);
 }
 
 #[test]
 fn dynamic_field_still_requires_the_same_scalar_type() {
     let (_temp, options) = write_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      dynamic:\n        - pointer: /content\n          mechanisms: [uuid]\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
         json!("recorded"),
         json!(42),
     );
@@ -625,7 +625,7 @@ fn dynamic_field_still_requires_the_same_scalar_type() {
     assert!(!report.passed);
     assert_eq!(
         report.differences[0].kind,
-        ResponseDifferenceKind::DynamicFieldNotScalar
+        ResponseDifferenceKind::GeneratedFieldNotScalar
     );
 }
 
@@ -646,7 +646,7 @@ fn exact_array_reordering_surfaces_an_unordered_candidate() {
 #[test]
 fn unordered_array_compares_nested_values_as_a_multiset() {
     let (_temp, options) = write_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered:\n        - pointer: /content\n",
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered:\n        - pointer: /content\n          source_evidence: src/service.rs:content is a Set\n",
         json!([{"id": 1}, "same", "same"]),
         json!(["same", {"id": 1}, "same"]),
     );
@@ -661,7 +661,7 @@ fn unordered_array_compares_nested_values_as_a_multiset() {
 #[test]
 fn unordered_array_preserves_duplicate_counts() {
     let (_temp, options) = write_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered:\n        - pointer: /content\n",
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered:\n        - pointer: /content\n          source_evidence: src/service.rs:content is a Set\n",
         json!(["same", "same"]),
         json!(["same", "other"]),
     );
@@ -679,7 +679,7 @@ fn unordered_array_preserves_duplicate_counts() {
 #[test]
 fn unordered_field_requires_arrays_on_both_sides() {
     let (_temp, options) = write_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered:\n        - pointer: /content\n",
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered:\n        - pointer: /content\n          source_evidence: src/service.rs:content is a Set\n",
         json!(["same"]),
         json!({"0": "same"}),
     );
@@ -696,7 +696,7 @@ fn unordered_field_requires_arrays_on_both_sides() {
 #[test]
 fn an_unordered_rule_absent_from_both_response_shapes_is_irrelevant() {
     let (_temp, options) = write_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered:\n        - pointer: /missing\n",
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered:\n        - pointer: /missing\n          source_evidence: src/service.rs:content is a Set\n",
         json!(["same"]),
         json!(["same"]),
     );
@@ -709,9 +709,9 @@ fn an_unordered_rule_absent_from_both_response_shapes_is_irrelevant() {
 }
 
 #[test]
-fn a_dynamic_rule_absent_from_both_response_shapes_is_irrelevant() {
+fn a_generated_rule_absent_from_both_response_shapes_is_irrelevant() {
     let (_temp, options) = write_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      dynamic:\n        - pointer: /missing\n          mechanisms: [uuid]\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /missing\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
         json!("same"),
         json!("same"),
     );
@@ -720,13 +720,13 @@ fn a_dynamic_rule_absent_from_both_response_shapes_is_irrelevant() {
 
     assert!(report.passed);
     assert!(report.differences.is_empty());
-    assert!(report.unused_applicable_dynamic_rule_ids.is_empty());
+    assert!(report.unused_applicable_generated_rule_ids.is_empty());
 }
 
 #[test]
 fn a_rule_present_on_only_one_side_remains_an_exact_difference() {
     let (_temp, options) = write_raw_case(
-        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      dynamic:\n        - pointer: /content\n          mechanisms: [uuid]\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      uuid:\n        - pointer: /content\n          source_evidence: src/token.rs:issue_token\n          source_example: <redacted source UUID>\n          target_example: <redacted target UUID>\n",
         r#"{"content":"recorded"}"#,
         "{}",
     );
@@ -739,5 +739,5 @@ fn a_rule_present_on_only_one_side_remains_an_exact_difference() {
         report.differences[0].kind,
         ResponseDifferenceKind::MissingActual
     );
-    assert!(report.unused_applicable_dynamic_rule_ids.is_empty());
+    assert!(report.unused_applicable_generated_rule_ids.is_empty());
 }

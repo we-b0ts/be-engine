@@ -20,9 +20,8 @@ fn response_state() -> RewriteState {
     state.rule_plan = Some(RewriteRulePlanRecord {
         id: "plan-response".to_string(),
         issue_id: "issue-response".to_string(),
-        kind: "dynamic".to_string(),
+        kind: "uuid".to_string(),
         json_pointer: "/request_id".to_string(),
-        dynamic_mechanisms: vec!["uuid".to_string()],
         source_evidence: Some("src/id.rs:new".to_string()),
         source_example: None,
         target_example: None,

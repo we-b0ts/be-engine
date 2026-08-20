@@ -163,7 +163,7 @@ pub enum ResponseDifferenceKind {
     ArrayLengthMismatch,
     ArrayOrderMismatch,
     ExactBodyMismatch,
-    DynamicFieldNotScalar,
+    GeneratedFieldNotScalar,
     UnorderedFieldNotArray,
     UnorderedArrayContentMismatch,
     CounterFieldUnsupportedType,
@@ -221,9 +221,9 @@ pub struct ResponseAssertionCaseReport {
     pub actual_response_fingerprint: String,
     pub body_mode: ResponseBodyMode,
     pub differences: Vec<ResponseDifference>,
-    pub applied_dynamic_rule_ids: Vec<String>,
-    pub unused_applicable_dynamic_rule_ids: Vec<String>,
-    pub dynamic_candidates: Vec<String>,
+    pub applied_generated_rule_ids: Vec<String>,
+    pub unused_applicable_generated_rule_ids: Vec<String>,
+    pub generated_scalar_candidates: Vec<String>,
     pub applied_unordered_rule_ids: Vec<String>,
     pub unused_applicable_unordered_rule_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -254,7 +254,7 @@ impl ResponseAssertionCaseReport {
         actual_response_fingerprint: String,
     ) -> Self {
         Self {
-            version: 1,
+            version: 2,
             case_id,
             method,
             path,
@@ -266,9 +266,9 @@ impl ResponseAssertionCaseReport {
             actual_response_fingerprint,
             body_mode: ResponseBodyMode::Unknown,
             differences: Vec::new(),
-            applied_dynamic_rule_ids: Vec::new(),
-            unused_applicable_dynamic_rule_ids: Vec::new(),
-            dynamic_candidates: Vec::new(),
+            applied_generated_rule_ids: Vec::new(),
+            unused_applicable_generated_rule_ids: Vec::new(),
+            generated_scalar_candidates: Vec::new(),
             applied_unordered_rule_ids: Vec::new(),
             unused_applicable_unordered_rule_ids: Vec::new(),
             applied_counter_rule_ids: Vec::new(),
@@ -282,15 +282,15 @@ impl ResponseAssertionCaseReport {
     }
 
     pub(super) fn finish(&mut self, applicable: &[ResponseField], applicable_motan: &[String]) {
-        let applied_dynamic = self
-            .applied_dynamic_rule_ids
+        let applied_generated = self
+            .applied_generated_rule_ids
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
-        self.unused_applicable_dynamic_rule_ids = applicable
+        self.unused_applicable_generated_rule_ids = applicable
             .iter()
-            .filter(|field| field.kind == ResponseRuleKind::Dynamic)
-            .filter(|field| !applied_dynamic.contains(&field.id))
+            .filter(|field| field.kind.is_generated())
+            .filter(|field| !applied_generated.contains(&field.id))
             .map(|field| field.id.clone())
             .collect();
         let applied_unordered = self
@@ -325,7 +325,7 @@ impl ResponseAssertionCaseReport {
             .filter(|rule_id| !applied_motan.contains(*rule_id))
             .cloned()
             .collect();
-        self.dynamic_candidates = self
+        self.generated_scalar_candidates = self
             .differences
             .iter()
             .filter(|difference| {
@@ -345,7 +345,7 @@ impl ResponseAssertionCaseReport {
             .map(|difference| difference.pointer.clone())
             .collect();
         self.passed = self.differences.is_empty()
-            && self.unused_applicable_dynamic_rule_ids.is_empty()
+            && self.unused_applicable_generated_rule_ids.is_empty()
             && self.unused_applicable_unordered_rule_ids.is_empty()
             && self.unused_applicable_counter_rule_ids.is_empty()
             && self.unused_applicable_motan_rule_ids.is_empty();

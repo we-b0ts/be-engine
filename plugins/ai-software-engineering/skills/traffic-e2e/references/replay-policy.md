@@ -8,8 +8,9 @@ response rules.
 - Ownership
 - Assertion and dependency boundaries
 - Dependency dynamic rules
-- Dynamic response fields
+- Generated scalar response fields
 - Unordered response arrays
+- Motan body response rules
 - Comparison-only response fields
 
 ## Ownership
@@ -42,9 +43,10 @@ response_rules:
 ```
 
 Response field rules are grouped by body protocol, canonical API, and then
-rule kind. Standard replay loads JSON `dynamic` and `unordered` rules plus
-configured protobuf and Hessian2 rules. Comparison also loads JSON `counter`
-rules. Replay and comparison-only rules must select disjoint JSON subtrees;
+concrete rule kind. Standard replay loads JSON `timestamp`, `duration`, `uuid`,
+`random`, and `unordered` rules plus configured protobuf and Hessian2 rules.
+Comparison also loads JSON `counter` rules. Replay and comparison-only rules
+must select disjoint JSON subtrees;
 overlapping strategies are rejected rather than ordered by precedence.
 
 `response_settings.comparison.source_match` is whole-response verification
@@ -221,24 +223,22 @@ Only `kind: cache_service` is currently supported. Reject `kind: breeze`
 instead of guessing its namespace and dynamic-port semantics; add that kind
 only after a concrete recorded case supplies the required evidence.
 
-## Dynamic Response Fields
+## Generated Scalar Response Fields
 
 Version three makes the runner compare expected and actual responses. The runner
 reads `request.json`, sends the genuine request to the managed target HTTP
 endpoint, and writes the actual-response artifact. The target MUST NOT read
 `request.json` or `expected-response.json`.
 
-`response_rules.json.<API>.dynamic` selects an exact scalar JSON value by JSON
-Pointer:
+`response_rules.json.<API>.<rule-kind>` selects an exact scalar JSON value by
+JSON Pointer. Use the concrete source-proven mechanism as the key:
 
 ```yaml
 response_rules:
   json:
     "GET /api/resource/token":
-      dynamic:
+      uuid:
         - pointer: /content
-          mechanisms:
-            - uuid
           source_evidence: src/token.rs:issue_token UUID generation
           source_example: <redacted source UUID>
           target_example: <redacted target UUID>
@@ -252,30 +252,32 @@ only one response omits it, the missing field remains an exact structural
 difference. Only literal equality is skipped. Status, body structure,
 undeclared fields, nulls, arrays, and non-JSON bodies remain exact. The rule
 does not validate UUID shape, randomness, timestamps, or other generation
-semantics. Its persisted mechanism, source citation, and distinct redacted
-source/target examples make the decision reviewable but do not replace source
-review, unit tests, or real-traffic integration tests.
+semantics. Its concrete rule kind, persisted source citation, and distinct
+redacted source/target examples make the decision reviewable but do not replace
+source review, unit tests, or real-traffic integration tests.
 
 On an exact scalar mismatch the assertion report may expose the pointer as a
 diagnostic candidate. That mechanical candidate is not authorization to weaken
 the assertion. Inspect source and target behavior first. A missing, cold,
 stale, partially loaded, differently keyed, or differently refreshed
-process-local cache is target behavior and MUST NOT authorize a dynamic rule.
+process-local cache is target behavior and MUST NOT authorize a generated-scalar
+rule.
 Repair its implementation, lifecycle, or readiness and rerun the same cases.
 
-Apply a dynamic rule only when source code proves a supported nondeterministic
+Apply a generated-scalar rule only when source code proves its concrete
 mechanism and a representative, redacted source/target value pair shows that
 the selected scalar differs only because of that mechanism. Stable structure
 inside a scalar remains behavior: for example, a signed URL cannot be exempted
-as one dynamic string when the target omits the required signature parameters.
-Supported declarations are `timestamp`, `duration`, `uuid`, `random`, `nonce`,
-`random-salt`, and `dynamic-derived`; use `dynamic-derived` only together with
-the underlying dynamic input when a digest, signature, or encoding is derived
-from it.
-The command requires the mechanism, a single-line source file/symbol citation,
-and different redacted source and target examples. It writes all four evidence
-fields into the policy beside each selected Pointer. Multiple Pointers may be
-submitted together only when the same evidence proves every selected field;
+as one generated string when the target omits the required signature
+parameters.
+Supported rule kinds are `timestamp`, `duration`, `uuid`, and `random`. A nonce
+or random salt uses `random`; those names are business uses, not comparison
+strategies. For a digest, signature, or encoding derived from a generated
+input, use the root rule kind and explain the derivation in `source_evidence`.
+The command requires a single-line source file/symbol citation,
+and different redacted source and target examples. It writes the citation and
+both examples into the policy beside each selected Pointer. Multiple Pointers
+may be submitted together only when the same evidence proves every selected field;
 otherwise plan and apply them separately. These declarations make the decision
 auditable; they do not replace source review. The command replans from the
 current evidence before writing; `plan` is available with the same arguments
@@ -284,8 +286,7 @@ for optional diagnostics:
 ```bash
 traffic-e2e config replay apply response-rule \
   --target-root <target> \
-  --kind dynamic \
-  --dynamic-mechanism uuid \
+  --kind uuid \
   --source-evidence 'src/token.rs:issue_token UUID generation' \
   --source-example '<redacted UUID from source>' \
   --target-example '<redacted UUID from target>' \
@@ -295,7 +296,8 @@ traffic-e2e config replay apply response-rule \
 ```
 
 Complete aggregate evidence may remain dependency-dirty while applying a
-dynamic rule. Other response differences may also remain in the same report.
+generated-scalar rule. Other response differences may also remain in the same
+report.
 Neither condition authorizes the selected Pointer, and neither blocks its
 independent evidence from being applied. The plan reports aggregate dirtiness
 and every unselected difference Pointer; those failures remain exact gates and
@@ -312,6 +314,7 @@ response_rules:
     "GET /api/config/ansible_facts":
       unordered:
         - pointer: /general/sudo_users
+          source_evidence: src/config.rs:sudo_users is built from a Set
 ```
 
 For a response pair, the rule applies only when the selected field exists in
@@ -323,25 +326,82 @@ locations remain exact. Response strategies cannot overlap the same JSON
 subtree.
 
 An exact reorder-only mismatch may expose an `unordered_candidates` diagnostic.
-It does not prove that order is irrelevant. Inspect source behavior, target
-behavior, and consumers before applying:
+It is mechanical evidence, not authorization that order is irrelevant. Inspect
+source behavior, target behavior, and consumers before applying:
 
 ```bash
 traffic-e2e config replay apply response-rule \
   --target-root <target> \
   --kind unordered \
+  --source-evidence 'src/config.rs:sudo_users is built from a Set' \
   --api 'GET /api/config/ansible_facts' \
   --json-pointer /general/sudo_users \
   --case-source <exact-finalized-case-source>
 ```
 
 Both actions require runner-owned structural assertion evidence using the
-current policy fingerprint and complete aggregate evidence. A dynamic action
-validates only its selected Pointer and may retain dirty dependencies or
+current policy fingerprint and complete aggregate evidence. A generated-scalar
+action validates only its selected Pointer and may retain dirty dependencies or
 unselected response differences as independent failing gates. An unordered
 action still requires clean aggregate evidence and rejects undeclared response
 differences. Both reject unsupported differences at a selected location.
 Apply is additive, sorted, and atomic.
+
+## Motan Body Response Rules
+
+Motan rules use the same body-protocol/API/rule-kind hierarchy. A protocol-only
+entry enables protocol-aware diagnostics without relaxing a business value:
+
+```yaml
+response_rules:
+  protobuf:
+    "MOTAN /rpc/ExampleService-getConfig-Request-hash": {}
+```
+
+Treat reported protocol candidates as decoder candidates, not semantic proof.
+Select protobuf or Hessian2 from application/schema context, apply the
+protocol-only plan, and use its offline re-verification of the same immutable
+comparison artifacts to obtain typed differences. Protocol selection does not
+require source evidence because it does not ignore a value.
+
+An unordered selector does relax comparison and therefore requires one-line
+source proof on every selected path. A diagnostic candidate proves only that
+multiset comparison explains observed bytes; it does not prove order is absent
+from the product contract:
+
+```yaml
+response_rules:
+  protobuf:
+    "MOTAN /rpc/ExampleService-getConfig-Request-hash":
+      unordered:
+        - field_path: [3, 1, 6, 3]
+          display_path: rule_collection.experiments.groups.white_list
+          element_type: string
+          source_evidence: src/rule.rs:white_list is a Set
+  hessian2:
+    "MOTAN /rpc/ExampleService-getMembers-Request-hash":
+      unordered:
+        - value_path: [result, groups, "*", whiteList]
+          display_path: result.groups[].white_list
+          source_evidence: src/rule.rs:white_list is a Set
+      unordered_joined_string:
+        - value_path: [result, memberNames]
+          display_path: result.member_names
+          separator: ","
+          source_evidence: src/service.rs:memberNames joins a Set
+```
+
+Protobuf selectors require a numeric `field_path`, semantic `display_path`, and
+explicit repeated `element_type`. Hessian2 selectors require a `value_path` and
+semantic `display_path`; joined strings also require a non-empty separator.
+Only selected collection order is ignored. Presence, types, contents,
+duplicate multiplicity, status, envelope, and undeclared paths remain exact.
+
+Use the current comparison report and policy fingerprint. Plan first, review
+the exact selectors and source citations, apply atomically, then rerun the
+affected comparison/E2E group. Planning rejects stale reports, source changes,
+unused applicable rules, selectors absent from typed diagnostics, and a set of
+selectors that does not fully explain the current body difference.
 
 ## Comparison Counter Fields
 

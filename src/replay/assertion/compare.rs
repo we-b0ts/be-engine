@@ -27,13 +27,13 @@ fn compare_value(
 ) {
     if let Some(field) = fields.get(pointer) {
         match field.kind {
-            ResponseRuleKind::Dynamic => {
+            kind if kind.is_generated() => {
                 if scalar_kind(expected).is_some() && scalar_kind(expected) == scalar_kind(actual) {
-                    report.applied_dynamic_rule_ids.push(field.id.clone());
+                    report.applied_generated_rule_ids.push(field.id.clone());
                 } else {
                     report.differences.push(difference(
                         pointer,
-                        ResponseDifferenceKind::DynamicFieldNotScalar,
+                        ResponseDifferenceKind::GeneratedFieldNotScalar,
                         Some(expected),
                         Some(actual),
                     ));
@@ -96,6 +96,7 @@ fn compare_value(
                     ));
                 }
             },
+            _ => unreachable!("all response rule kinds are covered"),
         }
         return;
     }

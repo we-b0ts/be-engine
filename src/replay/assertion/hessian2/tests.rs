@@ -32,6 +32,7 @@ fn discovers_and_applies_root_list_order() {
     let rule = Hessian2UnorderedPath {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.members".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
     assert!(compare_motan_hessian2(&expected, &actual, &[rule], &[]).unwrap());
 }
@@ -43,6 +44,7 @@ fn unordered_list_preserves_duplicate_multiplicity() {
     let rule = Hessian2UnorderedPath {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.members".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
 
     assert!(!compare_motan_hessian2(&expected, &actual, &[rule], &[]).unwrap());
@@ -54,12 +56,16 @@ fn missing_path_is_a_no_op_but_a_non_list_terminal_is_rejected() {
     let missing = Hessian2UnorderedPath {
         value_path: Hessian2ValuePath(vec!["missing".to_string()]),
         display_path: "response.missing".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
-    assert!(compare_motan_hessian2(&expected, &expected, std::slice::from_ref(&missing), &[]).unwrap());
+    assert!(
+        compare_motan_hessian2(&expected, &expected, std::slice::from_ref(&missing), &[]).unwrap()
+    );
 
     let scalar = Hessian2UnorderedPath {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.value".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
     let scalar_body = body(to_vec(&42_i32, Limits::default()).unwrap());
     assert!(compare_motan_hessian2(&scalar_body, &scalar_body, &[scalar], &[]).is_err());
@@ -112,6 +118,7 @@ fn discovers_and_applies_nested_lists_through_map_keys_and_wildcards() {
             &[Hessian2UnorderedPath {
                 value_path,
                 display_path: "rule_collection.groups[].names".to_string(),
+                source_evidence: "test source contract".to_string(),
             }],
             &[],
         )
@@ -137,6 +144,7 @@ fn applies_a_list_path_through_an_object_field() {
     let rule = Hessian2UnorderedPath {
         value_path: Hessian2ValuePath(vec!["names".to_string()]),
         display_path: "response.names".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
 
     assert!(compare_motan_hessian2(&expected, &actual, &[rule], &[]).unwrap());
@@ -227,6 +235,7 @@ fn discovers_and_applies_list_order_in_a_bare_body() {
     let rule = Hessian2UnorderedPath {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.names".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
     assert!(compare_motan_hessian2(&expected, &actual, &[rule], &[]).unwrap());
 }
@@ -286,6 +295,7 @@ fn discovers_order_under_an_object_with_a_high_class_index() {
             &[Hessian2UnorderedPath {
                 value_path,
                 display_path: "nodes[].value".to_string(),
+                source_evidence: "test source contract".to_string(),
             }],
             &[],
         )
@@ -302,6 +312,7 @@ fn joined_string_matches_when_elements_differ_only_by_order() {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.white_list".to_string(),
         separator: ",".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
     assert!(compare_motan_hessian2(&expected, &actual, &[], &[rule]).unwrap());
 }
@@ -314,6 +325,7 @@ fn joined_string_preserves_duplicate_multiplicity() {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.white_list".to_string(),
         separator: ",".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
     assert!(!compare_motan_hessian2(&expected, &actual, &[], &[rule]).unwrap());
 }
@@ -325,15 +337,28 @@ fn joined_string_missing_path_is_a_no_op_but_a_non_string_terminal_is_rejected()
         value_path: Hessian2ValuePath(vec!["missing".to_string()]),
         display_path: "response.missing".to_string(),
         separator: ",".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
-    assert!(compare_motan_hessian2(&list_body, &list_body, &[], std::slice::from_ref(&missing)).unwrap());
+    assert!(
+        compare_motan_hessian2(&list_body, &list_body, &[], std::slice::from_ref(&missing))
+            .unwrap()
+    );
 
     let present_non_string = Hessian2JoinedStringPath {
         value_path: Hessian2ValuePath(vec![]),
         display_path: "response.value".to_string(),
         separator: ",".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
-    assert!(compare_motan_hessian2(&list_body, &list_body, &[], std::slice::from_ref(&present_non_string)).is_err());
+    assert!(
+        compare_motan_hessian2(
+            &list_body,
+            &list_body,
+            &[],
+            std::slice::from_ref(&present_non_string)
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -355,6 +380,7 @@ fn joined_string_path_reaches_a_nested_field() {
         value_path: Hessian2ValuePath(vec!["whiteList".to_string()]),
         display_path: "response.white_list".to_string(),
         separator: ",".to_string(),
+        source_evidence: "test source contract".to_string(),
     };
     assert!(compare_motan_hessian2(&expected, &actual, &[], &[rule]).unwrap());
 }

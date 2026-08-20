@@ -1,9 +1,8 @@
 use anyhow::{Result, ensure};
 
-use super::super::response::{DynamicResponseMechanism, ResponseRuleKind};
+use super::super::response::ResponseRuleKind;
 
 pub(super) struct ResponseRuleJustification {
-    pub(super) dynamic_mechanisms: Vec<DynamicResponseMechanism>,
     pub(super) source_evidence: Option<String>,
     pub(super) source_example: Option<String>,
     pub(super) target_example: Option<String>,
@@ -11,37 +10,21 @@ pub(super) struct ResponseRuleJustification {
 
 pub(super) fn validate(
     kind: ResponseRuleKind,
-    mut dynamic_mechanisms: Vec<DynamicResponseMechanism>,
     source_evidence: Option<String>,
     source_example: Option<String>,
     target_example: Option<String>,
 ) -> Result<ResponseRuleJustification> {
     match kind {
-        ResponseRuleKind::Dynamic => {
-            ensure!(
-                !dynamic_mechanisms.is_empty(),
-                "dynamic response rules require at least one --dynamic-mechanism"
-            );
-            dynamic_mechanisms.sort();
-            dynamic_mechanisms.dedup();
-            ensure!(
-                !dynamic_mechanisms.contains(&DynamicResponseMechanism::DynamicDerived)
-                    || dynamic_mechanisms.len() > 1,
-                "dynamic-derived requires the underlying dynamic mechanism"
-            );
+        kind if kind.is_generated() => {
             validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
             validate_text(source_example.as_deref(), "--source-example", 1024)?;
             validate_text(target_example.as_deref(), "--target-example", 1024)?;
             ensure!(
                 source_example != target_example,
-                "dynamic response rules require different --source-example and --target-example values"
+                "{kind:?} response rules require different --source-example and --target-example values"
             );
         }
         ResponseRuleKind::Counter => {
-            ensure!(
-                dynamic_mechanisms.is_empty(),
-                "--dynamic-mechanism is valid only with --kind dynamic"
-            );
             validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
             validate_text(source_example.as_deref(), "--source-example", 1024)?;
             validate_text(target_example.as_deref(), "--target-example", 1024)?;
@@ -51,17 +34,15 @@ pub(super) fn validate(
             );
         }
         ResponseRuleKind::Unordered => {
+            validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
             ensure!(
-                dynamic_mechanisms.is_empty()
-                    && source_evidence.is_none()
-                    && source_example.is_none()
-                    && target_example.is_none(),
-                "source and dynamic mechanism evidence is not valid with --kind unordered"
+                source_example.is_none() && target_example.is_none(),
+                "--source-example and --target-example are not valid with --kind unordered"
             );
         }
+        _ => unreachable!("all response rule kinds are covered"),
     }
     Ok(ResponseRuleJustification {
-        dynamic_mechanisms,
         source_evidence,
         source_example,
         target_example,

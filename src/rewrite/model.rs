@@ -228,8 +228,6 @@ pub struct RewriteRulePlanRecord {
     pub issue_id: String,
     pub kind: String,
     pub json_pointer: String,
-    #[serde(default)]
-    pub dynamic_mechanisms: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_evidence: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

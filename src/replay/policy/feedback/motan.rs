@@ -9,7 +9,7 @@ use super::super::config::{fingerprint, load_replay_policy};
 use super::super::response::{
     Hessian2JoinedStringPath, Hessian2ResponseRules, Hessian2ValuePath, MotanBodyProtocol,
     MotanUnorderedPath, ProtobufFieldPath, ProtobufResponseRules, motan_response_rule_id,
-    parse_api,
+    parse_api, validate_response_rules,
 };
 use super::document::{render_response_rules, replace_response_rules};
 use crate::comparison_recording::{
@@ -517,6 +517,7 @@ pub fn plan_motan_rule(feedback: MotanRuleFeedback) -> Result<MotanRulePlan> {
             );
         }
     }
+    validate_response_rules(&loaded.document.response_rules)?;
     let updated = replace_response_rules(&original, &loaded.document.response_rules)?;
     let changed = updated != original;
     let diff = if changed {

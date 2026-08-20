@@ -100,7 +100,6 @@ fn response_rule_plan(
         kind,
         api: args.api,
         json_pointers: args.json_pointers,
-        dynamic_mechanisms: Vec::new(),
         source_evidence: Some(args.source_evidence),
         source_example: Some(args.source_example),
         target_example: Some(args.target_example),

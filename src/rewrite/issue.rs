@@ -117,7 +117,7 @@ pub(super) fn response_possible_causes(kind: Option<ResponseDifferenceKind>) -> 
             "unordered_policy_candidate_only_if_contents_are_equal",
         ],
         Some(
-            ResponseDifferenceKind::DynamicFieldNotScalar
+            ResponseDifferenceKind::GeneratedFieldNotScalar
             | ResponseDifferenceKind::UnorderedFieldNotArray
             | ResponseDifferenceKind::UnorderedArrayContentMismatch
             | ResponseDifferenceKind::CounterFieldUnsupportedType,

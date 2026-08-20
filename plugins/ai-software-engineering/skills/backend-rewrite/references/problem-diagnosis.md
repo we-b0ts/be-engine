@@ -170,7 +170,8 @@ Classify exactly one cause:
 - `dependency_behavior`: the target calls, selects, or consumes a dependency
   differently;
 - `intentional_nondeterminism`: source code proves current time, duration,
-  UUID, random, nonce, random salt, or a derived scalar;
+  UUID, or random generation; nonce and random salt are uses of `random`, and a
+  derived scalar uses its root mechanism with the derivation in source evidence;
 - `unordered_contract`: source collection type and API contract prove order is
   irrelevant and bounded evidence proves equal contents;
 - `comparison_counter`: source ownership and type prove a live counter that is
@@ -250,7 +251,7 @@ endpoint is not proof that no process-local cache exists, and a high interaction
 count or configured process-owned match is not proof that the traffic populates
 a response-driving cache.
 
-Do not apply a dynamic rule for a cold, missing, stale, differently keyed,
+Do not apply a generated-scalar rule for a cold, missing, stale, differently keyed,
 partially loaded, or differently refreshed cache. Do not materialize recorded
 cache results as target fixtures or boot configuration. Repair the target cache
 or its genuine dependency path and rerun the same immutable group.
@@ -340,7 +341,8 @@ For one representative comparison difference, distinguish:
 - candidate-only stable difference: target behavior;
 - source-before/source-after change at the same Pointer: source change or
   possible nondeterminism requiring source proof;
-- proven generated scalar: supported dynamic rule candidate;
+- proven generated scalar: concrete `timestamp`, `duration`, `uuid`, or
+  `random` rule candidate;
 - proven equal-content unordered array: unordered rule candidate;
 - proven live numeric counter: comparison-only counter candidate;
 - cache hit/miss/staleness/warmup: target behavior, never policy.

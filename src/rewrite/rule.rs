@@ -10,12 +10,11 @@ use super::model::{
 };
 use super::{action, evidence};
 use crate::{
-    ComparisonResponseRuleFeedback, DynamicResponseMechanism, E2eRunContext,
-    Hessian2JoinedStringPath, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
-    MotanBodyProtocol, MotanRuleFeedback, MotanRulePlan, MotanUnorderedPath, ResponseRuleFeedback,
-    ResponseRuleKind, ResponseRulePlan, plan_comparison_response_rule,
-    plan_memcached_timestamp_rule, plan_motan_rule, plan_response_rule,
-    resolve_e2e_response_rule_evidence,
+    ComparisonResponseRuleFeedback, E2eRunContext, Hessian2JoinedStringPath,
+    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MotanBodyProtocol,
+    MotanRuleFeedback, MotanRulePlan, MotanUnorderedPath, ResponseRuleFeedback, ResponseRuleKind,
+    ResponseRulePlan, plan_comparison_response_rule, plan_memcached_timestamp_rule,
+    plan_motan_rule, plan_response_rule, resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Clone)]
@@ -23,7 +22,6 @@ pub struct RewriteRulePlanOptions {
     pub evidence_id: String,
     pub kind: ResponseRuleKind,
     pub json_pointer: Option<String>,
-    pub dynamic_mechanisms: Vec<DynamicResponseMechanism>,
     pub source_evidence: Option<String>,
     pub source_example: Option<String>,
     pub target_example: Option<String>,
@@ -114,11 +112,6 @@ pub(super) fn plan(
         issue_id: issue.id.clone(),
         kind: rule_kind(options.kind).to_string(),
         json_pointer: pointer,
-        dynamic_mechanisms: options
-            .dynamic_mechanisms
-            .iter()
-            .map(|mechanism| mechanism_name(*mechanism).to_string())
-            .collect(),
         source_evidence: options.source_evidence,
         source_example: options.source_example,
         target_example: options.target_example,
@@ -189,7 +182,6 @@ pub(super) fn plan_memcached_timestamp(
         issue_id: issue.id.clone(),
         kind: "memcached_protobuf_timestamp".to_string(),
         json_pointer: String::new(),
-        dynamic_mechanisms: Vec::new(),
         source_evidence: None,
         source_example: None,
         target_example: None,
@@ -246,7 +238,6 @@ pub(super) fn plan_motan(
         issue_id: issue.id.clone(),
         kind: "motan".to_string(),
         json_pointer: String::new(),
-        dynamic_mechanisms: Vec::new(),
         source_evidence: None,
         source_example: None,
         target_example: None,
@@ -325,11 +316,6 @@ fn build_plan(
         ));
     }
     let kind = parse_rule_kind(&record.kind)?;
-    let mechanisms = record
-        .dynamic_mechanisms
-        .iter()
-        .map(|value| parse_mechanism(value))
-        .collect::<Result<Vec<_>>>()?;
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
     let comparison_run = state.comparison_run_id.as_ref().map(|run_id| {
         target_root
@@ -350,7 +336,6 @@ fn build_plan(
                 kind,
                 api: state.api.clone(),
                 json_pointers: vec![record.json_pointer.clone()],
-                dynamic_mechanisms: mechanisms,
                 source_evidence: record.source_evidence.clone(),
                 source_example: record.source_example.clone(),
                 target_example: record.target_example.clone(),
@@ -380,7 +365,6 @@ fn build_plan(
             kind,
             api: state.api.clone(),
             json_pointers: vec![record.json_pointer.clone()],
-            dynamic_mechanisms: mechanisms,
             source_evidence: record.source_evidence.clone(),
             source_example: record.source_example.clone(),
             target_example: record.target_example.clone(),
@@ -550,7 +534,10 @@ fn project_motan_report(report: &crate::MotanRuleReport) -> Value {
 
 fn rule_kind(kind: ResponseRuleKind) -> &'static str {
     match kind {
-        ResponseRuleKind::Dynamic => "dynamic",
+        ResponseRuleKind::Timestamp => "timestamp",
+        ResponseRuleKind::Duration => "duration",
+        ResponseRuleKind::Uuid => "uuid",
+        ResponseRuleKind::Random => "random",
         ResponseRuleKind::Unordered => "unordered",
         ResponseRuleKind::Counter => "counter",
     }
@@ -558,37 +545,15 @@ fn rule_kind(kind: ResponseRuleKind) -> &'static str {
 
 fn parse_rule_kind(value: &str) -> Result<ResponseRuleKind> {
     match value {
-        "dynamic" => Ok(ResponseRuleKind::Dynamic),
+        "timestamp" => Ok(ResponseRuleKind::Timestamp),
+        "duration" => Ok(ResponseRuleKind::Duration),
+        "uuid" => Ok(ResponseRuleKind::Uuid),
+        "random" => Ok(ResponseRuleKind::Random),
         "unordered" => Ok(ResponseRuleKind::Unordered),
         "counter" => Ok(ResponseRuleKind::Counter),
         _ => anyhow::bail!("unsupported rewrite rule kind {value:?}"),
     }
 }
 
-fn mechanism_name(mechanism: DynamicResponseMechanism) -> &'static str {
-    match mechanism {
-        DynamicResponseMechanism::Timestamp => "timestamp",
-        DynamicResponseMechanism::Duration => "duration",
-        DynamicResponseMechanism::Uuid => "uuid",
-        DynamicResponseMechanism::Random => "random",
-        DynamicResponseMechanism::Nonce => "nonce",
-        DynamicResponseMechanism::RandomSalt => "random_salt",
-        DynamicResponseMechanism::DynamicDerived => "dynamic_derived",
-    }
-}
-
 #[cfg(test)]
 mod tests;
-
-fn parse_mechanism(value: &str) -> Result<DynamicResponseMechanism> {
-    match value {
-        "timestamp" => Ok(DynamicResponseMechanism::Timestamp),
-        "duration" => Ok(DynamicResponseMechanism::Duration),
-        "uuid" => Ok(DynamicResponseMechanism::Uuid),
-        "random" => Ok(DynamicResponseMechanism::Random),
-        "nonce" => Ok(DynamicResponseMechanism::Nonce),
-        "random_salt" => Ok(DynamicResponseMechanism::RandomSalt),
-        "dynamic_derived" => Ok(DynamicResponseMechanism::DynamicDerived),
-        _ => anyhow::bail!("unsupported dynamic mechanism {value:?}"),
-    }
-}

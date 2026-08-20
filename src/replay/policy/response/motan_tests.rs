@@ -24,12 +24,29 @@ protobuf:
       - field_path: [3, 1, 6, 3]
         display_path: rule_collection.experiments.groups.white_list
         element_type: string
+        source_evidence: src/rule.rs:white_list is a set
 "#,
     )
     .unwrap();
     validate_response_rules(&reviewed).unwrap();
     let path = &reviewed.protobuf["MOTAN /rpc/example"].unordered[0];
     assert_eq!(path.field_path.display_path(), "3.1.6.3");
+}
+
+#[test]
+fn unordered_motan_selectors_require_source_evidence() {
+    let rules = serde_yaml::from_str::<ResponseRules>(
+        r#"
+protobuf:
+  "MOTAN /rpc/example":
+    unordered:
+      - field_path: [3]
+        display_path: response.names
+        element_type: string
+"#,
+    );
+
+    assert!(rules.is_err());
 }
 
 #[test]
@@ -42,6 +59,7 @@ protobuf:
       - field_path: [3]
         display_path: payload
         element_type: bytes
+        source_evidence: src/rule.rs:payload is a set
 "#,
     )
     .unwrap_err();
@@ -58,6 +76,7 @@ hessian2:
     unordered:
       - value_path: [ruleCollection, groups, "*", whiteList]
         display_path: rule_collection.groups[].white_list
+        source_evidence: src/rule.rs:white_list is a set
 "#,
     )
     .unwrap();
@@ -80,6 +99,7 @@ hessian2:
       - field_path: [3]
         display_path: response.names
         element_type: string
+        source_evidence: src/rule.rs:names is a set
 "#,
     )
     .unwrap_err();
@@ -97,6 +117,7 @@ protobuf:
       - field_path: [3, 1, 6, 3]
         display_path: 3.1.6.3
         element_type: string
+        source_evidence: src/rule.rs:white_list is a set
 "#,
     )
     .unwrap();
@@ -114,6 +135,7 @@ hessian2:
       - value_path: [result, whiteList]
         display_path: cache_result.white_list
         separator: ","
+        source_evidence: src/cache.rs:white_list is set-joined
 "#,
     )
     .unwrap();
@@ -134,6 +156,7 @@ protobuf:
       - value_path: [result, whiteList]
         display_path: cache_result.white_list
         separator: ","
+        source_evidence: src/cache.rs:white_list is set-joined
 "#,
     )
     .unwrap_err();
@@ -155,6 +178,7 @@ hessian2:
       - value_path: [result, whiteList]
         display_path: cache_result.white_list
         separator: ""
+        source_evidence: src/cache.rs:white_list is set-joined
 "#,
     )
     .unwrap();
@@ -171,10 +195,12 @@ hessian2:
     unordered:
       - value_path: [result, whiteList]
         display_path: cache_result.white_list
+        source_evidence: src/cache.rs:white_list is a set
     unordered_joined_string:
       - value_path: [result, whiteList]
         display_path: cache_result.white_list_joined
         separator: ","
+        source_evidence: src/cache.rs:white_list is set-joined
 "#,
     )
     .unwrap();

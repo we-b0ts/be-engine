@@ -57,7 +57,13 @@ pub(in crate::replay) struct ResponseRules {
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct JsonResponseRules {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub(in crate::replay) dynamic: Vec<DynamicResponseRule>,
+    pub(in crate::replay) timestamp: Vec<GeneratedResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) duration: Vec<GeneratedResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) uuid: Vec<GeneratedResponseRule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(in crate::replay) random: Vec<GeneratedResponseRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(in crate::replay) unordered: Vec<JsonUnorderedResponseRule>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -66,7 +72,57 @@ pub(in crate::replay) struct JsonResponseRules {
 
 impl JsonResponseRules {
     fn is_empty(&self) -> bool {
-        self.dynamic.is_empty() && self.unordered.is_empty() && self.counter.is_empty()
+        self.timestamp.is_empty()
+            && self.duration.is_empty()
+            && self.uuid.is_empty()
+            && self.random.is_empty()
+            && self.unordered.is_empty()
+            && self.counter.is_empty()
+    }
+
+    pub(in crate::replay) fn generated(
+        &self,
+    ) -> impl Iterator<Item = (ResponseRuleKind, &GeneratedResponseRule)> {
+        self.timestamp
+            .iter()
+            .map(|rule| (ResponseRuleKind::Timestamp, rule))
+            .chain(
+                self.duration
+                    .iter()
+                    .map(|rule| (ResponseRuleKind::Duration, rule)),
+            )
+            .chain(self.uuid.iter().map(|rule| (ResponseRuleKind::Uuid, rule)))
+            .chain(
+                self.random
+                    .iter()
+                    .map(|rule| (ResponseRuleKind::Random, rule)),
+            )
+    }
+
+    pub(in crate::replay) fn generated_for_kind(
+        &self,
+        kind: ResponseRuleKind,
+    ) -> Option<&Vec<GeneratedResponseRule>> {
+        match kind {
+            ResponseRuleKind::Timestamp => Some(&self.timestamp),
+            ResponseRuleKind::Duration => Some(&self.duration),
+            ResponseRuleKind::Uuid => Some(&self.uuid),
+            ResponseRuleKind::Random => Some(&self.random),
+            ResponseRuleKind::Unordered | ResponseRuleKind::Counter => None,
+        }
+    }
+
+    pub(in crate::replay) fn generated_for_kind_mut(
+        &mut self,
+        kind: ResponseRuleKind,
+    ) -> Option<&mut Vec<GeneratedResponseRule>> {
+        match kind {
+            ResponseRuleKind::Timestamp => Some(&mut self.timestamp),
+            ResponseRuleKind::Duration => Some(&mut self.duration),
+            ResponseRuleKind::Uuid => Some(&mut self.uuid),
+            ResponseRuleKind::Random => Some(&mut self.random),
+            ResponseRuleKind::Unordered | ResponseRuleKind::Counter => None,
+        }
     }
 }
 
@@ -99,11 +155,8 @@ impl ResponseRules {
         matching_json_rules(&self.json, method, path)
             .flat_map(|(api, rules)| {
                 rules
-                    .dynamic
-                    .iter()
-                    .map(move |field| {
-                        response_field(ResponseRuleKind::Dynamic, api, &field.pointer)
-                    })
+                    .generated()
+                    .map(move |(kind, field)| response_field(kind, api, &field.pointer))
                     .chain(rules.unordered.iter().map(move |field| {
                         response_field(ResponseRuleKind::Unordered, api, &field.pointer)
                     }))
@@ -227,6 +280,7 @@ pub struct ProtobufUnorderedPath {
     pub field_path: ProtobufFieldPath,
     pub display_path: String,
     pub element_type: ProtobufRepeatedElementType,
+    pub source_evidence: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -257,6 +311,7 @@ impl Hessian2ValuePath {
 pub struct Hessian2UnorderedPath {
     pub value_path: Hessian2ValuePath,
     pub display_path: String,
+    pub source_evidence: String,
 }
 
 /// Selects a Hessian2 **String** field whose value is a set joined into one
@@ -268,6 +323,7 @@ pub struct Hessian2JoinedStringPath {
     pub value_path: Hessian2ValuePath,
     pub display_path: String,
     pub separator: String,
+    pub source_evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -351,28 +407,27 @@ pub(in crate::replay) struct MotanResponseRuleMatch {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseRuleKind {
-    Dynamic,
-    Unordered,
-    Counter,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum DynamicResponseMechanism {
     Timestamp,
     Duration,
     Uuid,
     Random,
-    Nonce,
-    RandomSalt,
-    DynamicDerived,
+    Unordered,
+    Counter,
+}
+
+impl ResponseRuleKind {
+    pub(in crate::replay) fn is_generated(self) -> bool {
+        matches!(
+            self,
+            Self::Timestamp | Self::Duration | Self::Uuid | Self::Random
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(in crate::replay) struct DynamicResponseRule {
+pub(in crate::replay) struct GeneratedResponseRule {
     pub(in crate::replay) pointer: String,
-    pub(in crate::replay) mechanisms: Vec<DynamicResponseMechanism>,
     pub(in crate::replay) source_evidence: String,
     pub(in crate::replay) source_example: String,
     pub(in crate::replay) target_example: String,
@@ -382,6 +437,7 @@ pub(in crate::replay) struct DynamicResponseRule {
 #[serde(deny_unknown_fields)]
 pub(in crate::replay) struct JsonUnorderedResponseRule {
     pub(in crate::replay) pointer: String,
+    pub(in crate::replay) source_evidence: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -436,9 +492,8 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
         .iter()
         .flat_map(|(api, rules)| {
             rules
-                .dynamic
-                .iter()
-                .map(move |field| response_rule_id(ResponseRuleKind::Dynamic, api, &field.pointer))
+                .generated()
+                .map(move |(kind, field)| response_rule_id(kind, api, &field.pointer))
                 .chain(rules.unordered.iter().map(move |field| {
                     response_rule_id(ResponseRuleKind::Unordered, api, &field.pointer)
                 }))
@@ -466,7 +521,10 @@ pub(in crate::replay) fn response_rule_id(
     pointer: &str,
 ) -> String {
     let (namespace, kind) = match kind {
-        ResponseRuleKind::Dynamic => ("response", "dynamic"),
+        ResponseRuleKind::Timestamp => ("response", "timestamp"),
+        ResponseRuleKind::Duration => ("response", "duration"),
+        ResponseRuleKind::Uuid => ("response", "uuid"),
+        ResponseRuleKind::Random => ("response", "random"),
         ResponseRuleKind::Unordered => ("response", "unordered"),
         ResponseRuleKind::Counter => ("response:comparison", "counter"),
     };
@@ -526,16 +584,16 @@ fn validate_json_rule_map<'a>(
             !rules.is_empty(),
             "JSON response rule API {api:?} must select at least one rule"
         );
-        let mut unique_dynamic = BTreeSet::new();
-        for field in &rules.dynamic {
+        let mut unique_generated = BTreeSet::new();
+        for (kind, field) in rules.generated() {
             validate_json_pointer(&field.pointer)?;
             ensure!(
-                unique_dynamic.insert(field.pointer.as_str()),
-                "dynamic response rule API {api:?} repeats JSON Pointer {:?}",
+                unique_generated.insert(field.pointer.as_str()),
+                "generated response rules for API {api:?} repeat JSON Pointer {:?}",
                 field.pointer
             );
-            validate_dynamic_rule(field)?;
-            locations.push((method, path, &field.pointer, ResponseRuleKind::Dynamic));
+            validate_generated_rule(kind, field)?;
+            locations.push((method, path, &field.pointer, kind));
         }
         let mut unique_unordered = BTreeSet::new();
         for field in &rules.unordered {
@@ -545,6 +603,7 @@ fn validate_json_rule_map<'a>(
                 "unordered response rule API {api:?} repeats JSON Pointer {:?}",
                 field.pointer
             );
+            validate_audit_text(&field.source_evidence, "source_evidence", 512)?;
             locations.push((method, path, &field.pointer, ResponseRuleKind::Unordered));
         }
         let mut unique_counter = BTreeSet::new();
@@ -581,6 +640,7 @@ fn validate_protobuf_rule_map(rules: &BTreeMap<String, ProtobufResponseRules>) -
         let mut unique_display = BTreeSet::new();
         for unordered_path in &rule.unordered {
             validate_audit_text(&unordered_path.display_path, "display_path", 512)?;
+            validate_audit_text(&unordered_path.source_evidence, "source_evidence", 512)?;
             ensure!(
                 unordered_path
                     .display_path
@@ -643,6 +703,7 @@ fn validate_hessian2_rule_map(rules: &BTreeMap<String, Hessian2ResponseRules>) -
         for unordered_path in &rule.unordered {
             validate_hessian2_value_path(api, &unordered_path.value_path, MAX_PATH_DEPTH)?;
             validate_semantic_display_path(api, &unordered_path.display_path)?;
+            validate_audit_text(&unordered_path.source_evidence, "source_evidence", 512)?;
             ensure!(
                 unique_display.insert(&unordered_path.display_path),
                 "Hessian2 response rule API {api:?} repeats display_path {:?}",
@@ -663,6 +724,7 @@ fn validate_hessian2_rule_map(rules: &BTreeMap<String, Hessian2ResponseRules>) -
             );
             validate_audit_text(&joined.separator, "Hessian2 joined-string separator", 16)?;
             validate_semantic_display_path(api, &joined.display_path)?;
+            validate_audit_text(&joined.source_evidence, "source_evidence", 512)?;
             ensure!(
                 unique_display.insert(&joined.display_path),
                 "Hessian2 response rule API {api:?} repeats display_path {:?}",
@@ -740,29 +802,17 @@ fn validate_rule_api(api: &str) -> Result<(&str, &str)> {
     Ok((method, path))
 }
 
-fn validate_dynamic_rule(rule: &DynamicResponseRule) -> Result<()> {
+fn validate_generated_rule(kind: ResponseRuleKind, rule: &GeneratedResponseRule) -> Result<()> {
     ensure!(
-        !rule.mechanisms.is_empty(),
-        "dynamic response rule {} requires at least one mechanism",
-        rule.pointer
-    );
-    let mechanisms = rule.mechanisms.iter().copied().collect::<BTreeSet<_>>();
-    ensure!(
-        mechanisms.len() == rule.mechanisms.len(),
-        "dynamic response rule {} repeats a mechanism",
-        rule.pointer
-    );
-    ensure!(
-        !mechanisms.contains(&DynamicResponseMechanism::DynamicDerived) || mechanisms.len() > 1,
-        "dynamic response rule {} uses dynamic_derived without its underlying mechanism",
-        rule.pointer
+        kind.is_generated(),
+        "generated response rule has an invalid kind"
     );
     validate_audit_text(&rule.source_evidence, "source_evidence", 512)?;
     validate_audit_text(&rule.source_example, "source_example", 1024)?;
     validate_audit_text(&rule.target_example, "target_example", 1024)?;
     ensure!(
         rule.source_example != rule.target_example,
-        "dynamic response rule {} requires different source and target examples",
+        "{kind:?} response rule {} requires different source and target examples",
         rule.pointer
     );
     Ok(())
