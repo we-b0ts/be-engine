@@ -462,11 +462,18 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         }
         _ => {
             report.body_mode = ResponseBodyMode::ExactBytes;
+            let bodies_match = expected_body.exact_bytes() == actual_body.exact_bytes();
+            // Configured response rules are JSON-pointer-based and cannot apply
+            // to a non-JSON body. When the bodies are byte-equal there is no
+            // difference for any rule to evaluate, so the case passes
+            // regardless of configured rules. Only a differing non-JSON body
+            // with configured rules is unevaluable, because the rules cannot
+            // judge whether the difference would be tolerated.
             ensure!(
-                response_fields.is_empty(),
+                bodies_match || response_fields.is_empty(),
                 "response rules require JSON response bodies"
             );
-            if expected_body.exact_bytes() != actual_body.exact_bytes() {
+            if !bodies_match {
                 report
                     .differences
                     .push(ResponseDifference::exact_body_mismatch());
