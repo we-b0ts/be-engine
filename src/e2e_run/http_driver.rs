@@ -350,6 +350,7 @@ mod tests {
             target_startup_timeout: Duration::from_secs(1),
             target_request_timeout: Duration::from_secs(1),
             target_quality_gates: Vec::new(),
+            process_outputs: Vec::new(),
             target_max_response_bytes: 1024,
             source_container: "source".to_string(),
             breeze_container: None,

@@ -309,6 +309,9 @@ fn source_process_next_step(kind: RewriteIssueKind) -> &'static str {
         RewriteIssueKind::TargetRuntime => {
             "Inspect source startup and readiness paths only for matching bootstrap dependencies."
         }
+        RewriteIssueKind::ProcessOutput => {
+            "Use the recorded process output manifests and inspect the target startup path."
+        }
     }
 }
 
@@ -739,11 +742,14 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
 }
 
 fn source_process_evidence_relevant(issue: &RewriteIssue) -> bool {
-    issue.kind != RewriteIssueKind::TargetRuntime
-        || issue
+    match issue.kind {
+        RewriteIssueKind::ProcessOutput => false,
+        RewriteIssueKind::TargetRuntime => issue
             .possible_causes
             .iter()
-            .any(|cause| cause == "source_compatible_configuration")
+            .any(|cause| cause == "source_compatible_configuration"),
+        _ => true,
+    }
 }
 
 fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
@@ -756,6 +762,9 @@ fn source_process_evidence_purpose(kind: RewriteIssueKind) -> &'static str {
         }
         RewriteIssueKind::TargetRuntime => {
             "Use this evidence when target startup or readiness may depend on source bootstrap traffic"
+        }
+        RewriteIssueKind::ProcessOutput => {
+            "Inspect the recorded process output manifests and target startup path"
         }
     }
 }

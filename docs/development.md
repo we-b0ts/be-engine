@@ -1020,6 +1020,7 @@ backend-rewrite next --api 'GET /api/widgets/*' \
   --source-route '/api/widgets/:id'
 backend-rewrite status
 backend-rewrite status --api 'GET /api/widgets/*'
+backend-rewrite status --process-output metrics-profile
 backend-rewrite inventory
 backend-rewrite evidence <query-id>
 backend-rewrite recording request \
@@ -1038,7 +1039,7 @@ backend-rewrite verification request \
   --reason 'shared response mapper changed'
 ```
 
-Rewrite action schema v19 always returns `action.kind`, `action.summary`,
+Rewrite action schema v20 always returns `action.kind`, `action.summary`,
 `action.details`, and `action.commands`. Variant facts exist only under
 `details`; executable argv exist only under role-named `commands` such as
 `execute`, `status`, `advance`, `recover`, `evidence`, `apply`, and `acceptance`.
@@ -1057,10 +1058,11 @@ The binary writes one compact JSON object per command by default. Pass global
 atomic and avoids reconstructing one response with `head` and `tail`.
 
 Worker transfer is an exceptional compare-and-swap ownership change. It is
-valid only for the current `implementation_required` API and requires its
+valid only for the current `implementation_required` API or process-output
+work item and requires its
 current opaque `binding_id`, an actual replacement handle, a bounded reason,
-and explicit caller approval. The replacement handle must not own another API
-in the workflow. A successful transfer preserves the worktree, records the
+and explicit caller approval. The replacement handle must not own another work
+item in the workflow. A successful transfer preserves the worktree, records the
 prior handle fingerprint and reason, changes the binding generation, and
 atomically confirms the replacement for the current dispatch. A stale binding
 ID is rejected so an older session cannot overwrite a newer owner.
@@ -1093,6 +1095,22 @@ before executing evidence, and each worker owns evidence, diagnosis, target
 code, and local tests for only its API. With multiple APIs, the orchestrator
 uses `backend-rewrite inventory` to choose an exact pending item and continues
 with `next --api` after dispatch rather than waiting for the current worker.
+Configured `project.process_outputs` are captured from the source container as
+immutable standard-recording evidence and from each target run immediately
+before target shutdown. The v1 `regular_file_exists` comparison passes when
+both captures are regular files; their bytes, sizes, and fingerprints remain in
+the evidence even though v1 does not compare contents. A missing source output
+rejects the standard recording as an engine input problem. A missing target
+output becomes a target-code `implementation_required` work item.
+
+The coordinator first traverses and dispatches every API work item. It then
+traverses pending process outputs with `next --process-output <id>` and assigns
+each failure its own dedicated worker, without waiting for already-confirmed
+API workers. AI work therefore overlaps while traffic and capture operations
+remain serialized. `inventory` includes a separate bounded
+`process_output_inventory`; use `status --process-output <id>` to reconstruct a
+specific process-output action.
+
 After status returns
 `advance_required`, the returned `next` validates the
 preallocated run, prepares the current API, runs focused E2E, and returns
@@ -1106,11 +1124,14 @@ preserves the effective worktree content does not change the fingerprint.
 `verification request` lets the main orchestrator promote selected stale APIs
 early after a high-impact shared change; the returned advance command starts
 their normal Replay/comparison flow, and final whole-inventory coverage remains
-mandatory. `terminal_allowed` is false until every inventory item has both
-passing E2E and comparison evidence for the same target content fingerprint.
+mandatory. `terminal_allowed` is false until every API inventory item has both
+passing E2E and comparison evidence and every process output has passing
+evidence for the same target content fingerprint. A process-output repair can
+invalidate completed APIs, so the final epoch reruns stale APIs before the
+process output is compared again.
 
 Recording, focused Replay, and comparison share one serialized traffic-runtime
-lease. When another API owns it, action schema v19 returns `wait_required` with
+lease. When another API owns it, action schema v20 returns `wait_required` with
 the requested and blocking APIs, the live operation when available, a retry
 delay, and the exact `commands.status` argv. This lease serializes each traffic
 operation, not a complete API lifecycle: while worker A implements, the
@@ -1118,8 +1139,9 @@ orchestrator may run Replay for API B and dispatch worker B. No worker may start
 a traffic operation. If code changes during Replay, that result is discarded;
 later code changes defer already-completed API evidence to the final epoch.
 
-`status [--api]` is read-only and returns the selected API's `action` from the
-persisted workflow revision. Before execution starts it reconstructs the same
+`status [--api | --process-output]` is read-only and returns the selected work
+item's `action` from the persisted workflow revision. Before execution starts
+it reconstructs the same
 run ID and argv; owner status for a live detached worker may return
 `recording_in_progress`, and only a
 finalized manifest returns `advance_required`. A running manifest without a live

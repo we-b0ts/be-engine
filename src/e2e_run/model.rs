@@ -35,6 +35,8 @@ pub(super) struct ProjectSettings {
     pub source: SourceProjectConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub breeze: Option<BreezeProjectConfig>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
     pub target: TargetProjectConfig,
     pub replay: ReplayProjectConfig,
     pub recording: RecordingProjectConfig,
@@ -119,6 +121,7 @@ pub(crate) struct ResolvedProjectConfig {
     pub(crate) target_quality_gates: Vec<TargetQualityGateConfig>,
     pub(crate) target_max_response_bytes: usize,
     pub(crate) source_container: String,
+    pub(crate) process_outputs: Vec<crate::process_output::ProcessOutputConfig>,
     pub(crate) breeze_container: Option<String>,
     pub(crate) replay_policy: PathBuf,
     pub(crate) replay_startup_timeout: Duration,

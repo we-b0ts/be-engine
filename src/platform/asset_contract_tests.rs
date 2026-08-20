@@ -340,6 +340,22 @@ fn embedded_platform_manager_is_valid_bash() {
             .contains("replace 127.0.0.1 with this preflight host when capturing remotely")
     );
     assert!(MANAGER.contains("wait_for_recorder_or_duration"));
+    let standard_recording = MANAGER
+        .split("run_standard_recording() {")
+        .nth(1)
+        .unwrap()
+        .split("wait_for_comparison_ready() {")
+        .next()
+        .unwrap();
+    assert_in_order(
+        standard_recording,
+        &[
+            "finalize_recorder",
+            "internal process-output-capture",
+            "--container \"$source_name\" --side source",
+            "manifest_filter=",
+        ],
+    );
     assert!(
         RECORDER_RUNTIME
             .contains("timeout --foreground \"$duration_seconds\" docker wait \"$recorder_name\"")

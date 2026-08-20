@@ -124,6 +124,7 @@ pub(crate) fn render_project_config(
                 .breeze_container
                 .clone()
                 .map(|container| BreezeProjectConfig { container }),
+            process_outputs: Vec::new(),
             target: TargetProjectConfig {
                 dockerfile: options.target_dockerfile.clone(),
                 startup: crate::startup::normalized_config(options.target_startup.clone())?,
@@ -276,6 +277,7 @@ pub(crate) fn resolve_project(target_root: &Path) -> Result<(PathBuf, ResolvedPr
             target_quality_gates,
             target_max_response_bytes,
             source_container: config.project.source.container,
+            process_outputs: config.project.process_outputs,
             breeze_container: config.project.breeze.map(|breeze| breeze.container),
             replay_policy: policy_path,
             replay_startup_timeout: Duration::from_secs(
@@ -357,6 +359,7 @@ pub(super) fn validate_project_config(config: &ProjectConfig) -> Result<()> {
             "breeze.container must not be empty"
         );
     }
+    crate::process_output::validate_configs(&project.process_outputs)?;
     ensure!(
         !project.target.dockerfile.as_os_str().is_empty(),
         "target.dockerfile must not be empty"

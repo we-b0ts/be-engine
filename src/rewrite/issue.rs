@@ -155,6 +155,7 @@ fn kind_name(kind: RewriteIssueKind) -> &'static str {
         RewriteIssueKind::Replay => "replay",
         RewriteIssueKind::Dependency => "dependency",
         RewriteIssueKind::Comparison => "comparison",
+        RewriteIssueKind::ProcessOutput => "process_output",
     }
 }
 

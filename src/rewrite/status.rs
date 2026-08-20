@@ -4,7 +4,10 @@ use super::model::{
     ACTION_SCHEMA_VERSION, RewriteInventoryReport, RewritePhase, RewriteStatusReport,
 };
 use super::store::{RewriteLockState, RewriteStore};
-use super::{RewriteContext, action, fingerprint, inventory, revalidation, traffic_operation};
+use super::{
+    RewriteContext, action, fingerprint, inventory, process_outputs, revalidation,
+    traffic_operation,
+};
 use crate::RecordingApi;
 
 pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
@@ -12,18 +15,23 @@ pub fn status_rewrite(context: RewriteContext) -> Result<RewriteStatusReport> {
 }
 
 pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let (target_root, project) = crate::e2e_run::resolve_project(&context.target_root)?;
     let state = RewriteStore::new(&target_root)?.load()?;
     Ok(match state {
         Some(mut state) => {
             inventory::initialize_legacy(&mut state);
+            if !state.api_inventory.is_empty() {
+                process_outputs::ensure_inventory_matches(&state, &project.process_outputs)?;
+            }
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
+            process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
             RewriteInventoryReport {
                 schema_version: ACTION_SCHEMA_VERSION,
                 initialized: true,
                 workflow: Some(action::workflow_view(&state)),
                 api_inventory: Some(inventory::details(&state)),
+                process_output_inventory: Some(super::process_outputs::details(&state)),
             }
         }
         None => RewriteInventoryReport {
@@ -31,6 +39,7 @@ pub fn inventory_rewrite(context: RewriteContext) -> Result<RewriteInventoryRepo
             initialized: false,
             workflow: None,
             api_inventory: None,
+            process_output_inventory: None,
         },
     })
 }
@@ -39,13 +48,17 @@ pub fn status_rewrite_for_api(
     context: RewriteContext,
     api: Option<&RecordingApi>,
 ) -> Result<RewriteStatusReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let (target_root, project) = crate::e2e_run::resolve_project(&context.target_root)?;
     let state = RewriteStore::new(&target_root)?.load()?;
     Ok(match state {
         Some(mut state) => {
             inventory::initialize_legacy(&mut state);
+            if !state.api_inventory.is_empty() {
+                process_outputs::ensure_inventory_matches(&state, &project.process_outputs)?;
+            }
             let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
             inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
+            process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
             if state.phase == RewritePhase::ComparisonRecordingRequired
                 && state.target_fingerprint.as_deref() != Some(target_fingerprint.as_str())
             {
@@ -106,6 +119,7 @@ pub fn status_rewrite_for_api(
                 initialized: true,
                 workflow: envelope.workflow,
                 api_inventory: envelope.api_inventory,
+                process_output_inventory: envelope.process_output_inventory,
                 latest_focused_e2e: envelope.latest_focused_e2e,
                 e2e_current: scoped.e2e_current,
                 comparison_current: scoped.comparison_current,
@@ -127,6 +141,78 @@ pub fn status_rewrite_for_api(
                 initialized: false,
                 workflow: None,
                 api_inventory: None,
+                process_output_inventory: None,
+                latest_focused_e2e: None,
+                e2e_current: false,
+                comparison_current: false,
+                terminal_allowed: false,
+                action: envelope.action,
+            }
+        }
+    })
+}
+
+pub fn status_rewrite_for_process_output(
+    context: RewriteContext,
+    id: &str,
+) -> Result<RewriteStatusReport> {
+    let (target_root, project) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let state = RewriteStore::new(&target_root)?.load()?;
+    Ok(match state {
+        Some(mut state) => {
+            inventory::initialize_legacy(&mut state);
+            if !state.api_inventory.is_empty() {
+                process_outputs::ensure_inventory_matches(&state, &project.process_outputs)?;
+            }
+            let target_fingerprint = fingerprint::repository_fingerprint(&target_root)?;
+            inventory::defer_completed_for_target_change(&mut state, &target_fingerprint)?;
+            process_outputs::defer_for_target_change(&mut state, &target_fingerprint);
+            let scoped = process_outputs::scoped(&state, id)?;
+            let mut envelope = match traffic_operation::state(&target_root)? {
+                traffic_operation::TrafficOperationState::Live(active) => {
+                    action::wait_envelope(&target_root, &scoped, None, &active)
+                }
+                traffic_operation::TrafficOperationState::Stale(_) => {
+                    action::recovery_required(&target_root)
+                }
+                traffic_operation::TrafficOperationState::Absent => {
+                    match RewriteStore::new(&target_root)?.lock_state()? {
+                        RewriteLockState::Live => {
+                            action::coordinator_wait_envelope(&target_root, &scoped, None)
+                        }
+                        RewriteLockState::Stale => action::recovery_required(&target_root),
+                        RewriteLockState::Absent => action::for_status(&target_root, &scoped)?,
+                    }
+                }
+            };
+            action::retarget_wait_status_for_process_output(&mut envelope, &target_root, id);
+            RewriteStatusReport {
+                schema_version: envelope.schema_version,
+                initialized: true,
+                workflow: envelope.workflow,
+                api_inventory: envelope.api_inventory,
+                process_output_inventory: envelope.process_output_inventory,
+                latest_focused_e2e: envelope.latest_focused_e2e,
+                e2e_current: scoped.e2e_current,
+                comparison_current: scoped.comparison_current,
+                terminal_allowed: envelope.terminal_allowed,
+                action: envelope.action,
+            }
+        }
+        None => {
+            let envelope = match RewriteStore::new(&target_root)?.lock_state()? {
+                RewriteLockState::Live => {
+                    action::uninitialized_coordinator_wait_envelope(&target_root, None)
+                }
+                RewriteLockState::Stale => action::recovery_required(&target_root),
+                RewriteLockState::Absent => action::input_required(&target_root),
+            };
+            RewriteStatusReport {
+                schema_version: envelope.schema_version,
+                initialized: false,
+                workflow: None,
+                api_inventory: None,
+                process_output_inventory: None,
                 latest_focused_e2e: None,
                 e2e_current: false,
                 comparison_current: false,

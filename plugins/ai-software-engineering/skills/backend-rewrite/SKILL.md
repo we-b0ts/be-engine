@@ -78,7 +78,7 @@ only when the caller explicitly requests a single-API recording. After the
 coordinator publishes its stable inventory, select work with the exact
 inventory method/pattern.
 
-Response schema v19 contains an `action` object with exactly `kind`, `summary`,
+Response schema v20 contains an `action` object with exactly `kind`, `summary`,
 `details`, and `commands`. This action schema version is independent of target
 repository configuration versions. Read kind-specific facts only from
 `action.details`. For `implementation_required`, use only the issue-scoped
@@ -93,8 +93,9 @@ combining, shell-evaluating, or changing arguments. Supply named required
 environment variables without printing their values. Compact JSON is the
 default; use global `--pretty` only for interactive human inspection.
 
-Use `backend-rewrite status [--api '<METHOD pattern>']` when an action response
-was lost or a session resumes. Never infer state from artifact recency. Never
+Use `backend-rewrite status [--api '<METHOD pattern>' | --process-output <id>]`
+when an action response was lost or a session resumes. Never infer state from
+artifact recency. Never
 mutate coordinator runtime files. Use action, status, and evidence APIs as the
 primary interface; report an insufficient API surface as a coordinator gap.
 Read-only runtime inspection is allowed when needed to diagnose such a gap,

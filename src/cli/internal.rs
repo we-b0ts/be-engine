@@ -3,10 +3,11 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
-    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, RecordingApi,
-    drive_managed_recording_input, execute_rewrite_recording_worker,
+    ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ProcessOutputCaptureSide,
+    RecordingApi, capture_project_process_outputs, drive_managed_recording_input,
+    execute_rewrite_recording_worker,
 };
 
 use super::{record, record_comparison};
@@ -29,6 +30,8 @@ enum InternalCommand {
     CacheSnapshotRun(super::cache_snapshot::CacheSnapshotRunArgs),
     /// Drive coordinator-owned request templates through a managed recording gateway.
     RecordingInput(RecordingInputArgs),
+    /// Capture configured process-owned files before a managed container exits.
+    ProcessOutputCapture(ProcessOutputCaptureArgs),
     /// Run one detached rewrite recording action owned by the coordinator.
     #[command(hide = true)]
     RewriteRecordingWorker(RewriteRecordingWorkerArgs),
@@ -59,6 +62,33 @@ struct RewriteRecordingWorkerArgs {
     action_id: String,
 }
 
+#[derive(Debug, Args)]
+struct ProcessOutputCaptureArgs {
+    #[arg(long)]
+    target_root: PathBuf,
+    #[arg(long)]
+    container: String,
+    #[arg(long, value_enum)]
+    side: ProcessOutputCaptureSideArg,
+    #[arg(long)]
+    output_root: PathBuf,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ProcessOutputCaptureSideArg {
+    Source,
+    Target,
+}
+
+impl From<ProcessOutputCaptureSideArg> for ProcessOutputCaptureSide {
+    fn from(value: ProcessOutputCaptureSideArg) -> Self {
+        match value {
+            ProcessOutputCaptureSideArg::Source => Self::Source,
+            ProcessOutputCaptureSideArg::Target => Self::Target,
+        }
+    }
+}
+
 pub(super) async fn run(args: InternalArgs) -> Result<()> {
     match args.command {
         InternalCommand::RecorderRun(args) => record::run(args).await,
@@ -80,6 +110,15 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
             })
             .await?;
             super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&report)?))
+        }
+        InternalCommand::ProcessOutputCapture(args) => {
+            let report = capture_project_process_outputs(
+                &args.target_root,
+                &args.container,
+                args.side.into(),
+                &args.output_root,
+            )?;
+            super::output::stdout_line(format_args!("{}", serde_json::to_string(&report)?))
         }
         InternalCommand::RewriteRecordingWorker(args) => {
             let report =

@@ -48,6 +48,15 @@ pub(super) fn allocate_run_id_excluding(
 }
 
 pub(super) fn validate_standard_recording(target_root: &Path, state: &RewriteState) -> Result<()> {
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    validate_standard_recording_with_process_outputs(target_root, state, &project.process_outputs)
+}
+
+fn validate_standard_recording_with_process_outputs(
+    target_root: &Path,
+    state: &RewriteState,
+    process_outputs: &[crate::process_output::ProcessOutputConfig],
+) -> Result<()> {
     let report: StandardRecordingManifest =
         read_json(&recording_manifest(target_root, &state.recording_run_id))?;
     ensure!(
@@ -62,6 +71,12 @@ pub(super) fn validate_standard_recording(target_root: &Path, state: &RewriteSta
         report.published_cases > 0,
         "standard recording published no cases"
     );
+    crate::process_output::validate_capture_set(
+        process_outputs,
+        crate::process_output::ProcessOutputCaptureSide::Source,
+        &recording_run(target_root, &state.recording_run_id).join("process-outputs"),
+        true,
+    )?;
     Ok(())
 }
 
@@ -426,7 +441,7 @@ mod tests {
         let mut state = crate::rewrite::test_state();
         state.recording_run_id = run_id.to_string();
 
-        validate_standard_recording(target.path(), &state).unwrap();
+        validate_standard_recording_with_process_outputs(target.path(), &state, &[]).unwrap();
     }
 
     #[test]

@@ -17,13 +17,15 @@ workflow. Load action-specific references only through the direct routing in
 The coordinator owns the executable phase order:
 
 ```text
-record configured traffic -> stable API inventory
+record configured traffic -> stable API inventory + source process outputs
            -> serialize prepare/focused E2E for API A
            -> API A implementation issue (AI work may run in parallel)
            -> serialize focused E2E for API B
            -> API B implementation issue (AI work may run in parallel)
+           -> process-output comparisons after every API is dispatched
+           -> process-output implementation issues (AI work may run in parallel)
            -> serialize each Replay/comparison transition
-           -> all API slices complete
+           -> all API slices and process outputs complete at one fingerprint
 
 explicit new traffic / changed recording contract / changed source baseline
            -> fresh standard recording -> prepare -> focused E2E
@@ -38,7 +40,7 @@ current action. Wait only for:
 - a returned standard-recording, focused Replay, or comparison operation;
 - required caller input or a coordinator-owned mutation;
 - a serialized traffic runtime owned by another API;
-- worker handoffs after no pending API can advance; or
+- worker handoffs after no pending API or process-output item can advance; or
 - terminal completion.
 
 ## Core Action Handling
@@ -110,11 +112,21 @@ attempts do not require progress commits.
 
 Stop before evidence, artifact, source, or target analysis. Follow
 [implementation-worker-coordination.md](implementation-worker-coordination.md)
-to create or resume the API's dedicated worker and confirm the dispatch. The
-assigned worker follows [problem-diagnosis.md](problem-diagnosis.md), executes
-the opaque evidence queries, proves one cause, runs local tests, and returns the
-unchanged acceptance command. The main orchestrator integrates the tested
-handoff and executes acceptance only from the canonical worktree.
+to create or resume the work item's dedicated worker and confirm the dispatch.
+An API worker receives its bounded evidence commands. A process-output worker
+receives the comparison observation and acceptance command and fixes target
+startup/code without inventing traffic operations. The assigned worker follows
+[problem-diagnosis.md](problem-diagnosis.md), executes any returned opaque
+evidence queries, proves one cause, runs local tests, and returns the unchanged
+acceptance command. The main orchestrator integrates the tested handoff and
+executes acceptance only from the canonical worktree.
+
+After all API items have been traversed and their implementation workers have
+been confirmed, execute each returned `next --process-output <id>` command.
+Dispatch and confirm each process-output worker, then keep advancing other
+eligible work instead of waiting. If a process-output repair changes target
+content, completed APIs become stale; let the coordinator drain their final
+revalidation before it performs the process-output comparison again.
 
 If the worker returns source-proven recorder-capture or process-owned-rule inputs,
 read

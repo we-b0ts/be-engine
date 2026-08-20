@@ -96,7 +96,11 @@ is unclear.
   compatibility and action-schema changes remain reviewable together.
   `inventory.rs` owns the API inventory state machine: stable installation,
   bounded activation and parking, deferred revalidation, and summary/detail
-  views. `revalidation.rs` owns the coordinator's explicit early-validation
+  views. `process_output_model.rs` and `process_outputs.rs` own the separate
+  process-output inventory, comparison scheduling, issue projection, and final
+  target-fingerprint revalidation. Root `process_output.rs` owns validated
+  capture configuration and immutable source/target file evidence.
+  `revalidation.rs` owns the coordinator's explicit early-validation
   request boundary and projection for deferred API status.
   Together, these files are intentionally cohesive near the 1000-line hard limit;
   status projection and the traffic lease are separate modules, and further

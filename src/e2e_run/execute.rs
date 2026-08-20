@@ -429,6 +429,7 @@ async fn run_active_with_replay(
         case_progress::log_completion(position + 1, total_cases);
     }
 
+    capture_target_process_outputs(config, layout, state).await?;
     stop_target_runtime(layout, state).await?;
     state.status = RunStatus::Finalizing;
     store::write_active(layout, state)?;
@@ -455,6 +456,33 @@ async fn run_active_with_replay(
     } else {
         RunStatus::Failed
     };
+    Ok(())
+}
+
+async fn capture_target_process_outputs(
+    config: &ResolvedProjectConfig,
+    layout: &RunLayout,
+    state: &ActiveRunState,
+) -> Result<()> {
+    if config.process_outputs.is_empty() {
+        return Ok(());
+    }
+    let container = state
+        .target_container_name
+        .clone()
+        .context("active E2E state has no target container name")?;
+    let configs = config.process_outputs.clone();
+    let output_root = layout.active_dir.join("reports/process-outputs");
+    tokio::task::spawn_blocking(move || {
+        crate::process_output::capture_process_outputs(
+            &container,
+            &configs,
+            crate::process_output::ProcessOutputCaptureSide::Target,
+            &output_root,
+        )
+    })
+    .await
+    .context("target process output capture task failed")??;
     Ok(())
 }
 
