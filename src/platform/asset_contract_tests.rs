@@ -240,6 +240,9 @@ fn embedded_platform_manager_is_valid_bash() {
     assert!(MANAGER.contains(
             "[[ -z \"${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}\" ]] || comparison_command+=(--listen \"$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN\")"
         ));
+    assert!(MANAGER.contains(
+            "[[ -z \"${TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN-}\" ]] || comparison_command+=(--motan-listen \"$TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN\")"
+        ));
     assert!(RECORDER_RUNTIME.contains("--target-source-ip \"$target_network_ip\""));
     assert!(RECORDER_RUNTIME.contains("--interception-listen-ip \"$target_network_gateway\""));
     assert!(!MANAGER.contains("start_genuine_source"));

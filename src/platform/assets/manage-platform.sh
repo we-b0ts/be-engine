@@ -953,6 +953,7 @@ run_comparison_recording() {
     docker exec "$recorder_name" /usr/local/bin/traffic-e2e recording wait-ready --control-socket /workspace/control/cache-snapshot.sock
     local -a comparison_command=(internal comparison-run --config "$TRAFFIC_E2E_RECORDER_CONFIG" --candidate-upstream "$target_origin" --policy "$TRAFFIC_E2E_REPLAY_POLICY" --run-id "$run_id" --duration-seconds "$duration_seconds" --control-socket "$comparison_control_socket")
     [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN-}" ]] || comparison_command+=(--listen "$TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN")
+    [[ -z "${TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN-}" ]] || comparison_command+=(--motan-listen "$TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN")
     if [[ "${TRAFFIC_E2E_COMPARISON_MOTAN_ENABLED-false}" == true ]]; then
         comparison_command+=(--candidate-motan-upstream "$target_motan_upstream")
     fi

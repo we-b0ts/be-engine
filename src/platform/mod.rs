@@ -400,11 +400,16 @@ async fn run_managed_runtime(
             crate::repository::LOCAL_ARTIFACTS_ROOT
         );
     }
+    let finite_input_comparison = runtime_operation
+        == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
+        && request_source.is_some();
     let managed_comparison_listen = listen_preflight::managed_finite_comparison(
-        runtime_operation
-            == ManagedRuntimeOperation::Recording(ManagedRecordingOperation::RecordComparison)
-            && request_source.is_some(),
+        finite_input_comparison && recorder.http_gateway.enabled,
         recorder.http_gateway.listen,
+    );
+    let managed_comparison_motan_listen = listen_preflight::managed_finite_comparison(
+        finite_input_comparison && recorder.motan_gateway.enabled,
+        recorder.motan_gateway.listen,
     );
     let executable = crate::engine_binary::executable()?;
     ensure_executable(&executable, "traffic-e2e binary")?;
@@ -482,6 +487,12 @@ async fn run_managed_runtime(
         .arg(&run_id);
     if let Some(listen) = managed_comparison_listen {
         command.env("TRAFFIC_E2E_MANAGED_COMPARISON_LISTEN", listen.to_string());
+    }
+    if let Some(listen) = managed_comparison_motan_listen {
+        command.env(
+            "TRAFFIC_E2E_MANAGED_COMPARISON_MOTAN_LISTEN",
+            listen.to_string(),
+        );
     }
     if let Some(port) = comparison_motan_port {
         command.env("TRAFFIC_E2E_TARGET_MOTAN_PORT", port.to_string());
