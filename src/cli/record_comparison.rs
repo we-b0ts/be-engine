@@ -45,9 +45,12 @@ pub(super) struct RecordComparisonArgs {
     /// Publish comparison readiness on this Unix socket for the managed runtime.
     #[arg(long)]
     control_socket: Option<PathBuf>,
-    /// Runtime-only loopback listener used by managed finite-input comparison.
+    /// Runtime-only loopback HTTP listener used by managed finite-input comparison.
     #[arg(long)]
     listen: Option<SocketAddr>,
+    /// Runtime-only loopback Motan listener used by managed finite-input comparison.
+    #[arg(long)]
+    motan_listen: Option<SocketAddr>,
 }
 
 pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
@@ -67,7 +70,7 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
             args.config.display()
         )
     })?;
-    configure_managed_listener(&mut config, args.listen)?;
+    configure_managed_listeners(&mut config, args.listen, args.motan_listen)?;
     let policy_path = args
         .policy
         .unwrap_or_else(|| args.config.with_file_name("verification.yaml"));
@@ -99,18 +102,33 @@ pub(super) async fn run(args: RecordComparisonArgs) -> Result<()> {
     .await
 }
 
-fn configure_managed_listener(config: &mut AppConfig, listen: Option<SocketAddr>) -> Result<()> {
-    let Some(listen) = listen else {
+fn configure_managed_listeners(
+    config: &mut AppConfig,
+    http_listen: Option<SocketAddr>,
+    motan_listen: Option<SocketAddr>,
+) -> Result<()> {
+    if http_listen.is_none() && motan_listen.is_none() {
         return Ok(());
-    };
-    ensure!(
-        listen.ip().is_loopback() && listen.port() != 0,
-        "managed comparison listen must be a loopback address with a non-zero port"
-    );
-    config.http_gateway.listen = listen;
+    }
+    if let Some(listen) = http_listen {
+        validate_managed_listener("HTTP", listen)?;
+        config.http_gateway.listen = listen;
+    }
+    if let Some(listen) = motan_listen {
+        validate_managed_listener("Motan", listen)?;
+        config.motan_gateway.listen = listen;
+    }
     config
         .validate_comparison_recording()
         .context("invalid managed comparison listener override")
+}
+
+fn validate_managed_listener(protocol: &str, listen: SocketAddr) -> Result<()> {
+    ensure!(
+        listen.ip().is_loopback() && listen.port() != 0,
+        "managed comparison {protocol} listen must be a loopback address with a non-zero port"
+    );
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -273,7 +291,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_listener_override_is_loopback_only() {
+    fn managed_listener_overrides_isolate_each_enabled_protocol() {
         let load = || {
             AppConfig::load_comparison_recording(
                 Path::new(env!("CARGO_MANIFEST_DIR")).join("config/project.example.yaml"),
@@ -281,13 +299,26 @@ mod tests {
             .unwrap()
         };
         let mut config = load();
+        config.motan_gateway.enabled = true;
 
-        configure_managed_listener(&mut config, Some("127.0.0.1:17171".parse().unwrap())).unwrap();
+        configure_managed_listeners(
+            &mut config,
+            Some("127.0.0.1:17171".parse().unwrap()),
+            Some("127.0.0.1:18081".parse().unwrap()),
+        )
+        .unwrap();
         assert_eq!(config.http_gateway.listen.to_string(), "127.0.0.1:17171");
+        assert_eq!(config.motan_gateway.listen.to_string(), "127.0.0.1:18081");
 
         for listen in ["0.0.0.0:17171", "10.0.0.1:17171", "127.0.0.1:0"] {
             let error =
-                configure_managed_listener(&mut load(), Some(listen.parse().unwrap())).unwrap_err();
+                configure_managed_listeners(&mut load(), Some(listen.parse().unwrap()), None)
+                    .unwrap_err();
+            assert!(error.to_string().contains("loopback"), "{error:#}");
+
+            let error =
+                configure_managed_listeners(&mut load(), None, Some(listen.parse().unwrap()))
+                    .unwrap_err();
             assert!(error.to_string().contains("loopback"), "{error:#}");
         }
     }
