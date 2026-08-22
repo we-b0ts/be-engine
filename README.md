@@ -86,8 +86,8 @@ operators and system maintainers.
 Nonpassing focused E2E attempts reuse the active immutable standard cases;
 passing attempts advance to fresh comparison recording. An explicit
 `backend-rewrite recording request --kind standard` transition replaces the standard
-evidence chain when new traffic is requested or its Recorder/source contract
-has changed. The coordinator, not the caller, allocates the run ID and returns
+evidence chain only after explicit user authorization. The coordinator, not
+the caller, allocates the run ID and returns
 the exact recording argv. Omitting `--api` on that request resets any prior
 single-API scope and records every API admitted by recorder configuration;
 provide `--api` only for an explicitly narrowed fresh recording. Executing the

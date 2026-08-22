@@ -61,13 +61,11 @@ mutation.
 
 ## Request Fresh Standard Traffic
 
-Use `backend-rewrite recording request --kind standard` only for:
+Every fresh standard recording requires explicit user authorization. Use
+`backend-rewrite recording request --kind standard` only after that
+authorization.
 
-- an explicit caller request;
-- a changed Recorder contract; or
-- a changed source baseline.
-
-Supply the corresponding reason and positive `--duration-seconds` and
+Supply `--reason user-requested` and positive `--duration-seconds` and
 `--per-api-case-limit` values. Omit `--api` to replace a narrowed scope with
 every API admitted by recorder configuration. Provide `--api` only for an
 explicitly single-API recording.

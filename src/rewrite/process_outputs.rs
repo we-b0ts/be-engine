@@ -21,7 +21,7 @@ pub(super) fn install(
     state: &mut RewriteState,
     configs: &[crate::process_output::ProcessOutputConfig],
 ) {
-    state.process_outputs.inventory = configs
+    state.process_outputs.inventory = workflow_configs(configs)
         .iter()
         .map(|config| RewriteProcessOutputProgress {
             id: config.id.clone(),
@@ -116,6 +116,7 @@ pub(super) fn activate_and_compare(
     configs: &[crate::process_output::ProcessOutputConfig],
 ) -> Result<ProcessOutputActivation> {
     ensure_inventory_matches(state, configs)?;
+    let configs = workflow_configs(configs);
     let index = state
         .process_outputs
         .inventory
@@ -161,7 +162,7 @@ pub(super) fn activate_and_compare(
             "current target process-output capture is missing; rerun the coordinator-owned API verification",
         )?;
     crate::process_output::validate_capture_set(
-        configs,
+        &configs,
         crate::process_output::ProcessOutputCaptureSide::Target,
         &evidence.root,
         false,
@@ -191,6 +192,36 @@ pub(super) fn activate_and_compare(
     Ok(ProcessOutputActivation::Compared)
 }
 
+pub(super) fn comparison_issue(
+    target_root: &Path,
+    state: &RewriteState,
+    target_fingerprint: &str,
+    configs: &[crate::process_output::ProcessOutputConfig],
+) -> Result<Option<RewriteIssue>> {
+    let configs = crate::process_output::configs_for_observation(
+        configs,
+        crate::process_output::ProcessOutputObservation::Comparison,
+    );
+    if configs.is_empty() {
+        return Ok(None);
+    }
+    let run_id = state
+        .comparison_run_id
+        .as_deref()
+        .context("comparison process output has no run id")?;
+    let root = super::artifacts::comparison_run(target_root, run_id).join("process-outputs");
+    let source_root = root.join("source");
+    let target_root = root.join("target");
+    let attempt = state.attempts.last().map_or(0, |attempt| attempt.attempt);
+    for config in &configs {
+        let result = crate::process_output::compare_capture(config, &source_root, &target_root)?;
+        if !result.passed {
+            return Ok(Some(missing_issue(&result, target_fingerprint, attempt)));
+        }
+    }
+    Ok(None)
+}
+
 fn ensure_eligible(
     state: &RewriteState,
     status: RewriteProcessOutputStatus,
@@ -218,6 +249,7 @@ pub(super) fn ensure_inventory_matches(
     state: &RewriteState,
     configs: &[crate::process_output::ProcessOutputConfig],
 ) -> Result<()> {
+    let configs = workflow_configs(configs);
     ensure!(
         state.process_outputs.inventory.len() == configs.len()
             && configs.iter().all(|config| {
@@ -230,6 +262,15 @@ pub(super) fn ensure_inventory_matches(
         "process output configuration changed after the standard recording; start a fresh workflow recording"
     );
     Ok(())
+}
+
+fn workflow_configs(
+    configs: &[crate::process_output::ProcessOutputConfig],
+) -> Vec<crate::process_output::ProcessOutputConfig> {
+    crate::process_output::configs_for_observation(
+        configs,
+        crate::process_output::ProcessOutputObservation::BeforeShutdown,
+    )
 }
 
 fn missing_issue(
@@ -419,6 +460,70 @@ mod tests {
     }
 
     #[test]
+    fn comparison_outputs_are_verified_per_api_not_as_global_work() {
+        let mut state = crate::rewrite::test_state();
+        state.api_inventory = vec![api("GET /a", RewriteApiStatus::Complete)];
+        let before_shutdown = process_output_config(
+            "startup-report",
+            crate::process_output::ProcessOutputObservation::BeforeShutdown,
+        );
+        let comparison = process_output_config(
+            "metrics-profile",
+            crate::process_output::ProcessOutputObservation::Comparison,
+        );
+
+        let configs = [before_shutdown, comparison];
+        install(&mut state, &configs);
+
+        assert_eq!(state.process_outputs.inventory.len(), 1);
+        assert_eq!(state.process_outputs.inventory[0].id, "startup-report");
+        ensure_inventory_matches(&state, &configs).unwrap();
+    }
+
+    #[test]
+    fn comparison_output_missing_from_target_becomes_current_api_issue() {
+        let target = tempfile::tempdir().unwrap();
+        let mut state = crate::rewrite::test_state();
+        let run_id = "20260822000000";
+        state.comparison_run_id = Some(run_id.to_string());
+        let config = process_output_config(
+            "metrics-profile",
+            crate::process_output::ProcessOutputObservation::Comparison,
+        );
+        let root = crate::rewrite::artifacts::comparison_run(target.path(), run_id)
+            .join("process-outputs");
+        crate::process_output::write_test_capture(
+            &root.join("source"),
+            &config,
+            crate::process_output::ProcessOutputCaptureSide::Source,
+            Some(b"source profile"),
+        )
+        .unwrap();
+        crate::process_output::write_test_capture(
+            &root.join("target"),
+            &config,
+            crate::process_output::ProcessOutputCaptureSide::Target,
+            None,
+        )
+        .unwrap();
+
+        let issue = comparison_issue(target.path(), &state, "target-a", &[config])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(issue.kind, RewriteIssueKind::ProcessOutput);
+        assert_eq!(issue.owner, RewriteIssueOwner::TargetCode);
+        assert_eq!(
+            issue
+                .comparison_observation
+                .as_ref()
+                .unwrap()
+                .pointer("/candidate/present"),
+            Some(&serde_json::json!(false))
+        );
+    }
+
+    #[test]
     fn stale_process_output_waits_for_all_apis_to_complete() {
         let mut state = crate::rewrite::test_state();
         state.api_inventory = vec![api("GET /a", RewriteApiStatus::ImplementationRequired)];
@@ -511,6 +616,19 @@ mod tests {
             attempts: 0,
             verified_target_fingerprint: None,
             issue: None,
+        }
+    }
+
+    fn process_output_config(
+        id: &str,
+        observation: crate::process_output::ProcessOutputObservation,
+    ) -> crate::process_output::ProcessOutputConfig {
+        crate::process_output::ProcessOutputConfig {
+            id: id.to_string(),
+            path: PathBuf::from("/data1/weibo/logs/profile.log"),
+            comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
+            observation,
+            max_bytes: 1024,
         }
     }
 }

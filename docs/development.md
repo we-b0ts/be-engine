@@ -1095,16 +1095,23 @@ before executing evidence, and each worker owns evidence, diagnosis, target
 code, and local tests for only its API. With multiple APIs, the orchestrator
 uses `backend-rewrite inventory` to choose an exact pending item and continues
 with `next --api` after dispatch rather than waiting for the current worker.
-Configured `project.process_outputs` are captured from the source container as
-immutable standard-recording evidence and from each target run immediately
-before target shutdown. The v1 `regular_file_exists` comparison passes when
-both captures are regular files; their bytes, sizes, and fingerprints remain in
-the evidence even though v1 does not compare contents. A missing source output
-rejects the standard recording as an engine input problem. A missing target
-output becomes a target-code `implementation_required` work item.
+Configured `project.process_outputs` select their capture lifecycle with
+`observation`. `before_shutdown` retains the global workflow: source evidence
+comes from the standard recording and target evidence from focused Replay
+immediately before shutdown. `comparison` starts fresh source and target
+containers for each API comparison, waits
+`comparison_recording.process_output_flush_after_last_case_ms` after its final
+case (15 seconds by default), captures both files, and makes the result part of
+that API's comparison gate. Focused Replay does not capture `comparison`
+outputs. The v1 `regular_file_exists` comparison passes when both captures are
+regular files; their bytes, sizes, and fingerprints remain in the evidence even
+though v1 does not compare contents. A missing source output rejects the owning
+recording as an engine input problem. A missing target output becomes a
+target-code `implementation_required` work item.
 
 The coordinator first traverses and dispatches every API work item. It then
-traverses pending process outputs with `next --process-output <id>` and assigns
+traverses pending `before_shutdown` process outputs with
+`next --process-output <id>` and assigns
 each failure its own dedicated worker, without waiting for already-confirmed
 API workers. AI work therefore overlaps while traffic and capture operations
 remain serialized. `inventory` includes a separate bounded
@@ -1160,8 +1167,9 @@ explicit empty list disables them.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
-recording. Use `backend-rewrite recording request --kind standard` only for an explicit
-new-traffic request, a changed Recorder contract, or a changed source baseline.
+recording. Every fresh standard recording requires explicit user authorization.
+Use `backend-rewrite recording request --kind standard` only after that
+authorization.
 The request accepts positive duration and per-API case-limit values, invalidates state
 derived from the old baseline without deleting its artifacts, and returns a
 new exact recording action. Omitting `--api` means all APIs admitted by recorder

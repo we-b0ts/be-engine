@@ -375,5 +375,16 @@ mod tests {
         let enabled_decision = configure_baseline_recheck(&mut enabled, &policy, true).unwrap();
         assert!(enabled_decision.enabled);
         assert_eq!(enabled_decision.reason, "command_line");
+
+        let mut configured = load_config();
+        configured
+            .comparison_recording
+            .as_mut()
+            .unwrap()
+            .baseline_recheck = true;
+        let configured_decision =
+            configure_baseline_recheck(&mut configured, &policy, false).unwrap();
+        assert!(configured_decision.enabled);
+        assert_eq!(configured_decision.reason, "recorder_config");
     }
 }

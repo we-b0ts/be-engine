@@ -6,7 +6,8 @@ use anyhow::Result;
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     ManagedRecordingInputCompletion, ManagedRecordingInputOptions, ProcessOutputCaptureSide,
-    RecordingApi, capture_project_process_outputs, drive_managed_recording_input,
+    ProcessOutputObservation, RecordingApi, capture_project_process_outputs,
+    capture_project_process_outputs_for_observation, drive_managed_recording_input,
     execute_rewrite_recording_worker,
 };
 
@@ -53,6 +54,9 @@ struct RecordingInputArgs {
     /// Notify a managed comparison after every finite request template is consumed.
     #[arg(long)]
     completion_control_socket: Option<PathBuf>,
+    /// Override the finite comparison quiet period after the last request.
+    #[arg(long)]
+    completion_quiet_period_ms: Option<NonZeroU64>,
 }
 
 #[derive(Debug, Args)]
@@ -70,6 +74,8 @@ struct ProcessOutputCaptureArgs {
     container: String,
     #[arg(long, value_enum)]
     side: ProcessOutputCaptureSideArg,
+    #[arg(long, value_enum)]
+    observation: Option<ProcessOutputObservationArg>,
     #[arg(long)]
     output_root: PathBuf,
 }
@@ -78,6 +84,21 @@ struct ProcessOutputCaptureArgs {
 enum ProcessOutputCaptureSideArg {
     Source,
     Target,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ProcessOutputObservationArg {
+    BeforeShutdown,
+    Comparison,
+}
+
+impl From<ProcessOutputObservationArg> for ProcessOutputObservation {
+    fn from(value: ProcessOutputObservationArg) -> Self {
+        match value {
+            ProcessOutputObservationArg::BeforeShutdown => Self::BeforeShutdown,
+            ProcessOutputObservationArg::Comparison => Self::Comparison,
+        }
+    }
 }
 
 impl From<ProcessOutputCaptureSideArg> for ProcessOutputCaptureSide {
@@ -104,7 +125,9 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
                 completion: args.completion_control_socket.map(|control_socket| {
                     ManagedRecordingInputCompletion {
                         control_socket,
-                        quiet_period: MANAGED_COMPARISON_FINAL_QUIET_PERIOD,
+                        quiet_period: managed_comparison_quiet_period(
+                            args.completion_quiet_period_ms,
+                        ),
                     }
                 }),
             })
@@ -112,12 +135,21 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
             super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&report)?))
         }
         InternalCommand::ProcessOutputCapture(args) => {
-            let report = capture_project_process_outputs(
-                &args.target_root,
-                &args.container,
-                args.side.into(),
-                &args.output_root,
-            )?;
+            let report = match args.observation {
+                Some(observation) => capture_project_process_outputs_for_observation(
+                    &args.target_root,
+                    &args.container,
+                    args.side.into(),
+                    observation.into(),
+                    &args.output_root,
+                )?,
+                None => capture_project_process_outputs(
+                    &args.target_root,
+                    &args.container,
+                    args.side.into(),
+                    &args.output_root,
+                )?,
+            };
             super::output::stdout_line(format_args!("{}", serde_json::to_string(&report)?))
         }
         InternalCommand::RewriteRecordingWorker(args) => {
@@ -125,5 +157,33 @@ pub(super) async fn run(args: InternalArgs) -> Result<()> {
                 execute_rewrite_recording_worker(args.target_root, &args.action_id).await?;
             super::output::stdout_line(format_args!("{}", serde_json::to_string_pretty(&report)?))
         }
+    }
+}
+
+fn managed_comparison_quiet_period(override_ms: Option<NonZeroU64>) -> Duration {
+    override_ms
+        .map(|value| Duration::from_millis(value.get()))
+        .unwrap_or(MANAGED_COMPARISON_FINAL_QUIET_PERIOD)
+        .max(MANAGED_COMPARISON_FINAL_QUIET_PERIOD)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_output_flush_never_shortens_the_comparison_final_quiet_period() {
+        assert_eq!(
+            managed_comparison_quiet_period(None),
+            MANAGED_COMPARISON_FINAL_QUIET_PERIOD
+        );
+        assert_eq!(
+            managed_comparison_quiet_period(NonZeroU64::new(1)),
+            MANAGED_COMPARISON_FINAL_QUIET_PERIOD
+        );
+        assert_eq!(
+            managed_comparison_quiet_period(NonZeroU64::new(15_000)),
+            Duration::from_secs(15)
+        );
     }
 }

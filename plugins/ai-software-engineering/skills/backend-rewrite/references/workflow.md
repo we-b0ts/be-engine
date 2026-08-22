@@ -27,7 +27,7 @@ record configured traffic -> stable API inventory + source process outputs
            -> serialize each Replay/comparison transition
            -> all API slices and process outputs complete at one fingerprint
 
-explicit new traffic / changed recording contract / changed source baseline
+explicit user authorization
            -> fresh standard recording -> prepare -> focused E2E
 
 source-proven bypassed backend -> apply capture rule -> API waits

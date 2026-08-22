@@ -6,8 +6,8 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use super::{
-    COMPARISON_TARGET_NETWORK, HTTPS_PROBE, MANAGER, PLATFORM_MOUNTS, PREFLIGHT_BUSINESS_INPUT,
-    RECORDER_RUNTIME,
+    COMPARISON_PROCESS_OUTPUTS, COMPARISON_TARGET_NETWORK, HTTPS_PROBE, MANAGER, PLATFORM_MOUNTS,
+    PREFLIGHT_BUSINESS_INPUT, RECORDER_RUNTIME,
 };
 
 pub(super) fn stage_assets(target_root: &Path) -> Result<PathBuf> {
@@ -17,6 +17,11 @@ pub(super) fn stage_assets(target_root: &Path) -> Result<PathBuf> {
     fs::create_dir_all(&root)
         .with_context(|| format!("failed to create Platform asset root {}", root.display()))?;
     write_asset(&root.join("manage-platform.sh"), MANAGER, 0o700)?;
+    write_asset(
+        &root.join("comparison-process-outputs.sh"),
+        COMPARISON_PROCESS_OUTPUTS,
+        0o600,
+    )?;
     write_asset(
         &root.join("comparison-target-network.sh"),
         COMPARISON_TARGET_NETWORK,

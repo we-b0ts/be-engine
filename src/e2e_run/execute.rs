@@ -464,14 +464,17 @@ async fn capture_target_process_outputs(
     layout: &RunLayout,
     state: &ActiveRunState,
 ) -> Result<()> {
-    if config.process_outputs.is_empty() {
+    let configs = crate::process_output::configs_for_observation(
+        &config.process_outputs,
+        crate::process_output::ProcessOutputObservation::BeforeShutdown,
+    );
+    if configs.is_empty() {
         return Ok(());
     }
     let container = state
         .target_container_name
         .clone()
         .context("active E2E state has no target container name")?;
-    let configs = config.process_outputs.clone();
     let output_root = layout.active_dir.join("reports/process-outputs");
     tokio::task::spawn_blocking(move || {
         crate::process_output::capture_process_outputs(

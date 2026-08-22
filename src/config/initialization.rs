@@ -228,6 +228,7 @@ comparison_recording:
   upstream_timeout_ms: 30000
   max_in_flight: 1
   summary_flush_interval_ms: 1000
+  process_output_flush_after_last_case_ms: 15000
 dns_mock:
   enabled: true
   listen: 127.0.0.153:__DNS_MOCK_PORT__
@@ -347,6 +348,14 @@ mod tests {
                 .as_ref()
                 .unwrap()
                 .baseline_recheck
+        );
+        assert_eq!(
+            config
+                .comparison_recording
+                .as_ref()
+                .unwrap()
+                .process_output_flush_after_last_case_ms,
+            crate::config::comparison_recording::DEFAULT_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS
         );
         assert_eq!(config.http_gateway.listen.to_string(), "0.0.0.0:18181");
         assert_eq!(config.dns_mock.listen.port(), DEFAULT_DNS_MOCK_PORT);

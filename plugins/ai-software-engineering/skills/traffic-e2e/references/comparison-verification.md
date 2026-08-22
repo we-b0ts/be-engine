@@ -71,6 +71,18 @@ the published comparison case count; a mismatch finalizes with errors instead
 of silently accepting missing evidence. Without finite input or a completed
 explicit case limit, comparison keeps the full recording window.
 
+For `project.process_outputs` whose `observation` is `comparison`, the final
+quiet period is extended to
+`comparison_recording.process_output_flush_after_last_case_ms` (15 seconds by
+default). Source and candidate files are copied after that wait and before
+their containers stop. The capture is scoped to this single-API comparison
+run; standard Replay does not collect these outputs. Source-after remains
+independently controlled by `baseline_recheck` and the verification policy.
+Because source-after sends a second request only to the source process,
+cumulative process-output contents are not workload-symmetric when it is
+enabled; do not add raw-content equality without an explicit segmentation or
+normalization contract.
+
 ## Verify
 
 Run the file-only comparator against the exact finalized manifest:

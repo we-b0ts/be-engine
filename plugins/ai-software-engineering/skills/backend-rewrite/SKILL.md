@@ -24,6 +24,8 @@ Choose one role before taking action:
   that API's evidence, source/target diagnosis, implementation, and local tests.
   Never advance coordinator state, execute acceptance, or operate another API.
 
+A fresh standard recording requires explicit user authorization.
+
 The main orchestrator reads [workflow.md](references/workflow.md) before
 advancing the workflow. Load these conditional references directly from this
 file only when their trigger occurs:

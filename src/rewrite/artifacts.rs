@@ -57,6 +57,10 @@ fn validate_standard_recording_with_process_outputs(
     state: &RewriteState,
     process_outputs: &[crate::process_output::ProcessOutputConfig],
 ) -> Result<()> {
+    let process_outputs = crate::process_output::configs_for_observation(
+        process_outputs,
+        crate::process_output::ProcessOutputObservation::BeforeShutdown,
+    );
     let report: StandardRecordingManifest =
         read_json(&recording_manifest(target_root, &state.recording_run_id))?;
     ensure!(
@@ -72,7 +76,7 @@ fn validate_standard_recording_with_process_outputs(
         "standard recording published no cases"
     );
     crate::process_output::validate_capture_set(
-        process_outputs,
+        &process_outputs,
         crate::process_output::ProcessOutputCaptureSide::Source,
         &recording_run(target_root, &state.recording_run_id).join("process-outputs"),
         true,
@@ -161,6 +165,24 @@ pub(super) fn validate_comparison_recording(
         report.counts.failed == 0 && report.errors.is_empty(),
         "comparison recording is dirty"
     );
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    let process_outputs = crate::process_output::configs_for_observation(
+        &project.process_outputs,
+        crate::process_output::ProcessOutputObservation::Comparison,
+    );
+    let process_output_root = comparison_run(target_root, run_id).join("process-outputs");
+    crate::process_output::validate_capture_set(
+        &process_outputs,
+        crate::process_output::ProcessOutputCaptureSide::Source,
+        &process_output_root.join("source"),
+        true,
+    )?;
+    crate::process_output::validate_capture_set(
+        &process_outputs,
+        crate::process_output::ProcessOutputCaptureSide::Target,
+        &process_output_root.join("target"),
+        false,
+    )?;
     Ok(())
 }
 
@@ -442,6 +464,20 @@ mod tests {
         state.recording_run_id = run_id.to_string();
 
         validate_standard_recording_with_process_outputs(target.path(), &state, &[]).unwrap();
+
+        let comparison_output = crate::process_output::ProcessOutputConfig {
+            id: "metrics-profile".to_string(),
+            path: PathBuf::from("/data1/weibo/logs/profile.log"),
+            comparison: crate::process_output::ProcessOutputComparison::RegularFileExists,
+            observation: crate::process_output::ProcessOutputObservation::Comparison,
+            max_bytes: 1024,
+        };
+        validate_standard_recording_with_process_outputs(
+            target.path(),
+            &state,
+            &[comparison_output],
+        )
+        .unwrap();
     }
 
     #[test]
