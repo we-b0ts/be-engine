@@ -482,7 +482,10 @@ async fn execute_rewrite_recording_locked(
         operation,
         run_id: Some(run_id.clone()),
         duration_seconds: state.recording_settings.duration_seconds,
-        baseline_recheck: comparison,
+        // The project configuration and verification policy own source-after.
+        // The rewrite coordinator must not turn an optional diagnostic into
+        // an unconditional second source request.
+        baseline_recheck: false,
         apis,
         per_api_case_limit: Some(state.recording_settings.per_api_case_limit),
         request_source,

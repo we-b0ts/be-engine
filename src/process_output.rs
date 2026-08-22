@@ -39,9 +39,10 @@ pub(crate) enum ProcessOutputComparison {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum ProcessOutputObservation {
+pub enum ProcessOutputObservation {
     #[default]
     BeforeShutdown,
+    Comparison,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +132,29 @@ pub fn capture_project_process_outputs(
 ) -> Result<ProcessOutputCaptureReport> {
     let (_, project) = crate::e2e_run::resolve_project(target_root)?;
     capture_process_outputs(container, &project.process_outputs, side, output_root)
+}
+
+pub fn capture_project_process_outputs_for_observation(
+    target_root: &Path,
+    container: &str,
+    side: ProcessOutputCaptureSide,
+    observation: ProcessOutputObservation,
+    output_root: &Path,
+) -> Result<ProcessOutputCaptureReport> {
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    let configs = configs_for_observation(&project.process_outputs, observation);
+    capture_process_outputs(container, &configs, side, output_root)
+}
+
+pub(crate) fn configs_for_observation(
+    configs: &[ProcessOutputConfig],
+    observation: ProcessOutputObservation,
+) -> Vec<ProcessOutputConfig> {
+    configs
+        .iter()
+        .filter(|config| config.observation == observation)
+        .cloned()
+        .collect()
 }
 
 pub(crate) fn capture_process_outputs(
@@ -526,6 +550,42 @@ fn file_fingerprint(path: &Path) -> Result<String> {
 }
 
 #[cfg(test)]
+pub(crate) fn write_test_capture(
+    root: &Path,
+    config: &ProcessOutputConfig,
+    side: ProcessOutputCaptureSide,
+    bytes: Option<&[u8]>,
+) -> Result<()> {
+    let directory = root.join(&config.id);
+    fs::create_dir_all(&directory)?;
+    let (present, size_bytes, fingerprint) = if let Some(bytes) = bytes {
+        let data = directory.join(side.data_file());
+        fs::write(&data, bytes)?;
+        (
+            true,
+            Some(bytes.len() as u64),
+            Some(file_fingerprint(&data)?),
+        )
+    } else {
+        (false, None, None)
+    };
+    write_json(
+        &directory.join("manifest.json"),
+        &ProcessOutputManifest {
+            schema_version: CAPTURE_SCHEMA_VERSION,
+            id: config.id.clone(),
+            side,
+            path: config.path.clone(),
+            comparison: config.comparison,
+            observation: config.observation,
+            present,
+            size_bytes,
+            fingerprint,
+        },
+    )
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -548,6 +608,24 @@ mod tests {
         let mut invalid = config();
         invalid.path = PathBuf::from("relative.log");
         assert!(validate_configs(&[invalid]).is_err());
+    }
+
+    #[test]
+    fn selects_outputs_by_capture_observation() {
+        let before_shutdown = config();
+        let mut comparison = config();
+        comparison.id = "comparison-profile".to_string();
+        comparison.observation = ProcessOutputObservation::Comparison;
+        let configs = [before_shutdown.clone(), comparison.clone()];
+
+        assert_eq!(
+            configs_for_observation(&configs, ProcessOutputObservation::BeforeShutdown),
+            vec![before_shutdown]
+        );
+        assert_eq!(
+            configs_for_observation(&configs, ProcessOutputObservation::Comparison),
+            vec![comparison]
+        );
     }
 
     #[test]
@@ -596,32 +674,6 @@ mod tests {
     }
 
     fn write_capture(root: &Path, side: ProcessOutputCaptureSide, present: bool, bytes: &[u8]) {
-        let directory = root.join("metrics-profile");
-        fs::create_dir_all(&directory).unwrap();
-        let (size_bytes, fingerprint) = if present {
-            let data = directory.join(side.data_file());
-            fs::write(&data, bytes).unwrap();
-            (
-                Some(bytes.len() as u64),
-                Some(file_fingerprint(&data).unwrap()),
-            )
-        } else {
-            (None, None)
-        };
-        write_json(
-            &directory.join("manifest.json"),
-            &ProcessOutputManifest {
-                schema_version: CAPTURE_SCHEMA_VERSION,
-                id: "metrics-profile".to_string(),
-                side,
-                path: PathBuf::from("/data1/weibo/logs/profile.log"),
-                comparison: ProcessOutputComparison::RegularFileExists,
-                observation: ProcessOutputObservation::BeforeShutdown,
-                present,
-                size_bytes,
-                fingerprint,
-            },
-        )
-        .unwrap();
+        write_test_capture(root, &config(), side, present.then_some(bytes)).unwrap();
     }
 }

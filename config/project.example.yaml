@@ -2,13 +2,6 @@ version: 14
 project:
   source:
     container: source-app
-  process_outputs:
-  - id: metrics-profile
-    path: /data1/weibo/logs/profile.log
-    comparison:
-      kind: regular_file_exists
-    observation: before_shutdown
-    max_bytes: 8388608
   target:
     dockerfile: .traffic-e2e/Dockerfile.e2e
     startup: {}
@@ -20,6 +13,13 @@ project:
     pr_base: dev-migration
   state:
     runtime_root: local/runtime
+  process_outputs:
+  - id: metrics-profile
+    path: /data1/weibo/logs/profile.log
+    comparison:
+      kind: regular_file_exists
+    observation: comparison
+    max_bytes: 8388608
 recorder:
   # Static recorder example. Project initialization embeds these settings under
   # `recorder` in `.traffic-e2e/project.yaml`. Coordinator-managed values belong
@@ -34,6 +34,7 @@ recorder:
     upstream_timeout_ms: 30000
     max_in_flight: 1
     summary_flush_interval_ms: 1000
+    process_output_flush_after_last_case_ms: 15000
   dns_mock:
     enabled: true
     listen: 127.0.0.153:4053

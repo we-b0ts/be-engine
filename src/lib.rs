@@ -154,7 +154,8 @@ pub use platform::{
     run_managed_recording_preflight,
 };
 pub use process_output::{
-    ProcessOutputCaptureReport, ProcessOutputCaptureSide, capture_project_process_outputs,
+    ProcessOutputCaptureReport, ProcessOutputCaptureSide, ProcessOutputObservation,
+    capture_project_process_outputs, capture_project_process_outputs_for_observation,
 };
 pub use recorder::{
     AccessPolicyAllowEvent, ArtifactOwner, BodyCapture, CaseBodyCapture, CaseContext,

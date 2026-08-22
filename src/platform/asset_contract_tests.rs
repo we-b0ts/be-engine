@@ -16,15 +16,23 @@ fn assert_in_order(content: &str, markers: &[&str]) {
 fn embedded_platform_manager_is_valid_bash() {
     let temp = tempfile::tempdir().unwrap();
     let script = temp.path().join("manage-platform.sh");
+    let process_outputs = temp.path().join("comparison-process-outputs.sh");
     let mounts = temp.path().join("platform-mounts.sh");
     let target_network = temp.path().join("comparison-target-network.sh");
     let recorder_runtime = temp.path().join("recorder-runtime.sh");
     write_asset(&script, MANAGER, 0o700).unwrap();
+    write_asset(&process_outputs, COMPARISON_PROCESS_OUTPUTS, 0o600).unwrap();
     write_asset(&mounts, PLATFORM_MOUNTS, 0o600).unwrap();
     write_asset(&target_network, COMPARISON_TARGET_NETWORK, 0o600).unwrap();
     write_asset(&recorder_runtime, RECORDER_RUNTIME, 0o600).unwrap();
 
-    for asset in [&script, &mounts, &target_network, &recorder_runtime] {
+    for asset in [
+        &script,
+        &process_outputs,
+        &mounts,
+        &target_network,
+        &recorder_runtime,
+    ] {
         let status = StdCommand::new("bash")
             .arg("-n")
             .arg(asset)
@@ -33,8 +41,11 @@ fn embedded_platform_manager_is_valid_bash() {
         assert!(status.success());
     }
     assert!(MANAGER.contains("comparison-target-network.sh"));
+    assert!(MANAGER.contains("comparison-process-outputs.sh"));
     assert!(MANAGER.contains("recorder-runtime.sh"));
     assert!(MANAGER.contains("TRAFFIC_E2E_COORDINATOR_RULES"));
+    assert!(COMPARISON_PROCESS_OUTPUTS.contains("--observation comparison"));
+    assert!(COMPARISON_PROCESS_OUTPUTS.contains("completion_reason"));
     assert!(
         RECORDER_RUNTIME
             .contains("--volume \"$TRAFFIC_E2E_RECORDER_CONFIG:/workspace/project.yaml:ro\"")
@@ -367,6 +378,36 @@ fn embedded_platform_manager_is_valid_bash() {
 }
 
 #[test]
+fn comparison_process_output_flush_extends_finite_input_completion() {
+    let temp = tempfile::tempdir().unwrap();
+    let asset = temp.path().join("comparison-process-outputs.sh");
+    write_asset(&asset, COMPARISON_PROCESS_OUTPUTS, 0o600).unwrap();
+
+    let output = StdCommand::new("bash")
+        .arg("-c")
+        .arg(
+            "source \"$1\"; input_command=(recording-input); \
+             comparison_process_output_completion_args input_command /tmp/control.sock; \
+             printf '%s\\n' \"${input_command[@]}\"",
+        )
+        .arg("bash")
+        .arg(&asset)
+        .env("TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUTS_ENABLED", "true")
+        .env(
+            "TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS",
+            "15000",
+        )
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "recording-input\n--completion-quiet-period-ms\n15000\n"
+    );
+}
+
+#[test]
 fn stages_private_executable_assets() {
     let temp = tempfile::tempdir().unwrap();
     let target = temp.path();
@@ -382,6 +423,14 @@ fn stages_private_executable_assets() {
     );
     assert_eq!(
         fs::metadata(assets.join("comparison-target-network.sh"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    assert_eq!(
+        fs::metadata(assets.join("comparison-process-outputs.sh"))
             .unwrap()
             .permissions()
             .mode()

@@ -26,6 +26,8 @@ required_environment=(
     TRAFFIC_E2E_COORDINATOR_RULES
     TRAFFIC_E2E_REPLAY_POLICY
     TRAFFIC_E2E_PLATFORM_ASSETS
+    TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUTS_ENABLED
+    TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS
 )
 for name in "${required_environment[@]}"; do
     [[ -n "${!name-}" ]] || {
@@ -42,6 +44,8 @@ case "$TRAFFIC_E2E_HTTP_RECORDING_ENABLED" in
 esac
 http_recording_enabled=$TRAFFIC_E2E_HTTP_RECORDING_ENABLED
 source "$TRAFFIC_E2E_PLATFORM_ASSETS/preflight-business-input.sh"
+source "$TRAFFIC_E2E_PLATFORM_ASSETS/comparison-process-outputs.sh"
+validate_comparison_process_output_environment
 
 case "$operation" in
     record|record-comparison|preflight) ;;
@@ -770,6 +774,7 @@ start_recording_input() {
     fi
     [[ -z "$completion_control_socket" ]] || \
         input_command+=(--completion-control-socket "$completion_control_socket")
+    comparison_process_output_completion_args input_command "$completion_control_socket"
     if [[ -n "$completion_control_socket" ]]; then
         local selector
         for selector in "${api_selectors[@]}"; do input_command+=(--api "$selector"); done
@@ -877,6 +882,7 @@ run_standard_recording() {
     finalize_recorder
     "$TRAFFIC_E2E_BIN" internal process-output-capture --target-root "$TRAFFIC_E2E_TARGET_ROOT" \
         --container "$source_name" --side source \
+        --observation before-shutdown \
         --output-root "$artifacts_dir/recordings/$run_id/process-outputs"
     local manifest_filter='.status == "completed" and .failed_cases == 0 and (.errors | length == 0)'
     if [[ "$operation" == preflight && "${TRAFFIC_E2E_PREFLIGHT_MOTAN_ENABLED-false}" != true ]]; then
@@ -974,6 +980,7 @@ run_comparison_recording() {
     comparison_pid=""
     stop_recording_input || status=1
     ((status == 0)) || return "$status"
+    capture_comparison_process_outputs
     stop_target
     stop_container "$source_name"
     source_started=false

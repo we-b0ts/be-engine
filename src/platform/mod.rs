@@ -43,6 +43,7 @@ pub use replay_preflight::{
     ReplayPositiveProbeResult,
 };
 const MANAGER: &str = include_str!("assets/manage-platform.sh");
+const COMPARISON_PROCESS_OUTPUTS: &str = include_str!("assets/comparison-process-outputs.sh");
 const COMPARISON_TARGET_NETWORK: &str = include_str!("assets/comparison-target-network.sh");
 const RECORDER_RUNTIME: &str = include_str!("assets/recorder-runtime.sh");
 const PLATFORM_MOUNTS: &str = include_str!("assets/platform-mounts.sh");
@@ -365,6 +366,10 @@ async fn run_managed_runtime(
         .comparison_recording
         .as_ref()
         .context("managed recording requires comparison configuration")?;
+    let comparison_process_outputs = crate::process_output::configs_for_observation(
+        &config.process_outputs,
+        crate::process_output::ProcessOutputObservation::Comparison,
+    );
     let (source_origin, source_host, source_port) = if recorder.http_gateway.enabled {
         let source_origin = comparison
             .baseline_upstream(&recorder.http_gateway)
@@ -481,6 +486,16 @@ async fn run_managed_runtime(
         .env("TRAFFIC_E2E_COORDINATOR_RULES", coordinator_rules)
         .env("TRAFFIC_E2E_REPLAY_POLICY", &config.replay_policy)
         .env("TRAFFIC_E2E_PLATFORM_ASSETS", &assets)
+        .env(
+            "TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUTS_ENABLED",
+            (!comparison_process_outputs.is_empty()).to_string(),
+        )
+        .env(
+            "TRAFFIC_E2E_COMPARISON_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS",
+            comparison
+                .process_output_flush_after_last_case_ms
+                .to_string(),
+        )
         .arg("--duration-seconds")
         .arg(options.duration_seconds.to_string())
         .arg("--run-id")

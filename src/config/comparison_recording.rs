@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{HttpGatewayConfig, HttpGatewayFallbackMode};
 
+pub const DEFAULT_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS: u64 = 15_000;
+const MAX_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS: u64 = 10 * 60 * 1_000;
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ComparisonRecordingConfig {
@@ -14,6 +17,7 @@ pub struct ComparisonRecordingConfig {
     pub upstream_timeout_ms: u64,
     pub max_in_flight: usize,
     pub summary_flush_interval_ms: u64,
+    pub process_output_flush_after_last_case_ms: u64,
 }
 
 impl ComparisonRecordingConfig {
@@ -73,6 +77,11 @@ impl ComparisonRecordingConfig {
         ensure!(
             self.summary_flush_interval_ms > 0,
             "comparison_recording.summary_flush_interval_ms must be greater than zero"
+        );
+        ensure!(
+            (1..=MAX_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS)
+                .contains(&self.process_output_flush_after_last_case_ms),
+            "comparison_recording.process_output_flush_after_last_case_ms must be between 1 and {MAX_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS}"
         );
         if !gateway.enabled {
             return Ok(());
@@ -148,6 +157,8 @@ impl Default for ComparisonRecordingConfig {
             upstream_timeout_ms: 30_000,
             max_in_flight: 1,
             summary_flush_interval_ms: 1_000,
+            process_output_flush_after_last_case_ms:
+                DEFAULT_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS,
         }
     }
 }
@@ -225,6 +236,22 @@ mod tests {
         let error = validate(&config, &gateway(&["GET"])).unwrap_err();
 
         assert!(error.to_string().contains("HTTP and Motan"));
+    }
+
+    #[test]
+    fn bounds_the_comparison_process_output_flush_window() {
+        let default = ComparisonRecordingConfig::default();
+        assert_eq!(
+            default.process_output_flush_after_last_case_ms,
+            DEFAULT_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS
+        );
+
+        let invalid = ComparisonRecordingConfig {
+            process_output_flush_after_last_case_ms: MAX_PROCESS_OUTPUT_FLUSH_AFTER_LAST_CASE_MS
+                + 1,
+            ..Default::default()
+        };
+        assert!(validate(&invalid, &gateway(&["GET"])).is_err());
     }
 
     #[test]

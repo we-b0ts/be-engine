@@ -824,10 +824,14 @@ async fn run_and_transition(target_root: &Path, state: &mut RewriteState) -> Res
         return Ok(());
     }
     let (_, project) = crate::e2e_run::resolve_project(target_root)?;
-    if !project.process_outputs.is_empty() {
+    let process_outputs = crate::process_output::configs_for_observation(
+        &project.process_outputs,
+        crate::process_output::ProcessOutputObservation::BeforeShutdown,
+    );
+    if !process_outputs.is_empty() {
         let root = crate::e2e_run::focused_process_output_evidence(&context, &api)?;
         crate::process_output::validate_capture_set(
-            &project.process_outputs,
+            &process_outputs,
             crate::process_output::ProcessOutputCaptureSide::Target,
             &root,
             false,
@@ -862,8 +866,23 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
             .join("progress.yaml"),
         &state.recording_run_id,
     )?;
-    state.comparison_current = report.passed;
-    if report.passed {
+    let (_, project) = crate::e2e_run::resolve_project(target_root)?;
+    let target_fingerprint = fingerprint::repository_fingerprint(target_root)?;
+    let process_output_issue = report.passed.then(|| {
+        process_outputs::comparison_issue(
+            target_root,
+            state,
+            &target_fingerprint,
+            &project.process_outputs,
+        )
+    });
+    let process_output_issue = process_output_issue.transpose()?.flatten();
+    state.comparison_current = report.passed && process_output_issue.is_none();
+    if let Some(issue) = process_output_issue {
+        state.active_issue = Some(issue);
+        state.target_fingerprint = Some(target_fingerprint);
+        state.phase = RewritePhase::ImplementationRequired;
+    } else if report.passed {
         state.active_issue = None;
         if !inventory::complete_current_and_advance(state)?
             && !recording::begin_pending_capture_refresh(target_root, state)?
@@ -904,7 +923,7 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
             attempt: state.attempts.last().map_or(0, |attempt| attempt.attempt),
             comparison_observation: observation,
         });
-        state.target_fingerprint = Some(fingerprint::repository_fingerprint(target_root)?);
+        state.target_fingerprint = Some(target_fingerprint);
         state.phase = RewritePhase::ImplementationRequired;
     }
     state.bump();
