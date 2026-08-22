@@ -24,7 +24,11 @@ bypass the returned command.
 
 Successful verification chooses the next transition. Replay and external-input
 repairs reuse the same cases; Recorder or source-baseline repairs allocate
-fresh standard traffic. The AI never chooses between those transitions.
+fresh standard traffic. The AI never chooses between those transitions, and a
+repair transition is not recording authorization. Execute replacement standard
+traffic only when the user has already proactively and explicitly authorized
+that specific recording; otherwise leave it pending without soliciting
+authorization.
 
 Use `recorder-capability-gap` only when the recorder lacks a required mechanism.
 A configured Breeze resource bypassed during recording is reported as

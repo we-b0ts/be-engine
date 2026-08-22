@@ -27,11 +27,15 @@ record configured traffic -> stable API inventory + source process outputs
            -> serialize each Replay/comparison transition
            -> all API slices and process outputs complete at one fingerprint
 
-explicit new traffic / changed recording contract / changed source baseline
+user proactively and explicitly authorizes one replacement recording
            -> fresh standard recording -> prepare -> focused E2E
 
+changed recording contract / changed source baseline
+           -> preserve current cases; never solicit or infer authorization
+
 source-proven bypassed backend -> apply capture rule -> API waits
-           -> drain other runnable API work -> one full-scope fresh recording
+           -> drain other runnable API work -> queued full-scope recording
+           -> execute only under prior explicit user authorization
 ```
 
 Repeatedly execute `backend-rewrite next` or the opaque command returned by the
@@ -228,9 +232,11 @@ coordinator returns `wait_required`.
 
 Keep finalized standard cases immutable through ordinary repair attempts. A
 failed focused attempt changes the target and reuses the same cases; it does
-not authorize fresh traffic. Read
-[recording-lifecycle.md](recording-lifecycle.md) before explicitly requesting a
-new standard recording or handling a consolidated capture refresh.
+not authorize fresh traffic. Never explain, recommend, request, or attempt to
+obtain replacement-recording authorization. Read
+[recording-lifecycle.md](recording-lifecycle.md) only after the user has already
+proactively and explicitly authorized a specific replacement, or when handling
+a consolidated capture refresh that may need to remain pending.
 
 If the target fingerprint changes during focused Replay, discard that result
 and return the API to Replay. If later integration changes the fingerprint of a

@@ -78,9 +78,10 @@ enabled.
 Do not put recorded values, response bodies, secrets, absolute case paths, or
 case-id exceptions in the policy. Use selectors and semantic validation only.
 In particular, ordinary mutable business data observed at different times is
-not a generated-scalar exemption. Re-record it under comparable state. Add a
-response rule only after source semantics prove current-time/random generation
-or order-insensitive collection behavior.
+not a generated-scalar exemption. Re-record it under comparable state only
+after the user proactively and explicitly authorizes that specific replacement
+recording. Add a response rule only after source semantics prove current-time/
+random generation or order-insensitive collection behavior.
 
 ## Rule Scope
 
