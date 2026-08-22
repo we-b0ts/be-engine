@@ -365,8 +365,7 @@ Route the proven cause to exactly one action:
 - source-proven omitted dependency: return the evidence ID,
   `hostname[:port]`, and source proof; the orchestrator reports
   `--cause missing-recorded-resource`, then owns the returned capture apply and
-  coordinator-owned recording refresh, which remains pending unless already
-  covered by proactive, explicit user authorization;
+  coordinator-owned recording refresh;
 - true Recorder/Replay capability gap, where the supported planners and engine
   cannot express the required mechanism: return exact route evidence and the
   required system change; the orchestrator owns `backend-rewrite route` and the

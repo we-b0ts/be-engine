@@ -24,15 +24,17 @@ Choose one role before taking action:
   that API's evidence, source/target diagnosis, implementation, and local tests.
   Never advance coordinator state, execute acceptance, or operate another API.
 
+A fresh standard recording requires explicit user authorization.
+
 The main orchestrator reads [workflow.md](references/workflow.md) before
 advancing the workflow. Load these conditional references directly from this
 file only when their trigger occurs:
 
 - Read [recording-lifecycle.md](references/recording-lifecycle.md) for a
   `recording_required`, `recording_in_progress`, or
-  `comparison_recording_required` action, after the user proactively and
-  explicitly authorizes replacement standard traffic, or when applied capture
-  rules queue a consolidated recording refresh.
+  `comparison_recording_required` action, before requesting fresh standard
+  traffic, or when applied capture rules require a consolidated recording
+  refresh.
 - Read
   [coordinator-evidence-actions.md](references/coordinator-evidence-actions.md)
   only after worker confirmation and only when that worker returns inputs for
@@ -161,14 +163,6 @@ source file/symbol proof; it never guesses a Breeze resource or descriptor.
 The orchestrator then follows
 [coordinator-evidence-actions.md](references/coordinator-evidence-actions.md)
 for the coordinator-owned plan/apply transition and recording refresh.
-
-Replacement standard recording is user-authorized only. The AI must not
-explain, recommend, request, or attempt to obtain that authorization. A changed
-Recorder contract, changed source baseline, repair result, capture rule, stale
-evidence, or coordinator-issued action is not authorization. Execute a
-replacement only when the user has already proactively and explicitly
-authorized that specific recording; otherwise leave it pending and continue
-only work that preserves the existing standard cases.
 
 ## Mandatory Dedicated API Implementation Workers
 

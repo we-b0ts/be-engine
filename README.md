@@ -85,18 +85,15 @@ operators and system maintainers.
 
 Nonpassing focused E2E attempts reuse the active immutable standard cases;
 passing attempts advance to fresh comparison recording. An explicit
-`backend-rewrite recording request --kind standard --reason user-requested`
-transition replaces the standard evidence chain only after the user has
-proactively and explicitly authorized that specific replacement. Recorder or
-source contract changes do not authorize replacement, and the AI must not
-solicit authorization. The coordinator allocates the run ID and returns the
-exact recording argv. Omitting `--api` on that request resets any prior single-
-API scope and records every API admitted by recorder configuration; provide
-`--api` only when the user's authorization explicitly narrows the fresh
-recording. Executing the returned action starts a detached coordinator worker
-and returns immediately; poll `backend-rewrite status` until it reports
-`advance_required`, then execute the exact `action.commands.advance` command
-once.
+`backend-rewrite recording request --kind standard` transition replaces the standard
+evidence chain only after explicit user authorization. The coordinator, not
+the caller, allocates the run ID and returns
+the exact recording argv. Omitting `--api` on that request resets any prior
+single-API scope and records every API admitted by recorder configuration;
+provide `--api` only for an explicitly narrowed fresh recording. Executing the
+returned action starts a detached coordinator worker and returns immediately;
+poll `backend-rewrite status` until it reports `advance_required`, then execute
+the exact `action.commands.advance` command once.
 
 Process-owned dependency rules are evidence-ownership rules, not fresh-capture
 contracts. `backend-rewrite dependency-rule apply <plan-id>` preserves the

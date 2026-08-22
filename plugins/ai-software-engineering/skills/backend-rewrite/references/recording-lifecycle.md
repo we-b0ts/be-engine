@@ -1,15 +1,15 @@
 # Recording Lifecycle
 
 Read this guide only for `recording_required`, `recording_in_progress`,
-`comparison_recording_required`, a user-authorized replacement-standard-
-recording request, or a consolidated capture refresh. The main orchestrator
-owns every command in this guide.
+`comparison_recording_required`, an explicit fresh-standard-recording request,
+or a consolidated capture refresh. The main orchestrator owns every command in
+this guide.
 
 ## Contents
 
 - Execute and monitor recording actions
-- Preserve standard cases
-- Execute user-authorized replacement standard traffic
+- Preserve or replace standard cases
+- Request fresh standard traffic
 - Consolidate capture refreshes
 
 ## Execute A Recording Action
@@ -59,23 +59,16 @@ Replay evidence and returns its next action. Follow
 [coordinator-evidence-actions.md](coordinator-evidence-actions.md) for that
 mutation.
 
-## User-Authorized Replacement Standard Traffic
+## Request Fresh Standard Traffic
 
-Use `backend-rewrite recording request --kind standard` only after the user has
-already proactively and explicitly authorized that specific replacement
-recording. Use only `--reason user-requested`.
+Every fresh standard recording requires explicit user authorization. Use
+`backend-rewrite recording request --kind standard` only after that
+authorization.
 
-A changed Recorder contract, changed source baseline, repair result, capture
-rule, stale or unusable evidence, failed Replay/comparison, or coordinator-
-issued action never grants authorization. The AI must not explain, recommend,
-request, or attempt to obtain authorization. Without existing explicit user
-authorization, do not issue the request and do not execute a queued replacement
-recording action. Authorization for one replacement is not reusable.
-
-Supply positive `--duration-seconds` and `--per-api-case-limit` values. Omit
-`--api` to replace a narrowed scope with every API admitted by recorder
-configuration. Provide `--api` only when the user's authorization explicitly
-covers a single-API recording.
+Supply `--reason user-requested` and positive `--duration-seconds` and
+`--per-api-case-limit` values. Omit `--api` to replace a narrowed scope with
+every API admitted by recorder configuration. Provide `--api` only for an
+explicitly single-API recording.
 
 An identical pending request is idempotent. A different pending request
 requires explicit `--replace-pending`. The coordinator preserves prior
@@ -95,26 +88,23 @@ state or invent traffic.
 
 ## Consolidated Capture Refresh
 
-A recorder-capture apply is coordinator-owned but is not an exception to the
-user-authorization rule. Never follow it with `recording request`. Apply
-returns either another runnable API command or, after runnable inventory
-drains, a queued consolidated recording command. Multiple applied capture
-rules accumulate before that one full-scope recording.
+A recorder-capture apply is coordinator-owned and is the exception to the
+explicit request rules: never follow it with `recording request`. Apply returns
+either another runnable API command or, after runnable inventory drains, the
+exact consolidated recording command. Multiple applied capture rules
+accumulate before that one full-scope recording.
 
 `awaiting_recording_refresh` means an API has an applied, source-proven capture
 rule but cannot be reverified against the old baseline. It is parked, not
 complete or blocked. Continue pending APIs and existing workers; other APIs may
 still compare against the current baseline. When no runnable item remains, the
-coordinator atomically returns one `recording_required` refresh. Execute that
-replacement only when the user has already proactively and explicitly
-authorized it; otherwise leave it pending without soliciting authorization.
+coordinator atomically returns one `recording_required` refresh.
 
 The new finalized recording replaces the shared baseline atomically and
 invalidates old Replay/comparison evidence. It never creates per-API recording
 generations.
 
-After a system repair, do not choose fresh traffic yourself. The coordinator-
-issued repair verification may queue replacement standard cases, but its result
-is not user authorization. Execute the replacement only under existing,
-specific, proactive user authorization. Follow
+After a system repair, do not choose fresh traffic yourself. The
+coordinator-issued repair verification decides whether to allocate fresh
+standard cases or replay the existing cases. Follow
 [recovery-and-system-repair.md](recovery-and-system-repair.md).

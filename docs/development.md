@@ -385,11 +385,10 @@ AI must diagnose a failed comparison before changing code or policy. A stable
 source recheck plus a candidate mismatch is stronger implementation-defect
 evidence. A changed source recheck is `source_change` only for candidate
 differences at the same response location; unrelated candidate differences
-remain target behavior. Ordinary mutable business data may only be re-recorded
-in a quieter or snapshot-consistent window after proactive, explicit user
-authorization; it must not be exempted. Only source-proven current-time/random
-scalar fields or order-insensitive arrays may use concrete generated-scalar/
-unordered rules. A live count may use
+remain target behavior. Ordinary mutable business data must be re-recorded in
+a quieter or snapshot-consistent window, not exempted. Only source-proven
+current-time/random scalar fields or order-insensitive arrays may use concrete
+generated-scalar/unordered rules. A live count may use
 `config comparison ... --kind counter` only with exact API/Pointer,
 comparison-report evidence, source ownership evidence, and two different
 observations. The resulting `response_rules.json.<API>.counter` rule checks
@@ -1168,21 +1167,17 @@ explicit empty list disables them.
 
 A failed focused E2E attempt reuses the same finalized standard cases after the
 target changes. A passing attempt advances to a newly allocated comparison
-recording. Use `backend-rewrite recording request --kind standard --reason
-user-requested` only after the user has proactively and explicitly authorized
-that specific replacement recording. A changed Recorder contract, changed
-source baseline, repair result, capture rule, or stale evidence is not
-authorization; the AI must not explain, recommend, request, or attempt to
-obtain authorization. The request accepts positive duration and per-API case-
-limit values, invalidates state derived from the old baseline without deleting
-its artifacts, and returns a new exact recording action. Omitting `--api` means
-all APIs admitted by recorder configuration, even when the prior workflow was
-narrowed; explicit `--api` is allowed only when the user's authorization
-explicitly narrows the replacement. An identical pending request returns the
-existing action and run. A different pending request is rejected unless
-`--replace-pending` is explicit; a matching completed manifest returns an
-advance action. Authorization for one replacement is not reusable. The
-coordinator defaults both standard and comparison recording actions to 60
+recording. Every fresh standard recording requires explicit user authorization.
+Use `backend-rewrite recording request --kind standard` only after that
+authorization.
+The request accepts positive duration and per-API case-limit values, invalidates state
+derived from the old baseline without deleting its artifacts, and returns a
+new exact recording action. Omitting `--api` means all APIs admitted by recorder
+configuration, even when the prior workflow was narrowed; explicit `--api`
+keeps the fresh recording single-API. An identical pending request returns the existing
+action and run. A different pending request is rejected unless
+`--replace-pending` is explicit; a matching completed manifest returns an advance action.
+The coordinator defaults both standard and comparison recording actions to 60
 seconds and 100 cases.
 
 After a focused attempt, `next` and `status` expose
@@ -1286,10 +1281,9 @@ An accepted system/source repair route snapshots a coordinator-defined revision
 and returns `repair verify <repair-id>`. The caller cannot provide an acceptance
 command, and `next` or `recording request` cannot bypass the repair. Successful
 verification decides whether to rerun the same cases or allocate fresh standard
-recording evidence. A queued replacement remains unexecuted unless the user has
-already proactively and explicitly authorized that specific recording. A
-successful `missing-recorded-resource` route instead returns the existing
-recorder-capture apply command and never enters system repair.
+recording evidence. A successful `missing-recorded-resource` route instead
+returns the existing recorder-capture apply command and never enters system
+repair.
 
 If an administrator confirms that a comparison issue was incorrectly routed
 as a `source_change` system repair, return that exact repair to target
@@ -1961,8 +1955,8 @@ traffic-e2e config recorder apply process-owned-dependencies \
 ```
 
 Planning requires every configured exact key in replay-safe, unused case
-evidence. In a user-authorized fresh recording, Recorder forwards the first
-successful matching read and holds that response for the rest of the run. Replay reuses
+evidence. In the fresh recording, Recorder forwards the first successful
+matching read and holds that response for the rest of the run. Replay reuses
 the marked first-value seed for repeated exact target, session, command, and
 argument matches without inheriting the source connection binding or earlier
 unrelated lane commands. Case and unmarked bootstrap exchanges retain
@@ -2006,8 +2000,6 @@ Bootstrap Redis `HGET`/`HMGET` rules do not add an initial-load wait. They
 combine optional exact keys with compact `prefix<digits>suffix` patterns and
 require the exact field sequence. Applying one through the rewrite coordinator
 still queues a fresh standard recording so its first-value seed is explicit.
-The queued replacement must not execute without proactive, explicit user
-authorization.
 
 An applied rule with `initial_load_timeout_ms` delays source case admission
 while Recorder observes its initial load. Redis exact-key `GET`, `SCARD`, and

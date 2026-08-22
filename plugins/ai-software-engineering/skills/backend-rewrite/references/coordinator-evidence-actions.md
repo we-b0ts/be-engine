@@ -46,10 +46,7 @@ scoped waiting API, poll current `status`; never execute its stale acceptance.
 
 Do not follow capture apply with `recording request`. Continue runnable work and
 read [recording-lifecycle.md](recording-lifecycle.md) when the coordinator
-returns the consolidated refresh. That refresh is not authorization: execute
-it only when the user has already proactively and explicitly authorized that
-specific replacement recording. Otherwise leave it pending without soliciting
-authorization.
+returns the consolidated refresh.
 
 ## Process-Owned Dependency Rules
 
