@@ -1645,9 +1645,11 @@ published.
 Intermediate attempts do not require Git commits for progress. After every API
 is verified, the rewrite coordinator synchronizes the final public
 `progress.yaml` snapshot and returns
-`input_required/verification_progress_commit_required` until that file is
-committed. A reset at that gate is reconstructed from the local ledger and
-cannot make terminal completion available.
+`input_required/verification_progress_commit_required` until every dirty,
+fixed coordinator-managed delivery file is committed: `coordinator-rules.yaml`,
+`verification.yaml`, and `progress.yaml`. The action lists only the dirty
+paths. A reset at that gate is reconstructed from the local ledger and cannot
+make terminal completion available.
 
 After every published case is prepared exactly once and every focused group
 passes, the grouped result is sufficient unless behavior-affecting code changed

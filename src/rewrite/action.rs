@@ -151,15 +151,11 @@ fn state_action(target_root: &Path, state: &RewriteState) -> RewriteAction {
                     .to_string(),
             );
         }
-        Some(progress_publication::PublicationState::CommitRequired) => {
+        Some(progress_publication::PublicationState::CommitRequired(required)) => {
             return RewriteAction::InputRequired {
                 reason: RewriteInputRequiredReason::VerificationProgressCommitRequired,
-                summary: "commit the coordinator-generated final verification progress snapshot"
-                    .to_string(),
-                required: progress_publication::public_paths()
-                    .into_iter()
-                    .map(str::to_string)
-                    .collect(),
+                summary: "commit every listed coordinator-managed final delivery file".to_string(),
+                required,
             };
         }
         Some(progress_publication::PublicationState::Published) | None => {}

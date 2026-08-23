@@ -242,8 +242,10 @@ code consume recorded results, or modify source business behavior to
 manufacture evidence. Intermediate attempts do not require progress commits.
 When the complete workflow returns
 `input_required/verification_progress_commit_required`, commit exactly the
-listed final public snapshots and call `next` again; only the resulting
-`terminal_allowed=true` authorizes delivery.
+listed coordinator-managed delivery files and call `next` again. The list
+always contains the final public progress snapshot when it is dirty and also
+includes any dirty coordinator-rule or verification-policy file. Only the
+resulting `terminal_allowed=true` authorizes delivery.
 
 The initialized target repository provides ordinary product implementation,
 source-compatible configuration, and `.traffic-e2e/Dockerfile.e2e`. That
