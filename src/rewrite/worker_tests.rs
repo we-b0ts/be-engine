@@ -140,11 +140,14 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
             context(),
             RewriteRulePlanOptions {
                 evidence_id: evidence_id.clone(),
-                kind: ResponseRuleKind::Uuid,
+                body_codec: crate::ResponseBodyCodec::Json,
+                kind: Some(ResponseRuleKind::Uuid),
                 json_pointer: Some("/request_id".to_string()),
                 source_evidence: Some("src/id.rs:new".to_string()),
                 source_example: None,
                 target_example: None,
+                unordered_paths: Vec::new(),
+                unordered_joined_string_paths: Vec::new(),
             },
         )
         .unwrap_err(),
@@ -545,7 +548,7 @@ fn configured_target() -> tempfile::TempDir {
     );
     fs::write(
         target.path().join(".traffic-e2e/verification.yaml"),
-        "version: 3\nexpected_response: assertions_only\nrules: []\n",
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
     fs::write(target.path().join("lib.rs"), "pub fn value() -> u8 { 1 }\n").unwrap();

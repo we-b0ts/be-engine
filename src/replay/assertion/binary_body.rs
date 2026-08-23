@@ -3,16 +3,16 @@ use anyhow::{Context, Result, ensure};
 const SIMPLE_BYTE_ARRAY: u8 = 3;
 const SIMPLE_BYTE_ARRAY_HEADER: usize = 5;
 
-/// Framing that carries a binary business value inside a Motan response body.
+/// Envelope carrying one binary business value inside a normalized response body.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MotanBodyEnvelope {
-    /// Motan simple serialization `byte[]`: tag, big-endian length, payload.
+pub(super) enum BodyEnvelope {
+    /// Simple `byte[]` serialization: tag, big-endian length, payload.
     SimpleByteArray,
-    /// The serialized business value occupies the whole Motan body.
+    /// The serialized business value occupies the whole response body.
     Raw,
 }
 
-impl MotanBodyEnvelope {
+impl BodyEnvelope {
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::SimpleByteArray => "simple_byte_array",
@@ -24,12 +24,12 @@ impl MotanBodyEnvelope {
 pub(super) fn extract_simple_payload(body: &[u8]) -> Result<&[u8]> {
     ensure!(
         body.len() >= SIMPLE_BYTE_ARRAY_HEADER && body[0] == SIMPLE_BYTE_ARRAY,
-        "Motan body is not a simple byte-array envelope"
+        "response body is not a simple byte-array envelope"
     );
-    simple_payload(body).context("Motan simple byte-array length does not match its payload")
+    simple_payload(body).context("simple byte-array length does not match its payload")
 }
 
-/// Returns the payload of a Motan simple byte-array envelope when the body has
+/// Returns the payload of a simple byte-array envelope when the body has
 /// that exact framing.
 pub(super) fn simple_payload(body: &[u8]) -> Option<&[u8]> {
     if body.len() < SIMPLE_BYTE_ARRAY_HEADER || body[0] != SIMPLE_BYTE_ARRAY {

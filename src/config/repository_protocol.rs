@@ -241,7 +241,7 @@ mod tests {
         fs::create_dir_all(root.join(".traffic-e2e")).unwrap();
         fs::write(
             root.join(".traffic-e2e/verification.yaml"),
-            "version: 3\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
         .unwrap();
         fs::write(

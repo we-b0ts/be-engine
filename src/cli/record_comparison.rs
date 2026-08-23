@@ -329,7 +329,7 @@ mod tests {
         let policy = temp.path().join("verification.yaml");
         fs::write(
             &policy,
-            "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
         )
         .unwrap();
         let mut config = AppConfig::load_comparison_recording(
@@ -357,7 +357,7 @@ mod tests {
         let policy = temp.path().join("verification.yaml");
         fs::write(
             &policy,
-            "version: 3\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
         .unwrap();
         let load_config = || {

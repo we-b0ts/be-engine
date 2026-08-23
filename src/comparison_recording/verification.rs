@@ -517,7 +517,7 @@ fn policy_mismatch_rule_ids(
                 .iter()
                 .chain(&report.applied_unordered_rule_ids)
                 .chain(&report.applied_counter_rule_ids)
-                .chain(&report.applied_motan_rule_ids)
+                .chain(&report.applied_body_rule_ids)
         })
         .collect::<BTreeSet<_>>();
     reports
@@ -528,7 +528,7 @@ fn policy_mismatch_rule_ids(
                 .iter()
                 .chain(&report.unused_applicable_unordered_rule_ids)
                 .chain(&report.unused_applicable_counter_rule_ids)
-                .chain(&report.unused_applicable_motan_rule_ids)
+                .chain(&report.unused_applicable_body_rule_ids)
         })
         .filter(|rule_id| !applied.contains(rule_id))
         .cloned()

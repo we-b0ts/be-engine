@@ -19,7 +19,7 @@ pub(in crate::replay) struct ReplayPolicyDocument {
     pub(in crate::replay) version: u8,
     pub(in crate::replay) expected_response: ExpectedResponseUsage,
     #[serde(default)]
-    pub(super) rules: Vec<ReplayPolicyRule>,
+    pub(super) dependency_rules: Vec<ReplayDependencyRule>,
     #[serde(default, skip_serializing_if = "ResponseSettings::is_empty")]
     pub(in crate::replay) response_settings: ResponseSettings,
     #[serde(default, skip_serializing_if = "ResponseRules::is_empty")]
@@ -34,7 +34,7 @@ pub enum ExpectedResponseUsage {
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(in crate::replay) enum PolicyProtocol {
+pub(in crate::replay) enum DependencyProtocol {
     Mysql,
     Http,
     Memcached,
@@ -42,11 +42,11 @@ pub(in crate::replay) enum PolicyProtocol {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ReplayPolicyRule {
+pub(super) struct ReplayDependencyRule {
     pub(super) id: String,
     #[serde(default, rename = "case", skip_serializing_if = "Option::is_none")]
     pub(super) case_selector: Option<CaseSelector>,
-    pub(super) protocol: PolicyProtocol,
+    pub(super) protocol: DependencyProtocol,
     #[serde(default, skip_serializing_if = "TargetSelector::is_empty")]
     pub(super) target: TargetSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -197,7 +197,7 @@ pub struct ReplayPolicyValidationReport {
     pub fingerprint: String,
     pub expected_response: ExpectedResponseUsage,
     pub comparison: ComparisonVerificationPolicy,
-    pub rule_ids: Vec<String>,
+    pub dependency_rule_ids: Vec<String>,
     pub response_rule_ids: Vec<String>,
     pub runner_owned_response_assertions: bool,
 }
@@ -219,9 +219,9 @@ pub fn validate_replay_policy(path: &Path) -> Result<ReplayPolicyValidationRepor
         fingerprint: loaded.fingerprint,
         expected_response: loaded.document.expected_response,
         comparison,
-        rule_ids: loaded
+        dependency_rule_ids: loaded
             .document
-            .rules
+            .dependency_rules
             .into_iter()
             .map(|rule| rule.id)
             .collect(),
@@ -260,7 +260,7 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     );
     validate_response_rules(&document.response_rules)?;
     let mut ids = BTreeSet::new();
-    for rule in &document.rules {
+    for rule in &document.dependency_rules {
         validate_rule(rule)?;
         ensure!(
             ids.insert(rule.id.as_str()),
@@ -269,13 +269,13 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
         );
     }
     let bindings = document
-        .rules
+        .dependency_rules
         .iter()
         .flat_map(dynamic_fields)
         .filter_map(|field| field.bind.as_deref())
         .collect::<BTreeSet<_>>();
     for reference in document
-        .rules
+        .dependency_rules
         .iter()
         .flat_map(dynamic_fields)
         .filter_map(|field| field.reference.as_deref())
@@ -288,23 +288,23 @@ pub(super) fn validate_document(document: &ReplayPolicyDocument) -> Result<()> {
     Ok(())
 }
 
-fn dynamic_fields(rule: &ReplayPolicyRule) -> Vec<&DynamicValueRule> {
+fn dynamic_fields(rule: &ReplayDependencyRule) -> Vec<&DynamicValueRule> {
     match rule.protocol {
-        PolicyProtocol::Mysql => rule
+        DependencyProtocol::Mysql => rule
             .mysql
             .as_ref()
             .map(|mysql| mysql.params.values().collect())
             .unwrap_or_default(),
-        PolicyProtocol::Http => rule
+        DependencyProtocol::Http => rule
             .http
             .as_ref()
             .map(|http| http.query.values().collect())
             .unwrap_or_default(),
-        PolicyProtocol::Memcached => Vec::new(),
+        DependencyProtocol::Memcached => Vec::new(),
     }
 }
 
-fn validate_rule(rule: &ReplayPolicyRule) -> Result<()> {
+fn validate_rule(rule: &ReplayDependencyRule) -> Result<()> {
     ensure_identifier(&rule.id, "rule id")?;
     if let Some(case) = &rule.case_selector {
         ensure!(
@@ -326,7 +326,7 @@ fn validate_rule(rule: &ReplayPolicyRule) -> Result<()> {
         );
     }
     match rule.protocol {
-        PolicyProtocol::Mysql => {
+        DependencyProtocol::Mysql => {
             ensure!(
                 rule.http.is_none() && rule.memcached.is_none(),
                 "MySQL rule {:?} must not define http or memcached",
@@ -356,7 +356,7 @@ fn validate_rule(rule: &ReplayPolicyRule) -> Result<()> {
                     .with_context(|| format!("invalid MySQL rule {:?} params[{index}]", rule.id))?;
             }
         }
-        PolicyProtocol::Http => {
+        DependencyProtocol::Http => {
             ensure!(
                 rule.mysql.is_none() && rule.memcached.is_none(),
                 "HTTP rule {:?} must not define mysql or memcached",
@@ -391,7 +391,7 @@ fn validate_rule(rule: &ReplayPolicyRule) -> Result<()> {
                     .with_context(|| format!("invalid HTTP rule {:?} query.{name}", rule.id))?;
             }
         }
-        PolicyProtocol::Memcached => {
+        DependencyProtocol::Memcached => {
             ensure!(
                 rule.mysql.is_none() && rule.http.is_none(),
                 "Memcached rule {:?} must not define mysql or http",

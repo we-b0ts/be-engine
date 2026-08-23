@@ -207,6 +207,7 @@ fn state_for_published_directory(
     for case in &mut published.cases {
         if let Some(assertion) = &mut case.response_assertion {
             retarget_path(&mut assertion.detail_report, active_dir, latest_dir)?;
+            retarget_path(&mut assertion.request, active_dir, latest_dir)?;
             retarget_path(&mut assertion.actual_response, active_dir, latest_dir)?;
         }
     }
@@ -261,6 +262,7 @@ fn retarget_assertion_reports(
                 continue;
             };
             retarget_path(&mut response.detail_report, active_dir, latest_dir)?;
+            retarget_path(&mut response.request, active_dir, latest_dir)?;
             retarget_path(&mut response.actual_response, active_dir, latest_dir)?;
         }
         write_json(report_path, &report)?;
@@ -498,11 +500,17 @@ mod tests {
             passed: false,
             response: Some(ResponseAssertionSummary {
                 passed: false,
+                method: "GET".to_string(),
+                path: "/api".to_string(),
+                gateway_protocol: crate::ResponseGatewayProtocol::Http,
+                body_codec: crate::ResponseBodyCodec::Json,
+                body_diagnosis: None,
                 difference_count: 1,
                 difference_index: Vec::new(),
                 representative_difference: None,
                 detail_report: detail_report.clone(),
                 detail_fingerprint: "detail-fingerprint".to_string(),
+                request: PathBuf::from("/cases/case-1/request.json"),
                 expected_response: PathBuf::from("/cases/case-1/response.json"),
                 actual_response: actual_response.clone(),
                 policy_path: "/target/replay.yaml".to_string(),

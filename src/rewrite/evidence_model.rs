@@ -6,14 +6,14 @@ use super::model::RewriteCommandSpec;
 #[derive(Debug, Clone, Serialize)]
 pub struct RewriteApplicableRulePlanner {
     pub kind: String,
-    pub protocol: String,
+    pub capability: String,
     pub evidence_id: String,
     pub command: RewriteCommandSpec,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RewriteProtocolRuleHint {
-    pub protocol: String,
+pub struct RewriteRuleHint {
+    pub capability: String,
     pub rule: String,
     pub hint: String,
     pub help: RewriteCommandSpec,
@@ -29,7 +29,7 @@ pub struct RewriteEvidenceReport {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub applicable_rule_planners: Vec<RewriteApplicableRulePlanner>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub protocol_rules: Vec<RewriteProtocolRuleHint>,
+    pub rule_hints: Vec<RewriteRuleHint>,
     pub does_not_prove: Vec<String>,
     pub next_step: String,
 }

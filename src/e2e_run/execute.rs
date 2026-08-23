@@ -582,6 +582,11 @@ async fn execute_case(
                         state.cases[case_index].response_assertion =
                             Some(ResponseAssertionSummary {
                                 passed: report.passed,
+                                method: report.method.clone(),
+                                path: report.path.clone(),
+                                gateway_protocol: report.gateway_protocol,
+                                body_codec: report.body_codec,
+                                body_diagnosis: report.body_diagnosis.clone(),
                                 difference_count: report.differences.len(),
                                 difference_index: report
                                     .differences
@@ -594,6 +599,7 @@ async fn execute_case(
                                 detail_fingerprint: crate::verification_progress::fingerprint(
                                     &bytes,
                                 ),
+                                request: PathBuf::from(report.request_path),
                                 expected_response: PathBuf::from(report.expected_response_path),
                                 actual_response: PathBuf::from(report.actual_response_path),
                                 policy_path: report.policy_path,

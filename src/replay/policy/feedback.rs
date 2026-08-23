@@ -3,7 +3,7 @@ mod evidence;
 mod justification;
 mod memcached;
 mod model;
-mod motan;
+mod response_body;
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
@@ -32,7 +32,11 @@ pub use memcached::{
     plan_memcached_timestamp_rule,
 };
 pub use model::{ComparisonResponseRuleFeedback, ResponseRuleFeedback, ResponseRuleReport};
-pub use motan::{MotanRuleFeedback, MotanRulePlan, MotanRuleReport, plan_motan_rule};
+pub use response_body::{
+    ResponseBodyRuleEvidence, ResponseBodyRuleEvidenceKind, ResponseBodyRuleFeedback,
+    ResponseBodyRulePlan, ResponseBodyRuleReport, ResponseBodyRuleVerificationOutcome,
+    plan_response_body_rule,
+};
 
 pub struct ResponseRulePlan {
     policy_path: PathBuf,
@@ -175,7 +179,7 @@ fn hydrate_assertion_details(assertions: &mut AssertionEvidence) -> Result<()> {
         ensure!(
             !detail.method.is_empty()
                 && !detail.path.is_empty()
-                && !detail.body_mode.is_empty()
+                && detail.body_codec != super::response::ResponseBodyCodec::Unknown
                 && detail.detail_report.is_none()
                 && detail.detail_fingerprint.is_none(),
             "assertion detail report is incomplete: {}",
@@ -359,7 +363,7 @@ fn validate_response_evidence(
             );
         }
         ensure!(
-            response.body_mode == "json_structural",
+            response.body_codec == super::response::ResponseBodyCodec::Json,
             "response rules require structural JSON assertion evidence"
         );
         let mut case_has_selected_difference = false;

@@ -12,8 +12,8 @@ pub(super) fn summary(
     let Some(policy) = report.get("replay_policy") else {
         return Ok(None);
     };
-    let unused_applicable_rule_ids =
-        required_array(policy, "unused_applicable_rule_ids", report_path)?
+    let unused_applicable_dependency_rule_ids =
+        required_array(policy, "unused_applicable_dependency_rule_ids", report_path)?
             .iter()
             .map(|value| {
                 value
@@ -33,13 +33,13 @@ pub(super) fn summary(
         path: required_string(policy, "path", report_path)?.to_owned(),
         fingerprint: required_string(policy, "fingerprint", report_path)?.to_owned(),
         expected_response,
-        unused_applicable_rule_ids,
+        unused_applicable_dependency_rule_ids,
     }))
 }
 
 fn invalid_rule_ids(report_path: &Path) -> anyhow::Error {
     anyhow!(
-        "replay report {} replay_policy.unused_applicable_rule_ids must contain strings",
+        "replay report {} replay_policy.unused_applicable_dependency_rule_ids must contain strings",
         report_path.display()
     )
 }

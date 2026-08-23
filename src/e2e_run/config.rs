@@ -507,7 +507,7 @@ mod tests {
         fs::create_dir_all(root.join("config")).unwrap();
         fs::write(
             root.join("config/replay.yaml"),
-            "version: 3\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
         .unwrap();
         let mut recorder = crate::config::AppConfig::default();

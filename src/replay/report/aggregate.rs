@@ -60,7 +60,7 @@ pub struct ReplayPolicyAggregateSummary {
     pub path: String,
     pub fingerprint: String,
     pub expected_response: String,
-    pub unused_applicable_rule_ids: Vec<String>,
+    pub unused_applicable_dependency_rule_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -493,7 +493,7 @@ fn summarize_report(
     let dirty = report_has_case_dirty_events(report)
         || replay_policy
             .as_ref()
-            .is_some_and(|policy| !policy.unused_applicable_rule_ids.is_empty());
+            .is_some_and(|policy| !policy.unused_applicable_dependency_rule_ids.is_empty());
 
     Ok(ReplayReportSummary {
         path: report_name,

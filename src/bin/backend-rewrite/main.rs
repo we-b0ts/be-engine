@@ -7,19 +7,17 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    Hessian2JoinedStringPath, MotanBodyProtocol, MotanUnorderedPath, RecordingApi,
-    ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteContext,
-    RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteNextOptions,
+    Hessian2JoinedStringPath, RecordingApi, ResponseBodyCodec, ResponseBodyUnorderedPath,
+    ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteContext, RewriteNextOptions,
     RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
     RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
     RewriteRulePlanOptions, RewriteTargetQualityOptions, RewriteWorkerConfirmOptions,
     RewriteWorkerTransferOptions, apply_rewrite_rule, confirm_rewrite_worker, inventory_rewrite,
-    next_rewrite, plan_rewrite_memcached_timestamp_rule, plan_rewrite_motan_rule,
-    plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence, recover_rewrite,
-    request_rewrite_recording, request_rewrite_revalidation, resume_rewrite_replay_planning,
-    route_rewrite, run_rewrite_target_quality, start_rewrite_recording, status_rewrite,
-    status_rewrite_for_api, status_rewrite_for_process_output, transfer_rewrite_worker,
-    verify_rewrite_repair,
+    next_rewrite, plan_rewrite_rule, query_rewrite_case_dependencies, query_rewrite_evidence,
+    recover_rewrite, request_rewrite_recording, request_rewrite_revalidation,
+    resume_rewrite_replay_planning, route_rewrite, run_rewrite_target_quality,
+    start_rewrite_recording, status_rewrite, status_rewrite_for_api,
+    status_rewrite_for_process_output, transfer_rewrite_worker, verify_rewrite_repair,
 };
 
 mod config_protocol;
@@ -189,47 +187,11 @@ struct RuleArgs {
 enum RuleCommand {
     /// Validate current evidence and preview one response-rule change.
     Plan(RulePlanArgs),
-    /// Plan a request-owned Memcached dependency-payload verification rule.
-    Memcached(MemcachedRuleArgs),
-    /// Configure a Motan body protocol or apply a supported protocol-aware rule.
-    Motan(MotanRulePlanArgs),
     /// Atomically apply the persisted, evidence-validated pending plan.
     Apply(RuleApplyArgs),
 }
 
-#[derive(Debug, Args)]
-struct MemcachedRuleArgs {
-    #[command(subcommand)]
-    command: MemcachedRuleCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum MemcachedRuleCommand {
-    /// Plan a cache-service SET protobuf Unix-seconds field rule.
-    ProtobufTimestamp(MemcachedTimestampRulePlanArgs),
-}
-
-#[derive(Debug, Args)]
-struct MotanRulePlanArgs {
-    /// Coordinator-issued evidence id for the exact Motan body mismatch.
-    #[arg(long)]
-    evidence_id: String,
-    /// Binary protocol of the Motan response body. Protobuf is carried inside
-    /// the Motan simple byte-array envelope; Hessian2 is accepted bare or
-    /// inside that envelope.
-    #[arg(long, value_enum)]
-    protocol: MotanBodyProtocolArg,
-    /// Source-proven unordered collection as JSON. Protobuf uses field_path + element_type; Hessian2 uses value_path; both require display_path + source_evidence.
-    #[arg(long = "unordered-path", value_parser = parse_motan_unordered_path)]
-    unordered_paths: Vec<MotanUnorderedPath>,
-    /// Reviewed joined-string field (a Set joined into one string) from
-    /// protocol-aware evidence as JSON. Hessian2 only. Each entry carries
-    /// value_path, display_path, separator, and source_evidence.
-    #[arg(long = "unordered-joined-string-path", value_parser = parse_hessian2_joined_string_path)]
-    unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
-}
-
-fn parse_motan_unordered_path(value: &str) -> Result<MotanUnorderedPath, String> {
+fn parse_response_body_unordered_path(value: &str) -> Result<ResponseBodyUnorderedPath, String> {
     serde_json::from_str(value).map_err(|error| format!("invalid unordered path JSON: {error}"))
 }
 
@@ -238,51 +200,20 @@ fn parse_hessian2_joined_string_path(value: &str) -> Result<Hessian2JoinedString
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum MotanBodyProtocolArg {
+enum ResponseBodyCodecArg {
+    Json,
     Protobuf,
     Hessian2,
 }
 
-impl From<MotanBodyProtocolArg> for MotanBodyProtocol {
-    fn from(value: MotanBodyProtocolArg) -> Self {
+impl From<ResponseBodyCodecArg> for ResponseBodyCodec {
+    fn from(value: ResponseBodyCodecArg) -> Self {
         match value {
-            MotanBodyProtocolArg::Protobuf => Self::Protobuf,
-            MotanBodyProtocolArg::Hessian2 => Self::Hessian2,
+            ResponseBodyCodecArg::Json => Self::Json,
+            ResponseBodyCodecArg::Protobuf => Self::Protobuf,
+            ResponseBodyCodecArg::Hessian2 => Self::Hessian2,
         }
     }
-}
-
-#[derive(Debug, Args)]
-struct MemcachedTimestampRulePlanArgs {
-    /// Dirty-cluster evidence id that exposes a Memcached SET capability candidate.
-    #[arg(long)]
-    evidence_id: String,
-    /// Stable verification-policy rule id.
-    #[arg(long)]
-    name: String,
-    /// Resource addressing contract. Cache service is selected by protocol and port.
-    #[arg(long, value_enum)]
-    resource_kind: MemcachedResourceKindArg,
-    /// Actual Memcached dependency port observed on the recorded node, not a local SDK entry port.
-    #[arg(long)]
-    port: u16,
-    /// Byte-exact key prefix before a required nonempty ASCII integer. At least one key bound must be nonempty.
-    #[arg(long, default_value = "")]
-    key_prefix: String,
-    /// Byte-exact key suffix after a required nonempty ASCII integer. At least one key bound must be nonempty.
-    #[arg(long, default_value = "")]
-    key_suffix: String,
-    /// Top-level protobuf varint field proven by source to contain current Unix seconds.
-    #[arg(long)]
-    protobuf_field: u32,
-    /// One-line source file/symbol proof for the field's current-time mechanism.
-    #[arg(long)]
-    source_evidence: String,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum MemcachedResourceKindArg {
-    CacheService,
 }
 
 #[derive(Debug, Args)]
@@ -290,29 +221,21 @@ struct RulePlanArgs {
     #[arg(long)]
     evidence_id: String,
     #[arg(long, value_enum)]
-    kind: RuleKindArg,
+    body_codec: ResponseBodyCodecArg,
+    #[arg(long, value_enum)]
+    kind: Option<RuleKindArg>,
     #[arg(long)]
     json_pointer: Option<String>,
     #[arg(long)]
-    source_evidence: String,
-    #[arg(
-        long,
-        required_if_eq("kind", "timestamp"),
-        required_if_eq("kind", "duration"),
-        required_if_eq("kind", "uuid"),
-        required_if_eq("kind", "random"),
-        required_if_eq("kind", "counter")
-    )]
+    source_evidence: Option<String>,
+    #[arg(long)]
     source_example: Option<String>,
-    #[arg(
-        long,
-        required_if_eq("kind", "timestamp"),
-        required_if_eq("kind", "duration"),
-        required_if_eq("kind", "uuid"),
-        required_if_eq("kind", "random"),
-        required_if_eq("kind", "counter")
-    )]
+    #[arg(long)]
     target_example: Option<String>,
+    #[arg(long = "unordered-path", value_parser = parse_response_body_unordered_path)]
+    unordered_paths: Vec<ResponseBodyUnorderedPath>,
+    #[arg(long = "unordered-joined-string-path", value_parser = parse_hessian2_joined_string_path)]
+    unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
 }
 
 #[derive(Debug, Args)]
@@ -595,41 +518,12 @@ async fn run(cli: Cli) -> Result<()> {
                     RewriteContext { target_root },
                     RewriteRulePlanOptions {
                         evidence_id: args.evidence_id,
-                        kind: args.kind.into(),
+                        body_codec: args.body_codec.into(),
+                        kind: args.kind.map(Into::into),
                         json_pointer: args.json_pointer,
-                        source_evidence: Some(args.source_evidence),
+                        source_evidence: args.source_evidence,
                         source_example: args.source_example,
                         target_example: args.target_example,
-                    },
-                )?,
-                pretty,
-            ),
-            RuleCommand::Memcached(args) => match args.command {
-                MemcachedRuleCommand::ProtobufTimestamp(args) => {
-                    let MemcachedResourceKindArg::CacheService = args.resource_kind;
-                    print_json(
-                        &plan_rewrite_memcached_timestamp_rule(
-                            RewriteContext { target_root },
-                            RewriteMemcachedTimestampRulePlanOptions {
-                                evidence_id: args.evidence_id,
-                                rule_id: args.name,
-                                port: args.port,
-                                key_prefix: args.key_prefix,
-                                key_suffix: args.key_suffix,
-                                field_number: args.protobuf_field,
-                                source_evidence: args.source_evidence,
-                            },
-                        )?,
-                        pretty,
-                    )
-                }
-            },
-            RuleCommand::Motan(args) => print_json(
-                &plan_rewrite_motan_rule(
-                    RewriteContext { target_root },
-                    RewriteMotanRulePlanOptions {
-                        evidence_id: args.evidence_id,
-                        protocol: args.protocol.into(),
                         unordered_paths: args.unordered_paths,
                         unordered_joined_string_paths: args.unordered_joined_string_paths,
                     },

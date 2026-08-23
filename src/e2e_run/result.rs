@@ -1,17 +1,24 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::model::{ActiveRunState, ResponseAssertionSummary, RunLayout, RunStatus};
 use super::support::status_label;
-use crate::replay::{ResponseDifference, ResponseDifferenceKind};
+use crate::replay::{
+    ResponseBodyAssertionReport, ResponseBodyCodec, ResponseDifference, ResponseDifferenceKind,
+    ResponseGatewayProtocol,
+};
 
 const MAX_FAILURE_CLUSTERS: usize = 20;
 pub(crate) const RESPONSE_AVAILABILITY_POINTER: &str = "$response";
+
+mod observation;
+
+#[cfg(test)]
+use observation::bounded;
+pub(super) use observation::{response_observation, response_observation_with_status};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -130,6 +137,12 @@ pub struct E2eRepresentativeDifference {
     pub pointer: String,
     pub difference_kind: ResponseDifferenceKind,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_protocol: Option<ResponseGatewayProtocol>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_codec: Option<ResponseBodyCodec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_diagnosis: Option<ResponseBodyAssertionReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unavailable_reason: Option<E2eResponseUnavailableReason>,
     pub expected: E2eValueObservation,
     pub actual: E2eValueObservation,
@@ -234,9 +247,18 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
                 case_id: cluster.representative_case_id.clone(),
                 pointer: cluster.representative_pointer.clone(),
                 difference_kind: cluster.difference_kind,
+                gateway_protocol: None,
+                body_codec: None,
+                body_diagnosis: None,
                 unavailable_reason: case.response_unavailable_reason,
-                expected: observation(E2eValuePresence::Present, None),
-                actual: observation(E2eValuePresence::Unavailable, None),
+                expected: E2eValueObservation {
+                    presence: E2eValuePresence::Present,
+                    value: None,
+                },
+                actual: E2eValueObservation {
+                    presence: E2eValuePresence::Unavailable,
+                    value: None,
+                },
             })
         } else {
             let assertion = case.response_assertion.as_ref()?;
@@ -244,14 +266,19 @@ fn diagnosis(layout: &RunLayout, state: &ActiveRunState) -> E2eDiagnosis {
                 case_id: cluster.representative_case_id.clone(),
                 pointer: cluster.representative_pointer.clone(),
                 difference_kind: cluster.difference_kind,
+                gateway_protocol: Some(assertion.gateway_protocol),
+                body_codec: Some(assertion.body_codec),
+                body_diagnosis: assertion.body_diagnosis.clone(),
                 unavailable_reason: None,
-                expected: response_observation(
+                expected: response_observation_with_status(
                     &assertion.expected_response,
                     &cluster.representative_pointer,
+                    representative_status(assertion, cluster, true),
                 ),
-                actual: response_observation(
+                actual: response_observation_with_status(
                     &published_path(layout, &assertion.actual_response),
                     &cluster.representative_pointer,
+                    representative_status(assertion, cluster, false),
                 ),
             })
         }
@@ -359,110 +386,34 @@ fn bounded_error(error: &str) -> String {
     }
 }
 
-pub(super) fn response_observation(path: &Path, pointer: &str) -> E2eValueObservation {
-    let Ok(bytes) = std::fs::read(path) else {
-        return observation(E2eValuePresence::Unavailable, None);
-    };
-    let Ok(response) = serde_json::from_slice::<Value>(&bytes) else {
-        return observation(E2eValuePresence::Unavailable, None);
-    };
-    if pointer == "$status" {
-        return match response.get("status") {
-            Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
-            None => observation(E2eValuePresence::Missing, None),
-        };
-    }
-    let Some(body) = response.get("body") else {
-        return observation(E2eValuePresence::Missing, None);
-    };
-    let Some(data) = body.get("data").and_then(Value::as_str) else {
-        return observation(E2eValuePresence::Missing, None);
-    };
-    let decoded = match body.get("encoding").and_then(Value::as_str) {
-        Some("utf8") => data.as_bytes().to_vec(),
-        Some("base64") => match STANDARD.decode(data) {
-            Ok(value) => value,
-            Err(_) => return observation(E2eValuePresence::Unavailable, None),
-        },
-        _ => return observation(E2eValuePresence::Unavailable, None),
-    };
-    if pointer == "$body" {
-        let value = String::from_utf8(decoded)
-            .map(Value::String)
-            .unwrap_or_else(|error| {
-                Value::String(format!("<binary bytes={}>", error.as_bytes().len()))
-            });
-        return observation(E2eValuePresence::Present, Some(bounded(&value, pointer)));
-    }
-    let Ok(json) = serde_json::from_slice::<Value>(&decoded) else {
-        return observation(E2eValuePresence::NotApplicable, None);
-    };
-    match json.pointer(pointer) {
-        Some(value) => observation(E2eValuePresence::Present, Some(bounded(value, pointer))),
-        None => observation(E2eValuePresence::Missing, None),
-    }
+fn representative_status(
+    assertion: &ResponseAssertionSummary,
+    cluster: &E2eFailureCluster,
+    expected: bool,
+) -> Option<u16> {
+    indexed_response_differences(assertion)
+        .iter()
+        .find(|difference| {
+            difference.pointer == cluster.representative_pointer
+                && difference.kind == cluster.difference_kind
+        })
+        .and_then(|difference| {
+            if expected {
+                difference.expected_status
+            } else {
+                difference.actual_status
+            }
+        })
 }
 
 pub(crate) fn response_pointer_scope(pointer: &str) -> &'static str {
     match pointer {
         RESPONSE_AVAILABILITY_POINTER => "response_availability",
         "$status" => "response_status",
+        "$metadata" => "response_gateway_metadata",
         "$body" => "response_body_bytes",
         _ => "decoded_response_body_json",
     }
-}
-
-fn observation(presence: E2eValuePresence, value: Option<Value>) -> E2eValueObservation {
-    E2eValueObservation { presence, value }
-}
-
-fn bounded(value: &Value, pointer: &str) -> Value {
-    if sensitive_pointer(pointer) {
-        return Value::String(match value {
-            Value::String(value) => format!("<redacted string bytes={}>", value.len()),
-            _ => "<redacted>".to_string(),
-        });
-    }
-    match value {
-        Value::String(value) if value.len() > 256 => {
-            Value::String(format!("<string bytes={}>", value.len()))
-        }
-        Value::Array(values) => {
-            let bytes = serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len());
-            if bytes > 1_024 {
-                Value::String(format!("<array items={} bytes={bytes}>", values.len()))
-            } else {
-                value.clone()
-            }
-        }
-        Value::Object(values) => {
-            let bytes = serde_json::to_vec(value).map_or(usize::MAX, |bytes| bytes.len());
-            if bytes > 1_024 {
-                Value::String(format!("<object keys={} bytes={bytes}>", values.len()))
-            } else {
-                value.clone()
-            }
-        }
-        _ => value.clone(),
-    }
-}
-
-fn sensitive_pointer(pointer: &str) -> bool {
-    pointer.split('/').any(|token| {
-        let token = token.to_ascii_lowercase();
-        [
-            "authorization",
-            "cookie",
-            "password",
-            "passwd",
-            "secret",
-            "token",
-            "ticket",
-            "credential",
-        ]
-        .iter()
-        .any(|sensitive| token.contains(sensitive))
-    })
 }
 
 fn published_path(layout: &RunLayout, path: &Path) -> PathBuf {
@@ -522,6 +473,10 @@ mod tests {
             "response_availability"
         );
         assert_eq!(response_pointer_scope("$status"), "response_status");
+        assert_eq!(
+            response_pointer_scope("$metadata"),
+            "response_gateway_metadata"
+        );
         assert_eq!(response_pointer_scope("$body"), "response_body_bytes");
         assert_eq!(
             response_pointer_scope("/users/0/id"),
@@ -627,6 +582,11 @@ mod tests {
         state.cases[0].assertion_passed = Some(false);
         state.cases[0].response_assertion = Some(ResponseAssertionSummary {
             passed: false,
+            method: "GET".to_string(),
+            path: "/api".to_string(),
+            gateway_protocol: ResponseGatewayProtocol::Http,
+            body_codec: ResponseBodyCodec::Json,
+            body_diagnosis: None,
             difference_count: 1,
             difference_index: Vec::new(),
             representative_difference: Some(ResponseDifference {
@@ -639,6 +599,7 @@ mod tests {
             }),
             detail_report: active_dir.join("assertion-detail.json"),
             detail_fingerprint: "detail-fingerprint".to_string(),
+            request: PathBuf::from("request.json"),
             expected_response: expected,
             actual_response: active_dir.join("actual-response.json"),
             policy_path: "replay.yaml".to_string(),
@@ -788,11 +749,17 @@ mod tests {
             state.cases[index].assertion_passed = Some(false);
             state.cases[index].response_assertion = Some(ResponseAssertionSummary {
                 passed: false,
+                method: "GET".to_string(),
+                path: "/api".to_string(),
+                gateway_protocol: ResponseGatewayProtocol::Http,
+                body_codec: ResponseBodyCodec::Json,
+                body_diagnosis: None,
                 difference_count: differences.len(),
                 difference_index: differences.clone(),
                 representative_difference: differences.first().cloned(),
                 detail_report: active_dir.join(format!("detail-{index}.json")),
                 detail_fingerprint: format!("detail-{index}"),
+                request: PathBuf::from("request.json"),
                 expected_response: expected,
                 actual_response: active_dir.join(format!("actual-{index}.json")),
                 policy_path: "replay.yaml".to_string(),
@@ -844,11 +811,17 @@ mod tests {
         state.cases[0].assertion_passed = Some(false);
         state.cases[0].response_assertion = Some(ResponseAssertionSummary {
             passed: false,
+            method: "GET".to_string(),
+            path: "/api".to_string(),
+            gateway_protocol: ResponseGatewayProtocol::Http,
+            body_codec: ResponseBodyCodec::Json,
+            body_diagnosis: None,
             difference_count: 30,
             difference_index: differences.clone(),
             representative_difference: differences.first().cloned(),
             detail_report: active_dir.join("detail.json"),
             detail_fingerprint: "detail".to_string(),
+            request: PathBuf::from("request.json"),
             expected_response: PathBuf::from("/missing/expected.json"),
             actual_response: active_dir.join("actual.json"),
             policy_path: "replay.yaml".to_string(),

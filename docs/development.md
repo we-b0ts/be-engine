@@ -1225,25 +1225,23 @@ separate `source_process_traffic` query. They do not affect the case gate.
 aggregate diagnostics and do not make a case dirty.
 
 When evidence identifies a protocol with supported rules, the report includes
-`protocol_rules`. Each entry contains an English applicability hint and an
+`rule_hints`. Each entry contains an English applicability hint and an
 exact read-only `help` command. This list is separate from
 `applicable_rule_planners`, which contains planner entrypoints appropriate to
 the current evidence state; neither list proves that a rule applies. For a
-Motan body without a configured protocol, the planner offers each
-syntactically valid protobuf or Hessian2 protocol candidate. Protobuf is
-recognized inside the Motan simple byte-array envelope written for a `byte[]`
-return value; Hessian2 is recognized both there and as a bare body, which is
-how Motan serializes any other return type. The observed framing is reported as
-`envelope`. Once one protocol is configured, the protocol rule hint instead
+response body without a configured codec, the planner offers each
+syntactically valid protobuf or Hessian2 codec candidate. The observed body
+framing is reported separately as `envelope`. Once one codec is configured,
+the response rule hint instead
 directs the AI to the reported field/value differences and unordered-path
 candidates. These candidates identify mechanically explainable paths but do
 not prove that order is semantically irrelevant. Every selected
-protobuf/Hessian2 path must include one-line source evidence; protocol-only
+protobuf/Hessian2 path must include one-line source evidence; codec-only
 selection is evidence-light because it does not relax body values. Memcached dirty-cluster
 evidence currently exposes `protobuf-timestamp`, whose help command is:
 
 ```bash
-backend-rewrite --target-root ../target rule memcached protobuf-timestamp --help
+backend-rewrite --target-root ../target dependency-rule plan memcached protobuf-timestamp --help
 ```
 
 The rule planner requires current dirty-cluster evidence and source proof for

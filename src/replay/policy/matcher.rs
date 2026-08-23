@@ -8,11 +8,12 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::config::{
-    DynamicValueRule, LoadedReplayPolicy, PolicyProtocol, ReplayPolicyRule, load_replay_policy,
+    DependencyProtocol, DynamicValueRule, LoadedReplayPolicy, ReplayDependencyRule,
+    load_replay_policy,
 };
 use super::pattern::{path_pattern_matches, query_values, text_pattern_matches, uri_path};
 use super::protobuf::matches_with_timestamp_fields;
-use super::report::{PolicyRuleReport, ReplayPolicyReport};
+use super::report::{DependencyRuleReport, ReplayPolicyReport};
 use super::value::{validate_time, validate_value};
 use crate::replay::{
     RecordedMysqlValue, ReplayCase, ReplaySessionIdentity, TargetKey, normalize_host, normalize_sql,
@@ -25,7 +26,7 @@ struct CaseIdentity {
 }
 
 #[derive(Debug, Clone, Default)]
-struct PolicyRuleUsage {
+struct DependencyRuleUsage {
     matches: usize,
     binds: usize,
     references: usize,
@@ -34,8 +35,8 @@ struct PolicyRuleUsage {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(in crate::replay) struct PolicyDecision {
-    usage: BTreeMap<String, PolicyRuleUsage>,
+pub(in crate::replay) struct DependencyRuleDecision {
+    usage: BTreeMap<String, DependencyRuleUsage>,
     bindings: Vec<(String, Value)>,
     pub(in crate::replay) dynamic_query_params: Vec<String>,
 }
@@ -44,8 +45,8 @@ pub(in crate::replay) struct PolicyDecision {
 pub(in crate::replay) struct ReplayPolicyRuntime {
     loaded: LoadedReplayPolicy,
     cases: BTreeMap<String, CaseIdentity>,
-    applicable_rule_ids: BTreeSet<String>,
-    usage: BTreeMap<String, PolicyRuleUsage>,
+    applicable_dependency_rule_ids: BTreeSet<String>,
+    usage: BTreeMap<String, DependencyRuleUsage>,
     bindings: BTreeMap<String, BTreeMap<String, Value>>,
 }
 
@@ -124,14 +125,14 @@ impl ReplayPolicyRuntime {
         }
         let usage = loaded
             .document
-            .rules
+            .dependency_rules
             .iter()
-            .map(|rule| (rule.id.clone(), PolicyRuleUsage::default()))
+            .map(|rule| (rule.id.clone(), DependencyRuleUsage::default()))
             .collect();
         Ok(Self {
             loaded,
             cases: case_identities,
-            applicable_rule_ids: BTreeSet::new(),
+            applicable_dependency_rule_ids: BTreeSet::new(),
             usage,
             bindings: BTreeMap::new(),
         })
@@ -147,13 +148,13 @@ impl ReplayPolicyRuntime {
         let Some(case) = case_id.and_then(|case_id| self.cases.get(case_id)) else {
             return;
         };
-        self.applicable_rule_ids.extend(
+        self.applicable_dependency_rule_ids.extend(
             self.loaded
                 .document
-                .rules
+                .dependency_rules
                 .iter()
                 .filter(|rule| {
-                    rule.protocol == PolicyProtocol::Mysql
+                    rule.protocol == DependencyProtocol::Mysql
                         && rule_matches_case(rule, case)
                         && rule_matches_mysql(rule, identity, command, sql)
                 })
@@ -171,13 +172,13 @@ impl ReplayPolicyRuntime {
         let Some(case) = case_id.and_then(|case_id| self.cases.get(case_id)) else {
             return;
         };
-        self.applicable_rule_ids.extend(
+        self.applicable_dependency_rule_ids.extend(
             self.loaded
                 .document
-                .rules
+                .dependency_rules
                 .iter()
                 .filter(|rule| {
-                    rule.protocol == PolicyProtocol::Http
+                    rule.protocol == DependencyProtocol::Http
                         && rule_matches_case(rule, case)
                         && rule_matches_http(rule, target, method, uri)
                 })
@@ -195,13 +196,13 @@ impl ReplayPolicyRuntime {
         let Some(case) = case_id.and_then(|case_id| self.cases.get(case_id)) else {
             return;
         };
-        self.applicable_rule_ids.extend(
+        self.applicable_dependency_rule_ids.extend(
             self.loaded
                 .document
-                .rules
+                .dependency_rules
                 .iter()
                 .filter(|rule| {
-                    rule.protocol == PolicyProtocol::Memcached
+                    rule.protocol == DependencyProtocol::Memcached
                         && rule_matches_case(rule, case)
                         && rule_matches_memcached(rule, target, command, key)
                 })
@@ -213,7 +214,7 @@ impl ReplayPolicyRuntime {
         let overlaps = self
             .loaded
             .document
-            .rules
+            .dependency_rules
             .iter()
             .filter_map(|rule| rule.http.as_ref())
             .flat_map(|http| http.query.keys())
@@ -240,7 +241,7 @@ impl ReplayPolicyRuntime {
         &self,
         context: &MysqlPolicyContext<'_>,
         now: DateTime<Utc>,
-    ) -> Result<PolicyDecision, String> {
+    ) -> Result<DependencyRuleDecision, String> {
         let Some(case_id) = context.case_id else {
             return exact_mysql_params(context.recorded, context.actual);
         };
@@ -252,10 +253,10 @@ impl ReplayPolicyRuntime {
         let matching_rules = self
             .loaded
             .document
-            .rules
+            .dependency_rules
             .iter()
             .filter(|rule| {
-                rule.protocol == PolicyProtocol::Mysql
+                rule.protocol == DependencyProtocol::Mysql
                     && rule_matches_case(rule, case)
                     && rule_matches_mysql(rule, context.identity, context.command, context.sql)
                     && rule_matches_mysql_sql_pattern(rule, context.recorded_sql)
@@ -296,7 +297,7 @@ impl ReplayPolicyRuntime {
                 ));
             }
         }
-        let mut decision = PolicyDecision::default();
+        let mut decision = DependencyRuleDecision::default();
         for (index, (recorded_value, actual_value)) in recorded.iter().zip(actual).enumerate() {
             if let Some((rule_id, field)) = fields.get(&index) {
                 if recorded_value.kind != actual_value.kind {
@@ -338,8 +339,8 @@ impl ReplayPolicyRuntime {
         let Some(case) = self.cases.get(case_id) else {
             return false;
         };
-        self.loaded.document.rules.iter().any(|rule| {
-            rule.protocol == PolicyProtocol::Mysql
+        self.loaded.document.dependency_rules.iter().any(|rule| {
+            rule.protocol == DependencyProtocol::Mysql
                 && rule_matches_case(rule, case)
                 && rule_matches_mysql(rule, context.identity, context.command, context.sql)
                 && rule_matches_mysql_sql_pattern(rule, context.recorded_sql)
@@ -350,9 +351,9 @@ impl ReplayPolicyRuntime {
         &self,
         context: &HttpPolicyContext<'_>,
         now: DateTime<Utc>,
-    ) -> Result<PolicyDecision, String> {
+    ) -> Result<DependencyRuleDecision, String> {
         let Some(case_id) = context.case_id else {
-            return Ok(PolicyDecision::default());
+            return Ok(DependencyRuleDecision::default());
         };
         let Some(case) = self.cases.get(case_id) else {
             return Err(format!(
@@ -362,16 +363,16 @@ impl ReplayPolicyRuntime {
         let matching_rules = self
             .loaded
             .document
-            .rules
+            .dependency_rules
             .iter()
             .filter(|rule| {
-                rule.protocol == PolicyProtocol::Http
+                rule.protocol == DependencyProtocol::Http
                     && rule_matches_case(rule, case)
                     && rule_matches_http(rule, context.target, context.method, context.actual_uri)
             })
             .collect::<Vec<_>>();
         if matching_rules.is_empty() {
-            return Ok(PolicyDecision::default());
+            return Ok(DependencyRuleDecision::default());
         }
         let recorded_query = query_values(context.recorded_uri);
         let actual_query = query_values(context.actual_uri);
@@ -389,7 +390,7 @@ impl ReplayPolicyRuntime {
                 }
             }
         }
-        let mut decision = PolicyDecision::default();
+        let mut decision = DependencyRuleDecision::default();
         for (name, (rule_id, field)) in fields {
             let recorded_values = recorded_query.get(name).cloned().unwrap_or_default();
             let actual_values = actual_query.get(name).cloned().unwrap_or_default();
@@ -416,7 +417,7 @@ impl ReplayPolicyRuntime {
     pub(in crate::replay) fn preview_memcached(
         &self,
         context: &MemcachedPolicyContext<'_>,
-    ) -> Result<PolicyDecision, String> {
+    ) -> Result<DependencyRuleDecision, String> {
         let Some(case_id) = context.case_id else {
             return exact_memcached_value(context.recorded_value, context.actual_value);
         };
@@ -428,10 +429,10 @@ impl ReplayPolicyRuntime {
         let matching_rules = self
             .loaded
             .document
-            .rules
+            .dependency_rules
             .iter()
             .filter(|rule| {
-                rule.protocol == PolicyProtocol::Memcached
+                rule.protocol == DependencyProtocol::Memcached
                     && rule_matches_case(rule, case)
                     && rule_matches_memcached(rule, context.target, context.command, context.key)
             })
@@ -466,7 +467,7 @@ impl ReplayPolicyRuntime {
             context.actual_observed_at,
         )?;
 
-        let mut decision = PolicyDecision::default();
+        let mut decision = DependencyRuleDecision::default();
         for rule_id in selected_fields.values() {
             decision
                 .usage
@@ -484,7 +485,7 @@ impl ReplayPolicyRuntime {
         field: &DynamicValueRule,
         actual: &Value,
         now: DateTime<Utc>,
-        decision: &mut PolicyDecision,
+        decision: &mut DependencyRuleDecision,
     ) -> Result<(), String> {
         let usage = decision.usage.entry(rule_id.to_string()).or_default();
         if let Some(reference) = &field.reference {
@@ -536,7 +537,11 @@ impl ReplayPolicyRuntime {
         Ok(())
     }
 
-    pub(in crate::replay) fn commit(&mut self, case_id: Option<&str>, decision: PolicyDecision) {
+    pub(in crate::replay) fn commit(
+        &mut self,
+        case_id: Option<&str>,
+        decision: DependencyRuleDecision,
+    ) {
         let Some(case_id) = case_id else {
             return;
         };
@@ -558,17 +563,17 @@ impl ReplayPolicyRuntime {
     }
 
     pub(in crate::replay) fn report(&self) -> ReplayPolicyReport {
-        let rules = self
+        let dependency_rules = self
             .loaded
             .document
-            .rules
+            .dependency_rules
             .iter()
             .map(|rule| {
                 let usage = self.usage.get(&rule.id).cloned().unwrap_or_default();
-                PolicyRuleReport {
+                DependencyRuleReport {
                     id: rule.id.clone(),
                     protocol: rule.protocol,
-                    applicable: self.applicable_rule_ids.contains(&rule.id),
+                    applicable: self.applicable_dependency_rule_ids.contains(&rule.id),
                     matches: usage.matches,
                     binds: usage.binds,
                     references: usage.references,
@@ -577,7 +582,7 @@ impl ReplayPolicyRuntime {
                 }
             })
             .collect::<Vec<_>>();
-        let unused_applicable_rule_ids = rules
+        let unused_applicable_dependency_rule_ids = dependency_rules
             .iter()
             .filter(|rule| rule.applicable && rule.matches == 0)
             .map(|rule| rule.id.clone())
@@ -587,8 +592,8 @@ impl ReplayPolicyRuntime {
             path: self.loaded.path.display().to_string(),
             fingerprint: self.loaded.fingerprint.clone(),
             expected_response: self.loaded.document.expected_response,
-            rules,
-            unused_applicable_rule_ids,
+            dependency_rules,
+            unused_applicable_dependency_rule_ids,
         }
     }
 }
@@ -596,9 +601,9 @@ impl ReplayPolicyRuntime {
 fn exact_mysql_params(
     recorded: Option<&[RecordedMysqlValue]>,
     actual: Option<&[RecordedMysqlValue]>,
-) -> Result<PolicyDecision, String> {
+) -> Result<DependencyRuleDecision, String> {
     if recorded == actual {
-        Ok(PolicyDecision::default())
+        Ok(DependencyRuleDecision::default())
     } else {
         Err("MySQL params did not match the recording".to_string())
     }
@@ -607,15 +612,15 @@ fn exact_mysql_params(
 fn exact_memcached_value(
     recorded: Option<&[u8]>,
     actual: Option<&[u8]>,
-) -> Result<PolicyDecision, String> {
+) -> Result<DependencyRuleDecision, String> {
     if recorded == actual {
-        Ok(PolicyDecision::default())
+        Ok(DependencyRuleDecision::default())
     } else {
         Err("Memcached value did not match the recording".to_string())
     }
 }
 
-fn rule_matches_case(rule: &ReplayPolicyRule, case: &CaseIdentity) -> bool {
+fn rule_matches_case(rule: &ReplayDependencyRule, case: &CaseIdentity) -> bool {
     let Some(selector) = rule.case_selector.as_ref() else {
         return true;
     };
@@ -672,7 +677,7 @@ fn load_case_identity(case_dir: &Path, request_path: &Path) -> Result<CaseIdenti
 }
 
 fn rule_matches_mysql(
-    rule: &ReplayPolicyRule,
+    rule: &ReplayDependencyRule,
     identity: &ReplaySessionIdentity,
     command: &str,
     sql: Option<&str>,
@@ -699,14 +704,19 @@ fn rule_matches_mysql(
     text_pattern_matches(&normalize_sql(&mysql.sql), &normalize_sql(sql))
 }
 
-fn rule_matches_mysql_sql_pattern(rule: &ReplayPolicyRule, sql: Option<&str>) -> bool {
+fn rule_matches_mysql_sql_pattern(rule: &ReplayDependencyRule, sql: Option<&str>) -> bool {
     let (Some(mysql), Some(sql)) = (&rule.mysql, sql) else {
         return false;
     };
     text_pattern_matches(&normalize_sql(&mysql.sql), &normalize_sql(sql))
 }
 
-fn rule_matches_http(rule: &ReplayPolicyRule, target: &TargetKey, method: &str, uri: &str) -> bool {
+fn rule_matches_http(
+    rule: &ReplayDependencyRule,
+    target: &TargetKey,
+    method: &str,
+    uri: &str,
+) -> bool {
     rule_matches_target(rule, Some(target))
         && rule.http.as_ref().is_some_and(|http| {
             http.method.eq_ignore_ascii_case(method)
@@ -715,7 +725,7 @@ fn rule_matches_http(rule: &ReplayPolicyRule, target: &TargetKey, method: &str, 
 }
 
 fn rule_matches_memcached(
-    rule: &ReplayPolicyRule,
+    rule: &ReplayDependencyRule,
     target: &TargetKey,
     command: &str,
     key: Option<&[u8]>,
@@ -743,7 +753,7 @@ fn is_u64_ascii(value: &[u8]) -> bool {
             .is_some()
 }
 
-fn rule_matches_target(rule: &ReplayPolicyRule, actual: Option<&TargetKey>) -> bool {
+fn rule_matches_target(rule: &ReplayDependencyRule, actual: Option<&TargetKey>) -> bool {
     let Some(host) = rule.target.host.as_deref() else {
         return true;
     };

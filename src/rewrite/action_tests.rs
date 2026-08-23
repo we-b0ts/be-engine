@@ -282,8 +282,7 @@ fn pending_rule_plans_are_recoverable_by_plan_id() {
         source_evidence: Some("src/id.rs:new".to_string()),
         source_example: None,
         target_example: None,
-        memcached_timestamp: None,
-        motan: None,
+        response_body: None,
         evidence_id: "evidence-response".to_string(),
     });
 

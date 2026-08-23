@@ -10,7 +10,7 @@ response rules.
 - Dependency dynamic rules
 - Generated scalar response fields
 - Unordered response arrays
-- Motan body response rules
+- Structured response-body rules
 - Comparison-only response fields
 
 ## Ownership
@@ -24,7 +24,7 @@ Use version one for legacy target-owned response assertions:
 ```yaml
 version: 1
 expected_response: assertions_only
-rules: []
+dependency_rules: []
 ```
 
 Use version three when the standard runner owns response assertions:
@@ -32,7 +32,7 @@ Use version three when the standard runner owns response assertions:
 ```yaml
 version: 3
 expected_response: assertions_only
-rules: []
+dependency_rules: []
 response_settings:
   comparison:
     source_match: before
@@ -42,7 +42,7 @@ response_rules:
   hessian2: {}
 ```
 
-Response field rules are grouped by body protocol, canonical API, and then
+Response field rules are grouped by body codec, canonical API, and then
 concrete rule kind. Standard replay loads JSON `timestamp`, `duration`, `uuid`,
 `random`, and `unordered` rules plus configured protobuf and Hessian2 rules.
 Comparison also loads JSON `counter` rules. Replay and comparison-only rules
@@ -110,7 +110,7 @@ applicable. Multiple rules may compose on one dependency exchange only when
 they select disjoint fields; overlapping field selection is rejected.
 
 ```yaml
-rules:
+dependency_rules:
   - id: request-audit-insert
     protocol: mysql
     target:
@@ -182,7 +182,7 @@ its exact target domain plus port. Cache namespace and deployment group are not
 accepted or exposed:
 
 ```yaml
-rules:
+dependency_rules:
   - id: user-info-cache-writeback
     protocol: memcached
     memcached:
@@ -347,22 +347,34 @@ action still requires clean aggregate evidence and rejects undeclared response
 differences. Both reject unsupported differences at a selected location.
 Apply is additive, sorted, and atomic.
 
-## Motan Body Response Rules
+## Structured Response-Body Rules
 
-Motan rules use the same body-protocol/API/rule-kind hierarchy. A protocol-only
-entry enables protocol-aware diagnostics without relaxing a business value:
+The policy has exactly two top-level rule surfaces: `dependency_rules` changes
+dependency replay matching, while `response_rules` changes response
+verification. The former generic `rules` key is intentionally unsupported.
+
+HTTP and Motan are gateway protocols, not response-rule kinds. JSON, protobuf,
+and Hessian2 are body codecs, and codec-aware comparison is independent of the
+gateway protocol. A codec-only entry enables typed diagnostics without
+relaxing a business value:
 
 ```yaml
 response_rules:
   protobuf:
-    "MOTAN /rpc/ExampleService-getConfig-Request-hash": {}
+    "POST /api/example": {}
 ```
 
-Treat reported protocol candidates as decoder candidates, not semantic proof.
-Select protobuf or Hessian2 from application/schema context, apply the
-protocol-only plan, and use its offline re-verification of the same immutable
-comparison artifacts to obtain typed differences. Protocol selection does not
-require source evidence because it does not ignore a value.
+Treat reported codec candidates as decoder candidates, not semantic proof.
+Select protobuf or Hessian2 from application/schema context, then use the
+unified response-rule planner to re-verify the same immutable evidence with
+that codec. Codec selection does not require source evidence because it does
+not ignore a value:
+
+```bash
+backend-rewrite rule plan \
+  --evidence-id <current-evidence-id> \
+  --body-codec protobuf
+```
 
 An unordered selector does relax comparison and therefore requires one-line
 source proof on every selected path. A diagnostic candidate proves only that
@@ -397,11 +409,12 @@ semantic `display_path`; joined strings also require a non-empty separator.
 Only selected collection order is ignored. Presence, types, contents,
 duplicate multiplicity, status, envelope, and undeclared paths remain exact.
 
-Use the current comparison report and policy fingerprint. Plan first, review
-the exact selectors and source citations, apply atomically, then rerun the
-affected comparison/E2E group. Planning rejects stale reports, source changes,
-unused applicable rules, selectors absent from typed diagnostics, and a set of
-selectors that does not fully explain the current body difference.
+Use current focused E2E or comparison evidence and the current policy
+fingerprint. Plan first, review the exact selectors and source citations, apply
+atomically, then rerun the affected E2E/comparison group. Planning rejects stale
+reports, source changes, unused applicable dependency rules, selectors absent
+from typed diagnostics, and a set of selectors that does not fully explain the
+current body difference.
 
 ## Comparison Counter Fields
 

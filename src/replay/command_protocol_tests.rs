@@ -366,7 +366,7 @@ async fn replays_memcached_set_with_a_case_relative_protobuf_timestamp() {
         r#"
 version: 1
 expected_response: assertions_only
-rules:
+dependency_rules:
   - id: user-info-loading-time
     protocol: memcached
     memcached:
@@ -402,11 +402,11 @@ rules:
     assert_eq!(u16::from_be_bytes(response[6..8].try_into().unwrap()), 0);
 
     let report = wait_for_matched_count(&report_path, "memcached", 1).await;
-    let rule = &report["replay_policy"]["rules"][0];
+    let rule = &report["replay_policy"]["dependency_rules"][0];
     assert_eq!(rule["matches"], 1);
     assert_eq!(rule["time_validations"], 1);
     assert!(
-        report["replay_policy"]["unused_applicable_rule_ids"]
+        report["replay_policy"]["unused_applicable_dependency_rule_ids"]
             .as_array()
             .unwrap()
             .is_empty()

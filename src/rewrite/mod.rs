@@ -48,12 +48,11 @@ pub use case_dependencies::{
     query as query_rewrite_case_dependencies,
 };
 pub use dependency_rule::{
-    RewriteDependencyOwnership, RewriteDependencyRulePlanOptions, RewriteDependencyRulePlanReport,
-    RewriteDependencyRuleSelector,
+    RewriteDependencyOwnership, RewriteDependencyPayloadRulePlanOptions,
+    RewriteDependencyPayloadRulePlanReport, RewriteDependencyRulePlanOptions,
+    RewriteDependencyRulePlanReport, RewriteDependencyRuleSelector,
 };
-pub use evidence_model::{
-    RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteProtocolRuleHint,
-};
+pub use evidence_model::{RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteRuleHint};
 pub use model::{
     RewriteAction, RewriteActionEnvelope, RewriteApiInventoryDetails, RewriteApiInventoryView,
     RewriteApiProgress, RewriteApiStatus, RewriteCommandSpec, RewriteDependencyRuleReport,
@@ -89,9 +88,7 @@ pub use revalidation::{
     request as request_rewrite_revalidation,
 };
 pub use route::{RewriteRouteCause, RewriteRouteOptions, RewriteRouteOutcome};
-pub use rule::{
-    RewriteMemcachedTimestampRulePlanOptions, RewriteMotanRulePlanOptions, RewriteRulePlanOptions,
-};
+pub use rule::RewriteRulePlanOptions;
 pub use source_process_traffic::*;
 pub use status::{
     inventory_rewrite, status_rewrite, status_rewrite_for_api, status_rewrite_for_process_output,
@@ -632,46 +629,6 @@ pub fn plan_rewrite_rule(
     Ok(report)
 }
 
-pub fn plan_rewrite_memcached_timestamp_rule(
-    context: RewriteContext,
-    options: RewriteMemcachedTimestampRulePlanOptions,
-) -> Result<RewriteRuleReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
-    let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
-    let mut state = store
-        .load()?
-        .context("rewrite workflow has not been initialized")?;
-    let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
-        .context("Memcached rule evidence is stale or belongs to no concurrent API work item")?;
-    worker::ensure_api_confirmed(&state, &api, "planning a Memcached SET payload rule")?;
-    let report = inventory::with_slice_mut(&mut state, &api, |state| {
-        rule::plan_memcached_timestamp(&target_root, state, options)
-    })?;
-    store.save(&state)?;
-    Ok(report)
-}
-
-pub fn plan_rewrite_motan_rule(
-    context: RewriteContext,
-    options: RewriteMotanRulePlanOptions,
-) -> Result<RewriteRuleReport> {
-    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
-    let store = RewriteStore::new(&target_root)?;
-    let _lock = store.lock()?;
-    let mut state = store
-        .load()?
-        .context("rewrite workflow has not been initialized")?;
-    let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
-        .context("Motan rule evidence is stale or belongs to no concurrent API work item")?;
-    worker::ensure_api_confirmed(&state, &api, "planning a Motan response-body rule")?;
-    let report = inventory::with_slice_mut(&mut state, &api, |state| {
-        rule::plan_motan(&target_root, state, options)
-    })?;
-    store.save(&state)?;
-    Ok(report)
-}
-
 pub fn apply_rewrite_rule(context: RewriteContext, plan_id: &str) -> Result<RewriteRuleReport> {
     let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
     let store = RewriteStore::new(&target_root)?;
@@ -710,6 +667,26 @@ pub fn plan_rewrite_dependency_rule(
     Ok(report)
 }
 
+pub fn plan_rewrite_dependency_payload_rule(
+    context: RewriteContext,
+    options: RewriteDependencyPayloadRulePlanOptions,
+) -> Result<RewriteDependencyPayloadRulePlanReport> {
+    let (target_root, _) = crate::e2e_run::resolve_project(&context.target_root)?;
+    let store = RewriteStore::new(&target_root)?;
+    let _lock = store.lock()?;
+    let mut state = store
+        .load()?
+        .context("rewrite workflow has not been initialized")?;
+    let api = inventory::api_for_evidence_id(&target_root, &state, &options.evidence_id)
+        .context("dependency-rule evidence is stale or belongs to no concurrent API work item")?;
+    worker::ensure_api_confirmed(&state, &api, "planning a dependency payload rule")?;
+    let report = inventory::with_slice_mut(&mut state, &api, |state| {
+        dependency_rule::plan_memcached_timestamp(&target_root, state, options)
+    })?;
+    store.save(&state)?;
+    Ok(report)
+}
+
 pub fn apply_rewrite_dependency_rule(
     context: RewriteContext,
     plan_id: &str,
@@ -724,6 +701,12 @@ pub fn apply_rewrite_dependency_rule(
         .context("dependency-rule plan is stale or belongs to no concurrent API work item")?;
     let (mut report, cache_snapshot_refresh) =
         inventory::with_slice_mut(&mut state, &owner_api, |state| {
+            let dependency_payload = state.dependency_rule_plan.as_ref().is_some_and(|plan| {
+                matches!(
+                    plan.spec,
+                    model::RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
+                )
+            });
             let cache_snapshot_refresh =
                 dependency_rule::pending_cache_snapshot_refresh(state, plan_id)?;
             let mut report = dependency_rule::apply(&target_root, state, plan_id)?;
@@ -731,6 +714,9 @@ pub fn apply_rewrite_dependency_rule(
                 dependency_rule::schedule_cache_snapshot_refresh(&target_root, state, applied)?;
                 report.next_command = action::next_command_for_api(&target_root, &state.api);
                 return Ok((report, true));
+            }
+            if dependency_payload {
+                return Ok((report, false));
             }
             let case_source = state
                 .case_source
@@ -901,10 +887,19 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
             .and_then(Value::as_str)
             .unwrap_or("<comparison>");
         let id = issue::id(&state.api, "comparison", pointer);
+        let response_body_candidate = observation.as_ref().is_some_and(|value| {
+            value
+                .get("body_diagnosis")
+                .is_some_and(|body| !body.is_null())
+        });
         state.active_issue = Some(RewriteIssue {
             id,
             kind: RewriteIssueKind::Comparison,
-            owner: RewriteIssueOwner::TargetCode,
+            owner: if response_body_candidate {
+                RewriteIssueOwner::SourceInvestigation
+            } else {
+                RewriteIssueOwner::TargetCode
+            },
             summary: format!(
                 "comparison has {} candidate difference(s) and {} inconclusive case(s)",
                 report.counts.failed, report.counts.inconclusive
@@ -913,12 +908,19 @@ fn compare_and_transition(target_root: &Path, state: &mut RewriteState) -> Resul
                 .then(|| crate::e2e_run::response_pointer_pattern(pointer)),
             representative: None,
             response_diagnosis: None,
-            possible_causes: vec![
-                "target_behavior".to_string(),
-                "intentional_source_nondeterminism".to_string(),
-                "source_changed_during_comparison".to_string(),
-                "verification_policy_gap".to_string(),
-            ],
+            possible_causes: if response_body_candidate {
+                vec![
+                    "structured_response_body_order_candidate".to_string(),
+                    "source_contract_must_prove_order_is_irrelevant".to_string(),
+                ]
+            } else {
+                vec![
+                    "target_behavior".to_string(),
+                    "intentional_source_nondeterminism".to_string(),
+                    "source_changed_during_comparison".to_string(),
+                    "verification_policy_gap".to_string(),
+                ]
+            },
             observed_target_fingerprint: fingerprint::repository_fingerprint(target_root)?,
             attempt: state.attempts.last().map_or(0, |attempt| attempt.attempt),
             comparison_observation: observation,

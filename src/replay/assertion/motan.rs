@@ -11,10 +11,6 @@ pub(super) struct ComparableResponseFrame {
 }
 
 impl ComparableResponseFrame {
-    pub(super) fn encoded(&self) -> &[u8] {
-        &self.encoded
-    }
-
     pub(super) fn body(&self) -> &[u8] {
         &self.encoded[self.body_offset..]
     }
@@ -98,7 +94,7 @@ mod tests {
         let source = comparable_response_frame(&source, "source response").unwrap();
         let target = comparable_response_frame(&target, "target response").unwrap();
 
-        assert_eq!(source.encoded(), target.encoded());
+        assert_eq!(source.encoded, target.encoded);
         assert_eq!(source.carrier(), target.carrier());
         assert_eq!(source.body(), target.body());
     }

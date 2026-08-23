@@ -33,7 +33,7 @@ fn validates_comparison_source_match_and_requires_version_three() {
     let path = temp.path().join("verification.yaml");
     fs::write(
         &path,
-        "version: 3\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
 
@@ -45,7 +45,7 @@ fn validates_comparison_source_match_and_requires_version_three() {
 
     fs::write(
         &path,
-        "version: 1\nexpected_response: assertions_only\nrules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
+        "version: 1\nexpected_response: assertions_only\ndependency_rules: []\nresponse_settings:\n  comparison:\n    source_match: before_or_after\n",
     )
     .unwrap();
     let error = validate_replay_policy(&path).unwrap_err();
@@ -61,12 +61,26 @@ fn rejects_removed_version_two_policy_contract() {
     let path = temp.path().join("verification.yaml");
     fs::write(
         &path,
-        "version: 2\nexpected_response: assertions_only\nrules: []\n",
+        "version: 2\nexpected_response: assertions_only\ndependency_rules: []\n",
     )
     .unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
     assert!(format!("{error:#}").contains("unsupported replay policy version 2; expected 1 or 3"));
+}
+
+#[test]
+fn rejects_legacy_rules_key() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("verification.yaml");
+    fs::write(
+        &path,
+        "version: 3\nexpected_response: assertions_only\nrules: []\n",
+    )
+    .unwrap();
+
+    let error = validate_replay_policy(&path).unwrap_err();
+    assert!(format!("{error:#}").contains("unknown field `rules`"));
 }
 
 #[test]
@@ -78,7 +92,7 @@ fn validates_assertion_only_policy_contract() {
         r#"
 version: 1
 expected_response: assertions_only
-rules: []
+dependency_rules: []
 "#,
     )
     .unwrap();
@@ -89,7 +103,7 @@ rules: []
         report.expected_response,
         ExpectedResponseUsage::AssertionsOnly
     );
-    assert!(report.rule_ids.is_empty());
+    assert!(report.dependency_rule_ids.is_empty());
     assert!(report.fingerprint.starts_with("fnv1a64:"));
 }
 
@@ -99,7 +113,7 @@ fn loads_motan_case_without_http_request_metadata() {
         r#"
 version: 1
 expected_response: assertions_only
-rules: []
+dependency_rules: []
 "#,
     );
     fs::write(
@@ -120,7 +134,7 @@ rules: []
 fn rejects_policy_without_expected_response_contract() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("replay.yaml");
-    fs::write(&path, "version: 1\nrules: []\n").unwrap();
+    fs::write(&path, "version: 1\ndependency_rules: []\n").unwrap();
 
     let error = validate_replay_policy(&path).unwrap_err();
     assert!(error.to_string().contains("failed to parse replay policy"));
@@ -175,10 +189,10 @@ fn binds_and_references_runtime_mysql_uuid() {
     runtime.commit(Some(CASE_ID), update);
 
     let report = runtime.report();
-    assert!(report.unused_applicable_rule_ids.is_empty());
-    assert_eq!(report.rules[0].binds, 1);
-    assert_eq!(report.rules[0].time_validations, 1);
-    assert_eq!(report.rules[1].references, 1);
+    assert!(report.unused_applicable_dependency_rule_ids.is_empty());
+    assert_eq!(report.dependency_rules[0].binds, 1);
+    assert_eq!(report.dependency_rules[0].time_validations, 1);
+    assert_eq!(report.dependency_rules[1].references, 1);
 }
 
 #[test]
@@ -309,9 +323,9 @@ fn validates_memcached_protobuf_timestamp_without_exposing_literals() {
     runtime.commit(Some(CASE_ID), decision);
 
     let report = runtime.report();
-    assert_eq!(report.rules[0].matches, 1);
-    assert_eq!(report.rules[0].time_validations, 1);
-    assert!(report.unused_applicable_rule_ids.is_empty());
+    assert_eq!(report.dependency_rules[0].matches, 1);
+    assert_eq!(report.dependency_rules[0].time_validations, 1);
+    assert!(report.unused_applicable_dependency_rule_ids.is_empty());
     let serialized = serde_json::to_string(&report).unwrap();
     assert!(!serialized.contains("1699999995"));
     assert!(!serialized.contains("1800000005"));
@@ -436,21 +450,39 @@ fn unscoped_rules_are_applicable_only_with_matching_recorded_dependencies() {
     let mut runtime = ReplayPolicyRuntime::load(&fixture.policy_path, &fixture.cases).unwrap();
     let identity = mysql_identity();
 
-    assert!(runtime.report().rules.iter().all(|rule| !rule.applicable));
+    assert!(
+        runtime
+            .report()
+            .dependency_rules
+            .iter()
+            .all(|rule| !rule.applicable)
+    );
     runtime.observe_recorded_mysql_exchange(
         None,
         &identity,
         "COM_STMT_EXECUTE",
         Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
     );
-    assert!(runtime.report().rules.iter().all(|rule| !rule.applicable));
+    assert!(
+        runtime
+            .report()
+            .dependency_rules
+            .iter()
+            .all(|rule| !rule.applicable)
+    );
     runtime.observe_recorded_mysql_exchange(
         Some(CASE_ID),
         &identity,
         "COM_STMT_EXECUTE",
         Some("SELECT 1"),
     );
-    assert!(runtime.report().rules.iter().all(|rule| !rule.applicable));
+    assert!(
+        runtime
+            .report()
+            .dependency_rules
+            .iter()
+            .all(|rule| !rule.applicable)
+    );
 
     runtime.observe_recorded_mysql_exchange(
         Some(CASE_ID),
@@ -459,9 +491,12 @@ fn unscoped_rules_are_applicable_only_with_matching_recorded_dependencies() {
         Some("INSERT INTO request_log_202607 (uuid, request_time) VALUES (?, ?)"),
     );
     let report = runtime.report();
-    assert!(report.rules[0].applicable);
-    assert!(!report.rules[1].applicable);
-    assert_eq!(report.unused_applicable_rule_ids, vec!["audit-insert"]);
+    assert!(report.dependency_rules[0].applicable);
+    assert!(!report.dependency_rules[1].applicable);
+    assert_eq!(
+        report.unused_applicable_dependency_rule_ids,
+        vec!["audit-insert"]
+    );
 }
 
 #[test]
@@ -496,9 +531,9 @@ fn scoped_and_unscoped_rules_compose_on_disjoint_mysql_params() {
     runtime.commit(Some(CASE_ID), decision);
 
     let report = runtime.report();
-    assert_eq!(report.rules[0].matches, 1);
-    assert_eq!(report.rules[1].matches, 1);
-    assert!(report.unused_applicable_rule_ids.is_empty());
+    assert_eq!(report.dependency_rules[0].matches, 1);
+    assert_eq!(report.dependency_rules[1].matches, 1);
+    assert!(report.unused_applicable_dependency_rule_ids.is_empty());
 }
 
 struct PolicyFixture {
@@ -551,7 +586,7 @@ fn mysql_policy() -> &'static str {
     r#"
 version: 1
 expected_response: assertions_only
-rules:
+dependency_rules:
   - id: audit-insert
     protocol: mysql
     target:
@@ -592,7 +627,7 @@ fn http_policy() -> &'static str {
     r#"
 version: 1
 expected_response: assertions_only
-rules:
+dependency_rules:
   - id: aliyun-signature
     protocol: http
     target:
@@ -617,7 +652,7 @@ fn memcached_policy() -> &'static str {
     r#"
 version: 1
 expected_response: assertions_only
-rules:
+dependency_rules:
   - id: user-info-loading-time
     protocol: memcached
     memcached:
@@ -656,7 +691,7 @@ fn composed_mysql_policy() -> &'static str {
     r#"
 version: 1
 expected_response: assertions_only
-rules:
+dependency_rules:
   - id: audit-update
     protocol: mysql
     target:

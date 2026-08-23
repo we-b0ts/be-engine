@@ -192,7 +192,7 @@ async fn replays_http_exchange_with_unscoped_dynamic_query_policy() {
         r#"
 version: 1
 expected_response: assertions_only
-rules:
+dependency_rules:
   - id: aliyun-signature
     protocol: http
     target:
@@ -233,9 +233,9 @@ rules:
 
     let state = runtime.state.lock().await;
     let policy = state.snapshot_report().replay_policy.unwrap();
-    assert!(policy.rules[0].applicable);
-    assert_eq!(policy.rules[0].matches, 1);
-    assert!(policy.unused_applicable_rule_ids.is_empty());
+    assert!(policy.dependency_rules[0].applicable);
+    assert_eq!(policy.dependency_rules[0].matches, 1);
+    assert!(policy.unused_applicable_dependency_rule_ids.is_empty());
     task.abort();
 }
 

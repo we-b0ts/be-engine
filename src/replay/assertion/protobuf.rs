@@ -29,13 +29,13 @@ struct Field<'a> {
     payload_offset: usize,
 }
 
-pub(crate) fn is_motan_protobuf_body(body: &[u8]) -> bool {
+pub(crate) fn is_protobuf_body(body: &[u8]) -> bool {
     extract_simple_payload(body)
         .and_then(|payload| parse_fields(payload).map(|_| ()))
         .is_ok()
 }
 
-pub(in crate::replay) fn compare_motan_protobuf(
+pub(in crate::replay) fn compare_protobuf(
     expected: &[u8],
     actual: &[u8],
     unordered_paths: &[ProtobufUnorderedPath],
@@ -49,13 +49,13 @@ pub(in crate::replay) fn compare_motan_protobuf(
     Ok(expected == actual)
 }
 
-pub(super) fn evaluate_motan_protobuf(
+pub(super) fn evaluate_protobuf(
     expected: &[u8],
     actual: &[u8],
     unordered_paths: &[ProtobufUnorderedPath],
 ) -> Result<(bool, ProtobufOrderDiscovery)> {
-    let mut discovery = discover_motan_protobuf_order(expected, actual)?;
-    let matches = compare_motan_protobuf(expected, actual, unordered_paths)?;
+    let mut discovery = discover_protobuf_order(expected, actual)?;
+    let matches = compare_protobuf(expected, actual, unordered_paths)?;
     for rule in unordered_paths {
         for difference in discovery
             .differences
@@ -73,7 +73,7 @@ pub(super) fn evaluate_motan_protobuf(
                 .filter(|(candidate, _)| *candidate != index)
                 .map(|(_, rule)| rule.clone())
                 .collect::<Vec<_>>();
-            if compare_motan_protobuf(expected, actual, &without_rule)? {
+            if compare_protobuf(expected, actual, &without_rule)? {
                 continue;
             }
             discovery.differences.retain(|difference| {
@@ -102,7 +102,7 @@ pub(super) fn evaluate_motan_protobuf(
     Ok((matches, discovery))
 }
 
-pub(super) fn discover_motan_protobuf_order(
+pub(super) fn discover_protobuf_order(
     expected: &[u8],
     actual: &[u8],
 ) -> Result<ProtobufOrderDiscovery> {
@@ -294,7 +294,7 @@ fn canonicalize_paths(payload: &[u8], paths: &[ProtobufFieldPath]) -> Result<Vec
         let (next, found) = canonicalize_path(&canonical, &path.0, None, 0)?;
         ensure!(
             found,
-            "protobuf unordered path {:?} is missing from the Motan body",
+            "protobuf unordered path {:?} is missing from the response body",
             path.0
         );
         canonical = next;
@@ -797,7 +797,7 @@ mod tests {
             &message([bytes_field(1, &message([bytes_field(6, &actual_group)]))]),
         )]));
 
-        let discovery = discover_motan_protobuf_order(&expected, &actual).unwrap();
+        let discovery = discover_protobuf_order(&expected, &actual).unwrap();
 
         assert_eq!(
             discovery.unordered_paths,
@@ -815,7 +815,7 @@ mod tests {
                 source_evidence: "test source contract".to_string(),
             })
             .collect::<Vec<_>>();
-        assert!(compare_motan_protobuf(&expected, &actual, &rules).unwrap());
+        assert!(compare_protobuf(&expected, &actual, &rules).unwrap());
     }
 
     #[test]
@@ -823,7 +823,7 @@ mod tests {
         let expected = body(message([bytes_field(3, b"alice"), bytes_field(3, b"bob")]));
         let actual = body(message([bytes_field(3, b"bob"), bytes_field(3, b"carol")]));
 
-        let discovery = discover_motan_protobuf_order(&expected, &actual).unwrap();
+        let discovery = discover_protobuf_order(&expected, &actual).unwrap();
 
         assert!(discovery.unordered_paths.is_empty());
         assert!(!discovery.order_only);
@@ -843,8 +843,8 @@ mod tests {
             source_evidence: "test source contract".to_string(),
         };
 
-        assert!(compare_motan_protobuf(&absent, &absent, std::slice::from_ref(&rule)).unwrap());
-        assert!(!compare_motan_protobuf(&absent, &present, &[rule]).unwrap());
+        assert!(compare_protobuf(&absent, &absent, std::slice::from_ref(&rule)).unwrap());
+        assert!(!compare_protobuf(&absent, &present, &[rule]).unwrap());
     }
 
     #[test]
@@ -860,7 +860,7 @@ mod tests {
             source_evidence: "test source contract".to_string(),
         };
 
-        let error = compare_motan_protobuf(&malformed, &malformed, &[rule]).unwrap_err();
+        let error = compare_protobuf(&malformed, &malformed, &[rule]).unwrap_err();
 
         assert!(
             error
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_envelope_length() {
-        assert!(discover_motan_protobuf_order(&[3, 0, 0, 0, 2, 8], &[3, 0, 0, 0, 1, 8]).is_err());
+        assert!(discover_protobuf_order(&[3, 0, 0, 0, 2, 8], &[3, 0, 0, 0, 1, 8]).is_err());
     }
 
     #[test]
@@ -885,7 +885,7 @@ mod tests {
             source_evidence: "test source contract".to_string(),
         };
 
-        let (matches, discovery) = evaluate_motan_protobuf(&expected, &actual, &[rule]).unwrap();
+        let (matches, discovery) = evaluate_protobuf(&expected, &actual, &[rule]).unwrap();
 
         assert!(matches);
         assert!(discovery.order_only);
@@ -924,7 +924,7 @@ mod tests {
             ]),
         )]));
 
-        let discovery = discover_motan_protobuf_order(&expected, &actual).unwrap();
+        let discovery = discover_protobuf_order(&expected, &actual).unwrap();
 
         assert_eq!(
             discovery.unordered_paths,
@@ -948,6 +948,6 @@ mod tests {
                 source_evidence: "test source contract".to_string(),
             },
         ];
-        assert!(compare_motan_protobuf(&expected, &actual, &rules).unwrap());
+        assert!(compare_protobuf(&expected, &actual, &rules).unwrap());
     }
 }

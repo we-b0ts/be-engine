@@ -12,10 +12,12 @@ const STATE_ERROR_OVERFLOW: &str =
 
 use super::result::E2eResponseUnavailableReason;
 use crate::case_group::CaseGroupInventory;
-use crate::replay::ResponseDifference;
+use crate::replay::{
+    ResponseBodyAssertionReport, ResponseBodyCodec, ResponseDifference, ResponseGatewayProtocol,
+};
 
-pub(super) const STATE_VERSION: u32 = 2;
-pub(super) const ASSERTION_REPORT_VERSION: u32 = 2;
+pub(super) const STATE_VERSION: u32 = 3;
+pub(super) const ASSERTION_REPORT_VERSION: u32 = 3;
 pub(super) const DEFAULT_REPLAY_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_STARTUP_TIMEOUT_SECONDS: u64 = 60;
 pub(super) const DEFAULT_TARGET_REQUEST_TIMEOUT_SECONDS: u64 = 30;
@@ -192,6 +194,12 @@ pub(super) struct CaseExecution {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct ResponseAssertionSummary {
     pub passed: bool,
+    pub method: String,
+    pub path: String,
+    pub gateway_protocol: ResponseGatewayProtocol,
+    pub body_codec: ResponseBodyCodec,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_diagnosis: Option<ResponseBodyAssertionReport>,
     pub difference_count: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub difference_index: Vec<ResponseDifference>,
@@ -199,6 +207,7 @@ pub(super) struct ResponseAssertionSummary {
     pub representative_difference: Option<ResponseDifference>,
     pub detail_report: PathBuf,
     pub detail_fingerprint: String,
+    pub request: PathBuf,
     pub expected_response: PathBuf,
     pub actual_response: PathBuf,
     pub policy_path: String,

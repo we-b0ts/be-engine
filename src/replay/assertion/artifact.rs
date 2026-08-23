@@ -5,6 +5,8 @@ use serde::Deserialize;
 
 use crate::recorder::HeaderMapSnapshot;
 
+use super::model::ResponseGatewayProtocol;
+
 #[derive(Debug, Deserialize)]
 pub(super) struct RecordedRequest {
     pub(super) method: String,
@@ -16,6 +18,17 @@ impl RecordedRequest {
     pub(super) fn has_motan_frame(&self) -> bool {
         self.method.eq_ignore_ascii_case("MOTAN")
             && matches!(self.protocol_version.as_deref(), Some("motan1" | "motan2"))
+    }
+
+    pub(super) fn gateway_protocol(&self) -> Result<ResponseGatewayProtocol> {
+        if !self.method.eq_ignore_ascii_case("MOTAN") {
+            return Ok(ResponseGatewayProtocol::Http);
+        }
+        match self.protocol_version.as_deref() {
+            Some("motan1") => Ok(ResponseGatewayProtocol::Motan1),
+            Some("motan2") => Ok(ResponseGatewayProtocol::Motan2),
+            value => anyhow::bail!("MOTAN request uses unsupported protocol version {value:?}"),
+        }
     }
 }
 

@@ -1,17 +1,17 @@
 use super::*;
 
 #[test]
-fn accepts_protocol_only_then_reviewable_protobuf_paths() {
-    let protocol_only = serde_yaml::from_str::<ResponseRules>(
+fn accepts_codec_only_then_reviewable_protobuf_paths() {
+    let codec_only = serde_yaml::from_str::<ResponseRules>(
         r#"
 protobuf:
   "MOTAN /rpc/example": {}
 "#,
     )
     .unwrap();
-    validate_response_rules(&protocol_only).unwrap();
+    validate_response_rules(&codec_only).unwrap();
     assert!(
-        protocol_only.protobuf["MOTAN /rpc/example"]
+        codec_only.protobuf["MOTAN /rpc/example"]
             .unordered
             .is_empty()
     );
@@ -34,7 +34,7 @@ protobuf:
 }
 
 #[test]
-fn unordered_motan_selectors_require_source_evidence() {
+fn unordered_response_body_selectors_require_source_evidence() {
     let rules = serde_yaml::from_str::<ResponseRules>(
         r#"
 protobuf:
@@ -90,7 +90,7 @@ hessian2:
 }
 
 #[test]
-fn rejects_a_selector_from_another_body_protocol() {
+fn rejects_a_selector_from_another_body_codec() {
     let error = serde_yaml::from_str::<ResponseRules>(
         r#"
 hessian2:
@@ -209,7 +209,7 @@ hessian2:
 }
 
 #[test]
-fn rejects_overlapping_body_protocol_routes() {
+fn rejects_overlapping_body_codec_routes() {
     let rules = serde_yaml::from_str::<ResponseRules>(
         r#"
 protobuf:

@@ -4,8 +4,9 @@ use anyhow::{Result, ensure};
 use clap::{Args, Subcommand, ValueEnum};
 use traffic_e2e::{
     RedisKeyPatternConfig, RewriteContext, RewriteDependencyOwnership,
-    RewriteDependencyRulePlanOptions, RewriteDependencyRuleSelector, apply_rewrite_dependency_rule,
-    plan_rewrite_dependency_rule,
+    RewriteDependencyPayloadRulePlanOptions, RewriteDependencyRulePlanOptions,
+    RewriteDependencyRuleSelector, apply_rewrite_dependency_rule,
+    plan_rewrite_dependency_payload_rule, plan_rewrite_dependency_rule,
 };
 
 #[derive(Debug, Args)]
@@ -32,7 +33,7 @@ struct DependencyRulePlanArgs {
 enum DependencyRuleProtocolArgs {
     /// Classify an HTTP dependency using an exact selector.
     Http(HttpDependencyRuleArgs),
-    /// Classify a Breeze-backed Memcached get dependency.
+    /// Plan a Memcached dependency rule.
     Memcached(MemcachedDependencyRuleArgs),
     /// Classify a Motan dependency using an exact selector.
     Motan(MotanDependencyRuleArgs),
@@ -93,6 +94,20 @@ struct HttpDependencyRuleArgs {
 
 #[derive(Debug, Args)]
 struct MemcachedDependencyRuleArgs {
+    #[command(subcommand)]
+    mode: MemcachedDependencyRuleModeArgs,
+}
+
+#[derive(Debug, Subcommand)]
+enum MemcachedDependencyRuleModeArgs {
+    /// Classify a Breeze-backed Memcached GET dependency.
+    Get(MemcachedGetDependencyRuleArgs),
+    /// Normalize a source-generated protobuf Unix timestamp inside a Memcached SET value.
+    ProtobufTimestamp(MemcachedProtobufTimestampRuleArgs),
+}
+
+#[derive(Debug, Args)]
+struct MemcachedGetDependencyRuleArgs {
     #[command(flatten)]
     common: DependencyRuleCommonArgs,
     /// Breeze business namespace, for example `user-video`.
@@ -108,6 +123,26 @@ struct MemcachedDependencyRuleArgs {
     key_suffix: String,
     #[arg(long, default_value_t = 60_000)]
     initial_load_timeout_ms: u64,
+}
+
+#[derive(Debug, Args)]
+struct MemcachedProtobufTimestampRuleArgs {
+    /// Coordinator-issued dirty-cluster evidence id describing a Memcached SET.
+    #[arg(long)]
+    evidence_id: String,
+    #[arg(long)]
+    rule_id: String,
+    #[arg(long)]
+    port: u16,
+    #[arg(long)]
+    key_prefix: String,
+    #[arg(long, default_value = "")]
+    key_suffix: String,
+    #[arg(long)]
+    field_number: u32,
+    /// Source file/symbol proof that the selected protobuf field is Unix seconds.
+    #[arg(long)]
+    source_evidence: String,
 }
 
 #[derive(Debug, Args)]
@@ -192,13 +227,16 @@ struct DependencyRuleApplyArgs {
 
 pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs, pretty: bool) -> Result<()> {
     match args.command {
-        DependencyRuleCommand::Plan(args) => super::print_json(
-            &plan_rewrite_dependency_rule(
-                RewriteContext { target_root },
-                args.protocol.try_into()?,
-            )?,
-            pretty,
-        ),
+        DependencyRuleCommand::Plan(args) => match DependencyPlan::try_from(args.protocol)? {
+            DependencyPlan::Ownership(options) => super::print_json(
+                &plan_rewrite_dependency_rule(RewriteContext { target_root }, options)?,
+                pretty,
+            ),
+            DependencyPlan::Payload(options) => super::print_json(
+                &plan_rewrite_dependency_payload_rule(RewriteContext { target_root }, options)?,
+                pretty,
+            ),
+        },
         DependencyRuleCommand::Apply(args) => super::print_json(
             &apply_rewrite_dependency_rule(RewriteContext { target_root }, &args.plan_id)?,
             pretty,
@@ -206,11 +244,16 @@ pub(super) fn run(target_root: PathBuf, args: DependencyRuleArgs, pretty: bool) 
     }
 }
 
-impl TryFrom<DependencyRuleProtocolArgs> for RewriteDependencyRulePlanOptions {
+enum DependencyPlan {
+    Ownership(RewriteDependencyRulePlanOptions),
+    Payload(RewriteDependencyPayloadRulePlanOptions),
+}
+
+impl TryFrom<DependencyRuleProtocolArgs> for DependencyPlan {
     type Error = anyhow::Error;
 
     fn try_from(value: DependencyRuleProtocolArgs) -> Result<Self> {
-        Ok(match value {
+        Ok(Self::Ownership(match value {
             DependencyRuleProtocolArgs::Http(args) => dependency_rule_options(
                 args.common,
                 RewriteDependencyRuleSelector::Http {
@@ -219,18 +262,31 @@ impl TryFrom<DependencyRuleProtocolArgs> for RewriteDependencyRulePlanOptions {
                     path_prefix: args.path_prefix,
                 },
             ),
-            DependencyRuleProtocolArgs::Memcached(args) => dependency_rule_options(
-                args.common,
-                RewriteDependencyRuleSelector::Memcached {
-                    breeze_resource: args.breeze_resource,
-                    command: "get".to_string(),
-                    key_start: args.key_start,
-                    key_end: args.key_end,
-                    key_separator: args.key_separator,
-                    key_suffix: args.key_suffix,
-                    initial_load_timeout_ms: args.initial_load_timeout_ms,
-                },
-            ),
+            DependencyRuleProtocolArgs::Memcached(args) => match args.mode {
+                MemcachedDependencyRuleModeArgs::Get(args) => dependency_rule_options(
+                    args.common,
+                    RewriteDependencyRuleSelector::Memcached {
+                        breeze_resource: args.breeze_resource,
+                        command: "get".to_string(),
+                        key_start: args.key_start,
+                        key_end: args.key_end,
+                        key_separator: args.key_separator,
+                        key_suffix: args.key_suffix,
+                        initial_load_timeout_ms: args.initial_load_timeout_ms,
+                    },
+                ),
+                MemcachedDependencyRuleModeArgs::ProtobufTimestamp(args) => {
+                    return Ok(Self::Payload(RewriteDependencyPayloadRulePlanOptions {
+                        evidence_id: args.evidence_id,
+                        rule_id: args.rule_id,
+                        port: args.port,
+                        key_prefix: args.key_prefix,
+                        key_suffix: args.key_suffix,
+                        field_number: args.field_number,
+                        source_evidence: args.source_evidence,
+                    }));
+                }
+            },
             DependencyRuleProtocolArgs::Motan(args) => dependency_rule_options(
                 args.common,
                 RewriteDependencyRuleSelector::Motan {
@@ -275,7 +331,7 @@ impl TryFrom<DependencyRuleProtocolArgs> for RewriteDependencyRulePlanOptions {
                 RedisDependencyRuleModeArgs::Hget(args) => redis_hash_options("HGET", args)?,
                 RedisDependencyRuleModeArgs::Hmget(args) => redis_hash_options("HMGET", args)?,
             },
-        })
+        }))
     }
 }
 
@@ -391,7 +447,9 @@ mod tests {
         let DependencyRuleCommand::Plan(plan) = parsed.dependency_rule.command else {
             panic!("expected plan command")
         };
-        let options: RewriteDependencyRulePlanOptions = plan.protocol.try_into().unwrap();
+        let DependencyPlan::Ownership(options) = plan.protocol.try_into().unwrap() else {
+            panic!("expected ownership plan")
+        };
 
         assert_eq!(options.ownership, RewriteDependencyOwnership::RequestOwned);
         assert!(options.name.is_none());

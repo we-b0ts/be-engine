@@ -9,8 +9,8 @@ use super::document::{render_dependency_rules, replace_dependency_rules};
 use crate::config::edit::write_atomic;
 
 use super::super::config::{
-    MemcachedResourceSelector, MemcachedSelector, NumericKeySelector, PolicyProtocol,
-    ProtobufSelector, ProtobufTimestampFieldRule, ProtobufTimestampMechanism, ReplayPolicyRule,
+    DependencyProtocol, MemcachedResourceSelector, MemcachedSelector, NumericKeySelector,
+    ProtobufSelector, ProtobufTimestampFieldRule, ProtobufTimestampMechanism, ReplayDependencyRule,
     TargetSelector, load_replay_policy,
 };
 
@@ -92,7 +92,7 @@ pub fn plan_memcached_timestamp_rule(
 
     if let Some(existing) = loaded
         .document
-        .rules
+        .dependency_rules
         .iter()
         .find(|rule| rule.id == feedback.rule_id)
     {
@@ -105,28 +105,28 @@ pub fn plan_memcached_timestamp_rule(
 
     let reusable = loaded
         .document
-        .rules
+        .dependency_rules
         .iter()
         .find(|rule| same_memcached_timestamp_selector(rule, &feedback))
         .map(|rule| rule.id.clone());
     let reused_existing = reusable.is_some();
     let effective_rule_id = reusable.unwrap_or_else(|| feedback.rule_id.clone());
     if !reused_existing {
-        loaded.document.rules.push(proposed);
+        loaded.document.dependency_rules.push(proposed);
         loaded
             .document
-            .rules
+            .dependency_rules
             .sort_by(|left, right| left.id.cmp(&right.id));
     }
 
-    let updated = replace_dependency_rules(&original, &loaded.document.rules)?;
+    let updated = replace_dependency_rules(&original, &loaded.document.dependency_rules)?;
     let changed = updated != original;
     let diff = if changed {
         format!(
-            "--- {}\n+++ {}\n@@ rules @@\n{}",
+            "--- {}\n+++ {}\n@@ dependency_rules @@\n{}",
             feedback.policy_path.display(),
             feedback.policy_path.display(),
-            render_dependency_rules(&loaded.document.rules)?
+            render_dependency_rules(&loaded.document.dependency_rules)?
                 .lines()
                 .map(|line| format!("+{line}\n"))
                 .collect::<String>()
@@ -161,11 +161,11 @@ pub fn plan_memcached_timestamp_rule(
     })
 }
 
-fn proposed_rule(feedback: &MemcachedTimestampRuleFeedback) -> ReplayPolicyRule {
-    ReplayPolicyRule {
+fn proposed_rule(feedback: &MemcachedTimestampRuleFeedback) -> ReplayDependencyRule {
+    ReplayDependencyRule {
         id: feedback.rule_id.clone(),
         case_selector: None,
-        protocol: PolicyProtocol::Memcached,
+        protocol: DependencyProtocol::Memcached,
         target: TargetSelector::default(),
         mysql: None,
         http: None,
@@ -192,10 +192,10 @@ fn proposed_rule(feedback: &MemcachedTimestampRuleFeedback) -> ReplayPolicyRule 
 }
 
 fn same_memcached_timestamp_selector(
-    rule: &ReplayPolicyRule,
+    rule: &ReplayDependencyRule,
     feedback: &MemcachedTimestampRuleFeedback,
 ) -> bool {
-    if rule.protocol != PolicyProtocol::Memcached || rule.case_selector.is_some() {
+    if rule.protocol != DependencyProtocol::Memcached || rule.case_selector.is_some() {
         return false;
     }
     let Some(memcached) = &rule.memcached else {
@@ -234,7 +234,7 @@ mod tests {
         let policy_path = temp.path().join("verification.yaml");
         fs::write(
             &policy_path,
-            "version: 3\nexpected_response: assertions_only\nrules: []\n",
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
         )
         .unwrap();
 
