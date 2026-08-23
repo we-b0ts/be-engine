@@ -17,12 +17,12 @@ use self::artifact::{
 use self::compare::compare_json;
 pub use self::model::{
     Hessian2BodyDifference, Hessian2BodyDifferenceKind, Hessian2JoinedStringCandidate,
-    Hessian2ValuePathCandidate, MotanBodyAssertionReport, MotanBodyDifference,
-    MotanUnorderedPathCandidate, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
-    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseBodyMode, ResponseDifference,
-    ResponseDifferenceKind,
+    Hessian2ValuePathCandidate, ProtobufBodyDifference, ProtobufBodyDifferenceKind,
+    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseBodyAssertionReport,
+    ResponseBodyDifferenceDetail, ResponseBodyUnorderedPathCandidate, ResponseDifference,
+    ResponseDifferenceKind, ResponseGatewayProtocol,
 };
-use super::policy::{fingerprint, load_replay_policy, uri_path};
+use super::policy::{ResponseBodyCodec, fingerprint, load_replay_policy, uri_path};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 use crate::http::content_encoding;
 
@@ -45,6 +45,98 @@ pub(crate) struct ComparisonResponseAssertionOptions {
 pub(crate) struct ComparisonResponseObservation {
     pub(crate) status: u16,
     pub(crate) body: Vec<u8>,
+}
+
+pub(crate) fn read_expected_response_body(
+    path: &Path,
+    gateway_protocol: ResponseGatewayProtocol,
+) -> Result<Vec<u8>> {
+    let bytes = read_regular(path, "expected response")?;
+    let response: ExpectedResponse = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid expected response {}", path.display()))?;
+    let body = response
+        .body
+        .as_ref()
+        .or(response.frame.as_ref())
+        .context("expected response has no body or frame")?;
+    response_body_for_gateway(decode_body(body, "expected response")?, gateway_protocol)
+}
+
+pub(crate) fn read_actual_response_body(
+    path: &Path,
+    gateway_protocol: ResponseGatewayProtocol,
+) -> Result<Vec<u8>> {
+    let bytes = read_regular(path, "actual response")?;
+    let response: ActualResponse = serde_json::from_slice(&bytes)
+        .with_context(|| format!("invalid actual response {}", path.display()))?;
+    response_body_for_gateway(
+        decode_body(&response.body, "actual response")?,
+        gateway_protocol,
+    )
+}
+
+fn response_body_for_gateway(
+    bytes: Vec<u8>,
+    gateway_protocol: ResponseGatewayProtocol,
+) -> Result<Vec<u8>> {
+    match gateway_protocol {
+        ResponseGatewayProtocol::Http => Ok(bytes),
+        ResponseGatewayProtocol::Motan1 | ResponseGatewayProtocol::Motan2 => {
+            Ok(motan::comparable_response_frame(&bytes, "response")?
+                .body()
+                .to_vec())
+        }
+    }
+}
+
+pub(in crate::replay) fn diagnose_response_body(
+    expected: &[u8],
+    actual: &[u8],
+    codec: ResponseBodyCodec,
+) -> Result<ResponseBodyAssertionReport> {
+    match codec {
+        ResponseBodyCodec::Protobuf => {
+            let discovery = protobuf::discover_protobuf_order(expected, actual)?;
+            Ok(ResponseBodyAssertionReport {
+                codec,
+                envelope: "simple_byte_array".to_string(),
+                configured: false,
+                codec_candidates: vec![codec],
+                unordered_path_candidates: discovery
+                    .unordered_paths
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                unordered_joined_string_candidates: Vec::new(),
+                differences: discovery.differences.into_iter().map(Into::into).collect(),
+                candidates_explain_all_differences: discovery.order_only,
+                order_only: discovery.order_only,
+            })
+        }
+        ResponseBodyCodec::Hessian2 => {
+            let discovery = hessian2::discover_hessian2_order(expected, actual)?;
+            Ok(ResponseBodyAssertionReport {
+                codec,
+                envelope: discovery.envelope.as_str().to_string(),
+                configured: false,
+                codec_candidates: vec![codec],
+                unordered_path_candidates: discovery
+                    .unordered_paths
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                unordered_joined_string_candidates: discovery
+                    .unordered_joined_string_paths
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+                differences: discovery.differences.into_iter().map(Into::into).collect(),
+                candidates_explain_all_differences: discovery.candidates_explain_all_differences,
+                order_only: discovery.order_only,
+            })
+        }
+        codec => anyhow::bail!("unsupported structured response body codec {codec:?}"),
+    }
 }
 
 pub fn assert_recorded_response(
@@ -106,6 +198,7 @@ pub fn assert_recorded_response(
         mode: AssertionMode::Replay,
         case_id: options.case_id,
         request,
+        request_path: options.request,
         expected_status,
         expected_body,
         expected_path: options.expected_response,
@@ -153,6 +246,7 @@ pub(crate) fn assert_comparison_response(
         mode: AssertionMode::Comparison,
         case_id: options.case_id,
         request,
+        request_path: options.request,
         expected_status,
         expected_body,
         expected_path: options.expected_response,
@@ -236,6 +330,7 @@ struct AssertionInputs {
     mode: AssertionMode,
     case_id: String,
     request: RecordedRequest,
+    request_path: PathBuf,
     expected_status: u16,
     expected_body: AssertionBody,
     expected_path: PathBuf,
@@ -253,21 +348,14 @@ enum AssertionBody {
 }
 
 impl AssertionBody {
-    fn exact_bytes(&self) -> &[u8] {
-        match self {
-            Self::Bytes(bytes) => bytes,
-            Self::MotanFrame(frame) => frame.encoded(),
-        }
-    }
-
-    fn protocol_body(&self) -> &[u8] {
+    fn body(&self) -> &[u8] {
         match self {
             Self::Bytes(bytes) => bytes,
             Self::MotanFrame(frame) => frame.body(),
         }
     }
 
-    fn protocol_carrier_matches(&self, actual: &Self) -> bool {
+    fn gateway_metadata_matches(&self, actual: &Self) -> bool {
         match (self, actual) {
             (Self::Bytes(_), Self::Bytes(_)) => true,
             (Self::MotanFrame(expected), Self::MotanFrame(actual)) => {
@@ -289,6 +377,7 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
         mode,
         case_id,
         request,
+        request_path,
         expected_status,
         expected_body,
         expected_path,
@@ -315,21 +404,23 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             .response_rules
             .matching_comparison_fields(&request.method, &path),
     };
-    let motan_rules = loaded
+    let body_rules = loaded
         .document
         .response_rules
-        .matching_motan_rules(&request.method, &path);
-    let is_motan_request = request.method.eq_ignore_ascii_case("MOTAN");
+        .matching_response_body_rules(&request.method, &path);
     ensure!(
-        motan_rules.len() <= 1,
-        "multiple Motan response rules match {} {}",
+        body_rules.len() <= 1,
+        "multiple response-body rules match {} {}",
         request.method,
         path
     );
+    let gateway_protocol = request.gateway_protocol()?;
     let mut report = ResponseAssertionCaseReport::new(
         case_id,
         request.method,
         path,
+        gateway_protocol,
+        request_path.display().to_string(),
         loaded.path.display().to_string(),
         loaded.fingerprint,
         expected_path.display().to_string(),
@@ -342,42 +433,45 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             .differences
             .push(ResponseDifference::status(expected_status, actual_status));
     }
-    if let Some(rule) = motan_rules.first() {
+    if let Some(rule) = body_rules.first() {
         ensure!(
             response_fields.is_empty(),
-            "Motan response rules cannot be combined with JSON response rules"
+            "typed response-body rules cannot be combined with JSON response rules"
         );
-        let (body_matches, motan_report) = match rule.protocol {
-            super::policy::MotanBodyProtocol::Protobuf => {
+        let (body_matches, body_diagnosis) = match rule.codec {
+            super::policy::ResponseBodyCodec::Protobuf => {
                 ensure!(
                     rule.unordered_joined_string_paths.is_empty(),
-                    "protobuf Motan rule cannot carry joined-string paths"
+                    "protobuf response-body rule cannot carry joined-string paths"
                 );
                 let unordered_paths = rule
                     .unordered_paths
                     .iter()
                     .map(|path| match path {
-                        super::policy::MotanUnorderedPath::Protobuf(path) => Ok(path.clone()),
-                        super::policy::MotanUnorderedPath::Hessian2(_) => {
-                            anyhow::bail!("protobuf Motan rule contains a Hessian2 unordered path")
+                        super::policy::ResponseBodyUnorderedPath::Protobuf(path) => {
+                            Ok(path.clone())
+                        }
+                        super::policy::ResponseBodyUnorderedPath::Hessian2(_) => {
+                            anyhow::bail!(
+                                "protobuf response-body rule contains a Hessian2 unordered path"
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
-                report.body_mode = ResponseBodyMode::MotanProtobuf;
-                let (body_matches, discovery) = protobuf::evaluate_motan_protobuf(
-                    expected_body.protocol_body(),
-                    actual_body.protocol_body(),
+                report.body_codec = ResponseBodyCodec::Protobuf;
+                let (body_matches, discovery) = protobuf::evaluate_protobuf(
+                    expected_body.body(),
+                    actual_body.body(),
                     &unordered_paths,
                 )
-                .context("failed to apply configured Motan protobuf response rule")?;
+                .context("failed to apply configured protobuf response-body rule")?;
                 (
                     body_matches,
-                    MotanBodyAssertionReport {
-                        rule_kind: "motan".to_string(),
-                        protocol: rule.protocol,
+                    ResponseBodyAssertionReport {
+                        codec: rule.codec,
                         envelope: "simple_byte_array".to_string(),
                         configured: true,
-                        protocol_candidates: vec![rule.protocol],
+                        codec_candidates: vec![rule.codec],
                         unordered_path_candidates: discovery
                             .unordered_paths
                             .into_iter()
@@ -385,37 +479,41 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                             .collect(),
                         unordered_joined_string_candidates: Vec::new(),
                         differences: discovery.differences.into_iter().map(Into::into).collect(),
+                        candidates_explain_all_differences: discovery.order_only,
                         order_only: discovery.order_only,
                     },
                 )
             }
-            super::policy::MotanBodyProtocol::Hessian2 => {
+            super::policy::ResponseBodyCodec::Hessian2 => {
                 let unordered_paths = rule
                     .unordered_paths
                     .iter()
                     .map(|path| match path {
-                        super::policy::MotanUnorderedPath::Hessian2(path) => Ok(path.clone()),
-                        super::policy::MotanUnorderedPath::Protobuf(_) => {
-                            anyhow::bail!("Hessian2 Motan rule contains a protobuf unordered path")
+                        super::policy::ResponseBodyUnorderedPath::Hessian2(path) => {
+                            Ok(path.clone())
+                        }
+                        super::policy::ResponseBodyUnorderedPath::Protobuf(_) => {
+                            anyhow::bail!(
+                                "Hessian2 response-body rule contains a protobuf unordered path"
+                            )
                         }
                     })
                     .collect::<Result<Vec<_>>>()?;
-                report.body_mode = ResponseBodyMode::MotanHessian2;
-                let (body_matches, discovery) = hessian2::evaluate_motan_hessian2(
-                    expected_body.protocol_body(),
-                    actual_body.protocol_body(),
+                report.body_codec = ResponseBodyCodec::Hessian2;
+                let (body_matches, discovery) = hessian2::evaluate_hessian2(
+                    expected_body.body(),
+                    actual_body.body(),
                     &unordered_paths,
                     &rule.unordered_joined_string_paths,
                 )
-                .context("failed to apply configured Motan Hessian2 response rule")?;
+                .context("failed to apply configured Hessian2 response-body rule")?;
                 (
                     body_matches,
-                    MotanBodyAssertionReport {
-                        rule_kind: "motan".to_string(),
-                        protocol: rule.protocol,
+                    ResponseBodyAssertionReport {
+                        codec: rule.codec,
                         envelope: discovery.envelope.as_str().to_string(),
                         configured: true,
-                        protocol_candidates: vec![rule.protocol],
+                        codec_candidates: vec![rule.codec],
                         unordered_path_candidates: discovery
                             .unordered_paths
                             .into_iter()
@@ -427,29 +525,44 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                             .map(Into::into)
                             .collect(),
                         differences: discovery.differences.into_iter().map(Into::into).collect(),
+                        candidates_explain_all_differences: discovery
+                            .candidates_explain_all_differences,
                         order_only: discovery.order_only,
                     },
                 )
             }
+            codec => anyhow::bail!("unsupported configured response-body codec {codec:?}"),
         };
-        report.applied_motan_rule_ids.push(rule.id.clone());
-        report.motan = Some(motan_report);
-        if !body_matches || !expected_body.protocol_carrier_matches(&actual_body) {
-            report
-                .differences
-                .push(ResponseDifference::exact_body_mismatch());
+        report.applied_body_rule_ids.push(rule.id.clone());
+        report.body_diagnosis = Some(body_diagnosis);
+        if !body_matches || !expected_body.gateway_metadata_matches(&actual_body) {
+            if !body_matches {
+                report
+                    .differences
+                    .push(ResponseDifference::exact_body_mismatch());
+            }
+            if !expected_body.gateway_metadata_matches(&actual_body) {
+                report
+                    .differences
+                    .push(ResponseDifference::gateway_metadata_mismatch());
+            }
         }
         report.finish(&[], std::slice::from_ref(&rule.id));
         return Ok(report);
     }
 
     match (
-        serde_json::from_slice::<serde_json::Value>(expected_body.exact_bytes()),
-        serde_json::from_slice::<serde_json::Value>(actual_body.exact_bytes()),
+        serde_json::from_slice::<serde_json::Value>(expected_body.body()),
+        serde_json::from_slice::<serde_json::Value>(actual_body.body()),
     ) {
         (Ok(expected), Ok(actual)) => {
-            report.body_mode = ResponseBodyMode::JsonStructural;
+            report.body_codec = ResponseBodyCodec::Json;
             compare_json(&expected, &actual, &response_fields, &mut report);
+            if !expected_body.gateway_metadata_matches(&actual_body) {
+                report
+                    .differences
+                    .push(ResponseDifference::gateway_metadata_mismatch());
+            }
             let applicable_fields = response_fields
                 .iter()
                 .filter(|field| {
@@ -461,8 +574,8 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
             report.finish(&applicable_fields, &[]);
         }
         _ => {
-            report.body_mode = ResponseBodyMode::ExactBytes;
-            let bodies_match = expected_body.exact_bytes() == actual_body.exact_bytes();
+            report.body_codec = ResponseBodyCodec::ExactBytes;
+            let bodies_match = expected_body.body() == actual_body.body();
             // Configured response rules are JSON-pointer-based and cannot apply
             // to a non-JSON body. When the bodies are byte-equal there is no
             // difference for any rule to evaluate, so the case passes
@@ -477,78 +590,40 @@ fn evaluate_response(inputs: AssertionInputs) -> Result<ResponseAssertionCaseRep
                 report
                     .differences
                     .push(ResponseDifference::exact_body_mismatch());
-                let expected_protocol_body = expected_body.protocol_body();
-                let actual_protocol_body = actual_body.protocol_body();
-                if is_motan_request && expected_protocol_body != actual_protocol_body {
-                    let protobuf_candidate =
-                        protobuf::is_motan_protobuf_body(expected_protocol_body)
-                            && protobuf::is_motan_protobuf_body(actual_protocol_body);
-                    let hessian2_candidate =
-                        hessian2::is_motan_hessian2_body(expected_protocol_body)
-                            && hessian2::is_motan_hessian2_body(actual_protocol_body);
-                    let mut protocol_candidates = Vec::new();
+                let expected_body_value = expected_body.body();
+                let actual_body_value = actual_body.body();
+                if expected_body_value != actual_body_value {
+                    let protobuf_candidate = protobuf::is_protobuf_body(expected_body_value)
+                        && protobuf::is_protobuf_body(actual_body_value);
+                    let hessian2_candidate = hessian2::is_hessian2_body(expected_body_value)
+                        && hessian2::is_hessian2_body(actual_body_value);
+                    let mut codec_candidates = Vec::new();
                     if protobuf_candidate {
-                        protocol_candidates
-                            .push(crate::replay::policy::MotanBodyProtocol::Protobuf);
+                        codec_candidates.push(crate::replay::policy::ResponseBodyCodec::Protobuf);
                     }
                     if hessian2_candidate {
-                        protocol_candidates
-                            .push(crate::replay::policy::MotanBodyProtocol::Hessian2);
+                        codec_candidates.push(crate::replay::policy::ResponseBodyCodec::Hessian2);
                     }
-                    if protobuf_candidate {
-                        let discovery = protobuf::discover_motan_protobuf_order(
-                            expected_protocol_body,
-                            actual_protocol_body,
-                        )?;
-                        report.motan = Some(MotanBodyAssertionReport {
-                            rule_kind: "motan".to_string(),
-                            protocol: crate::replay::policy::MotanBodyProtocol::Protobuf,
-                            envelope: "simple_byte_array".to_string(),
-                            configured: false,
-                            protocol_candidates,
-                            unordered_path_candidates: discovery
-                                .unordered_paths
-                                .into_iter()
-                                .map(Into::into)
-                                .collect(),
-                            unordered_joined_string_candidates: Vec::new(),
-                            differences: discovery
-                                .differences
-                                .into_iter()
-                                .map(Into::into)
-                                .collect(),
-                            order_only: discovery.order_only,
-                        });
+                    let diagnostic_codec = if protobuf_candidate {
+                        Some(ResponseBodyCodec::Protobuf)
                     } else if hessian2_candidate {
-                        let discovery = hessian2::discover_motan_hessian2_order(
-                            expected_protocol_body,
-                            actual_protocol_body,
-                        )?;
-                        report.motan = Some(MotanBodyAssertionReport {
-                            rule_kind: "motan".to_string(),
-                            protocol: crate::replay::policy::MotanBodyProtocol::Hessian2,
-                            envelope: discovery.envelope.as_str().to_string(),
-                            configured: false,
-                            protocol_candidates,
-                            unordered_path_candidates: discovery
-                                .unordered_paths
-                                .into_iter()
-                                .map(Into::into)
-                                .collect(),
-                            unordered_joined_string_candidates: discovery
-                                .unordered_joined_string_paths
-                                .into_iter()
-                                .map(Into::into)
-                                .collect(),
-                            differences: discovery
-                                .differences
-                                .into_iter()
-                                .map(Into::into)
-                                .collect(),
-                            order_only: discovery.order_only,
-                        });
+                        Some(ResponseBodyCodec::Hessian2)
+                    } else {
+                        None
+                    };
+                    if let Some(codec) = diagnostic_codec {
+                        let mut diagnosis =
+                            diagnose_response_body(expected_body_value, actual_body_value, codec)?;
+                        diagnosis.codec_candidates = codec_candidates;
+                        report.body_codec = codec;
+                        report.body_diagnosis = Some(diagnosis);
                     }
                 }
+            }
+            if !expected_body.gateway_metadata_matches(&actual_body) {
+                report
+                    .differences
+                    .push(ResponseDifference::gateway_metadata_mismatch());
             }
             report.finish(&[], &[]);
         }

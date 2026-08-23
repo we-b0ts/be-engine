@@ -240,33 +240,21 @@ pub struct RewriteRulePlanRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_example: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub memcached_timestamp: Option<RewriteMemcachedTimestampRuleSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub motan: Option<RewriteMotanRuleSpec>,
+    pub response_body: Option<RewriteResponseBodyRuleSpec>,
     pub evidence_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RewriteMotanRuleSpec {
-    pub protocol: crate::MotanBodyProtocol,
+pub struct RewriteResponseBodyRuleSpec {
+    pub codec: crate::ResponseBodyCodec,
     #[serde(default)]
-    pub unordered_paths: Vec<crate::MotanUnorderedPath>,
+    pub unordered_paths: Vec<crate::ResponseBodyUnorderedPath>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unordered_joined_string_paths: Vec<crate::Hessian2JoinedStringPath>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RewriteMemcachedTimestampRuleSpec {
-    pub rule_id: String,
-    pub port: u16,
-    pub key_prefix: String,
-    pub key_suffix: String,
-    pub field_number: u32,
-    pub source_evidence: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "protocol", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub(super) enum RewriteDependencyRuleSpec {
     Http {
         authority: String,
@@ -281,6 +269,13 @@ pub(super) enum RewriteDependencyRuleSpec {
         key_separator: String,
         key_suffix: String,
         initial_load_timeout_ms: u64,
+    },
+    MemcachedProtobufTimestamp {
+        rule_id: String,
+        port: u16,
+        key_prefix: String,
+        key_suffix: String,
+        field_number: u32,
     },
     Motan {
         group: String,

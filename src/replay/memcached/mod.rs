@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use uuid::Uuid;
 
 use super::{
-    MemcachedPolicyContext, PolicyDecision, ReplayExchangeStatus, ReplayExchangeTiming,
+    DependencyRuleDecision, MemcachedPolicyContext, ReplayExchangeStatus, ReplayExchangeTiming,
     ReplayPolicyRuntime, ReplayProtocol, ReplayReportWriter, ReplaySource, ReplayState,
     ReplayTarget, TargetKey, normalize_host, push_success_detail, register_replay_target,
 };
@@ -110,7 +110,7 @@ struct MatchedMemcachedExchange {
     response_frames: Vec<Vec<u8>>,
     timing: ReplayExchangeTiming,
     connection_independent: bool,
-    policy_decision: PolicyDecision,
+    policy_decision: DependencyRuleDecision,
     report: CommandMatchedReport,
 }
 

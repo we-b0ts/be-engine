@@ -76,6 +76,8 @@ fn parses_the_bounded_rewrite_surface() {
             "plan",
             "--evidence-id",
             "evidence-current",
+            "--body-codec",
+            "json",
             "--kind",
             "uuid",
             "--json-pointer",
@@ -109,11 +111,25 @@ fn parses_the_bounded_rewrite_surface() {
         Cli::try_parse_from([
             "test",
             "rule",
-            "motan",
+            "plan",
             "--evidence-id",
             "evidence-current",
-            "--protocol",
+            "--body-codec",
             "protobuf",
+        ])
+        .is_ok()
+    );
+    assert!(
+        Cli::try_parse_from([
+            "test",
+            "rule",
+            "plan",
+            "--evidence-id",
+            "evidence-current",
+            "--body-codec",
+            "protobuf",
+            "--unordered-path",
+            r#"{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:white_list is a Set"}"#,
         ])
         .is_ok()
     );
@@ -126,10 +142,8 @@ fn parses_the_bounded_rewrite_surface() {
             "evidence-current",
             "--protocol",
             "protobuf",
-            "--unordered-path",
-            r#"{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:white_list is a Set"}"#,
         ])
-        .is_ok()
+        .is_err()
     );
     assert!(
         Cli::try_parse_from([
@@ -148,20 +162,19 @@ fn parses_the_bounded_rewrite_surface() {
     assert!(
         Cli::try_parse_from([
             "test",
-            "rule",
+            "dependency-rule",
+            "plan",
             "memcached",
             "protobuf-timestamp",
             "--evidence-id",
             "evidence-current",
-            "--name",
+            "--rule-id",
             "user-info-loading-time",
-            "--resource-kind",
-            "cache-service",
             "--port",
             "15138",
             "--key-prefix",
             "u",
-            "--protobuf-field",
+            "--field-number",
             "50",
             "--source-evidence",
             "CacheService.java:2044 sets loading_time from Unix seconds",
@@ -528,6 +541,7 @@ fn parses_the_bounded_rewrite_surface() {
             "dependency-rule",
             "plan",
             "memcached",
+            "get",
             "--evidence-id",
             "evidence-1",
             "--ownership",
@@ -553,6 +567,7 @@ fn parses_the_bounded_rewrite_surface() {
             "dependency-rule",
             "plan",
             "memcached",
+            "get",
             "--evidence-id",
             "evidence-1",
             "--ownership",
@@ -578,9 +593,16 @@ fn parses_the_bounded_rewrite_surface() {
 
 #[test]
 fn dependency_rule_help_is_protocol_specific_and_has_no_api_context() {
-    let memcached = Cli::try_parse_from(["test", "dependency-rule", "plan", "memcached", "--help"])
-        .unwrap_err()
-        .to_string();
+    let memcached = Cli::try_parse_from([
+        "test",
+        "dependency-rule",
+        "plan",
+        "memcached",
+        "get",
+        "--help",
+    ])
+    .unwrap_err()
+    .to_string();
     assert!(memcached.contains("--breeze-resource"));
     assert!(memcached.contains("--key-start"));
     assert!(!memcached.contains("--authority"));
@@ -637,14 +659,21 @@ fn dependency_rule_help_is_protocol_specific_and_has_no_api_context() {
 
 #[test]
 fn memcached_protobuf_timestamp_help_is_rule_specific() {
-    let help = Cli::try_parse_from(["test", "rule", "memcached", "protobuf-timestamp", "--help"])
-        .unwrap_err()
-        .to_string();
+    let help = Cli::try_parse_from([
+        "test",
+        "dependency-rule",
+        "plan",
+        "memcached",
+        "protobuf-timestamp",
+        "--help",
+    ])
+    .unwrap_err()
+    .to_string();
 
-    assert!(help.contains("protobuf Unix-seconds field rule"));
-    assert!(help.contains("--resource-kind <RESOURCE_KIND>"));
+    assert!(help.contains("protobuf Unix timestamp"));
+    assert!(help.contains("--rule-id <RULE_ID>"));
     assert!(help.contains("--port <PORT>"));
-    assert!(help.contains("--protobuf-field <PROTOBUF_FIELD>"));
+    assert!(help.contains("--field-number <FIELD_NUMBER>"));
     assert!(help.contains("--source-evidence <SOURCE_EVIDENCE>"));
     assert!(!help.contains("--namespace"));
     assert!(!help.contains("--group"));

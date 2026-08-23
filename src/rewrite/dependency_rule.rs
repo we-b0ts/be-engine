@@ -14,11 +14,12 @@ use super::{action, evidence};
 use crate::{
     BackgroundDependencyFeedback, BackgroundDependencyPlan,
     BreezeMemcachedBackgroundDependencyFeedback, BreezeMemcachedBackgroundDependencyPlan,
-    E2eRunContext, MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
+    E2eRunContext, MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan,
+    MotanBackgroundDependencyFeedback, MotanBackgroundDependencyPlan,
     RedisBackgroundDependencyFeedback, RedisBackgroundDependencyPlan, RedisKeyPatternConfig,
     plan_background_dependency, plan_breeze_memcached_background_dependency,
-    plan_motan_background_dependency, plan_redis_background_dependency,
-    resolve_e2e_response_rule_evidence,
+    plan_memcached_timestamp_rule, plan_motan_background_dependency,
+    plan_redis_background_dependency, resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Clone)]
@@ -28,6 +29,26 @@ pub struct RewriteDependencyRulePlanOptions {
     pub name: Option<String>,
     pub source_evidence: Option<String>,
     pub selector: RewriteDependencyRuleSelector,
+}
+
+#[derive(Debug, Clone)]
+pub struct RewriteDependencyPayloadRulePlanOptions {
+    pub evidence_id: String,
+    pub rule_id: String,
+    pub port: u16,
+    pub key_prefix: String,
+    pub key_suffix: String,
+    pub field_number: u32,
+    pub source_evidence: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RewriteDependencyPayloadRulePlanReport {
+    pub issue_id: String,
+    pub evidence_id: String,
+    pub plan_id: String,
+    pub traffic_e2e_report: Value,
+    pub next_command: super::model::RewriteCommandSpec,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -108,6 +129,7 @@ pub enum RewriteDependencyRuleSelector {
 enum DependencyRulePlan {
     Http(BackgroundDependencyPlan),
     Memcached(BreezeMemcachedBackgroundDependencyPlan),
+    MemcachedTimestamp(MemcachedTimestampRulePlan),
     Motan(MotanBackgroundDependencyPlan),
     Redis(RedisBackgroundDependencyPlan),
 }
@@ -128,6 +150,7 @@ impl DependencyRulePlan {
         match self {
             Self::Http(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Memcached(plan) => Ok(serde_json::to_value(plan.report())?),
+            Self::MemcachedTimestamp(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Motan(plan) => Ok(serde_json::to_value(plan.report())?),
             Self::Redis(plan) => Ok(serde_json::to_value(plan.report())?),
         }
@@ -137,6 +160,7 @@ impl DependencyRulePlan {
         match self {
             Self::Http(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Memcached(plan) => Ok(serde_json::to_value(plan.apply()?)?),
+            Self::MemcachedTimestamp(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Motan(plan) => Ok(serde_json::to_value(plan.apply()?)?),
             Self::Redis(plan) => Ok(serde_json::to_value(plan.apply()?)?),
         }
@@ -149,6 +173,9 @@ impl DependencyRulePlan {
             }
             Self::Memcached(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_name)
+            }
+            Self::MemcachedTimestamp(plan) if plan.report().reused_existing => {
+                Some(&plan.report().effective_rule_id)
             }
             Self::Motan(plan) if plan.report().reused_existing => {
                 Some(&plan.report().effective_name)
@@ -164,6 +191,7 @@ impl DependencyRulePlan {
         match self {
             Self::Http(plan) => &plan.report().effective_name,
             Self::Memcached(plan) => &plan.report().effective_name,
+            Self::MemcachedTimestamp(plan) => &plan.report().effective_rule_id,
             Self::Motan(plan) => &plan.report().effective_name,
             Self::Redis(plan) => &plan.report().effective_name,
         }
@@ -232,6 +260,79 @@ pub(super) fn plan(
         plan_id: Some(record.id.clone()),
         traffic_e2e_report: Some(report),
         required_change: None,
+        next_command: action::dependency_rule_apply_command(target_root, &record.id),
+    })
+}
+
+pub(super) fn plan_memcached_timestamp(
+    target_root: &Path,
+    state: &mut RewriteState,
+    options: RewriteDependencyPayloadRulePlanOptions,
+) -> Result<RewriteDependencyPayloadRulePlanReport> {
+    let issue = state
+        .active_issue
+        .clone()
+        .context("rewrite workflow has no active issue")?;
+    ensure!(
+        matches!(
+            issue.kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        ),
+        "Memcached SET payload rules require response, replay, or dependency evidence"
+    );
+    validate_memcached_timestamp_evidence(
+        target_root,
+        state,
+        &issue.id,
+        &options.evidence_id,
+        options.port,
+    )?;
+    let spec = RewriteDependencyRuleSpec::MemcachedProtobufTimestamp {
+        rule_id: options.rule_id.clone(),
+        port: options.port,
+        key_prefix: options.key_prefix,
+        key_suffix: options.key_suffix,
+        field_number: options.field_number,
+    };
+    let spec_json = serde_json::to_string(&spec)?;
+    let mut record = RewriteDependencyRulePlanRecord {
+        id: format!(
+            "dependency-plan-{}",
+            fingerprint::id(&[
+                &state.workflow_id,
+                &issue.id,
+                "memcached_protobuf_timestamp",
+                &spec_json,
+                &options.evidence_id,
+            ])
+            .trim_start_matches("fnv1a64:")
+        ),
+        issue_id: issue.id.clone(),
+        evidence_id: options.evidence_id.clone(),
+        name: options.rule_id,
+        source_evidence: options.source_evidence,
+        spec,
+        reused_existing: false,
+        effective_name: None,
+    };
+    let plan = build_plan(target_root, state, &record)?;
+    if plan.effective_name() != record.name {
+        record.effective_name = Some(plan.effective_name().to_string());
+    }
+    if let Some(effective_name) = plan.reused_existing() {
+        record.reused_existing = true;
+        record.effective_name = Some(effective_name.to_string());
+    }
+    let traffic_e2e_report = plan.report()?;
+    state.rule_plan = None;
+    state.recorder_capture_plan = None;
+    state.dependency_rule_plan = Some(record.clone());
+    state.bump();
+    Ok(RewriteDependencyPayloadRulePlanReport {
+        issue_id: issue.id,
+        evidence_id: options.evidence_id,
+        plan_id: record.id.clone(),
+        traffic_e2e_report,
         next_command: action::dependency_rule_apply_command(target_root, &record.id),
     })
 }
@@ -347,10 +448,16 @@ fn dependency_issue(
         .clone()
         .context("rewrite workflow has no active issue")?;
     ensure!(
-        issue.kind == RewriteIssueKind::Dependency
+        (matches!(
+            spec,
+            RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. }
+        ) && matches!(
+            issue.kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Dependency | RewriteIssueKind::Replay
+        )) || issue.kind == RewriteIssueKind::Dependency
             || (issue.kind == RewriteIssueKind::Response
                 && matches!(spec, RewriteDependencyRuleSpec::RedisHashRead { .. })),
-        "process-owned dependency rules require a dependency issue; bootstrap Redis hash reads also accept a response issue"
+        "dependency rule is not applicable to the active issue"
     );
     Ok(issue)
 }
@@ -410,6 +517,59 @@ fn validate_plan_evidence(
     ensure!(
         valid,
         "dependency rule evidence is stale, has the wrong query kind, or belongs to another issue"
+    );
+    Ok(())
+}
+
+fn validate_memcached_timestamp_evidence(
+    target_root: &Path,
+    state: &RewriteState,
+    issue_id: &str,
+    evidence_id: &str,
+    port: u16,
+) -> Result<()> {
+    if state.dependency_rule_plan.as_ref().is_some_and(|plan| {
+        plan.issue_id == issue_id
+            && plan.evidence_id == evidence_id
+            && matches!(
+                plan.spec,
+                RewriteDependencyRuleSpec::MemcachedProtobufTimestamp {
+                    port: planned_port,
+                    ..
+                } if planned_port == port
+            )
+    }) {
+        return Ok(());
+    }
+    let valid = evidence::commands(target_root, state)
+        .into_iter()
+        .filter_map(|command| evidence::query(target_root, state, &command.query_id).ok())
+        .any(|report| {
+            report.evidence_id == evidence_id
+                && report.query == "dirty_clusters"
+                && report
+                    .facts
+                    .get("clusters")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .any(|cluster| {
+                        cluster.get("protocol").and_then(Value::as_str) == Some("memcached")
+                            && cluster.pointer("/endpoint/port").and_then(Value::as_u64)
+                                == Some(u64::from(port))
+                            && cluster
+                                .get("operations")
+                                .and_then(Value::as_object)
+                                .is_some_and(|operations| {
+                                    operations
+                                        .keys()
+                                        .any(|operation| operation.eq_ignore_ascii_case("set"))
+                                })
+                    })
+        });
+    ensure!(
+        valid,
+        "Memcached timestamp-rule evidence is stale, does not describe a SET on port {port}, or belongs to another issue"
     );
     Ok(())
 }
@@ -577,6 +737,26 @@ fn build_plan(
     state: &RewriteState,
     record: &RewriteDependencyRulePlanRecord,
 ) -> Result<DependencyRulePlan> {
+    if let RewriteDependencyRuleSpec::MemcachedProtobufTimestamp {
+        rule_id,
+        port,
+        key_prefix,
+        key_suffix,
+        field_number,
+    } = &record.spec
+    {
+        return Ok(DependencyRulePlan::MemcachedTimestamp(
+            plan_memcached_timestamp_rule(MemcachedTimestampRuleFeedback {
+                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
+                rule_id: rule_id.clone(),
+                port: *port,
+                key_prefix: key_prefix.clone(),
+                key_suffix: key_suffix.clone(),
+                field_number: *field_number,
+                source_evidence: record.source_evidence.clone(),
+            })?,
+        ));
+    }
     let case_source = state
         .case_source
         .clone()
@@ -644,6 +824,9 @@ fn build_plan(
                 },
             )?,
         )),
+        RewriteDependencyRuleSpec::MemcachedProtobufTimestamp { .. } => {
+            unreachable!("Memcached payload plans return before background evidence resolution")
+        }
         RewriteDependencyRuleSpec::Motan {
             group,
             interface_name,

@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 
 use super::verification::{ComparisonVerificationCase, ComparisonVerificationClassification};
 use crate::replay::{
-    ComparisonResponseObservation, MotanBodyAssertionReport, ResponseDifferenceKind,
-    read_comparison_response_observation,
+    ComparisonResponseObservation, ResponseBodyAssertionReport, ResponseBodyCodec,
+    ResponseDifferenceKind, ResponseGatewayProtocol, read_comparison_response_observation,
 };
 
 const VALUE_LIMIT_BYTES: usize = 1_024;
@@ -19,8 +19,10 @@ pub struct ComparisonRepresentativeDifference {
     pub classification: ComparisonVerificationClassification,
     pub pointer: String,
     pub difference_kind: ResponseDifferenceKind,
+    pub gateway_protocol: ResponseGatewayProtocol,
+    pub body_codec: ResponseBodyCodec,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub motan: Option<MotanBodyAssertionReport>,
+    pub body_diagnosis: Option<ResponseBodyAssertionReport>,
     pub source_before: Value,
     pub candidate: Value,
     pub source_after: Value,
@@ -99,7 +101,9 @@ pub(super) fn difference(
             classification: case.classification,
             pointer: pointer.clone(),
             difference_kind: difference.kind,
-            motan: response.motan.clone(),
+            gateway_protocol: response.gateway_protocol,
+            body_codec: response.body_codec,
+            body_diagnosis: response.body_diagnosis.clone(),
             source_before,
             candidate,
             source_after,

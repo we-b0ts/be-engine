@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 
-use super::super::config::{ReplayPolicyDocument, ReplayPolicyRule, validate_document};
+use super::super::config::{ReplayDependencyRule, ReplayPolicyDocument, validate_document};
 use super::super::response::ResponseRules;
 
 pub(super) fn replace_response_rules(original: &str, rules: &ResponseRules) -> Result<String> {
@@ -11,10 +11,10 @@ pub(super) fn replace_response_rules(original: &str, rules: &ResponseRules) -> R
 
 pub(super) fn replace_dependency_rules(
     original: &str,
-    rules: &[ReplayPolicyRule],
+    dependency_rules: &[ReplayDependencyRule],
 ) -> Result<String> {
-    let rendered = render_dependency_rules(rules)?;
-    replace_root_section(original, "rules:", &rendered)
+    let rendered = render_dependency_rules(dependency_rules)?;
+    replace_root_section(original, "dependency_rules:", &rendered)
 }
 
 fn replace_root_section(original: &str, heading: &str, rendered: &str) -> Result<String> {
@@ -51,11 +51,13 @@ fn replace_root_section(original: &str, heading: &str, rendered: &str) -> Result
 
 #[derive(Serialize)]
 struct DependencyRulesDocument<'a> {
-    rules: &'a [ReplayPolicyRule],
+    dependency_rules: &'a [ReplayDependencyRule],
 }
 
-pub(super) fn render_dependency_rules(rules: &[ReplayPolicyRule]) -> Result<String> {
-    Ok(serde_yaml::to_string(&DependencyRulesDocument { rules })?)
+pub(super) fn render_dependency_rules(dependency_rules: &[ReplayDependencyRule]) -> Result<String> {
+    Ok(serde_yaml::to_string(&DependencyRulesDocument {
+        dependency_rules,
+    })?)
 }
 
 #[derive(Serialize)]

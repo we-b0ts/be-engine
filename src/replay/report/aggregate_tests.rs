@@ -229,8 +229,8 @@ fn marks_unused_applicable_replay_policy_rule_dirty() {
         "path": "/target/config/replay.yaml",
         "fingerprint": "fnv1a64:0123456789abcdef",
         "expected_response": "assertions_only",
-        "rules": [],
-        "unused_applicable_rule_ids": ["audit-id"]
+        "dependency_rules": [],
+        "unused_applicable_dependency_rule_ids": ["audit-id"]
     });
     write_report(&source, "api", report);
 
@@ -239,7 +239,10 @@ fn marks_unused_applicable_replay_policy_rule_dirty() {
     assert!(aggregate.dirty);
     let policy = aggregate.reports[0].replay_policy.as_ref().unwrap();
     assert_eq!(policy.expected_response, "assertions_only");
-    assert_eq!(policy.unused_applicable_rule_ids, vec!["audit-id"]);
+    assert_eq!(
+        policy.unused_applicable_dependency_rule_ids,
+        vec!["audit-id"]
+    );
 }
 
 #[test]
@@ -257,8 +260,8 @@ fn rejects_replay_policy_that_does_not_declare_assertion_only_expected_response(
         "path": "/target/config/replay.yaml",
         "fingerprint": "fnv1a64:0123456789abcdef",
         "expected_response": "fixture_input",
-        "rules": [],
-        "unused_applicable_rule_ids": []
+        "dependency_rules": [],
+        "unused_applicable_dependency_rule_ids": []
     });
     write_report(&source, "api", report);
 

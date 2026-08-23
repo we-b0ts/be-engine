@@ -3,10 +3,14 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use super::super::response::{ResponseRuleKind, ResponseRules, response_locations_overlap};
+use super::super::response::{
+    ResponseBodyCodec, ResponseRuleKind, ResponseRules, response_locations_overlap,
+};
+use crate::replay::ResponseGatewayProtocol;
 
 #[derive(Debug, Deserialize)]
 pub(super) struct AssertionEvidence {
+    pub(super) version: u32,
     pub(super) case_source: String,
     pub(super) expected_response: String,
     pub(super) assertion_mode: String,
@@ -30,6 +34,8 @@ pub(super) struct ComparisonEvidence {
 pub(super) struct AssertionCaseEvidence {
     pub(super) case_id: String,
     #[serde(default)]
+    pub(super) passed: bool,
+    #[serde(default)]
     pub(super) classification: Option<String>,
     #[serde(default)]
     pub(super) matched_source: Option<String>,
@@ -47,13 +53,25 @@ pub(super) struct ResponseCaseEvidence {
     #[serde(default)]
     pub(super) path: String,
     #[serde(default)]
-    pub(super) body_mode: String,
+    pub(super) body_codec: ResponseBodyCodec,
+    #[serde(default)]
+    pub(super) gateway_protocol: Option<ResponseGatewayProtocol>,
     #[serde(default)]
     pub(super) differences: Vec<DifferenceEvidence>,
     #[serde(default)]
     pub(super) detail_report: Option<PathBuf>,
     #[serde(default)]
     pub(super) detail_fingerprint: Option<String>,
+    #[serde(default)]
+    pub(super) request: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) expected_response: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) actual_response: Option<PathBuf>,
+    #[serde(default)]
+    pub(super) policy_fingerprint: String,
+    #[serde(default)]
+    pub(super) difference_count: usize,
     #[serde(default)]
     applied_generated_rule_ids: Vec<String>,
     #[serde(default)]

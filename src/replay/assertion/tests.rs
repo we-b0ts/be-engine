@@ -73,7 +73,9 @@ fn write_raw_case(
     .unwrap();
     fs::write(
         &policy,
-        format!("version: 3\nexpected_response: assertions_only\nrules: []\n{response_rules}"),
+        format!(
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n{response_rules}"
+        ),
     )
     .unwrap();
     let options = ResponseAssertionOptions {
@@ -233,7 +235,9 @@ fn write_motan_case_with_rules(
     .unwrap();
     fs::write(
         &policy,
-        format!("version: 3\nexpected_response: assertions_only\nrules: []\n{response_rules}"),
+        format!(
+            "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n{response_rules}"
+        ),
     )
     .unwrap();
     let options = ResponseAssertionOptions {
@@ -274,7 +278,7 @@ fn empty_bodies_compare_as_exact_bytes() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    assert_eq!(report.body_codec, ResponseBodyCodec::ExactBytes);
     assert!(report.differences.is_empty());
 }
 
@@ -285,7 +289,7 @@ fn empty_body_does_not_match_nonempty_body() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(!report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    assert_eq!(report.body_codec, ResponseBodyCodec::ExactBytes);
     assert_eq!(
         report.differences[0].kind,
         ResponseDifferenceKind::ExactBodyMismatch
@@ -306,7 +310,7 @@ fn motan2_process_time_does_not_affect_response_assertion() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    assert_eq!(report.body_codec, ResponseBodyCodec::ExactBytes);
     assert!(report.differences.is_empty());
 }
 
@@ -335,7 +339,7 @@ fn motan2_business_body_remains_exact_after_process_time_normalization() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(!report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    assert_eq!(report.body_codec, ResponseBodyCodec::ExactBytes);
     assert_eq!(
         report.differences[0].kind,
         ResponseDifferenceKind::ExactBodyMismatch
@@ -358,12 +362,12 @@ fn motan2_other_metadata_remains_exact_after_process_time_normalization() {
     assert!(!report.passed);
     assert_eq!(
         report.differences[0].kind,
-        ResponseDifferenceKind::ExactBodyMismatch
+        ResponseDifferenceKind::GatewayMetadataMismatch
     );
 }
 
 #[test]
-fn motan2_protocol_rule_compares_the_business_body() {
+fn motan2_protobuf_response_body_rule_compares_the_business_body() {
     let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
     let actual = protobuf_repeated_strings(&[b"bob", b"alice"]);
     let (_temp, options) = write_motan2_case_with_rules(
@@ -379,13 +383,13 @@ fn motan2_protocol_rule_compares_the_business_body() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(!report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
-    let motan = report.motan.unwrap();
-    assert!(motan.configured);
-    assert!(motan.order_only);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Protobuf);
+    let body_diagnosis = report.body_diagnosis.unwrap();
+    assert!(body_diagnosis.configured);
+    assert!(body_diagnosis.order_only);
     assert_eq!(
-        motan.unordered_path_candidates[0],
-        crate::replay::assertion::MotanUnorderedPathCandidate::Protobuf(
+        body_diagnosis.unordered_path_candidates[0],
+        crate::replay::assertion::ResponseBodyUnorderedPathCandidate::Protobuf(
             crate::replay::assertion::ProtobufFieldPathCandidate {
                 field_path: crate::replay::policy::ProtobufFieldPath(vec![3]),
                 display_path: "3".to_string(),
@@ -395,7 +399,7 @@ fn motan2_protocol_rule_compares_the_business_body() {
 
     // Protobuf also emits the joined-string candidate array (empty), so the
     // rule shape is uniform across protocols.
-    let value = serde_json::to_value(&motan).unwrap();
+    let value = serde_json::to_value(&body_diagnosis).unwrap();
     assert_eq!(
         value.get("unordered_joined_string_candidates"),
         Some(&serde_json::json!([]))
@@ -420,7 +424,7 @@ fn motan2_unordered_rule_relaxes_only_business_body_order() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Protobuf);
     assert!(report.differences.is_empty());
 }
 
@@ -442,16 +446,16 @@ fn motan2_unordered_rule_keeps_other_metadata_exact() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(!report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Protobuf);
     assert_eq!(report.differences.len(), 1);
     assert_eq!(
         report.differences[0].kind,
-        ResponseDifferenceKind::ExactBodyMismatch
+        ResponseDifferenceKind::GatewayMetadataMismatch
     );
 }
 
 #[test]
-fn exact_motan2_body_reports_hessian2_as_a_protocol_candidate() {
+fn exact_motan2_body_reports_hessian2_as_a_codec_candidate() {
     let expected = hessian2_string_list(&["alice", "bob"]);
     let actual = hessian2_string_list(&["bob", "alice"]);
     let (_temp, options) =
@@ -460,23 +464,23 @@ fn exact_motan2_body_reports_hessian2_as_a_protocol_candidate() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(!report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
-    let motan = report.motan.unwrap();
-    assert!(!motan.configured);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
+    let body_diagnosis = report.body_diagnosis.unwrap();
+    assert!(!body_diagnosis.configured);
     assert_eq!(
-        motan.protocol,
-        crate::replay::policy::MotanBodyProtocol::Hessian2
+        body_diagnosis.codec,
+        crate::replay::policy::ResponseBodyCodec::Hessian2
     );
     assert!(
-        motan
-            .protocol_candidates
-            .contains(&crate::replay::policy::MotanBodyProtocol::Hessian2)
+        body_diagnosis
+            .codec_candidates
+            .contains(&crate::replay::policy::ResponseBodyCodec::Hessian2)
     );
 
     // The Hessian2 report always carries the joined-string candidate array,
     // even when discovery found no candidate: an empty array is the signal that
     // joined-string rules exist as an option.
-    let value = serde_json::to_value(&motan).unwrap();
+    let value = serde_json::to_value(&body_diagnosis).unwrap();
     assert_eq!(
         value.get("unordered_joined_string_candidates"),
         Some(&serde_json::json!([]))
@@ -502,7 +506,7 @@ fn motan2_hessian2_unordered_rule_relaxes_only_the_selected_list() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::MotanHessian2);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
     assert!(report.differences.is_empty());
 }
 
@@ -524,7 +528,7 @@ fn motan2_hessian2_unordered_rule_keeps_metadata_exact() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(!report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::MotanHessian2);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
     assert_eq!(report.differences.len(), 1);
 }
 
@@ -546,7 +550,7 @@ fn motan1_unordered_rule_compares_the_business_body() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::MotanProtobuf);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Protobuf);
     assert!(report.differences.is_empty());
 }
 
@@ -568,7 +572,7 @@ fn motan1_hessian2_unordered_rule_compares_the_business_body() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::MotanHessian2);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Hessian2);
     assert!(report.differences.is_empty());
 }
 
@@ -756,7 +760,7 @@ fn equal_non_json_body_passes_with_configured_response_rules() {
     let report = assert_recorded_response(options).unwrap();
 
     assert!(report.passed);
-    assert_eq!(report.body_mode, ResponseBodyMode::ExactBytes);
+    assert_eq!(report.body_codec, ResponseBodyCodec::ExactBytes);
     assert!(report.differences.is_empty());
 }
 

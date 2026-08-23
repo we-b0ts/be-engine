@@ -8,11 +8,14 @@ use serde_json::Value;
 use super::dirty_evidence::{self, E2eDirtyCounts};
 use super::result::{
     E2eResponseUnavailableReason, E2eValueObservation, E2eValuePresence,
-    RESPONSE_AVAILABILITY_POINTER, response_observation, response_pointer_pattern,
-    response_pointer_scope,
+    RESPONSE_AVAILABILITY_POINTER, response_observation, response_observation_with_status,
+    response_pointer_pattern, response_pointer_scope,
 };
 use super::{E2eRunContext, config, model, store, support};
-use crate::replay::{ResponseAssertionCaseReport, ResponseDifferenceKind};
+use crate::replay::{
+    ResponseAssertionCaseReport, ResponseBodyAssertionReport, ResponseBodyCodec,
+    ResponseDifferenceKind, ResponseGatewayProtocol,
+};
 
 const MAX_DISTINCT_SOURCE_VALUES: usize = 8;
 const RESPONSE_DIFFERENCE_PAGE_SIZE: usize = 20;
@@ -99,6 +102,12 @@ pub struct E2eCaseResponseDifference {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct E2eCaseResponseDifferences {
     pub case_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gateway_protocol: Option<ResponseGatewayProtocol>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_codec: Option<ResponseBodyCodec>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_diagnosis: Option<ResponseBodyAssertionReport>,
     pub total_differences: usize,
     pub offset: usize,
     pub returned_differences: usize,
@@ -302,6 +311,9 @@ fn unavailable_response_page(
     );
     Ok(E2eCaseResponseDifferences {
         case_id: case_id.to_string(),
+        gateway_protocol: None,
+        body_codec: None,
+        body_diagnosis: None,
         total_differences: 1,
         offset,
         returned_differences: 1,
@@ -344,12 +356,23 @@ fn response_difference_page(
             pointer_pattern: response_pointer_pattern(&difference.pointer),
             difference_kind: difference.kind,
             unavailable_reason: None,
-            expected: response_observation(&assertion.expected_response, &difference.pointer),
-            actual: response_observation(&assertion.actual_response, &difference.pointer),
+            expected: response_observation_with_status(
+                &assertion.expected_response,
+                &difference.pointer,
+                difference.expected_status,
+            ),
+            actual: response_observation_with_status(
+                &assertion.actual_response,
+                &difference.pointer,
+                difference.actual_status,
+            ),
         })
         .collect::<Vec<_>>();
     Ok(E2eCaseResponseDifferences {
         case_id: case_id.to_string(),
+        gateway_protocol: Some(report.gateway_protocol),
+        body_codec: Some(report.body_codec),
+        body_diagnosis: report.body_diagnosis.clone(),
         total_differences: report.differences.len(),
         offset,
         returned_differences: differences.len(),
@@ -480,28 +503,36 @@ mod tests {
             .collect::<Vec<_>>();
         let assertion = model::ResponseAssertionSummary {
             passed: false,
+            method: "GET".to_string(),
+            path: "/api".to_string(),
+            gateway_protocol: ResponseGatewayProtocol::Http,
+            body_codec: ResponseBodyCodec::Json,
+            body_diagnosis: None,
             difference_count: differences.len(),
             difference_index: differences.clone(),
             representative_difference: differences.first().cloned(),
             detail_report: PathBuf::from("detail.json"),
             detail_fingerprint: "detail".to_string(),
+            request: PathBuf::from("request.json"),
             expected_response: expected,
             actual_response: actual,
             policy_path: "replay.yaml".to_string(),
             policy_fingerprint: "policy".to_string(),
         };
         let report: ResponseAssertionCaseReport = serde_json::from_value(serde_json::json!({
-            "version": 1,
+            "version": 3,
             "case_id": "case-1",
             "method": "GET",
             "path": "/api",
+            "request_path": "request.json",
             "policy_path": "replay.yaml",
             "policy_fingerprint": "policy",
             "expected_response_path": assertion.expected_response.display().to_string(),
             "expected_response_fingerprint": "expected",
             "actual_response_path": assertion.actual_response.display().to_string(),
             "actual_response_fingerprint": "actual",
-            "body_mode": "json_structural",
+            "gateway_protocol": "http",
+            "body_codec": "json",
             "differences": differences,
             "applied_generated_rule_ids": [],
             "unused_applicable_generated_rule_ids": [],

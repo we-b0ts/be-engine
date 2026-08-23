@@ -181,35 +181,35 @@ impl ResponseRules {
             .collect()
     }
 
-    pub(in crate::replay) fn matching_motan_rules(
+    pub(in crate::replay) fn matching_response_body_rules(
         &self,
         method: &str,
         path: &str,
-    ) -> Vec<MotanResponseRuleMatch> {
+    ) -> Vec<ResponseBodyRuleMatch> {
         matching_body_rules(&self.protobuf, method, path)
-            .map(|(api, rules)| MotanResponseRuleMatch {
-                id: motan_response_rule_id(api),
+            .map(|(api, rules)| ResponseBodyRuleMatch {
+                id: response_body_rule_id(api),
                 api: api.clone(),
-                protocol: MotanBodyProtocol::Protobuf,
+                codec: ResponseBodyCodec::Protobuf,
                 unordered_paths: rules
                     .unordered
                     .iter()
                     .cloned()
-                    .map(MotanUnorderedPath::Protobuf)
+                    .map(ResponseBodyUnorderedPath::Protobuf)
                     .collect(),
                 unordered_joined_string_paths: Vec::new(),
             })
             .chain(
                 matching_body_rules(&self.hessian2, method, path).map(|(api, rules)| {
-                    MotanResponseRuleMatch {
-                        id: motan_response_rule_id(api),
+                    ResponseBodyRuleMatch {
+                        id: response_body_rule_id(api),
                         api: api.clone(),
-                        protocol: MotanBodyProtocol::Hessian2,
+                        codec: ResponseBodyCodec::Hessian2,
                         unordered_paths: rules
                             .unordered
                             .iter()
                             .cloned()
-                            .map(MotanUnorderedPath::Hessian2)
+                            .map(ResponseBodyUnorderedPath::Hessian2)
                             .collect(),
                         unordered_joined_string_paths: rules.unordered_joined_string.clone(),
                     }
@@ -218,34 +218,34 @@ impl ResponseRules {
             .collect()
     }
 
-    pub(in crate::replay) fn configured_motan_rule(
+    pub(in crate::replay) fn configured_response_body_rule(
         &self,
         api: &str,
-    ) -> Option<MotanResponseRuleMatch> {
+    ) -> Option<ResponseBodyRuleMatch> {
         self.protobuf
             .get(api)
-            .map(|rules| MotanResponseRuleMatch {
-                id: motan_response_rule_id(api),
+            .map(|rules| ResponseBodyRuleMatch {
+                id: response_body_rule_id(api),
                 api: api.to_string(),
-                protocol: MotanBodyProtocol::Protobuf,
+                codec: ResponseBodyCodec::Protobuf,
                 unordered_paths: rules
                     .unordered
                     .iter()
                     .cloned()
-                    .map(MotanUnorderedPath::Protobuf)
+                    .map(ResponseBodyUnorderedPath::Protobuf)
                     .collect(),
                 unordered_joined_string_paths: Vec::new(),
             })
             .or_else(|| {
-                self.hessian2.get(api).map(|rules| MotanResponseRuleMatch {
-                    id: motan_response_rule_id(api),
+                self.hessian2.get(api).map(|rules| ResponseBodyRuleMatch {
+                    id: response_body_rule_id(api),
                     api: api.to_string(),
-                    protocol: MotanBodyProtocol::Hessian2,
+                    codec: ResponseBodyCodec::Hessian2,
                     unordered_paths: rules
                         .unordered
                         .iter()
                         .cloned()
-                        .map(MotanUnorderedPath::Hessian2)
+                        .map(ResponseBodyUnorderedPath::Hessian2)
                         .collect(),
                     unordered_joined_string_paths: rules.unordered_joined_string.clone(),
                 })
@@ -253,11 +253,15 @@ impl ResponseRules {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum MotanBodyProtocol {
+pub enum ResponseBodyCodec {
+    #[default]
+    Unknown,
+    Json,
     Protobuf,
     Hessian2,
+    ExactBytes,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -328,12 +332,12 @@ pub struct Hessian2JoinedStringPath {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(untagged)]
-pub enum MotanUnorderedPath {
+pub enum ResponseBodyUnorderedPath {
     Protobuf(ProtobufUnorderedPath),
     Hessian2(Hessian2UnorderedPath),
 }
 
-impl<'de> Deserialize<'de> for MotanUnorderedPath {
+impl<'de> Deserialize<'de> for ResponseBodyUnorderedPath {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -349,20 +353,20 @@ impl<'de> Deserialize<'de> for MotanUnorderedPath {
                 .map(Self::Hessian2)
                 .map_err(D::Error::custom),
             (true, true) => Err(D::Error::custom(
-                "Motan unordered path cannot contain both field_path and value_path",
+                "response-body unordered path cannot contain both field_path and value_path",
             )),
             (false, false) => Err(D::Error::custom(
-                "Motan unordered path requires field_path or value_path",
+                "response-body unordered path requires field_path or value_path",
             )),
         }
     }
 }
 
-impl MotanUnorderedPath {
-    pub fn protocol(&self) -> MotanBodyProtocol {
+impl ResponseBodyUnorderedPath {
+    pub fn codec(&self) -> ResponseBodyCodec {
         match self {
-            Self::Protobuf(_) => MotanBodyProtocol::Protobuf,
-            Self::Hessian2(_) => MotanBodyProtocol::Hessian2,
+            Self::Protobuf(_) => ResponseBodyCodec::Protobuf,
+            Self::Hessian2(_) => ResponseBodyCodec::Hessian2,
         }
     }
 
@@ -396,11 +400,11 @@ pub enum ProtobufRepeatedElementType {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(in crate::replay) struct MotanResponseRuleMatch {
+pub(in crate::replay) struct ResponseBodyRuleMatch {
     pub(in crate::replay) id: String,
     pub(in crate::replay) api: String,
-    pub(in crate::replay) protocol: MotanBodyProtocol,
-    pub(in crate::replay) unordered_paths: Vec<MotanUnorderedPath>,
+    pub(in crate::replay) codec: ResponseBodyCodec,
+    pub(in crate::replay) unordered_paths: Vec<ResponseBodyUnorderedPath>,
     pub(in crate::replay) unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
 }
 
@@ -462,7 +466,7 @@ pub(in crate::replay) fn validate_response_rules(rules: &ResponseRules) -> Resul
     validate_json_rule_map(&rules.json, &mut locations)?;
     validate_protobuf_rule_map(&rules.protobuf)?;
     validate_hessian2_rule_map(&rules.hessian2)?;
-    validate_body_protocol_routes(rules)?;
+    validate_body_codec_routes(rules)?;
     for (index, left) in locations.iter().enumerate() {
         for right in locations.iter().skip(index + 1) {
             if left.0.eq_ignore_ascii_case(right.0)
@@ -506,13 +510,13 @@ pub(in crate::replay) fn response_rule_ids(rules: &ResponseRules) -> Vec<String>
                 .protobuf
                 .keys()
                 .chain(rules.hessian2.keys())
-                .map(|api| motan_response_rule_id(api)),
+                .map(|api| response_body_rule_id(api)),
         )
         .collect()
 }
 
-pub(in crate::replay) fn motan_response_rule_id(api: &str) -> String {
-    format!("response:motan:{api}")
+pub(in crate::replay) fn response_body_rule_id(api: &str) -> String {
+    format!("response:body:{api}")
 }
 
 pub(in crate::replay) fn response_rule_id(
@@ -577,10 +581,6 @@ fn validate_json_rule_map<'a>(
     for (api, rules) in rules {
         let (method, path) = validate_rule_api(api)?;
         ensure!(
-            method != "MOTAN",
-            "JSON response rule API cannot use the MOTAN carrier: {api:?}"
-        );
-        ensure!(
             !rules.is_empty(),
             "JSON response rule API {api:?} must select at least one rule"
         );
@@ -627,11 +627,7 @@ fn validate_protobuf_rule_map(rules: &BTreeMap<String, ProtobufResponseRules>) -
     const MAX_PATH_DEPTH: usize = 32;
 
     for (api, rule) in rules {
-        let (method, _) = validate_rule_api(api)?;
-        ensure!(
-            method == "MOTAN",
-            "protobuf response rule API method must be MOTAN: {api:?}"
-        );
+        validate_rule_api(api)?;
         ensure!(
             rule.unordered.len() <= MAX_PATHS,
             "protobuf response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
@@ -685,11 +681,7 @@ fn validate_hessian2_rule_map(rules: &BTreeMap<String, Hessian2ResponseRules>) -
     const MAX_PATH_DEPTH: usize = 32;
 
     for (api, rule) in rules {
-        let (method, _) = validate_rule_api(api)?;
-        ensure!(
-            method == "MOTAN",
-            "Hessian2 response rule API method must be MOTAN: {api:?}"
-        );
+        validate_rule_api(api)?;
         ensure!(
             rule.unordered.len() <= MAX_PATHS,
             "Hessian2 response rule API {api:?} selects more than {MAX_PATHS} unordered paths"
@@ -745,22 +737,27 @@ fn validate_hessian2_rule_map(rules: &BTreeMap<String, Hessian2ResponseRules>) -
     Ok(())
 }
 
-fn validate_body_protocol_routes(rules: &ResponseRules) -> Result<()> {
+fn validate_body_codec_routes(rules: &ResponseRules) -> Result<()> {
     let routes = rules
-        .protobuf
+        .json
         .keys()
-        .map(|api| ("protobuf", api))
+        .map(|api| ("json", api))
+        .chain(rules.protobuf.keys().map(|api| ("protobuf", api)))
         .chain(rules.hessian2.keys().map(|api| ("hessian2", api)))
-        .map(|(protocol, api)| {
-            let (_, path) = parse_api(api)?;
-            Ok((protocol, api.as_str(), path))
+        .map(|(codec, api)| {
+            let (method, path) = parse_api(api)?;
+            Ok((codec, api.as_str(), method, path))
         })
         .collect::<Result<Vec<_>>>()?;
-    for (index, (left_protocol, left_api, left_path)) in routes.iter().enumerate() {
-        for (right_protocol, right_api, right_path) in routes.iter().skip(index + 1) {
+    for (index, (left_codec, left_api, left_method, left_path)) in routes.iter().enumerate() {
+        for (right_codec, right_api, right_method, right_path) in routes.iter().skip(index + 1) {
+            if *left_codec == "json" && *right_codec == "json" {
+                continue;
+            }
             ensure!(
-                !path_patterns_overlap(left_path, right_path),
-                "overlapping body protocol response rules select the same API: {left_protocol} {left_api:?} and {right_protocol} {right_api:?}"
+                !left_method.eq_ignore_ascii_case(right_method)
+                    || !path_patterns_overlap(left_path, right_path),
+                "overlapping body codec response rules select the same API: {left_codec} {left_api:?} and {right_codec} {right_api:?}"
             );
         }
     }
@@ -902,8 +899,8 @@ fn path_patterns_overlap(left: &str, right: &str) -> bool {
 }
 
 #[cfg(test)]
-#[path = "response/motan_tests.rs"]
-mod motan_tests;
+#[path = "response/response_body_tests.rs"]
+mod response_body_tests;
 
 #[cfg(test)]
 #[path = "response/tests.rs"]

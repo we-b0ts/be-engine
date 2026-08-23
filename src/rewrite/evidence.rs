@@ -4,9 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::evidence_model::{
-    RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteProtocolRuleHint,
-};
+use super::evidence_model::{RewriteApplicableRulePlanner, RewriteEvidenceReport, RewriteRuleHint};
 use super::model::{RewriteEvidenceCommand, RewriteIssue, RewriteIssueKind, RewriteState};
 use super::{artifacts, fingerprint, source_process_traffic};
 use crate::case_group::resolve_published_case_dir;
@@ -14,11 +12,12 @@ use crate::comparison_recording::resolve_comparison_case_dir;
 use crate::e2e_run::response_pointer_scope;
 use crate::{
     E2eDirtyCluster, E2eDirtyCounts, E2eRunContext, E2eValueObservation, E2eValuePresence,
-    ResponseDifferenceKind, query_e2e_case_response_differences, query_e2e_dependency_correlation,
-    query_e2e_dirty_counts, query_e2e_source_variation, query_e2e_target_runtime_diagnostics,
+    ResponseBodyCodec, ResponseDifferenceKind, query_e2e_case_response_differences,
+    query_e2e_dependency_correlation, query_e2e_dirty_counts, query_e2e_source_variation,
+    query_e2e_target_runtime_diagnostics,
 };
 
-mod motan;
+mod response_body;
 
 const QUERY_CASE_RESPONSE_DIFFERENCES: &str = "case_response_differences";
 const QUERY_REPRESENTATIVES: &str = "representatives";
@@ -77,15 +76,14 @@ pub(super) fn query(
             )
         })?;
     let (kind, offset) = requested;
-    let (mut facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
-    motan::enrich_protocol_candidate(state, kind, &mut facts)?;
+    let (facts, does_not_prove, next_step) = facts(target_root, state, issue, kind, offset)?;
     let evidence_id = format!(
         "evidence-{}",
         fingerprint::id(&[requested_id, &serde_json::to_string(&facts)?])
             .trim_start_matches("fnv1a64:")
     );
     Ok(RewriteEvidenceReport {
-        schema_version: 2,
+        schema_version: 3,
         evidence_id: evidence_id.clone(),
         issue_id: issue.id.clone(),
         query: kind.to_string(),
@@ -96,46 +94,41 @@ pub(super) fn query(
             &facts,
             &evidence_id,
         ),
-        protocol_rules: protocol_rule_hints(target_root, kind, &facts),
+        rule_hints: rule_hints(target_root, kind, &facts),
         facts,
         does_not_prove,
         next_step,
     })
 }
 
-fn protocol_rule_hints(
-    target_root: &Path,
-    query_kind: &str,
-    facts: &Value,
-) -> Vec<RewriteProtocolRuleHint> {
+fn rule_hints(target_root: &Path, query_kind: &str, facts: &Value) -> Vec<RewriteRuleHint> {
     if query_kind == QUERY_REPRESENTATIVES {
-        let protocols = motan::protocol_candidates(facts);
-        if protocols.is_empty() {
+        let codecs = response_body::codec_candidates(facts);
+        if codecs.is_empty() {
             return Vec::new();
         }
-        let configured = facts
-            .pointer("/comparison_observation/motan/configured")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        return protocols
+        let configured = response_body::configured(facts);
+        return codecs
             .into_iter()
-            .map(|protocol| {
-                let hint = match (configured, protocol) {
-                    (true, "protobuf") => "The Motan body protocol is protobuf. Review unordered_path_candidates as mechanical candidates; they do not authorize order-insensitive comparison. Apply only fields whose order is irrelevant in the source contract, and include field_path, semantic display_path, explicit element_type, and one-line source_evidence for every field.",
-                    (true, "hessian2") => "The Motan body protocol is Hessian2. Candidates identify lists or joined strings but do not authorize order-insensitive comparison. Apply only source-proven sets: every selector requires value_path, semantic display_path, and one-line source_evidence; joined strings also require the reviewed separator.",
-                    (false, "protobuf") => "No Motan body protocol is configured. The exact body is a protobuf candidate; configure protobuf to re-verify existing response artifacts offline and return precise field paths without recording or starting processes.",
-                    (false, "hessian2") => "No Motan body protocol is configured. The exact body is a Hessian2 candidate; configure Hessian2 to re-verify existing response artifacts offline and return precise value paths without recording or starting processes.",
-                    _ => "The exact Motan body has a supported protocol candidate. Review and configure it before applying protocol-aware rules.",
+            .map(|codec| {
+                let hint = match (configured, codec) {
+                    (true, "protobuf") => "The response body codec is protobuf. Review unordered_path_candidates as mechanical candidates; they do not authorize order-insensitive comparison. Apply only fields whose order is irrelevant in the source contract, with field_path, semantic display_path, explicit element_type, and source_evidence.",
+                    (true, "hessian2") => "The response body codec is Hessian2. Candidates identify lists or joined strings but do not authorize order-insensitive comparison. Apply only source-proven sets; joined strings also require the reviewed separator.",
+                    (false, "protobuf") => "The exact response body is a protobuf candidate. The response rule planner can configure the codec and verify the existing focused-E2E or comparison artifacts offline without recording new traffic.",
+                    (false, "hessian2") => "The exact response body is a Hessian2 candidate. The response rule planner can configure the codec and verify the existing focused-E2E or comparison artifacts offline without recording new traffic.",
+                    _ => "The exact response body has a supported codec candidate. Review the body evidence before applying a response rule.",
                 };
-                RewriteProtocolRuleHint {
-                    protocol: format!("motan_{protocol}"),
-                    rule: "motan".to_string(),
+                RewriteRuleHint {
+                    capability: codec.to_string(),
+                    rule: "response_body".to_string(),
                     hint: hint.to_string(),
                     help: super::action::command(
                         target_root,
                         vec![
                             "rule".to_string(),
-                            "motan".to_string(),
+                            "plan".to_string(),
+                            "--body-codec".to_string(),
+                            codec.to_string(),
                             "--help".to_string(),
                         ],
                         Vec::new(),
@@ -156,15 +149,16 @@ fn protocol_rule_hints(
     if !has_memcached {
         return Vec::new();
     }
-    vec![RewriteProtocolRuleHint {
-        protocol: "memcached".to_string(),
+    vec![RewriteRuleHint {
+        capability: "memcached".to_string(),
         rule: "protobuf-timestamp".to_string(),
         hint: "Investigate this rule when a Memcached SET value contains a protobuf varint field generated from the current Unix time."
             .to_string(),
         help: super::action::command(
             target_root,
             vec![
-                "rule".to_string(),
+                "dependency-rule".to_string(),
+                "plan".to_string(),
                 "memcached".to_string(),
                 "protobuf-timestamp".to_string(),
                 "--help".to_string(),
@@ -183,31 +177,33 @@ fn applicable_rule_planners(
 ) -> Vec<RewriteApplicableRulePlanner> {
     let mut planners = Vec::new();
     if query_kind == QUERY_REPRESENTATIVES
-        && issue_kind == RewriteIssueKind::Comparison
-        && facts
-            .pointer("/comparison_observation/motan/configured")
-            .and_then(Value::as_bool)
-            != Some(true)
+        && matches!(
+            issue_kind,
+            RewriteIssueKind::Response | RewriteIssueKind::Comparison
+        )
     {
+        let configured = response_body::configured(facts);
         planners.extend(
-            motan::protocol_candidates(facts)
+            response_body::codec_candidates(facts)
                 .into_iter()
-                .map(|protocol| RewriteApplicableRulePlanner {
-                    kind: "response_body".to_string(),
-                    protocol: format!("motan_{protocol}"),
-                    evidence_id: evidence_id.to_string(),
-                    command: super::action::command(
-                        target_root,
-                        vec![
-                            "rule".to_string(),
-                            "motan".to_string(),
-                            "--evidence-id".to_string(),
-                            evidence_id.to_string(),
-                            "--protocol".to_string(),
-                            protocol.to_string(),
-                        ],
-                        Vec::new(),
-                    ),
+                .map(|codec| {
+                    let mut arguments = vec![
+                        "rule".to_string(),
+                        "plan".to_string(),
+                        "--evidence-id".to_string(),
+                        evidence_id.to_string(),
+                        "--body-codec".to_string(),
+                        codec.to_string(),
+                    ];
+                    if configured {
+                        arguments.push("--help".to_string());
+                    }
+                    RewriteApplicableRulePlanner {
+                        kind: "response_body".to_string(),
+                        capability: codec.to_string(),
+                        evidence_id: evidence_id.to_string(),
+                        command: super::action::command(target_root, arguments, Vec::new()),
+                    }
                 }),
         );
     }
@@ -218,10 +214,11 @@ fn applicable_rule_planners(
                 | RewriteIssueKind::Dependency
                 | RewriteIssueKind::Comparison
         )
+        && response_body::body_diagnosis(facts).is_none()
     {
         planners.push(RewriteApplicableRulePlanner {
             kind: "recorder_capture".to_string(),
-            protocol: "breeze_dns_bypass".to_string(),
+            capability: "breeze_dns_bypass".to_string(),
             evidence_id: evidence_id.to_string(),
             command: super::action::command(
                 target_root,
@@ -242,7 +239,7 @@ fn applicable_rule_planners(
     {
         planners.push(RewriteApplicableRulePlanner {
             kind: "dependency_ownership".to_string(),
-            protocol: "redis_bootstrap".to_string(),
+            capability: "redis_bootstrap".to_string(),
             evidence_id: evidence_id.to_string(),
             command: super::action::command(
                 target_root,
@@ -272,7 +269,7 @@ fn applicable_rule_planners(
             .into_iter()
             .map(|protocol| RewriteApplicableRulePlanner {
                 kind: "dependency_ownership".to_string(),
-                protocol: protocol.to_string(),
+                capability: protocol.to_string(),
                 evidence_id: evidence_id.to_string(),
                 command: super::action::command(
                     target_root,
@@ -287,6 +284,15 @@ fn applicable_rule_planners(
             }),
     );
     planners
+}
+
+pub(super) fn supports_response_body_codec(facts: &Value, codec: ResponseBodyCodec) -> bool {
+    let expected = match codec {
+        ResponseBodyCodec::Protobuf => "protobuf",
+        ResponseBodyCodec::Hessian2 => "hessian2",
+        _ => return false,
+    };
+    response_body::codec_candidates(facts).contains(&expected)
 }
 
 fn has_redis_bootstrap_traffic(facts: &Value) -> bool {
@@ -485,17 +491,27 @@ fn representative_facts(
     if let Some(representative) = issue.representative.as_ref() {
         let case_dir =
             resolve_published_case_dir(&case_source(target_root, state)?, &representative.case_id)?;
+        let mut response_difference = json!({
+            "pointer": representative.pointer,
+            "kind": representative.difference_kind,
+            "expected": representative.expected,
+            "actual": representative.actual,
+        });
+        if let Some(gateway_protocol) = representative.gateway_protocol {
+            response_difference["gateway_protocol"] = json!(gateway_protocol);
+        }
+        if let Some(body_codec) = representative.body_codec {
+            response_difference["body_codec"] = json!(body_codec);
+        }
+        if let Some(body_diagnosis) = &representative.body_diagnosis {
+            response_difference["body_diagnosis"] = json!(body_diagnosis);
+        }
         return Ok((
             response_pointer_scope(&representative.pointer),
             json!({
                 "case_id": representative.case_id,
                 "case_dir": case_dir,
-                "response_difference": {
-                    "pointer": representative.pointer,
-                    "kind": representative.difference_kind,
-                    "expected": representative.expected,
-                    "actual": representative.actual,
-                },
+                "response_difference": response_difference,
             }),
         ));
     }
@@ -541,18 +557,31 @@ fn representative_facts(
         .context("comparison representative has no recording run")?;
     let case_dir =
         resolve_comparison_case_dir(&artifacts::comparison_run(target_root, run_id), case_id)?;
+    let mut response_difference = json!({
+        "pointer": pointer,
+        "kind": difference_kind,
+        "source_before": source_before,
+        "candidate": candidate,
+        "source_after": source_after,
+    });
+    if let Some(body_diagnosis) = observation
+        .get("body_diagnosis")
+        .filter(|value| !value.is_null())
+    {
+        response_difference["body_diagnosis"] = body_diagnosis.clone();
+    }
+    if let Some(gateway_protocol) = observation.get("gateway_protocol") {
+        response_difference["gateway_protocol"] = gateway_protocol.clone();
+    }
+    if let Some(body_codec) = observation.get("body_codec") {
+        response_difference["body_codec"] = body_codec.clone();
+    }
     Ok((
         response_pointer_scope(pointer),
         json!({
             "case_id": case_id,
             "case_dir": case_dir,
-            "response_difference": {
-                "pointer": pointer,
-                "kind": difference_kind,
-                "source_before": source_before,
-                "candidate": candidate,
-                "source_after": source_after,
-            },
+            "response_difference": response_difference,
         }),
     ))
 }
@@ -617,6 +646,9 @@ fn case_response_difference_facts(
     let mut facts = json!({
         "case_id": page.case_id,
         "case_dir": case_dir,
+        "gateway_protocol": page.gateway_protocol,
+        "body_codec": page.body_codec,
+        "body_diagnosis": page.body_diagnosis,
         "total_differences": page.total_differences,
         "offset": page.offset,
         "returned_differences": page.returned_differences,
@@ -663,6 +695,18 @@ fn representative_guidance(kind: RewriteIssueKind) -> (Vec<String>, String) {
 
 fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str, &'static str)> {
     let mut queries = Vec::new();
+    let typed_body_candidate = issue
+        .representative
+        .as_ref()
+        .is_some_and(|representative| representative.body_diagnosis.is_some())
+        || issue
+            .comparison_observation
+            .as_ref()
+            .is_some_and(|observation| {
+                observation
+                    .get("body_diagnosis")
+                    .is_some_and(|body| !body.is_null())
+            });
     if issue.kind == RewriteIssueKind::TargetRuntime {
         queries.push((
             QUERY_TARGET_RUNTIME_DIAGNOSTICS,
@@ -703,7 +747,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
         ));
     }
     if issue.representative.is_some() {
-        if !response_unavailable {
+        if !response_unavailable && !typed_body_candidate {
             queries.extend([
                 (
                     QUERY_SOURCE_VARIATION,
@@ -719,7 +763,7 @@ fn query_kinds(state: &RewriteState, issue: &RewriteIssue) -> Vec<(&'static str,
             QUERY_DEPENDENCY_CORRELATION,
             "Correlate response outcomes with dependency cleanliness",
         ));
-        if !response_unavailable {
+        if !response_unavailable && !typed_body_candidate {
             queries.push((
                 QUERY_POLICY_APPLICABILITY,
                 "Check structural rule applicability without authorizing a rule",
@@ -939,8 +983,8 @@ fn policy_applicability(issue: &RewriteIssue) -> Value {
 }
 
 #[cfg(test)]
-#[path = "evidence/motan_tests.rs"]
-mod motan_tests;
+#[path = "evidence/response_body_tests.rs"]
+mod response_body_tests;
 
 #[cfg(test)]
 #[path = "evidence/tests.rs"]

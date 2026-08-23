@@ -5,7 +5,7 @@ use std::rc::Rc;
 use anyhow::{Context, Result, bail, ensure};
 use motan_hessian2::{ClassId, Decoder, Limits, TypeId, ValueKind};
 
-use super::binary_body::{MotanBodyEnvelope, simple_payload};
+use super::binary_body::{BodyEnvelope, simple_payload};
 use super::model::{Hessian2BodyDifference, Hessian2BodyDifferenceKind};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 use crate::replay::policy::{Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath};
@@ -21,10 +21,11 @@ const JOINED_STRING_SEPARATORS: [&str; 3] = [",", ";", "|"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Hessian2OrderDiscovery {
-    pub(super) envelope: MotanBodyEnvelope,
+    pub(super) envelope: BodyEnvelope,
     pub(super) unordered_paths: Vec<Hessian2ValuePath>,
     pub(super) unordered_joined_string_paths: Vec<(Hessian2ValuePath, String)>,
     pub(super) differences: Vec<Hessian2BodyDifference>,
+    pub(super) candidates_explain_all_differences: bool,
     pub(super) order_only: bool,
 }
 
@@ -73,19 +74,11 @@ struct Parser<'a> {
     nodes: usize,
 }
 
-pub(crate) fn is_motan_hessian2_body(body: &[u8]) -> bool {
+pub(crate) fn is_hessian2_body(body: &[u8]) -> bool {
     resolve_body(body).is_ok()
 }
 
-/// Reports how a Motan body carries its Hessian2 value, or `None` when it
-/// carries no complete Hessian2 value at all.
-pub(crate) fn motan_hessian2_envelope_name(body: &[u8]) -> Option<&'static str> {
-    resolve_body(body)
-        .ok()
-        .map(|(envelope, _)| envelope.as_str())
-}
-
-pub(in crate::replay) fn compare_motan_hessian2(
+pub(in crate::replay) fn compare_hessian2(
     expected: &[u8],
     actual: &[u8],
     unordered_paths: &[Hessian2UnorderedPath],
@@ -103,14 +96,14 @@ pub(in crate::replay) fn compare_motan_hessian2(
     Ok(expected == actual)
 }
 
-pub(super) fn evaluate_motan_hessian2(
+pub(super) fn evaluate_hessian2(
     expected: &[u8],
     actual: &[u8],
     unordered_paths: &[Hessian2UnorderedPath],
     joined_string_paths: &[Hessian2JoinedStringPath],
 ) -> Result<(bool, Hessian2OrderDiscovery)> {
-    let mut discovery = discover_motan_hessian2_order(expected, actual)?;
-    let matches = compare_motan_hessian2(expected, actual, unordered_paths, joined_string_paths)?;
+    let mut discovery = discover_hessian2_order(expected, actual)?;
+    let matches = compare_hessian2(expected, actual, unordered_paths, joined_string_paths)?;
     for rule in unordered_paths {
         for difference in discovery
             .differences
@@ -130,12 +123,13 @@ pub(super) fn evaluate_motan_hessian2(
         }
     }
     if matches {
+        discovery.candidates_explain_all_differences = true;
         discovery.order_only = true;
     }
     Ok((matches, discovery))
 }
 
-pub(super) fn discover_motan_hessian2_order(
+pub(super) fn discover_hessian2_order(
     expected: &[u8],
     actual: &[u8],
 ) -> Result<Hessian2OrderDiscovery> {
@@ -164,11 +158,14 @@ pub(super) fn discover_motan_hessian2_order(
         }
         selected.extend(next);
     }
-    // Joined-string discovery does not feed back into the canonicalization loop:
-    // canonicalizing a joined string would require a chosen separator, which the
-    // discovery pass does not fix. Candidates are reported as-is for review.
-
     let order_only = expected == actual;
+    let mut candidate_expected = expected.clone();
+    let mut candidate_actual = actual.clone();
+    for (path, separator) in &joined_string {
+        canonicalize_joined_string(&mut candidate_expected, &path.0, separator)?;
+        canonicalize_joined_string(&mut candidate_actual, &path.0, separator)?;
+    }
+    let candidates_explain_all_differences = candidate_expected == candidate_actual;
     let mut differences = selected
         .iter()
         .cloned()
@@ -189,6 +186,7 @@ pub(super) fn discover_motan_hessian2_order(
         unordered_paths: selected.into_iter().collect(),
         unordered_joined_string_paths: joined_string.into_iter().collect(),
         differences,
+        candidates_explain_all_differences,
         order_only,
     })
 }
@@ -203,24 +201,19 @@ fn validate_complete_value(payload: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Resolves the Hessian2 value carried by a Motan body.
-///
-/// A Motan method returning `byte[]` wraps its value in the simple
-/// byte-array envelope, while Hessian2 serialization of any other return type
-/// occupies the whole body. Both are accepted, and the framing is selected by
-/// the parse that succeeds so the choice never depends on payload guessing.
-fn resolve_body(body: &[u8]) -> Result<(MotanBodyEnvelope, &[u8])> {
+/// Resolves the Hessian2 value carried by a supported response-body envelope.
+fn resolve_body(body: &[u8]) -> Result<(BodyEnvelope, &[u8])> {
     if let Some(payload) = simple_payload(body)
         && validate_complete_value(payload).is_ok()
     {
-        return Ok((MotanBodyEnvelope::SimpleByteArray, payload));
+        return Ok((BodyEnvelope::SimpleByteArray, payload));
     }
     validate_complete_value(body)
-        .context("Motan body is not one complete Hessian2 value in either supported envelope")?;
-    Ok((MotanBodyEnvelope::Raw, body))
+        .context("response body is not one complete Hessian2 value in a supported envelope")?;
+    Ok((BodyEnvelope::Raw, body))
 }
 
-fn parse_body(body: &[u8]) -> Result<(MotanBodyEnvelope, HessianValue<'_>)> {
+fn parse_body(body: &[u8]) -> Result<(BodyEnvelope, HessianValue<'_>)> {
     let (envelope, payload) = resolve_body(body)?;
     let value = Parser::new(payload)?.parse_complete()?;
     Ok((envelope, value))
@@ -231,14 +224,14 @@ fn parse_body(body: &[u8]) -> Result<(MotanBodyEnvelope, HessianValue<'_>)> {
 fn parse_bodies<'a>(
     expected: &'a [u8],
     actual: &'a [u8],
-) -> Result<(MotanBodyEnvelope, HessianValue<'a>, HessianValue<'a>)> {
+) -> Result<(BodyEnvelope, HessianValue<'a>, HessianValue<'a>)> {
     let (expected_envelope, expected_value) =
-        parse_body(expected).context("source-before Motan Hessian2 body")?;
+        parse_body(expected).context("source-before Hessian2 response body")?;
     let (actual_envelope, actual_value) =
-        parse_body(actual).context("candidate Motan Hessian2 body")?;
+        parse_body(actual).context("candidate Hessian2 response body")?;
     ensure!(
         expected_envelope == actual_envelope,
-        "Motan Hessian2 bodies use different envelopes: source-before {} and candidate {}",
+        "Hessian2 response bodies use different envelopes: source-before {} and candidate {}",
         expected_envelope.as_str(),
         actual_envelope.as_str()
     );

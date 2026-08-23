@@ -13,6 +13,13 @@ pub(super) fn from_e2e(
     let (kind, owner, summary, pointer, possible_causes) = match result.gates.responses {
         E2eResponseGate::Nonpassing => {
             let representative = result.diagnosis.representative.as_ref();
+            let response_rule_candidate = representative.is_some_and(|value| {
+                value.body_diagnosis.as_ref().is_some_and(|body| {
+                    !body.codec_candidates.is_empty()
+                        && (!body.unordered_path_candidates.is_empty()
+                            || !body.unordered_joined_string_candidates.is_empty())
+                })
+            });
             let pointer = representative.map(|value| value.pointer.as_str());
             let differences = &result.diagnosis.response_differences;
             let observed_clusters = differences
@@ -26,7 +33,11 @@ pub(super) fn from_e2e(
             };
             (
                 RewriteIssueKind::Response,
-                RewriteIssueOwner::TargetCode,
+                if response_rule_candidate {
+                    RewriteIssueOwner::SourceInvestigation
+                } else {
+                    RewriteIssueOwner::TargetCode
+                },
                 format!(
                     "{} nonpassing cases among {} executed cases have {} response differences across {} {}",
                     result.diagnosis.counts.response_nonpassing,
@@ -36,7 +47,14 @@ pub(super) fn from_e2e(
                     cluster_scope,
                 ),
                 pointer,
-                response_possible_causes(representative.map(|value| value.difference_kind)),
+                if response_rule_candidate {
+                    vec![
+                        "structured_response_body_order_candidate".to_string(),
+                        "source_contract_must_prove_order_is_irrelevant".to_string(),
+                    ]
+                } else {
+                    response_possible_causes(representative.map(|value| value.difference_kind))
+                },
             )
         }
         _ if result.diagnosis.counts.executed == 0 => (

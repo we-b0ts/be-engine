@@ -104,9 +104,11 @@ not infer additional input or change the shared recording scope.
 
 When `details.reason=verification_progress_commit_required`, every API is
 verified but terminal delivery is still forbidden. Commit exactly the listed
-coordinator-generated public `progress.yaml` without editing or resetting it,
-then execute `backend-rewrite next` again. Intermediate failed or passing
-attempts do not require progress commits.
+coordinator-managed delivery files without editing or resetting the generated
+`progress.yaml`, then execute `backend-rewrite next` again. The list includes
+any dirty coordinator-rule or verification-policy file alongside the final
+public progress snapshot. Intermediate failed or passing attempts do not
+require progress commits.
 
 ### `implementation_required`
 

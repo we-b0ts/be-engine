@@ -25,7 +25,7 @@ Every policy starts with:
 ```yaml
 version: 1
 expected_response: assertions_only
-rules: []
+dependency_rules: []
 ```
 
 Version three enables runner-owned response assertions:
@@ -33,7 +33,7 @@ Version three enables runner-owned response assertions:
 ```yaml
 version: 3
 expected_response: assertions_only
-rules: []
+dependency_rules: []
 response_settings:
   comparison:
     source_match: before
@@ -43,7 +43,7 @@ response_rules:
   hessian2: {}
 ```
 
-Rules are grouped by body protocol, canonical API, and concrete rule kind.
+Rules are grouped by body codec, canonical API, and concrete rule kind.
 Standard replay loads JSON `timestamp`, `duration`, `uuid`, `random`, and
 `unordered` rules plus configured protobuf and Hessian2 rules. Comparison also
 loads JSON `counter` rules. Rule kinds selecting JSON must use disjoint
@@ -84,6 +84,21 @@ or order-insensitive collection behavior.
 
 ## Rule Scope
 
+The coordinator exposes exactly two rule classes:
+
+- `backend-rewrite rule plan|apply` changes response verification semantics.
+- `backend-rewrite dependency-rule plan|apply` changes dependency replay semantics.
+
+The policy mirrors that split with the top-level `response_rules` and
+`dependency_rules` keys. The former generic `rules` key is intentionally
+rejected; this fast-iteration contract has no compatibility alias.
+
+HTTP and Motan are gateway protocols, not rule classes. JSON, protobuf,
+Hessian2, and exact bytes describe response-body codecs; a response rule may
+combine either gateway with any supported body codec. Dependency-rule
+subcommands use protocol names only to select the recorded dependency wire
+contract.
+
 Dependency rules select one operation by protocol and a narrow dependency
 identity. HTTP rules require a target host, dependency method and dependency
 path. MySQL rules require a SQL pattern plus at least one target host, database,
@@ -122,7 +137,7 @@ Example:
 ```yaml
 version: 1
 expected_response: assertions_only
-rules:
+dependency_rules:
   - id: audit-insert
     protocol: mysql
     target:
@@ -185,7 +200,7 @@ Memcached `set` rules may select top-level protobuf varint fields that source
 code proves contain the current Unix time in seconds:
 
 ```yaml
-rules:
+dependency_rules:
   - id: user-info-cache-writeback
     protocol: memcached
     memcached:
@@ -338,8 +353,9 @@ no undeclared response differences. Apply is additive, sorted, and atomic.
 These JSON response-rule changes require rerunning
 the entire affected API group.
 
-Motan responses whose business body is a simple byte-array envelope can opt
-into protocol-aware business-body comparison:
+Structured response bodies can opt into codec-aware comparison independently
+of the gateway protocol. The following Motan API happens to carry protobuf in
+a simple byte-array body envelope:
 
 ```yaml
 response_rules:
@@ -390,49 +406,38 @@ response_rules:
 ```
 
 When a Hessian2 body mismatches only on such a joined string, the
-protocol-aware comparison report surfaces `unordered_joined_string_candidates`
+codec-aware comparison report surfaces `unordered_joined_string_candidates`
 with the value path and the separator that makes the two sides compare equal.
 Joined-string paths are Hessian2-only and a given value path may be either an
 `unordered` list or a joined string, but not both.
 
-The two Motan body envelopes are recognized without configuration. A method
-returning `byte[]` carries its business bytes inside the Motan simple
-byte-array envelope, while Hessian2 serialization of any other return type
-occupies the whole body. Protobuf bodies are always the enveloped `byte[]`
-form; a Hessian2 body is accepted in either form, and the report names the
-observed framing as `envelope: simple_byte_array` or `envelope: raw`. Both
-compared bodies must use the same envelope, because a framing change is a
-response-shape difference rather than a body-value difference.
+Gateway protocol, response component, body envelope, and body codec are
+separate dimensions. Gateway protocol is currently `http`, `motan1`, or
+`motan2`; response comparison distinguishes status, gateway metadata, and
+body. A body can then use JSON, protobuf, Hessian2, or exact bytes. Protobuf
+comparison currently accepts the simple byte-array envelope. Hessian2 accepts
+either `envelope: simple_byte_array` or `envelope: raw`. Both compared bodies
+must use the same envelope because an envelope change is a response-shape
+difference, not a body-value difference.
 
 The configured rule relaxes only the ordering of the declared repeated
-protobuf fields or Hessian2 lists inside the business body. During standard
-replay, the outer Motan frame remains exact after removing only the
-framework-generated `M_pt`
-process-time metadata entry: protocol version, flags, request ID, response
-status, serialization, and every other metadata entry must still match. A
-protocol-only rule does not relax any body value; it only enables
-protocol-aware differences. Standard replay without a configured Motan body
-rule keeps the same normalized full-frame exact comparison.
+protobuf fields or Hessian2 lists inside the business body. For Motan gateways,
+the outer frame metadata remains exact after removing only the
+framework-generated `M_pt` process-time entry: protocol version, flags,
+request ID, response status, serialization, and every other metadata entry
+must still match.
 
-This is one Motan response rule whose available action follows the current
-configuration. When the body protocol is not configured, evidence offers the
-syntactically valid `protobuf` and/or `hessian2` protocol choices. These are
-candidates rather than protocol claims; the AI must select the protocol using
-application/schema context. Applying that choice immediately reruns only the
-existing comparison verifier against the immutable response artifacts; it
-does not start source or target processes, send Motan requests, or record new
-traffic. A report produced before protocol-aware Motan diagnostics were
-available remains usable: evidence and protocol configuration probe the
-existing source/candidate bodies read-only instead of requiring another
-comparison recording. The refreshed standard comparison report keeps the
-exact `$body` mismatch and adds protocol-aware field paths, difference kinds,
-and an `order_only` decision. Apply returns the same comparison verifier's
-compact outcome (`complete`, `passed`, counts, per-API counts, and the bounded
-representative difference); complete per-case details remain in that standard
-report.
+This is a response rule, not a Motan rule. Planning is available whenever
+current runner-owned focused E2E evidence or current comparison evidence
+contains the required body diagnosis; it is not gated on entering the
+Comparison phase. When no body codec is configured, evidence reports the
+syntactically valid `protobuf` and/or `hessian2` candidates. They are decoding
+candidates rather than schema claims, so application or schema context must
+select the codec. The same plan may configure the codec and add reviewed paths
+in one step. Planning and apply reuse immutable response artifacts and do not
+start source or target processes or record new traffic.
 
-When a supported protocol is already configured, evidence skips protocol
-selection and lists its supported refinement directly. For protobuf, adding
+For protobuf, adding
 unordered fields must provide every newly discovered `field_path` together
 with a source/proto-reviewed semantic `display_path`, an explicit repeated
 `element_type`, and one-line `source_evidence` proving order is irrelevant. A
@@ -444,29 +449,31 @@ same field is reorder-only.
 The reported paths and successful offline multiset comparison are mechanical
 candidates, not authorization that order is absent from the product contract.
 Every selected protobuf path, Hessian2 list, and Hessian2 joined string must
-persist its own source citation. Protocol-only selection is the sole
-evidence-light step because it enables decoding without ignoring a body value.
+persist its own source citation. Codec-only selection is the sole
+evidence-light step because it enables decoding without ignoring a body value;
+it may remain nonpassing until a later source-proven selector accounts for the
+diagnosed differences.
 
-Use the staged planner commands:
+Use the unified response-rule planner:
 
 ```bash
-backend-rewrite rule motan \
+backend-rewrite rule plan \
   --evidence-id <current-evidence-id> \
-  --protocol protobuf
+  --body-codec protobuf
 
-backend-rewrite rule motan \
+backend-rewrite rule plan \
   --evidence-id <current-evidence-id> \
-  --protocol protobuf \
+  --body-codec protobuf \
   --unordered-path '{"field_path":[3,1,6,3],"display_path":"rule_collection.experiments.groups.white_list","element_type":"string","source_evidence":"src/rule.rs:white_list is a Set"}'
 
-backend-rewrite rule motan \
+backend-rewrite rule plan \
   --evidence-id <current-evidence-id> \
-  --protocol hessian2 \
+  --body-codec hessian2 \
   --unordered-path '{"value_path":["ruleCollection","groups","*","whiteList"],"display_path":"rule_collection.groups[].white_list","source_evidence":"src/rule.rs:white_list is a Set"}'
 
-backend-rewrite rule motan \
+backend-rewrite rule plan \
   --evidence-id <current-evidence-id> \
-  --protocol hessian2 \
+  --body-codec hessian2 \
   --unordered-joined-string-path '{"value_path":["result","whiteList"],"display_path":"result.white_list","separator":",","source_evidence":"src/cache.rs:white_list joins a Set"}'
 ```
 
@@ -476,8 +483,8 @@ bytes remain exact. Intermediate field numbers are interpreted as embedded
 messages.
 Supported terminal types are strings, messages, booleans, enums, and protobuf
 integer/fixed-width numeric types, including packed numeric encodings.
-`bytes` is deliberately unsupported: neither the outer Motan `byte[]`, a
-protobuf `bytes` field, nor `repeated bytes` can be declared unordered.
+`bytes` is deliberately unsupported: neither the outer response-body envelope,
+a protobuf `bytes` field, nor `repeated bytes` can be declared unordered.
 
 For Hessian2, `value_path` walks object field names and string-valued map keys;
 `"*"` is permitted only to traverse an intermediate list. The selected

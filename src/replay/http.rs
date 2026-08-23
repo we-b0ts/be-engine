@@ -23,7 +23,7 @@ use tokio_rustls::TlsAcceptor;
 use url::form_urlencoded;
 
 use super::{
-    HttpPolicyContext, MitmCa, PolicyDecision, ReplayPolicyRuntime, ReplayProtocol,
+    DependencyRuleDecision, HttpPolicyContext, MitmCa, ReplayPolicyRuntime, ReplayProtocol,
     ReplayReportWriter, ReplaySource, ReplayState, ReplayTarget, TargetKey, push_success_detail,
     register_replay_target, register_replay_target_at,
 };
@@ -345,7 +345,7 @@ impl ReplayState {
         }
 
         let mut matching_index = None;
-        let mut matching_policy_decision = PolicyDecision::default();
+        let mut matching_policy_decision = DependencyRuleDecision::default();
         let mut closest_mismatch = None;
         'sources: for source in [ReplaySource::Case, ReplaySource::Global] {
             for (index, exchange) in self.http_exchanges.iter().enumerate() {
@@ -375,7 +375,7 @@ impl ReplayState {
                         }
                     }
                 } else {
-                    PolicyDecision::default()
+                    DependencyRuleDecision::default()
                 };
                 let mut ignored_query_params = self.http_ignore_query_params.clone();
                 ignored_query_params.extend(policy_decision.dynamic_query_params.iter().cloned());

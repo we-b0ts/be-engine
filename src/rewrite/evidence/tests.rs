@@ -109,6 +109,9 @@ fn response_evidence_starts_with_paged_case_differences_and_rejects_stale_pages(
             case_id: "case-1".to_string(),
             pointer: "/items/0/value".to_string(),
             difference_kind: ResponseDifferenceKind::MissingActual,
+            gateway_protocol: Some(crate::ResponseGatewayProtocol::Http),
+            body_codec: Some(crate::ResponseBodyCodec::Json),
+            body_diagnosis: None,
             unavailable_reason: None,
             expected: E2eValueObservation {
                 presence: E2eValuePresence::Present,
@@ -168,6 +171,9 @@ fn unavailable_response_evidence_omits_value_and_policy_queries() {
             case_id: "case-1".to_string(),
             pointer: "$response".to_string(),
             difference_kind: ResponseDifferenceKind::ResponseUnavailable,
+            gateway_protocol: None,
+            body_codec: None,
+            body_diagnosis: None,
             unavailable_reason: Some(crate::E2eResponseUnavailableReason::TargetConnectionClosed),
             expected: E2eValueObservation {
                 presence: E2eValuePresence::Present,
@@ -230,7 +236,7 @@ fn response_source_process_evidence_exposes_bootstrap_redis_planner() {
 
     let planner = planners
         .iter()
-        .find(|planner| planner.protocol == "redis_bootstrap")
+        .find(|planner| planner.capability == "redis_bootstrap")
         .unwrap();
     assert_eq!(planner.kind, "dependency_ownership");
     assert_eq!(planner.evidence_id, "evidence-bootstrap");
@@ -340,6 +346,9 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
             case_id: "case-status-mismatch".to_string(),
             pointer: "$status".to_string(),
             difference_kind: ResponseDifferenceKind::StatusMismatch,
+            gateway_protocol: Some(crate::ResponseGatewayProtocol::Http),
+            body_codec: Some(crate::ResponseBodyCodec::Json),
+            body_diagnosis: None,
             unavailable_reason: None,
             expected: E2eValueObservation {
                 presence: E2eValuePresence::Present,
@@ -374,6 +383,8 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
         serde_json::json!({
             "pointer": "$status",
             "kind": "status_mismatch",
+            "gateway_protocol": "http",
+            "body_codec": "json",
             "expected": {"presence": "present", "value": 403},
             "actual": {"presence": "present", "value": 200},
         })
@@ -387,7 +398,7 @@ fn representatives_return_the_exact_recorded_case_directory_and_response_differe
     assert_eq!(report.applicable_rule_planners.len(), 1);
     let planner = &report.applicable_rule_planners[0];
     assert_eq!(planner.kind, "recorder_capture");
-    assert_eq!(planner.protocol, "breeze_dns_bypass");
+    assert_eq!(planner.capability, "breeze_dns_bypass");
     assert_eq!(planner.evidence_id, report.evidence_id);
     assert_eq!(
         planner.command.argv,
@@ -585,9 +596,9 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
     );
 
     assert_eq!(planners.len(), 3);
-    assert_eq!(planners[0].protocol, "http");
-    assert_eq!(planners[1].protocol, "memcached");
-    assert_eq!(planners[2].protocol, "redis");
+    assert_eq!(planners[0].capability, "http");
+    assert_eq!(planners[1].capability, "memcached");
+    assert_eq!(planners[2].capability, "redis");
     assert_eq!(planners[1].evidence_id, "evidence-current");
     assert_eq!(planners[1].command.cwd, target.path());
     assert_eq!(
@@ -619,7 +630,7 @@ fn dirty_cluster_evidence_returns_only_protocol_specific_rule_planners() {
 #[test]
 fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicability() {
     let target = tempfile::tempdir().unwrap();
-    let rules = protocol_rule_hints(
+    let rules = rule_hints(
         target.path(),
         QUERY_DIRTY_CLUSTERS,
         &serde_json::json!({
@@ -631,7 +642,7 @@ fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicab
     );
 
     assert_eq!(rules.len(), 1);
-    assert_eq!(rules[0].protocol, "memcached");
+    assert_eq!(rules[0].capability, "memcached");
     assert_eq!(rules[0].rule, "protobuf-timestamp");
     assert!(rules[0].hint.contains("Memcached SET value"));
     assert!(rules[0].hint.starts_with("Investigate"));
@@ -641,7 +652,8 @@ fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicab
             "backend-rewrite",
             "--target-root",
             target.path().to_str().unwrap(),
-            "rule",
+            "dependency-rule",
+            "plan",
             "memcached",
             "protobuf-timestamp",
             "--help",
@@ -650,67 +662,62 @@ fn memcached_dirty_clusters_expose_the_value_rule_help_without_claiming_applicab
 }
 
 #[test]
-fn exact_motan_protobuf_body_without_a_protocol_offers_protocol_configuration() {
+fn focused_response_body_candidate_offers_the_unified_response_rule_planner() {
     let target = tempfile::tempdir().unwrap();
     let facts = serde_json::json!({
-        "comparison_observation": {
-            "pointer": "$body",
-            "motan": {
-                "rule_kind": "motan",
-                "protocol": "protobuf",
-                "configured": false
+        "representative": {
+            "response_difference": {
+                "pointer": "$body",
+                "body_diagnosis": {
+                    "codec": "protobuf",
+                    "codec_candidates": ["protobuf"],
+                    "configured": false,
+                    "unordered_path_candidates": [{"field_path": [3, 3]}]
+                }
             }
         }
     });
 
-    let hints = protocol_rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
+    let hints = rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
     let planners = applicable_rule_planners(
         target.path(),
-        RewriteIssueKind::Comparison,
+        RewriteIssueKind::Response,
         QUERY_REPRESENTATIVES,
         &facts,
         "evidence-current",
     );
 
     assert_eq!(hints.len(), 1);
-    assert_eq!(hints[0].rule, "motan");
+    assert_eq!(hints[0].rule, "response_body");
+    assert_eq!(hints[0].capability, "protobuf");
+    assert!(hints[0].hint.contains("focused-E2E or comparison"));
+    assert_eq!(planners.len(), 1);
+    assert_eq!(planners[0].kind, "response_body");
+    assert_eq!(planners[0].capability, "protobuf");
     assert!(
-        hints[0]
-            .hint
-            .contains("No Motan body protocol is configured")
-    );
-    assert!(hints[0].hint.contains("offline"));
-    assert!(hints[0].hint.contains("without recording"));
-    assert_eq!(planners.len(), 2);
-    let motan = planners
-        .iter()
-        .find(|planner| planner.protocol == "motan_protobuf")
-        .unwrap();
-    assert_eq!(motan.kind, "response_body");
-    assert!(
-        motan
+        planners[0]
             .command
             .argv
-            .ends_with(&["--protocol".to_string(), "protobuf".to_string(),])
+            .ends_with(&["--body-codec".to_string(), "protobuf".to_string(),])
     );
 }
 
 #[test]
-fn configured_motan_protobuf_body_offers_rules_without_repeating_protocol_configuration() {
+fn configured_response_body_candidate_offers_selector_help() {
     let target = tempfile::tempdir().unwrap();
     let facts = serde_json::json!({
         "comparison_observation": {
             "pointer": "$body",
-            "motan": {
-                "rule_kind": "motan",
-                "protocol": "protobuf",
+            "body_diagnosis": {
+                "codec": "hessian2",
+                "codec_candidates": ["hessian2"],
                 "configured": true,
-                "unordered_path_candidates": [{"field_path": [3, 3]}]
+                "unordered_path_candidates": [{"value_path": []}]
             }
         }
     });
 
-    let hints = protocol_rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
+    let hints = rule_hints(target.path(), QUERY_REPRESENTATIVES, &facts);
     let planners = applicable_rule_planners(
         target.path(),
         RewriteIssueKind::Comparison,
@@ -720,95 +727,10 @@ fn configured_motan_protobuf_body_offers_rules_without_repeating_protocol_config
     );
 
     assert_eq!(hints.len(), 1);
-    assert!(hints[0].hint.contains("unordered_path_candidates"));
-    assert!(hints[0].hint.contains("display_path"));
-    assert!(
-        planners
-            .iter()
-            .all(|planner| planner.protocol != "motan_protobuf")
-    );
-}
-
-#[test]
-fn representative_evidence_probes_legacy_motan_reports_from_existing_bodies() {
-    let target = tempfile::tempdir().unwrap();
-    let case = target.path().join("comparison-case");
-    std::fs::create_dir(&case).unwrap();
-    let protobuf = |values: [&str; 2]| {
-        let mut payload = Vec::new();
-        for value in values {
-            payload.push(0x1a);
-            payload.push(value.len() as u8);
-            payload.extend_from_slice(value.as_bytes());
-        }
-        let mut body = vec![3];
-        body.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        body.extend(payload);
-        String::from_utf8(body).unwrap()
-    };
-    for (name, body) in [
-        ("expected-response.json", protobuf(["alice", "bob"])),
-        ("response.json", protobuf(["bob", "alice"])),
-    ] {
-        std::fs::write(
-            case.join(name),
-            serde_json::to_vec(&serde_json::json!({
-                "version": 1,
-                "status": 200,
-                "body": {
-                    "encoding": "utf8",
-                    "data": body,
-                    "truncated": false
-                },
-                "error": null
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-    }
-    let mut state = crate::rewrite::test_state();
-    state.api = "MOTAN /rpc/example".to_string();
-    let mut facts = serde_json::json!({
-        "representative": {"case_dir": case},
-        "comparison_observation": {
-            "classification": "candidate_difference",
-            "pointer": "$body",
-            "difference_kind": "exact_body_mismatch",
-            "motan": {
-                "rule_kind": "motan",
-                "protocol": "protobuf",
-                "configured": false,
-                "order_only": true
-            }
-        }
-    });
-
-    motan::enrich_protocol_candidate(&state, QUERY_REPRESENTATIVES, &mut facts).unwrap();
-
-    assert_eq!(
-        facts.pointer("/comparison_observation/motan/protocol"),
-        Some(&Value::String("protobuf".to_string()))
-    );
-    assert_eq!(
-        facts.pointer("/comparison_observation/motan/protocol_candidates/0"),
-        Some(&Value::String("protobuf".to_string()))
-    );
-    assert_eq!(
-        facts.pointer("/comparison_observation/motan/order_only"),
-        Some(&Value::Bool(true))
-    );
-    let planners = applicable_rule_planners(
-        target.path(),
-        RewriteIssueKind::Comparison,
-        QUERY_REPRESENTATIVES,
-        &facts,
-        "evidence-current",
-    );
-    assert!(
-        planners
-            .iter()
-            .any(|planner| planner.protocol == "motan_protobuf")
-    );
+    assert!(hints[0].hint.contains("source-proven"));
+    assert_eq!(planners.len(), 1);
+    assert_eq!(planners[0].capability, "hessian2");
+    assert_eq!(planners[0].command.argv.last().unwrap(), "--help");
 }
 
 #[test]
@@ -939,6 +861,6 @@ fn source_process_query_returns_bounded_bootstrap_and_process_owned_evidence() {
         report
             .applicable_rule_planners
             .iter()
-            .any(|planner| planner.protocol == "redis_bootstrap")
+            .any(|planner| planner.capability == "redis_bootstrap")
     );
 }

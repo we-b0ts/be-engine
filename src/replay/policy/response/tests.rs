@@ -125,7 +125,7 @@ fn rejects_overlapping_replay_and_comparison_rules() {
 }
 
 #[test]
-fn rejects_json_rules_on_the_motan_carrier() {
+fn accepts_json_rules_on_a_motan_gateway() {
     let rules = ResponseRules {
         json: BTreeMap::from([(
             "MOTAN /rpc/example".to_string(),
@@ -137,7 +137,11 @@ fn rejects_json_rules_on_the_motan_carrier() {
         ..Default::default()
     };
 
-    assert!(validate_response_rules(&rules).is_err());
+    validate_response_rules(&rules).unwrap();
+    assert_eq!(
+        rules.matching_replay_fields("MOTAN", "/rpc/example")[0].kind,
+        ResponseRuleKind::Unordered
+    );
 }
 
 #[test]

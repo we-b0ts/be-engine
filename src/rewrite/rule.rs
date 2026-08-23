@@ -5,67 +5,47 @@ use serde_json::{Value, json};
 
 use super::fingerprint;
 use super::model::{
-    RewriteMemcachedTimestampRuleSpec, RewriteMotanRuleSpec, RewriteRulePlanRecord,
-    RewriteRuleReport, RewriteState,
+    RewriteResponseBodyRuleSpec, RewriteRulePlanRecord, RewriteRuleReport, RewriteState,
 };
 use super::{action, evidence};
 use crate::{
-    ComparisonResponseRuleFeedback, E2eRunContext, Hessian2JoinedStringPath,
-    MemcachedTimestampRuleFeedback, MemcachedTimestampRulePlan, MotanBodyProtocol,
-    MotanRuleFeedback, MotanRulePlan, MotanUnorderedPath, ResponseRuleFeedback, ResponseRuleKind,
-    ResponseRulePlan, plan_comparison_response_rule, plan_memcached_timestamp_rule,
-    plan_motan_rule, plan_response_rule, resolve_e2e_response_rule_evidence,
+    ComparisonResponseRuleFeedback, E2eRunContext, Hessian2JoinedStringPath, ResponseBodyCodec,
+    ResponseBodyRuleEvidence, ResponseBodyRuleFeedback, ResponseBodyRulePlan,
+    ResponseBodyUnorderedPath, ResponseRuleFeedback, ResponseRuleKind, ResponseRulePlan,
+    plan_comparison_response_rule, plan_response_body_rule, plan_response_rule,
+    resolve_e2e_response_rule_evidence,
 };
 
 #[derive(Debug, Clone)]
 pub struct RewriteRulePlanOptions {
     pub evidence_id: String,
-    pub kind: ResponseRuleKind,
+    pub body_codec: ResponseBodyCodec,
+    pub kind: Option<ResponseRuleKind>,
     pub json_pointer: Option<String>,
     pub source_evidence: Option<String>,
     pub source_example: Option<String>,
     pub target_example: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RewriteMemcachedTimestampRulePlanOptions {
-    pub evidence_id: String,
-    pub rule_id: String,
-    pub port: u16,
-    pub key_prefix: String,
-    pub key_suffix: String,
-    pub field_number: u32,
-    pub source_evidence: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct RewriteMotanRulePlanOptions {
-    pub evidence_id: String,
-    pub protocol: MotanBodyProtocol,
-    pub unordered_paths: Vec<MotanUnorderedPath>,
+    pub unordered_paths: Vec<ResponseBodyUnorderedPath>,
     pub unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
 }
 
 enum VerificationRulePlan {
-    Response(ResponseRulePlan),
-    MemcachedTimestamp(MemcachedTimestampRulePlan),
-    Motan(Box<MotanRulePlan>),
+    Response(Box<ResponseRulePlan>),
+    Body(Box<ResponseBodyRulePlan>),
 }
 
 impl VerificationRulePlan {
     fn report(&self) -> Result<Value> {
         match self {
             Self::Response(plan) => project_response_report(plan.report()),
-            Self::MemcachedTimestamp(plan) => Ok(project_memcached_report(plan.report())),
-            Self::Motan(plan) => Ok(project_motan_report(plan.report())),
+            Self::Body(plan) => Ok(project_body_report(plan.report())),
         }
     }
 
     fn apply(self) -> Result<Value> {
         match self {
             Self::Response(plan) => project_response_report(&plan.apply()?),
-            Self::MemcachedTimestamp(plan) => Ok(project_memcached_report(&plan.apply()?)),
-            Self::Motan(plan) => Ok(project_motan_report(&plan.apply()?)),
+            Self::Body(plan) => Ok(project_body_report(&plan.apply()?)),
         }
     }
 }
@@ -75,6 +55,27 @@ pub(super) fn plan(
     state: &mut RewriteState,
     options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
+    match options.body_codec {
+        ResponseBodyCodec::Json => plan_json(target_root, state, options),
+        ResponseBodyCodec::Protobuf | ResponseBodyCodec::Hessian2 => {
+            plan_response_body(target_root, state, options)
+        }
+        codec => anyhow::bail!("response rule cannot be planned for body codec {codec:?}"),
+    }
+}
+
+fn plan_json(
+    target_root: &Path,
+    state: &mut RewriteState,
+    options: RewriteRulePlanOptions,
+) -> Result<RewriteRuleReport> {
+    ensure!(
+        options.unordered_paths.is_empty() && options.unordered_joined_string_paths.is_empty(),
+        "JSON response rules cannot carry typed response-body paths"
+    );
+    let kind = options
+        .kind
+        .context("JSON response rule plan requires --kind")?;
     let issue = state
         .active_issue
         .clone()
@@ -103,20 +104,19 @@ pub(super) fn plan(
             fingerprint::id(&[
                 &state.workflow_id,
                 &issue.id,
-                &format!("{:?}", options.kind),
+                &format!("{kind:?}"),
                 &pointer,
                 &options.evidence_id,
             ])
             .trim_start_matches("fnv1a64:")
         ),
         issue_id: issue.id.clone(),
-        kind: rule_kind(options.kind).to_string(),
+        kind: rule_kind(kind).to_string(),
         json_pointer: pointer,
         source_evidence: options.source_evidence,
         source_example: options.source_example,
         target_example: options.target_example,
-        memcached_timestamp: None,
-        motan: None,
+        response_body: None,
         evidence_id: options.evidence_id,
     };
     let traffic_plan = build_plan(target_root, state, &record)?;
@@ -133,92 +133,32 @@ pub(super) fn plan(
     })
 }
 
-pub(super) fn plan_memcached_timestamp(
+fn plan_response_body(
     target_root: &Path,
     state: &mut RewriteState,
-    options: RewriteMemcachedTimestampRulePlanOptions,
+    options: RewriteRulePlanOptions,
 ) -> Result<RewriteRuleReport> {
     let issue = state
         .active_issue
         .clone()
         .context("rewrite workflow has no active issue")?;
     ensure!(
-        matches!(
-            issue.kind,
-            super::model::RewriteIssueKind::Response
-                | super::model::RewriteIssueKind::Dependency
-                | super::model::RewriteIssueKind::Replay
-        ),
-        "Memcached SET payload rules require response, replay, or dependency dirty evidence"
+        options.kind.is_none()
+            && options.json_pointer.is_none()
+            && options.source_evidence.is_none()
+            && options.source_example.is_none()
+            && options.target_example.is_none(),
+        "typed response-body rules cannot carry JSON rule arguments"
     );
-    validate_memcached_plan_evidence(
+    validate_response_body_plan_evidence(
         target_root,
         state,
         &issue.id,
         &options.evidence_id,
-        options.port,
+        options.body_codec,
     )?;
-    let spec = RewriteMemcachedTimestampRuleSpec {
-        rule_id: options.rule_id,
-        port: options.port,
-        key_prefix: options.key_prefix,
-        key_suffix: options.key_suffix,
-        field_number: options.field_number,
-        source_evidence: options.source_evidence,
-    };
-    let spec_json = serde_json::to_string(&spec)?;
-    let record = RewriteRulePlanRecord {
-        id: format!(
-            "plan-{}",
-            fingerprint::id(&[
-                &state.workflow_id,
-                &issue.id,
-                "memcached_protobuf_timestamp",
-                &spec_json,
-                &options.evidence_id,
-            ])
-            .trim_start_matches("fnv1a64:")
-        ),
-        issue_id: issue.id.clone(),
-        kind: "memcached_protobuf_timestamp".to_string(),
-        json_pointer: String::new(),
-        source_evidence: None,
-        source_example: None,
-        target_example: None,
-        memcached_timestamp: Some(spec),
-        motan: None,
-        evidence_id: options.evidence_id,
-    };
-    let traffic_plan = build_plan(target_root, state, &record)?;
-    let traffic_report = traffic_plan.report()?;
-    state.dependency_rule_plan = None;
-    state.recorder_capture_plan = None;
-    state.rule_plan = Some(record.clone());
-    state.bump();
-    Ok(RewriteRuleReport {
-        plan_id: record.id.clone(),
-        issue_id: issue.id,
-        traffic_e2e_report: traffic_report,
-        next_command: action::rule_apply_command(target_root, &record.id),
-    })
-}
-
-pub(super) fn plan_motan(
-    target_root: &Path,
-    state: &mut RewriteState,
-    options: RewriteMotanRulePlanOptions,
-) -> Result<RewriteRuleReport> {
-    let issue = state
-        .active_issue
-        .clone()
-        .context("rewrite workflow has no active issue")?;
-    ensure!(
-        matches!(issue.kind, super::model::RewriteIssueKind::Comparison),
-        "Motan response-body rules require comparison evidence"
-    );
-    validate_plan_evidence(target_root, state, &issue.id, &options.evidence_id)?;
-    let spec = RewriteMotanRuleSpec {
-        protocol: options.protocol,
+    let spec = RewriteResponseBodyRuleSpec {
+        codec: options.body_codec,
         unordered_paths: options.unordered_paths,
         unordered_joined_string_paths: options.unordered_joined_string_paths,
     };
@@ -229,20 +169,19 @@ pub(super) fn plan_motan(
             fingerprint::id(&[
                 &state.workflow_id,
                 &issue.id,
-                "motan",
+                "response_body",
                 &spec_json,
                 &options.evidence_id,
             ])
             .trim_start_matches("fnv1a64:")
         ),
         issue_id: issue.id.clone(),
-        kind: "motan".to_string(),
+        kind: "response_body".to_string(),
         json_pointer: String::new(),
         source_evidence: None,
         source_example: None,
         target_example: None,
-        memcached_timestamp: None,
-        motan: Some(spec),
+        response_body: Some(spec),
         evidence_id: options.evidence_id,
     };
     let traffic_report = build_plan(target_root, state, &record)?.report()?;
@@ -282,38 +221,55 @@ fn build_plan(
     state: &RewriteState,
     record: &RewriteRulePlanRecord,
 ) -> Result<VerificationRulePlan> {
-    if let Some(spec) = &record.motan {
-        let comparison_run = state
-            .comparison_run_id
+    if let Some(spec) = &record.response_body {
+        let evidence = if state
+            .active_issue
             .as_ref()
-            .context("Motan response rule requires a comparison run")?;
-        return Ok(VerificationRulePlan::Motan(Box::new(plan_motan_rule(
-            MotanRuleFeedback {
-                policy_path: target_root.join(".traffic-e2e/verification.yaml"),
-                api: state.api.clone(),
-                protocol: spec.protocol,
-                unordered_paths: spec.unordered_paths.clone(),
-                unordered_joined_string_paths: spec.unordered_joined_string_paths.clone(),
+            .is_some_and(|issue| issue.kind == super::model::RewriteIssueKind::Comparison)
+        {
+            let comparison_run = state
+                .comparison_run_id
+                .as_ref()
+                .context("comparison response rule requires a comparison run")?;
+            ResponseBodyRuleEvidence::Comparison {
                 comparison_report: target_root
                     .join(crate::repository::LOCAL_ARTIFACTS_ROOT)
                     .join("comparison-recordings")
                     .join(comparison_run)
                     .join("comparison-report.json"),
-            },
-        )?)));
-    }
-    if let Some(spec) = &record.memcached_timestamp {
-        return Ok(VerificationRulePlan::MemcachedTimestamp(
-            plan_memcached_timestamp_rule(MemcachedTimestampRuleFeedback {
+            }
+        } else {
+            let case_source = state
+                .case_source
+                .clone()
+                .context("response rule requires a finalized case source")?;
+            let group_id = state
+                .group_id
+                .as_deref()
+                .context("response rule requires a prepared API group")?;
+            let evidence = resolve_e2e_response_rule_evidence(
+                E2eRunContext {
+                    target_root: target_root.to_path_buf(),
+                    case_source,
+                    run_key: None,
+                },
+                group_id,
+            )?;
+            ResponseBodyRuleEvidence::FocusedE2e {
+                assertion_report: evidence.assertions,
+                aggregate_report: evidence.aggregate,
+            }
+        };
+        return Ok(VerificationRulePlan::Body(Box::new(
+            plan_response_body_rule(ResponseBodyRuleFeedback {
                 policy_path: target_root.join(".traffic-e2e/verification.yaml"),
-                rule_id: spec.rule_id.clone(),
-                port: spec.port,
-                key_prefix: spec.key_prefix.clone(),
-                key_suffix: spec.key_suffix.clone(),
-                field_number: spec.field_number,
-                source_evidence: spec.source_evidence.clone(),
+                api: state.api.clone(),
+                codec: spec.codec,
+                unordered_paths: spec.unordered_paths.clone(),
+                unordered_joined_string_paths: spec.unordered_joined_string_paths.clone(),
+                evidence,
             })?,
-        ));
+        )));
     }
     let kind = parse_rule_kind(&record.kind)?;
     let policy_path = target_root.join(".traffic-e2e/verification.yaml");
@@ -330,7 +286,7 @@ fn build_plan(
             .is_some_and(|issue| issue.kind == super::model::RewriteIssueKind::Comparison)
     {
         let comparison_run = comparison_run.context("comparison rule requires a comparison run")?;
-        return Ok(VerificationRulePlan::Response(
+        return Ok(VerificationRulePlan::Response(Box::new(
             plan_comparison_response_rule(ComparisonResponseRuleFeedback {
                 policy_path,
                 kind,
@@ -341,7 +297,7 @@ fn build_plan(
                 target_example: record.target_example.clone(),
                 comparison_report: comparison_run.join("comparison-report.json"),
             })?,
-        ));
+        )));
     }
     let case_source = state
         .case_source
@@ -359,8 +315,8 @@ fn build_plan(
         },
         api,
     )?;
-    Ok(VerificationRulePlan::Response(plan_response_rule(
-        ResponseRuleFeedback {
+    Ok(VerificationRulePlan::Response(Box::new(
+        plan_response_rule(ResponseRuleFeedback {
             policy_path,
             kind,
             api: state.api.clone(),
@@ -370,8 +326,8 @@ fn build_plan(
             target_example: record.target_example.clone(),
             assertion_report: evidence.assertions,
             aggregate_report: evidence.aggregate,
-        },
-    )?))
+        })?,
+    )))
 }
 
 fn pending_plan_for_apply(state: &RewriteState, plan_id: &str) -> Result<RewriteRulePlanRecord> {
@@ -418,52 +374,35 @@ fn validate_plan_evidence(
     Ok(())
 }
 
-fn validate_memcached_plan_evidence(
+fn validate_response_body_plan_evidence(
     target_root: &Path,
     state: &RewriteState,
     issue_id: &str,
     evidence_id: &str,
-    port: u16,
+    codec: ResponseBodyCodec,
 ) -> Result<()> {
     if state.rule_plan.as_ref().is_some_and(|plan| {
         plan.issue_id == issue_id
             && plan.evidence_id == evidence_id
             && plan
-                .memcached_timestamp
+                .response_body
                 .as_ref()
-                .is_some_and(|spec| spec.port == port)
+                .is_some_and(|body| body.codec == codec)
     }) {
         return Ok(());
     }
+
     let valid = evidence::commands(target_root, state)
         .into_iter()
         .filter_map(|command| evidence::query(target_root, state, &command.query_id).ok())
         .any(|report| {
             report.evidence_id == evidence_id
-                && report.query == "dirty_clusters"
-                && report
-                    .facts
-                    .get("clusters")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .any(|cluster| {
-                        cluster.get("protocol").and_then(Value::as_str) == Some("memcached")
-                            && cluster.pointer("/endpoint/port").and_then(Value::as_u64)
-                                == Some(u64::from(port))
-                            && cluster
-                                .get("operations")
-                                .and_then(Value::as_object)
-                                .is_some_and(|operations| {
-                                    operations
-                                        .keys()
-                                        .any(|operation| operation.eq_ignore_ascii_case("set"))
-                                })
-                    })
+                && report.query == "representatives"
+                && evidence::supports_response_body_codec(&report.facts, codec)
         });
     ensure!(
         valid,
-        "Memcached timestamp-rule evidence is stale, does not describe a SET on port {port}, or belongs to another issue"
+        "response-body evidence is stale, belongs to another issue, or does not support the selected codec"
     );
     Ok(())
 }
@@ -484,37 +423,12 @@ fn project_response_report(report: &crate::ResponseRuleReport) -> Result<Value> 
     }))
 }
 
-fn project_memcached_report(report: &crate::MemcachedTimestampRuleReport) -> Value {
+fn project_body_report(report: &crate::ResponseBodyRuleReport) -> Value {
     json!({
-        "kind": "memcached_protobuf_timestamp",
-        "requested_rule_id": report.requested_rule_id,
-        "effective_rule_id": report.effective_rule_id,
-        "resource": {
-            "kind": report.resource_kind,
-            "port": report.port,
-        },
-        "command": report.command,
-        "key": {
-            "prefix": report.key_prefix,
-            "suffix": report.key_suffix,
-            "numeric_middle_required": true,
-        },
-        "protobuf_field_number": report.protobuf_field_number,
-        "mechanism": report.mechanism,
-        "fixed_tolerance_seconds": report.fixed_tolerance_seconds,
-        "reused_existing": report.reused_existing,
-        "changed": report.changed,
-        "applied": report.applied,
-        "diff": report.diff,
-    })
-}
-
-fn project_motan_report(report: &crate::MotanRuleReport) -> Value {
-    json!({
-        "kind": "motan",
+        "kind": "response_body",
         "api": report.api,
         "rule_id": report.rule_id,
-        "protocol": report.protocol,
+        "body_codec": report.codec,
         "matching_cases": report.matching_cases,
         "selected_difference_cases": report.selected_difference_cases,
         "discovered_unordered_paths": report.discovered_unordered_paths,
@@ -524,7 +438,7 @@ fn project_motan_report(report: &crate::MotanRuleReport) -> Value {
         // when this run found no candidate.
         "discovered_unordered_joined_string_paths": report.discovered_unordered_joined_string_paths,
         "effective_unordered_joined_string_paths": report.effective_unordered_joined_string_paths,
-        "offline_comparison": report.offline_comparison,
+        "offline_verification": report.offline_verification,
         "order_only": report.order_only,
         "changed": report.changed,
         "applied": report.applied,

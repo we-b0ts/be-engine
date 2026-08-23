@@ -148,7 +148,7 @@ impl ReplayState {
                 } else if Some(recorded_sql) != normalized_sql {
                     continue;
                 } else if params_match(exchange.record.params.as_deref(), params) {
-                    PolicyDecision::default()
+                    DependencyRuleDecision::default()
                 } else {
                     continue;
                 };

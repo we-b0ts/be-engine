@@ -89,7 +89,7 @@ impl ReplayReport {
             || self
                 .replay_policy
                 .as_ref()
-                .is_some_and(|policy| !policy.unused_applicable_rule_ids.is_empty())
+                .is_some_and(|policy| !policy.unused_applicable_dependency_rule_ids.is_empty())
     }
 
     pub(in crate::replay) fn case_is_dirty(&self, case_id: &str) -> bool {

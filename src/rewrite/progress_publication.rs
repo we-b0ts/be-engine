@@ -7,16 +7,21 @@ use super::model::{RewriteApiStatus, RewritePhase, RewriteState};
 use crate::verification_progress::{self, VerificationStage};
 
 const PUBLIC_PROGRESS: &str = ".traffic-e2e/progress.yaml";
+const MANAGED_DELIVERY_PATHS: &[&str] = &[
+    ".traffic-e2e/coordinator-rules.yaml",
+    ".traffic-e2e/verification.yaml",
+    PUBLIC_PROGRESS,
+];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum PublicationState {
     SynchronizationRequired,
-    CommitRequired,
+    CommitRequired(Vec<String>),
     Published,
 }
 
-pub(super) fn public_paths() -> [&'static str; 1] {
-    [PUBLIC_PROGRESS]
+pub(super) fn managed_delivery_paths() -> &'static [&'static str] {
+    MANAGED_DELIVERY_PATHS
 }
 
 pub(super) fn state(target_root: &Path, state: &RewriteState) -> Option<PublicationState> {
@@ -55,30 +60,40 @@ fn inspect(target_root: &Path) -> Result<PublicationState> {
     if report.requires_persistence() {
         return Ok(PublicationState::SynchronizationRequired);
     }
-    if git_has_uncommitted_progress(target_root)? {
-        Ok(PublicationState::CommitRequired)
-    } else {
+    let uncommitted = git_uncommitted_managed_delivery_paths(target_root)?;
+    if uncommitted.is_empty() {
         Ok(PublicationState::Published)
+    } else {
+        Ok(PublicationState::CommitRequired(uncommitted))
     }
 }
 
-fn git_has_uncommitted_progress(target_root: &Path) -> Result<bool> {
-    let relative_paths = public_paths();
+fn git_uncommitted_managed_delivery_paths(target_root: &Path) -> Result<Vec<String>> {
+    let mut uncommitted = Vec::new();
+    for relative_path in managed_delivery_paths() {
+        if git_has_uncommitted_path(target_root, relative_path)? {
+            uncommitted.push((*relative_path).to_string());
+        }
+    }
+    Ok(uncommitted)
+}
+
+fn git_has_uncommitted_path(target_root: &Path, relative_path: &str) -> Result<bool> {
     let output = Command::new("git")
         .arg("-C")
         .arg(target_root)
         .args(["status", "--porcelain=v1", "--untracked-files=normal", "--"])
-        .args(relative_paths)
+        .arg(relative_path)
         .output()
         .with_context(|| {
             format!(
-                "failed to inspect final verification progress in {}",
+                "failed to inspect coordinator-managed delivery file {relative_path:?} in {}",
                 target_root.display()
             )
         })?;
     ensure!(
         output.status.success(),
-        "git status failed while inspecting final verification progress in {}",
+        "git status failed while inspecting coordinator-managed delivery file {relative_path:?} in {}",
         target_root.display()
     );
     Ok(!output.stdout.is_empty())
@@ -114,7 +129,9 @@ mod tests {
         write_progress(target.path(), &["replay-1", "comparison-1", "replay-2"]);
         assert_eq!(
             super::state(target.path(), &state),
-            Some(PublicationState::CommitRequired)
+            Some(PublicationState::CommitRequired(vec![
+                PUBLIC_PROGRESS.to_string()
+            ]))
         );
         let commit_action =
             serde_json::to_value(super::super::action::for_state(target.path(), &state)).unwrap();
@@ -148,7 +165,9 @@ mod tests {
         );
         assert_eq!(
             super::state(target.path(), &state),
-            Some(PublicationState::CommitRequired)
+            Some(PublicationState::CommitRequired(vec![
+                PUBLIC_PROGRESS.to_string()
+            ]))
         );
 
         git(target.path(), &["add", ".traffic-e2e/progress.yaml"]);
@@ -159,6 +178,43 @@ mod tests {
             serde_json::to_value(published).unwrap()["action"]["kind"],
             "complete"
         );
+    }
+
+    #[test]
+    fn final_commit_includes_every_dirty_coordinator_managed_delivery_file() {
+        let target = tempfile::tempdir().unwrap();
+        git(target.path(), &["init"]);
+        git(target.path(), &["config", "user.email", "test@example.com"]);
+        git(target.path(), &["config", "user.name", "Traffic E2E Test"]);
+        fs::write(target.path().join(".gitignore"), "/.traffic-e2e/local/\n").unwrap();
+        write_managed_delivery_files(target.path(), "baseline");
+        write_progress(target.path(), &["replay-1", "comparison-1"]);
+        git(target.path(), &["add", "."]);
+        git(target.path(), &["commit", "-m", "baseline delivery files"]);
+
+        write_managed_delivery_files(target.path(), "updated");
+        write_progress(target.path(), &["replay-1", "comparison-1", "replay-2"]);
+        let state = complete_state();
+        let expected = managed_delivery_paths()
+            .iter()
+            .map(|path| (*path).to_string())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            super::state(target.path(), &state),
+            Some(PublicationState::CommitRequired(expected.clone()))
+        );
+
+        let action =
+            serde_json::to_value(super::super::action::for_state(target.path(), &state)).unwrap();
+        assert_eq!(
+            action.pointer("/action/details/required"),
+            Some(&serde_json::json!(expected))
+        );
+        assert_eq!(action["terminal_allowed"], false);
+
+        git(target.path(), &["add", "."]);
+        git(target.path(), &["commit", "-m", "publish delivery files"]);
+        assert!(super::super::action::for_state(target.path(), &state).terminal_allowed);
     }
 
     fn complete_state() -> RewriteState {
@@ -199,6 +255,17 @@ mod tests {
                 .unwrap();
         }
         write(&path, &report).unwrap();
+    }
+
+    fn write_managed_delivery_files(target_root: &Path, contents: &str) {
+        let root = target_root.join(".traffic-e2e");
+        fs::create_dir_all(&root).unwrap();
+        for path in managed_delivery_paths() {
+            if *path == PUBLIC_PROGRESS {
+                continue;
+            }
+            fs::write(target_root.join(path), format!("{contents}: {path}\n")).unwrap();
+        }
     }
 
     fn git(target_root: &Path, args: &[&str]) {
