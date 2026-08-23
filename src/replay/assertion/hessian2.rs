@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail, ensure};
 use motan_hessian2::{ClassId, Decoder, Limits, TypeId, ValueKind};
 
 use super::binary_body::{BodyEnvelope, simple_payload};
+use super::joined_string;
 use super::model::{Hessian2BodyDifference, Hessian2BodyDifferenceKind};
 use crate::config::DEFAULT_BODY_LIMIT_BYTES;
 use crate::replay::policy::{Hessian2JoinedStringPath, Hessian2UnorderedPath, Hessian2ValuePath};
@@ -13,11 +14,6 @@ use crate::replay::policy::{Hessian2JoinedStringPath, Hessian2UnorderedPath, Hes
 const MAX_NODES: usize = 1_000_000;
 const MAX_DISCOVERED_PATHS: usize = 32;
 const MAX_DIFFERENCES: usize = 32;
-
-/// Separators tried when discovering joined-string candidates. Kept to the
-/// common Set-join separators in this business; extend only when a real case
-/// appears.
-const JOINED_STRING_SEPARATORS: [&str; 3] = [",", ";", "|"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Hessian2OrderDiscovery {
@@ -431,10 +427,7 @@ fn canonicalize_joined_string(
         let HessianValue::String(text) = value else {
             bail!("joined-string path does not select a Hessian2 string");
         };
-        let mut parts = text.split(separator).collect::<Vec<_>>();
-        parts.sort_unstable();
-        let canonical = parts.join(separator);
-        *text = Cow::Owned(canonical);
+        *text = Cow::Owned(joined_string::canonicalize(text, separator));
         return Ok(true);
     };
     match value {
@@ -474,7 +467,7 @@ fn discover_paths(
     discovered: &mut BTreeSet<Hessian2ValuePath>,
     joined_string: &mut BTreeSet<(Hessian2ValuePath, String)>,
 ) {
-    if discovered.len() >= MAX_DISCOVERED_PATHS || expected == actual {
+    if discovered.len() + joined_string.len() >= MAX_DISCOVERED_PATHS || expected == actual {
         return;
     }
     match (expected, actual) {
@@ -547,20 +540,11 @@ fn discover_paths(
             }
         }
         (HessianValue::String(expected), HessianValue::String(actual)) => {
-            for separator in JOINED_STRING_SEPARATORS {
-                let mut expected_parts = expected.split(separator).collect::<Vec<_>>();
-                let mut actual_parts = actual.split(separator).collect::<Vec<_>>();
-                // A separator that does not appear in either string yields a
-                // single-element split on both sides, which trivially compares
-                // equal — ignore those to avoid spurious candidates.
-                if expected_parts.len() < 2 && actual_parts.len() < 2 {
-                    continue;
+            for separator in joined_string::matching_discovery_separators(expected, actual) {
+                if discovered.len() + joined_string.len() >= MAX_DISCOVERED_PATHS {
+                    return;
                 }
-                expected_parts.sort_unstable();
-                actual_parts.sort_unstable();
-                if expected_parts == actual_parts {
-                    joined_string.insert((Hessian2ValuePath(path.clone()), separator.to_string()));
-                }
+                joined_string.insert((Hessian2ValuePath(path.clone()), separator));
             }
         }
         _ => {}

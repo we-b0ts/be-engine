@@ -6,7 +6,7 @@ use anyhow::{Context, Result, ensure};
 use hyper::http::{Method, Uri, uri::Authority};
 use serde::{Deserialize, Serialize};
 
-use super::CoordinatorRulesConfig;
+use super::SourceTrafficPolicyConfig;
 use super::edit::write_atomic;
 use super::process_owned_dependencies::{self, BackgroundDependencyRuleConfig};
 use super::rule_document::whole_file_diff;
@@ -151,7 +151,7 @@ pub(super) fn plan_rule_config(
 ) -> Result<RuleConfigPlan> {
     ensure_regular_rules_file(rules_path)?;
     let original = read_file(rules_path, "process-owned rules")?;
-    let mut config = CoordinatorRulesConfig::parse(&original, rules_path)?;
+    let mut config = SourceTrafficPolicyConfig::parse(&original, rules_path)?;
     let mut rules = std::mem::take(&mut config.process_owned_dependencies);
     let requested_name = requested.name().to_string();
     let reused = rules

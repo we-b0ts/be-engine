@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::HttpGatewayRuleConfig;
 use super::edit::write_atomic;
 use super::rule_document::whole_file_diff;
-use super::{AppConfig, CoordinatorRulesConfig};
+use super::{AppConfig, SourceTrafficPolicyConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -93,7 +93,7 @@ impl CasePathPatternPlan {
         let current_rules = fs::read_to_string(&self.rules_path)?;
         ensure!(
             current_rules == self.original_rules,
-            "coordinator rules changed after planning; rerun plan before applying"
+            "source traffic policy changed after planning; rerun plan before applying"
         );
 
         if self.report.changed {
@@ -116,7 +116,7 @@ pub fn plan_case_path_pattern_feedback(
     let original_rules = fs::read_to_string(&feedback.rules_path)
         .with_context(|| format!("failed to read {}", feedback.rules_path.display()))?;
     let mut static_config = AppConfig::load_static(&feedback.project_config_path)?;
-    let mut rules = CoordinatorRulesConfig::parse(&original_rules, &feedback.rules_path)?;
+    let mut rules = SourceTrafficPolicyConfig::parse(&original_rules, &feedback.rules_path)?;
 
     let requested = feedback
         .patterns

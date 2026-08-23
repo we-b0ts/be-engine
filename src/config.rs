@@ -18,7 +18,6 @@ mod background_redis_feedback;
 mod breeze_capture_feedback;
 mod case_limits;
 mod comparison_recording;
-pub(crate) mod coordinator_rules;
 mod dns;
 pub(crate) mod edit;
 mod feedback;
@@ -32,6 +31,7 @@ mod recording;
 mod repository_initialization;
 mod repository_protocol;
 mod rule_document;
+pub(crate) mod source_traffic_policy;
 
 pub use allowed_unused_http::{
     AllowedUnusedHttpHostFeedback, AllowedUnusedHttpHostPlan, AllowedUnusedHttpHostReport,
@@ -60,9 +60,6 @@ pub use breeze_capture_feedback::{
 };
 pub use case_limits::HttpGatewayCaseLimitsConfig;
 pub use comparison_recording::ComparisonRecordingConfig;
-pub use coordinator_rules::{
-    COORDINATOR_RULES_FILE, CoordinatorBreezeCaptureConfig, CoordinatorRulesConfig,
-};
 pub use dns::{DnsBypassStrategyConfig, DnsMockConfig};
 pub use feedback::{
     CasePathPatternAuthority, CasePathPatternFeedback, CasePathPatternPlan, CasePathPatternReport,
@@ -85,6 +82,9 @@ pub use repository_initialization::{
 };
 pub use repository_protocol::{
     MotanProtocolConfigOptions, MotanProtocolConfigResult, enable_repository_motan_protocol,
+};
+pub use source_traffic_policy::{
+    SOURCE_TRAFFIC_POLICY_FILE, SourceTrafficBreezeCaptureConfig, SourceTrafficPolicyConfig,
 };
 pub const DEFAULT_DNS_MOCK_PORT: u16 = 4_053;
 pub const DEFAULT_TCP_GATEWAY_PORT: u16 = 4_001;
@@ -243,18 +243,18 @@ impl AppConfig {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config {}", path.display()))?;
         let mut config = Self::parse_static(path, &raw)?;
-        let reference: ProjectRulesReferenceDocument =
+        let reference: ProjectPolicyReferenceDocument =
             serde_yaml::from_str(&raw).with_context(|| {
                 format!(
-                    "failed to parse project rule reference from {}",
+                    "failed to parse project policy reference from {}",
                     path.display()
                 )
             })?;
-        let rules_path = coordinator_rules::resolve_from_project_config(
+        let rules_path = source_traffic_policy::resolve_from_project_config(
             path,
-            &reference.project.recording.coordinator_rules,
+            &reference.project.recording.source_traffic_policy,
         )?;
-        let rules = CoordinatorRulesConfig::load(rules_path)?;
+        let rules = SourceTrafficPolicyConfig::load(rules_path)?;
         rules.apply_to(&mut config)?;
         config
             .validate()
@@ -405,8 +405,8 @@ impl AppConfig {
 }
 
 #[derive(Debug, Deserialize)]
-struct ProjectRulesReferenceDocument {
-    project: ProjectRulesReference,
+struct ProjectPolicyReferenceDocument {
+    project: ProjectPolicyReference,
 }
 
 #[derive(Debug, Deserialize)]
@@ -415,13 +415,13 @@ struct RecorderConfigDocument {
 }
 
 #[derive(Debug, Deserialize)]
-struct ProjectRulesReference {
-    recording: ProjectRecordingRulesReference,
+struct ProjectPolicyReference {
+    recording: ProjectRecordingPolicyReference,
 }
 
 #[derive(Debug, Deserialize)]
-struct ProjectRecordingRulesReference {
-    coordinator_rules: PathBuf,
+struct ProjectRecordingPolicyReference {
+    source_traffic_policy: PathBuf,
 }
 
 impl Default for HttpConfig {
@@ -580,11 +580,11 @@ mod tests {
     }
 
     #[test]
-    fn loads_example_coordinator_rules() {
+    fn loads_example_source_traffic_policy() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("config")
-            .join("coordinator-rules.example.yaml");
-        CoordinatorRulesConfig::load(path).unwrap();
+            .join("source-traffic-policy.example.yaml");
+        SourceTrafficPolicyConfig::load(path).unwrap();
     }
 
     #[test]

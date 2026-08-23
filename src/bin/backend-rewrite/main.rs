@@ -7,7 +7,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use tracing_subscriber::EnvFilter;
 use traffic_e2e::{
-    Hessian2JoinedStringPath, RecordingApi, ResponseBodyCodec, ResponseBodyUnorderedPath,
+    RecordingApi, ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath,
     ResponseRuleKind, RewriteCaseDependenciesOptions, RewriteContext, RewriteNextOptions,
     RewriteRecordingKind, RewriteRecordingReason, RewriteRecordingRequestOptions,
     RewriteRevalidationRequestOptions, RewriteRouteCause, RewriteRouteOptions,
@@ -195,7 +195,9 @@ fn parse_response_body_unordered_path(value: &str) -> Result<ResponseBodyUnorder
     serde_json::from_str(value).map_err(|error| format!("invalid unordered path JSON: {error}"))
 }
 
-fn parse_hessian2_joined_string_path(value: &str) -> Result<Hessian2JoinedStringPath, String> {
+fn parse_response_body_joined_string_path(
+    value: &str,
+) -> Result<ResponseBodyJoinedStringPath, String> {
     serde_json::from_str(value).map_err(|error| format!("invalid joined-string path JSON: {error}"))
 }
 
@@ -232,10 +234,12 @@ struct RulePlanArgs {
     source_example: Option<String>,
     #[arg(long)]
     target_example: Option<String>,
+    #[arg(long, required_if_eq("kind", "unordered-joined-string"))]
+    separator: Option<String>,
     #[arg(long = "unordered-path", value_parser = parse_response_body_unordered_path)]
     unordered_paths: Vec<ResponseBodyUnorderedPath>,
-    #[arg(long = "unordered-joined-string-path", value_parser = parse_hessian2_joined_string_path)]
-    unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
+    #[arg(long = "unordered-joined-string-path", value_parser = parse_response_body_joined_string_path)]
+    unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
 }
 
 #[derive(Debug, Args)]
@@ -250,6 +254,7 @@ enum RuleKindArg {
     Uuid,
     Random,
     Unordered,
+    UnorderedJoinedString,
     Counter,
 }
 
@@ -524,6 +529,7 @@ async fn run(cli: Cli) -> Result<()> {
                         source_evidence: args.source_evidence,
                         source_example: args.source_example,
                         target_example: args.target_example,
+                        separator: args.separator,
                         unordered_paths: args.unordered_paths,
                         unordered_joined_string_paths: args.unordered_joined_string_paths,
                     },
@@ -637,6 +643,7 @@ impl From<RuleKindArg> for ResponseRuleKind {
             RuleKindArg::Uuid => Self::Uuid,
             RuleKindArg::Random => Self::Random,
             RuleKindArg::Unordered => Self::Unordered,
+            RuleKindArg::UnorderedJoinedString => Self::UnorderedJoinedString,
             RuleKindArg::Counter => Self::Counter,
         }
     }

@@ -659,8 +659,8 @@ pub(super) fn begin_pending_capture_refresh(
         "project config changed after scheduling the recording refresh; re-plan the affected rule"
     );
     ensure!(
-        super::fingerprint::coordinator_rules_revision(target_root)?
-            == refresh.coordinator_rules_revision,
+        super::fingerprint::source_traffic_policy_revision(target_root)?
+            == refresh.source_traffic_policy_revision,
         "process-owned rules changed after scheduling the recording refresh; re-plan the affected rule"
     );
     let run_id = artifacts::allocate_run_id_excluding(
@@ -914,10 +914,8 @@ mod tests {
                 target.path(),
             )
             .unwrap(),
-            coordinator_rules_revision: super::super::fingerprint::coordinator_rules_revision(
-                target.path(),
-            )
-            .unwrap(),
+            source_traffic_policy_revision:
+                super::super::fingerprint::source_traffic_policy_revision(target.path()).unwrap(),
             recording_run_id: None,
         });
 

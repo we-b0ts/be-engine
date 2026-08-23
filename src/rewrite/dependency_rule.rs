@@ -613,18 +613,18 @@ pub(super) fn schedule_cache_snapshot_refresh(
         "a full recording refresh has already started; wait for it to finish before applying another dependency rule"
     );
     let config_revision = fingerprint::project_config_revision(target_root)?;
-    let rules_revision = fingerprint::coordinator_rules_revision(target_root)?;
+    let rules_revision = fingerprint::source_traffic_policy_revision(target_root)?;
     let refresh = state
         .recording_refresh
         .get_or_insert_with(|| RewriteRecordingRefreshState {
             applied: Vec::new(),
             dependency_rules: Vec::new(),
             project_config_revision: config_revision.clone(),
-            coordinator_rules_revision: rules_revision.clone(),
+            source_traffic_policy_revision: rules_revision.clone(),
             recording_run_id: None,
         });
     refresh.project_config_revision = config_revision;
-    refresh.coordinator_rules_revision = rules_revision;
+    refresh.source_traffic_policy_revision = rules_revision;
     if !refresh
         .dependency_rules
         .iter()
@@ -780,7 +780,7 @@ fn build_plan(
     .replay;
     let rules_path = target_root
         .join(crate::repository::TRAFFIC_E2E_ROOT)
-        .join(crate::config::COORDINATOR_RULES_FILE);
+        .join(crate::config::SOURCE_TRAFFIC_POLICY_FILE);
     match &record.spec {
         RewriteDependencyRuleSpec::Http {
             authority,

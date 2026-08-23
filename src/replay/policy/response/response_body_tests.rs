@@ -147,25 +147,25 @@ hessian2:
 }
 
 #[test]
-fn rejects_joined_string_rules_on_protobuf() {
-    let error = serde_yaml::from_str::<ResponseRules>(
+fn accepts_reviewable_protobuf_joined_string_paths() {
+    let rules = serde_yaml::from_str::<ResponseRules>(
         r#"
 protobuf:
   "MOTAN /rpc/example":
     unordered_joined_string:
-      - value_path: [result, whiteList]
+      - field_path: [3, 1]
         display_path: cache_result.white_list
+        field_type: string
         separator: ","
         source_evidence: src/cache.rs:white_list is set-joined
 "#,
     )
-    .unwrap_err();
+    .unwrap();
 
-    assert!(
-        error
-            .to_string()
-            .contains("unknown field `unordered_joined_string`")
-    );
+    validate_response_rules(&rules).unwrap();
+    let joined = &rules.protobuf["MOTAN /rpc/example"].unordered_joined_string[0];
+    assert_eq!(joined.field_path.display_path(), "3.1");
+    assert_eq!(joined.field_type, ProtobufJoinedStringFieldType::String);
 }
 
 #[test]

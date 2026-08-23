@@ -524,7 +524,7 @@ mod tests {
             replay_startup_timeout: Duration::from_secs(1),
             pr_base: "dev-migration".to_string(),
             recorder_config: "project.yaml".into(),
-            coordinator_rules: "coordinator-rules.yaml".into(),
+            source_traffic_policy: "source-traffic-policy.yaml".into(),
             runner_owned_response_assertions: true,
         }
     }

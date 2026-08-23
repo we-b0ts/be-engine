@@ -128,7 +128,7 @@ pub(super) fn run(target_root: PathBuf, args: RecorderArgs) -> Result<()> {
 
 fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
     let project = project_path(&target_root);
-    let rules = coordinator_rules_path(&target_root);
+    let rules = source_traffic_policy_path(&target_root);
     match strategy {
         PlanStrategy::AllowedUnusedHttpHosts(args) => {
             let plan =
@@ -151,7 +151,7 @@ fn plan(target_root: PathBuf, strategy: PlanStrategy) -> Result<()> {
 
 fn apply(target_root: PathBuf, strategy: ApplyStrategy) -> Result<()> {
     let project = project_path(&target_root);
-    let rules = coordinator_rules_path(&target_root);
+    let rules = source_traffic_policy_path(&target_root);
     match strategy {
         ApplyStrategy::AllowedUnusedHttpHosts(args) => {
             let report =
@@ -195,10 +195,10 @@ fn project_path(target_root: &std::path::Path) -> PathBuf {
     target_root.join(".traffic-e2e/project.yaml")
 }
 
-fn coordinator_rules_path(target_root: &std::path::Path) -> PathBuf {
+fn source_traffic_policy_path(target_root: &std::path::Path) -> PathBuf {
     target_root
         .join(".traffic-e2e")
-        .join("coordinator-rules.yaml")
+        .join("source-traffic-policy.yaml")
 }
 
 fn allowed_unused_feedback(

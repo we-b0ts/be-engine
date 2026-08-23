@@ -6,6 +6,7 @@ use serde::Deserialize;
 use super::super::response::{
     ResponseBodyCodec, ResponseRuleKind, ResponseRules, response_locations_overlap,
 };
+use crate::replay::JsonJoinedStringCandidate;
 use crate::replay::ResponseGatewayProtocol;
 
 #[derive(Debug, Deserialize)]
@@ -81,15 +82,37 @@ pub(super) struct ResponseCaseEvidence {
     #[serde(default)]
     unordered_candidates: Vec<String>,
     #[serde(default)]
+    unordered_joined_string_candidates: Vec<JsonJoinedStringCandidate>,
+    #[serde(default)]
+    applied_unordered_joined_string_rule_ids: Vec<String>,
+    #[serde(default)]
     applied_counter_rule_ids: Vec<String>,
 }
 
 impl ResponseCaseEvidence {
-    pub(super) fn candidates(&self, kind: ResponseRuleKind) -> &[String] {
+    pub(super) fn has_candidate(
+        &self,
+        kind: ResponseRuleKind,
+        pointer: &str,
+        separator: Option<&str>,
+    ) -> bool {
         match kind {
-            kind if kind.is_generated() => &self.generated_scalar_candidates,
-            ResponseRuleKind::Unordered => &self.unordered_candidates,
-            ResponseRuleKind::Counter => &[],
+            kind if kind.is_generated() => self
+                .generated_scalar_candidates
+                .iter()
+                .any(|candidate| candidate == pointer),
+            ResponseRuleKind::Unordered => self
+                .unordered_candidates
+                .iter()
+                .any(|candidate| candidate == pointer),
+            ResponseRuleKind::UnorderedJoinedString => self
+                .unordered_joined_string_candidates
+                .iter()
+                .any(|candidate| {
+                    candidate.pointer == pointer
+                        && separator.is_some_and(|separator| candidate.separator == separator)
+                }),
+            ResponseRuleKind::Counter => false,
             _ => unreachable!("all response rule kinds are covered"),
         }
     }
@@ -98,6 +121,9 @@ impl ResponseCaseEvidence {
         match kind {
             kind if kind.is_generated() => &self.applied_generated_rule_ids,
             ResponseRuleKind::Unordered => &self.applied_unordered_rule_ids,
+            ResponseRuleKind::UnorderedJoinedString => {
+                &self.applied_unordered_joined_string_rule_ids
+            }
             ResponseRuleKind::Counter => &self.applied_counter_rule_ids,
             _ => unreachable!("all response rule kinds are covered"),
         }
@@ -142,6 +168,11 @@ pub(super) fn difference_supports_rule(
                 && difference.expected_type.as_deref() == Some("array")
                 && difference.actual_type.as_deref() == Some("array")
         }
+        ResponseRuleKind::UnorderedJoinedString => {
+            difference.kind == "value_mismatch"
+                && difference.expected_type.as_deref() == Some("string")
+                && difference.actual_type.as_deref() == Some("string")
+        }
         ResponseRuleKind::Counter => {
             difference.kind == "value_mismatch"
                 && difference.expected_type == difference.actual_type
@@ -159,6 +190,7 @@ pub(super) fn response_rule_exists(
     kind: ResponseRuleKind,
     api: &str,
     pointer: &str,
+    separator: Option<&str>,
 ) -> bool {
     let Some(api_rules) = rules.json.get(api) else {
         return false;
@@ -171,6 +203,12 @@ pub(super) fn response_rule_exists(
             .unordered
             .iter()
             .any(|field| field.pointer == pointer),
+        ResponseRuleKind::UnorderedJoinedString => {
+            api_rules.unordered_joined_string.iter().any(|field| {
+                field.pointer == pointer
+                    && separator.is_some_and(|separator| field.separator == separator)
+            })
+        }
         ResponseRuleKind::Counter => api_rules
             .counter
             .iter()

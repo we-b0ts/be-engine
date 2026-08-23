@@ -14,11 +14,12 @@ use serde_json::json;
 use tempfile::tempdir;
 use traffic_e2e::{
     ComparisonVerificationClassification, ComparisonVerificationOptions, Hessian2UnorderedPath,
-    Hessian2ValuePath, MatchedSourceObservation, ProtobufFieldPath, ProtobufRepeatedElementType,
-    ProtobufUnorderedPath, ResponseBodyCodec, ResponseBodyDifferenceDetail,
-    ResponseBodyRuleEvidence, ResponseBodyRuleFeedback, ResponseBodyUnorderedPath,
-    ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind, plan_response_body_rule,
-    verify_comparison_recording,
+    Hessian2ValuePath, MatchedSourceObservation, ProtobufFieldPath, ProtobufJoinedStringFieldType,
+    ProtobufJoinedStringPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
+    ResponseBodyCodec, ResponseBodyDifferenceDetail, ResponseBodyJoinedStringCandidate,
+    ResponseBodyJoinedStringPath, ResponseBodyRuleEvidence, ResponseBodyRuleFeedback,
+    ResponseBodyUnorderedPath, ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind,
+    plan_response_body_rule, verify_comparison_recording,
 };
 
 #[test]
@@ -261,6 +262,112 @@ fn protobuf_response_body_rule_reuses_comparison_bodies_for_offline_verification
     assert!(updated.contains("field_path:"));
     assert!(updated.contains("display_path: rule_collection.white_list"));
     assert!(updated.contains("element_type: string"));
+}
+
+#[test]
+fn protobuf_joined_string_rule_reuses_comparison_bodies_for_offline_verification() {
+    fn joined_string(value: &[u8]) -> Vec<u8> {
+        let mut payload = vec![0x1a, value.len() as u8];
+        payload.extend_from_slice(value);
+        let mut body = vec![3];
+        body.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        body.extend(payload);
+        body
+    }
+
+    let temp = tempdir().unwrap();
+    let run = create_run(temp.path(), json!("unused"), json!("unused"));
+    let case = run.join("apis/api-token/00000000-0000-4000-8000-000000000001");
+    fs::write(
+        case.join("request.json"),
+        serde_json::to_vec(&json!({
+            "protocol": "motan",
+            "protocol_version": "motan2",
+            "method": "MOTAN",
+            "uri": "/rpc/example",
+            "api_pattern": "/rpc/example",
+            "api_key": "motan:test/example#method()"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    write_binary_response(
+        &case.join("expected-response.json"),
+        200,
+        &joined_string(b"alice,,bob,alice"),
+    );
+    write_binary_response(
+        &case.join("response.json"),
+        200,
+        &joined_string(b"alice,bob,alice,"),
+    );
+    let policy = temp.path().join("verification.yaml");
+    fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    let report_path = run.join("comparison-report.json");
+    let initial = verify_comparison_recording(ComparisonVerificationOptions {
+        case_source: run,
+        policy: policy.clone(),
+        report: report_path.clone(),
+    })
+    .unwrap();
+    assert!(matches!(
+        &initial.cases[0]
+            .response
+            .as_ref()
+            .unwrap()
+            .body_diagnosis
+            .as_ref()
+            .unwrap()
+            .unordered_joined_string_candidates[0],
+        ResponseBodyJoinedStringCandidate::Protobuf(candidate)
+            if candidate.field_path == ProtobufFieldPath(vec![3])
+                && candidate.separator == ","
+    ));
+
+    plan_response_body_rule(ResponseBodyRuleFeedback {
+        policy_path: policy.clone(),
+        api: "MOTAN /rpc/example".to_string(),
+        codec: ResponseBodyCodec::Protobuf,
+        unordered_paths: Vec::new(),
+        unordered_joined_string_paths: Vec::new(),
+        evidence: ResponseBodyRuleEvidence::Comparison {
+            comparison_report: report_path.clone(),
+        },
+    })
+    .unwrap()
+    .apply()
+    .unwrap();
+
+    let applied = plan_response_body_rule(ResponseBodyRuleFeedback {
+        policy_path: policy.clone(),
+        api: "MOTAN /rpc/example".to_string(),
+        codec: ResponseBodyCodec::Protobuf,
+        unordered_paths: Vec::new(),
+        unordered_joined_string_paths: vec![ResponseBodyJoinedStringPath::Protobuf(
+            ProtobufJoinedStringPath {
+                field_path: ProtobufFieldPath(vec![3]),
+                display_path: "response.names".to_string(),
+                field_type: ProtobufJoinedStringFieldType::String,
+                separator: ",".to_string(),
+                source_evidence: "src/service.rs:names is set-joined".to_string(),
+            },
+        )],
+        evidence: ResponseBodyRuleEvidence::Comparison {
+            comparison_report: report_path,
+        },
+    })
+    .unwrap()
+    .apply()
+    .unwrap();
+
+    assert!(applied.offline_verification.unwrap().passed);
+    let updated = fs::read_to_string(&policy).unwrap();
+    assert!(updated.contains("unordered_joined_string:"));
+    assert!(updated.contains("field_type: string"));
 }
 
 #[test]

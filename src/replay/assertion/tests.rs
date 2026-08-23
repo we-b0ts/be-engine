@@ -429,6 +429,28 @@ fn motan2_unordered_rule_relaxes_only_business_body_order() {
 }
 
 #[test]
+fn motan2_protobuf_joined_string_rule_relaxes_only_token_order() {
+    let response_rules = "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered_joined_string:\n        - field_path: [3]\n          display_path: response.names\n          field_type: string\n          separator: ','\n          source_evidence: src/service.rs:names is set-joined\n";
+    let expected = protobuf_repeated_strings(&[b"alice,,bob,alice"]);
+    let actual = protobuf_repeated_strings(&[b"alice,bob,alice,"]);
+    let (_temp, options) = write_motan2_case_with_rules(
+        response_rules,
+        Some("3"),
+        Some("1"),
+        "value",
+        "value",
+        &expected,
+        &actual,
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.body_codec, ResponseBodyCodec::Protobuf);
+    assert!(report.differences.is_empty());
+}
+
+#[test]
 fn motan2_unordered_rule_keeps_other_metadata_exact() {
     let response_rules = "response_rules:\n  protobuf:\n    \"MOTAN /rpc/example\":\n      unordered:\n        - field_path: [3]\n          display_path: response.names\n          element_type: string\n          source_evidence: src/service.rs:names is a Set\n";
     let expected = protobuf_repeated_strings(&[b"alice", b"bob"]);
@@ -644,6 +666,62 @@ fn exact_array_reordering_surfaces_an_unordered_candidate() {
     assert_eq!(
         report.differences[0].kind,
         ResponseDifferenceKind::ArrayOrderMismatch
+    );
+}
+
+#[test]
+fn joined_string_reordering_surfaces_a_separator_specific_candidate() {
+    let (_temp, options) = write_case("", json!("alice,,bob,alice"), json!("alice,bob,alice,"));
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(
+        report.unordered_joined_string_candidates,
+        vec![JsonJoinedStringCandidate {
+            pointer: "/content".to_string(),
+            separator: ",".to_string(),
+        }]
+    );
+    assert_eq!(
+        report.differences[0].kind,
+        ResponseDifferenceKind::ValueMismatch
+    );
+}
+
+#[test]
+fn json_joined_string_rule_compares_a_multiset() {
+    let (_temp, options) = write_case(
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered_joined_string:\n        - pointer: /content\n          separator: ','\n          source_evidence: src/service.rs:content is set-joined\n",
+        json!("alice,,bob,alice"),
+        json!("alice,bob,alice,"),
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(report.passed);
+    assert_eq!(report.applied_unordered_joined_string_rule_ids.len(), 1);
+    assert!(
+        report
+            .unused_applicable_unordered_joined_string_rule_ids
+            .is_empty()
+    );
+}
+
+#[test]
+fn json_joined_string_rule_preserves_duplicate_counts() {
+    let (_temp, options) = write_case(
+        "response_rules:\n  json:\n    \"GET /api/resource/token\":\n      unordered_joined_string:\n        - pointer: /content\n          separator: ','\n          source_evidence: src/service.rs:content is set-joined\n",
+        json!("alice,bob,alice"),
+        json!("bob,alice"),
+    );
+
+    let report = assert_recorded_response(options).unwrap();
+
+    assert!(!report.passed);
+    assert_eq!(
+        report.differences[0].kind,
+        ResponseDifferenceKind::UnorderedJoinedStringContentMismatch
     );
 }
 

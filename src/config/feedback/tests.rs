@@ -7,7 +7,7 @@ use super::*;
 
 const PROJECT: &str = r#"project:
   recording:
-    coordinator_rules: coordinator-rules.yaml
+    source_traffic_policy: source-traffic-policy.yaml
 recorder:
   http_gateway:
     enabled: true
@@ -34,7 +34,7 @@ fn feedback(fixture: &Fixture, authority: CasePathPatternAuthority) -> CasePathP
 }
 
 #[test]
-fn focused_feedback_updates_only_coordinator_rules_and_converges() {
+fn focused_feedback_updates_only_source_traffic_policy_and_converges() {
     let fixture = Fixture::new(&["/api/xufei/getone/*"]);
     let plan =
         plan_case_path_pattern_feedback(feedback(&fixture, CasePathPatternAuthority::Focused))
@@ -55,7 +55,7 @@ fn focused_feedback_updates_only_coordinator_rules_and_converges() {
             "/api/xufei/getone/*".to_string()
         ]
     );
-    let rules = CoordinatorRulesConfig::load(&fixture.rules).unwrap();
+    let rules = SourceTrafficPolicyConfig::load(&fixture.rules).unwrap();
     assert_eq!(rules.http.source_revision, "abc123");
 }
 
@@ -158,9 +158,9 @@ impl Fixture {
     fn new(patterns: &[&str]) -> Self {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("project.yaml");
-        let rules_path = temp.path().join("coordinator-rules.yaml");
+        let rules_path = temp.path().join("source-traffic-policy.yaml");
         fs::write(&project, PROJECT).unwrap();
-        let mut rules = CoordinatorRulesConfig::empty();
+        let mut rules = SourceTrafficPolicyConfig::empty();
         rules.http.source_revision = "old".to_string();
         rules.http.case_path_patterns = patterns.iter().map(|value| (*value).to_string()).collect();
         fs::write(&rules_path, rules.render().unwrap()).unwrap();

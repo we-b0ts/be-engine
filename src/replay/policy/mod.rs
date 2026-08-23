@@ -34,7 +34,8 @@ pub(in crate::replay) use report::ReplayPolicyReport;
 pub(crate) use response::response_locations_overlap;
 pub use response::{
     ComparisonSourceMatch, ComparisonVerificationPolicy, Hessian2JoinedStringPath,
-    Hessian2UnorderedPath, Hessian2ValuePath, ProtobufFieldPath, ProtobufRepeatedElementType,
-    ProtobufUnorderedPath, ResponseBodyCodec, ResponseBodyUnorderedPath, ResponseField,
+    Hessian2UnorderedPath, Hessian2ValuePath, ProtobufFieldPath, ProtobufJoinedStringFieldType,
+    ProtobufJoinedStringPath, ProtobufRepeatedElementType, ProtobufUnorderedPath,
+    ResponseBodyCodec, ResponseBodyJoinedStringPath, ResponseBodyUnorderedPath, ResponseField,
     ResponseRuleKind,
 };

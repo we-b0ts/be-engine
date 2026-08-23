@@ -98,7 +98,9 @@ response_settings:
 # `random` keys. Nonces and random salts use `random`; they are business uses,
 # not separate comparison strategies. Every value-relaxing selector persists
 # one-line `source_evidence`; generated scalars and counters also persist
-# distinct redacted source/target examples.
+# distinct redacted source/target examples. JSON, protobuf, and Hessian2 can
+# also use `unordered_joined_string`; each selector requires a separator and
+# source proof, while protobuf additionally requires `field_type: string`.
 response_rules:
   json: {}
   # Motan byte-array responses may declare an API under protobuf or hessian2,

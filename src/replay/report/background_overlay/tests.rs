@@ -186,7 +186,7 @@ impl Fixture {
 
     fn with_redis_exchange(command: &str, key: &str, fields: &[&str]) -> Self {
         let temp = tempdir().unwrap();
-        let config = temp.path().join("coordinator-rules.yaml");
+        let config = temp.path().join("source-traffic-policy.yaml");
         let report = temp.path().join("replay-report.json");
         let case_dir = temp.path().join(CASE_ID);
         fs::create_dir_all(&case_dir).unwrap();
@@ -284,7 +284,7 @@ source_evidence = "fixture background warmup"
             rules: Vec<crate::config::BackgroundDependencyRuleConfig>,
         }
         let parsed: RuleList = toml::from_str(rules).unwrap();
-        let mut document = crate::config::CoordinatorRulesConfig::empty();
+        let mut document = crate::config::SourceTrafficPolicyConfig::empty();
         document.process_owned_dependencies = parsed.rules;
         fs::write(&self.config, document.render().unwrap()).unwrap();
     }

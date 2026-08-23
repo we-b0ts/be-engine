@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use super::edit::write_atomic;
 use super::rule_document::whole_file_diff;
-use super::{AppConfig, CoordinatorRulesConfig, HttpGatewayConfig};
+use super::{AppConfig, HttpGatewayConfig, SourceTrafficPolicyConfig};
 
 const FIELD: &str = "allowed_unused_http_hosts";
 
@@ -51,8 +51,8 @@ impl AllowedUnusedHttpHostPlan {
             "project config changed after planning; rerun plan before applying"
         );
         ensure!(
-            read(&self.rules_path, "coordinator rules")? == self.original_rules,
-            "coordinator rules changed after planning; rerun plan before applying"
+            read(&self.rules_path, "source traffic policy")? == self.original_rules,
+            "source traffic policy changed after planning; rerun plan before applying"
         );
         if self.report.changed {
             write_atomic(&self.rules_path, self.updated_rules.as_bytes())?;
@@ -76,8 +76,8 @@ pub fn plan_allowed_unused_http_hosts(
         .map(|host| normalize_host(host))
         .collect::<Result<BTreeSet<_>>>()?;
     let original_project_config = read(&feedback.project_config_path, "project config")?;
-    let original_rules = read(&feedback.rules_path, "coordinator rules")?;
-    let mut rules = CoordinatorRulesConfig::parse(&original_rules, &feedback.rules_path)?;
+    let original_rules = read(&feedback.rules_path, "source traffic policy")?;
+    let mut rules = SourceTrafficPolicyConfig::parse(&original_rules, &feedback.rules_path)?;
     let mut static_config = AppConfig::load_static(&feedback.project_config_path)?;
     let before = rules
         .http

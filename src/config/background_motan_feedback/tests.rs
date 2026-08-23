@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::config::{BackgroundDependencyRuleConfig, CoordinatorRulesConfig};
+use crate::config::{BackgroundDependencyRuleConfig, SourceTrafficPolicyConfig};
 
 const INTERFACE: &str = "com.weibo.api.kunpeng.rpc.ConfigItemServiceRpc";
 const METHOD: &str = "getConfigByName";
@@ -21,9 +21,13 @@ struct Fixture {
 impl Fixture {
     fn new(report: Value) -> Self {
         let temp = tempfile::tempdir().unwrap();
-        let config = temp.path().join("coordinator-rules.yaml");
+        let config = temp.path().join("source-traffic-policy.yaml");
         let replay_report = temp.path().join("replay-report.json");
-        fs::write(&config, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
+        fs::write(
+            &config,
+            SourceTrafficPolicyConfig::empty().render().unwrap(),
+        )
+        .unwrap();
         fs::write(&replay_report, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
         Self {
             _temp: temp,
@@ -95,7 +99,7 @@ fn plan_and_apply_add_an_idempotent_motan_rule_without_endpoint_identity() {
     assert!(!raw.contains(".trp.test"));
     assert!(!raw.contains("response_role"));
 
-    let config = CoordinatorRulesConfig::load(&fixture.config).unwrap();
+    let config = SourceTrafficPolicyConfig::load(&fixture.config).unwrap();
     assert!(matches!(
         &config.process_owned_dependencies[0],
         BackgroundDependencyRuleConfig::Motan {

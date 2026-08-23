@@ -2,7 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use super::model::{ResponseAssertionCaseReport, ResponseDifference, ResponseDifferenceKind};
+use super::joined_string;
+use super::model::{
+    JsonJoinedStringCandidate, ResponseAssertionCaseReport, ResponseDifference,
+    ResponseDifferenceKind,
+};
 use crate::replay::policy::{ResponseField, ResponseRuleKind};
 
 pub(super) fn compare_json(
@@ -57,6 +61,38 @@ fn compare_value(
                     report.differences.push(difference(
                         pointer,
                         ResponseDifferenceKind::UnorderedFieldNotArray,
+                        Some(expected),
+                        Some(actual),
+                    ));
+                }
+            },
+            ResponseRuleKind::UnorderedJoinedString => match (expected, actual) {
+                (Value::String(expected), Value::String(actual))
+                    if joined_string::equal(
+                        expected,
+                        actual,
+                        field
+                            .separator
+                            .as_deref()
+                            .expect("joined-string response field has a separator"),
+                    ) =>
+                {
+                    report
+                        .applied_unordered_joined_string_rule_ids
+                        .push(field.id.clone());
+                }
+                (Value::String(_), Value::String(_)) => {
+                    report.differences.push(difference(
+                        pointer,
+                        ResponseDifferenceKind::UnorderedJoinedStringContentMismatch,
+                        Some(expected),
+                        Some(actual),
+                    ));
+                }
+                _ => {
+                    report.differences.push(difference(
+                        pointer,
+                        ResponseDifferenceKind::UnorderedJoinedStringFieldNotString,
                         Some(expected),
                         Some(actual),
                     ));
@@ -162,6 +198,22 @@ fn compare_value(
             Some(expected),
             Some(actual),
         )),
+        (Value::String(expected), Value::String(actual)) if expected != actual => {
+            report.unordered_joined_string_candidates.extend(
+                joined_string::matching_discovery_separators(expected, actual)
+                    .into_iter()
+                    .map(|separator| JsonJoinedStringCandidate {
+                        pointer: pointer.to_string(),
+                        separator,
+                    }),
+            );
+            report.differences.push(difference(
+                pointer,
+                ResponseDifferenceKind::ValueMismatch,
+                Some(&Value::String(expected.clone())),
+                Some(&Value::String(actual.clone())),
+            ));
+        }
         _ if expected != actual => report.differences.push(difference(
             pointer,
             ResponseDifferenceKind::ValueMismatch,

@@ -67,6 +67,7 @@ fn plans_and_applies_evidence_backed_uuid_field() {
         source_evidence: Some("src/token.rs:issue_token".to_string()),
         source_example: Some("<redacted source UUID>".to_string()),
         target_example: Some("<redacted target UUID>".to_string()),
+        separator: None,
         assertion_report: assertions,
         aggregate_report: aggregate,
     };
@@ -178,6 +179,7 @@ fn replay_rule_planning_resolves_runner_owned_assertion_details() {
         source_evidence: Some("src/token.rs:issue_token".to_string()),
         source_example: Some("<redacted source UUID>".to_string()),
         target_example: Some("<redacted target UUID>".to_string()),
+        separator: None,
         assertion_report: assertions,
         aggregate_report: aggregate,
     })
@@ -382,6 +384,7 @@ fn plans_and_applies_uuid_field_from_comparison_recording_evidence() {
         source_evidence: Some("src/token.rs:issue_token".to_string()),
         source_example: Some("<redacted source UUID>".to_string()),
         target_example: Some("<redacted target UUID>".to_string()),
+        separator: None,
         comparison_report: comparison,
     };
 
@@ -443,6 +446,7 @@ fn plans_and_applies_comparison_only_counter_fields() {
         source_evidence: Some("src/user.rs:load live follower count".to_string()),
         source_example: Some("100".to_string()),
         target_example: Some("101".to_string()),
+        separator: None,
         comparison_report: comparison,
     };
 
@@ -516,6 +520,7 @@ fn a_permitted_source_after_match_does_not_authorize_a_response_rule() {
         source_evidence: Some("src/user.rs:load live follower count".to_string()),
         source_example: Some("100".to_string()),
         target_example: Some("101".to_string()),
+        separator: None,
         comparison_report: comparison,
     };
 
@@ -589,6 +594,7 @@ fn plans_and_applies_evidence_backed_unordered_array() {
         source_evidence: Some("src/config.rs:sudo_users is a set".to_string()),
         source_example: None,
         target_example: None,
+        separator: None,
         assertion_report: assertions,
         aggregate_report: aggregate,
     };
@@ -605,6 +611,85 @@ fn plans_and_applies_evidence_backed_unordered_array() {
     assert!(updated.contains("unordered:"));
     assert!(updated.contains("/general/sudo_users"));
     assert!(updated.contains("src/config.rs:sudo_users is a set"));
+    validate_replay_policy(&policy).unwrap();
+}
+
+#[test]
+fn plans_and_applies_separator_specific_joined_string_rule() {
+    let temp = tempdir().unwrap();
+    let policy = temp.path().join("replay.yaml");
+    let assertions = temp.path().join("assertions.json");
+    let aggregate = temp.path().join("aggregate.json");
+    fs::write(
+        &policy,
+        "version: 3\nexpected_response: assertions_only\ndependency_rules: []\n",
+    )
+    .unwrap();
+    let fingerprint = validate_replay_policy(&policy).unwrap().fingerprint;
+    fs::write(
+        &assertions,
+        serde_json::to_vec(&json!({
+            "version": 3,
+            "case_source": "/cases",
+            "expected_response": "assertions_only",
+            "assertion_mode": "runner_owned",
+            "policy_fingerprint": fingerprint,
+            "cases": [{
+                "case_id": "case-1",
+                "response": {
+                    "method": "GET",
+                    "path": "/api/config/ansible_facts",
+                    "body_codec": "json",
+                    "differences": [{
+                        "pointer": "/general/sudo_users",
+                        "kind": "value_mismatch",
+                        "expected_type": "string",
+                        "actual_type": "string"
+                    }],
+                    "unordered_joined_string_candidates": [{
+                        "pointer": "/general/sudo_users",
+                        "separator": ","
+                    }]
+                }
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &aggregate,
+        serde_json::to_vec(&json!({
+            "case_source": "/cases",
+            "selected_case_ids": ["case-1"],
+            "complete": true,
+            "dirty": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let feedback = ResponseRuleFeedback {
+        policy_path: policy.clone(),
+        kind: ResponseRuleKind::UnorderedJoinedString,
+        api: "GET /api/config/ansible_facts".to_string(),
+        json_pointers: vec!["/general/sudo_users".to_string()],
+        source_evidence: Some("src/config.rs:sudo_users is set-joined".to_string()),
+        source_example: None,
+        target_example: None,
+        separator: Some(",".to_string()),
+        assertion_report: assertions,
+        aggregate_report: aggregate,
+    };
+
+    let plan = plan_response_rule(feedback).unwrap();
+    assert_eq!(
+        plan.report().added_rule_ids,
+        ["response:unordered_joined_string:GET /api/config/ansible_facts:/general/sudo_users"]
+    );
+    assert_eq!(plan.report().separator.as_deref(), Some(","));
+    plan.apply().unwrap();
+    let updated = fs::read_to_string(&policy).unwrap();
+    assert!(updated.contains("unordered_joined_string:"));
+    assert!(updated.contains("separator: ','"));
     validate_replay_policy(&policy).unwrap();
 }
 
@@ -638,7 +723,7 @@ fn unordered_evidence_rejects_content_differences() {
 
 #[test]
 fn generated_rule_requires_auditable_source_evidence() {
-    let error = justification::validate(ResponseRuleKind::Uuid, None, None, None)
+    let error = justification::validate(ResponseRuleKind::Uuid, None, None, None, None)
         .err()
         .expect("missing UUID evidence must fail");
     assert!(error.to_string().contains("--source-evidence"));
@@ -648,6 +733,7 @@ fn generated_rule_requires_auditable_source_evidence() {
         Some("src/signed_url.rs:sign derives the signature from current time".to_string()),
         Some("https://img.test/a?Expires=<source-time>&ssig=<source-signature>".to_string()),
         Some("https://img.test/a?Expires=<target-time>&ssig=<target-signature>".to_string()),
+        None,
     )
     .unwrap();
     assert!(justification.source_evidence.is_some());
@@ -763,6 +849,7 @@ fn write_generated_replay_feedback(
         source_evidence: Some("src/token.rs:issue_token".to_string()),
         source_example: Some("<redacted source UUID>".to_string()),
         target_example: Some("<redacted target UUID>".to_string()),
+        separator: None,
         assertion_report: assertions,
         aggregate_report: aggregate,
     }

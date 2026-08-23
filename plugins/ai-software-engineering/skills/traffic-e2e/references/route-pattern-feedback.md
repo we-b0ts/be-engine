@@ -69,7 +69,7 @@ Before accepting it:
 
 Keep project-specific recorder config in the target repo. Static matching rules
 live under `recorder` in `.traffic-e2e/project.yaml`; dynamic feedback lives in
-the wholly coordinator-managed `.traffic-e2e/coordinator-rules.yaml`:
+the wholly coordinator-managed `.traffic-e2e/source-traffic-policy.yaml`:
 
 ```yaml
 version: 2
@@ -88,7 +88,7 @@ process_owned_dependencies: []
   limits. Do not add or raise these limits merely to make replay discovery
   record more cases. Pattern feedback must preserve existing limit settings.
 - Require `traffic-e2e` from `PATH`. Never edit either target YAML document
-  directly and never create the coordinator rules on the target's behalf. If
+  directly and never create the source traffic policy on the target's behalf. If
   the command is unavailable or rejects the managed document,
   report `recording_configuration/action_required` with the confirmed patterns,
   exact tool or managed-block failure, and acceptance check; stop only the

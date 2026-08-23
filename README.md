@@ -301,8 +301,8 @@ recorder:
         headers: { x-record: "yes" }
 ```
 
-AI/coordinator-owned values are stored only in
-`.traffic-e2e/coordinator-rules.yaml`:
+AI/coordinator-owned source-traffic policy values are stored only in
+`.traffic-e2e/source-traffic-policy.yaml`:
 
 ```yaml
 version: 2
@@ -374,7 +374,7 @@ example, `/api/users/123/xxx` and `/api/users/456/xxx` both record under
 `api-users-wildcard-xxx` when the global HTTP policy has
 `case_path_patterns = ["/api/users/*/xxx"]`.
 
-For replay-time AI feedback, keep patterns in `coordinator-rules.yaml`. Use
+For replay-time AI feedback, keep patterns in `source-traffic-policy.yaml`. Use
 `traffic-e2e config recorder apply case-path-patterns`; the command plans and
 validates against current evidence before atomically replacing that managed
 document. Feedback is add-only even for a

@@ -124,7 +124,9 @@ mod tests {
     #[test]
     fn missing_recorded_resource_routes_to_capture_plan_without_system_repair() {
         let (target, mut state, evidence_id) = fixture(None, false);
-        let rules = target.path().join(".traffic-e2e/coordinator-rules.yaml");
+        let rules = target
+            .path()
+            .join(".traffic-e2e/source-traffic-policy.yaml");
         let original_rules = fs::read_to_string(&rules).unwrap();
 
         let outcome = route_in_state(
@@ -297,13 +299,15 @@ mod tests {
             None,
         );
         if let Some(captured_resource) = captured_resource {
-            let mut rules = crate::config::CoordinatorRulesConfig::empty();
-            rules.breeze_capture = vec![crate::config::CoordinatorBreezeCaptureConfig {
+            let mut rules = crate::config::SourceTrafficPolicyConfig::empty();
+            rules.breeze_capture = vec![crate::config::SourceTrafficBreezeCaptureConfig {
                 snapshot_dir: snapshot,
                 capture_resources: vec![captured_resource.to_string()],
             }];
             fs::write(
-                target.path().join(".traffic-e2e/coordinator-rules.yaml"),
+                target
+                    .path()
+                    .join(".traffic-e2e/source-traffic-policy.yaml"),
                 rules.render().unwrap(),
             )
             .unwrap();

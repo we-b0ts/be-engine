@@ -484,7 +484,7 @@ fn apply_pattern_feedback(
     let rules_path = config
         .parent()
         .context("managed project config has no parent directory")?
-        .join(crate::config::COORDINATOR_RULES_FILE);
+        .join(crate::config::SOURCE_TRAFFIC_POLICY_FILE);
     let plan = plan_case_path_pattern_feedback(CasePathPatternFeedback {
         project_config_path: config.to_path_buf(),
         rules_path,

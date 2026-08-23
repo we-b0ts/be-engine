@@ -103,6 +103,7 @@ fn response_rule_plan(
         source_evidence: Some(args.source_evidence),
         source_example: Some(args.source_example),
         target_example: Some(args.target_example),
+        separator: None,
         comparison_report: args.comparison_run.join("comparison-report.json"),
     })
 }

@@ -31,16 +31,16 @@ impl Fixture {
             "other.example.com:6379,shared.example.com:6379",
         );
         let project = directory.path().join("project.yaml");
-        let rules = directory.path().join("coordinator-rules.yaml");
+        let rules = directory.path().join("source-traffic-policy.yaml");
         fs::write(
             &project,
             format!(
-                "project:\n  recording:\n    coordinator_rules: coordinator-rules.yaml\nrecorder:\n  dns_mock:\n    enabled: true\n    bypass_strategies:\n    - strategy: breeze\n      snapshot_dir: {}\n  tcp_gateway:\n    enabled: true\n",
+                "project:\n  recording:\n    source_traffic_policy: source-traffic-policy.yaml\nrecorder:\n  dns_mock:\n    enabled: true\n    bypass_strategies:\n    - strategy: breeze\n      snapshot_dir: {}\n  tcp_gateway:\n    enabled: true\n",
                 snapshot_dir.display()
             ),
         )
         .unwrap();
-        fs::write(&rules, CoordinatorRulesConfig::empty().render().unwrap()).unwrap();
+        fs::write(&rules, SourceTrafficPolicyConfig::empty().render().unwrap()).unwrap();
         Self {
             directory,
             project,
@@ -79,7 +79,7 @@ fn snapshot(directory: &Path, identity: &str, name: &str, backends: &str) {
 }
 
 #[test]
-fn plans_and_applies_canonical_resource_to_coordinator_rules() {
+fn plans_and_applies_canonical_resource_to_source_traffic_policy() {
     let fixture = Fixture::new();
     let plan = plan_breeze_resource_capture(fixture.feedback()).unwrap();
     assert!(plan.report().changed);
@@ -91,7 +91,7 @@ fn plans_and_applies_canonical_resource_to_coordinator_rules() {
     assert_eq!(plan.report().shared_domain_resources.len(), 1);
     let report = plan.apply().unwrap();
 
-    let rules = CoordinatorRulesConfig::load(&fixture.rules).unwrap();
+    let rules = SourceTrafficPolicyConfig::load(&fixture.rules).unwrap();
     assert_eq!(rules.breeze_capture.len(), 1);
     assert_eq!(
         rules.breeze_capture[0].capture_resources,
@@ -169,7 +169,7 @@ fn rejects_ip_only_or_ambiguous_resource() {
 }
 
 #[test]
-fn apply_rejects_stale_project_rules_or_snapshot() {
+fn apply_rejects_stale_project_policy_or_snapshot() {
     let fixture = Fixture::new();
     let plan = plan_breeze_resource_capture(fixture.feedback()).unwrap();
     fs::write(&fixture.rules, "version: 1\n").unwrap();
@@ -177,7 +177,7 @@ fn apply_rejects_stale_project_rules_or_snapshot() {
         plan.apply()
             .unwrap_err()
             .to_string()
-            .contains("rules changed")
+            .contains("source traffic policy changed")
     );
 
     let fixture = Fixture::new();

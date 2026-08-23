@@ -7,9 +7,8 @@ use serde::Serialize;
 
 use super::super::config::{fingerprint, load_replay_policy};
 use super::super::response::{
-    Hessian2JoinedStringPath, Hessian2ResponseRules, Hessian2ValuePath, ProtobufFieldPath,
-    ProtobufResponseRules, ResponseBodyCodec, ResponseBodyUnorderedPath, parse_api,
-    response_body_rule_id, validate_response_rules,
+    Hessian2ResponseRules, ProtobufResponseRules, ResponseBodyCodec, ResponseBodyJoinedStringPath,
+    ResponseBodyUnorderedPath, parse_api, response_body_rule_id, validate_response_rules,
 };
 use super::document::{render_response_rules, replace_response_rules};
 use super::evidence::{AggregateEvidence, AssertionEvidence};
@@ -20,23 +19,24 @@ use crate::comparison_recording::{
 use crate::config::edit::write_atomic;
 use crate::replay::assertion::diagnose_response_body;
 use crate::replay::{
-    ComparisonSourceMatch, Hessian2JoinedStringCandidate, Hessian2ValuePathCandidate,
-    ProtobufFieldPathCandidate, ResponseAssertionCaseReport, ResponseAssertionOptions,
-    ResponseBodyDifferenceDetail, ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind,
+    ComparisonSourceMatch, ResponseAssertionCaseReport, ResponseAssertionOptions,
+    ResponseBodyJoinedStringCandidate, ResponseBodyUnorderedPathCandidate, ResponseDifferenceKind,
     assert_recorded_response, read_actual_response_body, read_comparison_response_observation,
     read_expected_response_body,
 };
 
 mod codec;
+mod path;
 
 use codec::{compare_response_body, validate_unreported_codec_candidate};
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum BodyPath {
-    Protobuf(ProtobufFieldPath),
-    Hessian2(Hessian2ValuePath),
-    Hessian2JoinedString(Hessian2ValuePath),
-}
+use path::{
+    BodyPath, from_candidate as body_path_from_candidate,
+    from_difference as body_path_from_difference,
+    from_joined_string_candidate as body_path_from_joined_string_candidate,
+    from_joined_string_rule as body_path_from_joined_string_rule, from_rule as body_path_from_rule,
+    into_candidate as candidate_from_body_path,
+    into_joined_string_candidate as joined_string_candidate_from_body_path,
+};
 
 #[derive(Debug, Clone)]
 pub struct ResponseBodyRuleFeedback {
@@ -44,7 +44,7 @@ pub struct ResponseBodyRuleFeedback {
     pub api: String,
     pub codec: ResponseBodyCodec,
     pub unordered_paths: Vec<ResponseBodyUnorderedPath>,
-    pub unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
+    pub unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
     pub evidence: ResponseBodyRuleEvidence,
 }
 
@@ -89,10 +89,10 @@ pub struct ResponseBodyRuleReport {
     pub selected_difference_cases: usize,
     pub discovered_unordered_paths: Vec<ResponseBodyUnorderedPathCandidate>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub discovered_unordered_joined_string_paths: Vec<Hessian2JoinedStringCandidate>,
+    pub discovered_unordered_joined_string_paths: Vec<ResponseBodyJoinedStringCandidate>,
     pub effective_unordered_paths: Vec<ResponseBodyUnorderedPath>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub effective_unordered_joined_string_paths: Vec<Hessian2JoinedStringPath>,
+    pub effective_unordered_joined_string_paths: Vec<ResponseBodyJoinedStringPath>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offline_verification: Option<ResponseBodyRuleVerificationOutcome>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -357,6 +357,7 @@ fn load_focused_e2e_evidence(
             .unused_applicable_generated_rule_ids
             .iter()
             .chain(&detail.unused_applicable_unordered_rule_ids)
+            .chain(&detail.unused_applicable_unordered_joined_string_rule_ids)
             .chain(&detail.unused_applicable_counter_rule_ids)
             .chain(&detail.unused_applicable_body_rule_ids)
             .cloned()
@@ -532,9 +533,11 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
         "response-body rule plan contains an unordered path for a different codec"
     );
     ensure!(
-        feedback.codec == ResponseBodyCodec::Hessian2
-            || feedback.unordered_joined_string_paths.is_empty(),
-        "joined-string paths are only supported on the Hessian2 body codec"
+        feedback
+            .unordered_joined_string_paths
+            .iter()
+            .all(|path| path.codec() == feedback.codec),
+        "response-body rule plan contains a joined-string path for a different codec"
     );
     let matching = &evidence.cases;
     let mut selected_difference_cases = 0;
@@ -623,7 +626,7 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
                 .iter()
                 .filter_map(|candidate| {
                     body_path_from_joined_string_candidate(candidate, feedback.codec)
-                        .map(|path| (path, candidate.separator.clone()))
+                        .map(|path| (path, candidate.separator().to_string()))
                 }),
         );
         diagnostic_paths.extend(
@@ -636,10 +639,12 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
             |difference| {
                 let path = body_path_from_difference(difference, feedback.codec)?;
                 match path {
+                    BodyPath::Protobuf(field_path) | BodyPath::ProtobufJoinedString(field_path) => {
+                        Some(BodyPath::ProtobufJoinedString(field_path))
+                    }
                     BodyPath::Hessian2(value_path) | BodyPath::Hessian2JoinedString(value_path) => {
                         Some(BodyPath::Hessian2JoinedString(value_path))
                     }
-                    BodyPath::Protobuf(_) => None,
                 }
             },
         ));
@@ -704,7 +709,7 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
         );
         ensure!(
             requested.is_disjoint(&requested_joined_string),
-            "response-body rule plan uses the same Hessian2 body path as both an unordered list and a joined-string path"
+            "response-body rule plan uses the same body path as both an unordered collection and a joined-string path"
         );
         ensure!(
             new_discovered.is_subset(&requested),
@@ -799,11 +804,22 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
-            loaded
-                .document
-                .response_rules
-                .protobuf
-                .insert(feedback.api.clone(), ProtobufResponseRules { unordered });
+            let unordered_joined_string = effective_joined_string_paths
+                .iter()
+                .map(|path| match path {
+                    ResponseBodyJoinedStringPath::Protobuf(path) => Ok(path.clone()),
+                    ResponseBodyJoinedStringPath::Hessian2(_) => {
+                        anyhow::bail!("protobuf rule contains a Hessian2 joined-string path")
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            loaded.document.response_rules.protobuf.insert(
+                feedback.api.clone(),
+                ProtobufResponseRules {
+                    unordered,
+                    unordered_joined_string,
+                },
+            );
         }
         ResponseBodyCodec::Hessian2 => {
             let unordered = effective_paths
@@ -815,11 +831,20 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
                     }
                 })
                 .collect::<Result<Vec<_>>>()?;
+            let unordered_joined_string = effective_joined_string_paths
+                .iter()
+                .map(|path| match path {
+                    ResponseBodyJoinedStringPath::Hessian2(path) => Ok(path.clone()),
+                    ResponseBodyJoinedStringPath::Protobuf(_) => {
+                        anyhow::bail!("Hessian2 rule contains a protobuf joined-string path")
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
             loaded.document.response_rules.hessian2.insert(
                 feedback.api.clone(),
                 Hessian2ResponseRules {
                     unordered,
-                    unordered_joined_string: effective_joined_string_paths.clone(),
+                    unordered_joined_string,
                 },
             );
         }
@@ -876,88 +901,6 @@ pub fn plan_response_body_rule(feedback: ResponseBodyRuleFeedback) -> Result<Res
             diff,
         },
     })
-}
-
-fn body_path_from_rule(path: &ResponseBodyUnorderedPath) -> BodyPath {
-    match path {
-        ResponseBodyUnorderedPath::Protobuf(path) => BodyPath::Protobuf(path.field_path.clone()),
-        ResponseBodyUnorderedPath::Hessian2(path) => BodyPath::Hessian2(path.value_path.clone()),
-    }
-}
-
-fn body_path_from_joined_string_rule(path: &Hessian2JoinedStringPath) -> BodyPath {
-    BodyPath::Hessian2JoinedString(path.value_path.clone())
-}
-
-fn body_path_from_candidate(
-    path: &ResponseBodyUnorderedPathCandidate,
-    codec: ResponseBodyCodec,
-) -> Option<BodyPath> {
-    match (path, codec) {
-        (ResponseBodyUnorderedPathCandidate::Protobuf(path), ResponseBodyCodec::Protobuf) => {
-            Some(BodyPath::Protobuf(path.field_path.clone()))
-        }
-        (ResponseBodyUnorderedPathCandidate::Hessian2(path), ResponseBodyCodec::Hessian2) => {
-            Some(BodyPath::Hessian2(path.value_path.clone()))
-        }
-        _ => None,
-    }
-}
-
-fn body_path_from_joined_string_candidate(
-    path: &Hessian2JoinedStringCandidate,
-    codec: ResponseBodyCodec,
-) -> Option<BodyPath> {
-    match codec {
-        ResponseBodyCodec::Hessian2 => {
-            Some(BodyPath::Hessian2JoinedString(path.value_path.clone()))
-        }
-        _ => None,
-    }
-}
-
-fn body_path_from_difference(
-    difference: &ResponseBodyDifferenceDetail,
-    codec: ResponseBodyCodec,
-) -> Option<BodyPath> {
-    match (difference, codec) {
-        (ResponseBodyDifferenceDetail::Protobuf(difference), ResponseBodyCodec::Protobuf) => {
-            Some(BodyPath::Protobuf(difference.field_path.clone()))
-        }
-        (ResponseBodyDifferenceDetail::Hessian2(difference), ResponseBodyCodec::Hessian2) => {
-            Some(BodyPath::Hessian2(difference.value_path.clone()))
-        }
-        _ => None,
-    }
-}
-
-fn candidate_from_body_path(path: BodyPath) -> ResponseBodyUnorderedPathCandidate {
-    match path {
-        BodyPath::Protobuf(field_path) => ResponseBodyUnorderedPathCandidate::Protobuf(
-            ProtobufFieldPathCandidate::from(field_path),
-        ),
-        BodyPath::Hessian2(value_path) => ResponseBodyUnorderedPathCandidate::Hessian2(
-            Hessian2ValuePathCandidate::from(value_path),
-        ),
-        // Joined-string candidates carry a separator and are handled separately
-        // (see `joined_string_candidate_from_body_path`); this arm is unreachable
-        // for the existing List/protobuf candidate flow.
-        BodyPath::Hessian2JoinedString(_) => {
-            unreachable!("joined-string body paths use joined_string_candidate_from_body_path")
-        }
-    }
-}
-
-fn joined_string_candidate_from_body_path(
-    path: BodyPath,
-    separator: String,
-) -> Hessian2JoinedStringCandidate {
-    match path {
-        BodyPath::Hessian2JoinedString(value_path) => {
-            Hessian2JoinedStringCandidate::from((value_path, separator))
-        }
-        _ => unreachable!("joined-string candidate requires a Hessian2JoinedString body path"),
-    }
 }
 
 fn read_regular(path: &Path, label: &str) -> Result<Vec<u8>> {

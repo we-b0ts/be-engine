@@ -13,7 +13,7 @@ use crate::breeze::snapshot::{Snapshot, SnapshotResource};
 use super::edit::write_atomic;
 use super::rule_document::whole_file_diff;
 use super::{
-    AppConfig, CoordinatorBreezeCaptureConfig, CoordinatorRulesConfig, DnsBypassStrategyConfig,
+    AppConfig, DnsBypassStrategyConfig, SourceTrafficBreezeCaptureConfig, SourceTrafficPolicyConfig,
 };
 
 #[derive(Debug, Clone)]
@@ -81,7 +81,7 @@ impl BreezeResourceCapturePlan {
         );
         ensure!(
             read_config(&self.rules_path)? == self.original_rules,
-            "coordinator rules changed after planning; rerun plan before applying"
+            "source traffic policy changed after planning; rerun plan before applying"
         );
         let snapshot = Snapshot::load(&self.snapshot_dir)?;
         let resource = snapshot.resolve(&self.expected_resource.identity)?;
@@ -174,7 +174,7 @@ fn plan_capture(
     let mut after = before.clone();
     after.insert(candidate.resource.identity.clone());
     validate_existing_resources(&candidate.snapshot, &after)?;
-    let mut rules = CoordinatorRulesConfig::parse(&original_rules, &rules_path)?;
+    let mut rules = SourceTrafficPolicyConfig::parse(&original_rules, &rules_path)?;
     let overlay = breeze_overlay_mut(&mut rules, &candidate.snapshot_dir);
     overlay.capture_resources = after.iter().cloned().collect();
     let mut static_config = AppConfig::load_static(&project_config_path)?;
@@ -464,9 +464,9 @@ fn read_config(path: &Path) -> Result<String> {
 }
 
 fn breeze_overlay_mut<'a>(
-    rules: &'a mut CoordinatorRulesConfig,
+    rules: &'a mut SourceTrafficPolicyConfig,
     snapshot_dir: &Path,
-) -> &'a mut CoordinatorBreezeCaptureConfig {
+) -> &'a mut SourceTrafficBreezeCaptureConfig {
     if let Some(index) = rules
         .breeze_capture
         .iter()
@@ -474,7 +474,7 @@ fn breeze_overlay_mut<'a>(
     {
         return &mut rules.breeze_capture[index];
     }
-    rules.breeze_capture.push(CoordinatorBreezeCaptureConfig {
+    rules.breeze_capture.push(SourceTrafficBreezeCaptureConfig {
         snapshot_dir: snapshot_dir.to_path_buf(),
         capture_resources: Vec::new(),
     });

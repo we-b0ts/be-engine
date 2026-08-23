@@ -9,7 +9,7 @@ use super::initialization::{RecorderConfigInitOptions, render_validated_recorder
 use crate::e2e_run::{E2eRunInitOptions, render_project_config};
 
 const PROJECT_CONFIG_PATH: &str = ".traffic-e2e/project.yaml";
-const COORDINATOR_RULES_PATH: &str = ".traffic-e2e/coordinator-rules.yaml";
+const SOURCE_TRAFFIC_POLICY_PATH: &str = ".traffic-e2e/source-traffic-policy.yaml";
 const VERIFICATION_POLICY_PATH: &str = ".traffic-e2e/verification.yaml";
 const LOCAL_DIR: &str = crate::repository::LOCAL_ROOT;
 const DEFAULT_NATIVE_HTTP_PORT: u16 = 8080;
@@ -81,7 +81,7 @@ fn initialize_repository_config_with(
     ensure!(target_root.is_dir(), "target root must be a directory");
     let generated = [
         PROJECT_CONFIG_PATH,
-        COORDINATOR_RULES_PATH,
+        SOURCE_TRAFFIC_POLICY_PATH,
         VERIFICATION_POLICY_PATH,
     ]
     .map(|relative| target_root.join(relative));
@@ -121,14 +121,14 @@ fn initialize_repository_config_with(
         },
         recorder,
     )?;
-    let coordinator_rules = super::CoordinatorRulesConfig::repository_defaults().render()?;
+    let source_traffic_policy = super::SourceTrafficPolicyConfig::repository_defaults().render()?;
 
     let (gitignore, gitignore_updated) = ensure_local_gitignore(&target_root)?;
     let startup = crate::startup::normalized_config(options.startup)?;
     let startup = capture(&target_root, &options.source_container, &startup)?;
     super::edit::create_many_atomic(&[
         (generated[0].clone(), project),
-        (generated[1].clone(), coordinator_rules.into_bytes()),
+        (generated[1].clone(), source_traffic_policy.into_bytes()),
         (generated[2].clone(), verification.into_bytes()),
     ])?;
     let target_image_tag = crate::target_container::image_tag(&target_root)?;
@@ -291,12 +291,12 @@ mod tests {
         assert_eq!(
             [
                 PROJECT_CONFIG_PATH,
-                COORDINATOR_RULES_PATH,
+                SOURCE_TRAFFIC_POLICY_PATH,
                 VERIFICATION_POLICY_PATH
             ],
             [
                 ".traffic-e2e/project.yaml",
-                ".traffic-e2e/coordinator-rules.yaml",
+                ".traffic-e2e/source-traffic-policy.yaml",
                 ".traffic-e2e/verification.yaml"
             ]
         );
@@ -410,7 +410,7 @@ mod tests {
         );
         assert!(result.target_image_tag.ends_with("-target:cache"));
         assert!(target.path().join(PROJECT_CONFIG_PATH).is_file());
-        assert!(target.path().join(COORDINATOR_RULES_PATH).is_file());
+        assert!(target.path().join(SOURCE_TRAFFIC_POLICY_PATH).is_file());
         assert!(target.path().join(VERIFICATION_POLICY_PATH).is_file());
         assert_eq!(
             result.startup.root,

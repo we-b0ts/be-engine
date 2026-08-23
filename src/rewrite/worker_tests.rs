@@ -146,6 +146,7 @@ fn diagnostic_entrypoints_require_worker_confirmation_without_mutating_state() {
                 source_evidence: Some("src/id.rs:new".to_string()),
                 source_example: None,
                 target_example: None,
+                separator: None,
                 unordered_paths: Vec::new(),
                 unordered_joined_string_paths: Vec::new(),
             },

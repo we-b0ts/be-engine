@@ -7,7 +7,7 @@ use super::*;
 
 const PROJECT: &str = r#"project:
   recording:
-    coordinator_rules: coordinator-rules.yaml
+    source_traffic_policy: source-traffic-policy.yaml
 recorder:
   http_gateway:
     enabled: true
@@ -29,8 +29,8 @@ fn feedback(fixture: &Fixture, hosts: &[&str]) -> AllowedUnusedHttpHostFeedback 
 }
 
 #[test]
-fn plan_updates_the_coordinator_document_and_apply_converges() {
-    let fixture = Fixture::new(CoordinatorRulesConfig::empty());
+fn plan_updates_the_source_traffic_policy_and_apply_converges() {
+    let fixture = Fixture::new(SourceTrafficPolicyConfig::empty());
     let plan = plan_allowed_unused_http_hosts(feedback(
         &fixture,
         &["cs.aliyuncs.com", "location-readonly.aliyuncs.com"],
@@ -67,7 +67,7 @@ fn plan_updates_the_coordinator_document_and_apply_converges() {
 
 #[test]
 fn plan_adds_to_existing_values_and_deduplicates_input() {
-    let mut rules = CoordinatorRulesConfig::empty();
+    let mut rules = SourceTrafficPolicyConfig::empty();
     rules.http.allowed_unused_http_hosts = vec!["cs.aliyuncs.com".to_string()];
     let fixture = Fixture::new(rules);
 
@@ -102,7 +102,7 @@ fn rejects_noncanonical_hosts() {
         "cs.aliyuncs.com:443",
         "*.aliyuncs.com",
     ] {
-        let fixture = Fixture::new(CoordinatorRulesConfig::empty());
+        let fixture = Fixture::new(SourceTrafficPolicyConfig::empty());
         let error = plan_allowed_unused_http_hosts(feedback(&fixture, &[host])).unwrap_err();
         assert!(error.to_string().contains("allowed unused HTTP host"));
     }
@@ -110,7 +110,7 @@ fn rejects_noncanonical_hosts() {
 
 #[test]
 fn apply_detects_project_or_rules_changes_after_plan() {
-    let fixture = Fixture::new(CoordinatorRulesConfig::empty());
+    let fixture = Fixture::new(SourceTrafficPolicyConfig::empty());
     let plan = plan_allowed_unused_http_hosts(feedback(&fixture, &["cs.aliyuncs.com"])).unwrap();
     fs::write(&fixture.rules, "version: 1\n").unwrap();
     assert!(
@@ -120,7 +120,7 @@ fn apply_detects_project_or_rules_changes_after_plan() {
             .contains("changed after planning")
     );
 
-    let fixture = Fixture::new(CoordinatorRulesConfig::empty());
+    let fixture = Fixture::new(SourceTrafficPolicyConfig::empty());
     let plan = plan_allowed_unused_http_hosts(feedback(&fixture, &["cs.aliyuncs.com"])).unwrap();
     fs::write(&fixture.project, format!("{PROJECT}# concurrent edit\n")).unwrap();
     assert!(
@@ -138,10 +138,10 @@ struct Fixture {
 }
 
 impl Fixture {
-    fn new(rules: CoordinatorRulesConfig) -> Self {
+    fn new(rules: SourceTrafficPolicyConfig) -> Self {
         let temp = TempDir::new().unwrap();
         let project = temp.path().join("project.yaml");
-        let rules_path = temp.path().join("coordinator-rules.yaml");
+        let rules_path = temp.path().join("source-traffic-policy.yaml");
         fs::write(&project, PROJECT).unwrap();
         fs::write(&rules_path, rules.render().unwrap()).unwrap();
         Self {

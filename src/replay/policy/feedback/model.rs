@@ -13,6 +13,7 @@ pub struct ResponseRuleFeedback {
     pub source_evidence: Option<String>,
     pub source_example: Option<String>,
     pub target_example: Option<String>,
+    pub separator: Option<String>,
     pub assertion_report: PathBuf,
     pub aggregate_report: PathBuf,
 }
@@ -26,6 +27,7 @@ pub struct ComparisonResponseRuleFeedback {
     pub source_evidence: Option<String>,
     pub source_example: Option<String>,
     pub target_example: Option<String>,
+    pub separator: Option<String>,
     pub comparison_report: PathBuf,
 }
 
@@ -54,6 +56,8 @@ pub struct ResponseRuleReport {
     pub source_example: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_example: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub separator: Option<String>,
     pub matching_cases: usize,
     pub selected_difference_cases: usize,
     pub unselected_difference_pointers: Vec<String>,

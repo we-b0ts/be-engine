@@ -168,11 +168,11 @@ pub(super) fn project_config_revision(target_root: &Path) -> Result<String> {
     config_file_revision(target_root, ".traffic-e2e/project.yaml", "project config")
 }
 
-pub(super) fn coordinator_rules_revision(target_root: &Path) -> Result<String> {
+pub(super) fn source_traffic_policy_revision(target_root: &Path) -> Result<String> {
     config_file_revision(
         target_root,
-        ".traffic-e2e/coordinator-rules.yaml",
-        "process-owned rules",
+        ".traffic-e2e/source-traffic-policy.yaml",
+        "source traffic policy",
     )
 }
 

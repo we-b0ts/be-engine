@@ -17,8 +17,9 @@ The generated Recorder HTTP gateway listens on port `17171` by default; use
 
 The generated version-14 project configuration has separate `source`, optional
 `breeze`, `target`, `replay`, `recording`, `delivery`, and `state` settings plus
-an embedded static `recorder` section. All AI-managed rules are kept in the
-separate `.traffic-e2e/coordinator-rules.yaml` document.
+an embedded static `recorder` section. AI-managed source-traffic evidence
+acquisition and classification policy is kept in the separate
+`.traffic-e2e/source-traffic-policy.yaml` document.
 Relevant target fields are `.traffic-e2e/Dockerfile.e2e`, explicit startup
 mount paths and environment names, and optional quality gates. Native HTTP
 port, readiness, and request policy come from the embedded recorder. Do not
@@ -28,7 +29,7 @@ Before a run, the runner requires:
 
 - a regular `.traffic-e2e/Dockerfile.e2e` and a root `.dockerignore` that
   excludes `.git/`, `.traffic-e2e/local/`, and `target/`;
-- valid project, coordinator-rules, and replay config;
+- valid project, source traffic policy, and replay config;
 - ignored `.traffic-e2e/local/`, ensured by repository initialization;
 - a matching `.traffic-e2e/local/startup/` snapshot captured by initialization;
 - a feature branch distinct from the configured PR base.

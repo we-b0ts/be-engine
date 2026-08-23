@@ -244,7 +244,8 @@ When the complete workflow returns
 `input_required/verification_progress_commit_required`, commit exactly the
 listed coordinator-managed delivery files and call `next` again. The list
 always contains the final public progress snapshot when it is dirty and also
-includes any dirty coordinator-rule or verification-policy file. Only the
+includes a dirty `.traffic-e2e/source-traffic-policy.yaml` or
+`.traffic-e2e/verification.yaml` when applicable. Only the
 resulting `terminal_allowed=true` authorizes delivery.
 
 The initialized target repository provides ordinary product implementation,

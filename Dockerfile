@@ -34,7 +34,7 @@ RUN mkdir -p /data/config /data/recordings /data/replay /data/tls
 
 COPY --from=builder /tmp/traffic-e2e /usr/local/bin/traffic-e2e
 COPY config/project.example.yaml /data/config/project.yaml
-COPY config/coordinator-rules.example.yaml /data/config/coordinator-rules.example.yaml
+COPY config/source-traffic-policy.example.yaml /data/config/source-traffic-policy.example.yaml
 
 WORKDIR /data
 

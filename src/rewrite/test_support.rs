@@ -69,7 +69,7 @@ pub(in crate::rewrite) fn install_project_config(
             "replay": { "policy": ".traffic-e2e/verification.yaml" },
             "recording": {
                 "rule": "http-rule",
-                "coordinator_rules": "coordinator-rules.yaml"
+                "source_traffic_policy": "source-traffic-policy.yaml"
             },
             "delivery": { "pr_base": pr_base },
             "state": { "runtime_root": "local/runtime" }
@@ -84,8 +84,8 @@ pub(in crate::rewrite) fn install_project_config(
     )
     .unwrap();
     fs::write(
-        directory.join("coordinator-rules.yaml"),
-        crate::config::CoordinatorRulesConfig::empty()
+        directory.join("source-traffic-policy.yaml"),
+        crate::config::SourceTrafficPolicyConfig::empty()
             .render()
             .unwrap(),
     )

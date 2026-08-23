@@ -6,6 +6,7 @@ pub(super) struct ResponseRuleJustification {
     pub(super) source_evidence: Option<String>,
     pub(super) source_example: Option<String>,
     pub(super) target_example: Option<String>,
+    pub(super) separator: Option<String>,
 }
 
 pub(super) fn validate(
@@ -13,6 +14,7 @@ pub(super) fn validate(
     source_evidence: Option<String>,
     source_example: Option<String>,
     target_example: Option<String>,
+    separator: Option<String>,
 ) -> Result<ResponseRuleJustification> {
     match kind {
         kind if kind.is_generated() => {
@@ -23,6 +25,10 @@ pub(super) fn validate(
                 source_example != target_example,
                 "{kind:?} response rules require different --source-example and --target-example values"
             );
+            ensure!(
+                separator.is_none(),
+                "--separator is not valid for generated response rules"
+            );
         }
         ResponseRuleKind::Counter => {
             validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
@@ -32,12 +38,28 @@ pub(super) fn validate(
                 source_example != target_example,
                 "counter response rules require different --source-example and --target-example values"
             );
+            ensure!(
+                separator.is_none(),
+                "--separator is not valid with --kind counter"
+            );
         }
         ResponseRuleKind::Unordered => {
             validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
             ensure!(
                 source_example.is_none() && target_example.is_none(),
                 "--source-example and --target-example are not valid with --kind unordered"
+            );
+            ensure!(
+                separator.is_none(),
+                "--separator is only valid with --kind unordered-joined-string"
+            );
+        }
+        ResponseRuleKind::UnorderedJoinedString => {
+            validate_text(source_evidence.as_deref(), "--source-evidence", 512)?;
+            validate_text(separator.as_deref(), "--separator", 16)?;
+            ensure!(
+                source_example.is_none() && target_example.is_none(),
+                "--source-example and --target-example are not valid with --kind unordered-joined-string"
             );
         }
         _ => unreachable!("all response rule kinds are covered"),
@@ -46,6 +68,7 @@ pub(super) fn validate(
         source_evidence,
         source_example,
         target_example,
+        separator,
     })
 }
 
